@@ -56,48 +56,48 @@ import Layout from '../../layouts/Layout.astro';
       </div>
 
       <!-- Milestone 0.2 -->
-      <div class="roadmap-milestone card in-progress">
-        <div class="milestone-status-tag tag-progress">Ve vývoji</div>
+      <div class="roadmap-milestone card completed">
+        <div class="milestone-status-tag tag-done">Uvolněno</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.2.0</span>
           <h2>Pokročilé Metriky</h2>
-          <p>Zpřístupnění detailních statistik a napojení na monitoring třetích stran.</p>
+          <p>Historie metrik v grafech a napojení na externí monitorovací nástroje.</p>
         </div>
         <ul class="roadmap-checklist">
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
               <strong>Historie výkonnostních grafů</strong>
-              <span>Zobrazení grafů vytížení CPU, RAM a volného místa na disku za 30 dní.</span>
+              <span>Grafy vytížení CPU a RAM s přepínačem 24h / 7 dní / 30 dní, ze skutečných dat agentů.</span>
             </div>
           </li>
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
-              <strong>Prometheus a Grafana integrace</strong>
-              <span>Expozice standardizovaného metriky endpointu pro Grafana Cloud.</span>
+              <strong>Prometheus integrace</strong>
+              <span>Endpoint /metrics.php chráněný tokenem, standardní formát pro Grafanu i libovolný jiný scraper.</span>
             </div>
           </li>
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
               <strong>Telegram a Slack notifikace</strong>
-              <span>Rozšíření stávajících kanálů o nativní zprávy do dalších populárních platforem.</span>
+              <span>Okamžitá upozornění na výpadky přes Telegram a Slack, vedle stávajícího Discordu a e-mailu.</span>
             </div>
           </li>
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
               <strong>Automatická aktualizace agentů</strong>
-              <span>Bezúdržbový běh agentů s možností self-update z centrálního serveru.</span>
+              <span>Volitelná automatická aktualizace Python, Bash a PowerShell agentů s ověřením checksumu.</span>
             </div>
           </li>
         </ul>
       </div>
 
       <!-- Milestone 0.3 -->
-      <div class="roadmap-milestone card planned">
-        <div class="milestone-status-tag tag-planned">Plánováno</div>
+      <div class="roadmap-milestone card in-progress">
+        <div class="milestone-status-tag tag-progress">Ve vývoji</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.3.0</span>
           <h2>Multi-tenant & SSO</h2>
@@ -111,11 +111,11 @@ import Layout from '../../layouts/Layout.astro';
               <span>Možnost spravovat více oddělených projektů pod jedním serverem.</span>
             </div>
           </li>
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
               <strong>Single Sign-On (SSO / OIDC)</strong>
-              <span>Přihlašování přes Google, GitHub nebo firemní SAML poskytovatele.</span>
+              <span>Přihlašování přes GitHub už funguje. Google a firemní SAML jsou stále v plánu.</span>
             </div>
           </li>
           <li>
