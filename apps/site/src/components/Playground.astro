@@ -193,12 +193,9 @@ const t = isCs ? {
 
     resetTerminal();
 
-    // Determine API origin
-    let apiOrigin = window.location.origin;
-    if (!apiOrigin.includes('monitoring.bloodkings.eu')) {
-      // Fallback API during local development if worker is not running on same port
-      apiOrigin = 'https://monitoring.bloodkings.eu';
-    }
+    // The worker API lives on its own subdomain, independent of wherever the
+    // static site itself is served from (production domain, Pages preview, local dev).
+    const apiOrigin = 'https://api.bloodkings.eu';
 
     // Step 1: DNS
     stepDns.querySelector('.step-icon').className = 'step-icon status-pending';

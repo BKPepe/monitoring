@@ -186,10 +186,9 @@ services:
 
   // Fetch versions at runtime from Hono Cloudflare Worker API
   async function fetchVersions() {
-    let apiOrigin = window.location.origin;
-    if (!apiOrigin.includes('monitoring.bloodkings.eu')) {
-      apiOrigin = 'https://monitoring.bloodkings.eu';
-    }
+    // The worker API lives on its own subdomain, independent of wherever the
+    // static site itself is served from (production domain, Pages preview, local dev).
+    const apiOrigin = 'https://api.bloodkings.eu';
 
     try {
       const response = await fetch(`${apiOrigin}/api/versions`);

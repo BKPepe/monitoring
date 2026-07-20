@@ -97,10 +97,9 @@ const t = isCs ? {
     const monitorsEl = document.getElementById('dash-monitors');
     const agentsEl = document.getElementById('dash-agents');
 
-    let apiOrigin = window.location.origin;
-    if (!apiOrigin.includes('monitoring.bloodkings.eu')) {
-      apiOrigin = 'https://monitoring.bloodkings.eu';
-    }
+    // The worker API lives on its own subdomain, independent of wherever the
+    // static site itself is served from (production domain, Pages preview, local dev).
+    const apiOrigin = 'https://api.bloodkings.eu';
 
     try {
       const res = await fetch(`${apiOrigin}/api/status`);
