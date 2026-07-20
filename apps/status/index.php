@@ -273,7 +273,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                 <?php endforeach; ?>
                 <?php if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true): ?>
                     <a href="admin.php" class="btn btn-secondary btn-sm" style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.3); color: var(--color-green);"><i class="fas fa-user-shield"></i> Administrace (<?php echo htmlspecialchars($_SESSION['admin_username'] ?? 'Admin'); ?>)</a>
-                    <a href="admin.php?action=logout" class="btn btn-secondary btn-sm" style="background: rgba(230, 57, 70, 0.1); border: 1px solid rgba(230, 57, 70, 0.3); color: var(--color-red);" onclick="return confirm('Opravdu se chcete odhlásit?')"><i class="fas fa-sign-out-alt"></i> Odhlásit</a>
+                    <a href="admin.php?action=logout" class="btn btn-secondary btn-sm" style="background: rgba(193, 18, 31, 0.1); border: 1px solid rgba(193, 18, 31, 0.3); color: var(--color-red);" onclick="return confirm('Opravdu se chcete odhlásit?')"><i class="fas fa-sign-out-alt"></i> Odhlásit</a>
                 <?php else: ?>
                     <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-lock"></i> Admin</a>
                 <?php endif; ?>
@@ -1450,8 +1450,8 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 {
                                                                     label: 'CPU (%)',
                                                                     data: <?php echo json_encode($cpu_data); ?>,
-                                                                    borderColor: '#e63946',
-                                                                    backgroundColor: 'rgba(230, 57, 70, 0.05)',
+                                                                    borderColor: '#c1121f',
+                                                                    backgroundColor: 'rgba(193, 18, 31, 0.05)',
                                                                     borderWidth: 2,
                                                                     pointRadius: 0,
                                                                     tension: 0.3,
@@ -1460,7 +1460,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 {
                                                                     label: 'RAM (%)',
                                                                     data: <?php echo json_encode($ram_data); ?>,
-                                                                    borderColor: '#2ec4b6',
+                                                                    borderColor: '#1ec773',
                                                                     backgroundColor: 'rgba(30, 199, 115, 0.05)',
                                                                     borderWidth: 2,
                                                                     pointRadius: 0,

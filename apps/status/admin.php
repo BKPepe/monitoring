@@ -162,10 +162,10 @@ if (!$is_logged_in) {
     </head>
     <body style="display: flex; align-items: center; justify-content: center; height: 100vh; padding: 0; position: relative;">
         <div style="position: absolute; top: 1.5rem; right: 1.5rem;">
-            <button id="theme-toggle" class="btn btn-secondary btn-sm" style="clip-path: none; border-radius: 4px; padding: 0.5rem 0.75rem;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
+            <button id="theme-toggle" class="btn btn-secondary btn-sm" style="border-radius: 4px; padding: 0.5rem 0.75rem;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
         </div>
         <div class="login-wrapper">
-            <h2><i class="fas fa-lock" style="color: var(--color-red); margin-right: 0.5rem;"></i> Blood Kings Admin</h2>
+            <h2><i class="fas fa-lock" style="color: var(--color-red); margin-right: 0.5rem;"></i> <?php echo htmlspecialchars($site_title); ?> Admin</h2>
             <?php if (!empty($login_error)): ?>
                 <div class="alert alert-danger"><?php echo $login_error; ?></div>
             <?php endif; ?>
@@ -684,12 +684,12 @@ $site_title = get_setting('site_title', 'Blood Kings');
     <header>
         <div class="container header-wrapper">
             <a href="index.php" class="logo">
-                <i class="fas fa-gamepad" style="color: var(--color-red);"></i> Blood Kings <span>Status Admin</span>
+                <i class="fas fa-server" style="color: var(--color-red);"></i> <?php echo htmlspecialchars($site_title); ?> <span>Admin</span>
             </a>
             <div class="nav-links">
                 <a href="index.php"><i class="fas fa-chart-line"></i> Dashboard</a>
                 <a href="admin.php?action=logout" class="btn btn-secondary btn-sm"><i class="fas fa-sign-out-alt"></i> Odhlásit (<?php echo htmlspecialchars($_SESSION['admin_username']); ?>)</a>
-                <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; clip-path: none; border-radius: 4px;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
+                <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
             </div>
         </div>
     </header>
@@ -1223,12 +1223,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             if ($detected_loc): ?>
                                 <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--color-green);">
                                     <i class="fas fa-map-marker-alt"></i> Automaticky detekovaná lokace serveru: <strong><?php echo htmlspecialchars($detected_loc); ?></strong>
-                                    <a href="admin.php?action=redetect_location" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; clip-path: none; border-radius: 4px;" title="Vynutí opětovný dotaz na IP geolokační API"><i class="fas fa-sync-alt"></i> Znovu detekovat</a>
+                                    <a href="admin.php?action=redetect_location" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; border-radius: 4px;" title="Vynutí opětovný dotaz na IP geolokační API"><i class="fas fa-sync-alt"></i> Znovu detekovat</a>
                                 </div>
                             <?php else: ?>
                                 <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted);">
                                     <i class="fas fa-info-circle"></i> Lokace hostingu dosud nebyla automaticky zjištěna (zjistí se sama při příštím běhu cronu).
-                                    <a href="admin.php?action=redetect_location" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; clip-path: none; border-radius: 4px;"><i class="fas fa-sync-alt"></i> Detekovat nyní</a>
+                                    <a href="admin.php?action=redetect_location" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; border-radius: 4px;"><i class="fas fa-sync-alt"></i> Detekovat nyní</a>
                                 </div>
                             <?php endif; ?>
                         </div>
@@ -1245,7 +1245,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         $is_smtp_env = is_setting_env_defined('smtp_host') || is_setting_env_defined('smtp_port') || is_setting_env_defined('smtp_user') || is_setting_env_defined('smtp_pass');
                         if ($is_smtp_env):
                         ?>
-                            <div style="background: rgba(46, 196, 182, 0.1); border-left: 4px solid var(--color-green); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.82rem; border: 1px solid rgba(46, 196, 182, 0.15);">
+                            <div style="background: rgba(30, 199, 115, 0.1); border-left: 4px solid var(--color-green); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.82rem; border: 1px solid rgba(30, 199, 115, 0.15);">
                                 <strong style="color: var(--color-green); display: flex; align-items: center; gap: 0.4rem;">
                                     <i class="fas fa-shield-alt"></i> SMTP je bezpečně nakonfigurováno
                                 </strong>
@@ -2128,7 +2128,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
     <!-- Footer -->
     <footer style="margin-top: 4rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
         <div class="container">
-            <p>&copy; <?php echo date('Y'); ?> Blood Kings. Všechna práva vyhrazena.</p>
+            <p>&copy; <?php echo date('Y'); ?> <?php echo htmlspecialchars($site_title); ?>. Všechna práva vyhrazena.</p>
             <?php $ver = get_app_version(); ?>
             <p style="font-size: 0.75rem; opacity: 0.55; margin-top: 0.25rem;">
                 <i class="fas fa-code-branch"></i> <?php echo htmlspecialchars($ver['label']); ?>

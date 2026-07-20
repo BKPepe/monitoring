@@ -148,8 +148,8 @@ function render_vps_agent_details($details, $monitor = null) {
                     <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
                         <?php foreach ($monitored_arr as $proc): 
                             $is_missing = in_array($proc, $missing_arr);
-                            $badge_bg = $is_missing ? 'rgba(230,57,70,0.1)' : 'rgba(46,196,182,0.1)';
-                            $badge_border = $is_missing ? 'rgba(230,57,70,0.2)' : 'rgba(46,196,182,0.2)';
+                            $badge_bg = $is_missing ? 'rgba(193,18,31,0.1)' : 'rgba(30,199,115,0.1)';
+                            $badge_border = $is_missing ? 'rgba(193,18,31,0.2)' : 'rgba(30,199,115,0.2)';
                             $badge_color = $is_missing ? 'var(--color-red)' : 'var(--color-green)';
                             $badge_icon = $is_missing ? 'fa-times-circle' : 'fa-check-circle';
                         ?>
@@ -170,7 +170,7 @@ function render_vps_agent_details($details, $monitor = null) {
                     <span style="color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Aktivní porty serveru:</span>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
                         <?php foreach ($ports_arr as $p): ?>
-                            <span style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.68rem; font-family: monospace; font-weight: bold;"><?php echo htmlspecialchars($p); ?></span>
+                            <span style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.68rem; font-family: monospace; font-weight: bold;"><?php echo htmlspecialchars($p); ?></span>
                         <?php endforeach; ?>
                     </div>
                 </div>
@@ -1121,9 +1121,9 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     $time = date('d.m.Y H:i:s');
     
     // HTML Šablona pro E-mail v barvách Blood Kings (červeno-černá)
-    $color_theme = '#e63946'; // red
+    $color_theme = '#c1121f'; // red
     if ($new_status === 'up') {
-        $color_theme = '#2ec4b6'; // teal
+        $color_theme = '#1ec773'; // teal
     } elseif ($new_status === 'maintenance' || $new_status === 'vps_warning') {
         $color_theme = '#f39c12'; // orange
     }
@@ -1338,7 +1338,7 @@ function send_digest_report($pdo, $period = 'weekly') {
         <meta charset="utf-8">
         <style>
             body { font-family: Arial, sans-serif; background-color: #0f0f13; color: #e1e1e6; margin: 0; padding: 20px; }
-            .container { max-width: 640px; margin: 0 auto; background-color: #1a1a24; border-radius: 8px; border-top: 5px solid #e63946; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+            .container { max-width: 640px; margin: 0 auto; background-color: #1a1a24; border-radius: 8px; border-top: 5px solid #c1121f; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
             .header { padding: 25px; text-align: center; background-color: #12121a; }
             .header h1 { margin: 0; font-size: 22px; color: #ffffff; }
             .header p { margin: 6px 0 0 0; color: #888896; font-size: 13px; }
