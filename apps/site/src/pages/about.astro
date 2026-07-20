@@ -17,7 +17,7 @@ import Layout from '../layouts/Layout.astro';
       <div class="story-text">
         <h2>How it Started</h2>
         <p>
-          The **Blood Kings Monitoring** project was born out of frustration with the increasing costs and artificial limits imposed on free tiers by major cloud uptime checking providers. We believe that uptime tracking is a fundamental component of any modern application and shouldn't require paying subscription taxes for each added endpoint or telemetry node.
+          The <strong>Blood Kings Monitoring</strong> project was born out of frustration with the increasing costs and artificial limits imposed on free tiers by major cloud uptime checking providers. We believe that uptime tracking is a fundamental component of any modern application and shouldn't require paying subscription taxes for each added endpoint or telemetry node.
         </p>
         <p>
           We set out to build a platform that combines the configuration simplicity of cloud tools with the security and data isolation of self-hosted software. Our focus is to enable anyone to monitor their complete hardware and service footprint on their own servers.
@@ -49,7 +49,7 @@ import Layout from '../layouts/Layout.astro';
           </div>
           <div class="meta-item font-mono-link">
             <span>GitHub:</span>
-            <strong><a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener">BKPepe/bloodkings</a></strong>
+            <strong><a href="https://github.com/BKPepe/monitoring" target="_blank" rel="noopener">BKPepe/monitoring</a></strong>
           </div>
         </div>
       </div>
@@ -83,7 +83,7 @@ import Layout from '../layouts/Layout.astro';
 
       try {
         // Query GitHub API directly client-side
-        const response = await fetch('https://api.github.com/repos/BKPepe/bloodkings/contributors');
+        const response = await fetch('https://api.github.com/repos/BKPepe/monitoring/contributors');
         if (!response.ok) throw new Error('API failed');
 
         const contributors = await response.json();

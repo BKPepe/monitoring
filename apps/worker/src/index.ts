@@ -65,13 +65,13 @@ app.get('/api/stats', async (c) => {
 
   try {
     const stats = await withCache('github-stats', 3600, async () => {
-      const repo = await fetchGitHub('/repos/BKPepe/bloodkings', token)
+      const repo = await fetchGitHub('/repos/BKPepe/monitoring', token)
       
       // Let's try fetching contributors. GitHub contributors endpoint can be paginated,
       // but a simple length check on the first page of contributors is sufficient.
       let contributorsCount = 5 // Fallback default
       try {
-        const contributors = await fetchGitHub('/repos/BKPepe/bloodkings/contributors?per_page=100', token)
+        const contributors = await fetchGitHub('/repos/BKPepe/monitoring/contributors?per_page=100', token)
         if (Array.isArray(contributors)) {
           contributorsCount = contributors.length
         }
@@ -112,13 +112,13 @@ app.get('/api/versions', async (c) => {
       let publishedAt = new Date().toISOString().split('T')[0]
 
       try {
-        const latestRelease = await fetchGitHub('/repos/BKPepe/bloodkings/releases/latest', token)
+        const latestRelease = await fetchGitHub('/repos/BKPepe/monitoring/releases/latest', token)
         latestTag = latestRelease.tag_name ?? latestTag
         publishedAt = latestRelease.published_at ? new Date(latestRelease.published_at).toISOString().split('T')[0] : publishedAt
       } catch (e) {
         // Fallback to tags if no official release yet
         try {
-          const tags = await fetchGitHub('/repos/BKPepe/bloodkings/tags', token)
+          const tags = await fetchGitHub('/repos/BKPepe/monitoring/tags', token)
           if (tags && tags.length > 0) {
             latestTag = tags[0].name
           }
@@ -166,7 +166,7 @@ app.get('/api/changelog', async (c) => {
 
   try {
     const changelog = await withCache('github-changelog', 1800, async () => {
-      const releases = await fetchGitHub('/repos/BKPepe/bloodkings/releases', token)
+      const releases = await fetchGitHub('/repos/BKPepe/monitoring/releases', token)
       if (!Array.isArray(releases)) return []
 
       return releases.map((release: any) => ({
@@ -195,7 +195,7 @@ app.get('/api/changelog', async (c) => {
         title: 'Initial Alpha Release',
         date: '16. července 2026',
         body: 'První veřejná verze Blood Kings Monitoring.\n\n- Self-hosted monitorovací server\n- Vzdálení agenti pro Linux, Windows a Docker\n- Veřejné status stránky\n- E-mailové a Discord notifikace',
-        url: 'https://github.com/BKPepe/bloodkings',
+        url: 'https://github.com/BKPepe/monitoring',
         author: {
           name: 'BKPepe',
           avatar: 'https://github.com/BKPepe.png',

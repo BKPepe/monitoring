@@ -264,7 +264,10 @@ const t = isCs ? {
       resBigIcon.className = 'res-status-icon success';
       resBigIcon.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
       resTitle.textContent = isCs ? 'Webový server je online' : 'Web server is online';
-      resTitle.style.color = 'var(--text-primary)';
+      // Terminal panel background is always dark (terminal aesthetic, independent of
+      // site theme), so this text must stay light-colored even in light theme - using
+      // the theme-aware --text-primary here made it invisible (near-black on near-black).
+      resTitle.style.color = '#f4f4f5';
     } else {
       resBigIcon.className = 'res-status-icon error';
       resBigIcon.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
