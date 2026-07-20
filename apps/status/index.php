@@ -129,16 +129,25 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     $incidents = $stmt_inc->fetchAll();
 
     // Distribuovaní agenti/uzly, kteří v posledních 24h hlásili měření (veřejná
-    // "Global Agent Map" - stejná logika jako admin diagnostika, bez citlivých detailů)
-    $stmt_regions = $pdo->query("
+    // "Global Agent Map" - stejná logika jako admin diagnostika, bez citlivých detailů).
+    // Hlavní server (lokální cron.php) zapisuje své vlastní kontroly do stejného
+    // sloupce checked_from jako vzdálení agenti - bez vyloučení by se "hub" tvářil
+    // jako distribuovaný uzel, což zkresluje počet i smysl téhle sekce.
+    $hub_location = trim(get_setting('cron_location', ''));
+    if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
+        $hub_location = trim(get_setting('ip_loc_local', ''));
+    }
+    $stmt_regions = $pdo->prepare("
         SELECT checked_from, COUNT(*) as cnt, MAX(checked_at) as last_seen,
                ROUND(AVG(response_time)) as avg_latency
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND checked_from IS NOT NULL
+              AND checked_from != 'Main Server'" . ($hub_location !== '' ? " AND checked_from != ?" : "") . "
         GROUP BY checked_from
         ORDER BY last_seen DESC
         LIMIT 24
     ");
+    $stmt_regions->execute($hub_location !== '' ? [$hub_location] : []);
     $regions = $stmt_regions->fetchAll();
 
     $bk_agg = [
@@ -1020,39 +1029,12 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                              </div>
                                                          <?php endif; ?>
 
-                                                         <?php 
-                                                         // Průměrný ping dle lokací
-                                                         $stmt_locs = $pdo->prepare("
-                                                             SELECT checked_from, ROUND(AVG(response_time)) as avg_time, MAX(checked_at) as last_checked 
-                                                             FROM monitor_logs 
-                                                             WHERE monitor_id = ? AND response_time IS NOT NULL AND response_time > 0
-                                                             GROUP BY checked_from 
-                                                             ORDER BY last_checked DESC
-                                                         ");
-                                                         $stmt_locs->execute([$mid]);
-                                                         $loc_stats = $stmt_locs->fetchAll();
-                                                         if (!empty($loc_stats)):
-                                                         ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars(t('avg_ping_by_location_heading')); ?></div>
-                                                             <div class="location-stats-list" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem;">
-                                                                 <?php foreach ($loc_stats as $ls): 
-                                                                     $loc_name = $ls['checked_from'] ?: t('main_system');
-                                                                     $avg_time = intval($ls['avg_time']);
-                                                                 ?>
-                                                                     <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                         <span style="color: var(--text-secondary);"><i class="fas fa-server" style="color: var(--color-green); margin-right: 0.5rem; font-size: 0.75rem;"></i> <?php echo htmlspecialchars($loc_name); ?></span>
-                                                                         <strong style="color: #fff;"><?php echo $avg_time; ?> ms</strong>
-                                                                     </div>
-                                                                 <?php endforeach; ?>
-                                                             </div>
-                                                         <?php endif; ?>
-                                                         
                                                          <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
                                                              <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
-                                                                 
+
                                                                  <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                      <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                                  </button>
@@ -1262,32 +1244,6 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
                                                              <?php echo render_vps_agent_details($details, $monitor); ?>
                                                          <?php endif; ?>
-                                                          
-                                                          <?php
-                                                          $stmt_locs = $pdo->prepare("
-                                                              SELECT checked_from, ROUND(AVG(response_time)) as avg_time, MAX(checked_at) as last_checked 
-                                                              FROM monitor_logs 
-                                                              WHERE monitor_id = ? AND response_time IS NOT NULL AND response_time > 0
-                                                              GROUP BY checked_from 
-                                                              ORDER BY last_checked DESC
-                                                          ");
-                                                          $stmt_locs->execute([$mid]);
-                                                          $loc_stats = $stmt_locs->fetchAll();
-                                                          if (!empty($loc_stats)):
-                                                          ?>
-                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars(t('avg_ping_by_location_heading')); ?></div>
-                                                              <div class="location-stats-list" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem;">
-                                                                  <?php foreach ($loc_stats as $ls): 
-                                                                      $loc_name = $ls['checked_from'] ?: t('main_system');
-                                                                      $avg_time = intval($ls['avg_time']);
-                                                                  ?>
-                                                                      <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                          <span style="color: var(--text-secondary);"><i class="fas fa-server" style="color: var(--color-green); margin-right: 0.5rem; font-size: 0.75rem;"></i> <?php echo htmlspecialchars($loc_name); ?></span>
-                                                                          <strong style="color: #fff;"><?php echo $avg_time; ?> ms</strong>
-                                                                      </div>
-                                                                  <?php endforeach; ?>
-                                                              </div>
-                                                          <?php endif; ?>
                                                           
                                                           <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>

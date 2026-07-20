@@ -705,11 +705,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
         <?php endif; ?>
 
         <?php if ($user_role === 'admin'): ?>
-        <div class="admin-grid">
-            
-            <!-- LEVÝ SLOUPEC: Seznam monitorů -->
-            <div>
-                <div class="admin-card">
+        <!-- Seznam monitorů - vlastní plná šířka, aby se tabulka nemusela vejít vedle jiné karty -->
+        <div class="admin-card">
                     <div class="admin-header">
                         <h2><i class="fas fa-list-ul"></i> Sledované servery a služby</h2>
                         <button type="button" onclick="openMonitorModal()" class="btn btn-sm"><i class="fas fa-plus"></i> Přidat monitor</button>
@@ -1482,10 +1479,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     })();
                     </script>
                 </div>
-            </div>
-            
-            <!-- PRAVÝ SLOUPEC: Formulář přidání / editace monitoru (jako modal) & profil -->
-            <div>
+
+                <!-- Formulář přidání / editace monitoru (modal) -->
                 <div class="modal-overlay modal-overlay-wide" id="monitor-form-modal" style="display: <?php echo $edit_monitor ? 'flex' : 'none'; ?>;">
                 <div class="admin-card" style="border-top: 4px solid var(--color-red);">
                     <div class="admin-header">
@@ -1714,10 +1709,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <a href="admin.php?action=send_monthly_digest" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat měsíční digest všem adminům"><i class="fas fa-chart-pie"></i> Odeslat měsíční digest</a>
                     </form>
                 </div>
-            </div>
 
-        </div>
-        
         <!-- SEKCE: Správa uživatelů (pouze pro Admina) -->
         <div class="admin-grid" style="margin-top: 2rem;">
             <!-- LEVÝ SLOUPEC: Seznam uživatelů -->

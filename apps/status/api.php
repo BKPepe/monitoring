@@ -79,6 +79,105 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
     exit;
 }
 
+// Veřejný agregovaný přehled pro externí zobrazení (např. marketingový web).
+// Záměrně neobsahuje jména/cíle jednotlivých monitorů ani checked_from detaily
+// jednotlivých kontrol - jen souhrnná čísla a seznam distribuovaných lokací,
+// stejně jako zbytek veřejné status stránky.
+if (($_GET['action'] ?? '') === 'public_status') {
+    try {
+        $stmt_stats = $pdo->query("
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+                SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
+                MAX(last_checked) as last_checked
+            FROM monitors
+        ");
+        $stats = $stmt_stats->fetch();
+        $total_monitors = (int)($stats['total'] ?? 0);
+        $down_monitors = (int)($stats['down_count'] ?? 0);
+
+        $stmt_upt = $pdo->query("
+            SELECT monitor_id,
+                   SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+                   SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY monitor_id
+        ");
+        $uptime_values = [];
+        while ($row = $stmt_upt->fetch()) {
+            if ($row['total_count'] > 0) {
+                $uptime_values[] = ($row['up_count'] / $row['total_count']) * 100;
+            }
+        }
+        $avg_uptime = !empty($uptime_values) ? round(array_sum($uptime_values) / count($uptime_values), 3) : 100.0;
+
+        $stmt_latency = $pdo->query("
+            SELECT AVG(response_time) as avg_latency
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND response_time > 0
+        ");
+        $avg_latency = (int)round($stmt_latency->fetch()['avg_latency'] ?? 0);
+
+        // Agenti s agent_key, kteří v posledních 24h reálně hlásili data
+        $offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
+        $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != ''");
+        $agents_total = 0;
+        $agents_online = 0;
+        while ($row = $stmt_agents->fetch()) {
+            $agents_total++;
+            $det = json_decode($row['last_details'] ?? '', true);
+            $last_seen = $det['agent_last_seen'] ?? 0;
+            if ($last_seen > 0 && ($offline_timeout_secs === 0 || (time() - (int)$last_seen) < $offline_timeout_secs)) {
+                $agents_online++;
+            }
+        }
+
+        // Distribuované lokace (stejná logika jako Global Agent Map na status stránce -
+        // hlavní server je vyloučen, protože není "distribuovaný")
+        $hub_location = trim(get_setting('cron_location', ''));
+        if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
+            $hub_location = trim(get_setting('ip_loc_local', ''));
+        }
+        $stmt_regions = $pdo->prepare("
+            SELECT checked_from, MAX(checked_at) as last_seen, ROUND(AVG(response_time)) as avg_latency
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND checked_from IS NOT NULL
+                  AND checked_from != 'Main Server'" . ($hub_location !== '' ? " AND checked_from != ?" : "") . "
+            GROUP BY checked_from
+            ORDER BY last_seen DESC
+            LIMIT 24
+        ");
+        $stmt_regions->execute($hub_location !== '' ? [$hub_location] : []);
+        $nodes = [];
+        foreach ($stmt_regions->fetchAll() as $rg) {
+            $diff_min = round((time() - strtotime($rg['last_seen'])) / 60);
+            $nodes[] = [
+                'name' => $rg['checked_from'],
+                'status' => $diff_min < 15 ? 'online' : ($diff_min < 60 ? 'warning' : 'offline'),
+                'latencyMs' => $rg['avg_latency'] !== null ? (int)$rg['avg_latency'] : null,
+            ];
+        }
+
+        echo json_encode([
+            'status' => $down_monitors > 0 ? 'degraded' : 'healthy',
+            'uptimePercent' => $avg_uptime,
+            'totalMonitors' => $total_monitors,
+            'downMonitors' => $down_monitors,
+            'agentsOnline' => $agents_online,
+            'agentsTotal' => $agents_total,
+            'avgLatencyMs' => $avg_latency,
+            'lastUpdated' => $stats['last_checked'] ? date('c', strtotime($stats['last_checked'])) : null,
+            'nodes' => $nodes,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Exception $e) {
+        http_response_code(503);
+        echo json_encode(['error' => 'unavailable']);
+    }
+    exit;
+}
+
 $response = [
     'teamspeak' => [
         'online' => false,
