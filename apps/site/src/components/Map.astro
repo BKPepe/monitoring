@@ -59,7 +59,7 @@ const t = isCs ? {
     };
 
     let apiOrigin = window.location.origin;
-    if (apiOrigin.includes('localhost') || apiOrigin.includes('127.0.0.1')) {
+    if (!apiOrigin.includes('monitoring.bloodkings.eu')) {
       apiOrigin = 'https://monitoring.bloodkings.eu';
     }
 

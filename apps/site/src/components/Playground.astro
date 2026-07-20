@@ -195,7 +195,7 @@ const t = isCs ? {
 
     // Determine API origin
     let apiOrigin = window.location.origin;
-    if (apiOrigin.includes('localhost') || apiOrigin.includes('127.0.0.1')) {
+    if (!apiOrigin.includes('monitoring.bloodkings.eu')) {
       // Fallback API during local development if worker is not running on same port
       apiOrigin = 'https://monitoring.bloodkings.eu';
     }
