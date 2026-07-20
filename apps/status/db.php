@@ -16,7 +16,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260720');
+    define('BK_SCHEMA_VERSION', '20260721');
 
     $bk_current_schema = false;
     try {
@@ -215,6 +215,18 @@ try {
     // řádků a u agentů, kteří síť ještě nehlásí (chybí předchozí vzorek pro výpočet).
     try {
         $pdo->exec("ALTER TABLE vps_metrics ADD COLUMN net_usage FLOAT DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+
+    // Automatická migrace - check pipeline (DNS/TCP/TLS/HTTP/body fáze u 'web' monitorů)
+    try {
+        $pdo->exec("ALTER TABLE monitors ADD COLUMN body_keyword VARCHAR(255) DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+    try {
+        $pdo->exec("ALTER TABLE monitor_logs ADD COLUMN check_stages TEXT DEFAULT NULL");
     } catch (PDOException $e) {
         // Ignorujeme
     }

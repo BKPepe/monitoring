@@ -657,7 +657,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                         <div class="details-content-inner">
                                             <?php
                                             // Načtení posledních logů pro historii a výpočet frekvence (zabraňuje duplicitním SQL dotazům)
-                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
+                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_last_logs->execute([$mid]);
                                             $last_logs = $stmt_last_logs->fetchAll();
                                             
@@ -695,6 +695,53 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     }
                                                 }
                                             }
+                                            // Check pipeline (DNS/TCP/TLS/HTTP/body fáze) - jen u typu 'web', z posledního logu.
+                                            // Confidence Score kombinuje podíl úspěšných fází s konsensem mezi regiony
+                                            // (Distributed View výše) - nikdy nenahrazuje status-dot, jen ho doplňuje.
+                                            $pipeline = null;
+                                            $confidence_score = null;
+                                            if ($m_type === 'web' && !empty($last_logs[0]['check_stages'])) {
+                                                $decoded_pipeline = json_decode($last_logs[0]['check_stages'], true);
+                                                if (is_array($decoded_pipeline)) {
+                                                    $pipeline = $decoded_pipeline;
+                                                }
+                                            }
+                                            $pipeline_stage_order = ['dns', 'tcp', 'tls', 'http', 'body'];
+                                            $stage_labels = [
+                                                'dns' => t('pipeline_stage_dns'),
+                                                'tcp' => t('pipeline_stage_tcp'),
+                                                'tls' => t('pipeline_stage_tls'),
+                                                'http' => t('pipeline_stage_http'),
+                                                'body' => t('pipeline_stage_body'),
+                                            ];
+                                            if ($pipeline !== null) {
+                                                $stages_present = 0;
+                                                $stages_ok = 0;
+                                                foreach ($pipeline_stage_order as $sk) {
+                                                    if (isset($pipeline[$sk])) {
+                                                        $stages_present++;
+                                                        if (!empty($pipeline[$sk]['ok'])) $stages_ok++;
+                                                    }
+                                                }
+                                                $stage_health = $stages_present > 0 ? ($stages_ok / $stages_present) * 100 : null;
+
+                                                $region_consensus = null;
+                                                if (!empty($distributed_view)) {
+                                                    $region_up = 0;
+                                                    foreach ($distributed_view as $dv) {
+                                                        if ($dv['status'] === 'up') $region_up++;
+                                                    }
+                                                    $region_consensus = ($region_up / count($distributed_view)) * 100;
+                                                }
+
+                                                if ($stage_health !== null && $region_consensus !== null) {
+                                                    $confidence_score = round(($stage_health * 0.6) + ($region_consensus * 0.4), 2);
+                                                } elseif ($stage_health !== null) {
+                                                    $confidence_score = round($stage_health, 2);
+                                                } elseif ($region_consensus !== null) {
+                                                    $confidence_score = round($region_consensus, 2);
+                                                }
+                                            }
                                             $agent_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.py";
                                             $agent_url = str_replace('\\', '/', $agent_url); // Normalize paths for Windows/Mac
                                             $agent_sh_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.sh";
@@ -730,6 +777,126 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <?php endforeach; ?>
                                                     </div>
                                                 </div>
+                                            <?php endif; ?>
+
+                                            <?php if ($pipeline !== null): ?>
+                                                <div class="check-pipeline-section" style="margin-bottom: 1.25rem;">
+                                                    <div class="detail-section-title">
+                                                        <i class="fas fa-route"></i> <?php echo htmlspecialchars(t('pipeline_heading')); ?>
+                                                        <?php if ($confidence_score !== null): ?>
+                                                            <span style="font-weight: normal; font-size: 0.78rem; color: var(--text-muted); margin-left: 0.5rem;">
+                                                                &middot; <?php echo htmlspecialchars(t('confidence_score_label')); ?>:
+                                                                <strong style="color: <?php echo $confidence_score >= 90 ? 'var(--color-green)' : ($confidence_score >= 70 ? 'var(--color-yellow)' : 'var(--color-red)'); ?>;"><?php echo number_format($confidence_score, 2, ',', ' '); ?>%</strong>
+                                                            </span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
+                                                        <?php $pipeline_first = true; ?>
+                                                        <?php foreach ($pipeline_stage_order as $sk): ?>
+                                                            <?php if (!isset($pipeline[$sk])) continue; ?>
+                                                            <?php
+                                                                $stage_ok = !empty($pipeline[$sk]['ok']);
+                                                                $chip_title = '';
+                                                                if ($sk === 'http' && isset($pipeline[$sk]['status_code'])) {
+                                                                    $chip_title = 'HTTP ' . $pipeline[$sk]['status_code'];
+                                                                } elseif ($sk === 'tls' && isset($pipeline[$sk]['cert']['days_remaining'])) {
+                                                                    $chip_title = $pipeline[$sk]['cert']['days_remaining'] . 'd';
+                                                                }
+                                                            ?>
+                                                            <?php if (!$pipeline_first): ?><i class="fas fa-arrow-right" style="color: var(--text-muted); font-size: 0.65rem;"></i><?php endif; ?>
+                                                            <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $stage_ok ? 'rgba(30, 199, 115, 0.08)' : 'rgba(239, 35, 60, 0.08)'; ?>; border: 1px solid <?php echo $stage_ok ? 'rgba(30, 199, 115, 0.2)' : 'rgba(239, 35, 60, 0.2)'; ?>;" <?php if ($chip_title !== ''): ?>title="<?php echo htmlspecialchars($chip_title); ?>"<?php endif; ?>>
+                                                                <i class="fas <?php echo $stage_ok ? 'fa-check-circle' : 'fa-times-circle'; ?>" style="color: <?php echo $stage_ok ? 'var(--color-green)' : 'var(--color-red)'; ?>;"></i>
+                                                                <span><?php echo htmlspecialchars($stage_labels[$sk]); ?></span>
+                                                            </div>
+                                                            <?php $pipeline_first = false; ?>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+
+                                                <div class="response-breakdown-section" style="margin-bottom: 1.25rem;">
+                                                    <div class="detail-section-title"><i class="fas fa-stopwatch"></i> <?php echo htmlspecialchars(t('response_breakdown_heading')); ?></div>
+                                                    <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                        <?php foreach ($pipeline_stage_order as $sk): ?>
+                                                            <?php if (!isset($pipeline[$sk]['time_ms'])) continue; ?>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                <span style="color: var(--text-muted);"><?php echo htmlspecialchars($stage_labels[$sk]); ?>:</span>
+                                                                <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$pipeline[$sk]['time_ms']; ?>&nbsp;ms</strong>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                        <?php if (isset($pipeline['total_time_ms'])): ?>
+                                                            <div style="background: rgba(193, 18, 31, 0.06); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(193, 18, 31, 0.15);">
+                                                                <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('response_total')); ?>:</span>
+                                                                <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$pipeline['total_time_ms']; ?>&nbsp;ms</strong>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+
+                                                <?php if (!empty($pipeline['tls']['cert'])): $cert = $pipeline['tls']['cert']; ?>
+                                                    <div class="ssl-card-section" style="margin-bottom: 1.25rem;">
+                                                        <div class="detail-section-title"><i class="fas fa-lock"></i> <?php echo htmlspecialchars(t('ssl_card_heading')); ?></div>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                            <?php if (!empty($cert['issuer'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_issuer')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($cert['issuer']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($cert['algo'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_algo')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($cert['algo']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($cert['valid_to'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_valid_until')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(date('d.m.Y', strtotime($cert['valid_to']))); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($cert['days_remaining'])): ?>
+                                                                <?php $days_color = $cert['days_remaining'] < 14 ? 'var(--color-red)' : ($cert['days_remaining'] < 30 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_days_remaining')); ?>:</span>
+                                                                    <strong style="color: <?php echo $days_color; ?>; margin-left: 0.25rem;"><?php echo (int)$cert['days_remaining']; ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if (isset($pipeline['http'])): ?>
+                                                    <details class="headers-section" style="margin-bottom: 1.25rem;">
+                                                        <summary class="detail-section-title" style="cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem;"><i class="fas fa-list"></i> <?php echo htmlspecialchars(t('headers_heading')); ?></summary>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                            <?php $ph = $pipeline['http']['headers'] ?? []; ?>
+                                                            <?php if (!empty($ph['server'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_server')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ph['server']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($ph['cache_control'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_cache_control')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ph['cache_control']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($ph['content_encoding'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_content_encoding')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ph['content_encoding']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($details['http_version'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_http_version')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($details['http_version']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </details>
+                                                <?php endif; ?>
                                             <?php endif; ?>
 
                                             <?php if ($m_type === 'minecraft'): ?>

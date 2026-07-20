@@ -171,6 +171,27 @@ return [
     'hdd_avg_max' => 'Disk Průměr / Max:',
     'net_avg_max' => 'Síť Průměr / Max:',
 
+    // Check pipeline
+    'pipeline_heading' => 'Check Pipeline',
+    'pipeline_stage_dns' => 'DNS',
+    'pipeline_stage_tcp' => 'TCP',
+    'pipeline_stage_tls' => 'TLS',
+    'pipeline_stage_http' => 'HTTP',
+    'pipeline_stage_body' => 'Obsah',
+    'response_breakdown_heading' => 'Rozpad odezvy',
+    'response_total' => 'Celkem',
+    'ssl_card_heading' => 'SSL certifikát',
+    'ssl_issuer' => 'Vydavatel',
+    'ssl_algo' => 'Algoritmus',
+    'ssl_valid_until' => 'Platnost do',
+    'ssl_days_remaining' => 'Zbývá dní',
+    'headers_heading' => 'HTTP hlavičky',
+    'header_server' => 'Server',
+    'header_cache_control' => 'Cache-Control',
+    'header_content_encoding' => 'Komprese',
+    'header_http_version' => 'HTTP verze',
+    'confidence_score_label' => 'Míra jistoty',
+
     // Výpadky monitoru
     'recent_outages_heading' => 'Nedávné výpadky (posledních 30 dní)',
     'th_time' => 'Čas',

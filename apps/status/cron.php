@@ -142,7 +142,7 @@ foreach ($monitors as $monitor) {
     // Aktivní kontroly z hostingu podle typu
     switch ($type) {
         case 'web':
-            $check_result = check_http($target, $timeout);
+            $check_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
             break;
             
         case 'cpanel':
@@ -356,8 +356,13 @@ foreach ($monitors as $monitor) {
             $stmt_set->execute(['ip_loc_local', $loc, $loc]);
         }
     }
-    $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, ?, ?, ?)");
-    $stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc]);
+    // check_stages (rozpad DNS/TCP/TLS/HTTP/body fází) existuje jen u typu 'web' -
+    // u ostatních typů je vždy null, žádná změna chování pro ně.
+    $check_stages_json = ($type === 'web' && isset($check_result['check_stages']))
+        ? json_encode($check_result['check_stages'], JSON_UNESCAPED_UNICODE)
+        : null;
+    $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);
     
     // Zjistit změnu stavu
     if ($old_status !== $new_status) {

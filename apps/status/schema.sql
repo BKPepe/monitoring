@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `cpu_threshold` INT DEFAULT 90, -- Práh varování v %
   `ram_threshold` INT DEFAULT 95,
   `hdd_threshold` INT DEFAULT 90,
+  `body_keyword` VARCHAR(255) DEFAULT NULL, -- Volitelný řetězec, který musí obsahovat tělo odpovědi (check pipeline)
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS `monitor_logs` (
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `error_message` TEXT DEFAULT NULL,
   `checked_from` VARCHAR(50) DEFAULT 'Main Server',
+  `check_stages` TEXT DEFAULT NULL, -- JSON s rozpadem DNS/TCP/TLS/HTTP/body fází (jen u typu 'web'), viz check_http()
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
   INDEX (`monitor_id`, `checked_at`)
@@ -125,5 +127,5 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Prometheus exporter (metrics.php) - prázdný token = endpoint vypnutý
 ('metrics_token', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260720')
+('schema_version', '20260721')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

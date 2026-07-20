@@ -243,6 +243,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $cpu_threshold = !empty($_POST['cpu_threshold']) ? intval($_POST['cpu_threshold']) : 90;
     $ram_threshold = !empty($_POST['ram_threshold']) ? intval($_POST['ram_threshold']) : 95;
     $hdd_threshold = !empty($_POST['hdd_threshold']) ? intval($_POST['hdd_threshold']) : 90;
+    $body_keyword = !empty($_POST['body_keyword']) && $type === 'web' ? trim($_POST['body_keyword']) : null;
 
     $cpanel_stats_url = !empty($_POST['cpanel_stats_url']) && $type === 'web' ? trim($_POST['cpanel_stats_url']) : null;
 
@@ -267,20 +268,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
             }
 
             $stmt = $pdo->prepare("
-                UPDATE monitors 
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?
+                UPDATE monitors
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $id]);
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
             // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
             $agent_key = bin2hex(random_bytes(16));
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword]);
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
     }
@@ -1517,7 +1518,15 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 Pokud chcete u tohoto webu sledovat i zatížení hostingu (Disk, RAM, CPU atd.), vložte sem odkaz na nahraný soubor <code>cpanel_stats.php</code> s vaším tajným klíčem.
                             </small>
                         </div>
-                        
+
+                        <div class="form-group" id="body-keyword-group" style="display: <?php echo (!$edit_monitor || $edit_monitor['type'] === 'web') ? 'block' : 'none'; ?>;">
+                            <label for="body_keyword">Ověření obsahu odpovědi (volitelné)</label>
+                            <input type="text" name="body_keyword" id="body_keyword" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['body_keyword'] ?? '') : ''; ?>" class="form-control" placeholder="Např. Blood Kings">
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">
+                                Pokud vyplníte, kontrola ověří, že tělo odpovědi obsahuje tento řetězec (fáze "Body" v check pipeline). Prázdné = fáze se přeskočí.
+                            </small>
+                        </div>
+
                         <div class="form-group" id="port-group" style="display: <?php echo ($edit_monitor && in_array($edit_monitor['type'], ['port', 'minecraft', 'teamspeak'])) ? 'block' : 'none'; ?>;">
                             <label for="port" id="port-label">Síťový port</label>
                             <input type="number" name="port" id="port" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['port'] ?? '') : ''; ?>" class="form-control" placeholder="Minecraft: 25565, TS3 Query: 10011">
@@ -1928,7 +1937,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             const portLabel = document.getElementById('port-label');
             const tsVoiceGroup = document.getElementById('teamspeak-voice-group');
             const cpanelStatsGroup = document.getElementById('cpanel-stats-group');
-            
+            const bodyKeywordGroup = document.getElementById('body-keyword-group');
+
             // Výchozí zobrazení
             portGroup.style.display = 'none';
             if (processesGroup) {
@@ -1943,6 +1953,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             if (cpanelStatsGroup) {
                 cpanelStatsGroup.style.display = 'none';
             }
+            if (bodyKeywordGroup) {
+                bodyKeywordGroup.style.display = 'none';
+            }
             if (portLabel) {
                 portLabel.textContent = "Síťový port";
             }
@@ -1951,6 +1964,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             if (type === 'web') {
                 if (cpanelStatsGroup) {
                     cpanelStatsGroup.style.display = 'block';
+                }
+                if (bodyKeywordGroup) {
+                    bodyKeywordGroup.style.display = 'block';
                 }
             } else if (type === 'port') {
                 portGroup.style.display = 'block';

@@ -233,27 +233,111 @@ function get_app_version() {
 }
 
 /**
+ * Vytáhne informace o TLS certifikátu (issuer, CN, SAN, platnost) přes vlastní
+ * samostatné spojení - záměrně nesdílí handle s hlavní HTTP kontrolou, aby tato
+ * (čistě informativní) fáze nemohla nijak ovlivnit chování/timing check_http().
+ * Vrací null při jakémkoli selhání (nehttps cíl, timeout, chyba parsování).
+ */
+function get_ssl_certificate_info($host, $port = 443, $timeout = 5) {
+    $context = stream_context_create([
+        'ssl' => [
+            'capture_peer_cert' => true,
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'SNI_enabled' => true,
+            'peer_name' => $host,
+        ]
+    ]);
+
+    $stream = @stream_socket_client(
+        "ssl://{$host}:{$port}",
+        $errno,
+        $errstr,
+        $timeout,
+        STREAM_CLIENT_CONNECT,
+        $context
+    );
+
+    if (!$stream) {
+        return null;
+    }
+
+    $params = stream_context_get_params($stream);
+    fclose($stream);
+
+    if (!isset($params['options']['ssl']['peer_certificate'])) {
+        return null;
+    }
+
+    $cert = openssl_x509_parse($params['options']['ssl']['peer_certificate']);
+    if (!$cert) {
+        return null;
+    }
+
+    $valid_to = $cert['validTo_time_t'] ?? null;
+    $days_remaining = $valid_to !== null ? (int)floor(($valid_to - time()) / 86400) : null;
+
+    $san = [];
+    if (!empty($cert['extensions']['subjectAltName'])) {
+        foreach (explode(',', $cert['extensions']['subjectAltName']) as $part) {
+            $san[] = trim(str_replace('DNS:', '', $part));
+        }
+    }
+
+    return [
+        'issuer' => $cert['issuer']['O'] ?? ($cert['issuer']['CN'] ?? ''),
+        'cn' => $cert['subject']['CN'] ?? '',
+        'san' => $san,
+        'valid_from' => isset($cert['validFrom_time_t']) ? date('c', $cert['validFrom_time_t']) : null,
+        'valid_to' => $valid_to !== null ? date('c', $valid_to) : null,
+        'days_remaining' => $days_remaining,
+        'algo' => $cert['signatureTypeSN'] ?? '',
+    ];
+}
+
+/**
  * Kontrola HTTP/HTTPS webu
  */
-function check_http($url, $timeout = 5) {
+function check_http($url, $timeout = 5, $body_keyword = null) {
     $start = microtime(true);
-    
+
     $host = parse_url($url, PHP_URL_HOST);
     $has_ipv4 = false;
     $has_ipv6 = false;
+    $dns_start = microtime(true);
+    $dns_records = ['A' => [], 'AAAA' => []];
     if ($host) {
         $dns_a = @dns_get_record($host, DNS_A);
         $has_ipv4 = !empty($dns_a);
-        
+        foreach ((array)$dns_a as $rec) {
+            if (!empty($rec['ip'])) $dns_records['A'][] = $rec['ip'];
+        }
+
         $dns_aaaa = @dns_get_record($host, DNS_AAAA);
         $has_ipv6 = !empty($dns_aaaa);
+        foreach ((array)$dns_aaaa as $rec) {
+            if (!empty($rec['ipv6'])) $dns_records['AAAA'][] = $rec['ipv6'];
+        }
     }
-    
+    $dns_time_ms = round((microtime(true) - $dns_start) * 1000);
+
+    // Rozpad kontroly na jednotlivé fáze (DNS/TCP/TLS/HTTP/body) pro diagnostický
+    // "check pipeline" na detailu monitoru. Nic z tohoto nemá vliv na $status níže -
+    // ten určuje výhradně HTTP kód/cURL chyba stejně jako dřív.
+    $check_stages = [
+        'dns' => [
+            'ok' => $host ? ($has_ipv4 || $has_ipv6) : false,
+            'time_ms' => $dns_time_ms,
+            'records' => $dns_records,
+        ],
+    ];
+
     // Zjistíme zda je k dispozici cURL
     if (function_exists('curl_init')) {
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HEADER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -261,18 +345,31 @@ function check_http($url, $timeout = 5) {
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
         curl_setopt($ch, CURLOPT_USERAGENT, 'BloodKingsStatusBot/1.0');
-        
-        $response = curl_exec($ch);
+
+        $raw_response = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
-        
+
         $primary_ip = curl_getinfo($ch, CURLINFO_PRIMARY_IP);
         $scheme = curl_getinfo($ch, CURLINFO_SCHEME);
         $http_version_raw = curl_getinfo($ch, CURLINFO_HTTP_VERSION);
+
+        $connect_time = curl_getinfo($ch, CURLINFO_CONNECT_TIME);
+        $appconnect_time = curl_getinfo($ch, CURLINFO_APPCONNECT_TIME);
+        $starttransfer_time = curl_getinfo($ch, CURLINFO_STARTTRANSFER_TIME);
+        $total_time = curl_getinfo($ch, CURLINFO_TOTAL_TIME);
+        $header_size = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         curl_close($ch);
-        
+
+        $response = $raw_response;
+        $response_headers = '';
+        if ($raw_response !== false && $header_size > 0) {
+            $response_headers = substr($raw_response, 0, $header_size);
+            $response = substr($raw_response, $header_size);
+        }
+
         $duration = round((microtime(true) - $start) * 1000);
-        
+
         $http_version = 'HTTP/1.1';
         if ($http_version_raw === 3) {
             $http_version = 'HTTP/2';
@@ -281,7 +378,7 @@ function check_http($url, $timeout = 5) {
         } elseif ($http_version_raw === 1) {
             $http_version = 'HTTP/1.0';
         }
-        
+
         $conn_details = [
             'has_ipv4' => $has_ipv4,
             'has_ipv6' => $has_ipv6,
@@ -289,26 +386,75 @@ function check_http($url, $timeout = 5) {
             'scheme' => $scheme ?: 'HTTP',
             'http_version' => $http_version
         ];
-        
+
+        $check_stages['tcp'] = [
+            'ok' => $response !== false,
+            'time_ms' => round($connect_time * 1000),
+        ];
+
+        // TLS certifikát jen u úspěšně navázaných https spojení - u nedostupného
+        // hostu by samostatný SSL pokus jen zdvojil čekání na timeout zbytečně.
+        if ($response !== false && stripos((string)$scheme, 'https') !== false && $host) {
+            $tls_port = parse_url($url, PHP_URL_PORT) ?: 443;
+            $cert_info = get_ssl_certificate_info($host, $tls_port, min($timeout, 5));
+            $check_stages['tls'] = [
+                'ok' => $cert_info !== null,
+                'time_ms' => round(max(0, $appconnect_time - $connect_time) * 1000),
+                'cert' => $cert_info,
+            ];
+        }
+
+        $parsed_headers = [];
+        foreach (explode("\r\n", $response_headers) as $h_line) {
+            if (strpos($h_line, ':') === false) continue;
+            [$h_key, $h_val] = explode(':', $h_line, 2);
+            $parsed_headers[strtolower(trim($h_key))] = trim($h_val);
+        }
+        $check_stages['http'] = [
+            'ok' => $http_code >= 200 && $http_code < 400,
+            'time_ms' => round($starttransfer_time * 1000),
+            'status_code' => $http_code,
+            'headers' => [
+                'server' => $parsed_headers['server'] ?? null,
+                'cache_control' => $parsed_headers['cache-control'] ?? null,
+                'content_encoding' => $parsed_headers['content-encoding'] ?? null,
+                'etag' => $parsed_headers['etag'] ?? null,
+            ],
+        ];
+
+        if ($body_keyword !== null && $body_keyword !== '') {
+            $keyword_found = $response !== false && strpos($response, $body_keyword) !== false;
+            $check_stages['body'] = [
+                'ok' => $keyword_found,
+                'time_ms' => round(max(0, $total_time - $starttransfer_time) * 1000),
+                'keyword_found' => $keyword_found,
+            ];
+        }
+
+        $check_stages['total_time_ms'] = round($total_time * 1000);
+
         if ($response === false) {
             return array_merge([
                 'status' => 'down',
                 'response_time' => 0,
-                'error' => "cURL chyba: " . $error
+                'error' => "cURL chyba: " . $error,
+                'check_stages' => $check_stages
             ], $conn_details);
         }
-        
+
         if ($http_code >= 200 && $http_code < 400) {
             return array_merge([
                 'status' => 'up',
                 'response_time' => $duration,
-                'error' => null
+                'error' => null,
+                'check_stages' => $check_stages
             ], $conn_details);
         } else {
             return array_merge([
                 'status' => 'down',
                 'response_time' => $duration,
-                'error' => "HTTP status kód: " . $http_code
+                'error' => "HTTP status kód: " . $http_code,
+                'check_stages' => $check_stages
             ], $conn_details);
         }
     } else {

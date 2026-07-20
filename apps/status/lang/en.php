@@ -170,6 +170,27 @@ return [
     'hdd_avg_max' => 'Disk Avg / Max:',
     'net_avg_max' => 'Network Avg / Max:',
 
+    // Check pipeline
+    'pipeline_heading' => 'Check Pipeline',
+    'pipeline_stage_dns' => 'DNS',
+    'pipeline_stage_tcp' => 'TCP',
+    'pipeline_stage_tls' => 'TLS',
+    'pipeline_stage_http' => 'HTTP',
+    'pipeline_stage_body' => 'Content',
+    'response_breakdown_heading' => 'Response Breakdown',
+    'response_total' => 'Total',
+    'ssl_card_heading' => 'SSL Certificate',
+    'ssl_issuer' => 'Issuer',
+    'ssl_algo' => 'Algorithm',
+    'ssl_valid_until' => 'Valid Until',
+    'ssl_days_remaining' => 'Days Remaining',
+    'headers_heading' => 'HTTP Headers',
+    'header_server' => 'Server',
+    'header_cache_control' => 'Cache-Control',
+    'header_content_encoding' => 'Compression',
+    'header_http_version' => 'HTTP Version',
+    'confidence_score_label' => 'Confidence',
+
     // Monitor outages
     'recent_outages_heading' => 'Recent Outages (last 30 days)',
     'th_time' => 'Time',
