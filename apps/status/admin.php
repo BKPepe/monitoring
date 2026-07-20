@@ -247,6 +247,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
 
     $cpanel_stats_url = !empty($_POST['cpanel_stats_url']) && $type === 'web' ? trim($_POST['cpanel_stats_url']) : null;
 
+    // Volitelné ServerQuery přihlášení (hlubší TeamSpeak data - server groups, plný clientlist)
+    $sq_username = !empty($_POST['sq_username']) && $type === 'teamspeak' ? trim($_POST['sq_username']) : null;
+    $sq_password = !empty($_POST['sq_password']) && $type === 'teamspeak' ? trim($_POST['sq_password']) : null;
+    $ts3_filetransfer_port = !empty($_POST['ts3_filetransfer_port']) && $type === 'teamspeak' ? intval($_POST['ts3_filetransfer_port']) : null;
+
     // Pro TeamSpeak spojíme hostitele s hlasovým portem
     if ($type === 'teamspeak') {
         $voice_port = !empty($_POST['teamspeak_voice_port']) ? intval($_POST['teamspeak_voice_port']) : 9987;
@@ -269,19 +274,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
 
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $id]);
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
             // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
             $agent_key = bin2hex(random_bytes(16));
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port]);
             log_monitor_event($pdo, (int)$pdo->lastInsertId(), $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
@@ -311,7 +316,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
         'custom_logo_url', 'custom_color_theme', 'custom_nav_links', 'portal_url',
-        'metrics_token', 'sla_goal_pct'
+        'metrics_token', 'sla_goal_pct', 'ts3_latest_version'
     ];
 
     // Checkboxy - nezaškrtnuté pole nedorazí v POST, ukládáme proto explicitně '0' / '1'
@@ -1224,6 +1229,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </div>
 
                         <div class="form-group" style="margin-top: 1rem;">
+                            <label for="ts3_latest_version">Poslední známá verze TeamSpeak serveru (volitelné)</label>
+                            <input type="text" name="ts3_latest_version" id="ts3_latest_version" value="<?php echo htmlspecialchars(get_setting('ts3_latest_version', '')); ?>" class="form-control" placeholder="Např. 3.13.7" style="max-width: 200px;">
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Ručně zadaná hodnota pro zobrazení "Update Available" u TeamSpeak monitorů. Prázdné = kontrola verze se přeskočí (nekontroluje se automaticky přes internet).</small>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 1rem;">
                             <label for="cron_location">Lokace hlavního serveru (necháte prázdné = AUTO detekce)</label>
                             <input type="text" name="cron_location" id="cron_location" value="<?php echo htmlspecialchars(get_setting('cron_location', '')); ?>" class="form-control" placeholder="Necháte prázdné pro automatickou detekci nebo zadejte např. 🇩🇪 Frankfurt, DE">
                             <small style="font-size: 0.75rem; color: var(--text-muted);">
@@ -1566,6 +1577,22 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             ?>
                             <input type="number" name="teamspeak_voice_port" id="teamspeak_voice_port" value="<?php echo $v_port; ?>" class="form-control" placeholder="9987">
                             <small style="font-size: 0.75rem; color: var(--text-muted);">Zadejte hlavní port, na který se připojují uživatelé ve svém TS3 klientu.</small>
+                        </div>
+
+                        <div class="form-group" id="ts3-filetransfer-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] === 'teamspeak') ? 'block' : 'none'; ?>;">
+                            <label for="ts3_filetransfer_port">File Transfer port (volitelné)</label>
+                            <input type="number" name="ts3_filetransfer_port" id="ts3_filetransfer_port" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['ts3_filetransfer_port'] ?? '') : ''; ?>" class="form-control" placeholder="30033 (výchozí)">
+                        </div>
+
+                        <div class="form-group" id="sq-login-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] === 'teamspeak') ? 'block' : 'none'; ?>;">
+                            <label for="sq_username">ServerQuery přihlášení (volitelné, pro hlubší data)</label>
+                            <div class="form-row">
+                                <input type="text" name="sq_username" id="sq_username" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['sq_username'] ?? '') : ''; ?>" class="form-control" placeholder="ServerQuery jméno" autocomplete="off">
+                                <input type="password" name="sq_password" id="sq_password" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['sq_password'] ?? '') : ''; ?>" class="form-control" placeholder="ServerQuery heslo" autocomplete="new-password">
+                            </div>
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">
+                                Bez přihlášení funguje jen základní anonymní dotaz (dostupnost, počet klientů). S přihlášením přibudou server groups, plný seznam kanálů/klientů a hlasová aktivita (mluví/AFK/ztlumeno/nahrává).
+                            </small>
                         </div>
 
                         <div class="form-group" id="processes-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord') ? 'block' : 'none'; ?>;">
@@ -1961,6 +1988,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             const tsVoiceGroup = document.getElementById('teamspeak-voice-group');
             const cpanelStatsGroup = document.getElementById('cpanel-stats-group');
             const bodyKeywordGroup = document.getElementById('body-keyword-group');
+            const ts3FiletransferGroup = document.getElementById('ts3-filetransfer-group');
+            const sqLoginGroup = document.getElementById('sq-login-group');
 
             // Výchozí zobrazení
             portGroup.style.display = 'none';
@@ -1978,6 +2007,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             }
             if (bodyKeywordGroup) {
                 bodyKeywordGroup.style.display = 'none';
+            }
+            if (ts3FiletransferGroup) {
+                ts3FiletransferGroup.style.display = 'none';
+            }
+            if (sqLoginGroup) {
+                sqLoginGroup.style.display = 'none';
             }
             if (portLabel) {
                 portLabel.textContent = "Síťový port";
@@ -2007,6 +2042,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 portGroup.style.display = 'block';
                 if (tsVoiceGroup) {
                     tsVoiceGroup.style.display = 'block';
+                }
+                if (ts3FiletransferGroup) {
+                    ts3FiletransferGroup.style.display = 'block';
+                }
+                if (sqLoginGroup) {
+                    sqLoginGroup.style.display = 'block';
                 }
                 targetLabel.textContent = "IP adresa / Hostname serveru (bez portu)";
                 targetDesc.textContent = "Zadejte pouze IP adresu nebo doménu serveru, např. donald.bloodkings.eu. Hlasový a query port doplňte samostatně níže.";

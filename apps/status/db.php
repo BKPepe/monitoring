@@ -16,7 +16,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260722');
+    define('BK_SCHEMA_VERSION', '20260723');
 
     $bk_current_schema = false;
     try {
@@ -258,6 +258,38 @@ try {
     try {
         $stmt_sla = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('sla_goal_pct', '99.95') ON DUPLICATE KEY UPDATE key_value = key_value");
         $stmt_sla->execute();
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+
+    // Automatická migrace - hloubkový TeamSpeak monitoring + Host/VPS vrstva (load average,
+    // CPU steal, swap, disk I/O, síťové chyby) a TeamSpeak proces/klienti pro grafy historie.
+    foreach ([
+        "ALTER TABLE vps_metrics ADD COLUMN load_avg_1 FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN load_avg_5 FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN load_avg_15 FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN cpu_steal FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN swap_usage FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN disk_io_read_kbps FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN disk_io_write_kbps FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN net_errors INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN ts_clients_online INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN ts_clients_max INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN ts_process_cpu FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN ts_process_ram FLOAT DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN sq_username VARCHAR(100) DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN sq_password VARCHAR(255) DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN ts3_filetransfer_port INT DEFAULT NULL",
+    ] as $migration_sql) {
+        try {
+            $pdo->exec($migration_sql);
+        } catch (PDOException $e) {
+            // Ignorujeme
+        }
+    }
+    try {
+        $stmt_ts3v = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('ts3_latest_version', '') ON DUPLICATE KEY UPDATE key_value = key_value");
+        $stmt_ts3v->execute();
     } catch (PDOException $e) {
         // Ignorujeme
     }

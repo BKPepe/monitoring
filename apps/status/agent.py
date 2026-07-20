@@ -6,6 +6,7 @@ Nevyžaduje žádné externí knihovny (pouze standardní Python 3).
 """
 
 import os
+import re
 import sys
 import time
 import json
@@ -53,7 +54,7 @@ if os.path.exists(cfg_path):
     except Exception:
         pass
 
-AGENT_VERSION = "1.4.0"
+AGENT_VERSION = "1.5.0"
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
 # V Docker režimu je adresář se skriptem připojený read-only, proto se stavový
 # soubor pro výpočet síťové propustnosti ukládá vždy do /tmp.
@@ -75,7 +76,12 @@ def log_message(msg):
             pass
 
 def get_cpu_usage():
-    """Vypočítá využití CPU z /proc/stat"""
+    """
+    Vypočítá využití CPU a CPU steal time (%) z /proc/stat. Steal time (8. pole,
+    index 7) je čas, kdy hypervisor přidělil CPU jinému hostiteli - na VPS důležitý
+    signál "sousedského rušení", který se dřív četl, ale zahazoval.
+    Vrací (cpu_pct, steal_pct).
+    """
     def read_stat():
         try:
             with open('/proc/stat', 'r') as f:
@@ -84,26 +90,30 @@ def get_cpu_usage():
                 if line.startswith('cpu '):
                     fields = [float(x) for x in line.strip().split()[1:]]
                     idle = fields[3] + fields[4]  # idle + iowait
+                    steal = fields[7] if len(fields) > 7 else 0.0
                     total = sum(fields)
-                    return idle, total
+                    return idle, steal, total
         except IOError:
             pass
-        return 0, 0
+        return 0, 0, 0
 
-    idle1, total1 = read_stat()
+    idle1, steal1, total1 = read_stat()
     if total1 == 0:
-        return 0.0
-    
+        return 0.0, 0.0
+
     time.sleep(1)
-    
-    idle2, total2 = read_stat()
+
+    idle2, steal2, total2 = read_stat()
     idle_delta = idle2 - idle1
+    steal_delta = steal2 - steal1
     total_delta = total2 - total1
-    
+
     if total_delta == 0:
-        return 0.0
-    
-    return round((1.0 - idle_delta / total_delta) * 100, 1)
+        return 0.0, 0.0
+
+    cpu_pct = round((1.0 - idle_delta / total_delta) * 100, 1)
+    steal_pct = round((steal_delta / total_delta) * 100, 1)
+    return cpu_pct, steal_pct
 
 def get_ram_usage():
     """Vypočítá využití RAM v % z /proc/meminfo"""
@@ -132,6 +142,33 @@ def get_ram_usage():
     except Exception:
         return 0.0
 
+def get_swap_usage():
+    """Vypočítá využití swapu v % z /proc/meminfo. Vrací 0.0, pokud swap není nakonfigurovaný."""
+    try:
+        mem = {}
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                parts = line.split(':')
+                if len(parts) == 2:
+                    mem[parts[0].strip()] = float(parts[1].split()[0].strip())
+
+        total = mem.get('SwapTotal', 0)
+        free = mem.get('SwapFree', 0)
+        if total == 0:
+            return 0.0
+        return round(((total - free) / total) * 100, 1)
+    except Exception:
+        return 0.0
+
+def get_load_average():
+    """Vrátí (load1, load5, load15) z /proc/loadavg, nebo (None, None, None) při chybě."""
+    try:
+        with open('/proc/loadavg', 'r') as f:
+            parts = f.readline().split()
+        return float(parts[0]), float(parts[1]), float(parts[2])
+    except Exception:
+        return None, None, None
+
 def get_hdd_usage():
     """Vypočítá zaplnění disku root / v % (v Docker režimu měří hostitelský FS přes /host)"""
     try:
@@ -148,10 +185,78 @@ def get_hdd_usage():
     except Exception:
         return 0.0
 
+DISKIO_STATE_FILE = '/tmp/status-agent-diskio.state' if DOCKER_MODE else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_diskio.state')
+_WHOLE_DISK_RE = re.compile(r'^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+)$')
+
+def get_disk_io_sectors():
+    """
+    Vrátí (sectors_read, sectors_written) součet přes fyzické disky z /proc/diskstats.
+    Stejně jako /proc/stat a /proc/meminfo je diskstats celojaderný čítač, ne per-pid-
+    namespace - v Docker režimu (pid: host) proto funguje bez zvláštního /host přístupu,
+    stejně jako existující get_cpu_usage()/get_ram_usage().
+    Vynechává oddíly (sda1, nvme0n1p1) a loop/ram zařízení, aby se I/O nezapočítalo dvakrát.
+    """
+    read_total = 0
+    write_total = 0
+    try:
+        with open('/proc/diskstats', 'r') as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) < 10:
+                    continue
+                if not _WHOLE_DISK_RE.match(fields[2]):
+                    continue
+                read_total += int(fields[5])   # sectors read
+                write_total += int(fields[9])  # sectors written
+    except Exception:
+        pass
+    return read_total, write_total
+
+def get_disk_io():
+    """
+    Vypočítá průměrnou I/O propustnost disku (čtení/zápis) v KB/s od posledního běhu.
+    Stejný tick/tock princip jako get_network_usage() - první běh vrací (None, None).
+    """
+    read_sectors, write_sectors = get_disk_io_sectors()
+    now = time.time()
+    sector_size = 512  # /proc/diskstats vždy počítá v 512B sektorech bez ohledu na fyzickou velikost sektoru
+
+    prev = None
+    try:
+        with open(DISKIO_STATE_FILE, 'r') as f:
+            parts = f.read().strip().split(',')
+            if len(parts) >= 3:
+                prev = (float(parts[0]), int(parts[1]), int(parts[2]))
+    except Exception:
+        pass
+
+    try:
+        with open(DISKIO_STATE_FILE, 'w') as f:
+            f.write(f"{now},{read_sectors},{write_sectors}")
+    except Exception:
+        pass
+
+    if prev is None:
+        return None, None
+
+    elapsed = now - prev[0]
+    delta_read = read_sectors - prev[1]
+    delta_write = write_sectors - prev[2]
+    if elapsed <= 0 or delta_read < 0 or delta_write < 0:
+        return None, None
+
+    read_kbps = round((delta_read * sector_size / elapsed) / 1024, 1)
+    write_kbps = round((delta_write * sector_size / elapsed) / 1024, 1)
+    return read_kbps, write_kbps
+
 def get_network_bytes():
-    """Vrátí (rx_bytes, tx_bytes) součet přes všechna síťová rozhraní kromě loopbacku a virtuálních Docker rozhraní"""
+    """
+    Vrátí (rx_bytes, tx_bytes, error_count) součet přes všechna síťová rozhraní kromě
+    loopbacku a virtuálních Docker rozhraní. error_count sčítá rx_errs+rx_drop+tx_errs+tx_drop.
+    """
     rx_total = 0
     tx_total = 0
+    err_total = 0
     try:
         with open('/proc/net/dev', 'r') as f:
             lines = f.readlines()[2:]
@@ -165,44 +270,52 @@ def get_network_bytes():
             fields = rest.split()
             rx_total += int(fields[0])
             tx_total += int(fields[8])
+            err_total += int(fields[2]) + int(fields[3]) + int(fields[10]) + int(fields[11])
     except Exception:
         pass
-    return rx_total, tx_total
+    return rx_total, tx_total, err_total
 
 def get_network_usage():
     """
-    Vypočítá průměrnou propustnost sítě (RX+TX) v KB/s od posledního běhu agenta.
-    Mezi jednotlivými spuštěními (cron/smyčka) se ukládá kumulativní počet bajtů
-    a čas do stavového souboru - první běh proto vrací None (chybí předchozí vzorek).
+    Vypočítá průměrnou propustnost sítě (RX+TX) v KB/s a počet nových síťových chyb/
+    zahozených paketů od posledního běhu agenta. Mezi spuštěními se ukládá kumulativní
+    počet bajtů/chyb a čas do stavového souboru - první běh proto vrací (None, None).
     """
-    rx, tx = get_network_bytes()
+    rx, tx, errors = get_network_bytes()
     total_bytes = rx + tx
     now = time.time()
 
     prev = None
     try:
         with open(NET_STATE_FILE, 'r') as f:
-            prev_ts, prev_bytes = f.read().strip().split(',')
-            prev = (float(prev_ts), int(prev_bytes))
+            parts = f.read().strip().split(',')
+            # Zpětná kompatibilita se starším stavovým souborem o 2 položkách (bez chyb)
+            if len(parts) >= 3:
+                prev = (float(parts[0]), int(parts[1]), int(parts[2]))
+            elif len(parts) == 2:
+                prev = (float(parts[0]), int(parts[1]), errors)
     except Exception:
         pass
 
     try:
         with open(NET_STATE_FILE, 'w') as f:
-            f.write(f"{now},{total_bytes}")
+            f.write(f"{now},{total_bytes},{errors}")
     except Exception:
         pass
 
     if prev is None or total_bytes == 0:
-        return None
+        return None, None
 
     elapsed = now - prev[0]
     delta_bytes = total_bytes - prev[1]
+    delta_errors = errors - prev[2]
     if elapsed <= 0 or delta_bytes < 0:
         # Čítač se resetoval (restart sítě/serveru) nebo neplatný interval
-        return None
+        return None, None
 
-    return round((delta_bytes / elapsed) / 1024, 1)
+    net_kbps = round((delta_bytes / elapsed) / 1024, 1)
+    net_errors = max(0, delta_errors)
+    return net_kbps, net_errors
 
 def get_uptime():
     """Uuptime v sekundách z /proc/uptime"""
@@ -292,6 +405,83 @@ def get_running_processes():
     except Exception:
         pass
     return list(processes)
+
+def get_ts3_process_info():
+    """
+    Najde proces ts3server a vrátí jeho PID/CPU/RAM/vlákna/otevřené FD/uptime.
+    Vrací None, pokud proces neběží. Detekce restartu (změna PID mezi hlášeními)
+    se dělá na serveru (agent_api.php), ne tady - agent jen hlásí aktuální stav.
+    """
+    pid = None
+    try:
+        for entry in os.listdir('/proc'):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f'/proc/{entry}/comm', 'r') as f:
+                    if f.read().strip() == 'ts3server':
+                        pid = entry
+                        break
+            except (IOError, OSError):
+                continue
+    except Exception:
+        pass
+
+    if pid is None:
+        return None
+
+    result = {"pid": int(pid), "cpu": 0.0, "ram_mb": 0.0, "threads": 0, "open_fds": 0, "uptime_sec": 0}
+
+    try:
+        clk_tck = os.sysconf('SC_CLK_TCK')
+    except Exception:
+        clk_tck = 100
+
+    def read_proc_stat(p):
+        try:
+            with open(f'/proc/{p}/stat', 'r') as f:
+                raw = f.read()
+            # comm je v závorkách a může obsahovat mezery i závorky - proto se hledá
+            # poslední ')' (doporučený způsob parsování dle proc(5))
+            after_comm = raw[raw.rfind(')') + 2:]
+            fields = after_comm.split()
+            utime = int(fields[11])       # pole 14 (utime)
+            stime = int(fields[12])       # pole 15 (stime)
+            starttime = int(fields[19])   # pole 22 (starttime)
+            return utime, stime, starttime
+        except Exception:
+            return None
+
+    stat1 = read_proc_stat(pid)
+    time.sleep(1)
+    stat2 = read_proc_stat(pid)
+
+    if stat1 and stat2:
+        cpu_ticks_delta = (stat2[0] + stat2[1]) - (stat1[0] + stat1[1])
+        result["cpu"] = round((cpu_ticks_delta / clk_tck) * 100, 1)
+        try:
+            with open('/proc/uptime', 'r') as f:
+                host_uptime = float(f.readline().split()[0])
+            result["uptime_sec"] = max(0, int(host_uptime - (stat2[2] / clk_tck)))
+        except Exception:
+            pass
+
+    try:
+        with open(f'/proc/{pid}/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    result["ram_mb"] = round(int(line.split()[1]) / 1024, 1)
+                elif line.startswith('Threads:'):
+                    result["threads"] = int(line.split()[1])
+    except Exception:
+        pass
+
+    try:
+        result["open_fds"] = len(os.listdir(f'/proc/{pid}/fd'))
+    except Exception:
+        pass
+
+    return result
 
 def get_local_teamspeak_servers(ports):
     """Dotáže se lokálního ServerQuery portu a získá info o virtual serverech"""
@@ -405,35 +595,48 @@ def main():
         sys.exit(1)
 
     log_message("Získávám systémové statistiky...")
-    cpu = get_cpu_usage()
+    cpu, cpu_steal = get_cpu_usage()
     ram = get_ram_usage()
+    swap = get_swap_usage()
     hdd = get_hdd_usage()
-    net = get_network_usage()
+    load1, load5, load15 = get_load_average()
+    disk_read, disk_write = get_disk_io()
+    net, net_errors = get_network_usage()
     uptime = get_uptime()
     smart = get_smart_status()
     ports = get_listening_ports()
     processes = get_running_processes()
     os_ver = get_os_version()
     teamspeak_servers = get_local_teamspeak_servers(ports)
-    
+    ts3_process = get_ts3_process_info()
+
     payload = {
         "agent_key": AGENT_KEY,
         "agent_type": "python",
         "version": AGENT_VERSION,
         "os": os_ver,
         "cpu": cpu,
+        "cpu_steal": cpu_steal,
         "ram": ram,
+        "swap": swap,
         "hdd": hdd,
+        "load1": load1,
+        "load5": load5,
+        "load15": load15,
+        "disk_io_read": disk_read,
+        "disk_io_write": disk_write,
         "net": net,
+        "net_errors": net_errors,
         "uptime": uptime,
         "smart": smart,
         "ports": ports,
         "processes": processes,
-        "teamspeak_servers": teamspeak_servers
+        "teamspeak_servers": teamspeak_servers,
+        "ts3_process": ts3_process
     }
-    
+
     net_log = f"{net} KB/s" if net is not None else "N/A (první běh)"
-    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}%, RAM: {ram}%, HDD: {hdd}%, Síť: {net_log}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
+    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}% (steal {cpu_steal}%), RAM: {ram}% (swap {swap}%), HDD: {hdd}%, Load: {load1}/{load5}/{load15}, Síť: {net_log}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
     
     req = urllib.request.Request(
         API_URL,

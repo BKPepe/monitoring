@@ -1006,6 +1006,232 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                           </p>
                                                      </div>
                                                  </div>
+
+                                                 <?php
+                                                 // --- TeamSpeak Health Score + hloubkový monitoring (Service Profile) ---
+                                                 $ts3_check_stages = null;
+                                                 if (!empty($last_logs[0]['check_stages'])) {
+                                                     $decoded_ts3_stages = json_decode($last_logs[0]['check_stages'], true);
+                                                     if (is_array($decoded_ts3_stages)) {
+                                                         $ts3_check_stages = $decoded_ts3_stages;
+                                                     }
+                                                 }
+                                                 $ts3_health_areas = build_teamspeak_health_areas($monitor, $status, $ts3_check_stages, $details);
+                                                 $ts3_health = bk_compute_health_score($ts3_health_areas);
+                                                 $ts3_voice_quality = bk_ts3_voice_quality($pdo, $mid);
+                                                 $ts3_status_labels = [
+                                                     'ok' => t('ts3_health_status_ok'),
+                                                     'warn' => t('ts3_health_status_warn'),
+                                                     'fail' => t('ts3_health_status_fail'),
+                                                     'na' => t('ts3_health_status_na'),
+                                                 ];
+                                                 $ts3_status_colors = [
+                                                     'ok' => 'var(--color-green)',
+                                                     'warn' => 'var(--color-yellow)',
+                                                     'fail' => 'var(--color-red)',
+                                                     'na' => 'var(--text-muted)',
+                                                 ];
+                                                 $ts3_score_color = $ts3_health['score'] >= 90 ? 'var(--color-green)' : ($ts3_health['score'] >= 70 ? 'var(--color-yellow)' : 'var(--color-red)');
+                                                 ?>
+
+                                                 <div class="ts3-health-score-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                     <div class="detail-section-title">
+                                                         <i class="fas fa-heartbeat"></i> <?php echo htmlspecialchars(t('ts3_health_score_heading')); ?>
+                                                         <span style="font-weight: normal; font-size: 0.9rem; margin-left: 0.5rem; color: <?php echo $ts3_score_color; ?>;"><strong><?php echo $ts3_health['score']; ?></strong> / 100</span>
+                                                     </div>
+                                                     <div style="overflow-x: auto; margin-top: 0.6rem;">
+                                                         <table class="report-table" style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">
+                                                             <thead>
+                                                                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
+                                                                     <th style="padding: 0.4rem 0.5rem; text-align: left;"><?php echo htmlspecialchars(t('ts3_health_area_column')); ?></th>
+                                                                     <th style="padding: 0.4rem 0.5rem; text-align: right;"><?php echo htmlspecialchars(t('ts3_health_weight_column')); ?></th>
+                                                                     <th style="padding: 0.4rem 0.5rem; text-align: right;"><?php echo htmlspecialchars(t('ts3_health_status_column')); ?></th>
+                                                                 </tr>
+                                                             </thead>
+                                                             <tbody>
+                                                                 <?php
+                                                                 $ts3_area_label_keys = [
+                                                                     'availability' => 'ts3_health_area_availability',
+                                                                     'process' => 'ts3_health_area_process',
+                                                                     'serverquery' => 'ts3_health_area_serverquery',
+                                                                     'ports' => 'ts3_health_area_ports',
+                                                                     'vps' => 'ts3_health_area_vps',
+                                                                     'clients' => 'ts3_health_area_clients',
+                                                                     'version' => 'ts3_health_area_version',
+                                                                 ];
+                                                                 ?>
+                                                                 <?php foreach ($ts3_health_areas as $area): ?>
+                                                                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                                                         <td style="padding: 0.4rem 0.5rem;"><?php echo htmlspecialchars(t($ts3_area_label_keys[$area['key']] ?? $area['label'])); ?></td>
+                                                                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: var(--text-muted);"><?php echo (int)$area['weight_pct']; ?>%</td>
+                                                                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: <?php echo $ts3_status_colors[$area['status']] ?? '#fff'; ?>;"><?php echo htmlspecialchars($ts3_status_labels[$area['status']] ?? $area['status']); ?></td>
+                                                                     </tr>
+                                                                 <?php endforeach; ?>
+                                                             </tbody>
+                                                         </table>
+                                                     </div>
+                                                 </div>
+
+                                                 <?php if ($ts3_check_stages !== null): ?>
+                                                     <?php if (is_array($details['ts3_process'] ?? null)): $tsp = $details['ts3_process']; ?>
+                                                         <div class="ts3-process-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                             <div class="detail-section-title"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('ts3_process_heading')); ?></div>
+                                                             <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_status')); ?>:</span> <strong style="color: var(--color-green); margin-left: 0.25rem;"><?php echo htmlspecialchars(t('ts3_process_running')); ?></strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_uptime')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(format_uptime_cz((int)($tsp['uptime_sec'] ?? 0))); ?></strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_cpu')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars((string)($tsp['cpu'] ?? 0)); ?>%</strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_ram')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars((string)($tsp['ram_mb'] ?? 0)); ?> MB</strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_threads')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['threads'] ?? 0); ?></strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_fds')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['open_fds'] ?? 0); ?></strong></div>
+                                                             </div>
+                                                         </div>
+                                                     <?php endif; ?>
+
+                                                     <div class="ts3-service-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('ts3_service_heading')); ?></div>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                             <?php $ts3_svc = $ts3_check_stages['service'] ?? []; ?>
+                                                             <?php if (isset($ts3_svc['slot_usage_pct'])): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_slots')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo $ts3_svc['slot_usage_pct']; ?>%</strong></div>
+                                                             <?php endif; ?>
+                                                             <?php if ($ts3_svc['channel_count'] !== null): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_channels')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['channel_count']; ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php if ($ts3_svc['active_channel_count'] !== null): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_active_channels')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['active_channel_count']; ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php if ($ts3_svc['query_client_count'] !== null): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_query_clients')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['query_client_count']; ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php if ($ts3_svc['server_group_count'] !== null): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_groups')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['server_group_count']; ?></strong></div>
+                                                             <?php endif; ?>
+                                                         </div>
+                                                         <?php if (!empty($ts3_svc['voice_activity'])): $va = $ts3_svc['voice_activity']; ?>
+                                                             <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-comment" style="color: var(--color-green);"></i> <?php echo htmlspecialchars(t('ts3_voice_talking')); ?>: <strong style="color: #fff;"><?php echo (int)$va['talking']; ?></strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-moon" style="color: var(--text-muted);"></i> <?php echo htmlspecialchars(t('ts3_voice_away')); ?>: <strong style="color: #fff;"><?php echo (int)$va['away']; ?></strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-microphone-slash" style="color: var(--color-yellow);"></i> <?php echo htmlspecialchars(t('ts3_voice_muted')); ?>: <strong style="color: #fff;"><?php echo (int)$va['muted']; ?></strong></div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-circle" style="color: var(--color-red);"></i> <?php echo htmlspecialchars(t('ts3_voice_recording')); ?>: <strong style="color: #fff;"><?php echo (int)$va['recording']; ?></strong></div>
+                                                             </div>
+                                                         <?php endif; ?>
+                                                     </div>
+
+                                                     <div class="ts3-quality-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-wave-square"></i> <?php echo htmlspecialchars(t('ts3_quality_heading')); ?></div>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_latency')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($ts3_check_stages['query']['time_ms'] ?? 0); ?> ms</strong></div>
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                 <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_voice')); ?>:</span>
+                                                                 <?php if ($ts3_voice_quality['band'] !== null): ?>
+                                                                     <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_voice_quality['band']); ?></strong>
+                                                                 <?php else: ?>
+                                                                     <strong style="color: var(--text-muted); margin-left: 0.25rem;"><?php echo htmlspecialchars(t('ts3_quality_insufficient_data')); ?></strong>
+                                                                 <?php endif; ?>
+                                                             </div>
+                                                         </div>
+                                                         <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('ts3_quality_estimate_note')); ?></p>
+                                                     </div>
+
+                                                     <div class="ts3-ports-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-plug"></i> <?php echo htmlspecialchars(t('ts3_ports_heading')); ?></div>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
+                                                             <?php $ts3_ports = $ts3_check_stages['ports'] ?? []; ?>
+                                                             <?php foreach (['query' => 'ts3_port_query', 'filetransfer' => 'ts3_port_filetransfer', 'voice' => 'ts3_port_voice'] as $pk => $pl): ?>
+                                                                 <?php $pinfo = $ts3_ports[$pk] ?? null; if ($pinfo === null) continue; $pok = $pinfo['ok']; ?>
+                                                                 <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $pok === true ? 'rgba(30, 199, 115, 0.08)' : ($pok === false ? 'rgba(239, 35, 60, 0.08)' : 'rgba(255,255,255,0.03)'); ?>; border: 1px solid <?php echo $pok === true ? 'rgba(30, 199, 115, 0.2)' : ($pok === false ? 'rgba(239, 35, 60, 0.2)' : 'rgba(255,255,255,0.08)'); ?>;">
+                                                                     <i class="fas <?php echo $pok === true ? 'fa-check-circle' : ($pok === false ? 'fa-times-circle' : 'fa-question-circle'); ?>" style="color: <?php echo $pok === true ? 'var(--color-green)' : ($pok === false ? 'var(--color-red)' : 'var(--text-muted)'); ?>;"></i>
+                                                                     <span><?php echo htmlspecialchars(t($pl)); ?></span>
+                                                                 </div>
+                                                             <?php endforeach; ?>
+                                                         </div>
+                                                     </div>
+
+                                                     <div class="ts3-license-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-id-badge"></i> <?php echo htmlspecialchars(t('ts3_license_heading')); ?></div>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                             <?php if (!empty($ts3_check_stages['license'])): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_license_label')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_check_stages['license']); ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php
+                                                             $ts3_current_version = $ts3_check_stages['version'] ?? '';
+                                                             $ts3_latest_version = trim((string)get_setting('ts3_latest_version', ''));
+                                                             ?>
+                                                             <?php if ($ts3_current_version !== ''): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_version_current')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_current_version); ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php if ($ts3_latest_version !== '' && $ts3_current_version !== ''): ?>
+                                                                 <?php $ts3_up_to_date = version_compare($ts3_current_version, $ts3_latest_version, '>='); ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                     <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_version_latest')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_latest_version); ?></strong>
+                                                                     <?php if (!$ts3_up_to_date): ?>
+                                                                         <span style="color: var(--color-yellow); margin-left: 0.4rem;"><i class="fas fa-arrow-up"></i> <?php echo htmlspecialchars(t('ts3_version_update_available')); ?></span>
+                                                                     <?php else: ?>
+                                                                         <span style="color: var(--color-green); margin-left: 0.4rem;"><i class="fas fa-check"></i> <?php echo htmlspecialchars(t('ts3_version_up_to_date')); ?></span>
+                                                                     <?php endif; ?>
+                                                                 </div>
+                                                             <?php endif; ?>
+                                                         </div>
+                                                     </div>
+
+                                                     <?php
+                                                     // --- Graf historie klientů (24 hodin) - jednoduchý statický graf bez
+                                                     // přepínače období (na rozdíl od hlavního metrics-history grafu výše).
+                                                     $stmt_ts3_clients_hist = $pdo->prepare("
+                                                         SELECT checked_at, ts_clients_online
+                                                         FROM vps_metrics
+                                                         WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND ts_clients_online IS NOT NULL
+                                                         ORDER BY checked_at ASC
+                                                     ");
+                                                     $stmt_ts3_clients_hist->execute([$mid]);
+                                                     $ts3_clients_hist = $stmt_ts3_clients_hist->fetchAll();
+                                                     $ts3_clients_labels = [];
+                                                     $ts3_clients_data = [];
+                                                     foreach ($ts3_clients_hist as $ch) {
+                                                         $ts3_clients_labels[] = date('H:i', strtotime($ch['checked_at']));
+                                                         $ts3_clients_data[] = (int)$ch['ts_clients_online'];
+                                                     }
+                                                     ?>
+                                                     <?php if (count($ts3_clients_data) > 1): ?>
+                                                         <div class="ts3-clients-chart-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                             <div class="detail-section-title"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('ts3_clients_chart_heading')); ?></div>
+                                                             <div style="position: relative; height: 180px; width: 100%; margin-top: 0.6rem;">
+                                                                 <canvas id="ts3ClientsChart-<?php echo $mid; ?>"></canvas>
+                                                             </div>
+                                                         </div>
+                                                         <script>
+                                                         document.addEventListener("DOMContentLoaded", function() {
+                                                             const ctx = document.getElementById('ts3ClientsChart-<?php echo $mid; ?>');
+                                                             if (!ctx) return;
+                                                             new Chart(ctx, {
+                                                                 type: 'line',
+                                                                 data: {
+                                                                     labels: <?php echo json_encode($ts3_clients_labels); ?>,
+                                                                     datasets: [{
+                                                                         label: 'Clients',
+                                                                         data: <?php echo json_encode($ts3_clients_data); ?>,
+                                                                         borderColor: '#1ec773',
+                                                                         backgroundColor: 'rgba(30, 199, 115, 0.08)',
+                                                                         borderWidth: 2,
+                                                                         pointRadius: 0,
+                                                                         tension: 0.3,
+                                                                         fill: true
+                                                                     }]
+                                                                 },
+                                                                 options: {
+                                                                     responsive: true,
+                                                                     maintainAspectRatio: false,
+                                                                     plugins: { legend: { display: false } },
+                                                                     scales: {
+                                                                         x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#8b8ba0', maxTicksLimit: 8, font: { size: 10 } } },
+                                                                         y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#8b8ba0', font: { size: 10 }, precision: 0 } }
+                                                                     }
+                                                                 }
+                                                             });
+                                                         });
+                                                         </script>
+                                                     <?php endif; ?>
+                                                 <?php endif; ?>
                                             <?php elseif ($m_type === 'discord'): ?>
                                                 <div class="game-details-grid">
                                                     <div>

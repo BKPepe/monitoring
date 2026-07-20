@@ -160,7 +160,14 @@ foreach ($monitors as $monitor) {
             break;
             
         case 'teamspeak':
-            $check_result = check_teamspeak($target, $port ?: 10011, $timeout);
+            $check_result = check_teamspeak(
+                $target,
+                $port ?: 10011,
+                $timeout,
+                $monitor['sq_username'] ?? null,
+                $monitor['sq_password'] ?? null,
+                $monitor['ts3_filetransfer_port'] ?? null
+            );
             break;
             
         case 'discord':
@@ -267,6 +274,33 @@ foreach ($monitors as $monitor) {
                 'ip_version' => $check_result['ip_version'] ?? 'IPv4',
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
+
+            // Uložit klienty (a proces/host zátěž, pokud je na stejném VPS propojený
+            // agent) do vps_metrics - podklad pro graf historie klientů/procesu.
+            $ts3_agent_details = json_decode($monitor['last_details'] ?? '', true);
+            $ts3_process_cpu = null;
+            $ts3_process_ram = null;
+            $ts3_host_cpu = 0;
+            $ts3_host_ram = 0;
+            $ts3_host_hdd = 0;
+            if (is_array($ts3_agent_details)) {
+                $ts3_host_cpu = $ts3_agent_details['cpu'] ?? 0;
+                $ts3_host_ram = $ts3_agent_details['ram'] ?? 0;
+                $ts3_host_hdd = $ts3_agent_details['hdd'] ?? 0;
+                if (isset($ts3_agent_details['ts3_process']) && is_array($ts3_agent_details['ts3_process'])) {
+                    $ts3_process_cpu = $ts3_agent_details['ts3_process']['cpu'] ?? null;
+                    $ts3_process_ram = $ts3_agent_details['ts3_process']['ram_mb'] ?? null;
+                }
+            }
+            $stmt_ts3_metrics = $pdo->prepare("
+                INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt_ts3_metrics->execute([
+                $id, $ts3_host_cpu, $ts3_host_ram, $ts3_host_hdd,
+                $check_result['clients_online'] ?? null, $check_result['clients_max'] ?? null,
+                $ts3_process_cpu, $ts3_process_ram,
+            ]);
         } elseif ($type === 'discord') {
             $details = json_encode([
                 'presence_count' => $check_result['presence_count'] ?? 0,
@@ -358,9 +392,10 @@ foreach ($monitors as $monitor) {
             $stmt_set->execute(['ip_loc_local', $loc, $loc]);
         }
     }
-    // check_stages (rozpad DNS/TCP/TLS/HTTP/body fází) existuje jen u typu 'web' -
-    // u ostatních typů je vždy null, žádná změna chování pro ně.
-    $check_stages_json = ($type === 'web' && isset($check_result['check_stages']))
+    // check_stages (rozpad DNS/TCP/TLS/HTTP/body fází u 'web', ServerQuery/service/
+    // ports/license u 'teamspeak') existuje jen u těchto dvou typů - u ostatních je
+    // vždy null, žádná změna chování pro ně.
+    $check_stages_json = (in_array($type, ['web', 'teamspeak'], true) && isset($check_result['check_stages']))
         ? json_encode($check_result['check_stages'], JSON_UNESCAPED_UNICODE)
         : null;
     $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages) VALUES (?, ?, ?, ?, ?, ?)");

@@ -874,7 +874,305 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
 /**
  * TeamSpeak 3 Query Port Check
  */
-function check_teamspeak($host, $port = 10011, $timeout = 3) {
+/**
+ * ==== TeamSpeak ServerQuery helpers ====
+ */
+
+/**
+ * Dekóduje TS3 ServerQuery escape sekvence v přijaté hodnotě (plná tabulka -
+ * dřívější verze řešila jen \s, \/, \p, což stačilo na pár polí serverinfo,
+ * ale u jmen kanálů/klientů je potřeba kompletní sada).
+ */
+function bk_ts3_escape_decode($value) {
+    static $map = null;
+    if ($map === null) {
+        $map = [
+            '\\\\' => '\\', '\\/' => '/', '\\s' => ' ', '\\p' => '|',
+            '\\a' => "\x07", '\\b' => "\x08", '\\f' => "\x0C",
+            '\\n' => "\x0A", '\\r' => "\x0D", '\\t' => "\x09", '\\v' => "\x0B",
+        ];
+    }
+    return strtr($value, $map);
+}
+
+/**
+ * Zakóduje hodnotu pro odeslání v ServerQuery příkazu (opak bk_ts3_escape_decode) -
+ * potřeba např. pro přihlašovací jméno/heslo, pokud obsahují mezery nebo jiné znaky.
+ */
+function bk_ts3_escape_encode($value) {
+    static $map = null;
+    if ($map === null) {
+        $map = [
+            '\\' => '\\\\', '/' => '\\/', ' ' => '\\s', '|' => '\\p',
+            "\x07" => '\\a', "\x08" => '\\b', "\x0C" => '\\f',
+            "\x0A" => '\\n', "\x0D" => '\\r', "\x09" => '\\t', "\x0B" => '\\v',
+        ];
+    }
+    return strtr($value, $map);
+}
+
+/**
+ * Pošle ServerQuery příkaz a čte odpověď, dokud se neobjeví ukončovací
+ * "error id=..." řádek (nebo dokud nevyprší bezpečnostní limity).
+ */
+function bk_ts3_send_command($socket, $command, $max_bytes = 65536, $max_seconds = 5) {
+    @fwrite($socket, $command . "\n");
+    $response = '';
+    $start = microtime(true);
+    while (strpos($response, 'error id=') === false) {
+        $chunk = @fgets($socket, 4096);
+        if ($chunk === false) break;
+        $response .= $chunk;
+        if (strlen($response) > $max_bytes) break;
+        if ((microtime(true) - $start) > $max_seconds) break;
+    }
+    return $response;
+}
+
+/**
+ * Vytáhne číselný "error id=" z odpovědi ServerQuery. Vrací null, pokud chybí
+ * (spojení spadlo dřív, než přišla ukončovací hláška).
+ */
+function bk_ts3_parse_error_id($response) {
+    if (preg_match('/error id=(\d+)/', $response, $m)) {
+        return (int)$m[1];
+    }
+    return null;
+}
+
+/**
+ * Rozparsuje jednořádkovou odpověď typu "klic=hodnota klic2=hodnota2 ..." (např.
+ * serverinfo) do asociativního pole, s plným escape dekódováním hodnot.
+ */
+function bk_ts3_parse_kv_line($line) {
+    $details = [];
+    $line = rtrim((string)$line, "\r\n");
+    foreach (explode(' ', $line) as $part) {
+        $kv = explode('=', $part, 2);
+        if (count($kv) === 2) {
+            $details[$kv[0]] = bk_ts3_escape_decode($kv[1]);
+        }
+    }
+    return $details;
+}
+
+/**
+ * Rozparsuje seznamovou odpověď (channellist/clientlist/servergrouplist) - záznamy
+ * oddělené "|", v každém záznamu klic=hodnota páry oddělené mezerou. Ukončovací
+ * "error id=..." řádek se odřízne, ne je součástí posledního záznamu.
+ */
+function bk_ts3_parse_list_response($response) {
+    $err_pos = strrpos($response, 'error id=');
+    $body = $err_pos !== false ? substr($response, 0, $err_pos) : $response;
+    $body = trim($body);
+    if ($body === '') {
+        return [];
+    }
+
+    $records = [];
+    foreach (explode('|', $body) as $record_str) {
+        $record_str = trim($record_str);
+        if ($record_str === '') continue;
+        $record = bk_ts3_parse_kv_line($record_str);
+        if (!empty($record)) {
+            $records[] = $record;
+        }
+    }
+    return $records;
+}
+
+/**
+ * Rychlá TCP kontrola ServerQuery a FileTransfer portů. Voice port (výchozí 9987)
+ * je UDP a nelze ho stejným způsobem "connect probovat" - jeho stav je jen odvozený
+ * z úspěšného serverinfo výše, proto má 'ok' => null (nezávisle neověřeno).
+ */
+function check_ts3_ports($host, $query_port, $filetransfer_port, $timeout = 2) {
+    $ft_ok = false;
+    $ft_socket = @fsockopen($host, $filetransfer_port, $errno, $errstr, min($timeout, 3));
+    if ($ft_socket) {
+        $ft_ok = true;
+        @fclose($ft_socket);
+    }
+    return [
+        'query' => ['ok' => true, 'port' => $query_port],
+        'filetransfer' => ['ok' => $ft_ok, 'port' => $filetransfer_port],
+        'voice' => ['ok' => null, 'note' => 'odvozeno z úspěšného serverinfo - UDP nelze nezávisle TCP-probovat'],
+    ];
+}
+
+/**
+ * Aproximace kvality hlasového spojení z jitteru (směrodatné odchylky) posledních
+ * ServerQuery TCP odezev za poslední hodinu. NENÍ to skutečné měření hlasového
+ * (UDP) packet loss - to z PHP na sdíleném hostingu spolehlivě neumíme změřit -
+ * jde jen o proxy signál "jak stabilní je spojení k serveru v poslední době".
+ */
+function bk_ts3_voice_quality($pdo, $monitor_id) {
+    $stmt = $pdo->prepare("
+        SELECT response_time FROM monitor_logs
+        WHERE monitor_id = ? AND status = 'up' AND response_time > 0
+              AND checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        ORDER BY checked_at DESC LIMIT 30
+    ");
+    $stmt->execute([$monitor_id]);
+    $samples = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    if (count($samples) < 3) {
+        return ['band' => null, 'jitter_ms' => null, 'sample_count' => count($samples)];
+    }
+
+    $mean = array_sum($samples) / count($samples);
+    $variance = 0.0;
+    foreach ($samples as $s) {
+        $variance += ($s - $mean) ** 2;
+    }
+    $variance /= count($samples);
+    $jitter = sqrt($variance);
+
+    if ($jitter < 5) {
+        $band = 'Excellent';
+    } elseif ($jitter < 15) {
+        $band = 'Good';
+    } elseif ($jitter < 40) {
+        $band = 'Fair';
+    } else {
+        $band = 'Poor';
+    }
+
+    return ['band' => $band, 'jitter_ms' => round($jitter, 1), 'sample_count' => count($samples)];
+}
+
+/**
+ * Obecný vážený Health Score kalkulátor - typově agnostický, použitelný pro
+ * jakýkoli budoucí Service Profile, ne jen TeamSpeak. $areas je pole
+ * [['label'=>, 'weight_pct'=>, 'score_pct'=>0-100, 'status'=>'ok'|'warn'|'fail'|'na'], ...].
+ * Oblasti se status='na' (nelze změřit - typicky chybí propojený agent) se z
+ * výpočtu vynechají a jejich váha se poměrně přerozdělí mezi měřitelné oblasti,
+ * místo aby uměle doplňovaly 100 % nebo nespravedlivě strhávaly skóre na 0.
+ */
+function bk_compute_health_score(array $areas) {
+    $weighted_sum = 0.0;
+    $available_weight = 0.0;
+    foreach ($areas as $area) {
+        if (($area['status'] ?? '') === 'na') {
+            continue;
+        }
+        $weight = (float)($area['weight_pct'] ?? 0);
+        $score_pct = (float)($area['score_pct'] ?? 0);
+        $weighted_sum += ($weight * $score_pct) / 100;
+        $available_weight += $weight;
+    }
+    $score = $available_weight > 0 ? (int)round(($weighted_sum / $available_weight) * 100) : 0;
+    return ['score' => $score, 'areas' => $areas];
+}
+
+/**
+ * Sestaví 7 vážených oblastí Health Score pro TeamSpeak monitor:
+ * Dostupnost 35 % / Proces 20 % / ServerQuery 15 % / Porty 10 % / Výkon VPS 10 % /
+ * Klienti-limity 5 % / Verze 5 %. $agent_data je dekódovaný monitors.last_details
+ * (obsahuje cpu/ram a případně ts3_process, pokud je na VPS propojený agent),
+ * $check_stages je dekódovaný monitor_logs.check_stages z posledního běhu.
+ */
+function build_teamspeak_health_areas($monitor, $current_status, $check_stages, $agent_data) {
+    $areas = [];
+
+    // Dostupnost (35 %)
+    $avail_ok = $current_status === 'up';
+    $areas[] = ['key' => 'availability', 'label' => 'Dostupnost', 'weight_pct' => 35, 'score_pct' => $avail_ok ? 100 : 0, 'status' => $avail_ok ? 'ok' : 'fail'];
+
+    // TeamSpeak proces (20 %) - jen pokud je agent propojený a hlásí ts3_process
+    if (is_array($agent_data) && isset($agent_data['ts3_process']) && is_array($agent_data['ts3_process'])) {
+        $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 100, 'status' => 'ok'];
+    } elseif (is_array($agent_data) && !empty($agent_data['cpu'])) {
+        // Agent je propojený, ale proces ts3server nenašel
+        $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 0, 'status' => 'fail'];
+    } else {
+        $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 0, 'status' => 'na'];
+    }
+
+    // ServerQuery (15 %)
+    if (is_array($check_stages) && isset($check_stages['query']['ok'])) {
+        $sq_ok = (bool)$check_stages['query']['ok'];
+        $areas[] = ['key' => 'serverquery', 'label' => 'ServerQuery', 'weight_pct' => 15, 'score_pct' => $sq_ok ? 100 : 0, 'status' => $sq_ok ? 'ok' : 'fail'];
+    } else {
+        $areas[] = ['key' => 'serverquery', 'label' => 'ServerQuery', 'weight_pct' => 15, 'score_pct' => 0, 'status' => 'na'];
+    }
+
+    // Porty (10 %) - voice port se do poměru nepočítá (nezávisle neověřený, ok=null)
+    if (is_array($check_stages) && isset($check_stages['ports']) && is_array($check_stages['ports'])) {
+        $port_total = 0;
+        $port_ok = 0;
+        foreach ($check_stages['ports'] as $p) {
+            if (!isset($p['ok']) || $p['ok'] === null) continue;
+            $port_total++;
+            if ($p['ok']) $port_ok++;
+        }
+        $port_score = $port_total > 0 ? ($port_ok / $port_total) * 100 : 0;
+        $port_status = $port_total === 0 ? 'na' : ($port_score >= 100 ? 'ok' : 'warn');
+        $areas[] = ['key' => 'ports', 'label' => 'Porty', 'weight_pct' => 10, 'score_pct' => $port_score, 'status' => $port_status];
+    } else {
+        $areas[] = ['key' => 'ports', 'label' => 'Porty', 'weight_pct' => 10, 'score_pct' => 0, 'status' => 'na'];
+    }
+
+    // Výkon VPS (10 %) - jen pokud agent hlásí cpu/ram
+    if (is_array($agent_data) && isset($agent_data['cpu'], $agent_data['ram'])) {
+        $cpu_threshold = (float)($monitor['cpu_threshold'] ?? 90);
+        $ram_threshold = (float)($monitor['ram_threshold'] ?? 95);
+        $cpu_ok = (float)$agent_data['cpu'] < $cpu_threshold;
+        $ram_ok = (float)$agent_data['ram'] < $ram_threshold;
+        $perf_score = ($cpu_ok && $ram_ok) ? 100 : (($cpu_ok || $ram_ok) ? 60 : 20);
+        $areas[] = ['key' => 'vps', 'label' => 'Výkon VPS', 'weight_pct' => 10, 'score_pct' => $perf_score, 'status' => $perf_score >= 100 ? 'ok' : 'warn'];
+    } else {
+        $areas[] = ['key' => 'vps', 'label' => 'Výkon VPS', 'weight_pct' => 10, 'score_pct' => 0, 'status' => 'na'];
+    }
+
+    // Počet klientů / limity (5 %)
+    $slot_pct = $check_stages['service']['slot_usage_pct'] ?? null;
+    if ($slot_pct !== null) {
+        $clients_score = $slot_pct < 90 ? 100 : ($slot_pct < 100 ? 60 : 20);
+        $areas[] = ['key' => 'clients', 'label' => 'Klienti / limity', 'weight_pct' => 5, 'score_pct' => $clients_score, 'status' => $clients_score >= 100 ? 'ok' : 'warn'];
+    } else {
+        $areas[] = ['key' => 'clients', 'label' => 'Klienti / limity', 'weight_pct' => 5, 'score_pct' => 0, 'status' => 'na'];
+    }
+
+    // Verze (5 %) - jen pokud je ručně vyplněná "poslední známá verze" v nastavení
+    $latest_version = trim((string)get_setting('ts3_latest_version', ''));
+    $current_version = is_array($check_stages) ? (string)($check_stages['version'] ?? '') : '';
+    if ($latest_version !== '' && $current_version !== '') {
+        $up_to_date = version_compare($current_version, $latest_version, '>=');
+        $areas[] = ['key' => 'version', 'label' => 'Verze', 'weight_pct' => 5, 'score_pct' => $up_to_date ? 100 : 70, 'status' => $up_to_date ? 'ok' : 'warn'];
+    } else {
+        $areas[] = ['key' => 'version', 'label' => 'Verze', 'weight_pct' => 5, 'score_pct' => 0, 'status' => 'na'];
+    }
+
+    return $areas;
+}
+
+/**
+ * Registr Service Profiles - label/ikona/health-score funkce podle typu monitoru.
+ * Zatím jen 'teamspeak' má reálnou implementaci; tvar registru je to, co dělá z
+ * jednorázového TeamSpeak Health Score obecný framework - přidání dalšího typu
+ * (web/minecraft/...) v budoucnu znamená jeden nový záznam, ne přepis.
+ */
+function get_service_profiles() {
+    return [
+        'teamspeak' => [
+            'label' => 'TeamSpeak',
+            'icon' => 'fa-headset',
+            'health_score_fn' => 'build_teamspeak_health_areas',
+        ],
+    ];
+}
+
+/**
+ * Kontrola TeamSpeak serveru přes ServerQuery. Základní anonymní sekvence
+ * (use + serverinfo) je záměrně beze změny oproti dřívější verzi - je to
+ * produkční kontrola běžící každou 1-5 minutu, nic navíc ji nesmí nově shodit.
+ * Nové věci (přihlášení, channely, server groups, hlasová aktivita, porty) jsou
+ * čistě přídavné a jejich případné selhání (chybějící oprávnění, chybějící
+ * přihlašovací údaje) nikdy nemění výsledné 'status'.
+ */
+
+function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null, $sq_password = null, $filetransfer_port = null) {
     // Rozdělení voice portu a query portu (např. host:voice_port)
     $voice_port = 9987;
     $parts = explode(':', $host);
@@ -882,13 +1180,16 @@ function check_teamspeak($host, $port = 10011, $timeout = 3) {
         $host = $parts[0];
         $voice_port = intval($parts[1]);
     }
-    
+    if (!$filetransfer_port) {
+        $filetransfer_port = 30033;
+    }
+
     $start = microtime(true);
     $host = preg_replace('~^https?://~', '', $host);
-    
+
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
     $duration = round((microtime(true) - $start) * 1000);
-    
+
     $connected_ip = '';
     $ip_version = 'IPv4';
     if ($socket) {
@@ -918,16 +1219,16 @@ function check_teamspeak($host, $port = 10011, $timeout = 3) {
             'error' => "TS3 Query port ($port) nedostupný: $errstr ($errno). Tip: Ujistěte se, že váš VPS neblokuje IP adresu webhostingu ($server_ip) ve svém firewallu nebo v souboru query_ip_whitelist.txt."
         ];
     }
-    
+
     stream_set_timeout($socket, $timeout);
-    
+
     // Čtení úvodního pozdravu ze ServerQuery (přesně 2 řádky: TS3 a Welcome zpráva)
     $greeting = '';
     $line1 = @fgets($socket, 256);
     $line2 = @fgets($socket, 256);
     if ($line1 !== false) $greeting .= $line1;
     if ($line2 !== false) $greeting .= $line2;
-    
+
     if (strpos($greeting, 'TS3') === false && strpos($greeting, 'Welcome') === false) {
         @fclose($socket);
         $visible_greeting = !empty(trim($greeting)) ? '"' . trim(substr($greeting, 0, 50)) . '"' : 'žádná odezva (prázdná)';
@@ -937,63 +1238,152 @@ function check_teamspeak($host, $port = 10011, $timeout = 3) {
             'error' => "Chyba komunikace s TS3 ServerQuery (přijatá data: $visible_greeting). Ujistěte se, že IP adresa webhostingu je přidána v query_ip_whitelist.txt na VPS."
         ];
     }
-    
-    // Zvolíme virtuální server na hlasovém portu
+
+    $query_start = microtime(true);
+
+    // Zvolíme virtuální server na hlasovém portu (nezměněno oproti dřívější verzi)
     @fwrite($socket, "use port=$voice_port\n");
     @fgets($socket, 256); // přečíst odpověď (error id=0 msg=ok)
-    
-    // Dotaz na info o serveru
+
+    // Dotaz na info o serveru (nezměněno - toto je baseline, na kterém stojí up/down)
     @fwrite($socket, "serverinfo\n");
     $info = @fgets($socket, 4096);
-    
-    // Odhlášení ze ServerQuery
-    @fwrite($socket, "quit\n");
-    @fclose($socket);
-    
-    if ($info && strpos($info, 'virtualserver_clientsonline') !== false) {
-        $parts = explode(' ', $info);
-        $details = [];
-        foreach ($parts as $part) {
-            $kv = explode('=', $part, 2);
-            if (count($kv) == 2) {
-                // Dekódování TS3 escapovaných znaků (\s -> mezera, \/ -> lomítko atd.)
-                $details[$kv[0]] = str_replace(['\s', '\/', '\p'], [' ', '/', '|'], $kv[1]);
-            }
+
+    if (!$info || strpos($info, 'virtualserver_clientsonline') === false) {
+        @fwrite($socket, "quit\n");
+        @fclose($socket);
+        $error_detail = 'Spojení navázáno, ale nepodařilo se načíst detaily z Query portu';
+        if ($info) {
+            $error_detail .= ' (Odpověď serveru: ' . trim($info) . ')';
         }
-        
-        $clients_online = isset($details['virtualserver_clientsonline']) ? (int)$details['virtualserver_clientsonline'] : 0;
-        $query_clients = isset($details['virtualserver_queryclientsonline']) ? (int)$details['virtualserver_queryclientsonline'] : 0;
-        $clients_max = isset($details['virtualserver_maxclients']) ? (int)$details['virtualserver_maxclients'] : 0;
-        
+        $server_ip = $_SERVER['SERVER_ADDR'] ?? null;
+        if (!$server_ip && function_exists('gethostname')) {
+            $server_ip = @gethostbyname(@gethostname());
+        }
+        if (!$server_ip || $server_ip === '127.0.0.1') {
+            $server_ip = 'IP vašeho webhostingu';
+        }
+        $error_detail .= ". Tip: Pokud vidíte chybu 'flooding', přidejte IP webhostingu ($server_ip) do souboru query_ip_whitelist.txt na vašem TS3 VPS.";
         return [
             'status' => 'up',
             'response_time' => $duration,
-            'error' => null,
-            'clients_online' => max(0, $clients_online - $query_clients),
-            'clients_max' => $clients_max,
-            'name' => $details['virtualserver_name'] ?? 'TeamSpeak Server',
-            'version' => $details['virtualserver_version'] ?? '',
-            'checked_ip' => $connected_ip,
-            'ip_version' => $ip_version
+            'error' => $error_detail
         ];
     }
-    
-    $error_detail = 'Spojení navázáno, ale nepodařilo se načíst detaily z Query portu';
-    if ($info) {
-        $error_detail .= ' (Odpověď serveru: ' . trim($info) . ')';
+
+    $details = bk_ts3_parse_kv_line($info);
+    $clients_online = isset($details['virtualserver_clientsonline']) ? (int)$details['virtualserver_clientsonline'] : 0;
+    $query_clients = isset($details['virtualserver_queryclientsonline']) ? (int)$details['virtualserver_queryclientsonline'] : 0;
+    $clients_max = isset($details['virtualserver_maxclients']) ? (int)$details['virtualserver_maxclients'] : 0;
+    $real_clients_online = max(0, $clients_online - $query_clients);
+
+    // --- Od tady jsou to čistě přídavné dotazy (check pipeline) - nic z tohoto
+    // --- nemůže shodit status určený serverinfo výše. ---
+    $query_steps = ['serverinfo' => true];
+    $authenticated = false;
+
+    if (!empty($sq_username) && !empty($sq_password)) {
+        $login_cmd = 'login client_login_name=' . bk_ts3_escape_encode($sq_username)
+            . ' client_login_password=' . bk_ts3_escape_encode($sq_password);
+        $login_resp = bk_ts3_send_command($socket, $login_cmd);
+        $authenticated = (bk_ts3_parse_error_id($login_resp) === 0);
+        $query_steps['login'] = $authenticated;
+        if ($authenticated) {
+            // Po přihlášení je nutné virtuální server vybrat znovu (ServerQuery to vyžaduje)
+            bk_ts3_send_command($socket, "use port=$voice_port");
+        }
     }
-    $server_ip = $_SERVER['SERVER_ADDR'] ?? null;
-    if (!$server_ip && function_exists('gethostname')) {
-        $server_ip = @gethostbyname(@gethostname());
+
+    $channel_count = null;
+    $channellist_resp = bk_ts3_send_command($socket, 'channellist');
+    $channellist_ok = (bk_ts3_parse_error_id($channellist_resp) === 0);
+    $query_steps['channellist'] = $channellist_ok;
+    if ($channellist_ok) {
+        $channel_count = count(bk_ts3_parse_list_response($channellist_resp));
     }
-    if (!$server_ip || $server_ip === '127.0.0.1') {
-        $server_ip = 'IP vašeho webhostingu';
+
+    $query_client_count = null;
+    $active_channel_count = null;
+    $voice_activity = null;
+    $clientlist_cmd = $authenticated ? 'clientlist -voice -away' : 'clientlist';
+    $clientlist_resp = bk_ts3_send_command($socket, $clientlist_cmd);
+    $clientlist_ok = (bk_ts3_parse_error_id($clientlist_resp) === 0);
+    $query_steps['clientlist'] = $clientlist_ok;
+    if ($clientlist_ok) {
+        $clients = bk_ts3_parse_list_response($clientlist_resp);
+        $query_client_count = 0;
+        $active_cids = [];
+        $talking = $away = $muted = $recording = 0;
+        foreach ($clients as $c) {
+            $is_query_client = ($c['client_type'] ?? '0') === '1';
+            if ($is_query_client) {
+                $query_client_count++;
+                continue;
+            }
+            if (isset($c['cid'])) {
+                $active_cids[$c['cid']] = true;
+            }
+            if ($authenticated) {
+                if (($c['client_flag_talking'] ?? '0') === '1') $talking++;
+                if (($c['client_away'] ?? '0') === '1') $away++;
+                if (($c['client_input_muted'] ?? '0') === '1' || ($c['client_output_muted'] ?? '0') === '1') $muted++;
+                if (($c['client_is_recording'] ?? '0') === '1') $recording++;
+            }
+        }
+        $active_channel_count = count($active_cids);
+        if ($authenticated) {
+            $voice_activity = ['talking' => $talking, 'away' => $away, 'muted' => $muted, 'recording' => $recording];
+        }
     }
-    $error_detail .= ". Tip: Pokud vidíte chybu 'flooding', přidejte IP webhostingu ($server_ip) do souboru query_ip_whitelist.txt na vašem TS3 VPS.";
+
+    $server_group_count = null;
+    if ($authenticated) {
+        $sg_resp = bk_ts3_send_command($socket, 'servergrouplist');
+        $sg_ok = (bk_ts3_parse_error_id($sg_resp) === 0);
+        $query_steps['servergrouplist'] = $sg_ok;
+        if ($sg_ok) {
+            $server_group_count = count(bk_ts3_parse_list_response($sg_resp));
+        }
+        bk_ts3_send_command($socket, 'logout');
+        $query_steps['logout'] = true;
+    }
+
+    @fwrite($socket, "quit\n");
+    @fclose($socket);
+
+    $check_stages = [
+        'query' => [
+            'ok' => true,
+            'time_ms' => round((microtime(true) - $query_start) * 1000),
+            'authenticated' => $authenticated,
+            'steps' => $query_steps,
+        ],
+        'service' => [
+            'clients_online' => $real_clients_online,
+            'clients_max' => $clients_max,
+            'slot_usage_pct' => $clients_max > 0 ? round(($real_clients_online / $clients_max) * 100, 1) : null,
+            'channel_count' => $channel_count,
+            'active_channel_count' => $active_channel_count,
+            'query_client_count' => $query_client_count,
+            'server_group_count' => $server_group_count,
+            'voice_activity' => $voice_activity,
+        ],
+        'ports' => check_ts3_ports($host, $port, $filetransfer_port, min($timeout, 2)),
+        'license' => $details['virtualserver_license'] ?? null,
+        'version' => $details['virtualserver_version'] ?? null,
+    ];
+
     return [
         'status' => 'up',
         'response_time' => $duration,
-        'error' => $error_detail
+        'error' => null,
+        'clients_online' => $real_clients_online,
+        'clients_max' => $clients_max,
+        'name' => $details['virtualserver_name'] ?? 'TeamSpeak Server',
+        'version' => $details['virtualserver_version'] ?? '',
+        'checked_ip' => $connected_ip,
+        'ip_version' => $ip_version,
+        'check_stages' => $check_stages,
     ];
 }
 

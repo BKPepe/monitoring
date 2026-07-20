@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `hdd_threshold` INT DEFAULT 90,
   `body_keyword` VARCHAR(255) DEFAULT NULL, -- Volitelný řetězec, který musí obsahovat tělo odpovědi (check pipeline)
   `config_snapshot` TEXT DEFAULT NULL, -- JSON s posledním stavem (scheme/dns_ok/cert_valid_to/agent_connected) pro detekci změn config
+  `sq_username` VARCHAR(100) DEFAULT NULL, -- Volitelné TeamSpeak ServerQuery přihlášení (hlubší data - server groups, plný clientlist)
+  `sq_password` VARCHAR(255) DEFAULT NULL,
+  `ts3_filetransfer_port` INT DEFAULT NULL, -- Výchozí 30033, pokud nevyplněno
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -84,6 +87,18 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `ram_usage` FLOAT NOT NULL, -- v %
   `hdd_usage` FLOAT NOT NULL, -- v %
   `net_usage` FLOAT DEFAULT NULL, -- v KB/s (RX+TX), NULL pokud agent síť nehlásí
+  `load_avg_1` FLOAT DEFAULT NULL, -- Load average (1 min)
+  `load_avg_5` FLOAT DEFAULT NULL, -- Load average (5 min)
+  `load_avg_15` FLOAT DEFAULT NULL, -- Load average (15 min)
+  `cpu_steal` FLOAT DEFAULT NULL, -- CPU steal time v % (virtualizace)
+  `swap_usage` FLOAT DEFAULT NULL, -- Využití swapu v %
+  `disk_io_read_kbps` FLOAT DEFAULT NULL,
+  `disk_io_write_kbps` FLOAT DEFAULT NULL,
+  `net_errors` INT DEFAULT NULL, -- Součet rx/tx chyb a zahozených paketů od posledního běhu
+  `ts_clients_online` INT DEFAULT NULL, -- TeamSpeak - počet klientů (pro graf historie)
+  `ts_clients_max` INT DEFAULT NULL,
+  `ts_process_cpu` FLOAT DEFAULT NULL, -- CPU využité přímo procesem ts3server (ne celým hostem)
+  `ts_process_ram` FLOAT DEFAULT NULL, -- RAM v MB využitá procesem ts3server
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
@@ -142,6 +157,8 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 ('metrics_token', ''),
 -- Cílová dostupnost pro měsíční digest (SLA vs Goal)
 ('sla_goal_pct', '99.95'),
+-- Ručně nastavená poslední známá verze TeamSpeak serveru (pro "Update Available"); prázdné = kontrola se přeskočí
+('ts3_latest_version', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260722')
+('schema_version', '20260723')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

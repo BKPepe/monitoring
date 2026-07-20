@@ -32,6 +32,19 @@ $hdd = isset($data['hdd']) ? floatval($data['hdd']) : null;
 // nový agent ji vrací až od druhého běhu (potřebuje předchozí vzorek pro výpočet).
 $net = (isset($data['net']) && $data['net'] !== null) ? floatval($data['net']) : null;
 
+// Host vrstva (Level 2) - vše volitelné, starší agenti tato pole neposílají vůbec.
+$cpu_steal = (isset($data['cpu_steal']) && $data['cpu_steal'] !== null) ? floatval($data['cpu_steal']) : null;
+$swap = (isset($data['swap']) && $data['swap'] !== null) ? floatval($data['swap']) : null;
+$load1 = (isset($data['load1']) && $data['load1'] !== null) ? floatval($data['load1']) : null;
+$load5 = (isset($data['load5']) && $data['load5'] !== null) ? floatval($data['load5']) : null;
+$load15 = (isset($data['load15']) && $data['load15'] !== null) ? floatval($data['load15']) : null;
+$disk_io_read = (isset($data['disk_io_read']) && $data['disk_io_read'] !== null) ? floatval($data['disk_io_read']) : null;
+$disk_io_write = (isset($data['disk_io_write']) && $data['disk_io_write'] !== null) ? floatval($data['disk_io_write']) : null;
+$net_errors = (isset($data['net_errors']) && $data['net_errors'] !== null) ? intval($data['net_errors']) : null;
+
+// TeamSpeak proces (pokud agent běží na stejném VPS jako ts3server)
+$ts3_process = (isset($data['ts3_process']) && is_array($data['ts3_process'])) ? $data['ts3_process'] : null;
+
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Chybí povinné údaje (agent_key, cpu, ram, hdd).']);
@@ -83,11 +96,7 @@ if (is_in_maintenance($monitor)) {
 
 try {
     $pdo->beginTransaction();
-    
-    // Zapsat metriky do databáze
-    $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, net_usage) VALUES (?, ?, ?, ?, ?)");
-    $stmt_metrics->execute([$monitor_id, $cpu, $ram, $hdd, $net]);
-    
+
     // Načíst minulé stavy výstrah pro zamezení spamu
     $old_details = json_decode($monitor['last_details'] ?? '{}', true);
     $cpu_alert_sent = $old_details['cpu_alert_sent'] ?? false;
@@ -141,6 +150,14 @@ try {
         'ram' => $ram,
         'hdd' => $hdd,
         'net' => $net,
+        'cpu_steal' => $cpu_steal,
+        'swap' => $swap,
+        'load1' => $load1,
+        'load5' => $load5,
+        'load15' => $load15,
+        'disk_io_read' => $disk_io_read,
+        'disk_io_write' => $disk_io_write,
+        'net_errors' => $net_errors,
         'missing_processes' => $missing_processes,
         'version' => isset($data['version']) ? trim($data['version']) : null,
         'uptime' => isset($data['uptime']) ? intval($data['uptime']) : null,
@@ -171,10 +188,42 @@ try {
             }
         }
     }
-    
+
+    // TeamSpeak proces (pokud agent běží na stejném VPS jako ts3server) - PID se
+    // porovná s posledním hlášením; změna PID = proces byl restartován.
+    if ($ts3_process !== null) {
+        $old_ts3_pid = $old_details['ts3_process']['pid'] ?? null;
+        $new_ts3_pid = $ts3_process['pid'] ?? null;
+        if ($old_ts3_pid !== null && $new_ts3_pid !== null && $old_ts3_pid != $new_ts3_pid) {
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'process_restarted', "ts3server restartován (PID {$old_ts3_pid} -> {$new_ts3_pid})");
+        }
+        $new_data['ts3_process'] = $ts3_process;
+    }
+
     $merged_details_arr = array_merge($old_details, $new_data);
     $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
-    
+
+    // Zapsat metriky do databáze - včetně TeamSpeak klientů/procesu, pokud jsou
+    // k dispozici (viz výše), aby graf historie měl data z tohoto běhu.
+    $ts3_clients_online = $new_data['ts3_clients_online'] ?? null;
+    $ts3_clients_max = $new_data['ts3_clients_max'] ?? null;
+    $ts3_process_cpu = $ts3_process['cpu'] ?? null;
+    $ts3_process_ram = $ts3_process['ram_mb'] ?? null;
+    $stmt_metrics = $pdo->prepare("
+        INSERT INTO vps_metrics (
+            monitor_id, cpu_usage, ram_usage, hdd_usage, net_usage,
+            load_avg_1, load_avg_5, load_avg_15, cpu_steal, swap_usage,
+            disk_io_read_kbps, disk_io_write_kbps, net_errors,
+            ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt_metrics->execute([
+        $monitor_id, $cpu, $ram, $hdd, $net,
+        $load1, $load5, $load15, $cpu_steal, $swap,
+        $disk_io_read, $disk_io_write, $net_errors,
+        $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
+    ]);
+
     if ($monitor['type'] === 'vps') {
         // Zapsat běžný log kontroly
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");

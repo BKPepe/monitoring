@@ -13,7 +13,7 @@ $AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 $AUTO_UPDATE = "0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
 # ===========================
 
-$AGENT_VERSION = "1.4.0"
+$AGENT_VERSION = "1.5.0"
 
 # Načtení z Environment proměnných
 if ($env:STATUS_API_URL) { $API_URL = $env:STATUS_API_URL }
@@ -94,29 +94,62 @@ try {
     }
 } catch {}
 
-# --- Síť: propustnost (KB/s, RX+TX) od posledního běhu ---
-# Potřebuje 2 vzorky, proto se mezi běhy ukládá kumulativní počet bajtů a čas
+# --- Swap (stránkovací soubor): využití v % ---
+$swap = 0.0
+try {
+    $pageFiles = Get-CimInstance -ClassName Win32_PageFileUsage
+    if ($pageFiles) {
+        $totalAllocated = ($pageFiles | Measure-Object -Property AllocatedBaseSize -Sum).Sum
+        $totalUsed = ($pageFiles | Measure-Object -Property CurrentUsage -Sum).Sum
+        if ($totalAllocated -gt 0) { $swap = [math]::Round(($totalUsed / $totalAllocated) * 100, 1) }
+    }
+} catch {}
+
+# --- Load average a CPU steal time nejsou na Windows k dispozici (nejde o Linux
+# koncepty s přímým ekvivalentem) - záměrně se nedopočítávají ani nenahrazují
+# odhadem, jen se pošlou jako $null.
+$load1 = $null; $load5 = $null; $load15 = $null
+$cpuSteal = $null
+
+# --- Disk I/O (KB/s čtení/zápis), průměr za 1s vzorek přes výkonnostní čítače ---
+$diskIoRead = $null
+$diskIoWrite = $null
+try {
+    $ioCounters = Get-Counter '\PhysicalDisk(_Total)\Disk Read Bytes/sec', '\PhysicalDisk(_Total)\Disk Write Bytes/sec' -SampleInterval 1 -MaxSamples 2 -ErrorAction Stop
+    $readAvg = ($ioCounters.CounterSamples | Where-Object { $_.Path -like '*read bytes*' } | Measure-Object -Property CookedValue -Average).Average
+    $writeAvg = ($ioCounters.CounterSamples | Where-Object { $_.Path -like '*write bytes*' } | Measure-Object -Property CookedValue -Average).Average
+    if ($null -ne $readAvg) { $diskIoRead = [math]::Round($readAvg / 1024, 1) }
+    if ($null -ne $writeAvg) { $diskIoWrite = [math]::Round($writeAvg / 1024, 1) }
+} catch {}
+
+# --- Síť: propustnost (KB/s, RX+TX) a nové chyby/zahozené pakety od posledního běhu ---
+# Potřebuje 2 vzorky, proto se mezi běhy ukládá kumulativní počet bajtů/chyb a čas
 # do stavového souboru vedle skriptu; první běh proto vrací $null.
 $net = $null
+$netErrors = $null
 try {
     $now = Get-Date
     $totalBytes = 0
+    $totalErrors = 0
     $adapters = Get-NetAdapterStatistics -ErrorAction Stop | Where-Object { $_.Name -notmatch '^(Loopback|vEthernet|Docker|WSL)' }
     foreach ($a in $adapters) {
         $totalBytes += [int64]$a.ReceivedBytes + [int64]$a.SentBytes
+        $totalErrors += [int64]$a.ReceivedPacketErrors + [int64]$a.OutboundPacketErrors + [int64]$a.ReceivedDiscardedPackets + [int64]$a.OutboundDiscardedPackets
     }
 
     $prev = $null
     if (Test-Path $NetStateFile) {
         try {
             $parts = (Get-Content $NetStateFile -Raw).Trim().Split(",")
-            if ($parts.Count -eq 2) {
-                $prev = @{ Ts = [double]$parts[0]; Bytes = [int64]$parts[1] }
+            if ($parts.Count -ge 3) {
+                $prev = @{ Ts = [double]$parts[0]; Bytes = [int64]$parts[1]; Errors = [int64]$parts[2] }
+            } elseif ($parts.Count -eq 2) {
+                $prev = @{ Ts = [double]$parts[0]; Bytes = [int64]$parts[1]; Errors = $totalErrors }
             }
         } catch {}
     }
 
-    "$($now.ToFileTimeUtc()),$totalBytes" | Set-Content -Path $NetStateFile -Encoding ASCII -ErrorAction SilentlyContinue
+    "$($now.ToFileTimeUtc()),$totalBytes,$totalErrors" | Set-Content -Path $NetStateFile -Encoding ASCII -ErrorAction SilentlyContinue
 
     if ($prev) {
         $elapsedSec = ($now.ToFileTimeUtc() - $prev.Ts) / 10000000.0
@@ -124,6 +157,8 @@ try {
         if ($elapsedSec -gt 0 -and $deltaBytes -ge 0) {
             $net = [math]::Round(($deltaBytes / $elapsedSec) / 1024, 1)
         }
+        $deltaErrors = $totalErrors - $prev.Errors
+        if ($deltaErrors -ge 0) { $netErrors = $deltaErrors }
     }
 } catch {}
 
@@ -172,23 +207,60 @@ try {
     $processes = Get-Process | Select-Object -ExpandProperty ProcessName -Unique
 } catch {}
 
+# --- TeamSpeak proces (PID/CPU/RAM/vlákna/handles) ---
+# Detekce restartu (změna PID mezi hlášeními) se dělá na serveru (agent_api.php),
+# agent jen hlásí aktuální stav. "open_fds" je zde HandleCount (nejbližší windowsí
+# obdoba počtu otevřených soketů/souborů - Windows nemá přímo /proc/<pid>/fd).
+$ts3Process = $null
+try {
+    $proc = Get-Process -Name "ts3server" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($proc) {
+        $cpuTime1 = $proc.TotalProcessorTime
+        Start-Sleep -Seconds 1
+        $proc.Refresh()
+        $cpuTime2 = $proc.TotalProcessorTime
+        $cpuCores = [Environment]::ProcessorCount
+        $cpuDeltaMs = ($cpuTime2 - $cpuTime1).TotalMilliseconds
+        $ts3Cpu = 0.0
+        if ($cpuCores -gt 0) { $ts3Cpu = [math]::Round(($cpuDeltaMs / 1000.0 / $cpuCores) * 100, 1) }
+
+        $ts3Process = @{
+            pid = $proc.Id
+            cpu = $ts3Cpu
+            ram_mb = [math]::Round($proc.WorkingSet64 / 1MB, 1)
+            threads = $proc.Threads.Count
+            open_fds = $proc.HandleCount
+            uptime_sec = [int]((Get-Date) - $proc.StartTime).TotalSeconds
+        }
+    }
+} catch {}
+
 $payload = @{
     agent_key = $AGENT_KEY
     agent_type = "powershell"
     version = $AGENT_VERSION
     os = $os_version
     cpu = $cpu
+    cpu_steal = $cpuSteal
     ram = $ram
+    swap = $swap
     hdd = $hdd
+    load1 = $load1
+    load5 = $load5
+    load15 = $load15
+    disk_io_read = $diskIoRead
+    disk_io_write = $diskIoWrite
     net = $net
+    net_errors = $netErrors
     uptime = $uptime
     smart = $smart
     ports = @($ports)
     processes = @($processes)
+    ts3_process = $ts3Process
 } | ConvertTo-Json -Depth 4
 
 $netLog = if ($null -ne $net) { "$net KB/s" } else { "N/A (první běh)" }
-Write-AgentLog "Metriky - OS: $os_version, CPU: $cpu%, RAM: $ram%, HDD: $hdd%, Sit: $netLog, Uptime: ${uptime}s, SMART: $smart"
+Write-AgentLog "Metriky - OS: $os_version, CPU: $cpu%, RAM: $ram%, swap $swap%, HDD: $hdd%, Sit: $netLog, Uptime: ${uptime}s, SMART: $smart"
 Write-AgentLog "Odesílám data na $API_URL..."
 
 try {
