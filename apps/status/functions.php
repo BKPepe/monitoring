@@ -1310,7 +1310,10 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
     $stmt_total_monitors = $pdo->query("SELECT COUNT(*) FROM monitors");
     $total_monitors = (int)$stmt_total_monitors->fetchColumn();
 
-    // Nejméně spolehlivé monitory v období (top 5 dle nejnižší dostupnosti)
+    // Nejméně spolehlivé monitory v období (top 5 dle nejnižší dostupnosti).
+    // Řazení podle poměru up_count/total_count se schválně dopočítává v PHP,
+    // ne v ORDER BY - použití SELECT aliasu agregační funkce uvnitř výrazu
+    // v ORDER BY selhává na řadě MySQL/MariaDB verzí s chybou 1247.
     $stmt_worst = $pdo->prepare("
         SELECT m.name, m.type,
                SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -1321,11 +1324,18 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
         WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
         GROUP BY l.monitor_id, m.name, m.type
         HAVING down_count > 0
-        ORDER BY (up_count / total_count) ASC, down_count DESC
-        LIMIT 5
+        ORDER BY down_count DESC
+        LIMIT 20
     ");
     $stmt_worst->execute([$days]);
     $worst_monitors = $stmt_worst->fetchAll();
+
+    usort($worst_monitors, function ($a, $b) {
+        $ratio_a = $a['total_count'] > 0 ? $a['up_count'] / $a['total_count'] : 1;
+        $ratio_b = $b['total_count'] > 0 ? $b['up_count'] / $b['total_count'] : 1;
+        return $ratio_a <=> $ratio_b;
+    });
+    $worst_monitors = array_slice($worst_monitors, 0, 5);
 
     // Příjemci - všichni administrátoři se zadaným e-mailem
     $stmt_admins = $pdo->query("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
