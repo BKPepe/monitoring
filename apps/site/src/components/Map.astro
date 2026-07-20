@@ -1,0 +1,314 @@
+---
+// Map.astro - Interactive Agent World Map
+const currentPath = Astro.url.pathname;
+const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+
+const t = isCs ? {
+  title: 'Globální Monitorovací Síť',
+  desc: 'Distribuovaní agenti měří dostupnost z pohledu reálných uživatelů.',
+  centralBadge: '1 Centrála',
+  agentsBadge: '5 Agenti',
+  pragueServer: 'Hostování serveru',
+  pragueStatus: 'Primární databáze',
+  active: 'Aktivní',
+  latency: 'Latence'
+} : {
+  title: 'Global Monitoring Network',
+  desc: 'Distributed agents measure network availability from the perspective of real users.',
+  centralBadge: '1 Central',
+  agentsBadge: '5 Agents',
+  pragueServer: 'Server hosting node',
+  pragueStatus: 'Primary database',
+  active: 'Active',
+  latency: 'Latency'
+};
+---
+
+<div class="map-card card">
+  <div class="map-header">
+    <div class="map-title-info">
+      <h4>{t.title}</h4>
+      <p>{t.desc}</p>
+    </div>
+    <div class="map-stats-badges">
+      <span class="badge badge-accent">{t.centralBadge}</span>
+      <span class="badge badge-success">{t.agentsBadge}</span>
+    </div>
+  </div>
+
+  <div class="map-canvas-container">
+    <svg viewBox="0 0 800 450" class="world-map-svg">
+      <!-- Dark stylized background shapes representing continental masses -->
+      <g class="map-continents" fill="var(--bg-tertiary)" stroke="var(--border-color)" stroke-width="0.5">
+        <!-- North America -->
+        <path d="M 50 100 L 120 80 L 220 120 L 240 180 L 190 220 L 150 250 L 100 240 L 70 180 Z" opacity="0.6" />
+        <!-- South America -->
+        <path d="M 150 250 L 190 260 L 220 300 L 250 350 L 220 420 L 180 400 L 160 320 Z" opacity="0.6" />
+        <!-- Greenland -->
+        <path d="M 230 40 L 290 50 L 260 90 L 210 80 Z" opacity="0.4" />
+        <!-- Eurasia / Africa -->
+        <path d="M 290 120 L 330 100 L 450 70 L 600 90 L 720 120 L 750 180 L 700 250 L 620 280 L 520 260 L 480 320 L 410 320 L 370 240 L 310 160 Z" opacity="0.6" />
+        <path d="M 330 200 L 390 210 L 410 280 L 370 350 L 320 330 L 310 260 Z" opacity="0.6" /> <!-- Africa -->
+        <!-- Australia -->
+        <path d="M 620 300 L 680 310 L 700 350 L 640 370 L 600 340 Z" opacity="0.6" />
+      </g>
+
+      <!-- Connection Arcs (Bezier curves from agents to Prague Central) -->
+      <!-- Prague: Central monitoring node at (360, 138) -->
+      <g class="map-connections" fill="none" stroke-width="1.5">
+        <!-- New York (170, 150) to Prague (360, 138) -->
+        <path d="M 170 150 Q 265 110, 360 138" class="map-arc-line" />
+        <path d="M 170 150 Q 265 110, 360 138" class="map-arc-pulse p-ny" />
+
+        <!-- London (320, 125) to Prague (360, 138) -->
+        <path d="M 320 125 Q 340 125, 360 138" class="map-arc-line" />
+        <path d="M 320 125 Q 340 125, 360 138" class="map-arc-pulse p-ldn" />
+
+        <!-- Frankfurt (345, 135) to Prague (360, 138) -->
+        <path d="M 345 135 Q 352 133, 360 138" class="map-arc-line" />
+        <path d="M 345 135 Q 352 133, 360 138" class="map-arc-pulse p-fra" />
+
+        <!-- Singapore (610, 275) to Prague (360, 138) -->
+        <path d="M 610 275 Q 485 180, 360 138" class="map-arc-line" />
+        <path d="M 610 275 Q 485 180, 360 138" class="map-arc-pulse p-sgp" />
+
+        <!-- Tokyo (700, 175) to Prague (360, 138) -->
+        <path d="M 700 175 Q 530 120, 360 138" class="map-arc-line" />
+        <path d="M 700 175 Q 530 120, 360 138" class="map-arc-pulse p-tok" />
+      </g>
+
+      <!-- Central Node Prague -->
+      <g class="map-marker-center" transform="translate(360, 138)">
+        <circle cx="0" cy="0" r="10" fill="var(--accent-glow)" />
+        <circle cx="0" cy="0" r="14" fill="none" stroke="var(--accent-color)" stroke-width="1.5" class="pulse-ring" />
+        <circle cx="0" cy="0" r="5" fill="var(--accent-color)" />
+      </g>
+
+      <!-- Agent Node Markers -->
+      <!-- New York -->
+      <g class="map-marker agent-point" transform="translate(170, 150)">
+        <circle cx="0" cy="0" r="8" fill="rgba(64, 192, 87, 0.15)" />
+        <circle cx="0" cy="0" r="4" fill="var(--success)" class="point-dot" />
+        <text x="0" y="-12" class="marker-label">New York</text>
+      </g>
+
+      <!-- London -->
+      <g class="map-marker agent-point" transform="translate(320, 125)">
+        <circle cx="0" cy="0" r="8" fill="rgba(64, 192, 87, 0.15)" />
+        <circle cx="0" cy="0" r="4" fill="var(--success)" class="point-dot" />
+        <text x="0" y="-12" class="marker-label">{isCs ? "Londýn" : "London"}</text>
+      </g>
+
+      <!-- Frankfurt -->
+      <g class="map-marker agent-point" transform="translate(345, 135)">
+        <circle cx="0" cy="0" r="8" fill="rgba(64, 192, 87, 0.15)" />
+        <circle cx="0" cy="0" r="4" fill="var(--success)" class="point-dot" />
+        <text x="0" y="18" class="marker-label">Frankfurt</text>
+      </g>
+
+      <!-- Singapore -->
+      <g class="map-marker agent-point" transform="translate(610, 275)">
+        <circle cx="0" cy="0" r="8" fill="rgba(64, 192, 87, 0.15)" />
+        <circle cx="0" cy="0" r="4" fill="var(--success)" class="point-dot" />
+        <text x="0" y="-12" class="marker-label">{isCs ? "Singapur" : "Singapore"}</text>
+      </g>
+
+      <!-- Tokyo -->
+      <g class="map-marker agent-point" transform="translate(700, 175)">
+        <circle cx="0" cy="0" r="8" fill="rgba(64, 192, 87, 0.15)" />
+        <circle cx="0" cy="0" r="4" fill="var(--success)" class="point-dot" />
+        <text x="0" y="-12" class="marker-label">{isCs ? "Tokio" : "Tokyo"}</text>
+      </g>
+    </svg>
+  </div>
+  
+  <div class="map-details-grid">
+    <div class="map-details-box">
+      <span class="detail-country">{isCs ? "🇨🇿 Praha (Centrála)" : "🇨🇿 Prague (Central)"}</span>
+      <span class="detail-ping">{t.pragueServer}</span>
+      <span class="detail-status status-ok">{t.pragueStatus}</span>
+    </div>
+    <div class="map-details-box">
+      <span class="detail-country">🇺🇸 New York</span>
+      <span class="detail-ping">{t.latency}: 78 ms</span>
+      <span class="detail-status status-ok">{t.active}</span>
+    </div>
+    <div class="map-details-box">
+      <span class="detail-country">{isCs ? "🇬🇧 Londýn" : "🇬🇧 London"}</span>
+      <span class="detail-ping">{t.latency}: 15 ms</span>
+      <span class="detail-status status-ok">{t.active}</span>
+    </div>
+    <div class="map-details-box">
+      <span class="detail-country">{isCs ? "🇸🇬 Singapur" : "🇸🇬 Singapore"}</span>
+      <span class="detail-ping">{t.latency}: 184 ms</span>
+      <span class="detail-status status-ok">{t.active}</span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .map-card {
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    padding: 2.5rem;
+    overflow: hidden;
+  }
+
+  .map-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.2rem;
+  }
+
+  .map-title-info h4 {
+    font-size: 1.25rem;
+    font-weight: 700;
+  }
+
+  .map-title-info p {
+    font-size: 0.9rem;
+    margin-top: 0.2rem;
+  }
+
+  .map-stats-badges {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .map-canvas-container {
+    background: radial-gradient(circle at 50% 50%, var(--bg-tertiary) 0%, transparent 90%);
+    border-radius: var(--radius-md);
+    padding: 1.5rem;
+    border: 1px solid var(--border-color);
+    position: relative;
+  }
+
+  .world-map-svg {
+    width: 100%;
+    height: auto;
+  }
+
+  /* Connection Curves */
+  .map-arc-line {
+    stroke: var(--border-color);
+    stroke-dasharray: 4, 4;
+    stroke-opacity: 0.5;
+  }
+
+  .map-arc-pulse {
+    stroke: var(--accent-color);
+    stroke-linecap: round;
+    stroke-dasharray: 10, 150;
+    stroke-dashoffset: 160;
+    animation: arc-flow 4s infinite linear;
+  }
+
+  .p-ny { animation-delay: 0s; }
+  .p-ldn { animation-delay: 1.5s; animation-duration: 3s; }
+  .p-fra { animation-delay: 0.5s; animation-duration: 2s; }
+  .p-sgp { animation-delay: 2.2s; animation-duration: 5s; }
+  .p-tok { animation-delay: 1s; animation-duration: 4.5s; }
+
+  /* Markers */
+  .marker-label {
+    font-family: var(--font-sans);
+    font-size: 8px;
+    font-weight: 700;
+    fill: var(--text-secondary);
+    text-anchor: middle;
+    letter-spacing: 0.05em;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+  }
+
+  .map-marker:hover .marker-label {
+    opacity: 1;
+  }
+
+  .point-dot {
+    transition: transform var(--transition-fast);
+  }
+
+  .map-marker:hover .point-dot {
+    transform: scale(1.5);
+  }
+
+  /* Pulse Ring for Center */
+  .pulse-ring {
+    animation: map-ping 2s infinite ease-out;
+    transform-origin: center;
+  }
+
+  /* Grid details */
+  .map-details-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+  }
+
+  .map-details-box {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .detail-country {
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .detail-ping {
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+  }
+
+  .detail-status {
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .detail-status.status-ok {
+    color: var(--success);
+  }
+
+  /* Keyframe animations */
+  @keyframes map-ping {
+    0% { transform: scale(0.5); opacity: 1; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+
+  @keyframes arc-flow {
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .map-card {
+      padding: 1.5rem;
+    }
+    .map-header {
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .map-details-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 480px) {
+    .map-details-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

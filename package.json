@@ -1,0 +1,15 @@
+{
+  "name": "bloodkings-monitoring-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/site",
+    "apps/worker"
+  ],
+  "scripts": {
+    "dev:site": "npm run dev -w apps/site",
+    "dev:worker": "npm run dev -w apps/worker",
+    "build:site": "npm run build -w apps/site",
+    "build:worker": "npm run build -w apps/worker",
+    "build": "npm run build -w apps/site && npm run build -w apps/worker"
+  }
+}

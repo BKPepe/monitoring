@@ -1,0 +1,382 @@
+---
+// AgentNetwork.astro - Interactive network of server and agent nodes
+const currentPath = Astro.url.pathname;
+const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+const statusText = isCs ? "Agenty komunikují bez chyb" : "Agents communicating without errors";
+const latencyText = isCs ? "Průměrná odezva" : "Average latency";
+---
+
+<div class="network-container card">
+  <div class="network-header">
+    <div class="status-indicator">
+      <span class="pulse-dot green"></span>
+      <span class="status-label">{statusText}</span>
+    </div>
+    <span class="ping-stats">{latencyText}: <strong>24 ms</strong></span>
+  </div>
+
+  <div class="network-visualizer">
+    <svg viewBox="0 0 800 500" class="network-svg">
+      <!-- Defs for gradients & filters -->
+      <defs>
+        <radialGradient id="server-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="var(--accent-color)" stop-opacity="0.3"></stop>
+          <stop offset="100%" stop-color="var(--accent-color)" stop-opacity="0"></stop>
+        </radialGradient>
+        <radialGradient id="node-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#2b8a3e" stop-opacity="0.2"></stop>
+          <stop offset="100%" stop-color="#2b8a3e" stop-opacity="0"></stop>
+        </radialGradient>
+        <filter id="glow-effect" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="6" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+      </defs>
+
+      <!-- Connection Lines with Animated Pulses -->
+      <!-- Center is at (400, 250) -->
+      <!-- Nodes: 
+           Docker: (200, 100)
+           Linux VPS: (600, 100)
+           Windows: (150, 250)
+           Raspberry Pi: (650, 250)
+           macOS: (220, 400)
+           Cloud VPS: (580, 400)
+      -->
+      <g class="connections">
+        <!-- Back connection lines -->
+        <line x1="200" y1="100" x2="400" y2="250" class="connection-line c-docker" />
+        <line x1="600" y1="100" x2="400" y2="250" class="connection-line c-linux" />
+        <line x1="150" y1="250" x2="400" y2="250" class="connection-line c-windows" />
+        <line x1="650" y1="250" x2="400" y2="250" class="connection-line c-raspberry" />
+        <line x1="220" y1="400" x2="400" y2="250" class="connection-line c-macos" />
+        <line x1="580" y1="400" x2="400" y2="250" class="connection-line c-vps" />
+      </g>
+
+      <!-- Glowing Server Backing -->
+      <circle cx="400" cy="250" r="110" fill="url(#server-glow)" />
+
+      <!-- Center Server Node -->
+      <g class="node server-node" id="server-center">
+        <circle cx="400" cy="250" r="48" class="node-bg server-bg" />
+        <circle cx="400" cy="250" r="40" class="node-border server-border" />
+        <!-- Crown Core Icon -->
+        <text x="400" y="259" class="node-icon server-icon">👑</text>
+        <text x="400" y="325" class="node-title server-title">CENTRAL SERVER</text>
+        <text x="400" y="342" class="node-subtitle">bloodkings.eu</text>
+      </g>
+
+      <!-- Surrounding Agent Nodes -->
+      <!-- Agent 1: Docker (top left) -->
+      <g class="node agent-node online" transform="translate(200, 100)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">🐳</text>
+        <text x="0" y="-45" class="node-title">Docker Container</text>
+        <text x="0" y="50" class="node-ping">12 ms</text>
+      </g>
+
+      <!-- Agent 2: Linux (top right) -->
+      <g class="node agent-node online" transform="translate(600, 100)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">🐧</text>
+        <text x="0" y="-45" class="node-title">Linux VPS</text>
+        <text x="0" y="50" class="node-ping">8 ms</text>
+      </g>
+
+      <!-- Agent 3: Windows Server (mid left) -->
+      <g class="node agent-node online" transform="translate(150, 250)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">🪟</text>
+        <text x="0" y="-45" class="node-title">Windows Server</text>
+        <text x="0" y="50" class="node-ping">18 ms</text>
+      </g>
+
+      <!-- Agent 4: Raspberry Pi (mid right) -->
+      <g class="node agent-node online" transform="translate(650, 250)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">🍓</text>
+        <text x="0" y="-45" class="node-title">Raspberry Pi 5</text>
+        <text x="0" y="50" class="node-ping">32 ms</text>
+      </g>
+
+      <!-- Agent 5: macOS Agent (bottom left) -->
+      <g class="node agent-node online" transform="translate(220, 400)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">🍏</text>
+        <text x="0" y="-45" class="node-title">Mac Mini M2</text>
+        <text x="0" y="50" class="node-ping">15 ms</text>
+      </g>
+
+      <!-- Agent 6: Cloud VPS (bottom right) -->
+      <g class="node agent-node online" transform="translate(580, 400)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">☁️</text>
+        <text x="0" y="-45" class="node-title">AWS EC2</text>
+        <text x="0" y="50" class="node-ping">65 ms</text>
+      </g>
+    </svg>
+  </div>
+</div>
+
+<style>
+  .network-container {
+    width: 100%;
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 2.5rem;
+    position: relative;
+  }
+
+  .network-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.2rem;
+  }
+
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .pulse-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    position: relative;
+  }
+
+  .pulse-dot.green {
+    background-color: var(--success);
+    box-shadow: 0 0 10px var(--success);
+  }
+
+  .pulse-dot.green::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--success);
+    opacity: 0;
+    animation: ping-pulse 1.8s infinite cubic-bezier(0.4, 0, 0.6, 1);
+  }
+
+  .status-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  .ping-stats {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+  }
+
+  .network-visualizer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    background: radial-gradient(circle at 50% 50%, var(--bg-tertiary) 0%, transparent 80%);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    overflow: hidden;
+  }
+
+  .network-svg {
+    width: 100%;
+    max-height: 480px;
+  }
+
+  /* Node Styling */
+  .node {
+    cursor: pointer;
+    transition: transform var(--transition-normal);
+  }
+
+  .node-bg {
+    fill: var(--bg-secondary);
+    stroke: var(--border-color);
+    stroke-width: 1.5;
+    transition: fill var(--transition-normal), stroke var(--transition-normal);
+  }
+
+  :global(.dark) .node-bg {
+    fill: var(--bg-tertiary);
+  }
+
+  .node-border {
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-opacity: 0.2;
+    stroke-width: 2;
+    transition: stroke var(--transition-normal);
+  }
+
+  .node-icon {
+    font-size: 20px;
+    text-anchor: middle;
+    user-select: none;
+  }
+
+  .node-title {
+    font-family: var(--font-heading);
+    font-size: 13px;
+    font-weight: 600;
+    fill: var(--text-primary);
+    text-anchor: middle;
+    opacity: 0.85;
+    transition: opacity var(--transition-normal), font-size var(--transition-normal);
+  }
+
+  .node-subtitle {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    fill: var(--text-muted);
+    text-anchor: middle;
+  }
+
+  .node-ping {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--success);
+    font-weight: 600;
+    text-anchor: middle;
+    opacity: 0;
+    transform: translateY(-5px);
+    transition: opacity var(--transition-fast), transform var(--transition-fast);
+  }
+
+  /* Server Node Specifics */
+  .server-bg {
+    fill: var(--bg-secondary);
+    stroke: var(--accent-color);
+    stroke-width: 2.5;
+  }
+  
+  :global(.dark) .server-bg {
+    fill: rgba(176, 0, 32, 0.05);
+  }
+
+  .server-border {
+    stroke: var(--accent-color);
+    stroke-opacity: 0.4;
+    filter: url(#glow-effect);
+  }
+
+  .server-icon {
+    font-size: 32px;
+  }
+
+  .server-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    font-weight: 800;
+    fill: var(--text-primary);
+  }
+
+  /* Hover Interactivity */
+  .node:hover {
+    transform: scale(1.1);
+  }
+
+  .agent-node:hover .node-border {
+    stroke: var(--success);
+    stroke-opacity: 0.8;
+  }
+
+  .agent-node:hover .node-ping {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .server-node:hover {
+    transform: scale(1.05);
+  }
+
+  /* Connections Line Styling */
+  .connection-line {
+    stroke: var(--border-color);
+    stroke-width: 2.5;
+    stroke-dasharray: 8, 8;
+    fill: none;
+    transition: stroke var(--transition-normal);
+  }
+
+  /* Animated connection styling */
+  .agent-node.online {
+    animation: agent-floating 8s ease-in-out infinite;
+  }
+  
+  /* Apply delay to create a natural dynamic look */
+  .agent-node:nth-child(2) { animation-delay: -1s; }
+  .agent-node:nth-child(3) { animation-delay: -2.5s; }
+  .agent-node:nth-child(4) { animation-delay: -4s; }
+  .agent-node:nth-child(5) { animation-delay: -5.5s; }
+  .agent-node:nth-child(6) { animation-delay: -7s; }
+
+  /* Red glowing flowing connection line style */
+  .connection-line {
+    animation: flow-line 25s linear infinite;
+    stroke: rgba(176, 0, 32, 0.4);
+  }
+
+  :global(.dark) .connection-line {
+    stroke: rgba(229, 57, 53, 0.35);
+  }
+
+  .node:hover + .connection-line,
+  .connections:hover .connection-line {
+    stroke: var(--accent-color);
+    stroke-width: 3.5;
+  }
+
+  /* Animations definitions */
+  @keyframes ping-pulse {
+    0% { transform: scale(0.6); opacity: 1; }
+    100% { transform: scale(1.5); opacity: 0; }
+  }
+
+  @keyframes agent-floating {
+    0% { transform: translate(0, 0); }
+    50% { transform: translate(0, -6px); }
+    100% { transform: translate(0, 0); }
+  }
+
+  @keyframes flow-line {
+    to {
+      stroke-dashoffset: -200px;
+    }
+  }
+
+  /* Transform offset helpers because SVG translations inside HTML can differ */
+  .agent-node {
+    transform-origin: 0px 0px;
+  }
+
+  @media (max-width: 600px) {
+    .network-container {
+      padding: 1.5rem;
+    }
+    .network-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+    .node-title {
+      font-size: 10px;
+    }
+  }
+</style>

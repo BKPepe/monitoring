@@ -1,0 +1,562 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import AgentNetwork from '../../components/AgentNetwork.astro';
+import Playground from '../../components/Playground.astro';
+import Dashboard from '../../components/Dashboard.astro';
+import Map from '../../components/Map.astro';
+import AgentSelector from '../../components/AgentSelector.astro';
+---
+
+<Layout title="Blood Kings Monitoring | Self-Hosted Monitoring Bez Limitu">
+  <!-- Hero Section -->
+  <section class="hero-section section">
+    <div class="container hero-grid-layout">
+      <div class="hero-content">
+        <div class="badge badge-accent float-badge">v0.1.0-alpha Nyní Venku</div>
+        <h1 class="hero-title">
+          Self-Hosted Monitoring <br />
+          <span class="text-gradient">Bez Jakýchkoliv Limitů</span>
+        </h1>
+        <p class="hero-desc">
+          Blood Kings Monitoring je open-source monitorovací systém serverů a služeb. Distribuovaní agenti měří odezvu a dostupnost přímo ze systémů Linux, Windows nebo Docker kontejnerů.
+        </p>
+        <div class="hero-buttons">
+          <a href="#playground" class="btn btn-primary">🚀 Vyzkoušet demo</a>
+          <a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener" class="btn btn-secondary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z"></path>
+            </svg>
+            GitHub
+          </a>
+          <a href="/cs/docs" class="btn btn-outline">📖 Dokumentace</a>
+        </div>
+        
+        <!-- GitHub Live Stats Banner -->
+        <div class="git-stats-banner" id="git-stats-banner">
+          <span class="git-stat"><span class="stat-icon">⭐</span> <strong id="git-stars">...</strong> Stars</span>
+          <span class="git-divider">|</span>
+          <span class="git-stat"><span class="stat-icon">🍴</span> <strong id="git-forks">...</strong> Forks</span>
+          <span class="git-divider">|</span>
+          <span class="git-stat"><span class="stat-icon">👨‍💻</span> <strong id="git-contributors">...</strong> Contributorů</span>
+        </div>
+      </div>
+      
+      <div class="hero-visual">
+        <AgentNetwork />
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Playground Section -->
+  <section class="section bg-dim">
+    <div class="container">
+      <Playground />
+    </div>
+  </section>
+
+  <!-- Features Section: Why Blood Kings -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-accent">Proč Blood Kings?</span>
+        <h2>Kompletní Monitorovací Ekosystém</h2>
+        <p class="section-subtitle">SaaS služby vás omezují počtem monitorů, frekvencí kontrol a drahým příplatkem za agenty. My boříme hranice.</p>
+      </div>
+
+      <div class="grid-3 features-grid">
+        <div class="card card-glow">
+          <div class="feature-icon">🏠</div>
+          <h3>100 % Self-Hosted</h3>
+          <p>Mějte svá data a celou infrastrukturu pod absolutní kontrolou. Žádné cloudové servery třetích stran.</p>
+        </div>
+        
+        <div class="card card-glow">
+          <div class="feature-icon">🤖</div>
+          <h3>Remote Agenti</h3>
+          <p>Nativní a mimořádně lehcí agenti pro Linux, Windows, macOS i Docker odesílající systémová data.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🌐</div>
+          <h3>Public Status Pages</h3>
+          <p>Sdílejte dostupnost a incidenty se svými zákazníky prostřednictvím moderních a rychlých status stránek.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🔒</div>
+          <h3>SSL Monitoring</h3>
+          <p>Sledujte platnost a detaily SSL/TLS certifikátů. Upozornění obdržíte včas před jejich expirací.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🏷️</div>
+          <h3>IPv4 & IPv6</h3>
+          <p>Kompletní podpora obou IP protokolů. Testujte dostupnost bez jakýchkoliv síťových omezení.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">⏱️</div>
+          <h3>Response Time</h3>
+          <p>Měřte odezvy v milisekundách z různých koutů světa a odhalte pomalé požadavky.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">📣</div>
+          <h3>Incident Management</h3>
+          <p>Zaznamenávejte výpadky, tvořte časové osy incidentů a komunikujte stav se svými uživateli.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🔔</div>
+          <h3>Notifikace</h3>
+          <p>Získejte okamžité upozornění na Discord, Telegram, Slack, Webhooky nebo e-mail v sekundě výpadku.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">👥</div>
+          <h3>Multi-user</h3>
+          <p>Rozdělte práva v týmu. Podpora rolí administrátora, editora a čtenáře pro bezpečnější správu.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Dashboard Showcase -->
+  <section class="section bg-dim">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-success">Administrační Rozhraní</span>
+        <h2>Navrženo Pro Maximální Přehlednost</h2>
+        <p class="section-subtitle">Intuitivní administrační panel nabízí pohled na stav monitorů, historii odezvy a stav agentů v reálném čase.</p>
+      </div>
+      <Dashboard />
+    </div>
+  </section>
+
+  <!-- Global Agent Map Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-accent">Globální Pokrytí</span>
+        <h2>Monitoring Z Celého Světa</h2>
+        <p class="section-subtitle">Distribuovaný monitoring zamezí falešným poplachům. Pokud vypadne trasa v USA, agenti v Evropě potvrdí skutečný stav.</p>
+      </div>
+      <Map />
+    </div>
+  </section>
+
+  <!-- Comparison Section -->
+  <section class="section bg-dim">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-accent">Srovnání</span>
+        <h2>Blood Kings vs Tradiční Služby</h2>
+        <p class="section-subtitle">Podívejte se, čím se lišíme od zavedených cloudových řešení pro monitoring statusu.</p>
+      </div>
+
+      <div class="table-wrapper card">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Funkce</th>
+              <th class="highlight">Blood Kings</th>
+              <th>HetrixTools</th>
+              <th>UptimeRobot</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="feature-name">Self Hosted</td>
+              <td class="highlight-val">✅ Ano</td>
+              <td>❌ Ne</td>
+              <td>❌ Ne</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Vzdálení agenti (Remote Agents)</td>
+              <td class="highlight-val">✅ Všechny zdarma</td>
+              <td>⚠️ Omezené / Placené</td>
+              <td>❌ Ne</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Neomezený počet monitorů</td>
+              <td class="highlight-val">✅ Neomezeno</td>
+              <td>❌ Placené limity</td>
+              <td>❌ Placené limity</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Veřejné Status Stránky</td>
+              <td class="highlight-val">✅ Neomezeno</td>
+              <td>✅ Ano</td>
+              <td>✅ Ano</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Open Source (MIT)</td>
+              <td class="highlight-val">✅ Ano</td>
+              <td>❌ Ne</td>
+              <td>❌ Ne</td>
+            </tr>
+            <tr>
+              <td class="feature-name">IPv4 / IPv6 podpora</td>
+              <td class="highlight-val">✅ Ano</td>
+              <td>✅ Ano</td>
+              <td>⚠️ Omezená IPv6</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation Steps Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-success">Instalace Serveru</span>
+        <h2>Spusťte Server Během Minuty</h2>
+        <p class="section-subtitle">Instalace centrálního serveru Blood Kings je díky Dockeru otázkou jednoho příkazu.</p>
+      </div>
+      
+      <div class="docker-steps-grid">
+        <div class="step-card card">
+          <div class="step-num">1</div>
+          <h4>Vytvořte docker-compose.yml</h4>
+          <p>Uložte si konfiguraci serveru do složky ve vašem systému.</p>
+          <div class="code-block-wrapper-sm">
+            <pre><code id="docker-server-yml">version: '3.8'
+services:
+  bloodkings-server:
+    image: bkpepe/bloodkings:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data:/var/www/html/data
+    restart: always</code></pre>
+          </div>
+        </div>
+
+        <div class="step-card card">
+          <div class="step-num">2</div>
+          <h4>Spusťte kontejner</h4>
+          <p>Spusťte kompozici na svém VPS nebo serveru.</p>
+          <div class="code-block-wrapper-sm">
+            <pre><code id="docker-run-cmd">docker compose up -d</code></pre>
+          </div>
+        </div>
+
+        <div class="step-card card">
+          <div class="step-num">3</div>
+          <h4>Dokončete instalaci</h4>
+          <p>Otevřete v prohlížeči <code>http://localhost:8080</code> a nastavte admin účet.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation Panel for Agents -->
+  <section class="section bg-dim">
+    <div class="container">
+      <AgentSelector />
+    </div>
+  </section>
+
+  <script>
+    // Fetch GitHub stats at runtime from Cloudflare Worker
+    async function loadGitHubStats() {
+      let apiOrigin = window.location.origin;
+      if (apiOrigin.includes('localhost') || apiOrigin.includes('127.0.0.1')) {
+        apiOrigin = 'https://monitoring.bloodkings.eu';
+      }
+
+      try {
+        const res = await fetch(`${apiOrigin}/api/stats`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (data) {
+          const starsEl = document.getElementById('git-stars');
+          const forksEl = document.getElementById('git-forks');
+          const contrEl = document.getElementById('git-contributors');
+
+          if (starsEl) starsEl.textContent = data.stars;
+          if (forksEl) forksEl.textContent = data.forks;
+          if (contrEl) contrEl.textContent = data.contributors;
+        }
+      } catch (e) {
+        // Fallback default values if Worker isn't reachable
+        document.getElementById('git-stars').textContent = '42';
+        document.getElementById('git-forks').textContent = '8';
+        document.getElementById('git-contributors').textContent = '5';
+      }
+    }
+
+    loadGitHubStats();
+  </script>
+</Layout>
+
+<style>
+  /* Hero Grid Layout */
+  .hero-section {
+    padding: 8rem 0 6rem;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .hero-grid-layout {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 4rem;
+    align-items: center;
+  }
+
+  .float-badge {
+    margin-bottom: 1.5rem;
+  }
+
+  .hero-title {
+    font-size: 3.5rem;
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+    margin-bottom: 1.5rem;
+  }
+
+  .hero-desc {
+    font-size: 1.2rem;
+    color: var(--text-secondary);
+    max-width: 540px;
+    margin-bottom: 2.5rem;
+    line-height: 1.6;
+  }
+
+  .hero-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 3rem;
+    flex-wrap: wrap;
+  }
+
+  .hero-buttons .btn {
+    padding: 0.9rem 1.8rem;
+    font-size: 1rem;
+  }
+
+  /* GitHub Live Stats Banner */
+  .git-stats-banner {
+    display: flex;
+    gap: 1.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    padding: 0.8rem 1.5rem;
+    border-radius: var(--radius-sm);
+    width: fit-content;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    align-items: center;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .git-stat {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .git-divider {
+    color: var(--border-color);
+  }
+
+  .stat-icon {
+    font-size: 1.1rem;
+  }
+
+  .hero-visual {
+    width: 100%;
+  }
+
+  /* Section headers */
+  .section-header {
+    margin-bottom: 4rem;
+  }
+
+  .section-header.text-center {
+    text-align: center;
+  }
+
+  .section-header h2 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    margin-top: 0.8rem;
+  }
+
+  .section-subtitle {
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+    margin-top: 0.6rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Features Grid icons */
+  .features-grid .card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .feature-icon {
+    font-size: 2.5rem;
+    background: var(--bg-tertiary);
+    width: 60px;
+    height: 60px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+  }
+
+  /* Comparison Table styling */
+  .table-wrapper {
+    overflow-x: auto;
+    padding: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+
+  .comparison-table th, 
+  .comparison-table td {
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 1rem;
+  }
+
+  .comparison-table th {
+    background: var(--bg-tertiary);
+    font-family: var(--font-heading);
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .comparison-table th.highlight {
+    background: rgba(176, 0, 32, 0.05);
+    color: var(--accent-color);
+    border-bottom: 2px solid var(--accent-color);
+  }
+
+  .comparison-table td.highlight-val {
+    background: rgba(176, 0, 32, 0.02);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .feature-name {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* Docker steps installation styling */
+  .docker-steps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2rem;
+  }
+
+  .step-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    position: relative;
+    padding: 2.5rem;
+  }
+
+  .step-num {
+    position: absolute;
+    top: -1.2rem;
+    left: 2rem;
+    background: var(--accent-color);
+    color: #ffffff;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-heading);
+    font-weight: 800;
+    font-size: 1.1rem;
+    box-shadow: var(--shadow-glow);
+  }
+
+  .step-card h4 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin-top: 0.5rem;
+  }
+
+  .code-block-wrapper-sm {
+    background: #09090b;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1rem;
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+  }
+
+  .code-block-wrapper-sm code {
+    color: #f4f4f5;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  /* Background helpers */
+  .bg-dim {
+    background-color: var(--bg-secondary);
+  }
+  
+  :global(.dark) .bg-dim {
+    background-color: #0b0b0d;
+  }
+
+  @media (max-width: 992px) {
+    .hero-grid-layout {
+      grid-template-columns: 1fr;
+      gap: 3rem;
+    }
+    .hero-content {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .hero-title {
+      font-size: 3rem;
+    }
+    .hero-desc {
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .docker-steps-grid {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .step-card {
+      padding: 2rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .hero-title {
+      font-size: 2.25rem;
+    }
+    .comparison-table th, 
+    .comparison-table td {
+      padding: 1rem;
+      font-size: 0.9rem;
+    }
+  }
+</style>

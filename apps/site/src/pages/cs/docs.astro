@@ -1,0 +1,292 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="Dokumentace | Blood Kings Monitoring" description="Oficiální dokumentace k instalaci, konfiguraci a správě Blood Kings Monitoring a monitorovacích agentů.">
+  <div class="docs-layout-container container">
+    <!-- Sidebar Doc Links -->
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-section">
+        <h4>Začínáme</h4>
+        <a href="#quickstart" class="sidebar-link active">Rychlý start</a>
+        <a href="#requirements" class="sidebar-link">Požadavky</a>
+        <a href="#architecture" class="sidebar-link">Architektura</a>
+      </div>
+      <div class="docs-sidebar-section">
+        <h4>Centrální Server</h4>
+        <a href="#server-config" class="sidebar-link">Konfigurace databáze</a>
+        <a href="#server-env" class="sidebar-link">Proměnné prostředí</a>
+        <a href="#server-status" class="sidebar-link">Status stránky</a>
+      </div>
+      <div class="docs-sidebar-section">
+        <h4>Agenti</h4>
+        <a href="#agent-install" class="sidebar-link">Registrace agenta</a>
+        <a href="#agent-config" class="sidebar-link">Konfigurace intervalu</a>
+        <a href="#agent-trouble" class="sidebar-link">Řešení potíží</a>
+      </div>
+    </aside>
+
+    <!-- Docs Content Area -->
+    <main class="docs-main-content">
+      <!-- Section 1 -->
+      <section id="quickstart" class="docs-section">
+        <span class="badge badge-accent">Příručka</span>
+        <h1>Rychlý start</h1>
+        <p>Tento průvodce vám pomůže zprovoznit kompletní monitorovací systém během několika minut.</p>
+        
+        <h2>Krok 1: Spuštění Serveru</h2>
+        <p>Centrální server Blood Kings se nejjednodušeji spouští pomocí Docker Compose. Vytvořte si prázdnou složku a vložte do ní následující konfiguraci:</p>
+        <div class="docs-code-wrapper">
+          <pre><code># docker-compose.yml
+version: '3.8'
+services:
+  bloodkings:
+    image: bkpepe/bloodkings:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data:/var/www/html/data
+    restart: always</code></pre>
+        </div>
+        <p>Spusťte server příkazem:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>docker compose up -d</code></pre>
+        </div>
+        <p>Po dokončení stahování otevřete prohlížeč na adrese <code>http://localhost:8080</code> a postupujte podle pokynů na obrazovce k vytvoření administrátorského účtu.</p>
+
+        <h2>Krok 2: Přidání nového monitoru</h2>
+        <p>Po přihlášení do administrace přejděte na záložku <strong>Monitors</strong> a klikněte na <strong>Add Monitor</strong>. Můžete přidat standardní HTTPS kontroly, ping na IP adresy nebo kontroly SSL certifikátů.</p>
+      </section>
+
+      <!-- Section 2 -->
+      <section id="requirements" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Systémové požadavky</h1>
+        <p>Blood Kings Monitoring je navržen tak, aby běžel na jakémkoliv hardwaru.</p>
+        
+        <h3>Centrální Server:</h3>
+        <ul>
+          <li><strong>Procesor:</strong> 1 vCPU (x86_64 nebo ARM64)</li>
+          <li><strong>Operační paměť:</strong> 128 MB RAM (doporučeno 256 MB)</li>
+          <li><strong>Místo na disku:</strong> 50 MB pro aplikaci + místo pro historii databází (cca 100 MB na rok běžného provozu)</li>
+          <li><strong>Software:</strong> Docker & Docker Compose nebo PHP 8.2+ s webovým serverem (Apache/Nginx) a MySQL databází</li>
+        </ul>
+
+        <h3>Vzdálený Agent:</h3>
+        <ul>
+          <li><strong>OS:</strong> Linux (libovolná distribuce s Bash a Curl), Windows 10/11/Server, macOS, Raspberry Pi OS</li>
+          <li><strong>Paměť:</strong> méně než 10 MB RAM</li>
+          <li><strong>Síť:</strong> Odchozí HTTPS (port 443) přístup k centrálnímu serveru</li>
+        </ul>
+      </section>
+
+      <!-- Section 3 -->
+      <section id="architecture" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Architektura systému</h1>
+        <p>Blood Kings Monitoring využívá hybridní architekturu spojující aktivní piny a pasivní agenty.</p>
+        
+        <div class="architecture-diagram card">
+          <div class="arch-block">
+            <strong>Vzdálený Agent</strong>
+            <span>(Linux/Windows/Docker)</span>
+            <span class="arrow">↓ HTTPS POST (Metrics)</span>
+          </div>
+          <div class="arch-block highlight">
+            <strong>Centrální Server</strong>
+            <span>(PHP / SQLite nebo MySQL)</span>
+            <span class="arrow">↓ Render</span>
+          </div>
+          <div class="arch-block">
+            <strong>Veřejná Status Stránka</strong>
+            <span>(HTML / cached JSON)</span>
+          </div>
+        </div>
+
+        <p>
+          <strong>Pasivní monitoring (Agenti):</strong> Agenti běží na vašich cílových strojích. V pravidelných intervalech (např. 60 sekund) shromažďují lokální data (CPU, RAM, disky) a zasílají je pomocí HTTPS POST požadavků na centrální server. Tento přístup nevyžaduje otevírání žádných příchozích portů na monitorovaných serverech.
+        </p>
+        <p>
+          <strong>Aktivní monitoring (Pinger):</strong> Centrální server spouští cron skripty, které provádějí HTTP/HTTPS, TCP a ICMP ping požadavky na vámi zadané vzdálené cíle.
+        </p>
+      </section>
+    </main>
+  </div>
+</Layout>
+
+<style>
+  .docs-layout-container {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 4rem;
+    padding-top: 4rem;
+    padding-bottom: 6rem;
+  }
+
+  /* Sidebar Links */
+  .docs-sidebar {
+    position: sticky;
+    top: calc(var(--header-height) + 2rem);
+    height: fit-content;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .docs-sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .docs-sidebar-section h4 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+
+  .sidebar-link {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    padding: 0.25rem 0;
+    border-left: 2px solid transparent;
+    padding-left: 1rem;
+    margin-left: -2px;
+  }
+
+  .sidebar-link:hover {
+    color: var(--text-primary);
+  }
+
+  .sidebar-link.active {
+    color: var(--accent-color);
+    font-weight: 600;
+    border-color: var(--accent-color);
+  }
+
+  /* Content styles */
+  .docs-main-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4rem;
+  }
+
+  .docs-section h1 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    margin-top: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .docs-section h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  .docs-section h3 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .docs-section p {
+    font-size: 1rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .docs-section ul {
+    margin-bottom: 1.5rem;
+    padding-left: 1.5rem;
+  }
+
+  .docs-section li {
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+  }
+
+  .docs-divider {
+    border: 0;
+    height: 1px;
+    background: var(--border-color);
+    margin-bottom: 4rem;
+  }
+
+  /* Code wraps */
+  .docs-code-wrapper {
+    background: #09090b;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1.2rem;
+    border-radius: var(--radius-sm);
+    margin: 1rem 0;
+    overflow-x: auto;
+  }
+
+  .docs-code-wrapper code {
+    color: #f4f4f5;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+
+  /* Diagram styles */
+  .architecture-diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 2rem;
+    align-items: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    margin: 1.5rem 0;
+  }
+
+  .arch-block {
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    padding: 1rem 2rem;
+    border-radius: var(--radius-sm);
+    text-align: center;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .arch-block strong {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+  }
+
+  .arch-block span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .arch-block.highlight {
+    border-color: var(--accent-color);
+    background: rgba(176,0,32,0.02);
+  }
+
+  .arrow {
+    display: block;
+    margin-top: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent-color);
+    font-weight: 600;
+  }
+
+  @media (max-width: 992px) {
+    .docs-layout-container {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .docs-sidebar {
+      display: none; /* Hide sidebar on mobile to keep clean layout */
+    }
+  }
+</style>

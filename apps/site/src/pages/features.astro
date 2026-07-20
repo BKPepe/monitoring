@@ -1,0 +1,410 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Features | Blood Kings Monitoring" description="Explore detailed features of Blood Kings Monitoring: from remote agents, to SSL certificate tracking, and instant Discord or email notifications.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Detailed Specs</span>
+      <h1>Every Feature. Zero Limits.</h1>
+      <p class="section-subtitle">Discover a comprehensive monitoring toolset designed for sysadmins, devops engineers, and independent developers.</p>
+    </div>
+  </section>
+
+  <!-- Deep Dive Features -->
+  <section class="section bg-dim">
+    <div class="container features-deep-grid">
+      <!-- Feature 1 -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <span class="feature-number">01</span>
+          <h2>Ultra-Lightweight Remote Agents</h2>
+          <p>
+            Our remote probing agents are written using native scripts (Bash, Python, PowerShell, Go), ensuring zero footprint (using less than 10MB of memory and virtually 0% CPU on host systems).
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Single Command Install:</strong> Spin up monitoring on Linux, Windows, or macOS in seconds.</li>
+            <li><strong>Secure Communication:</strong> Agents establish outgoing connections and push telemetry data securely via HTTPS.</li>
+            <li><strong>System Metrics out-of-the-box:</strong> Gathers real-time CPU utilization, RAM usage, storage loads, and network activity.</li>
+          </ul>
+        </div>
+        <div class="feature-visual-mock card">
+          <div class="mock-terminal">
+            <div class="terminal-header"><span></span><span></span><span></span></div>
+            <div class="terminal-body">
+              <p class="green-text">$ ./bloodkings-agent --status</p>
+              <p>Blood Kings Agent v0.1.2</p>
+              <p>Status: <span class="green-text">Online</span></p>
+              <p>Server: monitoring.bloodkings.eu</p>
+              <p>CPU: 4.2% | RAM: 24MB / 8192MB</p>
+              <p>Disk: 42% [======>............] 120GB free</p>
+              <p>Last Ping: 1.2s ago | Latency: 12ms</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature 2 -->
+      <div class="feature-row reverse">
+        <div class="feature-text">
+          <span class="feature-number">02</span>
+          <h2>Beautiful Public Status Pages</h2>
+          <p>
+            Give your users confidence. Build and share customizable status pages mapping service metrics on your custom domain.
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Isolated Caching:</strong> Status pages leverage cached aggregates, meaning traffic spikes won't load your main monitoring database.</li>
+            <li><strong>Incident History:</strong> Record downtime reasons, timeline events, and planned maintenance cycles transparently.</li>
+            <li><strong>Custom Branding:</strong> Embed your corporate logo, adjust color styling, and customize navigation bars.</li>
+          </ul>
+        </div>
+        <div class="feature-visual-mock card">
+          <div class="mock-status-page">
+            <div class="status-page-header">
+              <span class="p-logo">👑 status.bloodkings.eu</span>
+              <span class="p-badge-ok">All Systems Operational</span>
+            </div>
+            <div class="status-services">
+              <div class="service-row">
+                <span>Web Portal</span>
+                <span class="green-text">99.99%</span>
+              </div>
+              <div class="service-row">
+                <span>Game Servers</span>
+                <span class="green-text">99.98%</span>
+              </div>
+              <div class="service-row">
+                <span>REST API Gateway</span>
+                <span class="green-text">100.00%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature 3 -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <span class="feature-number">03</span>
+          <h2>Instant Notifications</h2>
+          <p>
+            Don't rely on users to tell you when a service goes down. Receive instant alerts on any failure event.
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Discord & Slack:</strong> Embedded rich alerts detailing target, code, and response latency.</li>
+            <li><strong>Email (SMTP):</strong> Secure delivery of outage warnings straight to your inbox.</li>
+            <li><strong>Custom Webhooks:</strong> Trigger recovery actions or spin up self-healing scripts upon failure callback.</li>
+          </ul>
+        </div>
+        <div class="feature-visual-mock card">
+          <div class="mock-notification">
+            <div class="notif-header">
+              <span class="n-discord-icon">👾</span>
+              <strong>Discord Bot</strong>
+              <span class="n-time">Just now</span>
+            </div>
+            <div class="notif-embed">
+              <h5 class="danger-text">⚠️ Outage Detected!</h5>
+              <p><strong>Monitor:</strong> API Europe</p>
+              <p><strong>Error:</strong> Connection Refused (HTTP 502)</p>
+              <p><strong>Duration:</strong> Ongoing</p>
+              <p class="n-footer">Blood Kings Alert System</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="section">
+    <div class="container text-center cta-container">
+      <h2>Ready to take complete control?</h2>
+      <p>Try Blood Kings Monitoring today. Completely free and open-source.</p>
+      <div class="cta-buttons">
+        <a href="/download" class="btn btn-primary">🚀 Download & Install</a>
+        <a href="/docs" class="btn btn-secondary">Explore Documentation</a>
+      </div>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--bg-secondary) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border-color);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  /* Feature Rows grid deep dive */
+  .features-deep-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6rem;
+  }
+
+  .feature-row {
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    gap: 5rem;
+    align-items: center;
+  }
+
+  .feature-row.reverse {
+    direction: rtl;
+  }
+
+  .feature-row.reverse .feature-text,
+  .feature-row.reverse .feature-bullets {
+    direction: ltr;
+    text-align: left;
+  }
+
+  .feature-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .feature-number {
+    font-family: var(--font-heading);
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--accent-color);
+    letter-spacing: 0.1em;
+  }
+
+  .feature-text h2 {
+    font-size: 2rem;
+    font-weight: 800;
+  }
+
+  .feature-bullets {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-top: 1rem;
+  }
+
+  .feature-bullets li {
+    position: relative;
+    padding-left: 1.5rem;
+    font-size: 0.95rem;
+  }
+
+  .feature-bullets li::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    color: var(--accent-color);
+    font-weight: 800;
+  }
+
+  /* Visual mockups */
+  .feature-visual-mock {
+    height: 300px;
+    background: #09090b;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    overflow: hidden;
+  }
+
+  .mock-terminal {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+
+  .terminal-header {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 1rem;
+  }
+
+  .terminal-header span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #3f3f46;
+  }
+
+  .terminal-body {
+    color: #a1a1aa;
+    line-height: 1.5;
+  }
+
+  .green-text {
+    color: var(--success);
+  }
+
+  .danger-text {
+    color: var(--accent-color);
+  }
+
+  /* Status Page mockup */
+  .mock-status-page {
+    width: 100%;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    height: 100%;
+    color: var(--text-primary);
+  }
+
+  .status-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.8rem;
+  }
+
+  .p-logo {
+    font-weight: 800;
+    font-size: 0.9rem;
+  }
+
+  .p-badge-ok {
+    font-size: 0.75rem;
+    background: var(--success-bg);
+    color: var(--success);
+    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+  }
+
+  .status-services {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .service-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-secondary);
+    padding: 0.6rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  /* Notification mockup */
+  .mock-notification {
+    background: #2f3136;
+    color: #dcddde;
+    width: 100%;
+    border-radius: var(--radius-sm);
+    padding: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    height: 100%;
+    font-family: var(--font-sans);
+  }
+
+  .notif-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.85rem;
+  }
+
+  .n-discord-icon {
+    font-size: 1.2rem;
+  }
+
+  .n-time {
+    font-size: 0.75rem;
+    color: #72767d;
+    margin-left: auto;
+  }
+
+  .notif-embed {
+    background: #202225;
+    border-left: 4px solid var(--accent-color);
+    border-radius: 4px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+  }
+
+  .notif-embed h5 {
+    color: #ffffff;
+    font-size: 0.9rem;
+    margin-bottom: 0.3rem;
+  }
+
+  .n-footer {
+    font-size: 0.7rem;
+    color: #72767d;
+    margin-top: 0.5rem;
+  }
+
+  /* CTA container styling */
+  .cta-container {
+    padding: 5rem 2rem;
+    background: radial-gradient(circle at 50% 50%, var(--bg-tertiary) 0%, transparent 70%);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    margin: 4rem 0 2rem;
+  }
+
+  .cta-container h2 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    margin-bottom: 0.5rem;
+  }
+
+  .cta-container p {
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+  }
+
+  .cta-buttons {
+    display: flex;
+    gap: 1.2rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* Responsive media rules */
+  @media (max-width: 992px) {
+    .feature-row {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .feature-row.reverse {
+      direction: ltr;
+    }
+    .feature-visual-mock {
+      height: 250px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .page-header h1 {
+      font-size: 2.25rem;
+    }
+  }
+</style>

@@ -1,0 +1,336 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import AgentSelector from '../../components/AgentSelector.astro';
+---
+
+<Layout title="Download & Instalace | Blood Kings Monitoring" description="Stáhněte si centrální server Blood Kings Monitoring nebo nainstalujte vzdálené agenty pro Linux, Windows a Docker.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Download centrum</span>
+      <h1>Spusťte Blood Kings v0.1.0</h1>
+      <p class="section-subtitle">Stáhněte si centrální monitorovací server nebo nasaďte agenty na koncová zařízení během několika sekund.</p>
+    </div>
+  </section>
+
+  <!-- Server Deployment Panel -->
+  <section class="section bg-dim">
+    <div class="container">
+      <div class="download-section-header">
+        <h2>1. Nasazení Centrálního Serveru</h2>
+        <p>Centrální server shromažďuje data od agentů, spouští kontroly, spravuje notifikace a zobrazuje status stránky.</p>
+      </div>
+
+      <div class="grid-2 deploy-modes-grid">
+        <!-- Docker Compose -->
+        <div class="card card-glow deploy-card">
+          <div class="deploy-header-box">
+            <span class="d-icon">🐳</span>
+            <div>
+              <h3>Docker Compose (Doporučeno)</h3>
+              <p>Ideální pro produkční nasazení na VPS.</p>
+            </div>
+          </div>
+          <div class="code-box">
+            <pre><code id="srv-docker-yml">version: '3.8'
+services:
+  bloodkings:
+    image: bkpepe/bloodkings:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data:/var/www/html/data
+    environment:
+      - DB_PASSWORD=your_secure_password
+    restart: always</code></pre>
+            <button class="copy-btn-sm" data-target="srv-docker-yml">Kopírovat</button>
+          </div>
+          <div class="deploy-steps">
+            <p>1. Uložte kód do souboru <code>docker-compose.yml</code></p>
+            <p>2. Spusťte příkaz <code>docker compose up -d</code></p>
+            <p>3. Otevřete v prohlížeči <code>http://localhost:8080</code></p>
+          </div>
+        </div>
+
+        <!-- Manual PHP Apache -->
+        <div class="card deploy-card">
+          <div class="deploy-header-box">
+            <span class="d-icon">🐘</span>
+            <div>
+              <h3>Klasický Webhosting (LAMP)</h3>
+              <p>Spusťte server bez Dockeru přímo na PHP webhostingu.</p>
+            </div>
+          </div>
+          <div class="deploy-steps manual-steps">
+            <h4>Požadavky:</h4>
+            <ul>
+              <li>PHP 8.2 nebo novější</li>
+              <li>MySQL/MariaDB databáze</li>
+              <li>Podpora Apache <code>.htaccess</code> (mod_rewrite)</li>
+            </ul>
+            <a href="https://github.com/BKPepe/bloodkings/archive/refs/heads/main.zip" class="btn btn-secondary btn-full">
+              📥 Stáhnout ZIP zdrojové kódy
+            </a>
+            <p class="manual-note">Po nahrání na FTP otevřete adresu webu a instalátor vás provede zbytkem konfigurace.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Agent Deployment Section -->
+  <section class="section">
+    <div class="container">
+      <div class="download-section-header">
+        <h2>2. Nasazení Vzdálených Agentů</h2>
+        <p>Pro měření lokálních prostředků (CPU, RAM, Disky) nebo lokální síťové odezvy nainstalujte agenty.</p>
+      </div>
+      <AgentSelector />
+    </div>
+  </section>
+
+  <!-- GitHub Source Code CTA -->
+  <section class="section bg-dim">
+    <div class="container text-center github-cta-card">
+      <div class="card">
+        <h2>Chcete přispět k vývoji?</h2>
+        <p>Celý projekt Blood Kings Monitoring je 100% open source a licencovaný pod licencí MIT. Zdrojové kódy, dokumentaci a tracker chyb naleznete na našem GitHubu.</p>
+        <div class="github-links-row">
+          <a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener" class="btn btn-primary">
+            💻 GitHub Repozitář
+          </a>
+          <a href="https://github.com/BKPepe/bloodkings/releases" target="_blank" rel="noopener" class="btn btn-secondary">
+            📦 Všechny GitHub Releases
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // Copy buttons logic
+    const copyBtns = document.querySelectorAll('.copy-btn-sm');
+    copyBtns.forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const targetId = btn.getAttribute('data-target');
+        const codeElement = document.getElementById(targetId);
+        if (!codeElement) return;
+
+        try {
+          await navigator.clipboard.writeText(codeElement.textContent);
+          btn.textContent = 'Zkopírováno!';
+          btn.style.borderColor = 'var(--success)';
+          btn.style.color = 'var(--success)';
+          setTimeout(() => {
+            btn.textContent = 'Kopírovat';
+            btn.style.borderColor = '';
+            btn.style.color = '';
+          }, 2000);
+        } catch (err) {
+          console.error(err);
+        }
+      });
+    });
+  </script>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--bg-secondary) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border-color);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  .download-section-header {
+    margin-bottom: 3rem;
+    max-width: 600px;
+  }
+
+  .download-section-header h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .download-section-header p {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+  }
+
+  .deploy-modes-grid {
+    align-items: stretch;
+  }
+
+  .deploy-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    height: 100%;
+  }
+
+  .deploy-header-box {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  .d-icon {
+    font-size: 2.2rem;
+    background: var(--bg-tertiary);
+    width: 50px;
+    height: 50px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+  }
+
+  .deploy-header-box h3 {
+    font-size: 1.15rem;
+    font-weight: 700;
+  }
+
+  .deploy-header-box p {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  /* Code container inside card */
+  .code-box {
+    position: relative;
+    background: #09090b;
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: var(--radius-sm);
+    padding: 1.2rem;
+  }
+
+  .code-box pre {
+    margin: 0;
+    overflow-x: auto;
+  }
+
+  .code-box code {
+    color: #f4f4f5;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .copy-btn-sm {
+    position: absolute;
+    right: 1rem;
+    top: 1rem;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #a1a1aa;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all var(--transition-fast);
+  }
+
+  .copy-btn-sm:hover {
+    color: #ffffff;
+    background: rgba(255,255,255,0.12);
+  }
+
+  .deploy-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+  }
+
+  .deploy-steps code {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+  }
+
+  /* LAMP manual styles */
+  .manual-steps {
+    gap: 0.8rem;
+  }
+
+  .manual-steps h4 {
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  .manual-steps ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .manual-steps li {
+    font-size: 0.9rem;
+    padding-left: 1.2rem;
+    position: relative;
+    color: var(--text-secondary);
+  }
+
+  .manual-steps li::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: var(--accent-color);
+    font-weight: 800;
+  }
+
+  .btn-full {
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+
+  .manual-note {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  /* GitHub callout card */
+  .github-cta-card {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .github-cta-card h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .github-cta-card p {
+    font-size: 1rem;
+    max-width: 680px;
+    margin: 0.5rem auto 2rem;
+  }
+
+  .github-links-row {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 768px) {
+    .page-header h1 {
+      font-size: 2.25rem;
+    }
+    .grid-2 {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

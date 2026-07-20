@@ -1,0 +1,336 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="Changelog | Blood Kings Monitoring" description="Historie vydání, novinky a aktualizace monitorovacího systému Blood Kings. Sledujte vývoj a nové funkce v0.1 a novějších.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Aktualizace</span>
+      <h1>Changelog</h1>
+      <p class="section-subtitle">Sledujte vývoj a novinky v reálném čase. Všechna data jsou stahována přímo z GitHub Releases.</p>
+    </div>
+  </section>
+
+  <!-- Changelog Timeline Section -->
+  <section class="section bg-dim">
+    <div class="container timeline-container">
+      <!-- Loading Spinner -->
+      <div id="changelog-loading" class="changelog-loading">
+        <svg class="spinner" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3"></circle></svg>
+        <p>Načítání aktualizací z GitHubu...</p>
+      </div>
+
+      <!-- Timeline List -->
+      <div id="changelog-timeline" class="changelog-timeline-list" style="display: none;">
+        <!-- Filled dynamically by JavaScript -->
+      </div>
+    </div>
+  </section>
+
+  <script>
+    async function loadChangelog() {
+      const loader = document.getElementById('changelog-loading');
+      const timeline = document.getElementById('changelog-timeline');
+
+      let apiOrigin = window.location.origin;
+      if (apiOrigin.includes('localhost') || apiOrigin.includes('127.0.0.1')) {
+        apiOrigin = 'https://monitoring.bloodkings.eu';
+      }
+
+      try {
+        const response = await fetch(`${apiOrigin}/api/changelog`);
+        if (!response.ok) throw new Error('Failed to fetch changelog');
+
+        const releases = await response.json();
+        if (!releases || releases.length === 0) {
+          showFallback();
+          return;
+        }
+
+        renderTimeline(releases);
+      } catch (e) {
+        console.error('Error loading changelog, falling back to static release info.', e);
+        showFallback();
+      } finally {
+        if (loader) loader.style.display = 'none';
+        if (timeline) timeline.style.display = 'block';
+      }
+    }
+
+    function renderTimeline(releases: any[]) {
+      const timeline = document.getElementById('changelog-timeline');
+      if (!timeline) return;
+
+      timeline.innerHTML = '';
+
+      releases.forEach((release, index) => {
+        const releaseCard = document.createElement('div');
+        releaseCard.className = 'timeline-item';
+
+        // Convert newlines in markdown release body to paragraph tags / list items simple format
+        const bodyFormatted = release.body
+          ? release.body
+              .replace(/\r\n/g, '\n')
+              .split('\n')
+              .map((line: string) => {
+                if (line.trim().startsWith('-') || line.trim().startsWith('*')) {
+                  return `<li>${line.trim().substring(1).trim()}</li>`;
+                }
+                if (line.trim().startsWith('#')) {
+                  const level = (line.match(/^#+/) || ['#'])[0].length;
+                  const text = line.replace(/^#+/, '').trim();
+                  return `<h${level + 2}>${text}</h${level + 2}>`;
+                }
+                if (!line.trim()) return '';
+                return `<p>${line}</p>`;
+              })
+              .join('')
+              .replace(/<\/li><li>/g, '</li><li>') // Merge consecutive list items
+              .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+          : '<p>Žádný popis k tomuto vydání nebyl poskytnut.</p>';
+
+        releaseCard.innerHTML = `
+          <div class="timeline-badge">${index === 0 ? '🔥' : '📦'}</div>
+          <div class="timeline-card card">
+            <div class="release-header">
+              <span class="badge badge-accent">${release.tag}</span>
+              <h2>${release.title}</h2>
+              <span class="release-date">${release.date}</span>
+            </div>
+            
+            <div class="release-body">
+              ${bodyFormatted}
+            </div>
+
+            <div class="release-footer">
+              <div class="author-info">
+                <img src="${release.author.avatar}" alt="${release.author.name}" class="author-avatar" />
+                <span>Vydal <strong><a href="${release.author.url}" target="_blank" rel="noopener">${release.author.name}</a></strong></span>
+              </div>
+              <a href="${release.url}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
+                Zobrazit na GitHubu
+              </a>
+            </div>
+          </div>
+        `;
+        timeline.appendChild(releaseCard);
+      });
+    }
+
+    function showFallback() {
+      const timeline = document.getElementById('changelog-timeline');
+      if (!timeline) return;
+
+      timeline.innerHTML = `
+        <div class="timeline-item">
+          <div class="timeline-badge">🔥</div>
+          <div class="timeline-card card">
+            <div class="release-header">
+              <span class="badge badge-accent">v0.1.0-alpha</span>
+              <h2>Initial Alpha Release</h2>
+              <span class="release-date">16. července 2026</span>
+            </div>
+            <div class="release-body">
+              <p>První veřejná verze Blood Kings Monitoring.</p>
+              <ul>
+                <li>Self-hosted monitorovací server s instalací jedním kliknutím.</li>
+                <li>Vzdálení agenti pro platformy Linux, Windows a Docker.</li>
+                <li>Veřejné status stránky s cache vrstvou.</li>
+                <li>E-mailové (SMTP) a Discord notifikace při výpadku.</li>
+                <li>Podpora protokolů IPv4 a IPv6.</li>
+              </ul>
+            </div>
+            <div class="release-footer">
+              <div class="author-info">
+                <img src="https://github.com/BKPepe.png" alt="BKPepe" class="author-avatar" />
+                <span>Vydal <strong>BKPepe</strong></span>
+              </div>
+              <a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
+                Zobrazit na GitHubu
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    loadChangelog();
+  </script>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--bg-secondary) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border-color);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  .timeline-container {
+    max-width: 800px;
+    position: relative;
+    padding-left: 2.5rem;
+  }
+
+  /* Vertical timeline line */
+  .timeline-container::before {
+    content: '';
+    position: absolute;
+    top: 2rem;
+    left: 25px;
+    bottom: 2rem;
+    width: 2px;
+    background: var(--border-color);
+  }
+
+  /* Spinner loader styles */
+  .changelog-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 4rem 0;
+    color: var(--text-secondary);
+  }
+
+  .spinner {
+    animation: spin 0.8s linear infinite;
+    width: 32px;
+    height: 32px;
+    color: var(--accent-color);
+  }
+
+  .spinner circle {
+    stroke-dasharray: 42, 38;
+    stroke-linecap: round;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .changelog-timeline-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+  }
+
+  .timeline-item {
+    position: relative;
+  }
+
+  /* Timeline badge circle */
+  .timeline-badge {
+    position: absolute;
+    left: -2.5rem;
+    top: 1.5rem;
+    background: var(--bg-secondary);
+    border: 2px solid var(--border-color);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    transform: translateX(-50%);
+    z-index: 10;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .timeline-card {
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .release-header {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .release-header h2 {
+    font-size: 1.6rem;
+    font-weight: 800;
+  }
+
+  .release-date {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  /* Markdown body parsing display styles */
+  .release-body {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .release-body :global(ul) {
+    padding-left: 1.5rem;
+    margin: 0.5rem 0;
+  }
+
+  .release-body :global(li) {
+    margin-bottom: 0.4rem;
+  }
+
+  .release-body :global(h3) {
+    font-size: 1.1rem;
+    color: var(--text-primary);
+    margin-top: 1rem;
+  }
+
+  /* Card footer author and links */
+  .release-footer {
+    border-top: 1px solid var(--border-color);
+    padding-top: 1.2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .author-info {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  .author-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+  }
+
+  .author-info strong a {
+    color: var(--text-primary);
+  }
+
+  @media (max-width: 600px) {
+    .timeline-container {
+      padding-left: 0;
+    }
+    .timeline-container::before {
+      display: none;
+    }
+    .timeline-badge {
+      display: none;
+    }
+  }
+</style>

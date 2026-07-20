@@ -1,0 +1,647 @@
+---
+import ThemeScript from '../components/ThemeScript.astro';
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  ogImage?: string;
+}
+
+const currentPath = Astro.url.pathname;
+const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+const langPrefix = isCs ? '/cs' : '';
+const langCode = isCs ? 'cs' : 'en';
+
+const { 
+  title = isCs 
+    ? "Blood Kings Monitoring | Self-Hosted Monitoring Bez Limitu" 
+    : "Blood Kings Monitoring | Self-Hosted Monitoring Without Limits", 
+  description = isCs 
+    ? "Blood Kings Monitoring je open-source, ultra-rychlý, 100% self-hosted server status a remote agent monitorovací systém s veřejnými status stránkami a okamžitými notifikacemi."
+    : "Blood Kings Monitoring is an open-source, ultra-fast, 100% self-hosted server status and remote agent monitoring system with public status pages and instant notification alerts.",
+  ogImage = "https://monitoring.bloodkings.eu/og-image.png"
+} = Astro.props;
+
+// Define the navigation target links relative to locale prefix
+const linkFeatures = `${langPrefix}/features`;
+const linkDownload = `${langPrefix}/download`;
+const linkDocs = `${langPrefix}/docs`;
+const linkChangelog = `${langPrefix}/changelog`;
+const linkRoadmap = `${langPrefix}/roadmap`;
+const linkAbout = `${langPrefix}/about`;
+const linkLogo = isCs ? '/cs' : '/';
+
+// Dynamic locale toggle links
+const cleanPath = currentPath.replace(/^\/cs/, '') || '/';
+const csUrl = `/cs${cleanPath === '/' ? '' : cleanPath}`;
+const enUrl = cleanPath;
+
+// Header & Footer labels translation
+const labels = isCs ? {
+  features: 'Funkce',
+  download: 'Download',
+  docs: 'Dokumentace',
+  changelog: 'Changelog',
+  roadmap: 'Roadmapa',
+  about: 'O projektu',
+  product: 'Produkt',
+  resources: 'Zdroje',
+  community: 'Komunita',
+  footerDesc: 'Bezlimitní self-hosted monitoring pro vývojáře a sysadminy.',
+  footerBottom: 'Bez trackerů • Rychlé jako blesk • 100 % Open Source'
+} : {
+  features: 'Features',
+  download: 'Download',
+  docs: 'Docs',
+  changelog: 'Changelog',
+  roadmap: 'Roadmap',
+  about: 'About',
+  product: 'Product',
+  resources: 'Resources',
+  community: 'Community',
+  footerDesc: 'Self-hosted monitoring without limits for developers and sysadmins.',
+  footerBottom: 'No trackers • Lightning fast • 100% Open Source'
+};
+---
+
+<!doctype html>
+<html lang={langCode}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    
+    <!-- Primary Meta Tags -->
+    <title>{title}</title>
+    <meta name="title" content={title} />
+    <meta name="description" content={description} />
+    <meta name="generator" content={Astro.generator} />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.url} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content={Astro.url} />
+    <meta property="twitter:title" content={title} />
+    <meta property="twitter:description" content={description} />
+    <meta property="twitter:image" content={ogImage} />
+
+    <!-- Robots & Sitemap -->
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href={Astro.url.href} />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+
+    <!-- Theme Detection Script -->
+    <ThemeScript />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header-container container">
+        <a href={linkLogo} class="logo">
+          <span class="logo-icon">👑</span>
+          <span class="logo-text">Blood Kings <span class="logo-sub">Monitoring</span></span>
+        </a>
+
+        <!-- Desktop Navigation -->
+        <nav class="desktop-nav">
+          <a href={linkFeatures} class:list={[{ active: currentPath === linkFeatures }]}>{labels.features}</a>
+          <a href={linkDownload} class:list={[{ active: currentPath === linkDownload }]}>{labels.download}</a>
+          <a href={linkDocs} class:list={[{ active: currentPath === linkDocs }]}>{labels.docs}</a>
+          <a href={linkChangelog} class:list={[{ active: currentPath === linkChangelog }]}>{labels.changelog}</a>
+          <a href={linkRoadmap} class:list={[{ active: currentPath === linkRoadmap }]}>{labels.roadmap}</a>
+          <a href={linkAbout} class:list={[{ active: currentPath === linkAbout }]}>{labels.about}</a>
+        </nav>
+
+        <!-- Header Actions -->
+        <div class="header-actions">
+          <!-- Language Switcher -->
+          <div class="lang-switcher">
+            <a href={enUrl} class:list={["lang-link", { active: !isCs }]} aria-label="English">EN</a>
+            <span class="lang-divider">/</span>
+            <a href={csUrl} class:list={["lang-link", { active: isCs }]} aria-label="Čeština">CS</a>
+          </div>
+
+          <button id="theme-toggle" class="theme-btn" aria-label="Toggle theme">
+            <!-- Sun Icon -->
+            <svg class="sun-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+            </svg>
+            <!-- Moon Icon -->
+            <svg class="moon-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+            </svg>
+            <!-- Auto Icon -->
+            <svg class="auto-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="20" height="14" x="2" y="3" rx="2"></rect>
+              <line x1="8" x2="16" y1="21" y2="21"></line>
+              <line x1="12" x2="12" y1="17" y2="21"></line>
+            </svg>
+          </button>
+          
+          <a href="https://github.com/BKPepe/bloodkings" class="btn btn-outline btn-sm github-btn-nav" target="_blank" rel="noopener">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z"></path>
+            </svg>
+            GitHub
+          </a>
+
+          <!-- Mobile Toggle -->
+          <button id="mobile-toggle" class="mobile-toggle-btn" aria-label="Toggle menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Mobile Navigation Drawer -->
+      <div id="mobile-drawer" class="mobile-drawer">
+        <nav class="mobile-nav">
+          <a href={linkFeatures}>{labels.features}</a>
+          <a href={linkDownload}>{labels.download}</a>
+          <a href={linkDocs}>{labels.docs}</a>
+          <a href={linkChangelog}>{labels.changelog}</a>
+          <a href={linkRoadmap}>{labels.roadmap}</a>
+          <a href={linkAbout}>{labels.about}</a>
+          <hr class="mobile-nav-divider" />
+          <a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <slot />
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-grid">
+        <div class="footer-brand">
+          <a href={linkLogo} class="logo">
+            <span class="logo-icon">👑</span>
+            <span class="logo-text">Blood Kings</span>
+          </a>
+          <p class="footer-desc">
+            {labels.footerDesc}
+          </p>
+          <div class="footer-socials">
+            <a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener" aria-label="GitHub">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z"></path>
+              </svg>
+            </a>
+            <a href="https://discord.gg/bloodkings" target="_blank" rel="noopener" aria-label="Discord">
+              <svg width="22" height="22" viewBox="0 0 127.14 96.36" fill="currentColor">
+                <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.2,77.2,0,0,0-3.3,6.83A96.67,96.67,0,0,0,52.88,6.83,77.2,77.2,0,0,0,49.58,0,105.15,105.15,0,0,0,19.14,8.07C3,32.48-1.5,56.3.7,79.72c0,.08.06.15.11.2a109.86,109.86,0,0,0,33.14,16.44c.27.08.54-.02.71-.27a75,75,0,0,0,6.83-11.14c.15-.24.08-.55-.17-.7a71,71,0,0,1-10.43-5c-.27-.14-.29-.53-.04-.69a5.1,5.1,0,0,1,1-.75c.18-.1.37-.11.55,0,21.84,10,45.47,10,67.05,0a3.9,3.9,0,0,1,.56,0,5.1,5.1,0,0,1,1,.75c.25.16.24.55-.04.69a68.64,68.64,0,0,1-10.43,5c-.25.15-.32.46-.17.7a74.09,74.09,0,0,0,6.83,11.14c.17.25.44.35.71.27A109.86,109.86,0,0,0,126.06,80a.39.39,0,0,0,.11-.2C129.5,51.88,120.1,28.24,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.83,46,53.83,53,48.72,65.69,42.45,65.69Zm42.24,0C78.42,65.69,73.24,60,73.24,53S78.42,40.36,84.69,40.36,96.07,46,96.07,53,91,65.69,84.69,65.69Z"/>
+              </svg>
+            </a>
+          </div>
+        </div>
+
+        <div class="footer-links">
+          <h4>{labels.product}</h4>
+          <a href={linkFeatures}>{labels.features}</a>
+          <a href={linkDownload}>{labels.download}</a>
+          <a href={linkRoadmap}>{labels.roadmap}</a>
+        </div>
+
+        <div class="footer-links">
+          <h4>{labels.resources}</h4>
+          <a href={linkDocs}>{labels.docs}</a>
+          <a href={linkChangelog}>{labels.changelog}</a>
+          <a href="https://github.com/BKPepe/bloodkings" target="_blank" rel="noopener">GitHub Repo</a>
+        </div>
+
+        <div class="footer-links">
+          <h4>{labels.community}</h4>
+          <a href={linkAbout}>{labels.about}</a>
+          <a href="https://discord.gg/bloodkings" target="_blank" rel="noopener">Discord</a>
+        </div>
+      </div>
+
+      <div class="footer-bottom container">
+        <p>&copy; {new Date().getFullYear()} Blood Kings. {isCs ? 'Licencováno pod' : 'Licensed under'} <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noopener">{isCs ? 'Licencí MIT' : 'MIT License'}</a>.</p>
+        <p class="footer-built">{labels.footerBottom}</p>
+      </div>
+    </footer>
+
+    <script>
+      // Theme switching logic
+      const themeToggle = document.getElementById('theme-toggle');
+      const themes = ['auto', 'light', 'dark'];
+
+      const getTheme = () => localStorage.getItem('theme') || 'auto';
+      
+      const updateToggleUI = (theme) => {
+        themeToggle.setAttribute('data-theme', theme);
+      };
+
+      const resolveTheme = (theme) => {
+        if (theme === 'dark') return true;
+        if (theme === 'light') return false;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches;
+      };
+
+      const setTheme = (theme) => {
+        const isDark = resolveTheme(theme);
+        if (isDark) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+        document.documentElement.setAttribute('data-theme-resolved', isDark ? 'dark' : 'light');
+        localStorage.setItem('theme', theme);
+        updateToggleUI(theme);
+      };
+
+      // Initialize UI
+      updateToggleUI(getTheme());
+
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          const currentTheme = getTheme();
+          const nextIndex = (themes.indexOf(currentTheme) + 1) % themes.length;
+          const nextTheme = themes[nextIndex];
+          setTheme(nextTheme);
+        });
+      }
+
+      // Mobile menu toggle
+      const mobileToggle = document.getElementById('mobile-toggle');
+      const mobileDrawer = document.getElementById('mobile-drawer');
+
+      if (mobileToggle && mobileDrawer) {
+        mobileToggle.addEventListener('click', () => {
+          mobileToggle.classList.toggle('active');
+          mobileDrawer.classList.toggle('active');
+        });
+
+        // Close menu on navigation click
+        mobileDrawer.querySelectorAll('a').forEach(link => {
+          link.addEventListener('click', () => {
+            mobileToggle.classList.remove('active');
+            mobileDrawer.classList.remove('active');
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
+
+<style>
+  /* Header & Navigation Styles */
+  .header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--header-height);
+    background: rgba(248, 249, 250, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-color);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    transition: background-color var(--transition-normal), border-color var(--transition-normal);
+  }
+
+  :global(.dark) .header {
+    background: rgba(9, 9, 11, 0.8);
+  }
+
+  .header-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--font-heading);
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: var(--text-primary);
+  }
+
+  .logo-icon {
+    font-size: 1.4rem;
+  }
+
+  .logo-sub {
+    font-weight: 400;
+    color: var(--accent-color);
+  }
+
+  .desktop-nav {
+    display: flex;
+    gap: 2rem;
+  }
+
+  .desktop-nav a {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    position: relative;
+    padding: 0.5rem 0;
+  }
+
+  .desktop-nav a:hover,
+  .desktop-nav a.active {
+    color: var(--text-primary);
+  }
+
+  .desktop-nav a::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: var(--accent-color);
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform var(--transition-normal);
+  }
+
+  .desktop-nav a:hover::after,
+  .desktop-nav a.active::after {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .github-btn-nav {
+    display: inline-flex;
+    padding: 0.5rem 1rem !important;
+    font-size: 0.85rem !important;
+  }
+
+  /* Language Switcher */
+  .lang-switcher {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-right: 0.5rem;
+    font-family: var(--font-heading);
+  }
+
+  .lang-link {
+    color: var(--text-muted);
+    padding: 0.2rem;
+    transition: color var(--transition-fast);
+  }
+
+  .lang-link:hover,
+  .lang-link.active {
+    color: var(--text-primary);
+  }
+
+  .lang-divider {
+    color: var(--border-color);
+    user-select: none;
+  }
+
+  /* Theme Button Toggle */
+  .theme-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+  }
+
+  .theme-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+    background: var(--bg-tertiary);
+  }
+
+  .theme-btn svg {
+    width: 20px;
+    height: 20px;
+    display: none;
+  }
+
+  .theme-btn[data-theme="auto"] .auto-icon { display: block; }
+  .theme-btn[data-theme="light"] .sun-icon { display: block; }
+  .theme-btn[data-theme="dark"] .moon-icon { display: block; }
+
+  /* Mobile hamburger button */
+  .mobile-toggle-btn {
+    display: none;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 30px;
+    height: 20px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    z-index: 1001;
+  }
+
+  .mobile-toggle-btn span {
+    width: 100%;
+    height: 2px;
+    background-color: var(--text-primary);
+    transition: all var(--transition-normal);
+  }
+
+  .mobile-toggle-btn.active span:nth-child(1) {
+    transform: translateY(9px) rotate(45deg);
+  }
+
+  .mobile-toggle-btn.active span:nth-child(2) {
+    opacity: 0;
+  }
+
+  .mobile-toggle-btn.active span:nth-child(3) {
+    transform: translateY(-9px) rotate(-45deg);
+  }
+
+  /* Mobile drawer navigation */
+  .mobile-drawer {
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+    padding: 2rem;
+    transform: translateY(-100%);
+    opacity: 0;
+    visibility: hidden;
+    transition: transform var(--transition-normal), opacity var(--transition-normal), visibility var(--transition-normal);
+    z-index: 999;
+  }
+
+  .mobile-drawer.active {
+    transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .mobile-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .mobile-nav a {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .mobile-nav a:hover {
+    color: var(--text-primary);
+  }
+
+  .mobile-nav-divider {
+    border: 0;
+    height: 1px;
+    background: var(--border-color);
+  }
+
+  /* Main Content structure */
+  .main-content {
+    margin-top: var(--header-height);
+    flex-grow: 1;
+  }
+
+  /* Footer Styling */
+  .footer {
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    padding: 5rem 0 3rem;
+    transition: background-color var(--transition-normal), border-color var(--transition-normal);
+  }
+
+  .footer-grid {
+    display: grid;
+    grid-template-columns: 2fr repeat(3, 1fr);
+    gap: 4rem;
+    margin-bottom: 4rem;
+  }
+
+  .footer-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .footer-desc {
+    font-size: 0.95rem;
+    max-width: 320px;
+  }
+
+  .footer-socials {
+    display: flex;
+    gap: 1rem;
+    color: var(--text-secondary);
+  }
+
+  .footer-socials a:hover {
+    color: var(--accent-color);
+    transform: translateY(-2px);
+  }
+
+  .footer-links {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .footer-links h4 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-primary);
+  }
+
+  .footer-links a {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+  }
+
+  .footer-links a:hover {
+    color: var(--text-primary);
+  }
+
+  .footer-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--border-color);
+    padding-top: 2rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .footer-bottom a {
+    text-decoration: underline;
+  }
+
+  .footer-built {
+    font-weight: 500;
+  }
+
+  /* Responsive break points */
+  @media (max-width: 992px) {
+    .footer-grid {
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .desktop-nav {
+      display: none;
+    }
+    
+    .mobile-toggle-btn {
+      display: flex;
+    }
+
+    .github-btn-nav {
+      display: none;
+    }
+
+    .footer-grid {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+
+    .footer-bottom {
+      flex-direction: column;
+      gap: 1rem;
+      text-align: center;
+    }
+  }
+</style>

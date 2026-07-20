@@ -1,0 +1,318 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Roadmap | Blood Kings Monitoring" description="Official development roadmap for Blood Kings Monitoring. View plans for v0.2, v0.3, and the stable v1.0 releases.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Milestones</span>
+      <h1>Project Roadmap</h1>
+      <p class="section-subtitle">A transparent overview of the features we are actively working on and what lies ahead.</p>
+    </div>
+  </section>
+
+  <!-- Roadmap Timeline -->
+  <section class="section bg-dim">
+    <div class="container roadmap-grid-container">
+      
+      <!-- Milestone 0.1 -->
+      <div class="roadmap-milestone card completed">
+        <div class="milestone-status-tag tag-done">Released</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v0.1.0-alpha</span>
+          <h2>Base Monitoring Core</h2>
+          <p>Building a robust and ultra-fast base foundation for metrics collection.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Central PHP Server</strong>
+              <span>Web administration, SQLite/MySQL data schema, incident logging.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Native Telemetry Agents</strong>
+              <span>Extremely lightweight system metrics scripts for Linux (Bash), Windows (PowerShell), and Docker.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>SMTP & Discord Alerts</strong>
+              <span>Get instant outage notifications on email inboxes or Discord chat rooms.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Public Status Pages</strong>
+              <span>Build and customize public status panels reading from cache targets to prevent server overload.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Milestone 0.2 -->
+      <div class="roadmap-milestone card in-progress">
+        <div class="milestone-status-tag tag-progress">In Progress</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v0.2.0</span>
+          <h2>Advanced Metrics</h2>
+          <p>Exposing historical metrics charts and external visualization integrations.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Historical Performance Graphs</strong>
+              <span>Show CPU, RAM, and disk utilization charts spanning over 30 days of agent data.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Prometheus & Grafana Integrations</strong>
+              <span>Expose standard metrics outputs to scrape data into custom Grafana Cloud dashboards.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Telegram & Slack Support</strong>
+              <span>Deliver instant failures notices on Telegram and Slack workspace groups.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Self-Updating Agents</strong>
+              <span>Seamless agent daemon maintenance with automatic updates fetched from the central server.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Milestone 0.3 -->
+      <div class="roadmap-milestone card planned">
+        <div class="milestone-status-tag tag-planned">Planned</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v0.3.0</span>
+          <h2>Multi-tenant & SSO</h2>
+          <p>Focusing on secure team environments, authorization layers, and scale.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Multi-tenant Accounts</strong>
+              <span>Manage isolated projects and teams separately under a single server instance.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>SSO / OIDC Authentication</strong>
+              <span>Authenticate using Google, GitHub, or custom corporate SAML systems.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Community Agent Catalog</strong>
+              <span>Public repository of custom scripts for monitoring services like Redis, MySQL, Nginx, or Synology NAS.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Milestone 1.0 -->
+      <div class="roadmap-milestone card planned">
+        <div class="milestone-status-tag tag-planned">Future</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v1.0.0</span>
+          <h2>Stable LTS Release</h2>
+          <p>Optimized and battle-tested for enterprise workloads.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Long-Term Support (LTS)</strong>
+              <span>Guaranteed stable APIs and security maintenance updates for 2 years.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Native Mobile App</strong>
+              <span>Receive push alerts directly on iOS and Android devices for instant reactions.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--bg-secondary) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border-color);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  /* Grid layout for cards roadmap milestones */
+  .roadmap-grid-container {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3rem;
+    align-items: stretch;
+  }
+
+  .roadmap-milestone {
+    display: flex;
+    flex-direction: column;
+    padding: 3rem 2.5rem;
+    position: relative;
+    height: 100%;
+  }
+
+  /* Tag status inside milestone */
+  .milestone-status-tag {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .tag-done {
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid rgba(43, 138, 62, 0.2);
+  }
+
+  .tag-progress {
+    background: var(--danger-bg);
+    color: var(--accent-color);
+    border: 1px solid rgba(var(--accent-rgb), 0.2);
+  }
+
+  .tag-planned {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
+
+  .milestone-header {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .milestone-ver {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent-color);
+  }
+
+  .milestone-header h2 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    margin: 0.2rem 0 0.5rem;
+  }
+
+  .milestone-header p {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+  }
+
+  /* Checklist elements */
+  .roadmap-checklist {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .roadmap-checklist li {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  .check-box {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+
+  .roadmap-checklist li.checked .check-box {
+    border-color: var(--success);
+    background: var(--success-bg);
+    color: var(--success);
+  }
+
+  .task-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .task-info strong {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+  }
+
+  .roadmap-checklist li.checked .task-info strong {
+    text-decoration: line-through;
+    opacity: 0.7;
+  }
+
+  .task-info span {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  /* Border glow colors depending on state */
+  .roadmap-milestone.completed {
+    border-color: rgba(43, 138, 62, 0.2);
+  }
+  
+  .roadmap-milestone.in-progress {
+    border-color: var(--border-glow);
+    box-shadow: var(--shadow-glow);
+  }
+
+  @media (max-width: 992px) {
+    .roadmap-grid-container {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+  }
+</style>

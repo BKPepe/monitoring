@@ -1,0 +1,318 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="Roadmapa | Blood Kings Monitoring" description="Oficiální plán vývoje (roadmapa) monitorovacího systému Blood Kings. Podívejte se na plánované funkce v0.2, v0.3 a stabilní v1.0.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Plány vývoje</span>
+      <h1>Roadmapa projektu</h1>
+      <p class="section-subtitle">Transparentní přehled o tom, na jakých funkcích aktuálně pracujeme a co plánujeme do budoucna.</p>
+    </div>
+  </section>
+
+  <!-- Roadmap Timeline -->
+  <section class="section bg-dim">
+    <div class="container roadmap-grid-container">
+      
+      <!-- Milestone 0.1 -->
+      <div class="roadmap-milestone card completed">
+        <div class="milestone-status-tag tag-done">Uvolněno</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v0.1.0-alpha</span>
+          <h2>Základní Monitoring</h2>
+          <p>Vybudování robustního a ultra-rychlého základu pro sběr dat.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Centrální PHP Server</strong>
+              <span>Webová administrace, SQLite/MySQL úložiště incidentů.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Nativní monitorovací agenti</strong>
+              <span>Mimořádně lehké skripty pro Linux (Bash), Windows (PowerShell) a Docker.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Upozornění a notifikace</strong>
+              <span>Integrace e-mailových výstrah přes SMTP a zpráv na Discord.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Veřejné Status Stránky</strong>
+              <span>Možnost zveřejnit stav služeb s oddělenou cache pro nulovou zátěž serveru.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Milestone 0.2 -->
+      <div class="roadmap-milestone card in-progress">
+        <div class="milestone-status-tag tag-progress">Ve vývoji</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v0.2.0</span>
+          <h2>Pokročilé Metriky</h2>
+          <p>Zpřístupnění detailních statistik a napojení na monitoring třetích stran.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Historie výkonnostních grafů</strong>
+              <span>Zobrazení grafů vytížení CPU, RAM a volného místa na disku za 30 dní.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Prometheus a Grafana integrace</strong>
+              <span>Expozice standardizovaného metriky endpointu pro Grafana Cloud.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Telegram a Slack notifikace</strong>
+              <span>Rozšíření stávajících kanálů o nativní zprávy do dalších populárních platforem.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Automatická aktualizace agentů</strong>
+              <span>Bezúdržbový běh agentů s možností self-update z centrálního serveru.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Milestone 0.3 -->
+      <div class="roadmap-milestone card planned">
+        <div class="milestone-status-tag tag-planned">Plánováno</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v0.3.0</span>
+          <h2>Multi-tenant & SSO</h2>
+          <p>Zaměřeno na týmovou spolupráci, bezpečnost a škálovatelnost.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Multi-tenant struktura</strong>
+              <span>Možnost spravovat více oddělených projektů pod jedním serverem.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Single Sign-On (SSO / OIDC)</strong>
+              <span>Přihlašování přes Google, GitHub nebo firemní SAML poskytovatele.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Katalog komunitních agentů</strong>
+              <span>Veřejný katalog skriptů pro specifické aplikace (MySQL, Redis, Nginx, Synology).</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Milestone 1.0 -->
+      <div class="roadmap-milestone card planned">
+        <div class="milestone-status-tag tag-planned">Budoucnost</div>
+        <div class="milestone-header">
+          <span class="milestone-ver">v1.0.0</span>
+          <h2>Stabilní Verze (LTS)</h2>
+          <p>Připraveno pro nejnáročnější enterprise nasazení.</p>
+        </div>
+        <ul class="roadmap-checklist">
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Dlouhodobá podpora (LTS)</strong>
+              <span>Stabilní API a garantovaná podpora oprav chyb po dobu 2 let.</span>
+            </div>
+          </li>
+          <li>
+            <span class="check-box">○</span>
+            <div class="task-info">
+              <strong>Nativní mobilní aplikace</strong>
+              <span>Push notifikace na iOS a Android pro bleskové reakce na výpadky.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--bg-secondary) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border-color);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  /* Grid layout for cards roadmap milestones */
+  .roadmap-grid-container {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3rem;
+    align-items: stretch;
+  }
+
+  .roadmap-milestone {
+    display: flex;
+    flex-direction: column;
+    padding: 3rem 2.5rem;
+    position: relative;
+    height: 100%;
+  }
+
+  /* Tag status inside milestone */
+  .milestone-status-tag {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .tag-done {
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid rgba(43, 138, 62, 0.2);
+  }
+
+  .tag-progress {
+    background: var(--danger-bg);
+    color: var(--accent-color);
+    border: 1px solid rgba(var(--accent-rgb), 0.2);
+  }
+
+  .tag-planned {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
+
+  .milestone-header {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .milestone-ver {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent-color);
+  }
+
+  .milestone-header h2 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    margin: 0.2rem 0 0.5rem;
+  }
+
+  .milestone-header p {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+  }
+
+  /* Checklist elements */
+  .roadmap-checklist {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .roadmap-checklist li {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  .check-box {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+
+  .roadmap-checklist li.checked .check-box {
+    border-color: var(--success);
+    background: var(--success-bg);
+    color: var(--success);
+  }
+
+  .task-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .task-info strong {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+  }
+
+  .roadmap-checklist li.checked .task-info strong {
+    text-decoration: line-through;
+    opacity: 0.7;
+  }
+
+  .task-info span {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  /* Border glow colors depending on state */
+  .roadmap-milestone.completed {
+    border-color: rgba(43, 138, 62, 0.2);
+  }
+  
+  .roadmap-milestone.in-progress {
+    border-color: var(--border-glow);
+    box-shadow: var(--shadow-glow);
+  }
+
+  @media (max-width: 992px) {
+    .roadmap-grid-container {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+  }
+</style>

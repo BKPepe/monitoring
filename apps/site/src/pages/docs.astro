@@ -1,0 +1,292 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Documentation | Blood Kings Monitoring" description="Official documentation for installing, configuring, and managing Blood Kings Monitoring server and remote probing agents.">
+  <div class="docs-layout-container container">
+    <!-- Sidebar Doc Links -->
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-section">
+        <h4>Getting Started</h4>
+        <a href="#quickstart" class="sidebar-link active">Quick Start</a>
+        <a href="#requirements" class="sidebar-link">Requirements</a>
+        <a href="#architecture" class="sidebar-link">Architecture</a>
+      </div>
+      <div class="docs-sidebar-section">
+        <h4>Central Server</h4>
+        <a href="#server-config" class="sidebar-link">Database Config</a>
+        <a href="#server-env" class="sidebar-link">Environment Vars</a>
+        <a href="#server-status" class="sidebar-link">Status Pages</a>
+      </div>
+      <div class="docs-sidebar-section">
+        <h4>Agents</h4>
+        <a href="#agent-install" class="sidebar-link">Agent Registration</a>
+        <a href="#agent-config" class="sidebar-link">Interval Tweaks</a>
+        <a href="#agent-trouble" class="sidebar-link">Troubleshooting</a>
+      </div>
+    </aside>
+
+    <!-- Docs Content Area -->
+    <main class="docs-main-content">
+      <!-- Section 1 -->
+      <section id="quickstart" class="docs-section">
+        <span class="badge badge-accent">Developer Guide</span>
+        <h1>Quick Start</h1>
+        <p>This guide helps you spin up a complete Blood Kings Monitoring server stack in under two minutes.</p>
+        
+        <h2>Step 1: Start Central Server</h2>
+        <p>Deploying via Docker Compose is the easiest route. Create a folder on your host VPS and create the compose file:</p>
+        <div class="docs-code-wrapper">
+          <pre><code># docker-compose.yml
+version: '3.8'
+services:
+  bloodkings:
+    image: bkpepe/bloodkings:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data:/var/www/html/data
+    restart: always</code></pre>
+        </div>
+        <p>Run the compose stack using:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>docker compose up -d</code></pre>
+        </div>
+        <p>Once running, open your web browser to <code>http://localhost:8080</code> and proceed with the initial admin account setup.</p>
+
+        <h2>Step 2: Add Your First Monitor</h2>
+        <p>Log in to your admin panel, click on the **Monitors** tab, and select **Add Monitor**. You can track URLs (HTTPS), host IPs (Ping), or specific SSL certificate properties.</p>
+      </section>
+
+      <!-- Section 2 -->
+      <section id="requirements" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>System Requirements</h1>
+        <p>Blood Kings is built to run on lightweight hardware profiles (e.g. Raspberry Pis, micro cloud nodes).</p>
+        
+        <h3>Central Server:</h3>
+        <ul>
+          <li><strong>CPU:</strong> 1 vCPU (x86_64 or ARM64)</li>
+          <li><strong>Memory:</strong> 128 MB RAM (256 MB recommended)</li>
+          <li><strong>Storage:</strong> 50 MB application core + SQLite database history size</li>
+          <li><strong>Non-DockerLAMP:</strong> PHP 8.2+, Apache/Nginx, mod_rewrite config, and a MySQL/MariaDB daemon.</li>
+        </ul>
+
+        <h3>Remote Agent:</h3>
+        <ul>
+          <li><strong>OS:</strong> Linux (any system with Bash and Curl), Windows 10/11/Server, macOS, or Raspberry Pi OS</li>
+          <li><strong>Memory:</strong> Under 10 MB RAM footprint</li>
+          <li><strong>Network:</strong> Outgoing HTTPS access (port 443) targeting your central server URL</li>
+        </ul>
+      </section>
+
+      <!-- Section 3 -->
+      <section id="architecture" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Architecture Overview</h1>
+        <p>Blood Kings combines active pings (server-side polling) and passive telemetry reports (pushed from agents).</p>
+        
+        <div class="architecture-diagram card">
+          <div class="arch-block">
+            <strong>Remote Agent</strong>
+            <span>(Linux/Windows/Docker)</span>
+            <span class="arrow">↓ HTTPS POST (Metrics)</span>
+          </div>
+          <div class="arch-block highlight">
+            <strong>Central Server</strong>
+            <span>(PHP / SQLite or MySQL)</span>
+            <span class="arrow">↓ Render Static API</span>
+          </div>
+          <div class="arch-block">
+            <strong>Public Status Page</strong>
+            <span>(HTML / cached JSON)</span>
+          </div>
+        </div>
+
+        <p>
+          <strong>Passive Telemetry (Agents):</strong> The agent daemon runs locally on monitored boxes. Every 60 seconds, it fetches system resource parameters (CPU, memory, storage loads) and reports them back to the central server via secure POST requests. This means you do not have to expose open incoming firewall ports on the monitored hosts.
+        </p>
+        <p>
+          <strong>Active Probing (Pinger):</strong> The central server initiates cron runs to ping targets (HTTP/HTTPS, TCP connection checks, ICMP pings) directly from server threads.
+        </p>
+      </section>
+    </main>
+  </div>
+</Layout>
+
+<style>
+  .docs-layout-container {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 4rem;
+    padding-top: 4rem;
+    padding-bottom: 6rem;
+  }
+
+  /* Sidebar Links */
+  .docs-sidebar {
+    position: sticky;
+    top: calc(var(--header-height) + 2rem);
+    height: fit-content;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .docs-sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .docs-sidebar-section h4 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+
+  .sidebar-link {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    padding: 0.25rem 0;
+    border-left: 2px solid transparent;
+    padding-left: 1rem;
+    margin-left: -2px;
+  }
+
+  .sidebar-link:hover {
+    color: var(--text-primary);
+  }
+
+  .sidebar-link.active {
+    color: var(--accent-color);
+    font-weight: 600;
+    border-color: var(--accent-color);
+  }
+
+  /* Content styles */
+  .docs-main-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4rem;
+  }
+
+  .docs-section h1 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    margin-top: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .docs-section h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  .docs-section h3 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .docs-section p {
+    font-size: 1rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .docs-section ul {
+    margin-bottom: 1.5rem;
+    padding-left: 1.5rem;
+  }
+
+  .docs-section li {
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+  }
+
+  .docs-divider {
+    border: 0;
+    height: 1px;
+    background: var(--border-color);
+    margin-bottom: 4rem;
+  }
+
+  /* Code wraps */
+  .docs-code-wrapper {
+    background: #09090b;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1.2rem;
+    border-radius: var(--radius-sm);
+    margin: 1rem 0;
+    overflow-x: auto;
+  }
+
+  .docs-code-wrapper code {
+    color: #f4f4f5;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+
+  /* Diagram styles */
+  .architecture-diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 2rem;
+    align-items: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    margin: 1.5rem 0;
+  }
+
+  .arch-block {
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    padding: 1rem 2rem;
+    border-radius: var(--radius-sm);
+    text-align: center;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .arch-block strong {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+  }
+
+  .arch-block span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .arch-block.highlight {
+    border-color: var(--accent-color);
+    background: rgba(176,0,32,0.02);
+  }
+
+  .arrow {
+    display: block;
+    margin-top: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent-color);
+    font-weight: 600;
+  }
+
+  @media (max-width: 992px) {
+    .docs-layout-container {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .docs-sidebar {
+      display: none;
+    }
+  }
+</style>

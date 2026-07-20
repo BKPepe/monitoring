@@ -1,0 +1,421 @@
+---
+// AgentSelector.astro - Installation panels and agent switcher
+const currentPath = Astro.url.pathname;
+const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+
+const t = isCs ? {
+  badge: 'Instalace v 1 kroku',
+  title: 'Nainstalujte Agenta během 10 sekund',
+  desc: 'Vyberte svou platformu a zkopírujte instalační příkaz. Agent automaticky detekuje systém a připojí se.',
+  versionLabel: 'Verze agenta:',
+  tagLabel: 'Docker Tag:',
+  linuxDesc: 'Jednoduchý Bash instalátor stáhne binární soubor, nastaví systemd službu a spustí agenta jako démona na pozadí.',
+  windowsDesc: 'PowerShell instalátor vytvoří Windows Službu (Service), zaregistruje agenta do registrů a spustí ho.',
+  dockerDesc: 'Přidejte monitorovacího agenta do své docker-compose struktury. Agent poběží v izolovaném kontejneru.',
+  raspberryDesc: 'Optimalizováno pro nízkou spotřebu paměti a CPU na jednodeskových počítačích s architekturou ARMv7/ARM64.',
+  copy: 'Zkopírovat',
+  copied: 'Zkopírováno!'
+} : {
+  badge: '1-Step Installation',
+  title: 'Install Agent in 10 Seconds',
+  desc: 'Choose your platform and copy the installation script. The agent automatically detects the target OS and runs.',
+  versionLabel: 'Agent Version:',
+  tagLabel: 'Docker Tag:',
+  linuxDesc: 'A simple Bash script downloads the binary file, registers the systemd daemon, and starts the background task.',
+  windowsDesc: 'The PowerShell command registers a Windows Service, writes registry keys, and runs the monitoring thread.',
+  dockerDesc: 'Insert the monitoring agent service definition inside your docker-compose file. Runs isolated.',
+  raspberryDesc: 'Optimized for low CPU and memory footprints on ARMv7/ARM64 single-board systems.',
+  copy: 'Copy',
+  copied: 'Copied!'
+};
+---
+
+<div class="agent-selector-card card" id="install-guide">
+  <div class="selector-header">
+    <span class="badge badge-success">{t.badge}</span>
+    <h3>{t.title}</h3>
+    <p>{t.desc}</p>
+  </div>
+
+  <div class="tabbed-selector">
+    <!-- Tabs selectors -->
+    <div class="tabs-nav">
+      <button class="tab-btn active" data-platform="linux">
+        <span>🐧</span> Linux / VPS
+      </button>
+      <button class="tab-btn" data-platform="windows">
+        <span>🪟</span> Windows
+      </button>
+      <button class="tab-btn" data-platform="docker">
+        <span>🐳</span> Docker
+      </button>
+      <button class="tab-btn" data-platform="raspberry">
+        <span>🍓</span> Raspberry Pi
+      </button>
+    </div>
+
+    <!-- Tab contents -->
+    <div class="tab-contents">
+      <!-- Linux Panel -->
+      <div class="tab-panel active" id="panel-linux">
+        <div class="panel-meta">
+          <div class="meta-row">
+            <span class="meta-label">{t.versionLabel}</span>
+            <span class="meta-val badge badge-accent current-agent-version">v0.1.0-alpha</span>
+          </div>
+          <p>{t.linuxDesc}</p>
+        </div>
+        <div class="code-block-wrapper">
+          <pre><code class="language-bash" id="code-linux">curl -fsSL https://monitoring.bloodkings.eu/install.sh | sh -s -- --token YOUR_SECRET_TOKEN</code></pre>
+          <button class="copy-code-btn" data-target="code-linux" aria-label="Copy code">
+            <span class="copy-txt">{t.copy}</span>
+            <span class="copied-txt">{t.copied}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Windows Panel -->
+      <div class="tab-panel" id="panel-windows">
+        <div class="panel-meta">
+          <div class="meta-row">
+            <span class="meta-label">{t.versionLabel}</span>
+            <span class="meta-val badge badge-accent current-agent-version">v0.1.0-alpha</span>
+          </div>
+          <p>{t.windowsDesc}</p>
+        </div>
+        <div class="code-block-wrapper">
+          <pre><code class="language-powershell" id="code-windows">irm https://monitoring.bloodkings.eu/install.ps1 | iex; install-agent -Token "YOUR_SECRET_TOKEN"</code></pre>
+          <button class="copy-code-btn" data-target="code-windows" aria-label="Copy code">
+            <span class="copy-txt">{t.copy}</span>
+            <span class="copied-txt">{t.copied}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Docker Panel -->
+      <div class="tab-panel" id="panel-docker">
+        <div class="panel-meta">
+          <div class="meta-row">
+            <span class="meta-label">{t.tagLabel}</span>
+            <span class="meta-val badge badge-accent current-agent-tag">latest</span>
+          </div>
+          <p>{t.dockerDesc}</p>
+        </div>
+        <div class="code-block-wrapper">
+          <pre><code class="language-yaml" id="code-docker">version: '3.8'
+services:
+  bloodkings-agent:
+    image: bkpepe/bloodkings-agent:v0.1.0-alpha
+    restart: always
+    environment:
+      - SERVER_URL=https://monitoring.bloodkings.eu
+      - AGENT_TOKEN=YOUR_SECRET_TOKEN</code></pre>
+          <button class="copy-code-btn" data-target="code-docker" aria-label="Copy code">
+            <span class="copy-txt">{t.copy}</span>
+            <span class="copied-txt">{t.copied}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Raspberry Pi Panel -->
+      <div class="tab-panel" id="panel-raspberry">
+        <div class="panel-meta">
+          <div class="meta-row">
+            <span class="meta-label">{t.versionLabel}</span>
+            <span class="meta-val badge badge-accent current-agent-version">v0.1.0-alpha</span>
+          </div>
+          <p>{t.raspberryDesc}</p>
+        </div>
+        <div class="code-block-wrapper">
+          <pre><code class="language-bash" id="code-raspberry">curl -fsSL https://monitoring.bloodkings.eu/install.sh | sh -s -- --arch arm64 --token YOUR_SECRET_TOKEN</code></pre>
+          <button class="copy-code-btn" data-target="code-raspberry" aria-label="Copy code">
+            <span class="copy-txt">{t.copy}</span>
+            <span class="copied-txt">{t.copied}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Dynamic tab switcher
+  const tabBtns = document.querySelectorAll('.tab-btn');
+  const tabPanels = document.querySelectorAll('.tab-panel');
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const platform = btn.getAttribute('data-platform');
+
+      // Update button state
+      tabBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // Update panels visibility
+      tabPanels.forEach(panel => {
+        panel.classList.remove('active');
+        if (panel.id === `panel-${platform}`) {
+          panel.classList.add('active');
+        }
+      });
+    });
+  });
+
+  // Dynamic copy to clipboard logic
+  const copyButtons = document.querySelectorAll('.copy-code-btn');
+
+  copyButtons.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const targetId = btn.getAttribute('data-target');
+      const codeElement = document.getElementById(targetId);
+      if (!codeElement) return;
+
+      const codeText = codeElement.textContent;
+
+      try {
+        await navigator.clipboard.writeText(codeText);
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.classList.remove('copied');
+        }, 2000);
+      } catch (err) {
+        console.error('Failed to copy to clipboard:', err);
+      }
+    });
+  });
+
+  // Fetch versions at runtime from Hono Cloudflare Worker API
+  async function fetchVersions() {
+    let apiOrigin = window.location.origin;
+    if (apiOrigin.includes('localhost') || apiOrigin.includes('127.0.0.1')) {
+      apiOrigin = 'https://monitoring.bloodkings.eu';
+    }
+
+    try {
+      const response = await fetch(`${apiOrigin}/api/versions`);
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (!data || !data.monitoring) return;
+
+      // Update version tag elements in UI
+      const cleanVer = data.monitoring;
+      const verDisplays = document.querySelectorAll('.current-agent-version');
+      verDisplays.forEach(el => {
+        el.textContent = cleanVer;
+      });
+
+      // Update tags displays (Docker tag matches release)
+      const tagDisplays = document.querySelectorAll('.current-agent-tag');
+      tagDisplays.forEach(el => {
+        el.textContent = cleanVer;
+      });
+
+      // Update Docker code block text as well
+      const dockerBlock = document.getElementById('code-docker');
+      if (dockerBlock) {
+        dockerBlock.innerHTML = `version: '3.8'
+services:
+  bloodkings-agent:
+    image: bkpepe/bloodkings-agent:${cleanVer}
+    restart: always
+    environment:
+      - SERVER_URL=https://monitoring.bloodkings.eu
+      - AGENT_TOKEN=YOUR_SECRET_TOKEN`;
+      }
+    } catch (e) {
+      console.warn('Could not load versions from API, falling back to static tags.', e);
+    }
+  }
+
+  // Load versions
+  fetchVersions();
+</script>
+
+<style>
+  .agent-selector-card {
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    padding: 3rem;
+  }
+
+  .selector-header h3 {
+    font-size: 1.8rem;
+    margin-top: 0.5rem;
+  }
+
+  .selector-header p {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+    max-width: 600px;
+  }
+
+  /* Tab Nav */
+  .tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    padding: 0.4rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .tab-btn {
+    flex-grow: 1;
+    background: transparent;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all var(--transition-fast);
+  }
+
+  .tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  :global(.dark) .tab-btn:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .tab-btn.active {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border-color);
+  }
+
+  /* Tab Panel Content */
+  .tab-panel {
+    display: none;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .tab-panel.active {
+    display: flex;
+  }
+
+  .panel-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .meta-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .meta-val {
+    font-size: 0.85rem;
+  }
+
+  .tab-panel p {
+    font-size: 0.95rem;
+  }
+
+  /* Code Block Box */
+  .code-block-wrapper {
+    position: relative;
+    background: #09090b;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--radius-sm);
+    padding: 1.2rem 4rem 1.2rem 1.5rem;
+    display: flex;
+    align-items: center;
+  }
+
+  .code-block-wrapper pre {
+    width: 100%;
+    margin: 0;
+    overflow-x: auto;
+  }
+
+  .code-block-wrapper code {
+    color: #f4f4f5;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .copy-code-btn {
+    position: absolute;
+    right: 1.2rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #a1a1aa;
+    padding: 0.4rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .copy-code-btn:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .copy-code-btn .copied-txt {
+    display: none;
+    color: var(--success);
+  }
+
+  .copy-code-btn.copied {
+    border-color: var(--success);
+    background: rgba(64, 192, 87, 0.1);
+  }
+
+  .copy-code-btn.copied .copy-txt {
+    display: none;
+  }
+
+  .copy-code-btn.copied .copied-txt {
+    display: inline;
+  }
+
+  @media (max-width: 768px) {
+    .agent-selector-card {
+      padding: 1.5rem;
+    }
+    .tabs-nav {
+      flex-direction: column;
+    }
+    .code-block-wrapper {
+      padding: 1.2rem 1.2rem 4rem 1.2rem;
+      align-items: flex-start;
+    }
+    .copy-code-btn {
+      top: auto;
+      bottom: 1.2rem;
+      right: 1.2rem;
+      transform: none;
+    }
+  }
+</style>
