@@ -453,31 +453,59 @@ function check_minecraft_api_fallback($host, $start, $timeout = 3) {
     return null;
 }
 
+/**
+ * Blood Kings Status - Minecraft SLP kontrola s jedním rychlým opakováním
+ *
+ * Krátký timeout a čtení odpovědi po jednotlivých bytech dělá jednorázový
+ * pokus náchylný na běžné síťové zádrhele (server odpoví o zlomek sekundy
+ * později, než limit dovolí) - proto se před přechodem na fallback API a
+ * případným nahlášením výpadku zkusí spojení ještě jednou.
+ */
 function check_minecraft($host, $port = 25565, $timeout = 3) {
     $start = microtime(true);
     $host = preg_replace('~^https?://~', '', $host);
-    
+
     // Rozdělení hostitele a portu, pokud je zadáno jako host:port
     $parts = explode(':', $host);
     if (count($parts) === 2) {
         $host = $parts[0];
         $port = intval($parts[1]);
     }
-    
+
+    $result = check_minecraft_slp_attempt($host, $port, $timeout, $start);
+    if ($result === null) {
+        // Krátká prodleva a druhý pokus - odchytí přechodné výpadky/zpoždění
+        usleep(300000); // 0.3 s
+        $result = check_minecraft_slp_attempt($host, $port, $timeout, $start);
+    }
+    if ($result !== null) {
+        return $result;
+    }
+
+    $fb = check_minecraft_api_fallback($host, $start, $timeout);
+    if ($fb) return $fb;
+
+    return [
+        'status' => 'down',
+        'response_time' => 0,
+        'error' => 'Prázdná odpověď od MC serveru (timeout nebo nepodporovaný protokol), i po opakovaném pokusu.',
+        'players_online' => 0,
+        'players_max' => 0
+    ];
+}
+
+/**
+ * Jeden pokus o SLP handshake. Vrací null při selhání spojení/čtení
+ * (volající pak zkusí znovu nebo přejde na fallback API), jinak vrací
+ * hotové pole výsledku (status up i down - down se vrací jen v případech,
+ * kde je odpověď jednoznačně platná, ale zjevně chybná, např. neplatné ID paketu).
+ */
+function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
     if (!$socket) {
-        $fb = check_minecraft_api_fallback($host, $start, $timeout);
-        if ($fb) return $fb;
-        
-        return [
-            'status' => 'down',
-            'response_time' => 0,
-            'error' => "Nepodařilo se připojit k Minecraft serveru: $errstr ($errno) a záložní API neodpovědělo.",
-            'players_online' => 0,
-            'players_max' => 0
-        ];
+        return null;
     }
-    
+
     stream_set_timeout($socket, $timeout);
 
     // Minecraft SLP handshake protocol (1.7+)
@@ -526,25 +554,20 @@ function check_minecraft($host, $port = 25565, $timeout = 3) {
 
     $packetLength = $readVarInt($socket);
     if ($packetLength === false) {
+        // Nejde odlišit "server neběží" od "byte dorazil o zlomek sekundy později" -
+        // necháváme volajícího zkusit znovu, než se sáhne po fallback API.
         @fclose($socket);
-        $fb = check_minecraft_api_fallback($host, $start, $timeout);
-        if ($fb) return $fb;
-        
-        return [
-            'status' => 'down',
-            'response_time' => 0,
-            'error' => 'Prázdná odpověď od MC serveru (timeout nebo nepodporovaný protokol)',
-            'players_online' => 0,
-            'players_max' => 0
-        ];
+        return null;
     }
 
     $packetId = $readVarInt($socket);
     if ($packetId !== 0x00) {
+        // Tady server reálně odpověděl, jen jiným ID paketu - opakování by
+        // nepomohlo, jde o skutečný nesoulad protokolu/portu.
         @fclose($socket);
         $fb = check_minecraft_api_fallback($host, $start, $timeout);
         if ($fb) return $fb;
-        
+
         return [
             'status' => 'down',
             'response_time' => 0,
@@ -557,16 +580,7 @@ function check_minecraft($host, $port = 25565, $timeout = 3) {
     $stringLength = $readVarInt($socket);
     if ($stringLength === false || $stringLength <= 0) {
         @fclose($socket);
-        $fb = check_minecraft_api_fallback($host, $start, $timeout);
-        if ($fb) return $fb;
-        
-        return [
-            'status' => 'down',
-            'response_time' => 0,
-            'error' => 'Neplatná délka odpovědi od MC serveru',
-            'players_online' => 0,
-            'players_max' => 0
-        ];
+        return null;
     }
 
     $jsonData = '';
@@ -947,8 +961,9 @@ function send_sms($phone, $message, $user_whatsapp_apikey = '', $force_gateway =
     $gateway = !empty($force_gateway) ? $force_gateway : get_setting('sms_gateway_type', '');
     
     if ($gateway === 'whatsapp') {
-        // Per-user API klíč má přednost, pak globální systémové nastavení
-        $apikey = !empty($user_whatsapp_apikey) ? $user_whatsapp_apikey : get_setting('whatsapp_apikey');
+        // CallMeBot klíč je vázaný na konkrétní telefonní číslo, takže existuje
+        // jen jako osobní klíč každého uživatele - žádný globální fallback.
+        $apikey = $user_whatsapp_apikey;
         if (empty($apikey) || empty($phone)) {
             return false;
         }
@@ -1193,12 +1208,10 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             }
         }
 
-        // WhatsApp notifikace (CallMeBot) - nezávislé na SMS bráně, vlastní kanál
-        if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone'])) {
-            $user_wa_key = $rec['whatsapp_apikey'] ?? '';
-            if (!empty($user_wa_key) || !empty(get_setting('whatsapp_apikey'))) {
-                send_sms($rec['phone'], $sms_body, $user_wa_key, 'whatsapp');
-            }
+        // WhatsApp notifikace (CallMeBot) - nezávislé na SMS bráně, vlastní kanál.
+        // Klíč je vázaný na konkrétní telefonní číslo, takže existuje jen per-user.
+        if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
+            send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
         }
     }
 
@@ -1266,6 +1279,15 @@ function send_webhook_post($url, $payload_json) {
  */
 function send_digest_report($pdo, $period = 'weekly') {
     $GLOBALS['last_mail_error'] = '';
+    try {
+        return send_digest_report_inner($pdo, $period);
+    } catch (Exception $e) {
+        $GLOBALS['last_mail_error'] = $e->getMessage();
+        return false;
+    }
+}
+
+function send_digest_report_inner($pdo, $period = 'weekly') {
     $days = ($period === 'monthly') ? 30 : 7;
     $period_label = ($period === 'monthly') ? 'Měsíční' : 'Týdenní';
     $site_title = get_setting('site_title', 'Blood Kings Status');
@@ -1297,7 +1319,7 @@ function send_digest_report($pdo, $period = 'weekly') {
         FROM monitor_logs l
         JOIN monitors m ON m.id = l.monitor_id
         WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-        GROUP BY l.monitor_id
+        GROUP BY l.monitor_id, m.name, m.type
         HAVING down_count > 0
         ORDER BY (up_count / total_count) ASC, down_count DESC
         LIMIT 5

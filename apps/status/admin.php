@@ -298,7 +298,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $user_role === 'admin') {
     $settings_to_save = [
         'site_title', 'cron_key', 'cron_location', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
-        'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from', 'smsbrana_user', 'smsbrana_password', 'whatsapp_apikey',
+        'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from', 'smsbrana_user', 'smsbrana_password',
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
@@ -323,13 +323,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
                 $val = isset($_POST[$key]) ? trim($_POST[$key]) : '';
             }
             $stmt_set->execute([$key, $val, $val]);
-            
-            // AUTOMATICKÉ PROPOJENÍ: Pokud se ukládá globální 'whatsapp_apikey' a aktuálně ukládá admin ID = 1,
-            // propíšeme klíč také do jeho uživatelského profilu v tabulce users
-            if ($key === 'whatsapp_apikey' && $_SESSION['admin_id'] == 1 && !empty($val)) {
-                $stmt_up_user_wa = $pdo->prepare("UPDATE users SET whatsapp_apikey = ? WHERE id = 1");
-                $stmt_up_user_wa->execute([$val]);
-            }
         }
         $pdo->commit();
         $success_msg = 'Nastavení systému bylo úspěšně uloženo.';
@@ -980,7 +973,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                 </div>
 
                 <!-- VPS Agent instrukce (Modal simulace přes skryté okno) -->
-                <div id="agent-instructions-card" class="admin-card" style="display: none; border-top: 4px solid var(--color-green); max-width: 800px; width: 95%;">
+                <div id="agent-instructions-card" class="admin-card" style="display: none; border-top: 4px solid var(--color-green); max-width: 1100px; width: 95%;">
                     <div class="admin-header">
                         <h2 style="color: var(--color-green);"><i class="fas fa-terminal"></i> Návod k instalaci agenta na VPS</h2>
                         <button onclick="document.getElementById('agent-instructions-card').style.display='none'" class="modal-close"><i class="fas fa-times"></i></button>
@@ -997,10 +990,10 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <div class="settings-tab-panel active" id="agent-tab-python">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte Python agenta:<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?></pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?></pre>
                             </li>
                             <li>Nastavte konfiguraci (buď přímo v kódu, nebo pohodlněji vytvořením souboru <code>agent.cfg</code> ve stejné složce):<br>
-                                <div style="background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 4px; font-size: 0.72rem; margin-top: 0.25rem; line-height: 1.4;">
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     <strong>Obsah agent.cfg (doporučeno pro zachování při deployi):</strong><br>
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key">KLIC</span>"
@@ -1008,7 +1001,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                             </li>
                             <li>Povolte spuštění: <code>chmod +x agent.py</code></li>
                             <li>Cron úloha (<code>crontab -e</code>):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">*/5 * * * * /cesta/k/agent.py > /dev/null 2>&1</pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">*/5 * * * * /cesta/k/agent.py > /dev/null 2>&1</pre>
                             </li>
                             <li>Volitelně: nastavte <code>AUTO_UPDATE = True</code> (nebo v <code>agent.cfg</code> <code>AUTO_UPDATE = 1</code>), aby se agent sám aktualizoval na novější verze publikované na tomto serveru.</li>
                         </ol>
@@ -1017,10 +1010,10 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <div class="settings-tab-panel" id="agent-tab-bash">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte Shell agenta (nevyžaduje Python):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.sh <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.sh', $_SERVER['REQUEST_URI']); ?></pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.sh <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.sh', $_SERVER['REQUEST_URI']); ?></pre>
                             </li>
                             <li>Nastavte konfiguraci (buď přímo v kódu, nebo pohodlněji vytvořením souboru <code>agent.cfg</code> ve stejné složce):<br>
-                                <div style="background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 4px; font-size: 0.72rem; margin-top: 0.25rem; line-height: 1.4;">
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     <strong>Obsah agent.cfg (doporučeno pro zachování při deployi):</strong><br>
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-sh">KLIC</span>"
@@ -1028,7 +1021,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                             </li>
                             <li>Povolte spuštění: <code>chmod +x agent.sh</code></li>
                             <li>Cron úloha (<code>crontab -e</code>):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">*/5 * * * * /cesta/k/agent.sh > /dev/null 2>&1</pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">*/5 * * * * /cesta/k/agent.sh > /dev/null 2>&1</pre>
                             </li>
                             <li>Volitelně: nastavte <code>AUTO_UPDATE="1"</code> pro automatické aktualizace agenta.</li>
                         </ol>
@@ -1037,16 +1030,16 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <div class="settings-tab-panel" id="agent-tab-powershell">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte Windows agenta (PowerShell 5.1+, bez závislostí):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">Invoke-WebRequest -Uri "<?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.ps1', $_SERVER['REQUEST_URI']); ?>" -OutFile agent.ps1</pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">Invoke-WebRequest -Uri "<?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.ps1', $_SERVER['REQUEST_URI']); ?>" -OutFile agent.ps1</pre>
                             </li>
                             <li>Nastavte konfiguraci vytvořením souboru <code>agent.cfg</code> ve stejné složce jako <code>agent.ps1</code>:<br>
-                                <div style="background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 4px; font-size: 0.72rem; margin-top: 0.25rem; line-height: 1.4;">
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-ps1">KLIC</span>"
                                 </div>
                             </li>
                             <li>Vytvořte naplánovanou úlohu spouštěnou každých 5 minut (spusťte v PowerShellu jako Administrátor):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-ExecutionPolicy Bypass -File "C:\bloodkings\agent.ps1"'
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-ExecutionPolicy Bypass -File "C:\bloodkings\agent.ps1"'
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
 Register-ScheduledTask -TaskName "BloodKingsAgent" -Action $action -Trigger $trigger -RunLevel Highest</pre>
                             </li>
@@ -1057,17 +1050,17 @@ Register-ScheduledTask -TaskName "BloodKingsAgent" -Action $action -Trigger $tri
                     <div class="settings-tab-panel" id="agent-tab-docker">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte <code>agent.py</code> a <code>docker-compose.agent.yml</code> na server do jedné složky:<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?>
 wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'docker-compose.agent.yml', $_SERVER['REQUEST_URI']); ?></pre>
                             </li>
                             <li>V <code>docker-compose.agent.yml</code> vyplňte proměnné prostředí:<br>
-                                <div style="background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 4px; font-size: 0.72rem; margin-top: 0.25rem; line-height: 1.4;">
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     STATUS_API_URL: "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     STATUS_AGENT_KEY: "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-docker">KLIC</span>"
                                 </div>
                             </li>
                             <li>Spusťte kontejner:<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.35rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.65rem; margin-top: 0.25rem; white-space: pre-wrap; word-break: break-all;">docker compose -f docker-compose.agent.yml up -d</pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">docker compose -f docker-compose.agent.yml up -d</pre>
                             </li>
                             <li>Kontejner běží s <code>pid: host</code> a připojeným kořenovým FS hostitele (<code>/:/host:ro</code>), takže hlásí metriky <strong>hostitele</strong>, ne kontejneru. Funguje na Linuxu; vyžaduje Docker Engine s podporou <code>pid: host</code> a <code>network_mode: host</code>.</li>
                             <li>Automatické aktualizace jsou v Docker režimu vypnuté (skript je připojen read-only) - novou verzi nasadíte stažením aktuálního <code>agent.py</code> a restartem kontejneru.</li>
@@ -1332,15 +1325,11 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </div>
 
                         <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">WhatsApp Notifikace (CallMeBot, zdarma)</h3>
-                        <div class="form-group">
-                            <label for="whatsapp_apikey">Globální CallMeBot API klíč (nepovinné)</label>
-                            <input type="password" name="whatsapp_apikey" id="whatsapp_apikey" value="<?php echo htmlspecialchars(get_setting('whatsapp_apikey')); ?>" class="form-control" placeholder="Necháte prázdné = každý uživatel používá svůj vlastní klíč" autocomplete="off">
-                            <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.35rem; line-height: 1.5;">
-                                CallMeBot funguje na principu osobního klíče pro konkrétní telefonní číslo - klíč zde proto slouží jen jako
-                                <strong>záložní</strong> pro uživatele, kteří si vlastní klíč nenastavili. Doporučený způsob je, aby si každý
-                                uživatel (i administrátor) nastavil své telefonní číslo a vlastní <strong>CallMeBot API klíč</strong> ve svém
-                                profilu (sekce <em>Můj profil</em>) - tam WhatsApp notifikace zapnete zaškrtnutím políčka.
-                            </small>
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.5;">
+                            Zde není žádné globální nastavení - CallMeBot klíč je vždy vázaný na jedno konkrétní telefonní číslo
+                            (získáte ho zprávou z toho čísla jejich botovi), takže nejde nastavit "za všechny". Každý uživatel
+                            (i administrátor) si své telefonní číslo a vlastní <strong>CallMeBot API klíč</strong> nastavuje
+                            ve svém profilu (sekce <em>Můj profil</em>) - tam WhatsApp notifikace zapnete zaškrtnutím políčka.
                         </div>
 
                         <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">VPS Agent Nastavení</h3>

@@ -758,42 +758,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
-                                                                <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                    <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
-                                                                </button>
-                                                                <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
-                                                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
-                                                                        <div>
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
-                                                                            <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
-                                                                            </ol>
-                                                                        </div>
-                                                                        <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
-                                                                            <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
-                                                                            </ol>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
+                                                                <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                         <?php endif; ?>
 
                                                     </div>
@@ -855,42 +820,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                     <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
-                                                                 </button>
-                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
-                                                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
-                                                                         <div>
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
-                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
-                                                                             </ol>
-                                                                         </div>
-                                                                         <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
-                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
-                                                                             </ol>
-                                                                         </div>
-                                                                     </div>
-                                                                 </div>
-                                                             </div>
+                                                                 <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                          <?php endif; ?>
 
                                                      </div>
@@ -932,42 +862,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
-                                                                <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                    <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
-                                                                </button>
-                                                                <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
-                                                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
-                                                                        <div>
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
-                                                                            <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
-                                                                            </ol>
-                                                                        </div>
-                                                                        <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
-                                                                            <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
-                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
-                                                                            </ol>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
+                                                                <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                         <?php endif; ?>
 
                                                     </div>
@@ -1035,42 +930,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
 
-                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                     <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
-                                                                 </button>
-                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
-                                                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
-                                                                         <div>
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
-                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
-                                                                             </ol>
-                                                                         </div>
-                                                                         <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
-                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
-                                                                             </ol>
-                                                                         </div>
-                                                                     </div>
-                                                                 </div>
-                                                             </div>
+                                                                 <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                          <?php endif; ?>
 
                                                      </div>
@@ -1159,41 +1019,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
                                                             <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                             
-                                                            <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
-                                                            </button>
-                                                            <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
-                                                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
-                                                                    <div>
-                                                                        <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
-                                                                        <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                            <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                            <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                                                                                <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                                                                                    API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                                                                                    AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                                                                                </div>
-                                                                            </li>
-                                                                            <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
-                                                                            <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
-                                                                        </ol>
-                                                                    </div>
-                                                                    <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                        <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
-                                                                        <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                            <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                            <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                                                                                <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                                                                                    API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                                                                                    AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                                                                                </div>
-                                                                            </li>
-                                                                            <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
-                                                                            <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
-                                                                        </ol>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
+                                                            <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
@@ -1251,42 +1077,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                     <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
-                                                                 </button>
-                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
-                                                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
-                                                                         <div>
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
-                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
-                                                                             </ol>
-                                                                         </div>
-                                                                         <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
-                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
-                    <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
-                        API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
-                        AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
-                    </div>
-                </li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
-                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
-                                                                             </ol>
-                                                                         </div>
-                                                                     </div>
-                                                                 </div>
-                                                             </div>
+                                                                 <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                          <?php endif; ?>
 
                                                      </div>
@@ -1575,19 +1366,6 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         } else {
             panel.style.maxHeight = panel.scrollHeight + "px";
             item.classList.add('open');
-        }
-    }
-
-    function toggleAgentInstructions(id) {
-        const block = document.getElementById('agent-instructions-' + id);
-        const panel = document.getElementById('details-panel-' + id);
-        if (!block) return;
-        
-        const isHidden = block.style.display === 'none';
-        block.style.display = isHidden ? 'block' : 'none';
-        
-        if (panel) {
-            panel.style.maxHeight = panel.scrollHeight + "px";
         }
     }
 
