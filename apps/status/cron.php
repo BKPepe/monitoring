@@ -59,6 +59,7 @@ foreach ($monitors as $monitor) {
                     . "Poslední hlášení: {$last_seen_str} (před {$mins_since} min). "
                     . "Možné příčiny: cron úloha agenta na VPS neběží, VPS je vypnuté/restartuje se, nebo je nedostupná síť/firewall blokuje spojení.";
                 trigger_notifications($pdo, $monitor, 'agent_offline', $error_msg_agent);
+                log_monitor_event($pdo, $id, $name, $type, 'agent_disconnected', "Agent přestal hlásit data (poslední hlášení před {$mins_since} min)");
             }
         }
     }
@@ -143,6 +144,7 @@ foreach ($monitors as $monitor) {
     switch ($type) {
         case 'web':
             $check_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
+            detect_config_changes($pdo, $monitor, $check_result);
             break;
             
         case 'cpanel':

@@ -516,6 +516,77 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
 }
 
 /**
+ * Zapíše jednu událost do monitor_events (přidání/odebrání monitoru, změna
+ * schématu/DNS/certifikátu, připojení/odpojení agenta atd.) - lehký event log,
+ * ze kterého čerpá infrastructure report (weekly/monthly digest).
+ */
+function log_monitor_event($pdo, $monitor_id, $monitor_name, $monitor_type, $event_type, $description = null) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$monitor_id, $monitor_name, $monitor_type, $event_type, $description]);
+    } catch (PDOException $e) {
+        // Nezastavovat běh cronu kvůli chybě v logování události
+    }
+}
+
+/**
+ * Porovná aktuální stav 'web' monitoru (schéma, DNS, platnost certifikátu) proti
+ * poslednímu uloženému snímku (monitors.config_snapshot) a při změně zapíše
+ * událost do monitor_events. Snímek se poté vždy přepíše na aktuální hodnoty
+ * (tick/tock porovnání), bez ohledu na to, zda k nějaké změně došlo.
+ *
+ * Záměrně nesleduje vyjednanou verzi TLS protokolu (1.2 vs 1.3) - PHP/cURL
+ * takovou informaci na rozdíl od jiných jazyků nevystavuje (jen interní C API
+ * libcurl), takže by šlo jen o odhad, ne o spolehlivá data.
+ */
+function detect_config_changes($pdo, $monitor, $check_result) {
+    if (empty($check_result['check_stages'])) {
+        return;
+    }
+    $stages = $check_result['check_stages'];
+
+    $old_snapshot = json_decode($monitor['config_snapshot'] ?? '', true);
+    if (!is_array($old_snapshot)) {
+        $old_snapshot = null;
+    }
+
+    $new_snapshot = [
+        'scheme' => strtolower((string)($check_result['scheme'] ?? '')),
+        'dns_ok' => $stages['dns']['ok'] ?? null,
+        'cert_valid_to' => $stages['tls']['cert']['valid_to'] ?? null,
+    ];
+
+    if ($old_snapshot !== null) {
+        // HTTP -> HTTPS
+        if ($old_snapshot['scheme'] === 'http' && $new_snapshot['scheme'] === 'https') {
+            log_monitor_event($pdo, $monitor['id'], $monitor['name'], $monitor['type'], 'scheme_upgraded', 'HTTP -> HTTPS');
+        }
+
+        // DNS ztraceno / obnoveno
+        if ($old_snapshot['dns_ok'] === true && $new_snapshot['dns_ok'] === false) {
+            log_monitor_event($pdo, $monitor['id'], $monitor['name'], $monitor['type'], 'dns_lost', 'DNS přestalo odpovídat');
+        } elseif ($old_snapshot['dns_ok'] === false && $new_snapshot['dns_ok'] === true) {
+            log_monitor_event($pdo, $monitor['id'], $monitor['name'], $monitor['type'], 'dns_recovered', 'DNS opět odpovídá');
+        }
+
+        // Certifikát obnoven (nová platnost do budoucna, pozdější než ta stará)
+        if (!empty($old_snapshot['cert_valid_to']) && !empty($new_snapshot['cert_valid_to'])
+            && $new_snapshot['cert_valid_to'] !== $old_snapshot['cert_valid_to']
+            && strtotime($new_snapshot['cert_valid_to']) > strtotime($old_snapshot['cert_valid_to'])
+        ) {
+            log_monitor_event($pdo, $monitor['id'], $monitor['name'], $monitor['type'], 'cert_renewed', 'TLS certifikát obnoven');
+        }
+    }
+
+    try {
+        $stmt = $pdo->prepare("UPDATE monitors SET config_snapshot = ? WHERE id = ?");
+        $stmt->execute([json_encode($new_snapshot, JSON_UNESCAPED_UNICODE), $monitor['id']]);
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+}
+
+/**
  * Kontrola přes TCP Socket (port check / TCP ping)
  */
 function check_socket($host, $port, $timeout = 5) {
@@ -1433,33 +1504,138 @@ function send_digest_report($pdo, $period = 'weekly') {
     }
 }
 
-function send_digest_report_inner($pdo, $period = 'weekly') {
-    $days = ($period === 'monthly') ? 30 : 7;
-    $period_label = ($period === 'monthly') ? 'Měsíční' : 'Týdenní';
-    $site_title = get_setting('site_title', 'Blood Kings Status');
+/**
+ * ==== Infrastructure Report (weekly/monthly digest) - helper functions ====
+ */
 
-    // Celkový přehled - stejná logika jako výpočet uptime na veřejném dashboardu
+/**
+ * Určí směr trendu mezi aktuální a předchozí hodnotou. Vrací null, pokud
+ * předchozí hodnota není k dispozici (první report, žádný snapshot).
+ */
+function bk_trend_direction($current, $previous, $threshold = 0.01) {
+    if ($previous === null || $current === null) {
+        return null;
+    }
+    $diff = $current - $previous;
+    if (abs($diff) < $threshold) {
+        return 'flat';
+    }
+    return $diff > 0 ? 'up' : 'down';
+}
+
+/**
+ * Latence -> skóre 0-100 pro výpočet Infrastructure Score. 100 do 150 ms,
+ * lineárně klesá na 40 při 1000 ms a výš.
+ */
+function bk_latency_score($avg_latency_ms) {
+    if ($avg_latency_ms === null) {
+        return 100;
+    }
+    if ($avg_latency_ms <= 150) {
+        return 100;
+    }
+    if ($avg_latency_ms >= 1000) {
+        return 40;
+    }
+    return 100 - (($avg_latency_ms - 150) / (1000 - 150)) * 60;
+}
+
+/**
+ * Infrastructure Score (0-100) - vlastní heuristika, ne standardizovaná
+ * metrika. Váhy: dostupnost 55 %, latence 20 %, incidenty 15 %, certifikáty 10 %.
+ * Snadno laditelné, pokud se ukáže, že váhy neodpovídají realitě.
+ */
+function bk_infra_score($availability, $avg_latency_ms, $incident_count, $expiring_certs, $expired_certs) {
+    $availability_component = min(100, $availability) * 0.55;
+    $latency_component = bk_latency_score($avg_latency_ms) * 0.20;
+    $incident_component = max(0, 100 - $incident_count * 5) * 0.15;
+    $cert_component = max(0, 100 - $expiring_certs * 10 - $expired_certs * 30) * 0.10;
+    return (int)round($availability_component + $latency_component + $incident_component + $cert_component);
+}
+
+/**
+ * Sestaví veškerá data pro infrastructure report (weekly/monthly). Čistě
+ * výpočetní funkce bez vedlejších efektů, kromě zápisu trend-snapshotu do
+ * settings na konci (potřebný pro příští report, retence logů to jinak
+ * neumožňuje - viz komentář u digest_snapshot_* níže).
+ */
+function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
+    $days = ($period === 'monthly') ? 30 : 7;
+    $site_title = get_setting('site_title', 'Blood Kings Status');
+    $range_from = date('d.m.Y', strtotime("-$days days"));
+    $range_to = date('d.m.Y');
+
+    // --- Hlavní server / hub lokace (pro vyloučení z regionů, stejná logika jako index.php) ---
+    $hub_location = trim(get_setting('cron_location', ''));
+    if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
+        $hub_location = trim(get_setting('ip_loc_local', ''));
+    }
+
+    // --- Trend snapshot z minulého období ---
+    $snapshot_key = 'digest_snapshot_' . $period;
+    $prev_snapshot = json_decode(get_setting($snapshot_key, ''), true);
+    if (!is_array($prev_snapshot)) {
+        $prev_snapshot = null;
+    }
+
+    // --- Základní KPI ---
     $stmt_overall = $pdo->prepare("
         SELECT
             SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
             SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count,
-            SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count
+            SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
+            COUNT(*) as all_rows,
+            AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
     ");
     $stmt_overall->execute([$days]);
     $overall = $stmt_overall->fetch();
-    $total_checks = (int)($overall['total_count'] ?? 0);
-    $overall_uptime = $total_checks > 0 ? round(($overall['up_count'] / $total_checks) * 100, 2) : 100.00;
+    $total_checks = (int)($overall['all_rows'] ?? 0);
+    $availability = ($overall['total_count'] ?? 0) > 0 ? round(($overall['up_count'] / $overall['total_count']) * 100, 3) : 100.0;
     $incident_count = (int)($overall['down_count'] ?? 0);
+    $avg_latency = $overall['avg_latency'] !== null ? (int)round($overall['avg_latency']) : null;
 
-    $stmt_total_monitors = $pdo->query("SELECT COUNT(*) FROM monitors");
-    $total_monitors = (int)$stmt_total_monitors->fetchColumn();
+    // --- Agenti (jen ty, které se někdy reálně ozvaly - stejná logika jako index.php) ---
+    $offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
+    $agent_count = 0;
+    $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != ''");
+    while ($row = $stmt_agents->fetch()) {
+        $det = json_decode($row['last_details'] ?? '', true);
+        if (($det['agent_last_seen'] ?? 0) > 0) {
+            $agent_count++;
+        }
+    }
 
-    // Nejméně spolehlivé monitory v období (top 5 dle nejnižší dostupnosti).
-    // Řazení podle poměru up_count/total_count se schválně dopočítává v PHP,
-    // ne v ORDER BY - použití SELECT aliasu agregační funkce uvnitř výrazu
-    // v ORDER BY selhává na řadě MySQL/MariaDB verzí s chybou 1247.
+    // --- Regiony (per checked_from, dostupnost + latence za období) ---
+    $stmt_regions = $pdo->prepare("
+        SELECT checked_from,
+               SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+               SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count,
+               AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND checked_from IS NOT NULL
+              AND checked_from != 'Main Server'" . ($hub_location !== '' ? " AND checked_from != ?" : "") . "
+        GROUP BY checked_from
+        ORDER BY checked_from ASC
+    ");
+    $stmt_regions->execute($hub_location !== '' ? [$days, $hub_location] : [$days]);
+    $regions_raw = $stmt_regions->fetchAll();
+    $regions = [];
+    foreach ($regions_raw as $r) {
+        $regions[] = [
+            'name' => $r['checked_from'],
+            'uptime' => $r['total_count'] > 0 ? round(($r['up_count'] / $r['total_count']) * 100, 2) : 100.0,
+            'avg_latency' => $r['avg_latency'] !== null ? (int)round($r['avg_latency']) : null,
+        ];
+    }
+    $region_count = count($regions);
+
+    // --- Infrastructure Score ---
+    // SSL/DNS souhrn se počítá níže, ale skóre potřebuje počty expirujících/expirovaných certifikátů -
+    // proto se SSL data počítají dřív a skóre až po nich (viz níže po sekci SSL).
+
+    // --- Nejlepší / nejhorší monitory ---
     $stmt_worst = $pdo->prepare("
         SELECT m.name, m.type,
                SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -1469,19 +1645,715 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
         JOIN monitors m ON m.id = l.monitor_id
         WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
         GROUP BY l.monitor_id, m.name, m.type
-        HAVING down_count > 0
         ORDER BY down_count DESC
-        LIMIT 20
+        LIMIT 30
     ");
     $stmt_worst->execute([$days]);
-    $worst_monitors = $stmt_worst->fetchAll();
+    $all_monitor_stats = $stmt_worst->fetchAll();
 
+    $worst_monitors = array_values(array_filter($all_monitor_stats, function ($m) {
+        return (int)$m['down_count'] > 0;
+    }));
     usort($worst_monitors, function ($a, $b) {
         $ratio_a = $a['total_count'] > 0 ? $a['up_count'] / $a['total_count'] : 1;
         $ratio_b = $b['total_count'] > 0 ? $b['up_count'] / $b['total_count'] : 1;
         return $ratio_a <=> $ratio_b;
     });
     $worst_monitors = array_slice($worst_monitors, 0, 5);
+
+    $best_monitors = array_values(array_filter($all_monitor_stats, function ($m) {
+        return (int)$m['down_count'] === 0 && (int)$m['total_count'] > 0;
+    }));
+    usort($best_monitors, function ($a, $b) {
+        return $b['total_count'] <=> $a['total_count'];
+    });
+    $best_monitors = array_slice($best_monitors, 0, 4);
+
+    // --- Agent Health (poslední vps_metrics řádek za monitor v okně) ---
+    $stmt_agent_health = $pdo->prepare("
+        SELECT vm.cpu_usage, vm.ram_usage, vm.hdd_usage, m.name, m.cpu_threshold, m.ram_threshold, m.hdd_threshold
+        FROM vps_metrics vm
+        INNER JOIN (
+            SELECT monitor_id, MAX(checked_at) as max_at
+            FROM vps_metrics
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+            GROUP BY monitor_id
+        ) latest ON latest.monitor_id = vm.monitor_id AND latest.max_at = vm.checked_at
+        JOIN monitors m ON m.id = vm.monitor_id
+    ");
+    $stmt_agent_health->execute([$days]);
+    $agent_health = $stmt_agent_health->fetchAll();
+
+    // --- SSL souhrn (poslední check_stages za 'web' monitor v okně) ---
+    $stmt_ssl = $pdo->prepare("
+        SELECT l.check_stages, m.name
+        FROM monitor_logs l
+        INNER JOIN (
+            SELECT monitor_id, MAX(checked_at) as max_at
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND check_stages IS NOT NULL
+            GROUP BY monitor_id
+        ) latest ON latest.monitor_id = l.monitor_id AND latest.max_at = l.checked_at
+        JOIN monitors m ON m.id = l.monitor_id
+        WHERE m.type = 'web'
+    ");
+    $stmt_ssl->execute([$days]);
+    $ssl_rows = $stmt_ssl->fetchAll();
+
+    $certs_expiring = 0;
+    $certs_expired = 0;
+    $expiring_list = [];
+    $dns_failures = 0;
+    $dns_slow = 0;
+    foreach ($ssl_rows as $row) {
+        $stages = json_decode($row['check_stages'] ?? '', true);
+        if (!is_array($stages)) continue;
+
+        if (isset($stages['dns']['ok']) && $stages['dns']['ok'] === false) {
+            $dns_failures++;
+        }
+        if (isset($stages['dns']['time_ms']) && $stages['dns']['time_ms'] > 200) {
+            $dns_slow++;
+        }
+
+        $days_remaining = $stages['tls']['cert']['days_remaining'] ?? null;
+        if ($days_remaining === null) continue;
+        if ($days_remaining <= 0) {
+            $certs_expired++;
+            $expiring_list[] = ['name' => $row['name'], 'days_remaining' => $days_remaining];
+        } elseif ($days_remaining < 30) {
+            $certs_expiring++;
+            $expiring_list[] = ['name' => $row['name'], 'days_remaining' => $days_remaining];
+        }
+    }
+    usort($expiring_list, function ($a, $b) { return $a['days_remaining'] <=> $b['days_remaining']; });
+
+    // --- Config change eventy tohoto období (renewed počítáme z eventů, ne z aktuálního stavu) ---
+    $stmt_events_summary = $pdo->prepare("
+        SELECT event_type, COUNT(*) as cnt
+        FROM monitor_events
+        WHERE occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        GROUP BY event_type
+    ");
+    $stmt_events_summary->execute([$days]);
+    $event_counts = [];
+    foreach ($stmt_events_summary->fetchAll() as $row) {
+        $event_counts[$row['event_type']] = (int)$row['cnt'];
+    }
+
+    $stmt_events_recent = $pdo->prepare("
+        SELECT monitor_name, monitor_type, event_type, description, occurred_at
+        FROM monitor_events
+        WHERE occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        ORDER BY occurred_at DESC
+        LIMIT 25
+    ");
+    $stmt_events_recent->execute([$days]);
+    $recent_events = $stmt_events_recent->fetchAll();
+
+    $new_servers = [];
+    $removed_servers = [];
+    $config_change_examples = [];
+    foreach ($recent_events as $ev) {
+        if ($ev['event_type'] === 'monitor_added') {
+            $new_servers[] = $ev['monitor_name'];
+        } elseif ($ev['event_type'] === 'monitor_removed') {
+            $removed_servers[] = $ev['monitor_name'];
+        } elseif (in_array($ev['event_type'], ['scheme_upgraded', 'dns_lost', 'dns_recovered', 'cert_renewed', 'agent_connected', 'agent_disconnected'], true)) {
+            $config_change_examples[] = $ev['monitor_name'] . ': ' . $ev['description'];
+        }
+    }
+    $certs_renewed = $event_counts['cert_renewed'] ?? 0;
+
+    // --- Infrastructure Score (po SSL datech, viz výše) ---
+    $score = bk_infra_score($availability, $avg_latency, $incident_count, $certs_expiring, $certs_expired);
+
+    // --- Trendy vs. minulé období ---
+    $trend_availability = bk_trend_direction($availability, $prev_snapshot['availability'] ?? null);
+    $trend_latency = bk_trend_direction($avg_latency, $prev_snapshot['avg_latency'] ?? null);
+    $trend_score = bk_trend_direction($score, $prev_snapshot['score'] ?? null, 1);
+    $avg_cpu = null;
+    $avg_ram = null;
+    if (!empty($agent_health)) {
+        $avg_cpu = round(array_sum(array_column($agent_health, 'cpu_usage')) / count($agent_health), 1);
+        $avg_ram = round(array_sum(array_column($agent_health, 'ram_usage')) / count($agent_health), 1);
+    }
+    $trend_cpu = bk_trend_direction($avg_cpu, $prev_snapshot['avg_cpu'] ?? null, 1);
+    $trend_ram = bk_trend_direction($avg_ram, $prev_snapshot['avg_ram'] ?? null, 1);
+    $dns_health = $total_checks > 0 && count($ssl_rows) > 0 ? round((1 - $dns_failures / count($ssl_rows)) * 100, 1) : 100.0;
+    $trend_dns = bk_trend_direction($dns_health, $prev_snapshot['dns_health'] ?? null, 0.5);
+
+    // --- Biggest changes (latence podle regionu vs. uložený snapshot) ---
+    $biggest_changes = [];
+    $prev_regions = $prev_snapshot['regions'] ?? [];
+    foreach ($regions as $r) {
+        if ($r['avg_latency'] === null || !isset($prev_regions[$r['name']]) || $prev_regions[$r['name']] <= 0) continue;
+        $pct_change = round((($r['avg_latency'] - $prev_regions[$r['name']]) / $prev_regions[$r['name']]) * 100);
+        if (abs($pct_change) < 5) continue; // ignorovat šum pod 5 %
+        $biggest_changes[] = [
+            'label' => ($pct_change < 0 ? 'Latency improved' : 'Latency increased'),
+            'detail' => $r['name'],
+            'delta_text' => ($pct_change > 0 ? '+' : '') . $pct_change . '%',
+            'is_good' => $pct_change < 0,
+        ];
+    }
+    usort($biggest_changes, function ($a, $b) {
+        return abs((int)$b['delta_text']) <=> abs((int)$a['delta_text']);
+    });
+    $biggest_changes = array_slice($biggest_changes, 0, 3);
+
+    // --- Performance (nejlepší/nejhorší region podle latence) ---
+    $perf_best = null;
+    $perf_worst = null;
+    foreach ($regions as $r) {
+        if ($r['avg_latency'] === null) continue;
+        if ($perf_best === null || $r['avg_latency'] < $perf_best['avg_latency']) $perf_best = $r;
+        if ($perf_worst === null || $r['avg_latency'] > $perf_worst['avg_latency']) $perf_worst = $r;
+    }
+
+    // --- Biggest incident (aproximace: souvislé úseky 'down' řádků, mezera > 15 min = nový incident) ---
+    $stmt_down = $pdo->prepare("
+        SELECT l.monitor_id, m.name, l.checked_at, l.checked_from, l.error_message, m.status as current_status
+        FROM monitor_logs l
+        JOIN monitors m ON m.id = l.monitor_id
+        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND l.status = 'down'
+        ORDER BY l.monitor_id ASC, l.checked_at ASC
+        LIMIT 2000
+    ");
+    $stmt_down->execute([$days]);
+    $down_rows = $stmt_down->fetchAll();
+
+    $streaks = [];
+    $cur = null;
+    foreach ($down_rows as $row) {
+        $ts = strtotime($row['checked_at']);
+        if ($cur === null || $cur['monitor_id'] !== $row['monitor_id'] || ($ts - $cur['last_ts']) > 900) {
+            if ($cur !== null) $streaks[] = $cur;
+            $cur = [
+                'monitor_id' => $row['monitor_id'], 'name' => $row['name'],
+                'first_ts' => $ts, 'last_ts' => $ts,
+                'checked_from' => $row['checked_from'], 'error_message' => $row['error_message'],
+                'current_status' => $row['current_status'],
+            ];
+        } else {
+            $cur['last_ts'] = $ts;
+        }
+    }
+    if ($cur !== null) $streaks[] = $cur;
+
+    $biggest_incident = null;
+    foreach ($streaks as $s) {
+        $dur = max(60, $s['last_ts'] - $s['first_ts']); // min. 60s, jde jen o aproximaci
+        if ($biggest_incident === null || $dur > $biggest_incident['duration_sec']) {
+            $biggest_incident = [
+                'monitor' => $s['name'],
+                'location' => $s['checked_from'] ?: 'Main Server',
+                'reason' => $s['error_message'] ?: 'Nespecifikovaná chyba spojení',
+                'duration_sec' => $dur,
+                'resolved' => $s['current_status'] !== 'down',
+                'date' => date('d.m.Y', $s['first_ts']),
+            ];
+        }
+    }
+
+    // --- Doporučení (znovupoužita i jako počet "warnings") ---
+    $recommendations = [];
+    foreach ($expiring_list as $c) {
+        if ($c['days_remaining'] <= 0) {
+            $recommendations[] = "Certifikát pro {$c['name']} vypršel.";
+        } else {
+            $recommendations[] = "Certifikát pro {$c['name']} vyprší za {$c['days_remaining']} dní.";
+        }
+    }
+    foreach ($agent_health as $ah) {
+        if ($ah['cpu_usage'] >= $ah['cpu_threshold']) $recommendations[] = "Vytížení CPU na {$ah['name']} přesahuje {$ah['cpu_threshold']}%.";
+        if ($ah['ram_usage'] >= $ah['ram_threshold']) $recommendations[] = "Vytížení RAM na {$ah['name']} přesahuje {$ah['ram_threshold']}%.";
+        if ($ah['hdd_usage'] >= $ah['hdd_threshold']) $recommendations[] = "Zaplnění disku na {$ah['name']} přesahuje {$ah['hdd_threshold']}%.";
+    }
+    if ($dns_failures > 0) {
+        $recommendations[] = "DNS selhává u {$dns_failures} monitorovaných domén.";
+    }
+    // Monitory bez IPv6 (aktuální last_details, jen 'web' typ)
+    $stmt_ipv6 = $pdo->query("SELECT name, last_details FROM monitors WHERE type = 'web'");
+    foreach ($stmt_ipv6->fetchAll() as $m) {
+        $ld = json_decode($m['last_details'] ?? '', true);
+        if (is_array($ld) && ($ld['has_ipv4'] ?? false) && empty($ld['has_ipv6'])) {
+            $recommendations[] = "IPv6 není dostupné na {$m['name']}.";
+        }
+    }
+    if ($perf_worst !== null && $perf_worst['avg_latency'] !== null && $perf_worst['avg_latency'] > 200) {
+        $recommendations[] = "Vysoká latence z lokace {$perf_worst['name']} ({$perf_worst['avg_latency']} ms).";
+    }
+    $warning_count = count($recommendations);
+
+    // --- Executive Summary (pravidly generované věty, ne AI) ---
+    $executive_summary = [];
+    if ($score >= 95) {
+        $executive_summary[] = '🟢 Infrastruktura je zdravá.';
+    } elseif ($score >= 80) {
+        $executive_summary[] = '🟡 Infrastruktura je většinou zdravá, je tu pár otevřených bodů.';
+    } else {
+        $executive_summary[] = '🔴 Infrastruktura potřebuje pozornost.';
+    }
+    $executive_summary[] = "Dostupnost za období: " . number_format($availability, 3, ',', ' ') . " %.";
+    if ($trend_latency === 'down') {
+        $executive_summary[] = 'Průměrná latence se zlepšila.';
+    } elseif ($trend_latency === 'up') {
+        $executive_summary[] = 'Průměrná latence se zhoršila.';
+    }
+    if ($incident_count === 0) {
+        $executive_summary[] = 'Žádné výpadky v tomto období.';
+    } elseif ($biggest_incident !== null) {
+        $executive_summary[] = 'Zaznamenán ' . ($incident_count > 1 ? "{$incident_count} incidentů" : '1 incident') . ", nejvýznamnější: {$biggest_incident['monitor']} ({$biggest_incident['location']}).";
+    }
+    if (!empty($recommendations)) {
+        $executive_summary[] = 'Doporučená akce: ' . $recommendations[0];
+    } else {
+        $executive_summary[] = 'Žádná kritická akce není potřeba.';
+    }
+
+    $data = [
+        'period' => $period,
+        'days' => $days,
+        'site_title' => $site_title,
+        'range_from' => $range_from,
+        'range_to' => $range_to,
+        'score' => $score,
+        'trend_score' => $trend_score,
+        'score_prev' => $prev_snapshot['score'] ?? null,
+        'availability' => $availability,
+        'trend_availability' => $trend_availability,
+        'avg_latency' => $avg_latency,
+        'trend_latency' => $trend_latency,
+        'incident_count' => $incident_count,
+        'warning_count' => $warning_count,
+        'total_checks' => $total_checks,
+        'agent_count' => $agent_count,
+        'region_count' => $region_count,
+        'avg_cpu' => $avg_cpu, 'trend_cpu' => $trend_cpu,
+        'avg_ram' => $avg_ram, 'trend_ram' => $trend_ram,
+        'dns_health' => $dns_health, 'trend_dns' => $trend_dns,
+        'best_monitors' => $best_monitors,
+        'worst_monitors' => $worst_monitors,
+        'biggest_changes' => $biggest_changes,
+        'regions' => $regions,
+        'agent_health' => $agent_health,
+        'ssl' => ['expiring' => $certs_expiring, 'renewed' => $certs_renewed, 'expired' => $certs_expired, 'list' => array_slice($expiring_list, 0, 6)],
+        'dns' => ['failures' => $dns_failures, 'slow' => $dns_slow],
+        'biggest_incident' => $biggest_incident,
+        'performance' => ['avg' => $avg_latency, 'trend' => $trend_latency, 'best' => $perf_best, 'worst' => $perf_worst],
+        'new_servers' => $new_servers,
+        'removed_servers' => $removed_servers,
+        'config_change_examples' => array_slice($config_change_examples, 0, 6),
+        'recommendations' => array_slice($recommendations, 0, 8),
+        'executive_summary' => $executive_summary,
+    ];
+
+    if ($period === 'monthly') {
+        $data['monthly'] = build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts);
+    }
+
+    // --- Uložit snapshot pro příští období (dostupnost, latence, skóre, regiony atd.) ---
+    // Přeskočeno u náhledu (preview) - opakované prohlížení by jinak přepisovalo
+    // srovnávací základ dřív, než reálně proběhne odpovídající období.
+    if ($save_snapshot) {
+        $region_latency_map = [];
+        foreach ($regions as $r) {
+            if ($r['avg_latency'] !== null) $region_latency_map[$r['name']] = $r['avg_latency'];
+        }
+        $new_snapshot = [
+            'score' => $score, 'availability' => $availability, 'avg_latency' => $avg_latency,
+            'avg_cpu' => $avg_cpu, 'avg_ram' => $avg_ram, 'dns_health' => $dns_health,
+            'regions' => $region_latency_map, 'saved_at' => date('c'),
+        ];
+        try {
+            $stmt_snap = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+            $stmt_snap->execute([$snapshot_key, json_encode($new_snapshot, JSON_UNESCAPED_UNICODE)]);
+        } catch (PDOException $e) {
+            // Ignorujeme - report se i tak odešle, jen příští trend nebude mít srovnání
+        }
+    }
+
+    return $data;
+}
+
+/**
+ * Doplňkové sekce jen pro měsíční report (SLA, nejlepší/nejhorší den, heatmapy, růst).
+ */
+function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts) {
+    $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
+
+    // Nejlepší/nejhorší den (poměr se dopočítává v PHP, ne v ORDER BY - stejný důvod jako u worst monitors výše)
+    $stmt_days = $pdo->prepare("
+        SELECT DATE(checked_at) as d,
+               SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+               SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        GROUP BY DATE(checked_at)
+    ");
+    $stmt_days->execute([$days]);
+    $day_rows = $stmt_days->fetchAll();
+    $best_day = null;
+    $worst_day = null;
+    foreach ($day_rows as $d) {
+        if ($d['total_count'] <= 0) continue;
+        $uptime = round(($d['up_count'] / $d['total_count']) * 100, 2);
+        $entry = ['date' => date('d.m.', strtotime($d['d'])), 'uptime' => $uptime];
+        if ($best_day === null || $uptime > $best_day['uptime']) $best_day = $entry;
+        if ($worst_day === null || $uptime < $worst_day['uptime']) $worst_day = $entry;
+    }
+
+    // Nejlepší/nejhorší region (z už spočtených dat)
+    $best_region = null;
+    $worst_region = null;
+    foreach ($regions as $r) {
+        if ($best_region === null || $r['uptime'] > $best_region['uptime']) $best_region = $r;
+        if ($worst_region === null || $r['uptime'] < $worst_region['uptime']) $worst_region = $r;
+    }
+
+    // Incident heatmap podle dne v týdnu (agregováno přes celý měsíc)
+    $stmt_dow = $pdo->prepare("
+        SELECT DAYOFWEEK(checked_at) as dow, COUNT(*) as cnt
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
+        GROUP BY DAYOFWEEK(checked_at)
+    ");
+    $stmt_dow->execute([$days]);
+    // MySQL DAYOFWEEK: 1=neděle..7=sobota -> mapujeme na Po-Ne pro zobrazení
+    $dow_map = [2 => 'Po', 3 => 'Út', 4 => 'St', 5 => 'Čt', 6 => 'Pá', 7 => 'So', 1 => 'Ne'];
+    $incident_heatmap = ['Po' => 0, 'Út' => 0, 'St' => 0, 'Čt' => 0, 'Pá' => 0, 'So' => 0, 'Ne' => 0];
+    foreach ($stmt_dow->fetchAll() as $row) {
+        $label = $dow_map[(int)$row['dow']] ?? null;
+        if ($label !== null) $incident_heatmap[$label] = (int)$row['cnt'];
+    }
+
+    // Latency heatmap - z regionů, obarveno podle pásma
+    $latency_heatmap = [];
+    foreach ($regions as $r) {
+        if ($r['avg_latency'] === null) continue;
+        $band = $r['avg_latency'] < 50 ? 'green' : ($r['avg_latency'] < 150 ? 'yellow' : 'red');
+        $latency_heatmap[] = ['region' => $r['name'], 'ms' => $r['avg_latency'], 'band' => $band];
+    }
+
+    // Růst
+    $new_monitors_count = $event_counts['monitor_added'] ?? 0;
+    $stmt_new_users = $pdo->prepare("SELECT COUNT(*) FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)");
+    $stmt_new_users->execute([$days]);
+    $new_users_count = (int)$stmt_new_users->fetchColumn();
+
+    return [
+        'sla_goal' => $sla_goal,
+        'best_day' => $best_day, 'worst_day' => $worst_day,
+        'best_region' => $best_region, 'worst_region' => $worst_region,
+        'incident_heatmap' => $incident_heatmap,
+        'latency_heatmap' => $latency_heatmap,
+        'growth' => ['new_monitors' => $new_monitors_count, 'new_users' => $new_users_count],
+        'score_last_month' => $prev_snapshot['score'] ?? null,
+    ];
+}
+
+/**
+ * Sdílený obal (header/footer/základní styly) pro e-maily infrastructure reportu.
+ * Odděleno od šablony upozornění v trigger_notifications() - ta zůstává beze změny.
+ */
+function render_email_wrapper($title, $subtitle, $accent_color, $body_html) {
+    return '
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { font-family: Arial, sans-serif; background-color: #0f0f13; color: #e1e1e6; margin: 0; padding: 20px; }
+            .container { max-width: 640px; margin: 0 auto; background-color: #1a1a24; border-radius: 8px; border-top: 5px solid ' . $accent_color . '; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+            .header { padding: 25px; text-align: center; background-color: #12121a; }
+            .header h1 { margin: 0; font-size: 21px; color: #ffffff; }
+            .header p { margin: 6px 0 0 0; color: #888896; font-size: 13px; }
+            .content { padding: 28px; line-height: 1.55; }
+            .section { margin-bottom: 26px; }
+            .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888896; margin-bottom: 10px; font-weight: bold; }
+            .stat-grid { display: table; width: 100%; margin-bottom: 8px; }
+            .stat-box { display: table-cell; text-align: center; padding: 10px 4px; background-color: #12121a; }
+            .stat-box .value { font-size: 19px; font-weight: bold; color: #ffffff; }
+            .stat-box .label { font-size: 10px; color: #888896; text-transform: uppercase; margin-top: 4px; }
+            table.report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+            table.report-table th { text-align: left; padding: 7px 10px; color: #888896; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #22222f; }
+            table.report-table td { padding: 7px 10px; border-top: 1px solid #22222f; }
+            .kv-row { display: table; width: 100%; padding: 6px 0; border-top: 1px solid #22222f; }
+            .kv-label { display: table-cell; color: #888896; font-size: 13px; }
+            .kv-value { display: table-cell; text-align: right; font-weight: bold; font-size: 13px; color: #ffffff; }
+            .exec-summary { background-color: #12121a; border-radius: 6px; padding: 16px 18px; margin-bottom: 26px; }
+            .exec-summary p { margin: 5px 0; font-size: 14px; }
+            .heatmap-cell { text-align: center; font-size: 11px; color: #0f0f13; font-weight: bold; padding: 8px 0; }
+            .footer { padding: 15px 30px; text-align: center; font-size: 12px; color: #888896; border-top: 1px solid #22222f; background-color: #12121a; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>' . htmlspecialchars($title) . '</h1>
+                <p>' . $subtitle . '</p>
+            </div>
+            <div class="content">' . $body_html . '</div>
+            <div class="footer">' . htmlspecialchars(get_setting('site_title', 'Blood Kings Status')) . ' &mdash; ' . date('d.m.Y H:i') . '</div>
+        </div>
+    </body>
+    </html>';
+}
+
+function bk_trend_glyph($direction, $good_when_up = true) {
+    if ($direction === null || $direction === 'flat') {
+        return '<span style="color:#888896;">=</span>';
+    }
+    $is_good = ($direction === 'up' && $good_when_up) || ($direction === 'down' && !$good_when_up);
+    $color = $is_good ? '#1ec773' : '#ef233c';
+    $arrow = $direction === 'up' ? '&uarr;' : '&darr;';
+    return '<span style="color:' . $color . ';">' . $arrow . '</span>';
+}
+
+function bk_email_stat_box($value, $label) {
+    return '<div class="stat-box"><div class="value">' . $value . '</div><div class="label">' . htmlspecialchars($label) . '</div></div>';
+}
+
+function bk_email_section($title, $inner_html) {
+    return '<div class="section"><div class="section-title">' . htmlspecialchars($title) . '</div>' . $inner_html . '</div>';
+}
+
+function bk_email_kv($label, $value_html) {
+    return '<div class="kv-row"><span class="kv-label">' . htmlspecialchars($label) . '</span><span class="kv-value">' . $value_html . '</span></div>';
+}
+
+/**
+ * Vykreslí kompletní infrastructure report (weekly i monthly) do HTML e-mailu.
+ * Struktura odpovídá 4 blokům: Executive Summary / Operational Overview /
+ * Technical Insights / Recommendations.
+ */
+function render_digest_html($data) {
+    $is_monthly = $data['period'] === 'monthly';
+    $period_label = $is_monthly ? 'Monthly Infrastructure Report' : 'Weekly Infrastructure Report';
+    $score_color = $data['score'] >= 90 ? '#1ec773' : ($data['score'] >= 70 ? '#f39c12' : '#ef233c');
+    $accent_color = $data['score'] >= 70 ? '#1ec773' : '#c1121f';
+
+    $body = '';
+
+    // --- Hero: Infrastructure Score ---
+    $score_delta_html = '';
+    if ($data['score_prev'] !== null) {
+        $delta = $data['score'] - $data['score_prev'];
+        $delta_color = $delta > 0 ? '#1ec773' : ($delta < 0 ? '#ef233c' : '#888896');
+        $delta_sign = $delta > 0 ? '+' : '';
+        $score_delta_html = '<div style="margin-top:6px; font-size:13px; color:' . $delta_color . ';">' . bk_trend_glyph($data['trend_score']) . ' ' . $delta_sign . $delta . ' oproti minulému období</div>';
+    }
+    $body .= '<div style="text-align:center; margin-bottom:28px;">
+        <div style="font-size:11px; color:#888896; text-transform:uppercase; letter-spacing:0.05em;">Infrastructure Score</div>
+        <div style="font-size:48px; font-weight:bold; color:' . $score_color . '; line-height:1.3;">' . $data['score'] . '<span style="font-size:20px; color:#888896;">/100</span></div>'
+        . $score_delta_html .
+    '</div>';
+
+    // --- Executive Summary ---
+    $exec_html = '';
+    foreach ($data['executive_summary'] as $line) {
+        $exec_html .= '<p>' . htmlspecialchars($line) . '</p>';
+    }
+    $body .= '<div class="exec-summary">' . $exec_html . '</div>';
+
+    // --- Operational Overview: KPI mřížka ---
+    $stat_html = bk_email_stat_box(number_format($data['availability'], 3, ',', ' ') . '%', 'Availability')
+        . bk_email_stat_box(($data['avg_latency'] !== null ? $data['avg_latency'] . ' ms' : 'N/A'), 'Latency')
+        . bk_email_stat_box($data['incident_count'], 'Incidents')
+        . bk_email_stat_box($data['warning_count'], 'Warnings');
+    $stat_html2 = bk_email_stat_box(number_format($data['total_checks'], 0, ',', ' '), 'Checks')
+        . bk_email_stat_box($data['agent_count'], 'Agents')
+        . bk_email_stat_box($data['region_count'], 'Regions')
+        . bk_email_stat_box($is_monthly ? ($data['monthly']['sla_goal'] . '%') : '&mdash;', $is_monthly ? 'SLA Goal' : '');
+    $body .= bk_email_section('Operational Overview', '<div class="stat-grid">' . $stat_html . '</div><div class="stat-grid">' . $stat_html2 . '</div>');
+
+    // --- Trend ---
+    $trend_html = bk_email_kv('Availability', bk_trend_glyph($data['trend_availability']))
+        . bk_email_kv('Latency', bk_trend_glyph($data['trend_latency'], false))
+        . bk_email_kv('DNS', bk_trend_glyph($data['trend_dns']));
+    if ($data['avg_cpu'] !== null) {
+        $trend_html .= bk_email_kv('CPU', bk_trend_glyph($data['trend_cpu'], false)) . bk_email_kv('RAM', bk_trend_glyph($data['trend_ram'], false));
+    }
+    $body .= bk_email_section('Trend', $trend_html);
+
+    // --- Nejlepší / nejhorší monitory ---
+    if (!empty($data['best_monitors']) || !empty($data['worst_monitors'])) {
+        $bw_html = '<table class="report-table"><thead><tr><th>Monitor</th><th style="text-align:right;">Dostupnost</th></tr></thead><tbody>';
+        foreach ($data['best_monitors'] as $m) {
+            $bw_html .= '<tr><td>' . htmlspecialchars($m['name']) . '</td><td style="text-align:right; color:#1ec773;">100%</td></tr>';
+        }
+        foreach ($data['worst_monitors'] as $m) {
+            $u = $m['total_count'] > 0 ? round(($m['up_count'] / $m['total_count']) * 100, 2) : 100.0;
+            $bw_html .= '<tr><td>' . htmlspecialchars($m['name']) . '</td><td style="text-align:right; color:#ef233c;">' . $u . '%</td></tr>';
+        }
+        if (empty($data['worst_monitors'])) {
+            $bw_html .= '<tr><td colspan="2" style="color:#888896;">Žádné výpadky v tomto období.</td></tr>';
+        }
+        $bw_html .= '</tbody></table>';
+        $body .= bk_email_section('Nejlepší / nejhorší monitory', $bw_html);
+    }
+
+    // --- Největší změny ---
+    if (!empty($data['biggest_changes'])) {
+        $chg_html = '';
+        foreach ($data['biggest_changes'] as $c) {
+            $color = $c['is_good'] ? '#1ec773' : '#ef233c';
+            $chg_html .= bk_email_kv($c['label'] . ' — ' . $c['detail'], '<span style="color:' . $color . ';">' . $c['delta_text'] . '</span>');
+        }
+        $body .= bk_email_section('Největší změny', $chg_html);
+    }
+
+    // --- Region overview ---
+    if (!empty($data['regions'])) {
+        $reg_html = '<table class="report-table"><thead><tr><th>Region</th><th style="text-align:right;">Dostupnost</th><th style="text-align:right;">Latence</th></tr></thead><tbody>';
+        foreach ($data['regions'] as $r) {
+            $reg_html .= '<tr><td>' . htmlspecialchars($r['name']) . '</td><td style="text-align:right;">' . $r['uptime'] . '%</td><td style="text-align:right;">' . ($r['avg_latency'] !== null ? $r['avg_latency'] . ' ms' : 'N/A') . '</td></tr>';
+        }
+        $reg_html .= '</tbody></table>';
+        $body .= bk_email_section('Region Overview', $reg_html);
+    }
+
+    // --- Agent Health ---
+    if (!empty($data['agent_health'])) {
+        $ah_html = '<table class="report-table"><thead><tr><th>Agent</th><th style="text-align:right;">CPU</th><th style="text-align:right;">RAM</th><th style="text-align:right;">Disk</th></tr></thead><tbody>';
+        foreach ($data['agent_health'] as $ah) {
+            $ah_html .= '<tr><td>' . htmlspecialchars($ah['name']) . '</td><td style="text-align:right;">' . $ah['cpu_usage'] . '%</td><td style="text-align:right;">' . $ah['ram_usage'] . '%</td><td style="text-align:right;">' . $ah['hdd_usage'] . '%</td></tr>';
+        }
+        $ah_html .= '</tbody></table>';
+        $body .= bk_email_section('Agent Health', $ah_html);
+    }
+
+    // --- SSL ---
+    $ssl_html = bk_email_kv('Expiring', $data['ssl']['expiring']) . bk_email_kv('Renewed', $data['ssl']['renewed']) . bk_email_kv('Expired', $data['ssl']['expired']);
+    $body .= bk_email_section('SSL Certificates', $ssl_html);
+
+    // --- DNS ---
+    $dns_html = bk_email_kv('DNS Failures', $data['dns']['failures']) . bk_email_kv('Slow Responses (>200ms)', $data['dns']['slow']);
+    $body .= bk_email_section('DNS', $dns_html);
+
+    // --- Biggest incident ---
+    if ($data['biggest_incident'] !== null) {
+        $bi = $data['biggest_incident'];
+        $dur_min = round($bi['duration_sec'] / 60);
+        $status_color = $bi['resolved'] ? '#1ec773' : '#ef233c';
+        $status_text = $bi['resolved'] ? 'Resolved' : 'Ongoing';
+        $bi_html = '<div style="background-color:#12121a; border-radius:6px; padding:16px;">'
+            . '<div style="font-size:15px; font-weight:bold; color:#ffffff;">' . htmlspecialchars($bi['monitor']) . '</div>'
+            . '<div style="font-size:13px; color:#888896; margin-top:2px;">' . htmlspecialchars($bi['location']) . ' &middot; ' . htmlspecialchars($bi['date']) . '</div>'
+            . '<div style="font-size:13px; color:#e1e1e6; margin-top:8px;">' . htmlspecialchars($bi['reason']) . '</div>'
+            . '<div style="margin-top:10px; font-size:13px;"><span style="color:#888896;">Doba trvání (odhad):</span> <strong style="color:#ffffff;">' . $dur_min . ' min</strong> &middot; <span style="color:' . $status_color . '; font-weight:bold;">' . $status_text . '</span></div>'
+            . '</div>';
+        $body .= bk_email_section('Největší incident', $bi_html);
+    }
+
+    // --- Performance ---
+    $perf_html = bk_email_kv('Average latency', ($data['performance']['avg'] !== null ? $data['performance']['avg'] . ' ms' : 'N/A') . ' ' . bk_trend_glyph($data['performance']['trend'], false));
+    if ($data['performance']['best'] !== null) {
+        $perf_html .= bk_email_kv('Best', htmlspecialchars($data['performance']['best']['name']) . ' &middot; ' . $data['performance']['best']['avg_latency'] . ' ms');
+    }
+    if ($data['performance']['worst'] !== null) {
+        $perf_html .= bk_email_kv('Worst', htmlspecialchars($data['performance']['worst']['name']) . ' &middot; ' . $data['performance']['worst']['avg_latency'] . ' ms');
+    }
+    $body .= bk_email_section('Performance', $perf_html);
+
+    // --- Nové / odstraněné servery ---
+    if (!empty($data['new_servers']) || !empty($data['removed_servers'])) {
+        $ns_html = '';
+        foreach ($data['new_servers'] as $s) {
+            $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . htmlspecialchars($s) . '</div>';
+        }
+        foreach ($data['removed_servers'] as $s) {
+            $ns_html .= '<div style="color:#ef233c; font-size:13px; padding:3px 0;">- ' . htmlspecialchars($s) . '</div>';
+        }
+        $body .= bk_email_section('Nové / odstraněné servery', $ns_html);
+    }
+
+    // --- Změny konfigurace ---
+    if (!empty($data['config_change_examples'])) {
+        $cc_html = '';
+        foreach ($data['config_change_examples'] as $c) {
+            $cc_html .= '<div style="font-size:13px; padding:3px 0; color:#e1e1e6;">&middot; ' . htmlspecialchars($c) . '</div>';
+        }
+        $body .= bk_email_section('Změny konfigurace', $cc_html);
+    }
+
+    // --- Monthly-only sekce ---
+    if ($is_monthly && isset($data['monthly'])) {
+        $mo = $data['monthly'];
+
+        $sla_reached = $data['availability'] >= $mo['sla_goal'];
+        $sla_html = bk_email_kv('SLA', number_format($data['availability'], 3, ',', ' ') . '%')
+            . bk_email_kv('Goal', $mo['sla_goal'] . '%')
+            . bk_email_kv('Stav', '<span style="color:' . ($sla_reached ? '#1ec773' : '#ef233c') . ';">' . ($sla_reached ? 'Splněno' : 'Nesplněno') . '</span>');
+        $body .= bk_email_section('SLA', $sla_html);
+
+        if ($mo['best_day'] !== null || $mo['worst_day'] !== null) {
+            $day_html = '';
+            if ($mo['best_day'] !== null) $day_html .= bk_email_kv('Nejlepší den', $mo['best_day']['date'] . ' &middot; ' . $mo['best_day']['uptime'] . '%');
+            if ($mo['worst_day'] !== null) $day_html .= bk_email_kv('Nejhorší den', $mo['worst_day']['date'] . ' &middot; ' . $mo['worst_day']['uptime'] . '%');
+            $body .= bk_email_section('Nejlepší / nejhorší den', $day_html);
+        }
+
+        if ($mo['best_region'] !== null || $mo['worst_region'] !== null) {
+            $reg2_html = '';
+            if ($mo['best_region'] !== null) $reg2_html .= bk_email_kv('Nejlepší region', htmlspecialchars($mo['best_region']['name']) . ' &middot; ' . $mo['best_region']['uptime'] . '%');
+            if ($mo['worst_region'] !== null) $reg2_html .= bk_email_kv('Nejhorší region', htmlspecialchars($mo['worst_region']['name']) . ' &middot; ' . $mo['worst_region']['uptime'] . '%');
+            $body .= bk_email_section('Nejlepší / nejhorší region', $reg2_html);
+        }
+
+        // Incident heatmap - barevné buňky tabulky (email klienti neumí CSS grid)
+        $hm_html = '<table style="width:100%; border-collapse:collapse;"><tr>';
+        foreach ($mo['incident_heatmap'] as $day => $cnt) {
+            $bgcolor = $cnt === 0 ? '#1ec773' : ($cnt <= 2 ? '#f39c12' : '#ef233c');
+            $hm_html .= '<td bgcolor="' . $bgcolor . '" class="heatmap-cell" style="background-color:' . $bgcolor . ';">' . htmlspecialchars($day) . '<br>' . $cnt . '</td>';
+        }
+        $hm_html .= '</tr></table>';
+        $body .= bk_email_section('Incident Heatmap (dle dne v týdnu)', $hm_html);
+
+        // Latency heatmap - jeden řádek na region
+        if (!empty($mo['latency_heatmap'])) {
+            $lhm_html = '<table style="width:100%; border-collapse:collapse;">';
+            foreach ($mo['latency_heatmap'] as $lh) {
+                $bgcolor = $lh['band'] === 'green' ? '#1ec773' : ($lh['band'] === 'yellow' ? '#f39c12' : '#ef233c');
+                $lhm_html .= '<tr><td style="padding:4px 8px; font-size:12px; color:#e1e1e6;">' . htmlspecialchars($lh['region']) . '</td>'
+                    . '<td bgcolor="' . $bgcolor . '" style="background-color:' . $bgcolor . '; width:60%;">&nbsp;</td>'
+                    . '<td style="padding:4px 8px; font-size:12px; text-align:right; color:#ffffff;">' . $lh['ms'] . ' ms</td></tr>';
+            }
+            $lhm_html .= '</table>';
+            $body .= bk_email_section('Latency Heatmap', $lhm_html);
+        }
+
+        $growth_html = bk_email_stat_box('+' . $mo['growth']['new_monitors'], 'New Monitors') . bk_email_stat_box('+' . $mo['growth']['new_users'], 'New Users');
+        $body .= bk_email_section('Growth', '<div class="stat-grid">' . $growth_html . '</div>');
+
+        if ($mo['score_last_month'] !== null) {
+            $score_cmp_html = bk_email_kv('Last Month', $mo['score_last_month']) . bk_email_kv('This Month', $data['score']);
+            $body .= bk_email_section('Infrastructure Health Score', $score_cmp_html);
+        }
+    }
+
+    // --- Recommendations ---
+    $rec_html = '';
+    if (empty($data['recommendations'])) {
+        $rec_html = '<div style="font-size:13px; color:#1ec773;">Žádná doporučení - vše vypadá v pořádku.</div>';
+    } else {
+        foreach ($data['recommendations'] as $r) {
+            $rec_html .= '<div style="font-size:13px; padding:4px 0; color:#e1e1e6;">&bull; ' . htmlspecialchars($r) . '</div>';
+        }
+    }
+    $body .= bk_email_section('Recommendations', $rec_html);
+
+    $subtitle = htmlspecialchars($data['site_title']) . ' &middot; ' . $data['range_from'] . ' &ndash; ' . $data['range_to'];
+    return render_email_wrapper('📊 ' . $period_label, $subtitle, $accent_color, $body);
+}
+
+function send_digest_report_inner($pdo, $period = 'weekly') {
+    $data = build_digest_data($pdo, $period);
+    $html_body = render_digest_html($data);
+
+    $period_label = ($period === 'monthly') ? 'Monthly' : 'Weekly';
+    $subject = "📊 $period_label Infrastructure Report – {$data['site_title']} ({$data['range_from']} – {$data['range_to']})";
 
     // Příjemci - všichni administrátoři se zadaným e-mailem
     $stmt_admins = $pdo->query("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
@@ -1490,71 +2362,6 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
         $GLOBALS['last_mail_error'] = 'Žádný administrátor nemá vyplněný e-mail.';
         return false;
     }
-
-    $range_from = date('d.m.Y', strtotime("-$days days"));
-    $range_to = date('d.m.Y');
-    $subject = "📊 $period_label report – $site_title ($range_from – $range_to)";
-
-    $rows_html = '';
-    if (empty($worst_monitors)) {
-        $rows_html = '<tr><td colspan="3" style="padding: 10px; color: #94a3b8;">Žádné výpadky v tomto období - všechny služby běžely bez problémů.</td></tr>';
-    } else {
-        foreach ($worst_monitors as $wm) {
-            $wm_uptime = $wm['total_count'] > 0 ? round(($wm['up_count'] / $wm['total_count']) * 100, 2) : 100.00;
-            $rows_html .= '<tr>'
-                . '<td style="padding: 8px 10px; border-top: 1px solid #22222f;">' . htmlspecialchars($wm['name']) . '</td>'
-                . '<td style="padding: 8px 10px; border-top: 1px solid #22222f; text-align: center;">' . htmlspecialchars($wm['down_count']) . '</td>'
-                . '<td style="padding: 8px 10px; border-top: 1px solid #22222f; text-align: right;">' . $wm_uptime . '%</td>'
-                . '</tr>';
-        }
-    }
-
-    $html_body = '
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body { font-family: Arial, sans-serif; background-color: #0f0f13; color: #e1e1e6; margin: 0; padding: 20px; }
-            .container { max-width: 640px; margin: 0 auto; background-color: #1a1a24; border-radius: 8px; border-top: 5px solid #c1121f; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-            .header { padding: 25px; text-align: center; background-color: #12121a; }
-            .header h1 { margin: 0; font-size: 22px; color: #ffffff; }
-            .header p { margin: 6px 0 0 0; color: #888896; font-size: 13px; }
-            .content { padding: 30px; line-height: 1.6; }
-            .stat-grid { display: table; width: 100%; margin-bottom: 20px; }
-            .stat-box { display: table-cell; text-align: center; padding: 12px; background-color: #12121a; border-radius: 6px; }
-            .stat-box .value { font-size: 22px; font-weight: bold; color: #ffffff; }
-            .stat-box .label { font-size: 11px; color: #888896; text-transform: uppercase; margin-top: 4px; }
-            table.report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
-            table.report-table th { text-align: left; padding: 8px 10px; color: #888896; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #22222f; }
-            .footer { padding: 15px 30px; text-align: center; font-size: 12px; color: #888896; border-top: 1px solid #22222f; background-color: #12121a; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>📊 ' . $period_label . ' report</h1>
-                <p>' . htmlspecialchars($site_title) . ' &middot; ' . $range_from . ' – ' . $range_to . '</p>
-            </div>
-            <div class="content">
-                <div class="stat-grid">
-                    <div class="stat-box"><div class="value">' . $overall_uptime . '%</div><div class="label">Dostupnost</div></div>
-                    <div class="stat-box"><div class="value">' . $incident_count . '</div><div class="label">Výpadky</div></div>
-                    <div class="stat-box"><div class="value">' . $total_monitors . '</div><div class="label">Monitorů</div></div>
-                </div>
-                <p><strong>Nejméně spolehlivé služby v tomto období:</strong></p>
-                <table class="report-table">
-                    <thead><tr><th>Název</th><th style="text-align:center;">Výpadků</th><th style="text-align:right;">Dostupnost</th></tr></thead>
-                    <tbody>' . $rows_html . '</tbody>
-                </table>
-                <p style="margin-top: 24px; font-size: 12px; color: #888896;">Tento report byl automaticky vygenerován systémem Blood Kings Status a odeslán všem administrátorům.</p>
-            </div>
-            <div class="footer">
-                ' . htmlspecialchars($site_title) . ' &mdash; ' . date('d.m.Y H:i') . '
-            </div>
-        </div>
-    </body>
-    </html>';
 
     $any_success = false;
     foreach ($admin_emails as $email) {

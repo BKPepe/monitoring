@@ -282,6 +282,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword]);
+            log_monitor_event($pdo, (int)$pdo->lastInsertId(), $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
     }
@@ -290,6 +291,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
 // 2. Zpracování smazání monitoru
 if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id']) && $user_role === 'admin') {
     $del_id = intval($_GET['id']);
+    $stmt_del_info = $pdo->prepare("SELECT name, type FROM monitors WHERE id = ?");
+    $stmt_del_info->execute([$del_id]);
+    $del_info = $stmt_del_info->fetch();
+    if ($del_info) {
+        log_monitor_event($pdo, null, $del_info['name'], $del_info['type'], 'monitor_removed', "Monitor odebrán ({$del_info['type']})");
+    }
     $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
     $stmt->execute([$del_id]);
     $success_msg = 'Monitor byl úspěšně smazán.';
@@ -304,7 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
         'custom_logo_url', 'custom_color_theme', 'custom_nav_links', 'portal_url',
-        'metrics_token'
+        'metrics_token', 'sla_goal_pct'
     ];
 
     // Checkboxy - nezaškrtnuté pole nedorazí v POST, ukládáme proto explicitně '0' / '1'
@@ -530,6 +537,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_monthly_digest' && $user
         $detail = !empty($GLOBALS['last_mail_error']) ? ' Detaily: ' . htmlspecialchars($GLOBALS['last_mail_error']) : '';
         $error_msg = 'Chyba při odesílání měsíčního reportu.' . $detail;
     }
+}
+
+// Náhled infrastructure reportu v prohlížeči (bez odeslání e-mailu) - pouze pro Admina
+if (isset($_GET['action']) && in_array($_GET['action'], ['preview_weekly_digest', 'preview_monthly_digest'], true) && $user_role === 'admin') {
+    $preview_period = $_GET['action'] === 'preview_monthly_digest' ? 'monthly' : 'weekly';
+    $preview_data = build_digest_data($pdo, $preview_period, false);
+    echo render_digest_html($preview_data);
+    exit;
 }
 
 // Načtení monitoru pro editaci, pokud je požadováno (pouze pro Admina)
@@ -1203,6 +1218,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </div>
                         
                         <div class="form-group" style="margin-top: 1rem;">
+                            <label for="sla_goal_pct">Cílová dostupnost SLA (%)</label>
+                            <input type="number" name="sla_goal_pct" id="sla_goal_pct" value="<?php echo htmlspecialchars(get_setting('sla_goal_pct', '99.95')); ?>" class="form-control" min="0" max="100" step="0.01" style="max-width: 200px;">
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Používá se v měsíčním infrastructure reportu (SLA vs Goal).</small>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 1rem;">
                             <label for="cron_location">Lokace hlavního serveru (necháte prázdné = AUTO detekce)</label>
                             <input type="text" name="cron_location" id="cron_location" value="<?php echo htmlspecialchars(get_setting('cron_location', '')); ?>" class="form-control" placeholder="Necháte prázdné pro automatickou detekci nebo zadejte např. 🇩🇪 Frankfurt, DE">
                             <small style="font-size: 0.75rem; color: var(--text-muted);">
@@ -1687,6 +1708,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <a href="admin.php?action=test_email" class="btn btn-secondary" style="margin-left: 0.5rem;"><i class="fas fa-paper-plane"></i> Odeslat testovací e-mail</a>
                         <a href="admin.php?action=send_weekly_digest" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat týdenní digest všem adminům"><i class="fas fa-chart-bar"></i> Odeslat týdenní digest</a>
                         <a href="admin.php?action=send_monthly_digest" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat měsíční digest všem adminům"><i class="fas fa-chart-pie"></i> Odeslat měsíční digest</a>
+                        <a href="admin.php?action=preview_weekly_digest" target="_blank" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Zobrazit náhled týdenního reportu v prohlížeči (bez odeslání)"><i class="fas fa-eye"></i> Náhled týdenního reportu</a>
+                        <a href="admin.php?action=preview_monthly_digest" target="_blank" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Zobrazit náhled měsíčního reportu v prohlížeči (bez odeslání)"><i class="fas fa-eye"></i> Náhled měsíčního reportu</a>
                     </form>
                 </div>
 

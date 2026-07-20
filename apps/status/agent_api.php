@@ -93,6 +93,12 @@ try {
     $cpu_alert_sent = $old_details['cpu_alert_sent'] ?? false;
     $ram_alert_sent = $old_details['ram_alert_sent'] ?? false;
     $hdd_alert_sent = $old_details['hdd_alert_sent'] ?? false;
+
+    // Pokud byl agent naposledy označen jako neaktivní (cron.php), tak tímto
+    // úspěšným reportem se právě zotavil - zaznamenat do event logu pro digest.
+    if (!empty($old_details['agent_alert_sent'])) {
+        log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'agent_connected', 'Agent se znovu ozval');
+    }
     
     $cpu_threshold = floatval(isset($monitor['cpu_threshold']) ? $monitor['cpu_threshold'] : 90.0);
     $ram_threshold = floatval(isset($monitor['ram_threshold']) ? $monitor['ram_threshold'] : 95.0);

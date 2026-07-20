@@ -45,8 +45,22 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `ram_threshold` INT DEFAULT 95,
   `hdd_threshold` INT DEFAULT 90,
   `body_keyword` VARCHAR(255) DEFAULT NULL, -- Volitelný řetězec, který musí obsahovat tělo odpovědi (check pipeline)
+  `config_snapshot` TEXT DEFAULT NULL, -- JSON s posledním stavem (scheme/dns_ok/cert_valid_to/agent_connected) pro detekci změn config
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `monitor_events` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `monitor_id` INT DEFAULT NULL,
+  `monitor_name` VARCHAR(100) NOT NULL,
+  `monitor_type` VARCHAR(20) DEFAULT NULL,
+  `event_type` VARCHAR(50) NOT NULL, -- monitor_added, monitor_removed, scheme_upgraded, dns_lost, dns_recovered, cert_renewed, agent_connected, agent_disconnected
+  `description` VARCHAR(255) DEFAULT NULL,
+  `occurred_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE SET NULL,
+  INDEX (`occurred_at`),
+  INDEX (`monitor_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `monitor_logs` (
@@ -126,6 +140,8 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 ('portal_url', ''),
 -- Prometheus exporter (metrics.php) - prázdný token = endpoint vypnutý
 ('metrics_token', ''),
+-- Cílová dostupnost pro měsíční digest (SLA vs Goal)
+('sla_goal_pct', '99.95'),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260721')
+('schema_version', '20260722')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

@@ -16,7 +16,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260721');
+    define('BK_SCHEMA_VERSION', '20260722');
 
     $bk_current_schema = false;
     try {
@@ -227,6 +227,37 @@ try {
     }
     try {
         $pdo->exec("ALTER TABLE monitor_logs ADD COLUMN check_stages TEXT DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+
+    // Automatická migrace - infrastructure report digest (config change tracking + event log)
+    try {
+        $pdo->exec("ALTER TABLE monitors ADD COLUMN config_snapshot TEXT DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS monitor_events (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                monitor_id INT DEFAULT NULL,
+                monitor_name VARCHAR(100) NOT NULL,
+                monitor_type VARCHAR(20) DEFAULT NULL,
+                event_type VARCHAR(50) NOT NULL,
+                description VARCHAR(255) DEFAULT NULL,
+                occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (monitor_id) REFERENCES monitors(id) ON DELETE SET NULL,
+                INDEX (occurred_at),
+                INDEX (monitor_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+    } catch (PDOException $e) {
+        // Ignorujeme
+    }
+    try {
+        $stmt_sla = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('sla_goal_pct', '99.95') ON DUPLICATE KEY UPDATE key_value = key_value");
+        $stmt_sla->execute();
     } catch (PDOException $e) {
         // Ignorujeme
     }
