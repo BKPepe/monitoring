@@ -36,6 +36,22 @@ foreach ($monitors as $m) {
     $categories[$cat][] = $m;
 }
 
+// Počet aktivně hlásících VPS/host agentů (stejná logika jako detekce v cron.php)
+$agent_offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
+$online_agents_count = 0;
+$total_agents_count = 0;
+foreach ($monitors as $m) {
+    if (empty($m['agent_key'])) continue;
+    $total_agents_count++;
+    $det = json_decode($m['last_details'] ?? '', true);
+    $last_seen = $det['agent_last_seen'] ?? 0;
+    if ($last_seen <= 0) continue;
+    // Časový limit 0 = detekce neaktivity vypnuta - agent, který se kdy ozval, počítá jako online
+    if ($agent_offline_timeout_secs === 0 || (time() - (int)$last_seen) < $agent_offline_timeout_secs) {
+        $online_agents_count++;
+    }
+}
+
 // Načtení 30denní historie pro vizualizaci sloupců (HetrixTools styl)
 $past_30_days = [];
 for ($i = 29; $i >= 0; $i--) {
@@ -165,6 +181,10 @@ $custom_nav_links = json_decode(get_setting('custom_nav_links'), true);
 if (!is_array($custom_nav_links)) {
     $custom_nav_links = [];
 }
+// Odkaz na nadřazený portál (např. hlavní web provozovatele) - prázdné = skrýt.
+// Bez tohoto nastavení by referenční self-hosted nasazení mělo natvrdo odkaz
+// na cizí "../index.html", který u samostatné instalace nikam nevede.
+$portal_url = trim(get_setting('portal_url'));
 
 /**
  * Returns HTML icon for a given monitor type and target URL.
@@ -231,16 +251,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
     <!-- Header -->
     <header>
         <div class="container header-wrapper">
-            <a href="../index.html" class="logo">
+            <a href="<?php echo $portal_url !== '' ? htmlspecialchars($portal_url) : 'index.php'; ?>" class="logo">
                 <?php if ($custom_logo_url !== ''): ?>
                     <img src="<?php echo htmlspecialchars($custom_logo_url); ?>" alt="<?php echo htmlspecialchars($site_title); ?>" style="height: 28px; vertical-align: middle;">
                     <span><?php echo htmlspecialchars($site_title); ?></span>
                 <?php else: ?>
-                    <i class="fas fa-gamepad" style="color: var(--color-red);"></i> Blood Kings <span>Status</span>
+                    <i class="fas fa-server" style="color: var(--color-red);"></i> <?php echo htmlspecialchars($site_title); ?>
                 <?php endif; ?>
             </a>
             <div class="nav-links">
-                <a href="../index.html"><i class="fas fa-home"></i> Portál</a>
+                <?php if ($portal_url !== ''): ?>
+                    <a href="<?php echo htmlspecialchars($portal_url); ?>"><i class="fas fa-home"></i> Portál</a>
+                <?php endif; ?>
                 <a href="index.php" class="active"><i class="fas fa-chart-line"></i> Monitoring</a>
                 <?php foreach ($custom_nav_links as $nav_link):
                     $nl_name = trim((string)($nav_link['name'] ?? ''));
@@ -311,6 +333,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     <div class="stat-value total"><?php echo $total_monitors; ?></div>
                     <div class="stat-label">Celkem</div>
                 </div>
+                <?php if ($total_agents_count > 0): ?>
+                <div class="stat-item">
+                    <div class="stat-value <?php echo $online_agents_count === $total_agents_count ? 'up' : ($online_agents_count > 0 ? 'warn' : 'down'); ?>"><?php echo $online_agents_count; ?>/<?php echo $total_agents_count; ?></div>
+                    <div class="stat-label">Agentů online</div>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($regions)): ?>
+                <div class="stat-item">
+                    <div class="stat-value total"><?php echo count($regions); ?></div>
+                    <div class="stat-label">Regionů</div>
+                </div>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -617,7 +651,23 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             $stmt_outages = $pdo->prepare("SELECT checked_at, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? AND status = 'down' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_outages->execute([$mid]);
                                             $monitor_outages = $stmt_outages->fetchAll();
-                                            
+
+                                            // Distributed View - nejnovější měření z každé lokace zvlášť (posledních 24h)
+                                            $stmt_dist = $pdo->prepare("
+                                                SELECT l.checked_from, l.response_time, l.status
+                                                FROM monitor_logs l
+                                                INNER JOIN (
+                                                    SELECT checked_from, MAX(checked_at) as max_checked_at
+                                                    FROM monitor_logs
+                                                    WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND checked_from IS NOT NULL
+                                                    GROUP BY checked_from
+                                                ) latest ON latest.checked_from = l.checked_from AND latest.max_checked_at = l.checked_at
+                                                WHERE l.monitor_id = ?
+                                                ORDER BY l.response_time ASC
+                                            ");
+                                            $stmt_dist->execute([$mid, $mid]);
+                                            $distributed_view = $stmt_dist->fetchAll();
+
                                             $freq_text = 'N/A';
                                             if (count($last_logs) >= 2) {
                                                 $t1 = strtotime($last_logs[0]['checked_at']);
@@ -649,6 +699,23 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     <?php if (!empty($monitor['maintenance_description'])): ?>
                                                         <div style="color: var(--text-secondary); line-height: 1.4;"><?php echo htmlspecialchars($monitor['maintenance_description']); ?></div>
                                                     <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+
+                                            <?php if (count($distributed_view) > 1): ?>
+                                                <div class="distributed-view" style="margin-bottom: 1.25rem;">
+                                                    <div class="detail-section-title"><i class="fas fa-globe-europe"></i> Distributed View</div>
+                                                    <div class="distributed-view-chips">
+                                                        <?php foreach ($distributed_view as $dv): ?>
+                                                            <div class="dv-chip dv-<?php echo $dv['status'] === 'up' ? 'up' : 'down'; ?>">
+                                                                <span class="dv-dot"></span>
+                                                                <span class="dv-location"><?php echo htmlspecialchars($dv['checked_from']); ?></span>
+                                                                <?php if ($dv['response_time'] !== null): ?>
+                                                                    <span class="dv-latency"><?php echo (int)$dv['response_time']; ?>&nbsp;ms</span>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
                                                 </div>
                                             <?php endif; ?>
 
@@ -1523,7 +1590,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
     <!-- Footer -->
     <footer>
         <div class="container">
-            <p>&copy; <?php echo date('Y'); ?> <a href="../index.html">Blood Kings</a>. Všechna práva vyhrazena.</p>
+            <p>&copy; <?php echo date('Y'); ?> <?php if ($portal_url !== ''): ?><a href="<?php echo htmlspecialchars($portal_url); ?>"><?php echo htmlspecialchars($site_title); ?></a><?php else: ?><?php echo htmlspecialchars($site_title); ?><?php endif; ?>. Všechna práva vyhrazena.</p>
             <?php $ver = get_app_version(); ?>
             <p style="font-size: 0.75rem; opacity: 0.5; margin-top: 0.25rem;">
                 <i class="fas fa-code-branch"></i> <?php echo htmlspecialchars($ver['label']); ?>

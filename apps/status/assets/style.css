@@ -266,7 +266,8 @@ header {
 
 .overall-stats {
   display: flex;
-  gap: 2rem;
+  flex-wrap: wrap;
+  gap: 1.5rem 2rem;
 }
 
 .stat-item {
@@ -1143,6 +1144,46 @@ select.form-control {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.distributed-view-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.dv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+}
+
+.dv-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dv-up .dv-dot { background: var(--color-green); }
+.dv-down .dv-dot { background: var(--color-error); }
+
+.dv-location {
+  color: var(--text-secondary);
+}
+
+.dv-latency {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.dv-down .dv-latency {
+  color: var(--color-error);
 }
 
 .players-badge-grid {

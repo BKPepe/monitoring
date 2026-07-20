@@ -120,6 +120,7 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 ('custom_logo_url', ''),
 ('custom_color_theme', ''),
 ('custom_nav_links', ''),
+('portal_url', ''),
 -- Prometheus exporter (metrics.php) - prázdný token = endpoint vypnutý
 ('metrics_token', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php

@@ -302,7 +302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
-        'custom_logo_url', 'custom_color_theme', 'custom_nav_links',
+        'custom_logo_url', 'custom_color_theme', 'custom_nav_links', 'portal_url',
         'metrics_token'
     ];
 
@@ -1404,6 +1404,11 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <label for="custom_nav_links">Vlastní odkazy v menu (JSON formát)</label>
                             <textarea name="custom_nav_links" id="custom_nav_links" class="form-control" rows="2" placeholder='[{"name": "Hlavní Web", "url": "https://example.com"}]'><?php echo htmlspecialchars(get_setting('custom_nav_links')); ?></textarea>
                             <small style="font-size: 0.75rem; color: var(--text-muted);">Zadejte pole objektů ve formátu JSON: <code>[{"name": "Nápověda", "url": "..."}]</code></small>
+                        </div>
+                        <div class="form-group">
+                            <label for="portal_url">Odkaz na nadřazený portál (nepovinné)</label>
+                            <input type="url" name="portal_url" id="portal_url" value="<?php echo htmlspecialchars(get_setting('portal_url')); ?>" class="form-control" placeholder="https://vas-hlavni-web.cz nebo ../index.html">
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Pokud provozujete status stránku jako součást většího webu, zadejte sem odkaz zpět - zobrazí se v menu jako "Portál" a v patičce. Necháte-li prázdné, odkaz se nezobrazí (výchozí stav pro samostatnou instalaci).</small>
                         </div>
 
                         </div>
