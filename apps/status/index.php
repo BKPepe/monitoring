@@ -37,16 +37,20 @@ foreach ($monitors as $m) {
     $categories[$cat][] = $m;
 }
 
-// Počet aktivně hlásících VPS/host agentů (stejná logika jako detekce v cron.php)
+// Počet aktivně hlásících VPS/host agentů (stejná logika jako detekce v cron.php).
+// agent_key se automaticky generuje pro VŠECHNY monitory (viz migrace v db.php),
+// i ty bez jakéhokoli nainstalovaného agenta - takže "má agent_key" neznamená
+// "má nasazeného agenta". Počítáme proto jen monitory, u kterých se agent někdy
+// reálně ozval (agent_last_seen je vyplněné), ne jen ty s (nevyužitým) klíčem.
 $agent_offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
 $online_agents_count = 0;
 $total_agents_count = 0;
 foreach ($monitors as $m) {
     if (empty($m['agent_key'])) continue;
-    $total_agents_count++;
     $det = json_decode($m['last_details'] ?? '', true);
     $last_seen = $det['agent_last_seen'] ?? 0;
     if ($last_seen <= 0) continue;
+    $total_agents_count++;
     // Časový limit 0 = detekce neaktivity vypnuta - agent, který se kdy ozval, počítá jako online
     if ($agent_offline_timeout_secs === 0 || (time() - (int)$last_seen) < $agent_offline_timeout_secs) {
         $online_agents_count++;
@@ -330,12 +334,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     <div class="stat-value down"><?php echo $down_monitors; ?></div>
                     <div class="stat-label"><?php echo htmlspecialchars(t('stat_down')); ?></div>
                 </div>
-                <?php if ($maintenance_monitors_count > 0): ?>
                 <div class="stat-item">
-                    <div class="stat-value warn"><?php echo $maintenance_monitors_count; ?></div>
+                    <div class="stat-value <?php echo $maintenance_monitors_count > 0 ? 'warn' : 'total'; ?>"><?php echo $maintenance_monitors_count; ?></div>
                     <div class="stat-label"><?php echo htmlspecialchars(t('stat_maintenance')); ?></div>
                 </div>
-                <?php endif; ?>
                 <div class="stat-item">
                     <div class="stat-value <?php echo $avg_uptime >= 99 ? 'up' : ($avg_uptime >= 95 ? 'warn' : 'down'); ?>"><?php echo number_format($avg_uptime, 2, ',', ' '); ?>%</div>
                     <div class="stat-label"><?php echo htmlspecialchars(t('stat_uptime_30d')); ?></div>
@@ -758,7 +760,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
-                                                                <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                                <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                         <?php endif; ?>
 
                                                     </div>
@@ -820,7 +822,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                          <?php endif; ?>
 
                                                      </div>
@@ -862,7 +864,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
-                                                                <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                                <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                         <?php endif; ?>
 
                                                     </div>
@@ -930,7 +932,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
 
-                                                                 <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                          <?php endif; ?>
 
                                                      </div>
@@ -1019,7 +1021,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
                                                             <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                             
-                                                            <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
+                                                            <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
@@ -1077,7 +1079,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <a href="admin.php" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                          <?php endif; ?>
 
                                                      </div>
@@ -1121,10 +1123,11 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php
                                             // Query metrics history for the charts
                                             $show_charts = false;
-                                            $cpu_avg = $cpu_max = $ram_avg = $ram_max = 0;
+                                            $cpu_avg = $cpu_max = $ram_avg = $ram_max = $hdd_avg = $hdd_max = 0;
                                             $labels = [];
                                             $cpu_data = [];
                                             $ram_data = [];
+                                            $hdd_data = [];
 
                                             if ($m_type === 'vps' || $m_type === 'cpanel' || ($m_type === 'web' && isset($details['cpanel_stats'])) || isset($details['cpu'])) {
                                                 $stmt_metrics_history = $pdo->prepare("
@@ -1142,22 +1145,29 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     $cpu_max = 0;
                                                     $ram_sum = 0;
                                                     $ram_max = 0;
+                                                    $hdd_sum = 0;
+                                                    $hdd_max = 0;
                                                     $count_mh = count($metrics_history);
-                                                    
+
                                                     foreach ($metrics_history as $mh) {
                                                         $cpu_sum += $mh['cpu_usage'];
                                                         if ($mh['cpu_usage'] > $cpu_max) $cpu_max = $mh['cpu_usage'];
-                                                        
+
                                                         $ram_sum += $mh['ram_usage'];
                                                         if ($mh['ram_usage'] > $ram_max) $ram_max = $mh['ram_usage'];
-                                                        
+
+                                                        $hdd_sum += $mh['hdd_usage'];
+                                                        if ($mh['hdd_usage'] > $hdd_max) $hdd_max = $mh['hdd_usage'];
+
                                                         $labels[] = date('H:i', strtotime($mh['checked_at']));
                                                         $cpu_data[] = $mh['cpu_usage'];
                                                         $ram_data[] = $mh['ram_usage'];
+                                                        $hdd_data[] = $mh['hdd_usage'];
                                                     }
-                                                    
+
                                                     $cpu_avg = round($cpu_sum / $count_mh, 1);
                                                     $ram_avg = round($ram_sum / $count_mh, 1);
+                                                    $hdd_avg = round($hdd_sum / $count_mh, 1);
                                                 }
                                             }
                                             ?>
@@ -1179,6 +1189,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ram_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="ramStats-<?php echo $mid; ?>"><?php echo $ram_avg; ?>% / <?php echo $ram_max; ?>%</strong>
+                                                        </div>
+                                                        <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('hdd_avg_max')); ?></span>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="hddStats-<?php echo $mid; ?>"><?php echo $hdd_avg; ?>% / <?php echo $hdd_max; ?>%</strong>
                                                         </div>
                                                     </div>
                                                     <div style="position: relative; height: 220px; width: 100%;">
@@ -1211,6 +1225,16 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                     data: <?php echo json_encode($ram_data); ?>,
                                                                     borderColor: '#1ec773',
                                                                     backgroundColor: 'rgba(30, 199, 115, 0.05)',
+                                                                    borderWidth: 2,
+                                                                    pointRadius: 0,
+                                                                    tension: 0.3,
+                                                                    fill: true
+                                                                },
+                                                                {
+                                                                    label: 'Disk (%)',
+                                                                    data: <?php echo json_encode($hdd_data); ?>,
+                                                                    borderColor: '#ffb703',
+                                                                    backgroundColor: 'rgba(255, 183, 3, 0.05)',
                                                                     borderWidth: 2,
                                                                     pointRadius: 0,
                                                                     tension: 0.3,
@@ -1387,12 +1411,15 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     chart.data.labels = data.labels;
                     chart.data.datasets[0].data = data.cpu;
                     chart.data.datasets[1].data = data.ram;
+                    if (chart.data.datasets[2]) chart.data.datasets[2].data = data.hdd;
                     chart.update();
 
                     const cpuStats = document.getElementById('cpuStats-' + monitorId);
                     const ramStats = document.getElementById('ramStats-' + monitorId);
+                    const hddStats = document.getElementById('hddStats-' + monitorId);
                     if (cpuStats) cpuStats.textContent = data.cpu_avg + '% / ' + data.cpu_max + '%';
                     if (ramStats) ramStats.textContent = data.ram_avg + '% / ' + data.ram_max + '%';
+                    if (hddStats) hddStats.textContent = data.hdd_avg + '% / ' + data.hdd_max + '%';
                 } catch (e) {
                     console.error(<?php echo json_encode(t('js_metrics_load_error')); ?>, e);
                 } finally {

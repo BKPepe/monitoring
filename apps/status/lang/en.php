@@ -167,6 +167,7 @@ return [
     'period_30d' => '30 days',
     'cpu_avg_max' => 'CPU Avg / Max:',
     'ram_avg_max' => 'RAM Avg / Max:',
+    'hdd_avg_max' => 'Disk Avg / Max:',
 
     // Monitor outages
     'recent_outages_heading' => 'Recent Outages (last 30 days)',

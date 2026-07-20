@@ -168,6 +168,7 @@ return [
     'period_30d' => '30 dní',
     'cpu_avg_max' => 'CPU Průměr / Max:',
     'ram_avg_max' => 'RAM Průměr / Max:',
+    'hdd_avg_max' => 'Disk Průměr / Max:',
 
     // Výpadky monitoru
     'recent_outages_heading' => 'Nedávné výpadky (posledních 30 dní)',

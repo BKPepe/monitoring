@@ -19,8 +19,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
     $period = $_GET['period'] ?? '24h';
 
     $result = [
-        'labels' => [], 'cpu' => [], 'ram' => [],
-        'cpu_avg' => 0, 'cpu_max' => 0, 'ram_avg' => 0, 'ram_max' => 0,
+        'labels' => [], 'cpu' => [], 'ram' => [], 'hdd' => [],
+        'cpu_avg' => 0, 'cpu_max' => 0, 'ram_avg' => 0, 'ram_max' => 0, 'hdd_avg' => 0, 'hdd_max' => 0,
     ];
 
     try {
@@ -28,7 +28,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
             $stmt = $pdo->prepare("
                 SELECT DATE_FORMAT(checked_at, '%d.%m. %H:00') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
-                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak
+                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
+                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak
                 FROM vps_metrics
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
                 GROUP BY DATE_FORMAT(checked_at, '%Y-%m-%d %H')
@@ -38,7 +39,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
             $stmt = $pdo->prepare("
                 SELECT DATE_FORMAT(checked_at, '%d.%m.') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
-                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak
+                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
+                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak
                 FROM vps_metrics
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                 GROUP BY DATE(checked_at)
@@ -48,7 +50,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
             $stmt = $pdo->prepare("
                 SELECT DATE_FORMAT(checked_at, '%H:%i') AS label,
                        cpu_usage AS cpu, cpu_usage AS cpu_peak,
-                       ram_usage AS ram, ram_usage AS ram_peak
+                       ram_usage AS ram, ram_usage AS ram_peak,
+                       hdd_usage AS hdd, hdd_usage AS hdd_peak
                 FROM vps_metrics
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
                 ORDER BY checked_at ASC
@@ -57,19 +60,23 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
         $stmt->execute([$monitor_id]);
         $rows = $stmt->fetchAll();
 
-        $cpu_sum = $ram_sum = 0;
+        $cpu_sum = $ram_sum = $hdd_sum = 0;
         foreach ($rows as $r) {
             $result['labels'][] = $r['label'];
             $result['cpu'][] = round((float)$r['cpu'], 1);
             $result['ram'][] = round((float)$r['ram'], 1);
+            $result['hdd'][] = round((float)$r['hdd'], 1);
             $cpu_sum += (float)$r['cpu'];
             $ram_sum += (float)$r['ram'];
+            $hdd_sum += (float)$r['hdd'];
             $result['cpu_max'] = max($result['cpu_max'], round((float)$r['cpu_peak'], 1));
             $result['ram_max'] = max($result['ram_max'], round((float)$r['ram_peak'], 1));
+            $result['hdd_max'] = max($result['hdd_max'], round((float)$r['hdd_peak'], 1));
         }
         if (count($rows) > 0) {
             $result['cpu_avg'] = round($cpu_sum / count($rows), 1);
             $result['ram_avg'] = round($ram_sum / count($rows), 1);
+            $result['hdd_avg'] = round($hdd_sum / count($rows), 1);
         }
     } catch (Exception $e) {
         // Vracíme prázdná data
@@ -120,16 +127,19 @@ if (($_GET['action'] ?? '') === 'public_status') {
         ");
         $avg_latency = (int)round($stmt_latency->fetch()['avg_latency'] ?? 0);
 
-        // Agenti s agent_key, kteří v posledních 24h reálně hlásili data
+        // agent_key se generuje automaticky pro všechny monitory (viz db.php migrace),
+        // i ty bez nainstalovaného agenta - počítáme proto jen ty, které se agentem
+        // někdy reálně ozvaly (agent_last_seen vyplněné), ne jen "má klíč".
         $offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
         $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != ''");
         $agents_total = 0;
         $agents_online = 0;
         while ($row = $stmt_agents->fetch()) {
-            $agents_total++;
             $det = json_decode($row['last_details'] ?? '', true);
             $last_seen = $det['agent_last_seen'] ?? 0;
-            if ($last_seen > 0 && ($offline_timeout_secs === 0 || (time() - (int)$last_seen) < $offline_timeout_secs)) {
+            if ($last_seen <= 0) continue;
+            $agents_total++;
+            if ($offline_timeout_secs === 0 || (time() - (int)$last_seen) < $offline_timeout_secs) {
                 $agents_online++;
             }
         }

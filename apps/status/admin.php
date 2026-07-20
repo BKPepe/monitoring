@@ -827,7 +827,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                     <a href="admin.php?action=clear_history&id=<?php echo $mon['id']; ?>" class="btn btn-warning btn-sm" onclick="return confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
                                                     <a href="admin.php?action=delete&id=<?php echo $mon['id']; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Opravdu chcete smazat tento monitor?')" title="Smazat"><i class="fas fa-trash"></i></a>
                                                     <?php if (!empty($mon['agent_key'])): ?>
-                                                        <button class="btn btn-success btn-sm" onclick="showAgentInstructions('<?php echo $mon['agent_key']; ?>', '<?php echo htmlspecialchars($mon['name']); ?>')" title="Klíč a instalace VPS agenta"><i class="fas fa-terminal"></i></button>
+                                                        <button id="agent-btn-<?php echo $mon['id']; ?>" class="btn btn-success btn-sm" onclick="showAgentInstructions('<?php echo $mon['agent_key']; ?>', '<?php echo htmlspecialchars($mon['name']); ?>')" title="Klíč a instalace VPS agenta"><i class="fas fa-terminal"></i></button>
                                                     <?php elseif ($mon['type'] === 'cpanel'): ?>
                                                         <button class="btn btn-success btn-sm" onclick="showCpanelInstructions('<?php echo htmlspecialchars($mon['name']); ?>')" title="Nastavení cPanel monitoringu"><i class="fas fa-info-circle"></i></button>
                                                     <?php endif; ?>
@@ -2069,6 +2069,17 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             // Odrolovat na instrukce
             document.getElementById('agent-instructions-card').scrollIntoView({ behavior: 'smooth' });
         }
+
+        // Deep-link z veřejné status stránky (?show_agent=ID monitoru) - otevře rovnou
+        // instrukce pro daný monitor, místo obecného přistání na administraci.
+        (function() {
+            const params = new URLSearchParams(window.location.search);
+            const showAgentId = params.get('show_agent');
+            if (showAgentId) {
+                const btn = document.getElementById('agent-btn-' + showAgentId);
+                if (btn) btn.click();
+            }
+        })();
 
         function showCpanelInstructions(serverName) {
             document.getElementById('agent-instructions-card').style.display = 'none';
