@@ -12,7 +12,7 @@ Umožňuje nasazení jak na jediném sdíleném webhostingu, tak distribuované 
 * `cron.php` - Hlavní spouštěcí skript měření pro cPanel (spouští kontroly z hlavního serveru).
 * `node_api.php` - Bezpečné API rozhraní pro příjem měření ze vzdálených uzlů.
 * `node_client.php` - Samostatný klientský skript pro nahrání na jiné vzdálené hostingy.
-* `agent_api.php` - API endpoint pro příjem zátěže (CPU, RAM, HDD) z monitorovaných VPS.
+* `agent_api.php` - API endpoint pro příjem zátěže (CPU, RAM, HDD, síť) z monitorovaných VPS.
 * `agent.py` - Python skript, který se instaluje na monitorovaná VPS k zasílání systémových metrik.
 * `db.php` - Inicializace PDO připojení k databázi.
 * `functions.php` - Knihovna měřících funkcí (SLP Minecraft, ServerQuery TeamSpeak, Discord API, mail atd.).
@@ -211,7 +211,7 @@ scrape_configs:
       - targets: ['status.example.com']
 ```
 
-Exportované metriky: `bloodkings_monitor_up`, `bloodkings_monitor_maintenance`, `bloodkings_monitor_response_time_ms`, `bloodkings_vps_cpu_percent`, `bloodkings_vps_ram_percent`, `bloodkings_vps_hdd_percent`, `bloodkings_vps_uptime_seconds`, `bloodkings_vps_agent_last_seen_timestamp`, `bloodkings_monitors_total`.
+Exportované metriky: `bloodkings_monitor_up`, `bloodkings_monitor_maintenance`, `bloodkings_monitor_response_time_ms`, `bloodkings_vps_cpu_percent`, `bloodkings_vps_ram_percent`, `bloodkings_vps_hdd_percent`, `bloodkings_vps_net_kbps`, `bloodkings_vps_uptime_seconds`, `bloodkings_vps_agent_last_seen_timestamp`, `bloodkings_monitors_total`.
 
 ---
 

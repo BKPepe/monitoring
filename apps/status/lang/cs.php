@@ -169,6 +169,7 @@ return [
     'cpu_avg_max' => 'CPU Průměr / Max:',
     'ram_avg_max' => 'RAM Průměr / Max:',
     'hdd_avg_max' => 'Disk Průměr / Max:',
+    'net_avg_max' => 'Síť Průměr / Max:',
 
     // Výpadky monitoru
     'recent_outages_heading' => 'Nedávné výpadky (posledních 30 dní)',
@@ -185,9 +186,13 @@ return [
     'th_status' => 'Stav',
     'th_error_info' => 'Chyba / Informace',
     'service_recovered' => 'Služba se vrátila do normálního provozu',
+    'pagination_prev' => 'Předchozí',
+    'pagination_next' => 'Další',
+    'pagination_page_of' => 'Strana %d z %d',
 
     // Patička
     'footer_rights' => 'Všechna práva vyhrazena.',
+    'footer_powered_by' => 'Poháněno',
 
     // JS
     'js_metrics_load_error' => 'Nepodařilo se načíst historii metrik:',

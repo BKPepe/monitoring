@@ -168,6 +168,7 @@ return [
     'cpu_avg_max' => 'CPU Avg / Max:',
     'ram_avg_max' => 'RAM Avg / Max:',
     'hdd_avg_max' => 'Disk Avg / Max:',
+    'net_avg_max' => 'Network Avg / Max:',
 
     // Monitor outages
     'recent_outages_heading' => 'Recent Outages (last 30 days)',
@@ -184,9 +185,13 @@ return [
     'th_status' => 'Status',
     'th_error_info' => 'Error / Info',
     'service_recovered' => 'Service returned to normal operation',
+    'pagination_prev' => 'Previous',
+    'pagination_next' => 'Next',
+    'pagination_page_of' => 'Page %d of %d',
 
     // Footer
     'footer_rights' => 'All rights reserved.',
+    'footer_powered_by' => 'Powered by',
 
     // JS
     'js_metrics_load_error' => 'Failed to load metrics history:',

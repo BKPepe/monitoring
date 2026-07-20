@@ -28,6 +28,9 @@ $agent_key = isset($data['agent_key']) ? trim($data['agent_key']) : '';
 $cpu = isset($data['cpu']) ? floatval($data['cpu']) : null;
 $ram = isset($data['ram']) ? floatval($data['ram']) : null;
 $hdd = isset($data['hdd']) ? floatval($data['hdd']) : null;
+// Propustnost sítě (KB/s) je volitelná - starší agenti ji neposílají vůbec a
+// nový agent ji vrací až od druhého běhu (potřebuje předchozí vzorek pro výpočet).
+$net = (isset($data['net']) && $data['net'] !== null) ? floatval($data['net']) : null;
 
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
@@ -82,8 +85,8 @@ try {
     $pdo->beginTransaction();
     
     // Zapsat metriky do databáze
-    $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
-    $stmt_metrics->execute([$monitor_id, $cpu, $ram, $hdd]);
+    $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, net_usage) VALUES (?, ?, ?, ?, ?)");
+    $stmt_metrics->execute([$monitor_id, $cpu, $ram, $hdd, $net]);
     
     // Načíst minulé stavy výstrah pro zamezení spamu
     $old_details = json_decode($monitor['last_details'] ?? '{}', true);
@@ -131,6 +134,7 @@ try {
         'cpu' => $cpu,
         'ram' => $ram,
         'hdd' => $hdd,
+        'net' => $net,
         'missing_processes' => $missing_processes,
         'version' => isset($data['version']) ? trim($data['version']) : null,
         'uptime' => isset($data['uptime']) ? intval($data['uptime']) : null,

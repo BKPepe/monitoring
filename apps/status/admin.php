@@ -1233,17 +1233,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         
                         <?php
                         $is_smtp_env = is_setting_env_defined('smtp_host') || is_setting_env_defined('smtp_port') || is_setting_env_defined('smtp_user') || is_setting_env_defined('smtp_pass');
-                        if ($is_smtp_env):
                         ?>
-                            <div style="background: rgba(30, 199, 115, 0.1); border-left: 4px solid var(--color-green); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.82rem; border: 1px solid rgba(30, 199, 115, 0.15);">
-                                <strong style="color: var(--color-green); display: flex; align-items: center; gap: 0.4rem;">
-                                    <i class="fas fa-shield-alt"></i> SMTP je bezpečně nakonfigurováno
-                                </strong>
-                                <div style="margin-top: 0.25rem; color: var(--text-secondary);">
-                                    SMTP přihlašovací údaje jsou načítány z konfiguračního souboru <code>config.php</code> nebo z proměnných prostředí serveru. Změny a čtení z webové administrace jsou z bezpečnostních důvodů uzamčeny.
-                                </div>
-                            </div>
-                        <?php endif; ?>
 
                         <?php if (!$is_smtp_env): ?>
                         <div class="form-group">
@@ -1322,14 +1312,6 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                     <input type="password" name="smsbrana_password" id="smsbrana_password" value="<?php echo htmlspecialchars(get_setting('smsbrana_password')); ?>" class="form-control">
                                 </div>
                             </div>
-                        </div>
-
-                        <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">WhatsApp Notifikace (CallMeBot, zdarma)</h3>
-                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.5;">
-                            Zde není žádné globální nastavení - CallMeBot klíč je vždy vázaný na jedno konkrétní telefonní číslo
-                            (získáte ho zprávou z toho čísla jejich botovi), takže nejde nastavit "za všechny". Každý uživatel
-                            (i administrátor) si své telefonní číslo a vlastní <strong>CallMeBot API klíč</strong> nastavuje
-                            ve svém profilu (sekce <em>Můj profil</em>) - tam WhatsApp notifikace zapnete zaškrtnutím políčka.
                         </div>
 
                         <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">VPS Agent Nastavení</h3>

@@ -114,6 +114,7 @@ try {
         'cpu' => ['bloodkings_vps_cpu_percent', 'Aktualni vytizeni CPU v procentech (hlaseno agentem).'],
         'ram' => ['bloodkings_vps_ram_percent', 'Aktualni vytizeni RAM v procentech (hlaseno agentem).'],
         'hdd' => ['bloodkings_vps_hdd_percent', 'Aktualni zaplneni disku v procentech (hlaseno agentem).'],
+        'net' => ['bloodkings_vps_net_kbps', 'Prumerna propustnost site (RX+TX) v KB/s od posledniho behu agenta.'],
         'uptime' => ['bloodkings_vps_uptime_seconds', 'Uptime serveru v sekundach (hlaseno agentem).'],
         'agent_last_seen' => ['bloodkings_vps_agent_last_seen_timestamp', 'Unix cas posledniho hlaseni agenta.'],
     ];

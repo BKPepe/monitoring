@@ -19,8 +19,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
     $period = $_GET['period'] ?? '24h';
 
     $result = [
-        'labels' => [], 'cpu' => [], 'ram' => [], 'hdd' => [],
-        'cpu_avg' => 0, 'cpu_max' => 0, 'ram_avg' => 0, 'ram_max' => 0, 'hdd_avg' => 0, 'hdd_max' => 0,
+        'labels' => [], 'cpu' => [], 'ram' => [], 'hdd' => [], 'net' => [],
+        'cpu_avg' => 0, 'cpu_max' => 0, 'ram_avg' => 0, 'ram_max' => 0, 'hdd_avg' => 0, 'hdd_max' => 0, 'net_avg' => 0, 'net_max' => 0,
     ];
 
     try {
@@ -29,7 +29,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
                 SELECT DATE_FORMAT(checked_at, '%d.%m. %H:00') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
                        AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
-                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak
+                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
+                       AVG(net_usage) AS net, MAX(net_usage) AS net_peak
                 FROM vps_metrics
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
                 GROUP BY DATE_FORMAT(checked_at, '%Y-%m-%d %H')
@@ -40,7 +41,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
                 SELECT DATE_FORMAT(checked_at, '%d.%m.') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
                        AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
-                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak
+                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
+                       AVG(net_usage) AS net, MAX(net_usage) AS net_peak
                 FROM vps_metrics
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                 GROUP BY DATE(checked_at)
@@ -51,7 +53,8 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
                 SELECT DATE_FORMAT(checked_at, '%H:%i') AS label,
                        cpu_usage AS cpu, cpu_usage AS cpu_peak,
                        ram_usage AS ram, ram_usage AS ram_peak,
-                       hdd_usage AS hdd, hdd_usage AS hdd_peak
+                       hdd_usage AS hdd, hdd_usage AS hdd_peak,
+                       net_usage AS net, net_usage AS net_peak
                 FROM vps_metrics
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
                 ORDER BY checked_at ASC
@@ -60,23 +63,33 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
         $stmt->execute([$monitor_id]);
         $rows = $stmt->fetchAll();
 
-        $cpu_sum = $ram_sum = $hdd_sum = 0;
+        $cpu_sum = $ram_sum = $hdd_sum = $net_sum = 0;
+        $net_count = 0;
         foreach ($rows as $r) {
             $result['labels'][] = $r['label'];
             $result['cpu'][] = round((float)$r['cpu'], 1);
             $result['ram'][] = round((float)$r['ram'], 1);
             $result['hdd'][] = round((float)$r['hdd'], 1);
+            $result['net'][] = $r['net'] !== null ? round((float)$r['net'], 1) : null;
             $cpu_sum += (float)$r['cpu'];
             $ram_sum += (float)$r['ram'];
             $hdd_sum += (float)$r['hdd'];
             $result['cpu_max'] = max($result['cpu_max'], round((float)$r['cpu_peak'], 1));
             $result['ram_max'] = max($result['ram_max'], round((float)$r['ram_peak'], 1));
             $result['hdd_max'] = max($result['hdd_max'], round((float)$r['hdd_peak'], 1));
+            if ($r['net'] !== null) {
+                $net_sum += (float)$r['net'];
+                $net_count++;
+                $result['net_max'] = max($result['net_max'], round((float)$r['net_peak'], 1));
+            }
         }
         if (count($rows) > 0) {
             $result['cpu_avg'] = round($cpu_sum / count($rows), 1);
             $result['ram_avg'] = round($ram_sum / count($rows), 1);
             $result['hdd_avg'] = round($hdd_sum / count($rows), 1);
+        }
+        if ($net_count > 0) {
+            $result['net_avg'] = round($net_sum / $net_count, 1);
         }
     } catch (Exception $e) {
         // Vracíme prázdná data

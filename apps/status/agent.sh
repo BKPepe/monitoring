@@ -41,8 +41,9 @@ if [ -f "$ScriptPath/agent.cfg" ]; then
     done < "$ScriptPath/agent.cfg"
 fi
 
-AGENT_VERSION="1.3.0"
+AGENT_VERSION="1.4.0"
 LOG_FILE="$ScriptPath/agent.log"
+NET_STATE_FILE="$ScriptPath/agent_net.state"
 
 log_message() {
     local msg="$1"
@@ -117,6 +118,45 @@ END {
 hdd=$(df -P / | tail -n 1 | awk '{print $5}' | tr -d '%')
 if [ -z "$hdd" ]; then
     hdd=0.0
+fi
+
+# 3.5 Propustnost sítě (KB/s, RX+TX) - potřebuje 2 vzorky, proto se mezi běhy
+# ukládá kumulativní počet bajtů a čas do stavového souboru; první běh vrací null.
+net_bytes=$(awk '
+NR > 2 {
+    line = $0;
+    colon = index(line, ":");
+    if (colon == 0) next;
+    iface = substr(line, 1, colon - 1);
+    gsub(/^[ \t]+|[ \t]+$/, "", iface);
+    if (iface == "lo" || iface ~ /^veth/ || iface ~ /^docker/ || iface ~ /^br-/) next;
+    n = split(substr(line, colon + 1), f, " ");
+    total += (f[1] + 0) + (f[9] + 0);
+}
+END { printf "%.0f", total }
+' /proc/net/dev 2>/dev/null)
+if [ -z "$net_bytes" ]; then
+    net_bytes=0
+fi
+
+net=""
+now_ts=$(date +%s)
+if [ -f "$NET_STATE_FILE" ]; then
+    prev_ts=$(cut -d',' -f1 "$NET_STATE_FILE" 2>/dev/null)
+    prev_bytes=$(cut -d',' -f2 "$NET_STATE_FILE" 2>/dev/null)
+    if [ -n "$prev_ts" ] && [ -n "$prev_bytes" ] && [ "$net_bytes" -gt 0 ]; then
+        elapsed=$((now_ts - prev_ts))
+        delta=$((net_bytes - prev_bytes))
+        if [ "$elapsed" -gt 0 ] && [ "$delta" -ge 0 ]; then
+            net=$(awk -v d="$delta" -v e="$elapsed" 'BEGIN { printf "%.1f", (d / e) / 1024 }')
+        fi
+    fi
+fi
+echo "$now_ts,$net_bytes" > "$NET_STATE_FILE" 2>/dev/null || true
+
+net_json="null"
+if [ -n "$net" ]; then
+    net_json="$net"
 fi
 
 # 4. Uptime (sekundy)
@@ -381,6 +421,7 @@ payload=$(cat <<EOF
   "cpu": $cpu,
   "ram": $ram,
   "hdd": $hdd,
+  "net": $net_json,
   "uptime": $uptime,
   "smart": "$smart",
   "ports": [$ports_json],
@@ -390,7 +431,11 @@ payload=$(cat <<EOF
 EOF
 )
 
-log_message "Metriky - OS: $os_version, CPU: $cpu%, RAM: $ram%, HDD: $hdd%, Uptime: ${uptime}s, SMART: $smart, Porty: [$ports_json]"
+net_log="N/A (první běh)"
+if [ -n "$net" ]; then
+    net_log="${net} KB/s"
+fi
+log_message "Metriky - OS: $os_version, CPU: $cpu%, RAM: $ram%, HDD: $hdd%, Síť: $net_log, Uptime: ${uptime}s, SMART: $smart, Porty: [$ports_json]"
 log_message "Odesílám data na $API_URL..."
 
 http_code=""

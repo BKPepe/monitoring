@@ -53,8 +53,11 @@ if os.path.exists(cfg_path):
     except Exception:
         pass
 
-AGENT_VERSION = "1.3.0"
+AGENT_VERSION = "1.4.0"
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
+# V Docker režimu je adresář se skriptem připojený read-only, proto se stavový
+# soubor pro výpočet síťové propustnosti ukládá vždy do /tmp.
+NET_STATE_FILE = '/tmp/status-agent-net.state' if DOCKER_MODE else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_net.state')
 
 def log_message(msg):
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -144,6 +147,62 @@ def get_hdd_usage():
         return round((used / total) * 100, 1)
     except Exception:
         return 0.0
+
+def get_network_bytes():
+    """Vrátí (rx_bytes, tx_bytes) součet přes všechna síťová rozhraní kromě loopbacku a virtuálních Docker rozhraní"""
+    rx_total = 0
+    tx_total = 0
+    try:
+        with open('/proc/net/dev', 'r') as f:
+            lines = f.readlines()[2:]
+        for line in lines:
+            if ':' not in line:
+                continue
+            iface, rest = line.split(':', 1)
+            iface = iface.strip()
+            if iface == 'lo' or iface.startswith(('veth', 'docker', 'br-')):
+                continue
+            fields = rest.split()
+            rx_total += int(fields[0])
+            tx_total += int(fields[8])
+    except Exception:
+        pass
+    return rx_total, tx_total
+
+def get_network_usage():
+    """
+    Vypočítá průměrnou propustnost sítě (RX+TX) v KB/s od posledního běhu agenta.
+    Mezi jednotlivými spuštěními (cron/smyčka) se ukládá kumulativní počet bajtů
+    a čas do stavového souboru - první běh proto vrací None (chybí předchozí vzorek).
+    """
+    rx, tx = get_network_bytes()
+    total_bytes = rx + tx
+    now = time.time()
+
+    prev = None
+    try:
+        with open(NET_STATE_FILE, 'r') as f:
+            prev_ts, prev_bytes = f.read().strip().split(',')
+            prev = (float(prev_ts), int(prev_bytes))
+    except Exception:
+        pass
+
+    try:
+        with open(NET_STATE_FILE, 'w') as f:
+            f.write(f"{now},{total_bytes}")
+    except Exception:
+        pass
+
+    if prev is None or total_bytes == 0:
+        return None
+
+    elapsed = now - prev[0]
+    delta_bytes = total_bytes - prev[1]
+    if elapsed <= 0 or delta_bytes < 0:
+        # Čítač se resetoval (restart sítě/serveru) nebo neplatný interval
+        return None
+
+    return round((delta_bytes / elapsed) / 1024, 1)
 
 def get_uptime():
     """Uuptime v sekundách z /proc/uptime"""
@@ -349,6 +408,7 @@ def main():
     cpu = get_cpu_usage()
     ram = get_ram_usage()
     hdd = get_hdd_usage()
+    net = get_network_usage()
     uptime = get_uptime()
     smart = get_smart_status()
     ports = get_listening_ports()
@@ -364,6 +424,7 @@ def main():
         "cpu": cpu,
         "ram": ram,
         "hdd": hdd,
+        "net": net,
         "uptime": uptime,
         "smart": smart,
         "ports": ports,
@@ -371,7 +432,8 @@ def main():
         "teamspeak_servers": teamspeak_servers
     }
     
-    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}%, RAM: {ram}%, HDD: {hdd}%, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
+    net_log = f"{net} KB/s" if net is not None else "N/A (první běh)"
+    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}%, RAM: {ram}%, HDD: {hdd}%, Síť: {net_log}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
     
     req = urllib.request.Request(
         API_URL,

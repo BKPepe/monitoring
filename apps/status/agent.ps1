@@ -13,7 +13,7 @@ $AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 $AUTO_UPDATE = "0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
 # ===========================
 
-$AGENT_VERSION = "1.3.0"
+$AGENT_VERSION = "1.4.0"
 
 # Načtení z Environment proměnných
 if ($env:STATUS_API_URL) { $API_URL = $env:STATUS_API_URL }
@@ -40,6 +40,7 @@ if (Test-Path $CfgPath) {
 }
 
 $LogFile = Join-Path $ScriptPath "agent.log"
+$NetStateFile = Join-Path $ScriptPath "agent_net.state"
 
 function Write-AgentLog {
     param([string]$Message)
@@ -90,6 +91,39 @@ try {
     $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$systemDrive'"
     if ($disk -and [double]$disk.Size -gt 0) {
         $hdd = [math]::Round((([double]$disk.Size - [double]$disk.FreeSpace) / [double]$disk.Size) * 100, 1)
+    }
+} catch {}
+
+# --- Síť: propustnost (KB/s, RX+TX) od posledního běhu ---
+# Potřebuje 2 vzorky, proto se mezi běhy ukládá kumulativní počet bajtů a čas
+# do stavového souboru vedle skriptu; první běh proto vrací $null.
+$net = $null
+try {
+    $now = Get-Date
+    $totalBytes = 0
+    $adapters = Get-NetAdapterStatistics -ErrorAction Stop | Where-Object { $_.Name -notmatch '^(Loopback|vEthernet|Docker|WSL)' }
+    foreach ($a in $adapters) {
+        $totalBytes += [int64]$a.ReceivedBytes + [int64]$a.SentBytes
+    }
+
+    $prev = $null
+    if (Test-Path $NetStateFile) {
+        try {
+            $parts = (Get-Content $NetStateFile -Raw).Trim().Split(",")
+            if ($parts.Count -eq 2) {
+                $prev = @{ Ts = [double]$parts[0]; Bytes = [int64]$parts[1] }
+            }
+        } catch {}
+    }
+
+    "$($now.ToFileTimeUtc()),$totalBytes" | Set-Content -Path $NetStateFile -Encoding ASCII -ErrorAction SilentlyContinue
+
+    if ($prev) {
+        $elapsedSec = ($now.ToFileTimeUtc() - $prev.Ts) / 10000000.0
+        $deltaBytes = $totalBytes - $prev.Bytes
+        if ($elapsedSec -gt 0 -and $deltaBytes -ge 0) {
+            $net = [math]::Round(($deltaBytes / $elapsedSec) / 1024, 1)
+        }
     }
 } catch {}
 
@@ -146,13 +180,15 @@ $payload = @{
     cpu = $cpu
     ram = $ram
     hdd = $hdd
+    net = $net
     uptime = $uptime
     smart = $smart
     ports = @($ports)
     processes = @($processes)
 } | ConvertTo-Json -Depth 4
 
-Write-AgentLog "Metriky - OS: $os_version, CPU: $cpu%, RAM: $ram%, HDD: $hdd%, Uptime: ${uptime}s, SMART: $smart"
+$netLog = if ($null -ne $net) { "$net KB/s" } else { "N/A (první běh)" }
+Write-AgentLog "Metriky - OS: $os_version, CPU: $cpu%, RAM: $ram%, HDD: $hdd%, Sit: $netLog, Uptime: ${uptime}s, SMART: $smart"
 Write-AgentLog "Odesílám data na $API_URL..."
 
 try {

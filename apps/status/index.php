@@ -128,7 +128,7 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
         WHERE l.status = 'down'
            OR (l.status = 'up' AND l.error_message IS NOT NULL AND l.error_message != '')
         ORDER BY l.checked_at DESC
-        LIMIT 20
+        LIMIT 200
     ");
     $incidents = $stmt_inc->fetchAll();
 
@@ -1123,22 +1123,23 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php
                                             // Query metrics history for the charts
                                             $show_charts = false;
-                                            $cpu_avg = $cpu_max = $ram_avg = $ram_max = $hdd_avg = $hdd_max = 0;
+                                            $cpu_avg = $cpu_max = $ram_avg = $ram_max = $hdd_avg = $hdd_max = $net_avg = $net_max = 0;
                                             $labels = [];
                                             $cpu_data = [];
                                             $ram_data = [];
                                             $hdd_data = [];
+                                            $net_data = [];
 
                                             if ($m_type === 'vps' || $m_type === 'cpanel' || ($m_type === 'web' && isset($details['cpanel_stats'])) || isset($details['cpu'])) {
                                                 $stmt_metrics_history = $pdo->prepare("
-                                                    SELECT checked_at, cpu_usage, ram_usage, hdd_usage 
-                                                    FROM vps_metrics 
+                                                    SELECT checked_at, cpu_usage, ram_usage, hdd_usage, net_usage
+                                                    FROM vps_metrics
                                                     WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
                                                     ORDER BY checked_at ASC
                                                 ");
                                                 $stmt_metrics_history->execute([$mid]);
                                                 $metrics_history = $stmt_metrics_history->fetchAll();
-                                                
+
                                                 if (!empty($metrics_history)) {
                                                     $show_charts = true;
                                                     $cpu_sum = 0;
@@ -1147,6 +1148,8 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     $ram_max = 0;
                                                     $hdd_sum = 0;
                                                     $hdd_max = 0;
+                                                    $net_sum = 0;
+                                                    $net_count = 0;
                                                     $count_mh = count($metrics_history);
 
                                                     foreach ($metrics_history as $mh) {
@@ -1159,15 +1162,23 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         $hdd_sum += $mh['hdd_usage'];
                                                         if ($mh['hdd_usage'] > $hdd_max) $hdd_max = $mh['hdd_usage'];
 
+                                                        if ($mh['net_usage'] !== null) {
+                                                            $net_sum += $mh['net_usage'];
+                                                            $net_count++;
+                                                            if ($mh['net_usage'] > $net_max) $net_max = $mh['net_usage'];
+                                                        }
+
                                                         $labels[] = date('H:i', strtotime($mh['checked_at']));
                                                         $cpu_data[] = $mh['cpu_usage'];
                                                         $ram_data[] = $mh['ram_usage'];
                                                         $hdd_data[] = $mh['hdd_usage'];
+                                                        $net_data[] = $mh['net_usage'] !== null ? (float)$mh['net_usage'] : null;
                                                     }
 
                                                     $cpu_avg = round($cpu_sum / $count_mh, 1);
                                                     $ram_avg = round($ram_sum / $count_mh, 1);
                                                     $hdd_avg = round($hdd_sum / $count_mh, 1);
+                                                    $net_avg = $net_count > 0 ? round($net_sum / $net_count, 1) : 0;
                                                 }
                                             }
                                             ?>
@@ -1193,6 +1204,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('hdd_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="hddStats-<?php echo $mid; ?>"><?php echo $hdd_avg; ?>% / <?php echo $hdd_max; ?>%</strong>
+                                                        </div>
+                                                        <div class="net-stats-box" id="netStatsBox-<?php echo $mid; ?>" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); <?php echo $net_max > 0 ? '' : 'display: none;'; ?>">
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('net_avg_max')); ?></span>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="netStats-<?php echo $mid; ?>"><?php echo $net_avg; ?> / <?php echo $net_max; ?> KB/s</strong>
                                                         </div>
                                                     </div>
                                                     <div style="position: relative; height: 220px; width: 100%;">
@@ -1239,6 +1254,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                     pointRadius: 0,
                                                                     tension: 0.3,
                                                                     fill: true
+                                                                },
+                                                                {
+                                                                    label: 'Síť (KB/s)',
+                                                                    data: <?php echo json_encode($net_data); ?>,
+                                                                    borderColor: '#8b5cf6',
+                                                                    backgroundColor: 'rgba(139, 92, 246, 0.05)',
+                                                                    borderWidth: 2,
+                                                                    pointRadius: 0,
+                                                                    tension: 0.3,
+                                                                    fill: false,
+                                                                    spanGaps: true,
+                                                                    yAxisID: 'y1'
                                                                 }
                                                             ]
                                                         },
@@ -1260,6 +1287,12 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                     max: 100,
                                                                     grid: { color: 'rgba(255,255,255,0.03)' },
                                                                     ticks: { color: '#8b8ba0', font: { size: 10 } }
+                                                                },
+                                                                y1: {
+                                                                    position: 'right',
+                                                                    min: 0,
+                                                                    grid: { display: false },
+                                                                    ticks: { color: '#8b5cf6', font: { size: 10 } }
                                                                 }
                                                             }
                                                         }
@@ -1322,9 +1355,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                 <th><?php echo htmlspecialchars(t('th_error_info')); ?></th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <?php foreach ($incidents as $inc): ?>
-                                <tr>
+                        <tbody id="incidents-tbody">
+                            <?php foreach ($incidents as $inc_idx => $inc): ?>
+                                <tr class="incident-row" data-row-index="<?php echo $inc_idx; ?>">
                                     <td><?php echo date('d.m.Y H:i:s', strtotime($inc['checked_at'])); ?></td>
                                     <td>
                                         <strong><?php echo htmlspecialchars($inc['name']); ?></strong>
@@ -1355,6 +1388,38 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                         </tbody>
                     </table>
                 </div>
+                <?php if (count($incidents) > 10): ?>
+                    <div class="incidents-pagination" id="incidents-pagination" style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1rem;">
+                        <button type="button" id="incidents-prev" class="btn btn-secondary btn-sm" style="padding: 0.3rem 0.8rem; font-size: 0.78rem;"><i class="fas fa-chevron-left"></i> <?php echo htmlspecialchars(t('pagination_prev')); ?></button>
+                        <span id="incidents-page-label" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+                        <button type="button" id="incidents-next" class="btn btn-secondary btn-sm" style="padding: 0.3rem 0.8rem; font-size: 0.78rem;"><?php echo htmlspecialchars(t('pagination_next')); ?> <i class="fas fa-chevron-right"></i></button>
+                    </div>
+                    <script>
+                    (function() {
+                        const PAGE_SIZE = 10;
+                        const rows = Array.from(document.querySelectorAll('#incidents-tbody .incident-row'));
+                        const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+                        const label = document.getElementById('incidents-page-label');
+                        const prevBtn = document.getElementById('incidents-prev');
+                        const nextBtn = document.getElementById('incidents-next');
+                        const pageLabelTpl = <?php echo json_encode(t('pagination_page_of')); ?>;
+                        let page = 0;
+
+                        function render() {
+                            rows.forEach((row, i) => {
+                                row.style.display = (i >= page * PAGE_SIZE && i < (page + 1) * PAGE_SIZE) ? '' : 'none';
+                            });
+                            label.textContent = pageLabelTpl.replace('%d', page + 1).replace('%d', totalPages);
+                            prevBtn.disabled = page === 0;
+                            nextBtn.disabled = page >= totalPages - 1;
+                        }
+
+                        prevBtn.addEventListener('click', () => { if (page > 0) { page--; render(); } });
+                        nextBtn.addEventListener('click', () => { if (page < totalPages - 1) { page++; render(); } });
+                        render();
+                    })();
+                    </script>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
 
@@ -1367,6 +1432,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
             <?php $ver = get_app_version(); ?>
             <p style="font-size: 0.75rem; opacity: 0.5; margin-top: 0.25rem;">
                 <i class="fas fa-code-branch"></i> <?php echo htmlspecialchars($ver['label']); ?>
+                &middot; <?php echo htmlspecialchars(t('footer_powered_by')); ?> <a href="https://monitoring.bloodkings.eu" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline;">Blood Kings Monitoring</a>
             </p>
             <div class="social-links" style="margin-top: 0.75rem; display: flex; justify-content: center; gap: 1.25rem; font-size: 1.2rem;">
                 <a href="https://www.facebook.com/bloodkings" target="_blank" style="color: var(--text-muted); transition: color 0.15s ease;" onmouseover="this.style.color='#1877f2'" onmouseout="this.style.color='var(--text-muted)'" title="Facebook Page"><i class="fab fa-facebook"></i></a>
@@ -1412,14 +1478,19 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     chart.data.datasets[0].data = data.cpu;
                     chart.data.datasets[1].data = data.ram;
                     if (chart.data.datasets[2]) chart.data.datasets[2].data = data.hdd;
+                    if (chart.data.datasets[3]) chart.data.datasets[3].data = data.net;
                     chart.update();
 
                     const cpuStats = document.getElementById('cpuStats-' + monitorId);
                     const ramStats = document.getElementById('ramStats-' + monitorId);
                     const hddStats = document.getElementById('hddStats-' + monitorId);
+                    const netStats = document.getElementById('netStats-' + monitorId);
+                    const netStatsBox = document.getElementById('netStatsBox-' + monitorId);
                     if (cpuStats) cpuStats.textContent = data.cpu_avg + '% / ' + data.cpu_max + '%';
                     if (ramStats) ramStats.textContent = data.ram_avg + '% / ' + data.ram_max + '%';
                     if (hddStats) hddStats.textContent = data.hdd_avg + '% / ' + data.hdd_max + '%';
+                    if (netStats) netStats.textContent = data.net_avg + ' / ' + data.net_max + ' KB/s';
+                    if (netStatsBox) netStatsBox.style.display = data.net_max > 0 ? '' : 'none';
                 } catch (e) {
                     console.error(<?php echo json_encode(t('js_metrics_load_error')); ?>, e);
                 } finally {

@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `cpu_usage` FLOAT NOT NULL, -- v %
   `ram_usage` FLOAT NOT NULL, -- v %
   `hdd_usage` FLOAT NOT NULL, -- v %
+  `net_usage` FLOAT DEFAULT NULL, -- v KB/s (RX+TX), NULL pokud agent síť nehlásí
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
@@ -124,5 +125,5 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Prometheus exporter (metrics.php) - prázdný token = endpoint vypnutý
 ('metrics_token', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260719')
+('schema_version', '20260720')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;
