@@ -206,37 +206,23 @@ app.get('/api/changelog', async (c) => {
   }
 })
 
-// 4. GET /api/status - Live statistics from bloodkings.eu status check
+// 4. GET /api/status - Live aggregate statistics from the real bloodkings.eu status app.
+// No mock fallback: if the real endpoint is unreachable, we say so explicitly rather
+// than presenting fabricated numbers as if they were real.
 app.get('/api/status', async (c) => {
   try {
     const data = await withCache('system-status', 300, async () => {
-      // Try to fetch real status from status API of bloodkings
-      const statusRes = await fetch('https://status.bloodkings.eu/api/status', {
+      const statusRes = await fetch('https://bloodkings.eu/status/api.php?action=public_status', {
         headers: { 'User-Agent': 'BloodKings-Monitoring-Website-Worker' },
       })
-      if (statusRes.ok) {
-        return await statusRes.json()
+      if (!statusRes.ok) {
+        throw new Error(`Upstream status API returned ${statusRes.status}`)
       }
-      throw new Error('Fallback to mock')
+      return await statusRes.json()
     })
     return c.json(data)
   } catch (e) {
-    // Realistic fallback status data
-    return c.json({
-      status: 'healthy',
-      uptime: '99.987%',
-      totalMonitors: 58,
-      activeAgents: 14,
-      avgLatencyMs: 28,
-      lastUpdated: new Date().toISOString(),
-      nodes: [
-        { name: 'Prague Server', status: 'online', type: 'server', latency: '12ms' },
-        { name: 'Frankfurt Agent', status: 'online', type: 'agent', latency: '8ms' },
-        { name: 'London Agent', status: 'online', type: 'agent', latency: '15ms' },
-        { name: 'New York Agent', status: 'online', type: 'agent', latency: '78ms' },
-        { name: 'Singapore Agent', status: 'online', type: 'agent', latency: '184ms' },
-      ],
-    })
+    return c.json({ available: false, error: 'Status data temporarily unavailable' }, 503)
   }
 })
 
