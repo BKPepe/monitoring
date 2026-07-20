@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `ts_clients_max` INT DEFAULT NULL,
   `ts_process_cpu` FLOAT DEFAULT NULL, -- CPU využité přímo procesem ts3server (ne celým hostem)
   `ts_process_ram` FLOAT DEFAULT NULL, -- RAM v MB využitá procesem ts3server
+  `iowait_pct` FLOAT DEFAULT NULL, -- CPU čas čekání na I/O v %
+  `inode_usage_pct` FLOAT DEFAULT NULL, -- Zaplnění inodů kořenového disku v %
+  `zombie_count` INT DEFAULT NULL, -- Počet procesů ve stavu zombie (Z)
+  `fork_rate` INT DEFAULT NULL, -- Nové procesy (fork) od posledního běhu agenta
+  `temperature_c` FLOAT DEFAULT NULL, -- Teplota CPU/desky ve °C (NULL, pokud hostitel/VM nevystavuje thermal zóny)
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
@@ -160,5 +165,5 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Ručně nastavená poslední známá verze TeamSpeak serveru (pro "Update Available"); prázdné = kontrola se přeskočí
 ('ts3_latest_version', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260723')
+('schema_version', '20260724')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

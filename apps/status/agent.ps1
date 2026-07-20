@@ -13,7 +13,7 @@ $AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 $AUTO_UPDATE = "0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
 # ===========================
 
-$AGENT_VERSION = "1.5.0"
+$AGENT_VERSION = "1.6.0"
 
 # Načtení z Environment proměnných
 if ($env:STATUS_API_URL) { $API_URL = $env:STATUS_API_URL }
@@ -176,6 +176,61 @@ try {
     if ($os_info -and $os_info.Caption) { $os_version = $os_info.Caption.Trim() }
 } catch {}
 
+# --- Systémová identita (hostname/kernel/timezone/cloud/virtualizace) ---
+# reboot_required, iowait, inode usage, zombie count, fork rate a teplota jsou
+# Linux/proc specifické koncepty bez čistého windowsího ekvivalentu - posílají
+# se jako $null (viz payload níže), ne odhadované.
+$sys_hostname = $env:COMPUTERNAME
+$sys_kernel = $null
+try {
+    if ($os_info -and $os_info.BuildNumber) { $sys_kernel = "Build $($os_info.BuildNumber)" }
+} catch {}
+$sys_timezone = $null
+try {
+    $sys_timezone = [System.TimeZoneInfo]::Local.Id
+} catch {}
+$cloud_provider = $null
+$virtualization = $null
+try {
+    $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+    $manufacturer = ($cs.Manufacturer | Out-String).Trim().ToLower()
+    $model = ($cs.Model | Out-String).Trim().ToLower()
+    if ($manufacturer -match "amazon") { $cloud_provider = "AWS" }
+    elseif ($manufacturer -match "google") { $cloud_provider = "Google Cloud" }
+    elseif ($model -match "hvm domu|xen") { $cloud_provider = "AWS" }
+    if ($model -match "virtual machine" -and $manufacturer -match "microsoft") { $virtualization = "Hyper-V" }
+    elseif ($manufacturer -match "vmware") { $virtualization = "VMware" }
+    elseif ($model -match "kvm" -or $manufacturer -match "qemu") { $virtualization = "KVM" }
+    elseif ($manufacturer -match "xen") { $virtualization = "Xen" }
+} catch {}
+
+# --- TOP procesy dle CPU a RAM ---
+# CPU% je dopočítáno ze stejné dvouvzorkové techniky jako u ts3server níže
+# (TotalProcessorTime před/po 1s), ne z kumulativního $proc.CPU od startu procesu.
+$topCpuProcesses = @()
+$topRamProcesses = @()
+try {
+    $cpuCores = [Environment]::ProcessorCount
+    $procSample1 = Get-Process -ErrorAction Stop | Select-Object Id, ProcessName, TotalProcessorTime, WorkingSet64
+    Start-Sleep -Seconds 1
+    $procSample2 = Get-Process -ErrorAction Stop | Select-Object Id, ProcessName, TotalProcessorTime, WorkingSet64
+    $sample1ById = @{}
+    foreach ($p in $procSample1) { $sample1ById[$p.Id] = $p.TotalProcessorTime }
+
+    $cpuRanked = foreach ($p in $procSample2) {
+        if ($sample1ById.ContainsKey($p.Id)) {
+            $deltaMs = ($p.TotalProcessorTime - $sample1ById[$p.Id]).TotalMilliseconds
+            if ($deltaMs -gt 0 -and $cpuCores -gt 0) {
+                [PSCustomObject]@{ name = $p.ProcessName; cpu = [math]::Round(($deltaMs / 1000.0 / $cpuCores) * 100, 1) }
+            }
+        }
+    }
+    $topCpuProcesses = $cpuRanked | Sort-Object -Property cpu -Descending | Select-Object -First 5
+
+    $topRamProcesses = $procSample2 | Sort-Object -Property WorkingSet64 -Descending | Select-Object -First 5 |
+        ForEach-Object { [PSCustomObject]@{ name = $_.ProcessName; ram_mb = [math]::Round($_.WorkingSet64 / 1MB, 1) } }
+} catch {}
+
 # --- SMART stav disků ---
 $smart = "N/A"
 try {
@@ -242,9 +297,11 @@ $payload = @{
     os = $os_version
     cpu = $cpu
     cpu_steal = $cpuSteal
+    iowait = $null
     ram = $ram
     swap = $swap
     hdd = $hdd
+    inode_usage = $null
     load1 = $load1
     load5 = $load5
     load15 = $load15
@@ -252,11 +309,22 @@ $payload = @{
     disk_io_write = $diskIoWrite
     net = $net
     net_errors = $netErrors
+    fork_rate = $null
+    temperature = $null
     uptime = $uptime
     smart = $smart
     ports = @($ports)
     processes = @($processes)
     ts3_process = $ts3Process
+    zombie_count = $null
+    top_cpu_processes = @($topCpuProcesses)
+    top_ram_processes = @($topRamProcesses)
+    hostname = $sys_hostname
+    kernel = $sys_kernel
+    timezone = $sys_timezone
+    reboot_required = $null
+    cloud_provider = $cloud_provider
+    virtualization = $virtualization
 } | ConvertTo-Json -Depth 4
 
 $netLog = if ($null -ne $net) { "$net KB/s" } else { "N/A (první běh)" }

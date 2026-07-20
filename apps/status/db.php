@@ -16,7 +16,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260723');
+    define('BK_SCHEMA_VERSION', '20260724');
 
     $bk_current_schema = false;
     try {
@@ -292,6 +292,23 @@ try {
         $stmt_ts3v->execute();
     } catch (PDOException $e) {
         // Ignorujeme
+    }
+
+    // Automatická migrace - dokončení Level 2 Host vrstvy (IO wait, inode usage,
+    // zombie procesy, fork rate, teplota). Vše volitelné/NULL, starší agenti tato
+    // pole neposílají vůbec.
+    foreach ([
+        "ALTER TABLE vps_metrics ADD COLUMN iowait_pct FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN inode_usage_pct FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN zombie_count INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN fork_rate INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN temperature_c FLOAT DEFAULT NULL",
+    ] as $migration_sql) {
+        try {
+            $pdo->exec($migration_sql);
+        } catch (PDOException $e) {
+            // Ignorujeme
+        }
     }
 
     // Uložení aktuální verze schématu - migrace se příště přeskočí

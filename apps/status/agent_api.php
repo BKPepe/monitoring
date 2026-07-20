@@ -45,6 +45,22 @@ $net_errors = (isset($data['net_errors']) && $data['net_errors'] !== null) ? int
 // TeamSpeak proces (pokud agent běží na stejném VPS jako ts3server)
 $ts3_process = (isset($data['ts3_process']) && is_array($data['ts3_process'])) ? $data['ts3_process'] : null;
 
+// Dokončení Level 2 Host vrstvy - vše volitelné, starší agenti tato pole
+// neposílají vůbec (nebo je platforma nepodporuje, viz agent.ps1).
+$iowait = (isset($data['iowait']) && $data['iowait'] !== null) ? floatval($data['iowait']) : null;
+$inode_usage = (isset($data['inode_usage']) && $data['inode_usage'] !== null) ? floatval($data['inode_usage']) : null;
+$fork_rate = (isset($data['fork_rate']) && $data['fork_rate'] !== null) ? intval($data['fork_rate']) : null;
+$temperature = (isset($data['temperature']) && $data['temperature'] !== null) ? floatval($data['temperature']) : null;
+$zombie_count = (isset($data['zombie_count']) && $data['zombie_count'] !== null) ? intval($data['zombie_count']) : null;
+$top_cpu_processes = (isset($data['top_cpu_processes']) && is_array($data['top_cpu_processes'])) ? $data['top_cpu_processes'] : null;
+$top_ram_processes = (isset($data['top_ram_processes']) && is_array($data['top_ram_processes'])) ? $data['top_ram_processes'] : null;
+$sys_hostname = (isset($data['hostname']) && $data['hostname'] !== null && $data['hostname'] !== '') ? trim($data['hostname']) : null;
+$sys_kernel = (isset($data['kernel']) && $data['kernel'] !== null && $data['kernel'] !== '') ? trim($data['kernel']) : null;
+$sys_timezone = (isset($data['timezone']) && $data['timezone'] !== null && $data['timezone'] !== '') ? trim($data['timezone']) : null;
+$reboot_required = isset($data['reboot_required']) ? $data['reboot_required'] : null;
+$cloud_provider = (isset($data['cloud_provider']) && $data['cloud_provider'] !== null) ? trim($data['cloud_provider']) : null;
+$virtualization = (isset($data['virtualization']) && $data['virtualization'] !== null) ? trim($data['virtualization']) : null;
+
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Chybí povinné údaje (agent_key, cpu, ram, hdd).']);
@@ -158,6 +174,19 @@ try {
         'disk_io_read' => $disk_io_read,
         'disk_io_write' => $disk_io_write,
         'net_errors' => $net_errors,
+        'iowait' => $iowait,
+        'inode_usage' => $inode_usage,
+        'fork_rate' => $fork_rate,
+        'temperature' => $temperature,
+        'zombie_count' => $zombie_count,
+        'top_cpu_processes' => $top_cpu_processes,
+        'top_ram_processes' => $top_ram_processes,
+        'hostname' => $sys_hostname,
+        'kernel' => $sys_kernel,
+        'timezone' => $sys_timezone,
+        'reboot_required' => $reboot_required,
+        'cloud_provider' => $cloud_provider,
+        'virtualization' => $virtualization,
         'missing_processes' => $missing_processes,
         'version' => isset($data['version']) ? trim($data['version']) : null,
         'uptime' => isset($data['uptime']) ? intval($data['uptime']) : null,
@@ -214,14 +243,16 @@ try {
             monitor_id, cpu_usage, ram_usage, hdd_usage, net_usage,
             load_avg_1, load_avg_5, load_avg_15, cpu_steal, swap_usage,
             disk_io_read_kbps, disk_io_write_kbps, net_errors,
-            ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
+            iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
     $stmt_metrics->execute([
         $monitor_id, $cpu, $ram, $hdd, $net,
         $load1, $load5, $load15, $cpu_steal, $swap,
         $disk_io_read, $disk_io_write, $net_errors,
         $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
+        $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
     ]);
 
     if ($monitor['type'] === 'vps') {

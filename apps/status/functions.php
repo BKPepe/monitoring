@@ -89,7 +89,7 @@ function render_vps_agent_details($details, $monitor = null) {
         </div>
     </div>
     
-    <?php if (isset($details['uptime']) || isset($details['smart']) || isset($details['ports']) || isset($details['version']) || isset($details['os'])): ?>
+    <?php if (isset($details['uptime']) || isset($details['smart']) || isset($details['ports']) || isset($details['version']) || isset($details['os']) || isset($details['hostname']) || isset($details['iowait'])): ?>
         <div style="margin-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.85rem; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.45rem;">
             <?php if (isset($details['version'])): 
                 $v_reported = trim($details['version']);
@@ -110,6 +110,68 @@ function render_vps_agent_details($details, $monitor = null) {
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Operační systém:</span>
                     <strong style="color: #fff;"><?php echo htmlspecialchars($details['os']); ?></strong>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($details['hostname'])): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Hostname:</span>
+                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['hostname']); ?></strong>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($details['kernel'])): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Kernel:</span>
+                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['kernel']); ?></strong>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($details['timezone'])): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Časové pásmo:</span>
+                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['timezone']); ?></strong>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Poskytovatel / virtualizace:</span>
+                    <strong style="color: #fff;">
+                        <?php echo htmlspecialchars($details['cloud_provider'] ?? '?'); ?><?php if (!empty($details['virtualization'])): ?> (<?php echo htmlspecialchars($details['virtualization']); ?>)<?php endif; ?>
+                    </strong>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($details['reboot_required'])): ?>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: var(--text-muted);">Systém:</span>
+                    <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.68rem; font-weight: bold;"><i class="fas fa-power-off"></i> Vyžaduje restart</span>
+                </div>
+            <?php endif; ?>
+            <?php if (isset($details['iowait']) && $details['iowait'] !== null): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">IO Wait:</span>
+                    <strong style="color: <?php echo $details['iowait'] > 20 ? 'var(--color-red)' : (($details['iowait'] > 10) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['iowait']; ?>%</strong>
+                </div>
+            <?php endif; ?>
+            <?php if (isset($details['inode_usage']) && $details['inode_usage'] !== null): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Zaplnění inodů:</span>
+                    <strong style="color: <?php echo $details['inode_usage'] > 90 ? 'var(--color-red)' : (($details['inode_usage'] > 70) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['inode_usage']; ?>%</strong>
+                </div>
+            <?php endif; ?>
+            <?php if (isset($details['zombie_count']) && $details['zombie_count'] !== null): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Zombie procesy:</span>
+                    <strong style="color: <?php echo $details['zombie_count'] > 5 ? 'var(--color-red)' : '#fff'; ?>;"><?php echo (int)$details['zombie_count']; ?></strong>
+                </div>
+            <?php endif; ?>
+            <?php if (isset($details['fork_rate']) && $details['fork_rate'] !== null): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Nové procesy (od posl. kontroly):</span>
+                    <strong style="color: #fff;"><?php echo (int)$details['fork_rate']; ?></strong>
+                </div>
+            <?php endif; ?>
+            <?php if (isset($details['temperature']) && $details['temperature'] !== null): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Teplota:</span>
+                    <strong style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : (($details['temperature'] > 65) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['temperature']; ?>°C</strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['uptime'])): ?>
@@ -173,6 +235,37 @@ function render_vps_agent_details($details, $monitor = null) {
                             <span style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.68rem; font-family: monospace; font-weight: bold;"><?php echo htmlspecialchars($p); ?></span>
                         <?php endforeach; ?>
                     </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes'])): ?>
+                <div style="margin-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.45rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                    <?php if (!empty($details['top_cpu_processes'])): ?>
+                        <div>
+                            <span style="color: var(--text-muted); display: block; margin-bottom: 0.25rem;">TOP CPU procesy:</span>
+                            <div style="display: flex; flex-direction: column; gap: 0.2rem;">
+                                <?php foreach ($details['top_cpu_processes'] as $tp): ?>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
+                                        <span style="color: #e1e1e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                        <strong style="color: #fff; margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['cpu'] ?? 0)); ?>%</strong>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                    <?php if (!empty($details['top_ram_processes'])): ?>
+                        <div>
+                            <span style="color: var(--text-muted); display: block; margin-bottom: 0.25rem;">TOP RAM procesy:</span>
+                            <div style="display: flex; flex-direction: column; gap: 0.2rem;">
+                                <?php foreach ($details['top_ram_processes'] as $tp): ?>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
+                                        <span style="color: #e1e1e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                        <strong style="color: #fff; margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['ram_mb'] ?? 0)); ?> MB</strong>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
                 </div>
             <?php endif; ?>
         </div>

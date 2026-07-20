@@ -41,10 +41,11 @@ if [ -f "$ScriptPath/agent.cfg" ]; then
     done < "$ScriptPath/agent.cfg"
 fi
 
-AGENT_VERSION="1.5.0"
+AGENT_VERSION="1.6.0"
 LOG_FILE="$ScriptPath/agent.log"
 NET_STATE_FILE="$ScriptPath/agent_net.state"
 DISKIO_STATE_FILE="$ScriptPath/agent_diskio.state"
+FORKRATE_STATE_FILE="$ScriptPath/agent_forkrate.state"
 
 log_message() {
     local msg="$1"
@@ -80,10 +81,12 @@ BEGIN {
     split(s1, a1);
     split(s2, a2);
 
+    iowait1 = a1[6] + 0;
     idle1 = a1[5] + a1[6];
     total1 = a1[2]+a1[3]+a1[4]+a1[5]+a1[6]+a1[7]+a1[8];
     steal1 = a1[9] + 0;
 
+    iowait2 = a2[6] + 0;
     idle2 = a2[5] + a2[6];
     total2 = a2[2]+a2[3]+a2[4]+a2[5]+a2[6]+a2[7]+a2[8];
     steal2 = a2[9] + 0;
@@ -91,17 +94,20 @@ BEGIN {
     idle_delta = idle2 - idle1;
     total_delta = total2 - total1;
     steal_delta = steal2 - steal1;
+    iowait_delta = iowait2 - iowait1;
 
     if (total_delta == 0) {
-        print "0.0 0.0";
+        print "0.0 0.0 0.0";
     } else {
         cpu_pct = (1.0 - idle_delta / total_delta) * 100;
         steal_pct = (steal_delta / total_delta) * 100;
-        printf "%.1f %.1f", cpu_pct, steal_pct;
+        iowait_pct = (iowait_delta / total_delta) * 100;
+        printf "%.1f %.1f %.1f", cpu_pct, steal_pct, iowait_pct;
     }
 }')
 cpu=$(echo "$cpu_steal_out" | awk '{print $1}')
 cpu_steal=$(echo "$cpu_steal_out" | awk '{print $2}')
+iowait=$(echo "$cpu_steal_out" | awk '{print $3}')
 
 # 2. RAM Usage (%)
 ram=$(awk '
@@ -147,6 +153,13 @@ load15=$(echo "$load_out" | awk '{print $3}')
 hdd=$(df -P / | tail -n 1 | awk '{print $5}' | tr -d '%')
 if [ -z "$hdd" ]; then
     hdd=0.0
+fi
+
+# 3.05 Inode Usage (%) - stejný df, jen s -i (inode počty místo bloků)
+inode_usage=$(df -iP / 2>/dev/null | tail -n 1 | awk '{print $5}' | tr -d '%')
+inode_usage_json="null"
+if [ -n "$inode_usage" ]; then
+    inode_usage_json="$inode_usage"
 fi
 
 # 3.1 Disk I/O (KB/s čtení/zápis) - stejný tick/tock princip jako propustnost sítě níže.
@@ -238,6 +251,65 @@ net_errors_json="null"
 if [ -n "$net_errors" ]; then
     net_errors_json="$net_errors"
 fi
+
+# 3.6 Fork rate - nové procesy od posledního běhu (delta, ne rychlost za sekundu).
+# /proc/stat řádek "processes" je kumulativní čítač forků od bootu.
+total_forks=$(awk '/^processes / { print $2 }' /proc/stat 2>/dev/null)
+fork_rate_json="null"
+if [ -n "$total_forks" ]; then
+    if [ -f "$FORKRATE_STATE_FILE" ]; then
+        prev_forks=$(cat "$FORKRATE_STATE_FILE" 2>/dev/null)
+        if [ -n "$prev_forks" ]; then
+            delta_forks=$((total_forks - prev_forks))
+            [ "$delta_forks" -ge 0 ] && fork_rate_json="$delta_forks"
+        fi
+    fi
+    echo "$total_forks" > "$FORKRATE_STATE_FILE" 2>/dev/null || true
+fi
+
+# 3.7 Teplota (°C) - nejvyšší mezi dostupnými thermal zónami. Na většině VPS null,
+# tepelné senzory hostitele se přes virtualizaci obvykle nevystavují.
+temperature_json="null"
+if [ -d /sys/class/thermal ]; then
+    max_temp_millideg=$(for z in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$z" ] && cat "$z" 2>/dev/null
+    done | awk '$1 > 0 && $1 < 150000 { if ($1 > max) max = $1 } END { if (max) print max }')
+    if [ -n "$max_temp_millideg" ]; then
+        temperature_json=$(awk -v m="$max_temp_millideg" 'BEGIN { printf "%.1f", m / 1000 }')
+    fi
+fi
+
+# 3.8 Systémová identita (hostname/kernel/timezone/reboot-required/virtualizace/cloud)
+sys_hostname=$(hostname 2>/dev/null || echo "")
+sys_kernel=$(uname -r 2>/dev/null || echo "")
+sys_timezone=""
+if [ -f /etc/timezone ]; then
+    sys_timezone=$(cat /etc/timezone 2>/dev/null)
+elif [ -L /etc/localtime ]; then
+    sys_timezone=$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')
+fi
+reboot_required_json="false"
+[ -f /var/run/reboot-required ] && reboot_required_json="true"
+virtualization_json="null"
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+    virt=$(systemd-detect-virt 2>/dev/null)
+    [ -n "$virt" ] && [ "$virt" != "none" ] && virtualization_json="\"$virt\""
+fi
+cloud_provider_json="null"
+dmi_text=""
+for dmi_file in /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/bios_vendor; do
+    [ -r "$dmi_file" ] && dmi_text="$dmi_text $(cat "$dmi_file" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+done
+case "$dmi_text" in
+    *amazon*) cloud_provider_json="\"AWS\"" ;;
+    *google*) cloud_provider_json="\"Google Cloud\"" ;;
+    *microsoft*) cloud_provider_json="\"Azure\"" ;;
+    *digitalocean*) cloud_provider_json="\"DigitalOcean\"" ;;
+    *hetzner*) cloud_provider_json="\"Hetzner\"" ;;
+    *vultr*) cloud_provider_json="\"Vultr\"" ;;
+    *linode*) cloud_provider_json="\"Linode\"" ;;
+    *scaleway*) cloud_provider_json="\"Scaleway\"" ;;
+esac
 
 # 4. Uptime (sekundy)
 uptime=0
@@ -345,6 +417,31 @@ while read -r proc; do
     fi
 done <<EOF
 $(ps -eo comm 2>/dev/null | tail -n +2 | sort -u)
+EOF
+
+# 7.1 Zombie procesy a TOP RAM procesy (přes 'ps', stejná závislost jako výše).
+# TOP CPU procesy se v bash verzi nepočítají - přesné "právě teď" řazení by
+# vyžadovalo dvojité procházení /proc pro každý PID (drahé/pomalé v shellu);
+# pro plný přehled procesů použijte Python agenta. Zombie a TOP RAM jsou levné
+# (jeden běh 'ps'), proto zůstávají i v bash verzi.
+zombie_count_json="null"
+zc=$(ps -eo stat= 2>/dev/null | grep -c '^Z')
+[ -n "$zc" ] && zombie_count_json="$zc"
+
+top_ram_json=""
+while read -r rline; do
+    [ -z "$rline" ] && continue
+    rname=$(echo "$rline" | awk '{print $1}')
+    rrss_kb=$(echo "$rline" | awk '{print $2}')
+    [ -z "$rrss_kb" ] && continue
+    rname_clean=$(echo -n "$rname" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    rram_mb=$(awk -v k="$rrss_kb" 'BEGIN { printf "%.1f", k/1024 }')
+    if [ -n "$top_ram_json" ]; then
+        top_ram_json="$top_ram_json, "
+    fi
+    top_ram_json="$top_ram_json{\"name\": \"$rname_clean\", \"ram_mb\": $rram_mb}"
+done <<EOF
+$(ps -eo comm,rss --sort=-rss 2>/dev/null | tail -n +2 | head -n 5)
 EOF
 
 # 7.5 Zjištění TeamSpeak statistik (telnet query na localhost)
@@ -566,9 +663,11 @@ payload=$(cat <<EOF
   "os": "$os_version",
   "cpu": $cpu,
   "cpu_steal": $cpu_steal,
+  "iowait": $iowait,
   "ram": $ram,
   "swap": $swap,
   "hdd": $hdd,
+  "inode_usage": $inode_usage_json,
   "load1": $load1,
   "load5": $load5,
   "load15": $load15,
@@ -576,12 +675,23 @@ payload=$(cat <<EOF
   "disk_io_write": $disk_io_write_json,
   "net": $net_json,
   "net_errors": $net_errors_json,
+  "fork_rate": $fork_rate_json,
+  "temperature": $temperature_json,
   "uptime": $uptime,
   "smart": "$smart",
   "ports": [$ports_json],
   "processes": [$process_list],
   "teamspeak_servers": [$ts3_json_list],
-  "ts3_process": $ts3_process_json
+  "ts3_process": $ts3_process_json,
+  "zombie_count": $zombie_count_json,
+  "top_cpu_processes": null,
+  "top_ram_processes": [$top_ram_json],
+  "hostname": "$sys_hostname",
+  "kernel": "$sys_kernel",
+  "timezone": "$sys_timezone",
+  "reboot_required": $reboot_required_json,
+  "cloud_provider": $cloud_provider_json,
+  "virtualization": $virtualization_json
 }
 EOF
 )

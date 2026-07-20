@@ -54,7 +54,7 @@ if os.path.exists(cfg_path):
     except Exception:
         pass
 
-AGENT_VERSION = "1.5.0"
+AGENT_VERSION = "1.6.0"
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
 # V Docker režimu je adresář se skriptem připojený read-only, proto se stavový
 # soubor pro výpočet síťové propustnosti ukládá vždy do /tmp.
@@ -77,10 +77,12 @@ def log_message(msg):
 
 def get_cpu_usage():
     """
-    Vypočítá využití CPU a CPU steal time (%) z /proc/stat. Steal time (8. pole,
-    index 7) je čas, kdy hypervisor přidělil CPU jinému hostiteli - na VPS důležitý
-    signál "sousedského rušení", který se dřív četl, ale zahazoval.
-    Vrací (cpu_pct, steal_pct).
+    Vypočítá využití CPU, CPU steal time a IO wait (vše v %) z /proc/stat.
+    Steal (8. pole, index 7) je čas, kdy hypervisor přidělil CPU jinému
+    hostiteli - na VPS důležitý signál "sousedského rušení". IO wait (5. pole,
+    index 4) je dřív počítán jen jako součást "idle", teď se hlásí zvlášť -
+    vysoký iowait ukazuje na pomalý/přetížený disk, ne na volnou CPU.
+    Vrací (cpu_pct, steal_pct, iowait_pct).
     """
     def read_stat():
         try:
@@ -89,31 +91,34 @@ def get_cpu_usage():
             for line in lines:
                 if line.startswith('cpu '):
                     fields = [float(x) for x in line.strip().split()[1:]]
-                    idle = fields[3] + fields[4]  # idle + iowait
+                    iowait = fields[4] if len(fields) > 4 else 0.0
+                    idle = fields[3] + iowait
                     steal = fields[7] if len(fields) > 7 else 0.0
                     total = sum(fields)
-                    return idle, steal, total
+                    return idle, steal, iowait, total
         except IOError:
             pass
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
-    idle1, steal1, total1 = read_stat()
+    idle1, steal1, iowait1, total1 = read_stat()
     if total1 == 0:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
 
     time.sleep(1)
 
-    idle2, steal2, total2 = read_stat()
+    idle2, steal2, iowait2, total2 = read_stat()
     idle_delta = idle2 - idle1
     steal_delta = steal2 - steal1
+    iowait_delta = iowait2 - iowait1
     total_delta = total2 - total1
 
     if total_delta == 0:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
 
     cpu_pct = round((1.0 - idle_delta / total_delta) * 100, 1)
     steal_pct = round((steal_delta / total_delta) * 100, 1)
-    return cpu_pct, steal_pct
+    iowait_pct = round((iowait_delta / total_delta) * 100, 1)
+    return cpu_pct, steal_pct, iowait_pct
 
 def get_ram_usage():
     """Vypočítá využití RAM v % z /proc/meminfo"""
@@ -177,13 +182,27 @@ def get_hdd_usage():
         free = st.f_bavail * st.f_frsize
         total = st.f_blocks * st.f_frsize
         used = total - free
-        
+
         if total == 0:
             return 0.0
-        
+
         return round((used / total) * 100, 1)
     except Exception:
         return 0.0
+
+def get_inode_usage():
+    """Vypočítá zaplnění inodů kořenového disku v % - stejný statvfs() jako get_hdd_usage(), jen jiná pole."""
+    try:
+        root_path = HOST_ROOT if DOCKER_MODE and os.path.isdir(HOST_ROOT) else '/'
+        st = os.statvfs(root_path)
+        total_inodes = st.f_files
+        free_inodes = st.f_ffree
+        if total_inodes == 0:
+            return None
+        used_inodes = total_inodes - free_inodes
+        return round((used_inodes / total_inodes) * 100, 1)
+    except Exception:
+        return None
 
 DISKIO_STATE_FILE = '/tmp/status-agent-diskio.state' if DOCKER_MODE else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_diskio.state')
 _WHOLE_DISK_RE = re.compile(r'^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+)$')
@@ -248,6 +267,223 @@ def get_disk_io():
     read_kbps = round((delta_read * sector_size / elapsed) / 1024, 1)
     write_kbps = round((delta_write * sector_size / elapsed) / 1024, 1)
     return read_kbps, write_kbps
+
+FORKRATE_STATE_FILE = '/tmp/status-agent-forkrate.state' if DOCKER_MODE else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_forkrate.state')
+
+def get_fork_rate():
+    """
+    Počet nově vytvořených procesů (fork) od posledního běhu agenta - ne rychlost
+    za sekundu, ale delta od minula (stejně jako net_errors). /proc/stat řádek
+    "processes" je kumulativní čítač forků od bootu, tick/tock stejně jako
+    get_disk_io()/get_network_usage(). První běh vrací None (chybí předchozí vzorek).
+    """
+    total_forks = None
+    try:
+        with open('/proc/stat', 'r') as f:
+            for line in f:
+                if line.startswith('processes '):
+                    total_forks = int(line.split()[1])
+                    break
+    except Exception:
+        pass
+    if total_forks is None:
+        return None
+
+    prev = None
+    try:
+        with open(FORKRATE_STATE_FILE, 'r') as f:
+            prev = int(f.read().strip())
+    except Exception:
+        pass
+
+    try:
+        with open(FORKRATE_STATE_FILE, 'w') as f:
+            f.write(str(total_forks))
+    except Exception:
+        pass
+
+    if prev is None:
+        return None
+    delta = total_forks - prev
+    return delta if delta >= 0 else None
+
+def get_temperature():
+    """
+    Nejvyšší teplota (°C) mezi dostupnými /sys/class/thermal/thermal_zone* zónami.
+    Na většině VPS vrátí None - tepelné senzory hostitele se přes virtualizaci
+    obvykle nevystavují. Nejde o chybu, jen o nedostupnost dat na daném stroji.
+    """
+    max_temp = None
+    try:
+        base = '/sys/class/thermal'
+        if os.path.isdir(base):
+            for zone in os.listdir(base):
+                if not zone.startswith('thermal_zone'):
+                    continue
+                temp_path = os.path.join(base, zone, 'temp')
+                try:
+                    with open(temp_path, 'r') as f:
+                        millideg = float(f.read().strip())
+                    deg = millideg / 1000.0
+                    # Sanity limit - chybné čtení z virtualizovaného/chybějícího senzoru
+                    # občas vrátí nesmyslné hodnoty (0, záporné, nebo stovky stupňů).
+                    if 0 < deg < 150 and (max_temp is None or deg > max_temp):
+                        max_temp = deg
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return round(max_temp, 1) if max_temp is not None else None
+
+def get_system_identity():
+    """
+    Statická identita hostitele (mění se zřídka, na rozdíl od CPU/RAM/disk čísel):
+    hostname, kernel, timezone, reboot-required, cloud provider (best-effort dle
+    DMI řetězců), virtualizace. Vrací dict, chybějící/nedetekovatelné hodnoty None.
+    """
+    identity = {
+        'hostname': None, 'kernel': None, 'timezone': None,
+        'reboot_required': None, 'cloud_provider': None, 'virtualization': None,
+    }
+
+    try:
+        import socket as _socket
+        identity['hostname'] = _socket.gethostname()
+    except Exception:
+        pass
+
+    try:
+        import platform as _platform
+        identity['kernel'] = _platform.release()
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists('/etc/timezone'):
+            with open('/etc/timezone', 'r') as f:
+                identity['timezone'] = f.read().strip()
+        elif os.path.islink('/etc/localtime'):
+            link = os.readlink('/etc/localtime')
+            identity['timezone'] = link.split('zoneinfo/')[-1] if 'zoneinfo/' in link else None
+    except Exception:
+        pass
+
+    try:
+        identity['reboot_required'] = os.path.exists('/var/run/reboot-required')
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(['systemd-detect-virt'], capture_output=True, text=True, timeout=3)
+        virt = res.stdout.strip()
+        if virt and virt != 'none':
+            identity['virtualization'] = virt
+    except Exception:
+        pass
+
+    # Best-effort rozpoznání cloud poskytovatele dle DMI řetězců - nepokrývá
+    # všechny poskytovatele (OVH typicky vystavuje jen obecné KVM DMI bez
+    # rozlišujícího řetězce), jde o orientační informaci, ne spolehlivý fakt.
+    try:
+        dmi_text = ''
+        for dmi_file in ('/sys/class/dmi/id/sys_vendor', '/sys/class/dmi/id/product_name', '/sys/class/dmi/id/bios_vendor'):
+            if os.path.exists(dmi_file):
+                with open(dmi_file, 'r') as f:
+                    dmi_text += f.read().strip().lower() + ' '
+        provider_hints = [
+            ('amazon', 'AWS'), ('google', 'Google Cloud'), ('microsoft', 'Azure'),
+            ('digitalocean', 'DigitalOcean'), ('hetzner', 'Hetzner'),
+            ('vultr', 'Vultr'), ('linode', 'Linode'), ('scaleway', 'Scaleway'),
+        ]
+        for hint, name in provider_hints:
+            if hint in dmi_text:
+                identity['cloud_provider'] = name
+                break
+    except Exception:
+        pass
+
+    return identity
+
+def get_process_snapshot(limit=5):
+    """
+    Jeden společný sken /proc/<pid>/* pro tři věci najednou: počet zombie procesů,
+    TOP CPU procesy a TOP RAM procesy. CPU ranking je reálný "právě teď" stav (ne
+    průměr od startu procesu) - stejná dvouvzorková delta technika jako u
+    get_ts3_process_info(), jen zobecněná na všechny PID najednou.
+    Vrací (zombie_count, top_cpu[{name,cpu}], top_ram[{name,ram_mb}]).
+    """
+    def read_all_stats():
+        stats = {}
+        try:
+            for entry in os.listdir('/proc'):
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f'/proc/{entry}/stat', 'r') as f:
+                        raw = f.read()
+                    after_comm = raw[raw.rfind(')') + 2:]
+                    fields = after_comm.split()
+                    if len(fields) < 13:
+                        continue
+                    state = fields[0]
+                    utime = int(fields[11])
+                    stime = int(fields[12])
+                    stats[entry] = (state, utime + stime)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return stats
+
+    stats1 = read_all_stats()
+    time.sleep(1)
+    stats2 = read_all_stats()
+
+    zombie_count = sum(1 for state, _ in stats2.values() if state == 'Z')
+
+    cpu_deltas = []
+    try:
+        clk_tck = os.sysconf('SC_CLK_TCK')
+    except Exception:
+        clk_tck = 100
+    for pid, (state, ticks2) in stats2.items():
+        if pid not in stats1 or state == 'Z':
+            continue
+        ticks1 = stats1[pid][1]
+        delta_ticks = ticks2 - ticks1
+        if delta_ticks <= 0:
+            continue
+        cpu_pct = round((delta_ticks / clk_tck) * 100, 1)
+        try:
+            with open(f'/proc/{pid}/comm', 'r') as f:
+                name = f.read().strip()
+        except Exception:
+            name = f'pid-{pid}'
+        cpu_deltas.append({'name': name, 'cpu': cpu_pct})
+
+    cpu_deltas.sort(key=lambda x: x['cpu'], reverse=True)
+    top_cpu = cpu_deltas[:limit]
+
+    ram_list = []
+    for pid in stats2:
+        try:
+            with open(f'/proc/{pid}/status', 'r') as f:
+                rss_kb = None
+                name = f'pid-{pid}'
+                for line in f:
+                    if line.startswith('VmRSS:'):
+                        rss_kb = int(line.split()[1])
+                    elif line.startswith('Name:'):
+                        name = line.split(None, 1)[1].strip()
+                if rss_kb:
+                    ram_list.append({'name': name, 'ram_mb': round(rss_kb / 1024, 1)})
+        except Exception:
+            continue
+
+    ram_list.sort(key=lambda x: x['ram_mb'], reverse=True)
+    top_ram = ram_list[:limit]
+
+    return zombie_count, top_cpu, top_ram
 
 def get_network_bytes():
     """
@@ -595,20 +831,25 @@ def main():
         sys.exit(1)
 
     log_message("Získávám systémové statistiky...")
-    cpu, cpu_steal = get_cpu_usage()
+    cpu, cpu_steal, iowait = get_cpu_usage()
     ram = get_ram_usage()
     swap = get_swap_usage()
     hdd = get_hdd_usage()
+    inode_usage = get_inode_usage()
     load1, load5, load15 = get_load_average()
     disk_read, disk_write = get_disk_io()
     net, net_errors = get_network_usage()
+    fork_rate = get_fork_rate()
+    temperature = get_temperature()
     uptime = get_uptime()
     smart = get_smart_status()
     ports = get_listening_ports()
     processes = get_running_processes()
     os_ver = get_os_version()
+    identity = get_system_identity()
     teamspeak_servers = get_local_teamspeak_servers(ports)
     ts3_process = get_ts3_process_info()
+    zombie_count, top_cpu_processes, top_ram_processes = get_process_snapshot()
 
     payload = {
         "agent_key": AGENT_KEY,
@@ -617,9 +858,11 @@ def main():
         "os": os_ver,
         "cpu": cpu,
         "cpu_steal": cpu_steal,
+        "iowait": iowait,
         "ram": ram,
         "swap": swap,
         "hdd": hdd,
+        "inode_usage": inode_usage,
         "load1": load1,
         "load5": load5,
         "load15": load15,
@@ -627,16 +870,27 @@ def main():
         "disk_io_write": disk_write,
         "net": net,
         "net_errors": net_errors,
+        "fork_rate": fork_rate,
+        "temperature": temperature,
         "uptime": uptime,
         "smart": smart,
         "ports": ports,
         "processes": processes,
         "teamspeak_servers": teamspeak_servers,
-        "ts3_process": ts3_process
+        "ts3_process": ts3_process,
+        "zombie_count": zombie_count,
+        "top_cpu_processes": top_cpu_processes,
+        "top_ram_processes": top_ram_processes,
+        "hostname": identity['hostname'],
+        "kernel": identity['kernel'],
+        "timezone": identity['timezone'],
+        "reboot_required": identity['reboot_required'],
+        "cloud_provider": identity['cloud_provider'],
+        "virtualization": identity['virtualization']
     }
 
     net_log = f"{net} KB/s" if net is not None else "N/A (první běh)"
-    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}% (steal {cpu_steal}%), RAM: {ram}% (swap {swap}%), HDD: {hdd}%, Load: {load1}/{load5}/{load15}, Síť: {net_log}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
+    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}% (steal {cpu_steal}%, iowait {iowait}%), RAM: {ram}% (swap {swap}%), HDD: {hdd}% (inode {inode_usage}%), Load: {load1}/{load5}/{load15}, Síť: {net_log}, Zombie: {zombie_count}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
     
     req = urllib.request.Request(
         API_URL,
