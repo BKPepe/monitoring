@@ -4,18 +4,25 @@ Tento repozitář obsahuje oficiální produktový web a backend API pro **Blood
 
 ## 🏗️ Architektura projektu
 
-Projekt je strukturován jako monorepo využívající NPM workspaces:
+Projekt je strukturován jako monorepo využívající NPM workspaces (`apps/site`, `apps/worker`). `apps/status` je samostatná PHP aplikace mimo NPM workspaces - je to referenční self-hosted implementace monitorovacího dashboardu, tedy to, co si každý může nasadit na vlastní hosting:
 
 ```
 /
 ├── apps/
 │   ├── site/                      # Astro v5 - Statická landing page (SSG)
-│   └── worker/                    # Cloudflare Worker + Hono - Backend API
+│   ├── worker/                    # Cloudflare Worker + Hono - Backend API pro landing page
+│   └── status/                    # PHP - Self-hosted monitorovací dashboard (referenční nasazení)
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml             # CI/CD nasazení na Cloudflare Pages & Workers
-└── package.json                   # Konfigurace workspaces
+└── package.json                   # Konfigurace NPM workspaces (site, worker)
 ```
+
+Distribuovaní agenti (HTTP probes z GitHub Actions/Cloudflare Worker i VPS host-metrics agenti pro Python/Bash/PowerShell/Docker) žijí v samostatném repozitáři [BKPepe/monitoring-agent](https://github.com/BKPepe/monitoring-agent), protože je nasazuje každý uživatel nezávisle na hlavním dashboardu.
+
+### apps/status - self-hosted monitorovací dashboard
+
+Kompletní PHP aplikace (bez frameworku, MySQL databáze) pro vlastní status stránku a administraci monitorů, notifikací (e-mail/SMS/WhatsApp/Discord/Slack/Telegram), VPS agentů a Prometheus exportu. Instalační návod je v [apps/status/README.md](apps/status/README.md).
 
 ---
 

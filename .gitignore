@@ -1,1 +1,7 @@
 node_modules
+
+# apps/status (self-hosted PHP status dashboard) - secrets and generated files
+apps/status/config.php
+apps/status/cpanel_config.php
+apps/status/version.php
+apps/status/cache/
