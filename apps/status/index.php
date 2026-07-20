@@ -52,7 +52,7 @@ if (is_readable($bk_cache_file) && (time() - (int)@filemtime($bk_cache_file)) < 
     $bk_agg = json_decode((string)@file_get_contents($bk_cache_file), true);
 }
 
-if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'], $bk_agg['history_uptime'], $bk_agg['incidents'])) {
+if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'], $bk_agg['history_uptime'], $bk_agg['incidents'], $bk_agg['regions'])) {
     // Výpočet 30-denního uptime procenta pro každý monitor
     $stmt_upt = $pdo->query("
         SELECT monitor_id,
@@ -111,11 +111,25 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     ");
     $incidents = $stmt_inc->fetchAll();
 
+    // Distribuovaní agenti/uzly, kteří v posledních 24h hlásili měření (veřejná
+    // "Global Agent Map" - stejná logika jako admin diagnostika, bez citlivých detailů)
+    $stmt_regions = $pdo->query("
+        SELECT checked_from, COUNT(*) as cnt, MAX(checked_at) as last_seen,
+               ROUND(AVG(response_time)) as avg_latency
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND checked_from IS NOT NULL
+        GROUP BY checked_from
+        ORDER BY last_seen DESC
+        LIMIT 24
+    ");
+    $regions = $stmt_regions->fetchAll();
+
     $bk_agg = [
         'uptime_pct' => $uptime_pct,
         'history_data' => $history_data,
         'history_uptime' => $history_uptime,
         'incidents' => $incidents,
+        'regions' => $regions,
     ];
 
     if (!is_dir($bk_cache_dir)) {
@@ -132,6 +146,7 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     $history_data = $bk_agg['history_data'];
     $history_uptime = $bk_agg['history_uptime'];
     $incidents = $bk_agg['incidents'];
+    $regions = $bk_agg['regions'];
 }
 
 // Celková průměrná 30denní dostupnost napříč všemi monitory
@@ -235,7 +250,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     <a href="<?php echo htmlspecialchars($nl_url); ?>" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i> <?php echo htmlspecialchars($nl_name); ?></a>
                 <?php endforeach; ?>
                 <?php if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true): ?>
-                    <a href="admin.php" class="btn btn-secondary btn-sm" style="background: rgba(46, 196, 182, 0.1); border: 1px solid rgba(46, 196, 182, 0.3); color: var(--color-green);"><i class="fas fa-user-shield"></i> Administrace (<?php echo htmlspecialchars($_SESSION['admin_username'] ?? 'Admin'); ?>)</a>
+                    <a href="admin.php" class="btn btn-secondary btn-sm" style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.3); color: var(--color-green);"><i class="fas fa-user-shield"></i> Administrace (<?php echo htmlspecialchars($_SESSION['admin_username'] ?? 'Admin'); ?>)</a>
                     <a href="admin.php?action=logout" class="btn btn-secondary btn-sm" style="background: rgba(230, 57, 70, 0.1); border: 1px solid rgba(230, 57, 70, 0.3); color: var(--color-red);" onclick="return confirm('Opravdu se chcete odhlásit?')"><i class="fas fa-sign-out-alt"></i> Odhlásit</a>
                 <?php else: ?>
                     <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-lock"></i> Admin</a>
@@ -326,6 +341,39 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     <?php endforeach; ?>
                 </div>
             </div>
+        <?php endif; ?>
+
+        <!-- Global Agent Map - přehled distribuovaných měřicích uzlů/agentů -->
+        <?php if (!empty($regions)): ?>
+            <section class="regions-section">
+                <h2 class="category-title"><i class="fas fa-satellite-dish"></i> Distribuovaní agenti</h2>
+                <div class="regions-grid">
+                    <?php foreach ($regions as $rg):
+                        $r_diff_min = round((time() - strtotime($rg['last_seen'])) / 60);
+                        if ($r_diff_min < 15) {
+                            $r_state = 'online'; $r_label = 'Online';
+                        } elseif ($r_diff_min < 60) {
+                            $r_state = 'warn'; $r_label = 'Zpožděno';
+                        } else {
+                            $r_state = 'offline'; $r_label = 'Neaktivní';
+                        }
+                        $r_ago = $r_diff_min < 2 ? 'právě teď' : ($r_diff_min < 60 ? "před {$r_diff_min} min" : 'před ' . round($r_diff_min / 60) . ' hod');
+                    ?>
+                        <div class="region-card region-<?php echo $r_state; ?>">
+                            <div class="region-dot"></div>
+                            <div class="region-info">
+                                <div class="region-name"><?php echo htmlspecialchars($rg['checked_from']); ?></div>
+                                <div class="region-meta">
+                                    <?php echo $r_label; ?> · <?php echo $r_ago; ?>
+                                    <?php if ($rg['avg_latency'] !== null): ?>
+                                        · <?php echo (int)$rg['avg_latency']; ?>&nbsp;ms
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </section>
         <?php endif; ?>
 
         <!-- Sekce s kategoriemi a monitory -->
@@ -632,7 +680,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
-                                                                <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
+                                                                <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                     <i class="fas fa-terminal"></i> Návod k instalaci agenta
                                                                 </button>
                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
@@ -729,7 +777,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
+                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                      <i class="fas fa-terminal"></i> Návod k instalaci agenta
                                                                  </button>
                                                                  <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
@@ -793,7 +841,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                     <div class="voice-channel-name"><?php echo htmlspecialchars($chan['name']); ?></div>
                                                                     <div class="voice-channel-users">
                                                                         <?php foreach ($chan['users'] as $user): ?>
-                                                                            <span class="player-badge" style="background: rgba(46,196,182,0.1); border-color: rgba(46,196,182,0.15);"><i class="fas fa-microphone" style="font-size: 0.7rem; color: var(--color-green);"></i> <?php echo htmlspecialchars($user); ?></span>
+                                                                            <span class="player-badge" style="background: rgba(30,199,115,0.1); border-color: rgba(30,199,115,0.15);"><i class="fas fa-microphone" style="font-size: 0.7rem; color: var(--color-green);"></i> <?php echo htmlspecialchars($user); ?></span>
                                                                         <?php endforeach; ?>
                                                                     </div>
                                                                 </div>
@@ -806,7 +854,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
-                                                                <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
+                                                                <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                     <i class="fas fa-terminal"></i> Návod k instalaci agenta
                                                                 </button>
                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
@@ -849,7 +897,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <div class="detail-section-title">
                                                             <span><i class="fab fa-discord"></i> Online uživatelé</span>
                                                             <?php if (!empty($details['instant_invite'])): ?>
-                                                                <a href="<?php echo htmlspecialchars($details['instant_invite']); ?>" target="_blank" class="category-badge" style="color: var(--color-green); border-color: rgba(46,196,182,0.3); background: rgba(46,196,182,0.05); font-size: 0.7rem;"><i class="fas fa-external-link-alt"></i> Vstoupit</a>
+                                                                <a href="<?php echo htmlspecialchars($details['instant_invite']); ?>" target="_blank" class="category-badge" style="color: var(--color-green); border-color: rgba(30,199,115,0.3); background: rgba(30,199,115,0.05); font-size: 0.7rem;"><i class="fas fa-external-link-alt"></i> Vstoupit</a>
                                                             <?php endif; ?>
                                                         </div>
                                                         <?php if (empty($details['members'])): ?>
@@ -936,7 +984,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
+                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                      <i class="fas fa-terminal"></i> Návod k instalaci agenta
                                                                  </button>
                                                                  <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
@@ -1060,7 +1108,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> Unikátní klíč agenta</div>
                                                             <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                             
-                                                            <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; transition: all 0.2s; width: 100%; justify-content: center;">
+                                                            <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                 <i class="fas fa-terminal"></i> Návod k instalaci agenta
                                                             </button>
                                                             <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
@@ -1178,7 +1226,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
-                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(46,196,182,0.1); border: 1px solid rgba(46,196,182,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
+                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
                                                                      <i class="fas fa-terminal"></i> Návod k instalaci agenta
                                                                  </button>
                                                                  <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
@@ -1346,7 +1394,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                     label: 'RAM (%)',
                                                                     data: <?php echo json_encode($ram_data); ?>,
                                                                     borderColor: '#2ec4b6',
-                                                                    backgroundColor: 'rgba(46, 196, 182, 0.05)',
+                                                                    backgroundColor: 'rgba(30, 199, 115, 0.05)',
                                                                     borderWidth: 2,
                                                                     pointRadius: 0,
                                                                     tension: 0.3,
