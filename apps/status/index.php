@@ -4,6 +4,7 @@
  */
 
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/lang.php';
 
 $is_admin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
 
@@ -32,7 +33,7 @@ $monitors = $stmt_monitors->fetchAll();
 // Seskupení monitorů podle kategorií
 $categories = [];
 foreach ($monitors as $m) {
-    $cat = $m['category'] ?: 'Ostatní';
+    $cat = $m['category'] ?: t('default_category');
     $categories[$cat][] = $m;
 }
 
@@ -228,7 +229,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
 }
 ?>
 <!DOCTYPE html>
-<html lang="cs">
+<html lang="<?php echo htmlspecialchars($GLOBALS['BK_LANG']); ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -261,9 +262,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
             </a>
             <div class="nav-links">
                 <?php if ($portal_url !== ''): ?>
-                    <a href="<?php echo htmlspecialchars($portal_url); ?>"><i class="fas fa-home"></i> Portál</a>
+                    <a href="<?php echo htmlspecialchars($portal_url); ?>"><i class="fas fa-home"></i> <?php echo htmlspecialchars(t('nav_portal')); ?></a>
                 <?php endif; ?>
-                <a href="index.php" class="active"><i class="fas fa-chart-line"></i> Monitoring</a>
+                <a href="index.php" class="active"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('nav_monitoring')); ?></a>
                 <?php foreach ($custom_nav_links as $nav_link):
                     $nl_name = trim((string)($nav_link['name'] ?? ''));
                     $nl_url = trim((string)($nav_link['url'] ?? ''));
@@ -272,12 +273,13 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     <a href="<?php echo htmlspecialchars($nl_url); ?>" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i> <?php echo htmlspecialchars($nl_name); ?></a>
                 <?php endforeach; ?>
                 <?php if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true): ?>
-                    <a href="admin.php" class="btn btn-secondary btn-sm" style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.3); color: var(--color-green);"><i class="fas fa-user-shield"></i> Administrace (<?php echo htmlspecialchars($_SESSION['admin_username'] ?? 'Admin'); ?>)</a>
-                    <a href="admin.php?action=logout" class="btn btn-secondary btn-sm" style="background: rgba(193, 18, 31, 0.1); border: 1px solid rgba(193, 18, 31, 0.3); color: var(--color-red);" onclick="return confirm('Opravdu se chcete odhlásit?')"><i class="fas fa-sign-out-alt"></i> Odhlásit</a>
+                    <a href="admin.php" class="btn btn-secondary btn-sm" style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.3); color: var(--color-green);"><i class="fas fa-user-shield"></i> <?php echo htmlspecialchars(t('nav_admin_prefix')); ?> (<?php echo htmlspecialchars($_SESSION['admin_username'] ?? 'Admin'); ?>)</a>
+                    <a href="admin.php?action=logout" class="btn btn-secondary btn-sm" style="background: rgba(193, 18, 31, 0.1); border: 1px solid rgba(193, 18, 31, 0.3); color: var(--color-red);" onclick="return confirm('<?php echo htmlspecialchars(t('nav_logout_confirm')); ?>')"><i class="fas fa-sign-out-alt"></i> <?php echo htmlspecialchars(t('nav_logout')); ?></a>
                 <?php else: ?>
-                    <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-lock"></i> Admin</a>
+                    <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-lock"></i> <?php echo htmlspecialchars(t('nav_admin')); ?></a>
                 <?php endif; ?>
-                <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; clip-path: none; border-radius: 4px;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
+                <a href="?lang=<?php echo $GLOBALS['BK_LANG'] === 'cs' ? 'en' : 'cs'; ?>" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px; font-weight: 700; font-size: 0.75rem;" title="<?php echo htmlspecialchars(t('lang_toggle_title')); ?>"><?php echo $GLOBALS['BK_LANG'] === 'cs' ? 'EN' : 'CS'; ?></a>
+                <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px;" title="<?php echo htmlspecialchars(t('theme_toggle_title')); ?>"><i class="fas fa-sun"></i></button>
             </div>
         </div>
     </header>
@@ -296,53 +298,53 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         <div class="overall-status <?php echo $hero_class; ?>">
             <div class="overall-info">
                 <?php if ($down_monitors > 0): ?>
-                    <h2><i class="fas fa-exclamation-triangle" style="color: var(--color-red);"></i> Některé systémy vykazují výpadek</h2>
-                    <p>Detekovali jsme potíže u <?php echo $down_monitors; ?> z <?php echo $total_monitors; ?> sledovaných služeb.</p>
+                    <h2><i class="fas fa-exclamation-triangle" style="color: var(--color-red);"></i> <?php echo htmlspecialchars(t('hero_down_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(sprintf(t('hero_down_desc'), $down_monitors, $total_monitors)); ?></p>
                 <?php elseif ($maintenance_monitors_count > 0): ?>
-                    <h2><i class="fas fa-tools" style="color: var(--color-yellow, #f39c12);"></i> Systémy běží, probíhá plánovaná údržba</h2>
-                    <p>U <?php echo $maintenance_monitors_count; ?> služeb právě probíhá plánovaná údržba, ostatní běží bez problémů.</p>
+                    <h2><i class="fas fa-tools" style="color: var(--color-yellow, #f39c12);"></i> <?php echo htmlspecialchars(t('hero_maintenance_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(sprintf(t('hero_maintenance_desc'), $maintenance_monitors_count)); ?></p>
                 <?php else: ?>
-                    <h2><i class="fas fa-check-circle" style="color: var(--color-green);"></i> Všechny systémy jsou online</h2>
-                    <p>Všech <?php echo $total_monitors; ?> sledovaných služeb a serverů běží bez jakýchkoliv problémů.</p>
+                    <h2><i class="fas fa-check-circle" style="color: var(--color-green);"></i> <?php echo htmlspecialchars(t('hero_ok_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(sprintf(t('hero_ok_desc'), $total_monitors)); ?></p>
                 <?php endif; ?>
                 <?php if ($last_checked_global): ?>
-                    <p class="last-update-line"><i class="fas fa-clock"></i> Poslední kontrola: <?php echo date('d.m.Y H:i:s', strtotime($last_checked_global)); ?></p>
+                    <p class="last-update-line"><i class="fas fa-clock"></i> <?php echo htmlspecialchars(t('hero_last_check')); ?> <?php echo date('d.m.Y H:i:s', strtotime($last_checked_global)); ?></p>
                 <?php endif; ?>
             </div>
 
             <div class="overall-stats">
                 <div class="stat-item">
                     <div class="stat-value up"><?php echo $up_monitors; ?></div>
-                    <div class="stat-label">Online</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_online')); ?></div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-value down"><?php echo $down_monitors; ?></div>
-                    <div class="stat-label">Výpadek</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_down')); ?></div>
                 </div>
                 <?php if ($maintenance_monitors_count > 0): ?>
                 <div class="stat-item">
                     <div class="stat-value warn"><?php echo $maintenance_monitors_count; ?></div>
-                    <div class="stat-label">Údržba</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_maintenance')); ?></div>
                 </div>
                 <?php endif; ?>
                 <div class="stat-item">
                     <div class="stat-value <?php echo $avg_uptime >= 99 ? 'up' : ($avg_uptime >= 95 ? 'warn' : 'down'); ?>"><?php echo number_format($avg_uptime, 2, ',', ' '); ?>%</div>
-                    <div class="stat-label">Dostupnost 30 dní</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_uptime_30d')); ?></div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-value total"><?php echo $total_monitors; ?></div>
-                    <div class="stat-label">Celkem</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_total')); ?></div>
                 </div>
                 <?php if ($total_agents_count > 0): ?>
                 <div class="stat-item">
                     <div class="stat-value <?php echo $online_agents_count === $total_agents_count ? 'up' : ($online_agents_count > 0 ? 'warn' : 'down'); ?>"><?php echo $online_agents_count; ?>/<?php echo $total_agents_count; ?></div>
-                    <div class="stat-label">Agentů online</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_agents_online')); ?></div>
                 </div>
                 <?php endif; ?>
                 <?php if (!empty($regions)): ?>
                 <div class="stat-item">
                     <div class="stat-value total"><?php echo count($regions); ?></div>
-                    <div class="stat-label">Regionů</div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_regions')); ?></div>
                 </div>
                 <?php endif; ?>
             </div>
@@ -359,14 +361,14 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         ?>
             <div class="maintenance-banner" style="background: rgba(243, 156, 18, 0.1); border: 1px solid rgba(243, 156, 18, 0.2); border-left: 4px solid #f39c12; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
                 <div style="font-weight: bold; color: #f39c12; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem;">
-                    <i class="fas fa-tools"></i> Probíhá plánovaná údržba
+                    <i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_banner_title')); ?>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                    <?php foreach ($maintenance_monitors as $mm): 
-                        $desc = $mm['maintenance_description'] ?: 'Údržba a optimalizace systému';
+                    <?php foreach ($maintenance_monitors as $mm):
+                        $desc = $mm['maintenance_description'] ?: t('maintenance_default_desc');
                         $time_str = '';
                         if (!empty($mm['maintenance_start']) && !empty($mm['maintenance_end'])) {
-                            $time_str = ' (od ' . date('d.m.Y H:i', strtotime($mm['maintenance_start'])) . ' do ' . date('d.m.Y H:i', strtotime($mm['maintenance_end'])) . ')';
+                            $time_str = ' (' . sprintf(t('maintenance_duration_range'), date('d.m.Y H:i', strtotime($mm['maintenance_start'])), date('d.m.Y H:i', strtotime($mm['maintenance_end']))) . ')';
                         }
                     ?>
                         <div style="font-size: 0.85rem; color: #e1e1e6;">
@@ -380,18 +382,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         <!-- Global Agent Map - přehled distribuovaných měřicích uzlů/agentů -->
         <?php if (!empty($regions)): ?>
             <section class="regions-section">
-                <h2 class="category-title"><i class="fas fa-satellite-dish"></i> Distribuovaní agenti</h2>
+                <h2 class="category-title"><i class="fas fa-satellite-dish"></i> <?php echo htmlspecialchars(t('regions_title')); ?></h2>
                 <div class="regions-grid">
                     <?php foreach ($regions as $rg):
                         $r_diff_min = round((time() - strtotime($rg['last_seen'])) / 60);
                         if ($r_diff_min < 15) {
-                            $r_state = 'online'; $r_label = 'Online';
+                            $r_state = 'online'; $r_label = t('region_state_online');
                         } elseif ($r_diff_min < 60) {
-                            $r_state = 'warn'; $r_label = 'Zpožděno';
+                            $r_state = 'warn'; $r_label = t('region_state_warn');
                         } else {
-                            $r_state = 'offline'; $r_label = 'Neaktivní';
+                            $r_state = 'offline'; $r_label = t('region_state_offline');
                         }
-                        $r_ago = $r_diff_min < 2 ? 'právě teď' : ($r_diff_min < 60 ? "před {$r_diff_min} min" : 'před ' . round($r_diff_min / 60) . ' hod');
+                        $r_ago = $r_diff_min < 2 ? t('time_just_now') : ($r_diff_min < 60 ? sprintf(t('time_ago_min'), $r_diff_min) : sprintf(t('time_ago_hours'), round($r_diff_min / 60)));
                     ?>
                         <div class="region-card region-<?php echo $r_state; ?>">
                             <div class="region-dot"></div>
@@ -414,9 +416,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         <?php if (empty($categories)): ?>
             <div class="admin-card" style="text-align: center; padding: 3rem;">
                 <i class="fas fa-info-circle" style="font-size: 3rem; color: var(--text-muted); margin-bottom: 1rem;"></i>
-                <h2>Zatím nebyly přidány žádné servery</h2>
-                <p>Přihlaste se do administrace a přidejte své první servery k monitorování.</p>
-                <a href="admin.php" class="btn" style="margin-top: 1.5rem;"><i class="fas fa-plus"></i> Přejít do administrace</a>
+                <h2><?php echo htmlspecialchars(t('empty_title')); ?></h2>
+                <p><?php echo htmlspecialchars(t('empty_desc')); ?></p>
+                <a href="admin.php" class="btn" style="margin-top: 1.5rem;"><i class="fas fa-plus"></i> <?php echo htmlspecialchars(t('empty_cta')); ?></a>
             </div>
         <?php else: ?>
             
@@ -463,13 +465,13 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                 <?php echo monitor_type_icon($m_type, $monitor['target']); ?>
                                                 <?php echo htmlspecialchars($monitor['name']); ?>
                                                 <?php if ($status === 'maintenance'): ?>
-                                                    <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="Na tomto serveru právě probíhá plánovaná údržba."><i class="fas fa-tools"></i> Údržba</span>
+                                                    <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="<?php echo htmlspecialchars(t('maintenance_badge_title')); ?>"><i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_badge')); ?></span>
                                                 <?php endif; ?>
                                             </h3>
                                             <span>
                                                 <?php 
                                                 if ($m_type === 'discord') {
-                                                    echo 'Discord Server';
+                                                    echo htmlspecialchars(t('type_discord_server'));
                                                 } elseif ($m_type === 'teamspeak') {
                                                     $ts_host = $monitor['target'];
                                                     $ts_voice_port = 9987;
@@ -478,7 +480,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         $ts_host = $parts[0];
                                                         $ts_voice_port = intval($parts[1]);
                                                     }
-                                                    echo '<a href="ts3server://' . htmlspecialchars($ts_host) . '?port=' . htmlspecialchars($ts_voice_port) . '" class="ts-connect-link" title="Kliknutím se připojíte přímo na TeamSpeak server"><i class="fas fa-external-link-alt" style="font-size: 0.75rem; margin-right: 0.25rem;"></i> ' . htmlspecialchars($monitor['target']) . '</a>';
+                                                    echo '<a href="ts3server://' . htmlspecialchars($ts_host) . '?port=' . htmlspecialchars($ts_voice_port) . '" class="ts-connect-link" title="' . htmlspecialchars(t('ts_connect_title')) . '"><i class="fas fa-external-link-alt" style="font-size: 0.75rem; margin-right: 0.25rem;"></i> ' . htmlspecialchars($monitor['target']) . '</a>';
                                                 } else {
                                                     echo htmlspecialchars($monitor['target']) . ($monitor['port'] ? ':'.$monitor['port'] : ''); 
                                                 }
@@ -495,11 +497,11 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                         <?php if ($status === 'up' && $details): ?>
                                             <div class="game-info" style="margin-top: 0.25rem;">
                                                 <?php if ($m_type === 'minecraft'): ?>
-                                                    <span title="Minecraft verze: <?php echo htmlspecialchars($details['version'] ?? ''); ?>">
+                                                    <span title="<?php echo htmlspecialchars(sprintf(t('minecraft_version_title'), $details['version'] ?? '')); ?>">
                                                         <i class="fas fa-users"></i> <?php echo (int)($details['players_online'] ?? 0); ?> / <?php echo (int)($details['players_max'] ?? 0); ?>
                                                     </span>
                                                 <?php elseif ($m_type === 'teamspeak'): ?>
-                                                    <span title="Klienti online (mimo boty)<?php echo !empty($details['ip_version']) ? ' - Měřeno přes ' . $details['ip_version'] : ''; ?>">
+                                                    <span title="<?php echo htmlspecialchars(t('ts_clients_title') . (!empty($details['ip_version']) ? sprintf(t('measured_via_suffix'), $details['ip_version']) : '')); ?>">
                                                         <i class="fas fa-headset"></i> <?php echo (int)($details['clients_online'] ?? 0); ?> / <?php echo (int)($details['clients_max'] ?? 0); ?>
                                                         <?php if (!empty($details['ip_version'])): ?>
                                                             <small style="font-size: 0.65rem; color: var(--text-muted); margin-left: 0.25rem;">(<?php echo htmlspecialchars($details['ip_version']); ?>)</small>
@@ -507,7 +509,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     </span>
                                                 <?php elseif ($m_type === 'discord'): ?>
                                                     <span>
-                                                        <i class="fab fa-discord"></i> <?php echo (int)($details['presence_count'] ?? 0); ?> online
+                                                        <i class="fab fa-discord"></i> <?php echo (int)($details['presence_count'] ?? 0); ?> <?php echo htmlspecialchars(t('discord_online_suffix')); ?>
                                                     </span>
                                                 <?php endif; ?>
                                             </div>
@@ -521,7 +523,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <div class="metrics-charts">
                                                 <?php if ($m_type === 'vps'): ?>
                                                     <div class="mini-chart">
-                                                        <div class="chart-title">CPU</div>
+                                                        <div class="chart-title"><?php echo htmlspecialchars(t('chart_cpu')); ?></div>
                                                         <div class="chart-bar-container">
                                                             <?php 
                                                             $cpu_val = $details['cpu'];
@@ -533,7 +535,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     </div>
                                                 <?php else: // cpanel processes/CPU ?>
                                                     <div class="mini-chart">
-                                                        <div class="chart-title">Procesy</div>
+                                                        <div class="chart-title"><?php echo htmlspecialchars(t('chart_processes')); ?></div>
                                                         <div class="chart-bar-container">
                                                             <?php 
                                                             $proc_val = $details['processes']['percent'] ?? 0;
@@ -546,7 +548,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                 <?php endif; ?>
                                                 
                                                 <div class="mini-chart">
-                                                    <div class="chart-title">RAM</div>
+                                                    <div class="chart-title"><?php echo htmlspecialchars(t('chart_ram')); ?></div>
                                                     <div class="chart-bar-container">
                                                         <?php 
                                                         $ram_val = $m_type === 'vps' ? $details['ram'] : ($details['memory']['percent'] ?? 0);
@@ -558,7 +560,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                 </div>
                                                 
                                                 <div class="mini-chart">
-                                                    <div class="chart-title">DISK</div>
+                                                    <div class="chart-title"><?php echo htmlspecialchars(t('chart_disk')); ?></div>
                                                     <div class="chart-bar-container">
                                                         <?php 
                                                         $hdd_val = $m_type === 'vps' ? $details['hdd'] : ($details['disk']['percent'] ?? 0);
@@ -579,17 +581,17 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          
                                                          if ($day_status === 'up') {
                                                              $day_class = 'up';
-                                                             $day_text = 'Bez výpadků';
+                                                             $day_text = t('history_tooltip_up');
                                                          } elseif ($day_status === 'down') {
                                                              $day_class = 'down';
                                                              $day_uptime = $history_uptime[$mid][$day] ?? 100.00;
-                                                             $day_text = 'Detekován výpadek (dostupnost ' . number_format($day_uptime, 2, ',', ' ') . ' %)';
+                                                             $day_text = sprintf(t('history_tooltip_down'), number_format($day_uptime, 2, ',', ' '));
                                                          } elseif ($day_status === 'maintenance') {
                                                              $day_class = 'maintenance';
-                                                             $day_text = 'Plánovaná údržba';
+                                                             $day_text = t('history_tooltip_maintenance');
                                                          } else {
                                                              $day_class = 'nodata';
-                                                             $day_text = 'Žádná data';
+                                                             $day_text = t('history_tooltip_nodata');
                                                          }
                                                          
                                                          $tooltip = "$date_formatted: $day_text";
@@ -598,8 +600,8 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                      <?php endforeach; ?>
                                                 </div>
                                                 <div class="history-labels">
-                                                    <span>před 30 dny</span>
-                                                    <span>dnes</span>
+                                                    <span><?php echo htmlspecialchars(t('history_30_days_ago')); ?></span>
+                                                    <span><?php echo htmlspecialchars(t('history_today')); ?></span>
                                                 </div>
                                             </div>
                                         <?php endif; ?>
@@ -612,11 +614,11 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <div class="resp-time">
                                                 <?php 
                                                 if ($status === 'down') {
-                                                    echo '<span style="color: var(--color-red);">Nedostupný</span>';
+                                                    echo '<span style="color: var(--color-red);">' . htmlspecialchars(t('resp_unavailable')) . '</span>';
                                                 } elseif ($status === 'maintenance') {
-                                                    echo '<span style="color: var(--color-yellow);">Údržba</span>';
+                                                    echo '<span style="color: var(--color-yellow);">' . htmlspecialchars(t('resp_maintenance')) . '</span>';
                                                 } elseif ($m_type === 'vps') {
-                                                    echo '<span style="color: var(--color-green);">Online</span>';
+                                                    echo '<span style="color: var(--color-green);">' . htmlspecialchars(t('resp_online')) . '</span>';
                                                 } else {
                                                     // Zobrazíme odezvu z posledního logu
                                                     $stmt_last_log = $pdo->prepare("SELECT response_time FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
@@ -625,7 +627,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     if ($last_log && $last_log['response_time'] > 0) {
                                                         echo $last_log['response_time'] . ' ms';
                                                     } else {
-                                                        echo 'N/A';
+                                                        echo htmlspecialchars(t('na'));
                                                     }
                                                 }
                                                 ?>
@@ -691,10 +693,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php if (!empty($monitor['maintenance_start']) && !empty($monitor['maintenance_end']) && strtotime($monitor['maintenance_end']) > time()): ?>
                                                 <div style="background: rgba(243, 156, 18, 0.1); border-left: 4px solid #f39c12; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.25rem; font-size: 0.82rem; border: 1px solid rgba(243, 156, 18, 0.15);">
                                                     <strong style="color: #f39c12; display: flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; margin-bottom: 0.35rem;">
-                                                        <i class="fas fa-tools"></i> Plánovaná údržba (Maintenance)
+                                                        <i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_heading')); ?>
                                                     </strong>
                                                     <div style="color: #e1e1e6; margin-bottom: 0.35rem;">
-                                                        <strong>Doba trvání:</strong> od <?php echo date('d.m.Y H:i', strtotime($monitor['maintenance_start'])); ?> do <?php echo date('d.m.Y H:i', strtotime($monitor['maintenance_end'])); ?>
+                                                        <strong><?php echo htmlspecialchars(t('maintenance_duration')); ?></strong> <?php echo htmlspecialchars(sprintf(t('maintenance_duration_range'), date('d.m.Y H:i', strtotime($monitor['maintenance_start'])), date('d.m.Y H:i', strtotime($monitor['maintenance_end'])))); ?>
                                                     </div>
                                                     <?php if (!empty($monitor['maintenance_description'])): ?>
                                                         <div style="color: var(--text-secondary); line-height: 1.4;"><?php echo htmlspecialchars($monitor['maintenance_description']); ?></div>
@@ -722,62 +724,62 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php if ($m_type === 'minecraft'): ?>
                                                 <div class="game-details-grid">
                                                     <div>
-                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> Informace o serveru</div>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Verze:</strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['version'] ?? 'Neznámá'); ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Popis (MOTD):</strong> <span style="color: #fff; font-style: italic; font-weight: 500;"><?php echo htmlspecialchars($details['motd'] ?? 'Žádný popis'); ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Frekvence měření:</strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Poslední kontrola:</strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : 'Nikdy'; ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Poslední změna stavu:</strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                        <p><strong>Uptime (30 dní):</strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('server_info_heading')); ?></div>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_version')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['version'] ?? t('unknown')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_motd')); ?></strong> <span style="color: #fff; font-style: italic; font-weight: 500;"><?php echo htmlspecialchars($details['motd'] ?? t('no_description')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
                                                         <?php 
                                                         $mc_ll = $last_logs[0] ?? null;
                                                         if ($mc_ll && $mc_ll['checked_from']): 
                                                         ?>
-                                                        <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);"><i class="fas fa-map-marker-alt" style="color:var(--color-red);font-size:0.7rem;"></i> Měřeno z: <strong><?php echo htmlspecialchars($mc_ll['checked_from']); ?></strong></p>
+                                                        <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);"><i class="fas fa-map-marker-alt" style="color:var(--color-red);font-size:0.7rem;"></i> <?php echo htmlspecialchars(t('measured_from')); ?> <strong><?php echo htmlspecialchars($mc_ll['checked_from']); ?></strong></p>
                                                         <?php endif; ?>
                                                         
                                                         <?php if (isset($details['cpu'])): ?>
-                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> Zátěž serveru (VPS Agent)</div>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
                                                             <?php echo render_vps_agent_details($details, $monitor); ?>
                                                         <?php endif; ?>
                                                         
                                                         <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
-                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> Propojený VPS Agent</div>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
+                                                                <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                    <i class="fas fa-terminal"></i> Návod k instalaci agenta
+                                                                    <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                                 </button>
                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
                                                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
                                                                         <div>
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> Python 3 Agent</strong>
+                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                <li>Povolte: <code>chmod +x agent.py</code></li>
-                                                                                <li>Cron: <code>*/5 * * * * /cesta/agent.py</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
                                                                             </ol>
                                                                         </div>
                                                                         <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> Shell Agent (BASH)</strong>
+                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                <li>Povolte: <code>chmod +x agent.sh</code></li>
-                                                                                <li>Cron: <code>*/5 * * * * /cesta/agent.sh</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
                                                                             </ol>
                                                                         </div>
                                                                     </div>
@@ -788,11 +790,11 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     </div>
                                                     <div>
                                                         <div class="detail-section-title">
-                                                            <span><i class="fas fa-users"></i> Online hráči</span>
-                                                            <span class="category-badge"><?php echo count($details['players_list'] ?? []); ?> online</span>
+                                                            <span><i class="fas fa-users"></i> <?php echo htmlspecialchars(t('online_players_heading')); ?></span>
+                                                            <span class="category-badge"><?php echo count($details['players_list'] ?? []); ?> <?php echo htmlspecialchars(t('discord_online_suffix')); ?></span>
                                                         </div>
                                                         <?php if (empty($details['players_list'])): ?>
-                                                            <p style="color: var(--text-muted); font-style: italic;">Právě zde nejsou žádní online hráči.</p>
+                                                            <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_players_online')); ?></p>
                                                         <?php else: ?>
                                                             <div class="players-badge-grid">
                                                                 <?php foreach ($details['players_list'] as $player): ?>
@@ -805,76 +807,76 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php elseif ($m_type === 'teamspeak'): ?>
                                                 <div class="game-details-grid">
                                                     <div>
-                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> Informace o serveru</div>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Název TS serveru:</strong> <span style="color: #fff; font-weight: 600;"><?php echo htmlspecialchars($details['name'] ?? 'TeamSpeak Server'); ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Verze serveru:</strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['version'] ?? 'Neznámá'); ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Frekvence měření:</strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Poslední kontrola:</strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : 'Nikdy'; ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Poslední změna stavu:</strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                        <p><strong>Uptime (30 dní):</strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('server_info_heading')); ?></div>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_ts_server_name')); ?></strong> <span style="color: #fff; font-weight: 600;"><?php echo htmlspecialchars($details['name'] ?? t('default_ts_server_name')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong>Verze serveru:</strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['version'] ?? t('unknown')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
                                                         <?php 
                                                         $ts_ll = $last_logs[0] ?? null;
                                                         if ($ts_ll): 
                                                         ?>
                                                         <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);">
                                                              <i class="fas fa-stopwatch" style="color:var(--color-green);font-size:0.7rem;"></i>
-                                                             Ping <?php echo (int)($ts_ll['response_time']); ?> ms
+                                                             <?php echo htmlspecialchars(t('ping_prefix')); ?> <?php echo (int)($ts_ll['response_time']); ?> ms
                                                              <?php if ($ts_ll['checked_from']): ?>
                                                                  &nbsp;<i class="fas fa-map-marker-alt" style="color:var(--color-red);font-size:0.7rem;"></i>
-                                                                 z: <strong><?php echo htmlspecialchars($ts_ll['checked_from']); ?></strong>
+                                                                 <?php echo htmlspecialchars(t('ping_from')); ?> <strong><?php echo htmlspecialchars($ts_ll['checked_from']); ?></strong>
                                                              <?php endif; ?>
                                                          </p>
                                                          <p style="font-size:0.73rem;color:var(--text-muted);margin-top:0.2rem;">
                                                              <i class="fas fa-info-circle"></i>
-                                                             Ping ≈ čas TCP dotazu na TS query port (10011).
+                                                             <?php echo htmlspecialchars(t('ping_explanation')); ?>
                                                              <?php if ($ts_ll['response_time'] > 500): ?>
-                                                             Vysoká hodnota = vzdálenost agenta od serveru nebo pomalá DNS/TCP odezva.
+                                                             <?php echo htmlspecialchars(t('ping_high_warning')); ?>
                                                              <?php endif; ?>
                                                          </p>
                                                          <?php endif; ?>
                                                          
                                                          <?php if (isset($details['cpu'])): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> Zátěž serveru (VPS Agent)</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
                                                              <?php echo render_vps_agent_details($details, $monitor); ?>
                                                          <?php endif; ?>
                                                          
                                                          <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> Propojený VPS Agent</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
                                                              <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
+                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
                                                                  <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                     <i class="fas fa-terminal"></i> Návod k instalaci agenta
+                                                                     <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                                  </button>
                                                                  <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
                                                                      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
                                                                          <div>
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> Python 3 Agent</strong>
+                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
                                                                              <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                 <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                 <li>Povolte: <code>chmod +x agent.py</code></li>
-                                                                                 <li>Cron: <code>*/5 * * * * /cesta/agent.py</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
                                                                              </ol>
                                                                          </div>
                                                                          <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> Shell Agent (BASH)</strong>
+                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
                                                                              <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                 <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                 <li>Povolte: <code>chmod +x agent.sh</code></li>
-                                                                                 <li>Cron: <code>*/5 * * * * /cesta/agent.sh</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
                                                                              </ol>
                                                                          </div>
                                                                      </div>
@@ -884,14 +886,14 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
 
                                                      </div>
                                                      <div>
-                                                         <div class="detail-section-title"><i class="fas fa-users"></i> Připojení klienti</div>
+                                                         <div class="detail-section-title"><i class="fas fa-users"></i> <?php echo htmlspecialchars(t('connected_clients_heading')); ?></div>
                                                          <p style="font-size: 1.2rem; font-weight: bold; color: #fff; font-family: var(--font-header);">
                                                              <?php echo (int)($details['clients_online'] ?? 0); ?> / <?php echo (int)($details['clients_max'] ?? 0); ?>
                                                          </p>
                                                          <p style="color: var(--text-muted); margin-top: 0.25rem;">
-                                                              Počet klientů na serveru (mimo Query/Query boty).
+                                                              <?php echo htmlspecialchars(t('ts_clients_desc')); ?>
                                                               <?php if (!empty($details['ip_version'])): ?>
-                                                                  <br><span style="font-size: 0.72rem; color: var(--color-green);"><i class="fas fa-network-wired"></i> Měřeno přes: <?php echo htmlspecialchars($details['ip_version']); ?><?php echo ($is_admin && !empty($details['checked_ip'])) ? ' (' . htmlspecialchars($details['checked_ip']) . ')' : ''; ?></span>
+                                                                  <br><span style="font-size: 0.72rem; color: var(--color-green);"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('measured_via')); ?> <?php echo htmlspecialchars($details['ip_version']); ?><?php echo ($is_admin && !empty($details['checked_ip'])) ? ' (' . htmlspecialchars($details['checked_ip']) . ')' : ''; ?></span>
                                                               <?php endif; ?>
                                                           </p>
                                                      </div>
@@ -899,9 +901,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php elseif ($m_type === 'discord'): ?>
                                                 <div class="game-details-grid">
                                                     <div>
-                                                        <div class="detail-section-title"><i class="fas fa-volume-up"></i> Aktivní hlasové kanály</div>
+                                                        <div class="detail-section-title"><i class="fas fa-volume-up"></i> <?php echo htmlspecialchars(t('voice_channels_heading')); ?></div>
                                                         <?php if (empty($details['voice_channels'])): ?>
-                                                            <p style="color: var(--text-muted); font-style: italic;">V hlasových kanálech právě nikdo není.</p>
+                                                            <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_voice_activity')); ?></p>
                                                         <?php else: ?>
                                                             <?php foreach ($details['voice_channels'] as $chan): ?>
                                                                 <div class="voice-channel-item">
@@ -916,42 +918,42 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <?php endif; ?>
                                                         
                                                         <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
-                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> Propojený VPS Agent</div>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
+                                                                <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                 
                                                                 <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                    <i class="fas fa-terminal"></i> Návod k instalaci agenta
+                                                                    <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                                 </button>
                                                                 <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
                                                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
                                                                         <div>
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> Python 3 Agent</strong>
+                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                <li>Povolte: <code>chmod +x agent.py</code></li>
-                                                                                <li>Cron: <code>*/5 * * * * /cesta/agent.py</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
                                                                             </ol>
                                                                         </div>
                                                                         <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> Shell Agent (BASH)</strong>
+                                                                            <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
                                                                             <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                <li>Povolte: <code>chmod +x agent.sh</code></li>
-                                                                                <li>Cron: <code>*/5 * * * * /cesta/agent.sh</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
+                                                                                <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
                                                                             </ol>
                                                                         </div>
                                                                     </div>
@@ -962,18 +964,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     </div>
                                                     <div>
                                                         <div class="detail-section-title">
-                                                            <span><i class="fab fa-discord"></i> Online uživatelé</span>
+                                                            <span><i class="fab fa-discord"></i> <?php echo htmlspecialchars(t('online_users_heading')); ?></span>
                                                             <?php if (!empty($details['instant_invite'])): ?>
-                                                                <a href="<?php echo htmlspecialchars($details['instant_invite']); ?>" target="_blank" class="category-badge" style="color: var(--color-green); border-color: rgba(30,199,115,0.3); background: rgba(30,199,115,0.05); font-size: 0.7rem;"><i class="fas fa-external-link-alt"></i> Vstoupit</a>
+                                                                <a href="<?php echo htmlspecialchars($details['instant_invite']); ?>" target="_blank" class="category-badge" style="color: var(--color-green); border-color: rgba(30,199,115,0.3); background: rgba(30,199,115,0.05); font-size: 0.7rem;"><i class="fas fa-external-link-alt"></i> <?php echo htmlspecialchars(t('join_invite')); ?></a>
                                                             <?php endif; ?>
                                                         </div>
                                                         <?php if (empty($details['members'])): ?>
-                                                            <p style="color: var(--text-muted); font-style: italic;">Žádní členové nejsou online (Widget).</p>
+                                                            <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_members_online')); ?></p>
                                                         <?php else: ?>
                                                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; max-height: 180px; overflow-y: auto; padding-right: 0.5rem;">
                                                                 <?php foreach ($details['members'] as $m): 
                                                                     $status_class = $m['status'] ?? 'online';
-                                                                    $game_text = !empty($m['game']) ? ' - hraje ' . htmlspecialchars($m['game']) : '';
+                                                                    $game_text = !empty($m['game']) ? sprintf(t('playing_suffix'), htmlspecialchars($m['game'])) : '';
                                                                 ?>
                                                                     <div class="discord-member-item">
                                                                         <span class="discord-member-status <?php echo htmlspecialchars($status_class); ?>"></span>
@@ -993,26 +995,26 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                  ?>
                                                  <div class="game-details-grid" style="grid-template-columns: 1fr 1fr;">
                                                      <div>
-                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> Informace o hostingu</div>
+                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('hosting_info_heading')); ?></div>
                                                           <?php 
                                                           $parsed_url = parse_url($monitor['target']);
                                                           $display_target = ($parsed_url['host'] ?? $monitor['target']);
                                                           ?>
-                                                          <p style="margin-bottom: 0.5rem;"><strong>Cíl měření:</strong> <span style="color: #fff;" class="stat-val"><?php echo htmlspecialchars($display_target); ?></span></p>
-                                                         <p style="margin-bottom: 0.5rem;"><strong>Frekvence měření:</strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
-                                                         <p style="margin-bottom: 0.5rem;"><strong>Poslední kontrola:</strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : 'Nikdy'; ?></span></p>
-                                                         <p style="margin-bottom: 0.5rem;"><strong>Poslední změna stavu:</strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                         <p><strong>Uptime (30 dní):</strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_target')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo htmlspecialchars($display_target); ?></span></p>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                         <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
                                                          
                                                          <?php if ($m_type === 'web' && $status === 'up' && $details): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> Síťové parametry webu</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('web_network_params_heading')); ?></div>
                                                              <div class="network-params-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.8rem;">
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                                     <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;">Protokol / Verze</div>
+                                                                     <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_protocol_version')); ?></div>
                                                                      <strong style="color: #fff;"><?php echo htmlspecialchars(($details['scheme'] ?? 'HTTP') . '/' . ($details['http_version'] ?? '1.1')); ?></strong>
                                                                  </div>
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                                     <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;">IP Adresa webu</div>
+                                                                     <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_website_ip')); ?></div>
                                                                      <strong style="color: #fff;"><?php echo htmlspecialchars($details['primary_ip'] ?? 'N/A'); ?></strong>
                                                                  </div>
                                                              </div>
@@ -1031,10 +1033,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          $loc_stats = $stmt_locs->fetchAll();
                                                          if (!empty($loc_stats)):
                                                          ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-map-marker-alt"></i> Průměrný ping dle lokací</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars(t('avg_ping_by_location_heading')); ?></div>
                                                              <div class="location-stats-list" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem;">
                                                                  <?php foreach ($loc_stats as $ls): 
-                                                                     $loc_name = $ls['checked_from'] ?: 'Hlavní systém';
+                                                                     $loc_name = $ls['checked_from'] ?: t('main_system');
                                                                      $avg_time = intval($ls['avg_time']);
                                                                  ?>
                                                                      <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
@@ -1046,42 +1048,42 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          <?php endif; ?>
                                                          
                                                          <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> Propojený VPS Agent</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
                                                              <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
+                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
                                                                  <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                     <i class="fas fa-terminal"></i> Návod k instalaci agenta
+                                                                     <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                                  </button>
                                                                  <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
                                                                      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
                                                                          <div>
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> Python 3 Agent</strong>
+                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
                                                                              <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                 <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                 <li>Povolte: <code>chmod +x agent.py</code></li>
-                                                                                 <li>Cron: <code>*/5 * * * * /cesta/agent.py</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
                                                                              </ol>
                                                                          </div>
                                                                          <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> Shell Agent (BASH)</strong>
+                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
                                                                              <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                 <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                 <li>Povolte: <code>chmod +x agent.sh</code></li>
-                                                                                 <li>Cron: <code>*/5 * * * * /cesta/agent.sh</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
                                                                              </ol>
                                                                          </div>
                                                                      </div>
@@ -1091,18 +1093,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
 
                                                      </div>
                                                      <div>
-                                                         <div class="detail-section-title"><i class="fas fa-chart-pie"></i> Čerpání limitů hostingu</div>
+                                                         <div class="detail-section-title"><i class="fas fa-chart-pie"></i> <?php echo htmlspecialchars(t('hosting_limits_heading')); ?></div>
                                                          <?php if ($status === 'up' && $cp_details): ?>
                                                              <div style="display: flex; flex-direction: column; gap: 0.85rem; margin-top: 0.5rem;">
                                                                  <?php 
                                                                  $resources = [
-                                                                     'Zatížení CPU' => $cp_details['cpu'] ?? null,
-                                                                     'Physical Memory Usage' => $cp_details['memory'] ?? null,
-                                                                     'Disk (HDD Usage)' => $cp_details['disk'] ?? null,
-                                                                     'Běžící procesy' => $cp_details['processes'] ?? null,
-                                                                     'Měsíční přenos (Bandwidth)' => $cp_details['bandwidth'] ?? null,
-                                                                     'MySQL Databáze' => $cp_details['database'] ?? null,
-                                                                     'PostgreSQL Databáze' => $cp_details['postgresql'] ?? null,
+                                                                     t('resource_cpu') => $cp_details['cpu'] ?? null,
+                                                                     t('resource_memory') => $cp_details['memory'] ?? null,
+                                                                     t('resource_disk') => $cp_details['disk'] ?? null,
+                                                                     t('resource_processes') => $cp_details['processes'] ?? null,
+                                                                     t('resource_bandwidth') => $cp_details['bandwidth'] ?? null,
+                                                                     t('resource_mysql') => $cp_details['database'] ?? null,
+                                                                     t('resource_postgresql') => $cp_details['postgresql'] ?? null,
                                                                  ];
                                                                  foreach ($resources as $res_label => $res_data): 
                                                                      if (!$res_data) continue;
@@ -1121,17 +1123,17 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  <?php endforeach; ?>
                                                              </div>
                                                          <?php else: ?>
-                                                             <p style="color: var(--text-muted); font-style: italic;">Detaily hostingu nejsou při výpadku dostupné.</p>
+                                                             <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('hosting_unavailable_during_outage')); ?></p>
                                                          <?php endif; ?>
                                                          
                                                          <?php if (!empty($last_logs)): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-history"></i> Historie posledních 5 měření</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-history"></i> <?php echo htmlspecialchars(t('last_5_measurements_heading')); ?></div>
                                                              <div class="mini-logs-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
                                                                  <?php foreach ($last_logs as $ll): 
                                                                      $ll_status = $ll['status'];
                                                                      $ll_time = date('H:i:s (d.m.)', strtotime($ll['checked_at']));
                                                                      $ll_badge_class = ($ll_status === 'up') ? 'log-status up' : 'log-status down';
-                                                                     $ll_badge_text = ($ll_status === 'up') ? 'Online' : 'Výpadek';
+                                                                     $ll_badge_text = ($ll_status === 'up') ? t('resp_online') : t('stat_down');
                                                                  ?>
                                                                      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.25rem;">
                                                                          <div style="display: flex; flex-direction: column;">
@@ -1155,57 +1157,57 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php elseif ($m_type === 'vps'): ?>
                                                 <div class="game-details-grid">
                                                     <div>
-                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> Informace o agentu</div>
-                                                         <p style="margin-bottom: 0.5rem;"><strong>Frekvence měření:</strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
-                                                        <p style="margin-bottom: 0.5rem;"><strong>Poslední aktualizace:</strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : 'Nikdy'; ?></span></p>
-                                                        <p><strong>Poslední změna stavu:</strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('agent_info_heading')); ?></div>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_update')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
                                                     </div>
                                                     <div>
                                                         <?php if (isset($details['cpu'])): ?>
-                                                            <div class="detail-section-title"><i class="fas fa-server"></i> Zátěž serveru (VPS Agent)</div>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
                                                             <?php echo render_vps_agent_details($details, $monitor); ?>
                                                         <?php else: ?>
-                                                            <div class="detail-section-title"><i class="fas fa-server"></i> VPS Agent</div>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_agent_heading')); ?></div>
                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
-                                                                Čeká se na první data z VPS agenta...
+                                                                <?php echo htmlspecialchars(t('vps_waiting_for_data')); ?>
                                                             </div>
                                                         <?php endif; ?>
                                                         
                                                         <?php if ($is_admin): ?>
-                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> Unikátní klíč agenta</div>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
                                                             <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                             
                                                             <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                <i class="fas fa-terminal"></i> Návod k instalaci agenta
+                                                                <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                             </button>
                                                             <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
                                                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
                                                                     <div>
-                                                                        <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> Python 3 Agent</strong>
+                                                                        <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
                                                                         <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                            <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                            <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                            <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
+                                                                            <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                                                                                 <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                                                                                     API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                                                                                     AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                                                                                 </div>
                                                                             </li>
-                                                                            <li>Povolte: <code>chmod +x agent.py</code></li>
-                                                                            <li>Cron: <code>*/5 * * * * /cesta/agent.py</code></li>
+                                                                            <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
+                                                                            <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
                                                                         </ol>
                                                                     </div>
                                                                     <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                        <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> Shell Agent (BASH)</strong>
+                                                                        <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
                                                                         <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                            <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                            <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                            <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
+                                                                            <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                                                                                 <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                                                                                     API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                                                                                     AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                                                                                 </div>
                                                                             </li>
-                                                                            <li>Povolte: <code>chmod +x agent.sh</code></li>
-                                                                            <li>Cron: <code>*/5 * * * * /cesta/agent.sh</code></li>
+                                                                            <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
+                                                                            <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
                                                                         </ol>
                                                                     </div>
                                                                 </div>
@@ -1216,38 +1218,38 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php else: ?>
                                                 <div class="game-details-grid">
                                                      <div>
-                                                          <div class="detail-section-title"><i class="fas fa-info-circle"></i> Statistiky monitoru</div>
-                                                          <p style="margin-bottom: 0.5rem;"><strong>Cíl měření:</strong> <span style="color: #fff;"><?php echo htmlspecialchars($monitor['target']) . ($monitor['type'] !== 'teamspeak' && $monitor['port'] ? ':'.$monitor['port'] : ''); ?></span></p>
-                                                          <p style="margin-bottom: 0.5rem;"><strong>Frekvence měření:</strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
-                                                          <p style="margin-bottom: 0.5rem;"><strong>Poslední kontrola:</strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : 'Nikdy'; ?></span></p>
-                                                          <p style="margin-bottom: 0.5rem;"><strong>Poslední změna stavu:</strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                          <p><strong>Uptime (30 dní):</strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                          <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('monitor_stats_heading')); ?></div>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_target')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($monitor['target']) . ($monitor['type'] !== 'teamspeak' && $monitor['port'] ? ':'.$monitor['port'] : ''); ?></span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                          <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
                                                           
                                                           <?php 
                                                           if ($monitor['type'] === 'web'): 
                                                               $web_det = json_decode($monitor['last_details'] ?? '', true);
                                                               if (!empty($web_det)):
                                                           ?>
-                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> Síťové parametry webu</div>
+                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('web_network_params_heading')); ?></div>
                                                               <div class="network-params-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.8rem;">
                                                                   <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;">Protokol</div>
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_protocol')); ?></div>
                                                                       <strong style="color: var(--color-green);"><?php echo htmlspecialchars($web_det['scheme'] ?? 'HTTP'); ?> (<?php echo htmlspecialchars($web_det['http_version'] ?? 'HTTP/1.1'); ?>)</strong>
                                                                   </div>
                                                                   <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;">Primární IP</div>
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_primary_ip')); ?></div>
                                                                       <strong style="color: #fff; font-size: 0.7rem; word-break: break-all;"><?php echo htmlspecialchars($web_det['primary_ip'] ?? 'N/A'); ?></strong>
                                                                   </div>
                                                                   <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;">IPv4 připojení</div>
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_ipv4')); ?></div>
                                                                       <strong style="color: <?php echo (!empty($web_det['has_ipv4']) ? 'var(--color-green)' : 'var(--text-muted)'); ?>;">
-                                                                          <?php echo (!empty($web_det['has_ipv4']) ? '<i class="fas fa-check-circle" style="font-size: 0.75rem;"></i> Ano' : '<i class="fas fa-times-circle" style="font-size: 0.75rem;"></i> Ne'); ?>
+                                                                          <?php echo (!empty($web_det['has_ipv4']) ? '<i class="fas fa-check-circle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('yes')) : '<i class="fas fa-times-circle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('no'))); ?>
                                                                       </strong>
                                                                   </div>
                                                                   <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;">IPv6 připojení</div>
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_ipv6')); ?></div>
                                                                       <strong style="color: <?php echo (!empty($web_det['has_ipv6']) ? 'var(--color-green)' : 'var(--color-yellow)'); ?>;">
-                                                                          <?php echo (!empty($web_det['has_ipv6']) ? '<i class="fas fa-check-circle" style="font-size: 0.75rem;"></i> Ano' : '<i class="fas fa-exclamation-triangle" style="font-size: 0.75rem;"></i> Chybí'); ?>
+                                                                          <?php echo (!empty($web_det['has_ipv6']) ? '<i class="fas fa-check-circle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('yes')) : '<i class="fas fa-exclamation-triangle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('missing'))); ?>
                                                                       </strong>
                                                                   </div>
                                                               </div>
@@ -1257,7 +1259,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                           ?>
                                                           
                                                           <?php if (isset($details['cpu'])): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> Zátěž serveru (VPS Agent)</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
                                                              <?php echo render_vps_agent_details($details, $monitor); ?>
                                                          <?php endif; ?>
                                                           
@@ -1273,10 +1275,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                           $loc_stats = $stmt_locs->fetchAll();
                                                           if (!empty($loc_stats)):
                                                           ?>
-                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-map-marker-alt"></i> Průměrný ping dle lokací</div>
+                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars(t('avg_ping_by_location_heading')); ?></div>
                                                               <div class="location-stats-list" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem;">
                                                                   <?php foreach ($loc_stats as $ls): 
-                                                                      $loc_name = $ls['checked_from'] ?: 'Hlavní systém';
+                                                                      $loc_name = $ls['checked_from'] ?: t('main_system');
                                                                       $avg_time = intval($ls['avg_time']);
                                                                   ?>
                                                                       <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
@@ -1288,42 +1290,42 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                           <?php endif; ?>
                                                           
                                                           <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
-                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> Propojený VPS Agent</div>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
                                                              <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
-                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;">Klíč agenta</div>
+                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
                                                                  <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                                  
                                                                  <button class="btn-install-agent" onclick="toggleAgentInstructions(<?php echo $mid; ?>)" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.7rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; transition: all 0.2s; width: 100%; justify-content: center;">
-                                                                     <i class="fas fa-terminal"></i> Návod k instalaci agenta
+                                                                     <i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?>
                                                                  </button>
                                                                  <div id="agent-instructions-<?php echo $mid; ?>" style="display: none; margin-top: 0.75rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); padding: 0.85rem; border-radius: 6px; font-size: 0.72rem; line-height: 1.45; max-width: 650px;">
                                                                      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem;">
                                                                          <div>
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> Python 3 Agent</strong>
+                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fab fa-python"></i> <?php echo htmlspecialchars(t('agent_python')); ?></strong>
                                                                              <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
-                                                                                 <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.py <?php echo htmlspecialchars($agent_url); ?></code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                 <li>Povolte: <code>chmod +x agent.py</code></li>
-                                                                                 <li>Cron: <code>*/5 * * * * /cesta/agent.py</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.py</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.py</code></li>
                                                                              </ol>
                                                                          </div>
                                                                          <div style="border-left: 1px solid rgba(255,255,255,0.05); padding-left: 1.25rem;">
-                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> Shell Agent (BASH)</strong>
+                                                                             <strong style="color: var(--color-green); display: block; margin-bottom: 0.35rem; font-size: 0.75rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_shell')); ?></strong>
                                                                              <ol style="margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; color: var(--text-secondary);">
-                                                                                 <li>Stáhněte agenta:<br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
-                                                                                 <li>Nastavte konfiguraci (vytvořte soubor <code>agent.cfg</code>):<br>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_download')); ?><br><code style="background: rgba(0,0,0,0.4); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.62rem; word-break: break-all;">wget -O agent.sh <?php echo htmlspecialchars($agent_sh_url); ?></code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_configure')); ?> <code>agent.cfg</code>):<br>
                     <div style="background: rgba(0,0,0,0.3); padding: 0.25rem; border-radius: 4px; font-size: 0.6rem; margin-top: 0.15rem; font-family: monospace; line-height: 1.3;">
                         API_URL = "<?php echo htmlspecialchars(str_replace('index.php', 'api.php', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]")); ?>"<br>
                         AGENT_KEY = "<?php echo htmlspecialchars($monitor['agent_key']); ?>"
                     </div>
                 </li>
-                                                                                 <li>Povolte: <code>chmod +x agent.sh</code></li>
-                                                                                 <li>Cron: <code>*/5 * * * * /cesta/agent.sh</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_enable')); ?> <code>chmod +x agent.sh</code></li>
+                                                                                 <li><?php echo htmlspecialchars(t('agent_cron')); ?> <code>*/5 * * * * /cesta/agent.sh</code></li>
                                                                              </ol>
                                                                          </div>
                                                                      </div>
@@ -1333,16 +1335,16 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
 
                                                      </div>
                                                      <div>
-                                                         <div class="detail-section-title"><i class="fas fa-history"></i> Historie posledních 5 měření</div>
+                                                         <div class="detail-section-title"><i class="fas fa-history"></i> <?php echo htmlspecialchars(t('last_5_measurements_heading')); ?></div>
                                                          <?php if (empty($last_logs)): ?>
-                                                             <p style="color: var(--text-muted); font-style: italic;">Zatím nejsou k dispozici žádná data o měření.</p>
+                                                             <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_measurements_yet')); ?></p>
                                                          <?php else: ?>
                                                              <div class="mini-logs-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
                                                                  <?php foreach ($last_logs as $ll): 
                                                                      $ll_status = $ll['status'];
                                                                      $ll_time = date('H:i:s (d.m.)', strtotime($ll['checked_at']));
                                                                      $ll_badge_class = ($ll_status === 'up') ? 'log-status up' : 'log-status down';
-                                                                     $ll_badge_text = ($ll_status === 'up') ? 'Online' : 'Výpadek';
+                                                                     $ll_badge_text = ($ll_status === 'up') ? t('resp_online') : t('stat_down');
                                                                  ?>
                                                                      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.25rem;">
                                                                          <div style="display: flex; flex-direction: column;">
@@ -1415,20 +1417,20 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php if ($show_charts): ?>
                                                 <div class="metrics-history-charts" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                     <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
-                                                        <div class="detail-section-title" style="margin-bottom: 0;"><i class="fas fa-chart-line"></i> Historie vytížení</div>
+                                                        <div class="detail-section-title" style="margin-bottom: 0;"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('load_history_heading')); ?></div>
                                                         <div class="chart-period-switch" data-monitor="<?php echo $mid; ?>" style="display: flex; gap: 0.25rem;">
-                                                            <button type="button" data-period="24h" class="btn btn-secondary btn-sm active" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;">24 hodin</button>
-                                                            <button type="button" data-period="7d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;">7 dní</button>
-                                                            <button type="button" data-period="30d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;">30 dní</button>
+                                                            <button type="button" data-period="24h" class="btn btn-secondary btn-sm active" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_24h')); ?></button>
+                                                            <button type="button" data-period="7d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_7d')); ?></button>
+                                                            <button type="button" data-period="30d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_30d')); ?></button>
                                                         </div>
                                                     </div>
                                                     <div style="display: flex; gap: 1rem; margin: 0.75rem 0 1rem 0; font-size: 0.8rem;">
                                                         <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                            <span style="color: var(--text-muted);">CPU Průměr / Max:</span>
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('cpu_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="cpuStats-<?php echo $mid; ?>"><?php echo $cpu_avg; ?>% / <?php echo $cpu_max; ?>%</strong>
                                                         </div>
                                                         <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                                            <span style="color: var(--text-muted);">RAM Průměr / Max:</span>
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ram_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="ramStats-<?php echo $mid; ?>"><?php echo $ram_avg; ?>% / <?php echo $ram_max; ?>%</strong>
                                                         </div>
                                                     </div>
@@ -1497,14 +1499,14 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                              
                                              <?php if (!empty($monitor_outages)): ?>
                                                  <div class="monitor-outages-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
-                                                     <div class="detail-section-title" style="color: var(--color-red); margin-bottom: 0.75rem;"><i class="fas fa-exclamation-circle"></i> Nedávné výpadky (posledních 30 dní)</div>
+                                                     <div class="detail-section-title" style="color: var(--color-red); margin-bottom: 0.75rem;"><i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars(t('recent_outages_heading')); ?></div>
                                                      <div style="overflow-x: auto;">
                                                          <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left;">
                                                              <thead>
                                                                  <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
-                                                                     <th style="padding: 0.5rem 0.25rem;">Čas</th>
-                                                                     <th style="padding: 0.5rem 0.25rem;">Chyba / Důvod výpadku</th>
-                                                                     <th style="padding: 0.5rem 0.25rem; text-align: right;">Měřeno z</th>
+                                                                     <th style="padding: 0.5rem 0.25rem;"><?php echo htmlspecialchars(t('th_time')); ?></th>
+                                                                     <th style="padding: 0.5rem 0.25rem;"><?php echo htmlspecialchars(t('th_error_reason')); ?></th>
+                                                                     <th style="padding: 0.5rem 0.25rem; text-align: right;"><?php echo htmlspecialchars(t('th_measured_from')); ?></th>
                                                                  </tr>
                                                              </thead>
                                                              <tbody>
@@ -1513,7 +1515,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                  ?>
                                                                      <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary);">
                                                                          <td style="padding: 0.5rem 0.25rem; font-weight: 500; color: #fff; white-space: nowrap;"><?php echo $mo_time; ?></td>
-                                                                         <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars($mo['error_message'] ?: 'Nespecifikovaná chyba spojení'); ?></td>
+                                                                         <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars($mo['error_message'] ?: t('unspecified_connection_error')); ?></td>
                                                                          <td style="padding: 0.5rem 0.25rem; text-align: right; white-space: nowrap;"><i class="fas fa-map-marker-alt" style="font-size: 0.65rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($mo['checked_from'] ?: 'Main Server'); ?></td>
                                                                      </tr>
                                                                  <?php endforeach; ?>
@@ -1536,17 +1538,17 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         <!-- Sekce s incidenty -->
         <?php if (!empty($incidents)): ?>
             <div class="incident-card">
-                <h2><i class="fas fa-history" style="color: var(--color-red); margin-right: 0.5rem;"></i> Historie posledních událostí</h2>
+                <h2><i class="fas fa-history" style="color: var(--color-red); margin-right: 0.5rem;"></i> <?php echo htmlspecialchars(t('incidents_heading')); ?></h2>
                 <div style="overflow-x: auto;">
                     <table class="log-table">
                         <thead>
                             <tr>
-                                <th>Čas</th>
-                                <th>Monitor</th>
-                                <th>Typ</th>
-                                <th>Lokace</th>
-                                <th>Stav</th>
-                                <th>Chyba / Informace</th>
+                                <th><?php echo htmlspecialchars(t('th_time')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_monitor')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_type')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_location')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_status')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_error_info')); ?></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1565,15 +1567,15 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                     </td>
                                     <td>
                                         <span class="log-status <?php echo $inc['status']; ?>">
-                                            <?php echo ($inc['status'] === 'up') ? 'Online' : 'Výpadek'; ?>
+                                            <?php echo ($inc['status'] === 'up') ? t('resp_online') : t('stat_down'); ?>
                                         </span>
                                     </td>
                                     <td style="color: var(--text-secondary);">
                                         <?php 
                                         if ($inc['status'] === 'down') {
-                                            echo htmlspecialchars($inc['error_message'] ?: 'Nespecifikovaná chyba spojení');
+                                            echo htmlspecialchars($inc['error_message'] ?: t('unspecified_connection_error'));
                                         } else {
-                                            echo htmlspecialchars($inc['error_message'] ?: 'Služba se vrátila do normálního provozu');
+                                            echo htmlspecialchars($inc['error_message'] ?: t('service_recovered'));
                                         }
                                         ?>
                                     </td>
@@ -1590,7 +1592,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
     <!-- Footer -->
     <footer>
         <div class="container">
-            <p>&copy; <?php echo date('Y'); ?> <?php if ($portal_url !== ''): ?><a href="<?php echo htmlspecialchars($portal_url); ?>"><?php echo htmlspecialchars($site_title); ?></a><?php else: ?><?php echo htmlspecialchars($site_title); ?><?php endif; ?>. Všechna práva vyhrazena.</p>
+            <p>&copy; <?php echo date('Y'); ?> <?php if ($portal_url !== ''): ?><a href="<?php echo htmlspecialchars($portal_url); ?>"><?php echo htmlspecialchars($site_title); ?></a><?php else: ?><?php echo htmlspecialchars($site_title); ?><?php endif; ?>. <?php echo htmlspecialchars(t('footer_rights')); ?></p>
             <?php $ver = get_app_version(); ?>
             <p style="font-size: 0.75rem; opacity: 0.5; margin-top: 0.25rem;">
                 <i class="fas fa-code-branch"></i> <?php echo htmlspecialchars($ver['label']); ?>
@@ -1658,7 +1660,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                     if (cpuStats) cpuStats.textContent = data.cpu_avg + '% / ' + data.cpu_max + '%';
                     if (ramStats) ramStats.textContent = data.ram_avg + '% / ' + data.ram_max + '%';
                 } catch (e) {
-                    console.error('Nepodařilo se načíst historii metrik:', e);
+                    console.error(<?php echo json_encode(t('js_metrics_load_error')); ?>, e);
                 } finally {
                     btn.disabled = false;
                 }
