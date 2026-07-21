@@ -1,0 +1,41 @@
+name: Release Agent Scripts
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Package and Release Agent Scripts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Bundle Agent Files
+        run: |
+          mkdir -p build/
+          cp apps/status/agent.sh build/
+          cp apps/status/agent.py build/
+          cp apps/status/agent.ps1 build/
+          cp apps/status/agent_openwrt.sh build/
+          cp apps/status/docker-compose.agent.yml build/
+          cd build && tar -czvf ../bloodkings-agents.tar.gz * && cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            apps/status/agent.sh
+            apps/status/agent.py
+            apps/status/agent.ps1
+            apps/status/agent_openwrt.sh
+            apps/status/docker-compose.agent.yml
+            bloodkings-agents.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
