@@ -8,3 +8,18 @@ ErrorDocument 500 /status/error.php?code=500
     Header set X-Frame-Options "SAMEORIGIN"
     Header set X-XSS-Protection "1; mode=block"
 </IfModule>
+
+# Blokace přímého přístupu ke konfiguraci na úrovni webserveru - nezávislé na
+# PHP guardu v config.php (count(get_included_files()) === 1). Druhá vrstva
+# ochrany: i kdyby se PHP interpret pro tuto cestu někdy přestal spouštět
+# (špatná konfigurace, migrace na jiný webserver...), soubor se stejně nikdy
+# neposlouží jako čistý text s DB heslem uvnitř. Syntaxe pro Apache 2.4+ i 2.2.
+<FilesMatch "^config(\.sample)?\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
