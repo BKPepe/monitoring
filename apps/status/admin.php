@@ -4,6 +4,7 @@
  */
 
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/lang.php';
 
 // Zpracování odhlášení
 if (isset($_GET['action']) && $_GET['action'] === 'logout') {
