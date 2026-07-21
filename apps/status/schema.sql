@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `sq_username` VARCHAR(100) DEFAULT NULL, -- Volitelné TeamSpeak ServerQuery přihlášení (hlubší data - server groups, plný clientlist)
   `sq_password` VARCHAR(255) DEFAULT NULL,
   `ts3_filetransfer_port` INT DEFAULT NULL, -- Výchozí 30033, pokud nevyplněno
+  `enabled_metrics` TEXT DEFAULT NULL, -- JSON pole klíčů zapnutých metrik (Service Profiles). NULL = použít recommended výchozí hodnoty profilu.
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -165,5 +166,5 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Ručně nastavená poslední známá verze TeamSpeak serveru (pro "Update Available"); prázdné = kontrola se přeskočí
 ('ts3_latest_version', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260724')
+('schema_version', '20260725')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

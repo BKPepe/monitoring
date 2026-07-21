@@ -1246,14 +1246,76 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
  * jednorázového TeamSpeak Health Score obecný framework - přidání dalšího typu
  * (web/minecraft/...) v budoucnu znamená jeden nový záznam, ne přepis.
  */
+/**
+ * Registr Service Profiles - pro každý typ monitoru definuje popisek/ikonu pro
+ * vizuální picker v admin.php a (u typů, které to podporují) seznam
+ * togglovatelných sekcí dashboardu. Typy bez klíče 'metrics' nemají v adminu
+ * checklist a jejich dashboard se negatuje - zobrazuje se vše jako dosud
+ * (viz bk_get_enabled_metrics()).
+ */
 function get_service_profiles() {
     return [
+        'web' => [
+            'label' => t('profile_label_web'),
+            'icon' => 'fa-globe',
+            'metrics' => [
+                ['key' => 'check_pipeline', 'label' => t('metric_label_check_pipeline'), 'recommended' => true],
+                ['key' => 'response_breakdown', 'label' => t('metric_label_response_breakdown'), 'recommended' => true],
+                ['key' => 'ssl_card', 'label' => t('metric_label_ssl_card'), 'recommended' => true],
+                ['key' => 'headers', 'label' => t('metric_label_headers'), 'recommended' => false],
+            ],
+        ],
+        'port' => [
+            'label' => t('profile_label_port'),
+            'icon' => 'fa-network-wired',
+        ],
+        'vps' => [
+            'label' => t('profile_label_vps'),
+            'icon' => 'fa-server',
+        ],
+        'minecraft' => [
+            'label' => t('profile_label_minecraft'),
+            'icon' => 'fa-cubes',
+        ],
         'teamspeak' => [
-            'label' => 'TeamSpeak',
+            'label' => t('profile_label_teamspeak'),
             'icon' => 'fa-headset',
             'health_score_fn' => 'build_teamspeak_health_areas',
+            'metrics' => [
+                ['key' => 'health_score', 'label' => t('metric_label_health_score'), 'recommended' => true],
+                ['key' => 'process', 'label' => t('metric_label_process'), 'recommended' => true],
+                ['key' => 'service', 'label' => t('metric_label_service'), 'recommended' => true],
+                ['key' => 'clients_chart', 'label' => t('metric_label_clients_chart'), 'recommended' => true],
+                ['key' => 'quality', 'label' => t('metric_label_quality'), 'recommended' => false],
+                ['key' => 'ports', 'label' => t('metric_label_ports'), 'recommended' => false],
+                ['key' => 'license_version', 'label' => t('metric_label_license_version'), 'recommended' => false],
+            ],
+        ],
+        'discord' => [
+            'label' => t('profile_label_discord'),
+            'icon' => 'fa-discord',
         ],
     ];
+}
+
+/**
+ * Vrátí pole klíčů zapnutých metrik pro daný monitor, nebo NULL pokud se pro
+ * jeho typ gating neprovádí (typ bez 'metrics' v get_service_profiles() -
+ * dashboard se chová jako dřív, zobrazuje vše). Volající vždy kontrolují
+ * `$enabled_metrics === null || in_array('klíč', $enabled_metrics)`.
+ */
+function bk_get_enabled_metrics($monitor) {
+    $profile = get_service_profiles()[$monitor['type'] ?? ''] ?? null;
+    if (!$profile || empty($profile['metrics'])) {
+        return null;
+    }
+    $stored = json_decode($monitor['enabled_metrics'] ?? '', true);
+    if (is_array($stored) && !empty($stored)) {
+        return $stored;
+    }
+    // Nic explicitně uloženo (nový/needitovaný monitor) - použijí se recommended
+    // výchozí hodnoty, které přesně odpovídají tomu, co se dnes vždy zobrazuje.
+    return array_column(array_filter($profile['metrics'], fn($m) => !empty($m['recommended'])), 'key');
 }
 
 /**

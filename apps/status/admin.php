@@ -252,6 +252,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $sq_password = !empty($_POST['sq_password']) && $type === 'teamspeak' ? trim($_POST['sq_password']) : null;
     $ts3_filetransfer_port = !empty($_POST['ts3_filetransfer_port']) && $type === 'teamspeak' ? intval($_POST['ts3_filetransfer_port']) : null;
 
+    // Service Profiles - zapnuté sekce dashboardu. Prázdný výběr (nebo typ bez
+    // checklistu v get_service_profiles()) ukládáme jako NULL, aby se uplatnily
+    // recommended výchozí hodnoty profilu (viz bk_get_enabled_metrics()).
+    $enabled_metrics_post = isset($_POST['enabled_metrics']) && is_array($_POST['enabled_metrics'])
+        ? array_values(array_filter(array_map('trim', $_POST['enabled_metrics'])))
+        : [];
+    $enabled_metrics = !empty($enabled_metrics_post) ? json_encode($enabled_metrics_post) : null;
+
     // Pro TeamSpeak spojíme hostitele s hlasovým portem
     if ($type === 'teamspeak') {
         $voice_port = !empty($_POST['teamspeak_voice_port']) ? intval($_POST['teamspeak_voice_port']) : 9987;
@@ -274,19 +282,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
 
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?, enabled_metrics = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $id]);
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
             // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
             $agent_key = bin2hex(random_bytes(16));
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics]);
             log_monitor_event($pdo, (int)$pdo->lastInsertId(), $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
@@ -641,6 +649,55 @@ $site_title = get_setting('site_title', 'Blood Kings');
         }
         .settings-tab-panel.active {
             display: block;
+        }
+
+        /* Service Profile picker - vizuální výběr typu monitoru místo dropdownu */
+        .profile-picker-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+            gap: 0.6rem;
+            margin-bottom: 0.5rem;
+        }
+        .profile-picker-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.75rem 0.5rem;
+            background: var(--bg-secondary, #12121a);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.75rem;
+            text-align: center;
+            transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+        }
+        .profile-picker-card i {
+            font-size: 1.3rem;
+        }
+        .profile-picker-card:hover {
+            color: var(--text-primary);
+            border-color: var(--color-red);
+        }
+        .profile-picker-card.active {
+            color: var(--text-primary);
+            border-color: var(--color-red);
+            background: rgba(193, 18, 31, 0.08);
+        }
+        .metrics-checklist-group label.metric-checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.4rem;
+            font-weight: normal;
+            font-size: 0.85rem;
+        }
+        .metrics-checklist-group .metric-recommended-badge {
+            font-size: 0.6rem;
+            color: var(--color-green);
+            text-transform: uppercase;
+            font-weight: bold;
         }
 
         .password-toggle-group {
@@ -1503,9 +1560,26 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <input type="hidden" name="id" value="<?php echo $edit_monitor['id']; ?>">
                         <?php endif; ?>
                         
+                        <?php
+                        $service_profiles = get_service_profiles();
+                        $current_profile_type = $edit_monitor['type'] ?? 'web';
+                        $current_enabled_metrics = bk_get_enabled_metrics($edit_monitor ?: ['type' => $current_profile_type, 'enabled_metrics' => null]);
+                        ?>
+                        <div class="form-group">
+                            <label><?php echo htmlspecialchars(t('profile_picker_heading')); ?></label>
+                            <div class="profile-picker-grid" id="profile-picker-grid">
+                                <?php foreach ($service_profiles as $p_type => $p_profile): ?>
+                                    <button type="button" class="profile-picker-card<?php echo $p_type === $current_profile_type ? ' active' : ''; ?>" data-type="<?php echo htmlspecialchars($p_type); ?>" onclick="selectProfileType('<?php echo htmlspecialchars($p_type); ?>')">
+                                        <i class="fas <?php echo htmlspecialchars($p_profile['icon']); ?>"></i>
+                                        <span><?php echo htmlspecialchars($p_profile['label']); ?></span>
+                                    </button>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+
                         <div class="form-group">
                             <label for="type">Typ monitoringu</label>
-                            <select name="type" id="type" class="form-control" onchange="togglePortField(this.value)">
+                            <select name="type" id="type" class="form-control" onchange="selectProfileType(this.value);">
                                 <option value="web" <?php echo ($edit_monitor && $edit_monitor['type'] === 'web') ? 'selected' : ''; ?>>Webová stránka (HTTP/HTTPS)</option>
                                 <option value="port" <?php echo ($edit_monitor && $edit_monitor['type'] === 'port') ? 'selected' : ''; ?>>TCP Port (libovolný port)</option>
                                 <option value="vps" <?php echo ($edit_monitor && $edit_monitor['type'] === 'vps') ? 'selected' : ''; ?>>VPS Agent (CPU, RAM, Disk)</option>
@@ -1513,8 +1587,28 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <option value="teamspeak" <?php echo ($edit_monitor && $edit_monitor['type'] === 'teamspeak') ? 'selected' : ''; ?>>TeamSpeak server (ServerQuery)</option>
                                 <option value="discord" <?php echo ($edit_monitor && $edit_monitor['type'] === 'discord') ? 'selected' : ''; ?>>Discord Server Widget</option>
                             </select>
+
+                            <?php foreach ($service_profiles as $p_type => $p_profile):
+                                if (empty($p_profile['metrics'])) continue;
+                            ?>
+                                <div class="form-group metrics-checklist-group" id="metrics-checklist-<?php echo htmlspecialchars($p_type); ?>" style="margin-top: 0.75rem;<?php echo $p_type === $current_profile_type ? '' : ' display:none;'; ?>">
+                                    <label><?php echo htmlspecialchars(t('profile_metrics_heading')); ?></label>
+                                    <p style="color: var(--text-muted); font-size: 0.8rem; margin: 0 0 0.5rem;"><?php echo htmlspecialchars(t('profile_metrics_hint')); ?></p>
+                                    <?php foreach ($p_profile['metrics'] as $metric):
+                                        $is_checked = $p_type === $current_profile_type && in_array($metric['key'], $current_enabled_metrics ?? [], true);
+                                    ?>
+                                        <label class="metric-checkbox-label">
+                                            <input type="checkbox" name="enabled_metrics[]" value="<?php echo htmlspecialchars($metric['key']); ?>" <?php echo $is_checked ? 'checked' : ''; ?> <?php echo $p_type === $current_profile_type ? '' : 'disabled'; ?>>
+                                            <?php echo htmlspecialchars($metric['label']); ?>
+                                            <?php if (!empty($metric['recommended'])): ?>
+                                                <span class="metric-recommended-badge"><?php echo htmlspecialchars(t('profile_metric_recommended')); ?></span>
+                                            <?php endif; ?>
+                                        </label>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endforeach; ?>
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="name">Zobrazovaný název</label>
                             <input type="text" name="name" id="name" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['name']) : ''; ?>" class="form-control" required placeholder="Např. Blood Kings Wowko">
@@ -2143,6 +2237,28 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             }
         })();
 
+        // Service Profile picker - karta jen řídí skrytý <select name="type">, aby
+        // veškerá stávající logika (togglePortField, ukládání) zůstala beze změny.
+        function updateMetricsChecklist(type) {
+            document.querySelectorAll('.metrics-checklist-group').forEach((group) => {
+                const isActive = group.id === 'metrics-checklist-' + type;
+                group.style.display = isActive ? '' : 'none';
+                group.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+                    input.disabled = !isActive;
+                });
+            });
+        }
+
+        function selectProfileType(type) {
+            const select = document.getElementById('type');
+            if (select && select.value !== type) select.value = type;
+            document.querySelectorAll('.profile-picker-card').forEach((card) => {
+                card.classList.toggle('active', card.getAttribute('data-type') === type);
+            });
+            togglePortField(type);
+            updateMetricsChecklist(type);
+        }
+
         function showCpanelInstructions(serverName) {
             document.getElementById('agent-instructions-card').style.display = 'none';
             document.getElementById('cpanel-instructions-card').style.display = 'block';
@@ -2154,8 +2270,11 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
         // Inicializace při načtení pro správný stav formuláře
         window.addEventListener('DOMContentLoaded', () => {
             const typeEl = document.getElementById('type');
-            if (typeEl) togglePortField(typeEl.value);
-            
+            if (typeEl) {
+                togglePortField(typeEl.value);
+                updateMetricsChecklist(typeEl.value);
+            }
+
             const smsEl = document.getElementById('sms_gateway_type');
             if (smsEl) toggleSMSFields(smsEl.value);
         });

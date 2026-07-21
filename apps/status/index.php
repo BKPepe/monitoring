@@ -459,7 +459,21 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                             $uptime = $uptime_pct[$mid] ?? 100.00;
                             $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
                             $is_expandable = true;
-                            
+                            // Service Profiles - null = typ bez checklistu, dashboard zobrazí vše jako dřív
+                            $enabled_metrics = bk_get_enabled_metrics($monitor);
+
+                            // Má tento konkrétní monitor aktivně hlásícího VPS-metrics agenta? Stejná
+                            // freshness logika jako souhrnný "X/Y agentů online" stat výše, jen per-monitor -
+                            // aby bylo veřejně vidět, KTERÝ monitor tu statistiku tvoří (agent_key samotný
+                            // zůstává admin-only, viz linked_agent_heading sekce níže).
+                            $has_live_agent = false;
+                            if (!empty($monitor['agent_key'])) {
+                                $agent_last_seen = $details['agent_last_seen'] ?? 0;
+                                if ($agent_last_seen && ($agent_offline_timeout_secs === 0 || (time() - (int)$agent_last_seen) < $agent_offline_timeout_secs)) {
+                                    $has_live_agent = true;
+                                }
+                            }
+
                             // Třída pro barvu uptime textu
                             $uptime_class = 'up';
                             if ($uptime < 95) $uptime_class = 'down';
@@ -477,6 +491,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                 <?php echo htmlspecialchars($monitor['name']); ?>
                                                 <?php if ($status === 'maintenance'): ?>
                                                     <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="<?php echo htmlspecialchars(t('maintenance_badge_title')); ?>"><i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_badge')); ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($has_live_agent): ?>
+                                                    <span style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.2); color: var(--color-green); font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="<?php echo htmlspecialchars(t('agent_badge_title')); ?>"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('agent_badge')); ?></span>
                                                 <?php endif; ?>
                                             </h3>
                                             <span>
@@ -780,6 +797,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             <?php endif; ?>
 
                                             <?php if ($pipeline !== null): ?>
+                                                <?php if ($enabled_metrics === null || in_array('check_pipeline', $enabled_metrics)): ?>
                                                 <div class="check-pipeline-section" style="margin-bottom: 1.25rem;">
                                                     <div class="detail-section-title">
                                                         <i class="fas fa-route"></i> <?php echo htmlspecialchars(t('pipeline_heading')); ?>
@@ -812,7 +830,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <?php endforeach; ?>
                                                     </div>
                                                 </div>
+                                                <?php endif; ?>
 
+                                                <?php if ($enabled_metrics === null || in_array('response_breakdown', $enabled_metrics)): ?>
                                                 <div class="response-breakdown-section" style="margin-bottom: 1.25rem;">
                                                     <div class="detail-section-title"><i class="fas fa-stopwatch"></i> <?php echo htmlspecialchars(t('response_breakdown_heading')); ?></div>
                                                     <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -831,8 +851,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+                                                <?php endif; ?>
 
-                                                <?php if (!empty($pipeline['tls']['cert'])): $cert = $pipeline['tls']['cert']; ?>
+                                                <?php if (!empty($pipeline['tls']['cert']) && ($enabled_metrics === null || in_array('ssl_card', $enabled_metrics))): $cert = $pipeline['tls']['cert']; ?>
                                                     <div class="ssl-card-section" style="margin-bottom: 1.25rem;">
                                                         <div class="detail-section-title"><i class="fas fa-lock"></i> <?php echo htmlspecialchars(t('ssl_card_heading')); ?></div>
                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -865,7 +886,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     </div>
                                                 <?php endif; ?>
 
-                                                <?php if (isset($pipeline['http'])): ?>
+                                                <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?>
                                                     <details class="headers-section" style="margin-bottom: 1.25rem;">
                                                         <summary class="detail-section-title" style="cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem;"><i class="fas fa-list"></i> <?php echo htmlspecialchars(t('headers_heading')); ?></summary>
                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1034,6 +1055,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                  $ts3_score_color = $ts3_health['score'] >= 90 ? 'var(--color-green)' : ($ts3_health['score'] >= 70 ? 'var(--color-yellow)' : 'var(--color-red)');
                                                  ?>
 
+                                                 <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?>
                                                  <div class="ts3-health-score-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                      <div class="detail-section-title">
                                                          <i class="fas fa-heartbeat"></i> <?php echo htmlspecialchars(t('ts3_health_score_heading')); ?>
@@ -1071,9 +1093,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          </table>
                                                      </div>
                                                  </div>
+                                                 <?php endif; ?>
 
                                                  <?php if ($ts3_check_stages !== null): ?>
-                                                     <?php if (is_array($details['ts3_process'] ?? null)): $tsp = $details['ts3_process']; ?>
+                                                     <?php if (is_array($details['ts3_process'] ?? null) && ($enabled_metrics === null || in_array('process', $enabled_metrics))): $tsp = $details['ts3_process']; ?>
                                                          <div class="ts3-process-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                              <div class="detail-section-title"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('ts3_process_heading')); ?></div>
                                                              <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1087,6 +1110,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          </div>
                                                      <?php endif; ?>
 
+                                                     <?php if ($enabled_metrics === null || in_array('service', $enabled_metrics)): ?>
                                                      <div class="ts3-service-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('ts3_service_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1116,7 +1140,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                              </div>
                                                          <?php endif; ?>
                                                      </div>
+                                                     <?php endif; ?>
 
+                                                     <?php if ($enabled_metrics === null || in_array('quality', $enabled_metrics)): ?>
                                                      <div class="ts3-quality-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-wave-square"></i> <?php echo htmlspecialchars(t('ts3_quality_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1132,7 +1158,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          </div>
                                                          <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('ts3_quality_estimate_note')); ?></p>
                                                      </div>
+                                                     <?php endif; ?>
 
+                                                     <?php if ($enabled_metrics === null || in_array('ports', $enabled_metrics)): ?>
                                                      <div class="ts3-ports-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-plug"></i> <?php echo htmlspecialchars(t('ts3_ports_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
@@ -1146,7 +1174,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                              <?php endforeach; ?>
                                                          </div>
                                                      </div>
+                                                     <?php endif; ?>
 
+                                                     <?php if ($enabled_metrics === null || in_array('license_version', $enabled_metrics)): ?>
                                                      <div class="ts3-license-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-id-badge"></i> <?php echo htmlspecialchars(t('ts3_license_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1173,6 +1203,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                              <?php endif; ?>
                                                          </div>
                                                      </div>
+                                                     <?php endif; ?>
 
                                                      <?php
                                                      // --- Graf historie klientů (24 hodin) - jednoduchý statický graf bez
@@ -1192,7 +1223,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                          $ts3_clients_data[] = (int)$ch['ts_clients_online'];
                                                      }
                                                      ?>
-                                                     <?php if (count($ts3_clients_data) > 1): ?>
+                                                     <?php if (count($ts3_clients_data) > 1 && ($enabled_metrics === null || in_array('clients_chart', $enabled_metrics))): ?>
                                                          <div class="ts3-clients-chart-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                              <div class="detail-section-title"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('ts3_clients_chart_heading')); ?></div>
                                                              <div style="position: relative; height: 180px; width: 100%; margin-top: 0.6rem;">

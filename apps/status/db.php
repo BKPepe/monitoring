@@ -16,7 +16,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260724');
+    define('BK_SCHEMA_VERSION', '20260725');
 
     $bk_current_schema = false;
     try {
@@ -303,6 +303,20 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN zombie_count INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN fork_rate INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN temperature_c FLOAT DEFAULT NULL",
+    ] as $migration_sql) {
+        try {
+            $pdo->exec($migration_sql);
+        } catch (PDOException $e) {
+            // Ignorujeme
+        }
+    }
+
+    // Automatická migrace - Service Profiles: uživatel si zapíná/vypíná, které
+    // sekce dashboardu se pro daný monitor zobrazují (viz get_service_profiles()).
+    // NULL = žádný explicitní výběr, dashboard použije "recommended" výchozí
+    // hodnoty profilu, které přesně odpovídají tomu, co se zobrazovalo dosud.
+    foreach ([
+        "ALTER TABLE monitors ADD COLUMN enabled_metrics TEXT DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);
