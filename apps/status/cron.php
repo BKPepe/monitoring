@@ -109,7 +109,13 @@ foreach ($monitors as $monitor) {
             echo "OK (Detekce neaktivity vypnuta)\n";
         } elseif ($old_status !== 'down') {
             $details_arr = json_decode($monitor['last_details'] ?? '{}', true);
-            $last_report = $details_arr['agent_last_seen'] ?? ($monitor['last_checked'] ? strtotime($monitor['last_checked']) : 0);
+            // Pokud agent ještě nikdy nehlásil, počítáme timeout od vytvoření
+            // monitoru (ne od epochy 1970) - nový monitor tak dostane stejnou
+            // "grace" dobu (offline_timeout_mins), než ho poprvé označíme jako
+            // DOWN, jako monitor, kterému agent přestal hlásit po prvním hlášení.
+            $last_report = $details_arr['agent_last_seen']
+                ?? ($monitor['last_checked'] ? strtotime($monitor['last_checked']) : null)
+                ?? (!empty($monitor['created_at']) ? strtotime($monitor['created_at']) : 0);
 
             $offline_timeout_secs = $offline_timeout_mins * 60;
             $timeout_threshold = time() - $offline_timeout_secs;
