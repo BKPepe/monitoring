@@ -867,7 +867,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                 <?php endif; ?>
                                             </td>
                                             <td class="hide-mobile"><span class="category-badge"><?php echo htmlspecialchars($mon['category'] ?: 'Ostatní'); ?></span></td>
-                                            <td class="hide-mobile"><span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted);"><?php echo htmlspecialchars($mon['type']); ?></span></td>
+                                            <td class="hide-mobile"><span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.35rem;"><?php echo monitor_type_icon($mon['type'], $mon['target'], '0.85rem'); ?> <?php echo htmlspecialchars($mon['type']); ?></span></td>
                                             <td data-label="Cíl">
                                                 <span style="font-size: 0.85rem;" title="<?php echo htmlspecialchars($mon['target']); ?>">
                                                     <?php 
@@ -2009,7 +2009,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                             <tr>
                                                 <td><strong><?php echo htmlspecialchars($mon['name']); ?></strong></td>
                                                 <td data-label="Kategorie"><span class="category-badge"><?php echo htmlspecialchars($mon['category'] ?: 'Ostatní'); ?></span></td>
-                                                <td data-label="Typ"><span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted);"><?php echo htmlspecialchars($mon['type']); ?></span></td>
+                                                <td data-label="Typ"><span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.35rem;"><?php echo monitor_type_icon($mon['type'], $mon['target'], '0.85rem'); ?> <?php echo htmlspecialchars($mon['type']); ?></span></td>
                                                 <td data-label="Odběr E-mailem" style="text-align: center;">
                                                     <input type="checkbox" name="subs[<?php echo $mid; ?>][email]" <?php echo $has_email ? 'checked' : ''; ?> style="width: 16px; height: 16px; cursor: pointer;">
                                                 </td>

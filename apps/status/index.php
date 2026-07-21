@@ -200,48 +200,6 @@ if (!is_array($custom_nav_links)) {
 // na cizí "../index.html", který u samostatné instalace nikam nevede.
 $portal_url = trim(get_setting('portal_url'));
 
-/**
- * Returns HTML icon for a given monitor type and target URL.
- * For web monitors, tries to load favicon via Google's favicon API.
- */
-function monitor_type_icon(string $type, string $target = '', string $size = '1.1rem'): string {
-    switch ($type) {
-        case 'discord':
-            return '<i class="fab fa-discord" style="color:#5865f2;font-size:'.$size.';" title="Discord"></i>';
-        case 'minecraft':
-            return '<img src="https://www.google.com/s2/favicons?sz=32&domain=minecraft.net"
-                        width="16" height="16" style="border-radius:3px;vertical-align:middle;"
-                        onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'"
-                        title="Minecraft">
-                    <i class="fas fa-cubes" style="display:none;color:#5e8b4d;font-size:'.$size.';" title="Minecraft"></i>';
-        case 'teamspeak':
-            return '<i class="fas fa-headset" style="color:#5bb5e5;font-size:'.$size.';" title="TeamSpeak"></i>';
-        case 'vps':
-            return '<i class="fas fa-server" style="color:#a78bfa;font-size:'.$size.';" title="VPS"></i>';
-        case 'cpanel':
-            return '<i class="fas fa-server" style="color:#0f9f90;font-size:'.$size.';" title="cPanel Hosting"></i>';
-        case 'port':
-            return '<i class="fas fa-network-wired" style="color:#60a5fa;font-size:'.$size.';" title="Port"></i>';
-        case 'openwrt':
-            return '<i class="fas fa-wifi" style="color:#f39c12;font-size:'.$size.';" title="OpenWrt"></i>';
-        case 'web':
-        default:
-            // Extract domain for favicon lookup
-            $domain = '';
-            if ($target) {
-                $parsed = parse_url($target);
-                $domain = $parsed['host'] ?? $target;
-            }
-            if ($domain) {
-                return '<img src="https://www.google.com/s2/favicons?sz=32&domain='.htmlspecialchars($domain).'"
-                            width="16" height="16" style="border-radius:3px;vertical-align:middle;"
-                            onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'"
-                            title="'.htmlspecialchars($domain).'">
-                        <i class="fas fa-globe" style="display:none;color:#34d399;font-size:'.$size.';" title="Web"></i>';
-            }
-            return '<i class="fas fa-globe" style="color:#34d399;font-size:'.$size.';" title="Web"></i>';
-    }
-}
 ?>
 <!DOCTYPE html>
 <html lang="<?php echo htmlspecialchars($GLOBALS['BK_LANG']); ?>">
