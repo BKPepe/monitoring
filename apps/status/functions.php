@@ -196,6 +196,12 @@ function render_vps_agent_details($details, $monitor = null) {
                     <strong style="color: <?php echo $details['inode_usage'] > 90 ? 'var(--color-red)' : (($details['inode_usage'] > 70) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['inode_usage']; ?>%</strong>
                 </div>
             <?php endif; ?>
+            <?php if (isset($details['btrfs_errors']) && $details['btrfs_errors'] !== null): ?>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Chyby Btrfs:</span>
+                    <strong style="color: <?php echo $details['btrfs_errors'] > 0 ? 'var(--color-red)' : 'var(--color-green)'; ?>;"><?php echo (int)$details['btrfs_errors'] > 0 ? (int)$details['btrfs_errors'] : 'OK'; ?></strong>
+                </div>
+            <?php endif; ?>
             <?php if (isset($details['zombie_count']) && $details['zombie_count'] !== null): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Zombie procesy:</span>
@@ -364,6 +370,9 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         }
         if (isset($details['zombie_count']) && $details['zombie_count'] !== null && $details['zombie_count'] > 5) {
             $add('critical', 'knowledge_tip_zombie_high');
+        }
+        if (isset($details['btrfs_errors']) && $details['btrfs_errors'] !== null && $details['btrfs_errors'] > 0) {
+            $add('critical', 'knowledge_tip_btrfs_errors');
         }
         if (isset($details['temperature']) && $details['temperature'] !== null) {
             if ($details['temperature'] > 80) $add('critical', 'knowledge_tip_temperature_high');

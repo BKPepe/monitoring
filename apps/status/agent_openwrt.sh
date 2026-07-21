@@ -46,7 +46,7 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
     done < "$ScriptPath/agent_openwrt.cfg"
 fi
 
-AGENT_VERSION="1.1.0"
+AGENT_VERSION="1.2.0"
 LOG_FILE="$ScriptPath/agent_openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -149,6 +149,18 @@ df_target="/overlay"
 hdd=$(df -P "$df_target" 2>/dev/null | tail -n 1 | awk '{gsub("%","",$5); print $5}')
 [ -z "$hdd" ] && hdd="0.0"
 
+# --- 2b. Btrfs stav - jen zarizeni s btrfs (napr. Turris) ho maji, klasicky
+# OpenWrt squashfs+jffs2/overlay btrfs vubec nezna a prikaz jen tise selze
+# (zustane null). Soucet vsech 5 typu chyb pres vsechny disky v poli -
+# 0 = zdrave, cokoli vic znamena problem se zapisem/ctenim/checksumy.
+btrfs_errors="null"
+if command -v btrfs >/dev/null 2>&1; then
+    btrfs_out=$(btrfs device stats "$df_target" 2>/dev/null)
+    if [ -n "$btrfs_out" ]; then
+        btrfs_errors=$(echo "$btrfs_out" | awk '{sum += $NF} END {print sum+0}')
+    fi
+fi
+
 # --- 3. Identita routeru (ubus system board) ---
 ow_hostname=""; ow_kernel=""; ow_model=""; ow_board_name=""; ow_distribution=""; ow_os_version=""
 board_json=$(ubus call system board 2>/dev/null)
@@ -165,6 +177,7 @@ if [ -n "$board_json" ]; then
 fi
 os_combined="$ow_distribution $ow_os_version"
 log_message "Identita: hostname=$ow_hostname model=$ow_model board=$ow_board_name os=$os_combined kernel=$ow_kernel"
+log_message "Uloziste: hdd=${hdd}% (${df_target}) btrfs_errors=$btrfs_errors"
 
 # --- 4. WAN stav (ubus network.interface.wan status) ---
 wan_up="false"; wan_proto=""; wan_uptime="null"; wan_ipv4=""; wan_gateway=""; wan_dns=""; wan_l3_device=""
@@ -298,6 +311,7 @@ payload=$(cat <<EOF
   "ram": $ram,
   "net": $net,
   "hdd": $hdd,
+  "btrfs_errors": $btrfs_errors,
   "load1": $load1,
   "load5": $load5,
   "load15": $load15,

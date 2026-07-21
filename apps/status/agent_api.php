@@ -72,6 +72,7 @@ $ow_wan_ipv6 = (isset($data['wan_ipv6']) && $data['wan_ipv6'] !== null && $data[
 $ow_wan_gateway = (isset($data['wan_gateway']) && $data['wan_gateway'] !== null && $data['wan_gateway'] !== '') ? trim($data['wan_gateway']) : null;
 $ow_wan_dns = (isset($data['wan_dns']) && $data['wan_dns'] !== null && $data['wan_dns'] !== '') ? trim($data['wan_dns']) : null;
 $ow_wan_uptime = (isset($data['wan_uptime']) && $data['wan_uptime'] !== null) ? intval($data['wan_uptime']) : null;
+$ow_btrfs_errors = (isset($data['btrfs_errors']) && $data['btrfs_errors'] !== null) ? intval($data['btrfs_errors']) : null;
 
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
@@ -236,6 +237,7 @@ try {
         'wan_gateway' => $ow_wan_gateway,
         'wan_dns' => $ow_wan_dns,
         'wan_uptime' => $ow_wan_uptime,
+        'btrfs_errors' => $ow_btrfs_errors,
         'cpu_alert_sent' => $cpu_alert_sent,
         'ram_alert_sent' => $ram_alert_sent,
         'hdd_alert_sent' => $hdd_alert_sent,

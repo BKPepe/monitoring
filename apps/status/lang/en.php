@@ -239,6 +239,7 @@ return [
     'knowledge_tip_iowait_high' => 'High I/O wait usually means the disk can\'t keep up - common with overloaded databases or slow storage.',
     'knowledge_tip_inode_high' => 'Running low on inodes means the disk is full of files (e.g. many small log files), even if space is still free.',
     'knowledge_tip_zombie_high' => 'Zombie processes don\'t use CPU/RAM by themselves, but a large number means the parent process isn\'t reaping its children.',
+    'knowledge_tip_btrfs_errors' => 'Btrfs is reporting read/write errors or data corruption - this can indicate a failing disk. Check SMART and consider backing up your data.',
     'knowledge_tip_temperature_high' => 'High CPU temperature can trigger throttling and reduced performance - check cooling.',
     'knowledge_tip_smart_warning' => 'SMART is reporting a warning - the disk may be failing, back up data and plan a replacement.',
     'knowledge_tip_reboot_required' => 'The system is waiting for a reboot (typically after a kernel update) - schedule one during a low-traffic window.',
