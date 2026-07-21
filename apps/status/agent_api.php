@@ -61,6 +61,18 @@ $reboot_required = isset($data['reboot_required']) ? $data['reboot_required'] : 
 $cloud_provider = (isset($data['cloud_provider']) && $data['cloud_provider'] !== null) ? trim($data['cloud_provider']) : null;
 $virtualization = (isset($data['virtualization']) && $data['virtualization'] !== null) ? trim($data['virtualization']) : null;
 
+// OpenWrt profil - identita routeru + stav WAN rozhraní (viz agent_openwrt.sh).
+// hostname/kernel/os výše jsou generické a router je vyplňuje beze změny zde.
+$ow_model = (isset($data['model']) && $data['model'] !== null && $data['model'] !== '') ? trim($data['model']) : null;
+$ow_board_name = (isset($data['board_name']) && $data['board_name'] !== null && $data['board_name'] !== '') ? trim($data['board_name']) : null;
+$ow_wan_up = isset($data['wan_up']) ? (bool)$data['wan_up'] : null;
+$ow_wan_proto = (isset($data['wan_proto']) && $data['wan_proto'] !== null && $data['wan_proto'] !== '') ? trim($data['wan_proto']) : null;
+$ow_wan_ipv4 = (isset($data['wan_ipv4']) && $data['wan_ipv4'] !== null && $data['wan_ipv4'] !== '') ? trim($data['wan_ipv4']) : null;
+$ow_wan_ipv6 = (isset($data['wan_ipv6']) && $data['wan_ipv6'] !== null && $data['wan_ipv6'] !== '') ? trim($data['wan_ipv6']) : null;
+$ow_wan_gateway = (isset($data['wan_gateway']) && $data['wan_gateway'] !== null && $data['wan_gateway'] !== '') ? trim($data['wan_gateway']) : null;
+$ow_wan_dns = (isset($data['wan_dns']) && $data['wan_dns'] !== null && $data['wan_dns'] !== '') ? trim($data['wan_dns']) : null;
+$ow_wan_uptime = (isset($data['wan_uptime']) && $data['wan_uptime'] !== null) ? intval($data['wan_uptime']) : null;
+
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Chybí povinné údaje (agent_key, cpu, ram, hdd).']);
@@ -193,6 +205,15 @@ try {
         'smart' => isset($data['smart']) ? trim($data['smart']) : null,
         'ports' => isset($data['ports']) && is_array($data['ports']) ? $data['ports'] : [],
         'os' => isset($data['os']) ? trim($data['os']) : null,
+        'model' => $ow_model,
+        'board_name' => $ow_board_name,
+        'wan_up' => $ow_wan_up,
+        'wan_proto' => $ow_wan_proto,
+        'wan_ipv4' => $ow_wan_ipv4,
+        'wan_ipv6' => $ow_wan_ipv6,
+        'wan_gateway' => $ow_wan_gateway,
+        'wan_dns' => $ow_wan_dns,
+        'wan_uptime' => $ow_wan_uptime,
         'cpu_alert_sent' => $cpu_alert_sent,
         'ram_alert_sent' => $ram_alert_sent,
         'hdd_alert_sent' => $hdd_alert_sent,
@@ -255,7 +276,7 @@ try {
         $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
     ]);
 
-    if ($monitor['type'] === 'vps') {
+    if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
         // Zapsat běžný log kontroly
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");
         $stmt_log->execute([$monitor_id, $new_status, 0, $error_msg]);

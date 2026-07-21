@@ -101,8 +101,9 @@ foreach ($monitors as $monitor) {
         'error' => null
     ];
     
-    // Pasivní kontrola VPS zátěže (agenta)
-    if ($type === 'vps') {
+    // Pasivní kontrola VPS/OpenWrt zátěže (agenta) - obojí čeká na push z
+    // agenta, žádná aktivní síťová kontrola tu neprobíhá.
+    if ($type === 'vps' || $type === 'openwrt') {
         // Časový limit 0 = detekce neaktivity je vypnutá - monitor zůstává v posledním nahlášeném stavu
         if ($offline_timeout_mins === 0) {
             echo "OK (Detekce neaktivity vypnuta)\n";

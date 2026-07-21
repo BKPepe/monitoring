@@ -1437,6 +1437,10 @@ function get_service_profiles() {
             'label' => t('profile_label_discord'),
             'icon' => 'fa-discord',
         ],
+        'openwrt' => [
+            'label' => t('profile_label_openwrt'),
+            'icon' => 'fa-router',
+        ],
     ];
 }
 

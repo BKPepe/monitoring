@@ -222,6 +222,8 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
             return '<i class="fas fa-server" style="color:#0f9f90;font-size:'.$size.';" title="cPanel Hosting"></i>';
         case 'port':
             return '<i class="fas fa-network-wired" style="color:#60a5fa;font-size:'.$size.';" title="Port"></i>';
+        case 'openwrt':
+            return '<i class="fas fa-router" style="color:#f39c12;font-size:'.$size.';" title="OpenWrt"></i>';
         case 'web':
         default:
             // Extract domain for favicon lookup
@@ -546,10 +548,10 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
 
                                     <!-- Sloupec 3: Historie a grafy (HetrixTools styl nebo VPS grafy) -->
                                     <div>
-                                        <?php if (($m_type === 'vps' || $m_type === 'cpanel') && $status === 'up' && (isset($details['cpu']) || isset($details['disk']))): ?>
-                                            <!-- Pokud jde o VPS nebo cPanel, ukážeme rychlé grafy vytížení -->
+                                        <?php if (($m_type === 'vps' || $m_type === 'openwrt' || $m_type === 'cpanel') && $status === 'up' && (isset($details['cpu']) || isset($details['disk']))): ?>
+                                            <!-- Pokud jde o VPS, OpenWrt nebo cPanel, ukážeme rychlé grafy vytížení -->
                                             <div class="metrics-charts">
-                                                <?php if ($m_type === 'vps'): ?>
+                                                <?php if ($m_type === 'vps' || $m_type === 'openwrt'): ?>
                                                     <div class="mini-chart">
                                                         <div class="chart-title"><?php echo htmlspecialchars(t('chart_cpu')); ?></div>
                                                         <div class="chart-bar-container">
@@ -579,7 +581,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     <div class="chart-title"><?php echo htmlspecialchars(t('chart_ram')); ?></div>
                                                     <div class="chart-bar-container">
                                                         <?php 
-                                                        $ram_val = $m_type === 'vps' ? $details['ram'] : ($details['memory']['percent'] ?? 0);
+                                                        $ram_val = ($m_type === 'vps' || $m_type === 'openwrt') ? $details['ram'] : ($details['memory']['percent'] ?? 0);
                                                         $ram_color = ($ram_val > 85) ? 'red' : (($ram_val > 60) ? 'yellow' : 'green');
                                                         ?>
                                                         <div class="chart-bar-fill <?php echo $ram_color; ?>" style="width: <?php echo $ram_val; ?>%"></div>
@@ -591,7 +593,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                     <div class="chart-title"><?php echo htmlspecialchars(t('chart_disk')); ?></div>
                                                     <div class="chart-bar-container">
                                                         <?php 
-                                                        $hdd_val = $m_type === 'vps' ? $details['hdd'] : ($details['disk']['percent'] ?? 0);
+                                                        $hdd_val = ($m_type === 'vps' || $m_type === 'openwrt') ? $details['hdd'] : ($details['disk']['percent'] ?? 0);
                                                         $hdd_color = ($hdd_val > 90) ? 'red' : (($hdd_val > 70) ? 'yellow' : 'green');
                                                         ?>
                                                         <div class="chart-bar-fill <?php echo $hdd_color; ?>" style="width: <?php echo $hdd_val; ?>%"></div>
@@ -1458,6 +1460,71 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
                                                             <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
                                                             
+                                                            <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            <?php elseif ($m_type === 'openwrt'): ?>
+                                                <div class="game-details-grid">
+                                                    <div>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('agent_info_heading')); ?></div>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_update')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+
+                                                        <?php if (!empty($details['model']) || !empty($details['board_name'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('openwrt_router_heading')); ?></div>
+                                                            <?php if (!empty($details['model'])): ?>
+                                                                <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('openwrt_model')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['model']); ?></span></p>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($details['board_name'])): ?>
+                                                                <p><strong><?php echo htmlspecialchars(t('openwrt_board')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['board_name']); ?></span></p>
+                                                            <?php endif; ?>
+                                                        <?php endif; ?>
+
+                                                        <?php if (isset($details['wan_up'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-globe-europe"></i> <?php echo htmlspecialchars(t('openwrt_wan_heading')); ?></div>
+                                                            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.78rem;">
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_status')); ?>:</span>
+                                                                    <strong style="color: <?php echo $details['wan_up'] ? 'var(--color-green)' : 'var(--color-red)'; ?>; margin-left: 0.25rem;"><?php echo $details['wan_up'] ? htmlspecialchars(t('openwrt_wan_up')) : htmlspecialchars(t('openwrt_wan_down')); ?></strong>
+                                                                </div>
+                                                                <?php if (!empty($details['wan_proto'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_proto')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(strtoupper($details['wan_proto'])); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($details['wan_ipv4'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv4')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv4']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($details['wan_ipv6'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv6')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv6']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($details['wan_gateway'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_gateway')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_gateway']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($details['wan_dns'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_dns')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_dns']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($details['wan_uptime'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_uptime')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(format_uptime_cz((int)$details['wan_uptime'])); ?></strong></div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div>
+                                                        <?php if (isset($details['cpu'])): ?>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
+                                                            <?php echo render_vps_agent_details($details, $monitor); ?>
+                                                        <?php else: ?>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_agent_heading')); ?></div>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
+                                                                <?php echo htmlspecialchars(t('vps_waiting_for_data')); ?>
+                                                            </div>
+                                                        <?php endif; ?>
+
+                                                        <?php if ($is_admin): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
+                                                            <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+
                                                             <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
                                                         <?php endif; ?>
                                                     </div>

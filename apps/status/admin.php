@@ -905,7 +905,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                     <a href="admin.php?action=clear_history&id=<?php echo $mon['id']; ?>" class="btn btn-warning btn-sm" onclick="return confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
                                                     <a href="admin.php?action=delete&id=<?php echo $mon['id']; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Opravdu chcete smazat tento monitor?')" title="Smazat"><i class="fas fa-trash"></i></a>
                                                     <?php if (!empty($mon['agent_key'])): ?>
-                                                        <button id="agent-btn-<?php echo $mon['id']; ?>" class="btn btn-success btn-sm" onclick="showAgentInstructions('<?php echo $mon['agent_key']; ?>', '<?php echo htmlspecialchars($mon['name']); ?>')" title="Klíč a instalace VPS agenta"><i class="fas fa-terminal"></i></button>
+                                                        <button id="agent-btn-<?php echo $mon['id']; ?>" class="btn btn-success btn-sm" onclick="showAgentInstructions('<?php echo $mon['agent_key']; ?>', '<?php echo htmlspecialchars($mon['name']); ?>', '<?php echo htmlspecialchars($mon['type']); ?>')" title="Klíč a instalace agenta"><i class="fas fa-terminal"></i></button>
                                                     <?php elseif ($mon['type'] === 'cpanel'): ?>
                                                         <button class="btn btn-success btn-sm" onclick="showCpanelInstructions('<?php echo htmlspecialchars($mon['name']); ?>')" title="Nastavení cPanel monitoringu"><i class="fas fa-info-circle"></i></button>
                                                     <?php endif; ?>
@@ -1063,6 +1063,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                         <button type="button" data-agent-tab="agent-tab-bash"><i class="fas fa-terminal"></i> Bash/Shell</button>
                         <button type="button" data-agent-tab="agent-tab-powershell"><i class="fab fa-windows"></i> Windows</button>
                         <button type="button" data-agent-tab="agent-tab-docker"><i class="fab fa-docker"></i> Docker</button>
+                        <button type="button" data-agent-tab="agent-tab-openwrt"><i class="fas fa-router"></i> OpenWrt</button>
                     </div>
 
                     <div class="settings-tab-panel active" id="agent-tab-python">
@@ -1142,6 +1143,30 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             </li>
                             <li>Kontejner běží s <code>pid: host</code> a připojeným kořenovým FS hostitele (<code>/:/host:ro</code>), takže hlásí metriky <strong>hostitele</strong>, ne kontejneru. Funguje na Linuxu; vyžaduje Docker Engine s podporou <code>pid: host</code> a <code>network_mode: host</code>.</li>
                             <li>Automatické aktualizace jsou v Docker režimu vypnuté (skript je připojen read-only) - novou verzi nasadíte stažením aktuálního <code>agent.py</code> a restartem kontejneru.</li>
+                        </ol>
+                    </div>
+
+                    <div class="settings-tab-panel" id="agent-tab-openwrt">
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Pro OpenWrt/TurrisOS routery - nevyžaduje Python ani bash, jen standardní BusyBox ash a <code>ubus</code> (tedy prakticky jakýkoli router s OpenWrt). Žádný přístup zvenčí není potřeba - router se sám ozývá ven.</p>
+                        <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
+                            <li>Stáhněte OpenWrt agenta přímo na router (přes SSH):<br>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O /root/agent_openwrt.sh <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_openwrt.sh', $_SERVER['REQUEST_URI']); ?></pre>
+                                Pokud router nemá SSL podporu ve <code>wget</code>, použijte <code>uclient-fetch</code> místo <code>wget</code>.
+                            </li>
+                            <li>Nastavte konfiguraci vytvořením souboru <code>agent_openwrt.cfg</code> ve stejné složce:<br>
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
+                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
+                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-openwrt">KLIC</span>"
+                                </div>
+                            </li>
+                            <li>Povolte spuštění: <code>chmod +x /root/agent_openwrt.sh</code></li>
+                            <li>Nejdřív spusťte ručně a zkontrolujte log, než ho zařadíte do cronu:<br>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">/root/agent_openwrt.sh</pre>
+                            </li>
+                            <li>Přidejte do crontabu (OpenWrt má <code>crond</code> ve výchozí instalaci):<br>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">echo '*/5 * * * * /root/agent_openwrt.sh > /dev/null 2>&1' >> /etc/crontabs/root
+/etc/init.d/cron restart</pre>
+                            </li>
                         </ol>
                     </div>
                 </div>
@@ -1586,6 +1611,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <option value="minecraft" <?php echo ($edit_monitor && $edit_monitor['type'] === 'minecraft') ? 'selected' : ''; ?>>Minecraft server (SLP Query)</option>
                                 <option value="teamspeak" <?php echo ($edit_monitor && $edit_monitor['type'] === 'teamspeak') ? 'selected' : ''; ?>>TeamSpeak server (ServerQuery)</option>
                                 <option value="discord" <?php echo ($edit_monitor && $edit_monitor['type'] === 'discord') ? 'selected' : ''; ?>>Discord Server Widget</option>
+                                <option value="openwrt" <?php echo ($edit_monitor && $edit_monitor['type'] === 'openwrt') ? 'selected' : ''; ?>>OpenWrt router (ubus agent)</option>
                             </select>
 
                             <?php foreach ($service_profiles as $p_type => $p_profile):
@@ -2205,20 +2231,22 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             }
         }
 
-        function showAgentInstructions(key, serverName) {
+        function showAgentInstructions(key, serverName, monitorType) {
             document.getElementById('cpanel-instructions-card').style.display = 'none';
             document.getElementById('agent-instructions-card').style.display = 'block';
             document.getElementById('agent-server-name').textContent = serverName;
 
-            ['agent-server-key', 'agent-server-key-sh', 'agent-server-key-ps1', 'agent-server-key-docker'].forEach((id) => {
+            ['agent-server-key', 'agent-server-key-sh', 'agent-server-key-ps1', 'agent-server-key-docker', 'agent-server-key-openwrt'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.textContent = key;
             });
 
-            // Vždy začít na první záložce (Python)
+            // Výchozí záložka je Python, kromě OpenWrt monitorů - tam rovnou OpenWrt.
             const tabsBar = document.getElementById('agent-tabs');
             if (tabsBar) {
-                const firstBtn = tabsBar.querySelector('button[data-agent-tab]');
+                const targetTab = monitorType === 'openwrt' ? 'agent-tab-openwrt' : null;
+                const targetBtn = targetTab ? tabsBar.querySelector('button[data-agent-tab="' + targetTab + '"]') : null;
+                const firstBtn = targetBtn || tabsBar.querySelector('button[data-agent-tab]');
                 if (firstBtn) firstBtn.click();
             }
 
