@@ -1,0 +1,10 @@
+# Blood Kings Status - Custom Error Documents & Rewrites
+ErrorDocument 404 /status/error.php?code=404
+ErrorDocument 403 /status/error.php?code=403
+ErrorDocument 500 /status/error.php?code=500
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>

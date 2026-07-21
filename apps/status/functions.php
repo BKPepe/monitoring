@@ -13,7 +13,7 @@ require_once __DIR__ . '/db.php';
 function monitor_type_icon(string $type, string $target = '', string $size = '1.1rem'): string {
     switch ($type) {
         case 'discord':
-            return '<i class="fab fa-discord" style="color:#5865f2;font-size:'.$size.';" title="Discord"></i>';
+            return '<svg width="18" height="18" viewBox="0 0 127.14 96.36" fill="#5865F2" style="vertical-align:middle;display:inline-block;" title="Discord"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2.05a75.52 75.52 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.05a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.91-72.14zM42.45 65.69c-6.58 0-12-6.04-12-13.43s5.3-13.43 12-13.43c6.74 0 12.05 6.09 12 13.43 0 7.39-5.26 13.43-12 13.43zm42.24 0c-6.58 0-12-6.04-12-13.43s5.3-13.43 12-13.43c6.74 0 12.05 6.09 12 13.43 0 7.39-5.26 13.43-12 13.43z"/></svg>';
         case 'minecraft':
             return '<img src="https://www.google.com/s2/favicons?sz=32&domain=minecraft.net"
                         width="16" height="16" style="border-radius:3px;vertical-align:middle;"

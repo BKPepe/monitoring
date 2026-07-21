@@ -21,7 +21,7 @@ error_reporting(E_ALL);
 
 // Spuštění session pro administraci
 if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
-    session_start();
+    @session_start();
 }
 
 // --- DATABÁZOVÉ NASTAVENÍ ---

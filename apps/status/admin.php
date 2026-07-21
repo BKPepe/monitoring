@@ -258,9 +258,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $notes = isset($_POST['notes']) ? trim($_POST['notes']) : null;
     $maintenance = isset($_POST['maintenance']) ? 1 : 0;
     $monitored_processes = isset($_POST['monitored_processes']) ? trim($_POST['monitored_processes']) : null;
-    $maintenance_description = !empty($_POST['maintenance_description']) ? trim($_POST['maintenance_description']) : null;
-    $maintenance_start = !empty($_POST['maintenance_start']) ? $_POST['maintenance_start'] : null;
-    $maintenance_end = !empty($_POST['maintenance_end']) ? $_POST['maintenance_end'] : null;
+    $maintenance_description = ($maintenance === 1 && !empty($_POST['maintenance_description'])) ? trim($_POST['maintenance_description']) : null;
+    $maintenance_start = ($maintenance === 1 && !empty($_POST['maintenance_start'])) ? $_POST['maintenance_start'] : null;
+    $maintenance_end = ($maintenance === 1 && !empty($_POST['maintenance_end'])) ? $_POST['maintenance_end'] : null;
     $cpu_threshold = !empty($_POST['cpu_threshold']) ? intval($_POST['cpu_threshold']) : 90;
     $ram_threshold = !empty($_POST['ram_threshold']) ? intval($_POST['ram_threshold']) : 95;
     $hdd_threshold = !empty($_POST['hdd_threshold']) ? intval($_POST['hdd_threshold']) : 90;
@@ -507,6 +507,28 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_notif' && isset($_GET[
     
     $stmt_tog = $pdo->prepare("UPDATE monitors SET $field = 1 - $field WHERE id = ?");
     $stmt_tog->execute([$t_id]);
+    
+    header('Location: admin.php');
+    exit;
+}
+
+// Rychlé přepnutí / okamžité zapnutí či ukončení režimu údržby z tabulky (pouze pro Admina)
+if (isset($_GET['action']) && $_GET['action'] === 'toggle_maintenance' && isset($_GET['id']) && $user_role === 'admin') {
+    $t_id = intval($_GET['id']);
+    
+    $stmt_m = $pdo->prepare("SELECT maintenance FROM monitors WHERE id = ?");
+    $stmt_m->execute([$t_id]);
+    $curr_m = (int)$stmt_m->fetchColumn();
+    
+    if ($curr_m === 1) {
+        // Vypnutí údržby -> vyčistit popis a časování staré údržby
+        $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 0, maintenance_description = NULL, maintenance_start = NULL, maintenance_end = NULL, status = 'unknown' WHERE id = ?");
+        $stmt_tog->execute([$t_id]);
+    } else {
+        // Okamžité zapnutí údržby
+        $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 1, status = 'maintenance' WHERE id = ?");
+        $stmt_tog->execute([$t_id]);
+    }
     
     header('Location: admin.php');
     exit;
@@ -1003,6 +1025,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                             <td data-label="Akce">
                                                 <div class="action-btns">
                                                     <a href="admin.php?action=edit&id=<?php echo $mon['id']; ?>" class="btn btn-secondary btn-sm" title="Upravit"><i class="fas fa-edit"></i></a>
+                                                    <a href="admin.php?action=toggle_maintenance&id=<?php echo $mon['id']; ?>" class="btn btn-sm" style="background: <?php echo $mon['maintenance'] ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.05)'; ?>; border: 1px solid <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--border-color)'; ?>; color: <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--text-secondary)'; ?>;" title="<?php echo $mon['maintenance'] ? 'Ukončit režim údržby (vyčistí starý popis)' : 'Okamžitě zapnout režim údržby'; ?>"><i class="fas fa-wrench"></i></a>
                                                     <a href="admin.php?action=clear_history&id=<?php echo $mon['id']; ?>" class="btn btn-warning btn-sm" onclick="return confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
                                                     <a href="admin.php?action=delete&id=<?php echo $mon['id']; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Opravdu chcete smazat tento monitor?')" title="Smazat"><i class="fas fa-trash"></i></a>
                                                     <?php if (!empty($mon['agent_key'])): ?>
