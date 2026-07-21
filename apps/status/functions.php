@@ -467,6 +467,131 @@ function render_knowledge_panel(array $tips) {
 }
 
 /**
+ * Sdílená matematika pro Insights (Level 1 Forecasting) - rozdělí seřazenou
+ * (podle checked_at ASC) řadu vzorků na starší/novější polovinu, porovná
+ * průměry a vrátí rychlost změny za den. Deterministické, žádná AI - stejný
+ * princip pro disk/RAM i pro latenci, proto jedna sdílená funkce.
+ *
+ * @param array $rows Řádky s klíči $time_key (datum) a $value_key (číslo)
+ * @return array{avg_older: float, avg_newer: float, latest: float, rate_per_day: float}|null
+ *         null, pokud je dat málo na to, aby extrapolace dávala smysl.
+ */
+function bk_half_window_rate(array $rows, string $value_key, string $time_key = 'checked_at') {
+    $rows = array_values(array_filter($rows, fn($r) => isset($r[$value_key]) && $r[$value_key] !== null));
+    if (count($rows) < 5) {
+        return null;
+    }
+    $first_ts = strtotime($rows[0][$time_key]);
+    $last_ts = strtotime($rows[count($rows) - 1][$time_key]);
+    if ($first_ts === false || $last_ts === false || ($last_ts - $first_ts) < 4 * 86400) {
+        return null; // Méně než 4 dny rozestupu - příliš krátké okno na spolehlivou extrapolaci
+    }
+
+    $mid = intdiv(count($rows), 2);
+    $older = array_slice($rows, 0, $mid);
+    $newer = array_slice($rows, $mid);
+
+    $avg_older = array_sum(array_column($older, $value_key)) / count($older);
+    $avg_newer = array_sum(array_column($newer, $value_key)) / count($newer);
+    $mid_ts_older = strtotime($older[intdiv(count($older), 2)][$time_key]);
+    $mid_ts_newer = strtotime($newer[intdiv(count($newer), 2)][$time_key]);
+    $days_between = ($mid_ts_newer - $mid_ts_older) / 86400;
+    if ($days_between <= 0) {
+        return null;
+    }
+
+    return [
+        'avg_older' => $avg_older,
+        'avg_newer' => $avg_newer,
+        'latest' => (float)$rows[count($rows) - 1][$value_key],
+        'rate_per_day' => ($avg_newer - $avg_older) / $days_between,
+    ];
+}
+
+/**
+ * Insights v1 (Level 1 Forecasting) - trendová matematika nad historií, kterou
+ * už sbíráme (vps_metrics/monitor_logs, oboje 30denní retence - viz cron.php).
+ * Záměrně nezahrnuje SSL expiraci (tu už pokrývá knowledge_tip_ssl_expiring
+ * v bk_get_knowledge_tips() - duplicitní hlášení stejné věci by jen otravovalo)
+ * ani sloučení s Knowledge panelem (viz plán - samostatné rozhodnutí až bude
+ * víc typů insightů hotovo).
+ */
+function bk_get_forecast_insights($pdo, $monitor) {
+    $insights = [];
+    $monitor_id = $monitor['id'];
+
+    // --- Disk / RAM growth forecast ---
+    $stmt = $pdo->prepare("SELECT checked_at, hdd_usage, ram_usage FROM vps_metrics WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 14 DAY) ORDER BY checked_at ASC");
+    $stmt->execute([$monitor_id]);
+    $metrics_rows = $stmt->fetchAll();
+
+    foreach (['hdd_usage' => 'insight_forecast_disk', 'ram_usage' => 'insight_forecast_ram'] as $metric_key => $tip_key) {
+        $rate_info = bk_half_window_rate($metrics_rows, $metric_key);
+        if ($rate_info === null || $rate_info['rate_per_day'] <= 0.01) {
+            continue; // Ploché nebo klesající - není co predikovat
+        }
+        $days_until_full = (100 - $rate_info['latest']) / $rate_info['rate_per_day'];
+        if ($days_until_full <= 0 || $days_until_full > 90) {
+            continue; // Už plné (nesmysl), nebo za hranicí toho, co stojí za varování
+        }
+        $insights[] = [
+            'type' => 'forecast',
+            'icon' => 'fa-hourglass-half',
+            'color' => 'var(--color-yellow)',
+            'text' => sprintf(t($tip_key), number_format($rate_info['rate_per_day'], 2, ',', ' '), (int)round($days_until_full)),
+            'detail' => sprintf(t('insight_forecast_basis'), number_format($rate_info['latest'], 1, ',', ' ')),
+        ];
+    }
+
+    // --- Latency trend ---
+    $stmt2 = $pdo->prepare("SELECT checked_at, response_time FROM monitor_logs WHERE monitor_id = ? AND status = 'up' AND response_time IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 14 DAY) ORDER BY checked_at ASC");
+    $stmt2->execute([$monitor_id]);
+    $latency_rows = $stmt2->fetchAll();
+    $lat_rate = bk_half_window_rate($latency_rows, 'response_time');
+    if ($lat_rate !== null && $lat_rate['avg_older'] > 0) {
+        $pct_change = (($lat_rate['avg_newer'] - $lat_rate['avg_older']) / $lat_rate['avg_older']) * 100;
+        if (abs($pct_change) >= 15) {
+            $is_good = $pct_change < 0; // Nižší latence = lepší
+            $insights[] = [
+                'type' => 'trend',
+                'icon' => $pct_change > 0 ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down',
+                'color' => $is_good ? 'var(--color-green)' : 'var(--color-red)',
+                'text' => sprintf(t($pct_change > 0 ? 'insight_trend_latency_up' : 'insight_trend_latency_down'), number_format(abs($pct_change), 0)),
+                'detail' => sprintf(t('insight_trend_latency_basis'), (int)round($lat_rate['avg_older']), (int)round($lat_rate['avg_newer'])),
+            ];
+        }
+    }
+
+    return $insights;
+}
+
+/**
+ * Vykreslí panel s Insights (viz bk_get_forecast_insights()). Stejný tvar
+ * jako render_knowledge_panel() - prázdné pole = prázdný řetězec.
+ */
+function render_insights_panel(array $insights) {
+    if (empty($insights)) return '';
+    ob_start();
+    ?>
+    <div class="insights-panel-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+        <div class="detail-section-title"><?php echo htmlspecialchars(t('insights_panel_heading')); ?></div>
+        <div style="display: flex; flex-direction: column; gap: 0.65rem; margin-top: 0.6rem;">
+            <?php foreach ($insights as $insight): ?>
+                <div style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; line-height: 1.4;">
+                    <i class="fas <?php echo htmlspecialchars($insight['icon']); ?>" style="color: <?php echo $insight['color']; ?>; margin-top: 0.15rem; flex-shrink: 0;"></i>
+                    <div>
+                        <div style="color: var(--text-secondary);"><?php echo htmlspecialchars($insight['text']); ?></div>
+                        <div style="color: var(--text-muted); font-size: 0.72rem; margin-top: 0.1rem;"><?php echo htmlspecialchars($insight['detail']); ?></div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php
+    return ob_get_clean();
+}
+
+/**
  * Vrátí informace o aktuální verzi aplikace.
  * Ve produkci čte soubor version.php vygenerovaný GitHub Actions deployem.
  * Lokálně (dev) se jako záloha pokusí o git log.

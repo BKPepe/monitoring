@@ -240,6 +240,15 @@ return [
     'knowledge_tip_inode_high' => 'Running low on inodes means the disk is full of files (e.g. many small log files), even if space is still free.',
     'knowledge_tip_zombie_high' => 'Zombie processes don\'t use CPU/RAM by themselves, but a large number means the parent process isn\'t reaping its children.',
     'knowledge_tip_btrfs_errors' => 'Btrfs is reporting read/write errors or data corruption - this can indicate a failing disk. Check SMART and consider backing up your data.',
+
+    // Insights (Level 1 Forecasting) - trend math over existing history
+    'insights_panel_heading' => '🔮 Insights',
+    'insight_forecast_disk' => 'Disk usage is growing by roughly %s%%/day - at this rate it will be full in about %d days.',
+    'insight_forecast_ram' => 'RAM usage is growing by roughly %s%%/day - at this rate it will be exhausted in about %d days.',
+    'insight_forecast_basis' => 'Current value: %s%%.',
+    'insight_trend_latency_up' => 'Latency has increased by roughly %d%% over the last 14 days.',
+    'insight_trend_latency_down' => 'Latency has decreased by roughly %d%% over the last 14 days.',
+    'insight_trend_latency_basis' => 'Average before: %d ms, now: %d ms.',
     'knowledge_tip_temperature_high' => 'High CPU temperature can trigger throttling and reduced performance - check cooling.',
     'knowledge_tip_smart_warning' => 'SMART is reporting a warning - the disk may be failing, back up data and plan a replacement.',
     'knowledge_tip_reboot_required' => 'The system is waiting for a reboot (typically after a kernel update) - schedule one during a low-traffic window.',

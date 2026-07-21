@@ -241,6 +241,15 @@ return [
     'knowledge_tip_inode_high' => 'Docházející inodes znamená, že disk je plný souborů (např. malých log souborů), i když má ještě volné místo.',
     'knowledge_tip_zombie_high' => 'Zombie procesy samy nezatěžují CPU/RAM, ale velké množství značí, že rodičovský proces řádně neukončuje potomky.',
     'knowledge_tip_btrfs_errors' => 'Btrfs hlásí chyby čtení/zápisu nebo poškození dat - může jít o počínající selhání disku, zkontrolujte SMART a zvažte zálohu dat.',
+
+    // Insights (Level 1 Forecasting) - trendová matematika nad historií
+    'insights_panel_heading' => '🔮 Insights',
+    'insight_forecast_disk' => 'Disk roste přibližně o %s %%/den - při tomto tempu bude plný přibližně za %d dní.',
+    'insight_forecast_ram' => 'Využití RAM roste přibližně o %s %%/den - při tomto tempu dojde přibližně za %d dní.',
+    'insight_forecast_basis' => 'Aktuální hodnota: %s %%.',
+    'insight_trend_latency_up' => 'Latence se za posledních 14 dní zvýšila přibližně o %d %%.',
+    'insight_trend_latency_down' => 'Latence se za posledních 14 dní snížila přibližně o %d %%.',
+    'insight_trend_latency_basis' => 'Průměr dříve: %d ms, nyní: %d ms.',
     'knowledge_tip_temperature_high' => 'Vysoká teplota CPU může vést k throttlingu a snížení výkonu - zkontrolujte chlazení.',
     'knowledge_tip_smart_warning' => 'SMART hlásí varování - disk může selhávat, zálohujte data a naplánujte jeho výměnu.',
     'knowledge_tip_reboot_required' => 'Systém čeká na restart (typicky po aktualizaci jádra) - naplánujte si restart v době nízkého provozu.',
