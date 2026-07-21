@@ -2000,9 +2000,20 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 
     $query_start = microtime(true);
 
-    // Zvolíme virtuální server na hlasovém portu (nezměněno oproti dřívější verzi)
+    // Zvolíme virtuální server na hlasovém portu
     @fwrite($socket, "use port=$voice_port\n");
-    @fgets($socket, 256); // přečíst odpověď (error id=0 msg=ok)
+    $use_resp = @fgets($socket, 256);
+
+    if ($use_resp && strpos($use_resp, 'error id=0') === false) {
+        // Pokud zadaný voice port neexistuje nebo je neplatný, automaticky detekujeme port přes serverlist
+        @fwrite($socket, "serverlist\n");
+        $s_list = @fgets($socket, 4096);
+        if ($s_list && preg_match('/virtualserver_port=(\d+)/', $s_list, $m_port)) {
+            $voice_port = (int)$m_port[1];
+            @fwrite($socket, "use port=$voice_port\n");
+            @fgets($socket, 256);
+        }
+    }
 
     // Dotaz na info o serveru (nezměněno - toto je baseline, na kterém stojí up/down)
     @fwrite($socket, "serverinfo\n");

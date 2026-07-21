@@ -603,10 +603,10 @@ def get_os_version():
         return "Linux"
 
 def get_listening_ports():
-    """Zjistí naslouchající porty z /proc/net/tcp a tcp6"""
+    """Zjistí naslouchající porty (TCP i UDP) z /proc/net/"""
     ports = set()
     try:
-        for proto in ['tcp', 'tcp6']:
+        for proto in ['tcp', 'tcp6', 'udp', 'udp6']:
             path = f'/proc/net/{proto}'
             if os.path.exists(path):
                 with open(path, 'r') as f:
@@ -615,7 +615,7 @@ def get_listening_ports():
                         parts = line.strip().split()
                         if len(parts) >= 4:
                             state = parts[3]
-                            if state == '0A':  # TCP_LISTEN
+                            if state in ['0A', '07']:  # TCP_LISTEN (0A) nebo UDP active socket (07)
                                 local_address = parts[1]
                                 local_port_hex = local_address.split(':')[1]
                                 local_port = int(local_port_hex, 16)

@@ -392,7 +392,7 @@ smart=$(get_smart_status)
 ports_list=""
 if [ -f /proc/net/tcp ]; then
     ports_raw=$(awk '
-    NR > 1 && $4 == "0A" {
+    NR > 1 && ($4 == "0A" || $4 == "07") {
         split($2, addr, ":");
         hex = addr[2];
         dec = 0;
@@ -405,7 +405,7 @@ if [ -f /proc/net/tcp ]; then
         if (port > 0 && port < 65536) {
             print port;
         }
-    }' /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -un)
+    }' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null | sort -un)
     
     for p in $ports_raw; do
         if [ -z "$ports_list" ]; then
