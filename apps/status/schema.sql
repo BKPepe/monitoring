@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `sq_password` VARCHAR(255) DEFAULT NULL,
   `ts3_filetransfer_port` INT DEFAULT NULL, -- Výchozí 30033, pokud nevyplněno
   `enabled_metrics` TEXT DEFAULT NULL, -- JSON pole klíčů zapnutých metrik (Service Profiles). NULL = použít recommended výchozí hodnoty profilu.
+  `rcon_port` INT DEFAULT NULL, -- Minecraft RCON port (výchozí 25575) - volitelné, umožní TPS přes Paper/Spigot
+  `rcon_password` VARCHAR(255) DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -166,5 +168,5 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Ručně nastavená poslední známá verze TeamSpeak serveru (pro "Update Available"); prázdné = kontrola se přeskočí
 ('ts3_latest_version', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260725')
+('schema_version', '20260726')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

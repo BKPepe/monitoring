@@ -163,7 +163,13 @@ foreach ($monitors as $monitor) {
             break;
             
         case 'minecraft':
-            $check_result = check_minecraft($target, $port ?: 25565, $timeout);
+            $check_result = check_minecraft(
+                $target,
+                $port ?: 25565,
+                $timeout,
+                $monitor['rcon_port'] ?? null,
+                $monitor['rcon_password'] ?? null
+            );
             break;
             
         case 'teamspeak':
@@ -269,7 +275,10 @@ foreach ($monitors as $monitor) {
                 'version' => $check_result['version'] ?? '',
                 'players_list' => $check_result['players_list'] ?? [],
                 'motd' => $check_result['motd'] ?? '',
-                'api_fallback' => $check_result['api_fallback'] ?? false
+                'api_fallback' => $check_result['api_fallback'] ?? false,
+                'tps_1m' => $check_result['tps_1m'] ?? null,
+                'tps_5m' => $check_result['tps_5m'] ?? null,
+                'tps_15m' => $check_result['tps_15m'] ?? null
             ], JSON_UNESCAPED_UNICODE);
         } elseif ($type === 'teamspeak') {
             $details = json_encode([

@@ -16,7 +16,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260725');
+    define('BK_SCHEMA_VERSION', '20260726');
 
     $bk_current_schema = false;
     try {
@@ -317,6 +317,19 @@ try {
     // hodnoty profilu, které přesně odpovídají tomu, co se zobrazovalo dosud.
     foreach ([
         "ALTER TABLE monitors ADD COLUMN enabled_metrics TEXT DEFAULT NULL",
+    ] as $migration_sql) {
+        try {
+            $pdo->exec($migration_sql);
+        } catch (PDOException $e) {
+            // Ignorujeme
+        }
+    }
+
+    // Automatická migrace - RCON přihlášení pro Minecraft (TPS přes Paper/Spigot
+    // příkaz "tps"). Volitelné - bez vyplnění se používá jen SLP jako dosud.
+    foreach ([
+        "ALTER TABLE monitors ADD COLUMN rcon_port INT DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN rcon_password VARCHAR(255) DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

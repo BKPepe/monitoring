@@ -1720,6 +1720,17 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             </small>
                         </div>
 
+                        <div class="form-group" id="rcon-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] === 'minecraft') ? 'block' : 'none'; ?>;">
+                            <label for="rcon_port">RCON přihlášení (volitelné, pro zobrazení TPS)</label>
+                            <div class="form-row">
+                                <input type="number" name="rcon_port" id="rcon_port" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['rcon_port'] ?? '') : ''; ?>" class="form-control" placeholder="25575 (výchozí)">
+                                <input type="password" name="rcon_password" id="rcon_password" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['rcon_password'] ?? '') : ''; ?>" class="form-control" placeholder="RCON heslo" autocomplete="new-password">
+                            </div>
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">
+                                Nepovinné - funguje jen na Paper/Spigot (vanilla nemá příkaz "/tps"). Bez vyplnění se zobrazují jen data z veřejného SLP dotazu (hráči, verze, MOTD) jako dosud.
+                            </small>
+                        </div>
+
                         <div class="form-group" id="processes-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord' && $edit_monitor['type'] !== 'openwrt') ? 'block' : 'none'; ?>;">
                             <label for="monitored_processes">Sledované procesy (čárkou oddělené)</label>
                             <input type="text" name="monitored_processes" id="monitored_processes" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['monitored_processes'] ?? '') : ''; ?>" class="form-control" placeholder="Např. ts3server, nginx, mysql">
@@ -2115,6 +2126,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             const bodyKeywordGroup = document.getElementById('body-keyword-group');
             const ts3FiletransferGroup = document.getElementById('ts3-filetransfer-group');
             const sqLoginGroup = document.getElementById('sq-login-group');
+            const rconGroup = document.getElementById('rcon-group');
 
             // Výchozí zobrazení
             portGroup.style.display = 'none';
@@ -2141,6 +2153,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             if (sqLoginGroup) {
                 sqLoginGroup.style.display = 'none';
             }
+            if (rconGroup) {
+                rconGroup.style.display = 'none';
+            }
             if (portLabel) {
                 portLabel.textContent = "Síťový port";
             }
@@ -2163,6 +2178,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 targetDesc.textContent = "Zadejte IP adresu nebo doménu serveru, na kterém port běží.";
             } else if (type === 'minecraft') {
                 portGroup.style.display = 'block';
+                if (rconGroup) {
+                    rconGroup.style.display = 'block';
+                }
                 targetLabel.textContent = "Adresa Minecraft serveru (IP/Hostname)";
                 targetDesc.textContent = "Zadejte adresu herního serveru. Port doplňte níže (výchozí: 25565).";
                 document.getElementById('port').placeholder = "25565";

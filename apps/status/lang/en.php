@@ -105,6 +105,11 @@ return [
     // Minecraft
     'online_players_heading' => 'Online Players',
     'no_players_online' => 'No players online right now.',
+    'mc_tps_heading' => 'Server Performance (TPS)',
+    'mc_tps_1m' => 'TPS 1m',
+    'mc_tps_5m' => 'TPS 5m',
+    'mc_tps_15m' => 'TPS 15m',
+    'knowledge_tip_mc_tps_low' => 'Minecraft server TPS is low (%s / 20.0). The server is experiencing lag.',
 
     // TeamSpeak
     'connected_clients_heading' => 'Connected Clients',

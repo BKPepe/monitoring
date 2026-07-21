@@ -106,6 +106,11 @@ return [
     // Minecraft
     'online_players_heading' => 'Online hráči',
     'no_players_online' => 'Právě zde nejsou žádní online hráči.',
+    'mc_tps_heading' => 'Výkon serveru (TPS)',
+    'mc_tps_1m' => 'TPS 1m',
+    'mc_tps_5m' => 'TPS 5m',
+    'mc_tps_15m' => 'TPS 15m',
+    'knowledge_tip_mc_tps_low' => 'Minecraft server TPS je nízké (%s / 20.0). Na serveru dochází k prodlevám (lagům).',
 
     // TeamSpeak
     'connected_clients_heading' => 'Připojení klienti',

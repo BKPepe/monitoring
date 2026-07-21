@@ -924,6 +924,33 @@ $portal_url = trim(get_setting('portal_url'));
                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
                                                         <?php endif; ?>
 
+                                                        <?php if (isset($details['tps_1m']) && $details['tps_1m'] !== null): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-tachometer-alt"></i> <?php echo htmlspecialchars(t('mc_tps_heading')); ?></div>
+                                                            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                                                                <?php
+                                                                $tps_items = [
+                                                                    ['label' => t('mc_tps_1m'), 'val' => $details['tps_1m']],
+                                                                    ['label' => t('mc_tps_5m'), 'val' => $details['tps_5m'] ?? null],
+                                                                    ['label' => t('mc_tps_15m'), 'val' => $details['tps_15m'] ?? null],
+                                                                ];
+                                                                foreach ($tps_items as $ti):
+                                                                    if ($ti['val'] === null) continue;
+                                                                    $val = (float)$ti['val'];
+                                                                    $tps_color = 'var(--color-green)';
+                                                                    if ($val < 15.0) {
+                                                                        $tps_color = 'var(--color-red)';
+                                                                    } elseif ($val < 19.0) {
+                                                                        $tps_color = 'var(--color-yellow)';
+                                                                    }
+                                                                ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 0.5rem 0.75rem; border-radius: 6px; flex: 1; min-width: 80px; text-align: center;">
+                                                                        <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.2rem;"><?php echo htmlspecialchars($ti['label']); ?></div>
+                                                                        <div style="font-size: 1.1rem; font-weight: 700; font-family: monospace; color: <?php echo $tps_color; ?>;"><?php echo number_format($val, 2, '.', ''); ?> <span style="font-size: 0.68rem; font-weight: normal; color: var(--text-muted);">/ 20</span></div>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+
                                                     </div>
                                                     <div>
                                                         <div class="detail-section-title">

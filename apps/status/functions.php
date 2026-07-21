@@ -434,6 +434,14 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
                 $add('critical', 'knowledge_tip_process_missing', $proc);
             }
         }
+        if (isset($details['tps_1m']) && $details['tps_1m'] !== null) {
+            $tps1 = floatval($details['tps_1m']);
+            if ($tps1 < 15.0) {
+                $add('critical', 'knowledge_tip_mc_tps_low', number_format($tps1, 2));
+            } elseif ($tps1 < 19.0) {
+                $add('warn', 'knowledge_tip_mc_tps_low', number_format($tps1, 2));
+            }
+        }
     }
 
     $web_enabled = $enabled_metrics === null || in_array('check_pipeline', $enabled_metrics, true);
@@ -1185,6 +1193,116 @@ function check_socket($host, $port, $timeout = 5) {
 /**
  * Záložní dotaz na Minecraft server přes veřejné API mcsrvstat.us
  */
+/**
+ * Source RCON protokol (Valve/Source engine RCON - stejný binární protokol
+ * používá Minecraft Paper/Spigot i Source-based hry). Nezávislé na
+ * konkrétním herním software - jen packet framing (int32 délka/id/typ +
+ * null-terminated tělo). Auth -> exec command -> přečti odpověď.
+ *
+ * @return string|null Text odpovědi na příkaz, nebo null při chybě spojení/autentizace.
+ */
+function bk_rcon_execute($host, $port, $password, $command, $timeout = 3) {
+    $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
+    if (!$socket) {
+        return null;
+    }
+    stream_set_timeout($socket, $timeout);
+
+    $send_packet = function($socket, $id, $type, $body) {
+        $payload = pack('V', $id) . pack('V', $type) . $body . "\x00\x00";
+        return @fwrite($socket, pack('V', strlen($payload)) . $payload);
+    };
+
+    $read_packet = function($socket) {
+        $len_raw = @fread($socket, 4);
+        if ($len_raw === false || strlen($len_raw) < 4) {
+            return null;
+        }
+        $len = unpack('V', $len_raw)[1];
+        if ($len < 8 || $len > 1000000) {
+            return null; // Nesmyslná délka - poškozená/neplatná odpověď
+        }
+        $body_raw = '';
+        $remaining = $len;
+        while ($remaining > 0) {
+            $chunk = @fread($socket, $remaining);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $body_raw .= $chunk;
+            $remaining -= strlen($chunk);
+        }
+        if (strlen($body_raw) < 8) {
+            return null;
+        }
+        $id_unsigned = unpack('V', substr($body_raw, 0, 4))[1];
+        $id = $id_unsigned > 0x7FFFFFFF ? $id_unsigned - 0x100000000 : $id_unsigned;
+        $type = unpack('V', substr($body_raw, 4, 4))[1];
+        return ['id' => $id, 'type' => $type, 'body' => rtrim(substr($body_raw, 8), "\x00")];
+    };
+
+    $auth_id = random_int(1, 2147483646);
+    $send_packet($socket, $auth_id, 3, $password); // SERVERDATA_AUTH
+
+    // Auth response (typ 2) - někteří servery před ním pošlou i prázdný
+    // SERVERDATA_RESPONSE_VALUE paket, proto čteme, dokud typ 2 nedorazí
+    // (nebo spojení neskončí).
+    $auth_ok = false;
+    for ($i = 0; $i < 3; $i++) {
+        $resp = $read_packet($socket);
+        if ($resp === null) {
+            break;
+        }
+        if ($resp['type'] === 2) {
+            $auth_ok = ($resp['id'] === $auth_id); // ID -1 = špatné heslo
+            break;
+        }
+    }
+    if (!$auth_ok) {
+        @fclose($socket);
+        return null;
+    }
+
+    $cmd_id = random_int(1, 2147483646);
+    $send_packet($socket, $cmd_id, 2, $command); // SERVERDATA_EXECCOMMAND
+    $resp = $read_packet($socket);
+    @fclose($socket);
+
+    if ($resp === null || $resp['id'] !== $cmd_id) {
+        return null;
+    }
+    return $resp['body'];
+}
+
+/**
+ * TPS přes Paper/Spigot příkaz "/tps" (RCON) - vanilla tento příkaz nemá.
+ * Formát výstupu je u Paperu stabilní už řadu let: "TPS from last 1m, 5m,
+ * 15m: X, Y, Z" (obvykle s §-barevnými kódy) - odstraníme barevné kódy
+ * (v obou možných kódováních, aby se náhodou nesloučil kód-číslice s reálným
+ * číslem, např. "§220.0" by se bez ošetření četlo jako 220.0) a vytáhneme
+ * první trojici čísel oddělených čárkou.
+ */
+function check_minecraft_rcon($host, $rcon_port, $rcon_password, $timeout = 3) {
+    if (empty($rcon_port) || empty($rcon_password)) {
+        return null;
+    }
+    $response = bk_rcon_execute($host, (int)$rcon_port, $rcon_password, 'tps', $timeout);
+    if ($response === null) {
+        return null;
+    }
+    $clean = preg_replace('/\xC2\xA7[0-9a-fk-or]/i', '', $response);
+    $clean = preg_replace('/\xA7[0-9a-fk-or]/i', '', $clean);
+
+    if (!preg_match('/(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/', $clean, $m)) {
+        return null;
+    }
+    return [
+        'tps_1m' => (float)$m[1],
+        'tps_5m' => (float)$m[2],
+        'tps_15m' => (float)$m[3],
+    ];
+}
+
 function check_minecraft_api_fallback($host, $start, $timeout = 3) {
     $url = "https://api.mcsrvstat.us/2/" . urlencode($host);
     $ch = curl_init($url);
@@ -1244,7 +1362,7 @@ function check_minecraft_api_fallback($host, $start, $timeout = 3) {
  * později, než limit dovolí) - proto se před přechodem na fallback API a
  * případným nahlášením výpadku zkusí spojení ještě jednou.
  */
-function check_minecraft($host, $port = 25565, $timeout = 3) {
+function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, $rcon_password = null) {
     $start = microtime(true);
     $host = preg_replace('~^https?://~', '', $host);
 
@@ -1262,6 +1380,15 @@ function check_minecraft($host, $port = 25565, $timeout = 3) {
         $result = check_minecraft_slp_attempt($host, $port, $timeout, $start);
     }
     if ($result !== null) {
+        // TPS přes RCON je volitelné (Paper/Spigot only) a nikdy nesmí
+        // rozbít základní SLP kontrolu - best-effort, tiše se přeskočí,
+        // pokud RCON není nakonfigurovaný nebo selže.
+        if ($result['status'] === 'up' && !empty($rcon_port) && !empty($rcon_password)) {
+            $tps = check_minecraft_rcon($host, $rcon_port, $rcon_password, $timeout);
+            if ($tps !== null) {
+                $result = array_merge($result, $tps);
+            }
+        }
         return $result;
     }
 
