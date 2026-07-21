@@ -41,6 +41,31 @@ if [ -f "$ScriptPath/agent.cfg" ]; then
     done < "$ScriptPath/agent.cfg"
 fi
 
+# Zpracování příkazu pro automatickou registraci: ./agent.sh --register REGISTRATION_TOKEN [API_URL]
+if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
+    REG_TOKEN="$2"
+    if [ -z "$REG_TOKEN" ]; then
+        echo "Použití: $0 --register REGISTRATION_TOKEN [API_URL]"
+        exit 1
+    fi
+    if [ -n "$3" ]; then
+        API_URL="$3"
+    fi
+    HOSTNAME_VAL=$(hostname 2>/dev/null || echo "Linux-Server")
+    echo "Registruji nového agenta na $API_URL..."
+    RESP=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"action\":\"register\", \"token\":\"$REG_TOKEN\", \"hostname\":\"$HOSTNAME_VAL\", \"agent_type\":\"bash\"}" "$API_URL")
+    NEW_KEY=$(echo "$RESP" | sed -n 's/.*"agent_key":"\([^"]*\)".*/\1/p')
+    if [ -n "$NEW_KEY" ]; then
+        echo "API_URL=\"$API_URL\"" > "$ScriptPath/agent.cfg"
+        echo "AGENT_KEY=\"$NEW_KEY\"" >> "$ScriptPath/agent.cfg"
+        echo "OK: Agent byl úspěšně zaregistrován a nastavení bylo uloženo do $ScriptPath/agent.cfg (AGENT_KEY=$NEW_KEY)"
+        exit 0
+    else
+        echo "CHYBA při registraci: $RESP"
+        exit 1
+    fi
+fi
+
 AGENT_VERSION="1.6.0"
 LOG_FILE="$ScriptPath/agent.log"
 NET_STATE_FILE="$ScriptPath/agent_net.state"

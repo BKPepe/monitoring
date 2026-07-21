@@ -23,6 +23,45 @@ if (!$data) {
     exit;
 }
 
+// --- Zpracování automatické registrace agenta ---
+if (isset($data['action']) && $data['action'] === 'register') {
+    $token = trim($data['token'] ?? '');
+    $reg_token = get_setting('agent_registration_token');
+    
+    // Pokud registrační token není v nastavení, použije se záložní cron_key
+    if (empty($reg_token)) {
+        $reg_token = get_setting('cron_key');
+    }
+    
+    if (empty($reg_token) || $token !== $reg_token) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Neplatný registrační token.']);
+        exit;
+    }
+    
+    $name = trim($data['hostname'] ?? $data['name'] ?? ('VPS Agent ' . date('Y-m-d H:i')));
+    $type = (isset($data['agent_type']) && $data['agent_type'] === 'openwrt') ? 'openwrt' : 'vps';
+    $agent_key = bin2hex(random_bytes(16));
+    
+    $stmt = $pdo->prepare("
+        INSERT INTO monitors (name, type, target, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold)
+        VALUES (?, ?, 'Local VPS Agent', 'unknown', ?, 90, 90, 95)
+    ");
+    $stmt->execute([$name, $type, $agent_key]);
+    $new_id = (int)$pdo->lastInsertId();
+    
+    log_monitor_event($pdo, $new_id, $name, $type, 'monitor_added', "Automatická registrace agenta ({$type})");
+    
+    echo json_encode([
+        'success' => true,
+        'agent_key' => $agent_key,
+        'monitor_id' => $new_id,
+        'name' => $name,
+        'message' => 'Agent úspěšně zaregistrován.'
+    ]);
+    exit;
+}
+
 // Ověření povinných údajů
 $agent_key = isset($data['agent_key']) ? trim($data['agent_key']) : '';
 $cpu = isset($data['cpu']) ? floatval($data['cpu']) : null;

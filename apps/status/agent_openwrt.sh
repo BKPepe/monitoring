@@ -46,6 +46,31 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
     done < "$ScriptPath/agent_openwrt.cfg"
 fi
 
+if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
+    REG_TOKEN="$2"
+    if [ -z "$REG_TOKEN" ]; then
+        echo "Pouziti: $0 --register REGISTRATION_TOKEN [API_URL]"
+        exit 1
+    fi
+    if [ -n "$3" ]; then
+        API_URL="$3"
+    fi
+    HOSTNAME_VAL=$(uname -n 2>/dev/null || echo "OpenWrt-Router")
+    echo "Registruji router na $API_URL..."
+    FETCH_CMD="curl -s -X POST -H 'Content-Type: application/json' -d \"{\\\"action\\\":\\\"register\\\", \\\"token\\\":\\\"$REG_TOKEN\\\", \\\"hostname\\\":\\\"$HOSTNAME_VAL\\\", \\\"agent_type\\\":\\\"openwrt\\\"}\" \"$API_URL\""
+    RESP=$(eval "$FETCH_CMD")
+    NEW_KEY=$(echo "$RESP" | sed -n 's/.*"agent_key":"\([^"]*\)".*/\1/p')
+    if [ -n "$NEW_KEY" ]; then
+        echo "API_URL=\"$API_URL\"" > "$ScriptPath/agent_openwrt.cfg"
+        echo "AGENT_KEY=\"$NEW_KEY\"" >> "$ScriptPath/agent_openwrt.cfg"
+        echo "OK: Router zaregistrovan a ulozen do $ScriptPath/agent_openwrt.cfg (AGENT_KEY=$NEW_KEY)"
+        exit 0
+    else
+        echo "CHYBA pri registraci: $RESP"
+        exit 1
+    fi
+fi
+
 AGENT_VERSION="1.2.0"
 LOG_FILE="$ScriptPath/agent_openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"

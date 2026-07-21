@@ -267,6 +267,44 @@ $portal_url = trim(get_setting('portal_url'));
         } elseif ($maintenance_monitors_count > 0) {
             $hero_class = 'has-maintenance';
         }
+        // Načtení aktivních (nevyřešených) incidentů
+        try {
+            $stmt_inc = $pdo->query("SELECT * FROM incidents WHERE status != 'resolved' ORDER BY created_at DESC");
+            $active_incidents = $stmt_inc->fetchAll();
+            foreach ($active_incidents as $inc):
+                $stmt_updates = $pdo->prepare("SELECT * FROM incident_updates WHERE incident_id = ? ORDER BY created_at DESC");
+                $stmt_updates->execute([$inc['id']]);
+                $updates = $stmt_updates->fetchAll();
+                
+                $border_color = 'var(--color-yellow)';
+                $bg_glow = 'rgba(243, 156, 18, 0.1)';
+                if ($inc['impact'] === 'critical') {
+                    $border_color = 'var(--color-red)';
+                    $bg_glow = 'rgba(176, 0, 32, 0.15)';
+                }
+        ?>
+            <div style="background: <?php echo $bg_glow; ?>; border-left: 4px solid <?php echo $border_color; ?>; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; border-top: 1px solid rgba(255,255,255,0.05); border-right: 1px solid rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <strong style="color: #fff; font-size: 1.05rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-exclamation-circle" style="color: <?php echo $border_color; ?>;"></i>
+                        <?php echo htmlspecialchars($inc['title']); ?>
+                    </strong>
+                    <span class="category-badge" style="background: <?php echo $border_color; ?>; color: #fff; text-transform: uppercase; font-size: 0.7rem; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 4px;">
+                        <?php echo htmlspecialchars($inc['status']); ?>
+                    </span>
+                </div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem;">
+                    <?php foreach ($updates as $up): ?>
+                        <div style="margin-bottom: 0.4rem; padding-left: 0.75rem; border-left: 2px solid rgba(255,255,255,0.1);">
+                            <span style="font-size: 0.75rem; color: var(--text-muted);"><?php echo date('d.m.Y H:i', strtotime($up['created_at'])); ?> [<?php echo strtoupper($up['status']); ?>]:</span>
+                            <span style="color: #fff; margin-left: 0.3rem;"><?php echo htmlspecialchars($up['message']); ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php 
+            endforeach;
+        } catch (PDOException $e) {}
         ?>
         <div class="overall-status <?php echo $hero_class; ?>">
             <div class="overall-info">

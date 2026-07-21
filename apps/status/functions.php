@@ -2593,11 +2593,11 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         }
     }
 
-    // Odeslání systémových webhooků (Discord, Slack, Telegram) - spouští se pouze 1x na událost
-    $discord_webhook = get_setting('discord_webhook_url');
-    $telegram_token = get_setting('telegram_bot_token');
-    $telegram_chat = get_setting('telegram_chat_id');
-    $slack_webhook = get_setting('slack_webhook_url');
+    // Odeslání systémových/monitorových webhooků (Discord, Slack, Telegram) - spouští se pouze 1x na událost
+    $discord_webhook = !empty($monitor['discord_webhook_url']) ? $monitor['discord_webhook_url'] : get_setting('discord_webhook_url');
+    $telegram_token = !empty($monitor['telegram_bot_token']) ? $monitor['telegram_bot_token'] : get_setting('telegram_bot_token');
+    $telegram_chat = !empty($monitor['telegram_chat_id']) ? $monitor['telegram_chat_id'] : get_setting('telegram_chat_id');
+    $slack_webhook = !empty($monitor['slack_webhook_url']) ? $monitor['slack_webhook_url'] : get_setting('slack_webhook_url');
 
     if (!empty($discord_webhook)) {
         $color = ($new_status === 'up') ? 3066993 : 15073280; // Zelená / Červená

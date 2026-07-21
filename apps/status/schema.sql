@@ -167,6 +167,28 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 ('sla_goal_pct', '99.95'),
 -- Ručně nastavená poslední známá verze TeamSpeak serveru (pro "Update Available"); prázdné = kontrola se přeskočí
 ('ts3_latest_version', ''),
+-- Token pro automatickou registraci nových agentů (agent_api.php?action=register)
+('agent_registration_token', ''),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
 ('schema_version', '20260726')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;
+
+CREATE TABLE IF NOT EXISTS `incidents` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `title` VARCHAR(255) NOT NULL,
+  `impact` VARCHAR(20) DEFAULT 'minor', -- 'minor', 'major', 'critical'
+  `status` VARCHAR(20) DEFAULT 'investigating', -- 'investigating', 'identified', 'monitoring', 'resolved'
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `resolved_at` DATETIME DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `incident_updates` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `incident_id` INT NOT NULL,
+  `status` VARCHAR(20) NOT NULL,
+  `message` TEXT NOT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`incident_id`) REFERENCES `incidents`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

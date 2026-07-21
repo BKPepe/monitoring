@@ -507,6 +507,48 @@ if (isset($_GET['action']) && $_GET['action'] === 'clear_history' && isset($_GET
     $success_msg = 'Historie měření a logy pro daný monitor byly úspěšně smazány.';
 }
 
+// Zpracování vytvoření/úpravy incidentu (Správa incidentů)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_incident']) && $user_role === 'admin') {
+    $inc_action = $_POST['action_incident'];
+    if ($inc_action === 'create') {
+        $title = trim($_POST['inc_title'] ?? '');
+        $impact = $_POST['inc_impact'] ?? 'minor';
+        $status = $_POST['inc_status'] ?? 'investigating';
+        $message = trim($_POST['inc_message'] ?? '');
+        
+        if (!empty($title) && !empty($message)) {
+            $stmt = $pdo->prepare("INSERT INTO incidents (title, impact, status) VALUES (?, ?, ?)");
+            $stmt->execute([$title, $impact, $status]);
+            $inc_id = (int)$pdo->lastInsertId();
+            
+            $stmt_up = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)");
+            $stmt_up->execute([$inc_id, $status, $message]);
+            $success_msg = 'Incident byl úspěšně zaznamenán.';
+        }
+    } elseif ($inc_action === 'add_update') {
+        $inc_id = (int)($_POST['inc_id'] ?? 0);
+        $status = $_POST['inc_status'] ?? 'investigating';
+        $message = trim($_POST['inc_message'] ?? '');
+        
+        if ($inc_id > 0 && !empty($message)) {
+            $stmt_up = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)");
+            $stmt_up->execute([$inc_id, $status, $message]);
+            
+            $resolved_at = ($status === 'resolved') ? date('Y-m-d H:i:s') : null;
+            $stmt_inc = $pdo->prepare("UPDATE incidents SET status = ?, resolved_at = COALESCE(resolved_at, ?) WHERE id = ?");
+            $stmt_inc->execute([$status, $resolved_at, $inc_id]);
+            $success_msg = 'Aktualizace incidentu byla přidána.';
+        }
+    } elseif ($inc_action === 'delete') {
+        $inc_id = (int)($_POST['inc_id'] ?? 0);
+        if ($inc_id > 0) {
+            $stmt = $pdo->prepare("DELETE FROM incidents WHERE id = ?");
+            $stmt->execute([$inc_id]);
+            $success_msg = 'Incident byl smazán.';
+        }
+    }
+}
+
 // Zpracování odeslání testovacího e-mailu (pouze pro Admina)
 if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role === 'admin') {
     $to = $me['email'] ?? '';
