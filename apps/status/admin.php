@@ -267,7 +267,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
         $target = $target . ':' . $voice_port;
     }
     
-    if (empty($name) || empty($target)) {
+    // Cíl je povinný všude kromě čistě agentových typů (vps/openwrt) - tam se
+    // buď vůbec nepoužívá (openwrt), nebo je to jen popisek bez síťového
+    // významu (vps); pokud zůstane prázdný, doplní ho agent_api.php podle
+    // hostname/WAN IP z první zprávy agenta (viz agent_api.php).
+    if (empty($name) || (empty($target) && !in_array($type, ['vps', 'openwrt'], true))) {
         $error_msg = 'Název a cíl jsou povinné údaje.';
     } else {
         if ($id > 0) {
@@ -1716,14 +1720,14 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             </small>
                         </div>
 
-                        <div class="form-group" id="processes-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord') ? 'block' : 'none'; ?>;">
+                        <div class="form-group" id="processes-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord' && $edit_monitor['type'] !== 'openwrt') ? 'block' : 'none'; ?>;">
                             <label for="monitored_processes">Sledované procesy (čárkou oddělené)</label>
                             <input type="text" name="monitored_processes" id="monitored_processes" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['monitored_processes'] ?? '') : ''; ?>" class="form-control" placeholder="Např. ts3server, nginx, mysql">
                             <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Zadejte názvy procesů, které má agent na VPS hlídat. Pokud některý z nich nepoběží, monitor bude označen jako DOWN.</small>
                         </div>
 
                         <div class="form-group" id="agent-thresholds-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord') ? 'block' : 'none'; ?>;">
-                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Výstražné limity VPS Agenta</label>
+                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Výstražné limity agenta</label>
                             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
                                 <div>
                                     <label for="cpu_threshold" style="font-size: 0.8rem; color: var(--text-secondary);">CPU Limit (%)</label>
@@ -2115,7 +2119,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             // Výchozí zobrazení
             portGroup.style.display = 'none';
             if (processesGroup) {
-                processesGroup.style.display = (type !== 'cpanel' && type !== 'discord') ? 'block' : 'none';
+                // OpenWrt agent zatím neposílá seznam běžících procesů (viz
+                // agent_openwrt.sh) - zobrazovat pole by bylo zavádějící.
+                processesGroup.style.display = (type !== 'cpanel' && type !== 'discord' && type !== 'openwrt') ? 'block' : 'none';
             }
             if (agentThresholdsGroup) {
                 agentThresholdsGroup.style.display = (type !== 'cpanel' && type !== 'discord') ? 'block' : 'none';
@@ -2139,7 +2145,11 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 portLabel.textContent = "Síťový port";
             }
             targetInput.placeholder = "Např. https://bloodkings.eu nebo 123.45.67.89";
-            
+            // Cíl je povinný všude kromě čistě agentových typů (vps/openwrt) -
+            // tam se buď nepoužívá vůbec (openwrt), nebo je to jen popisek bez
+            // síťového významu (vps), takže vyplnění nemá smysl vynucovat.
+            targetInput.required = true;
+
             if (type === 'web') {
                 if (cpanelStatsGroup) {
                     cpanelStatsGroup.style.display = 'block';
@@ -2183,7 +2193,13 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             } else if (type === 'vps') {
                 targetLabel.textContent = "Název VPS / Identifikátor";
                 targetInput.placeholder = "Např. vps-server-germany";
-                targetDesc.textContent = "Zadejte libovolný textový identifikátor VPS serveru. Nejedná se o síťovou adresu.";
+                targetDesc.textContent = "Volitelné - libovolný textový identifikátor VPS serveru (není síťová adresa). Pokud necháte prázdné, doplní se automaticky podle hostname z první zprávy agenta.";
+                targetInput.required = false;
+            } else if (type === 'openwrt') {
+                targetLabel.textContent = "Název routeru / Identifikátor";
+                targetInput.placeholder = "Např. turris-domov";
+                targetDesc.textContent = "Volitelné - libovolný textový identifikátor routeru. Pokud necháte prázdné, doplní se automaticky podle hostname nebo WAN IP adresy z první zprávy agenta.";
+                targetInput.required = false;
             } else if (type === 'cpanel') {
                 targetLabel.textContent = "cPanel Stats URL (cpanel_stats.php s klíčem)";
                 targetInput.placeholder = "Např. https://bloodkings.eu/cpanel_stats.php?key=TajnyKlic";

@@ -93,6 +93,24 @@ if (!$monitor) {
 $monitor_id = $monitor['id'];
 $old_status = $monitor['status'];
 
+// Auto-doplnění cíle (target) pro čistě agentové typy (vps/openwrt) - admin.php
+// u nich cíl nevyžaduje, protože buď nemá síťový význam (vps) nebo ho agent
+// stejně zjistí sám (openwrt). Nikdy nepřepisuje cíl, který si uživatel sám
+// vyplnil - jen doplňuje prázdný.
+if (in_array($monitor['type'], ['vps', 'openwrt'], true) && trim((string)$monitor['target']) === '') {
+    $auto_target = null;
+    if ($monitor['type'] === 'openwrt') {
+        $auto_target = $sys_hostname ?: $ow_wan_ipv4;
+    } else {
+        $auto_target = $sys_hostname;
+    }
+    if (!empty($auto_target)) {
+        $stmt_target = $pdo->prepare("UPDATE monitors SET target = ? WHERE id = ?");
+        $stmt_target->execute([$auto_target, $monitor_id]);
+        $monitor['target'] = $auto_target;
+    }
+}
+
 // Kontrola procesů u VPS
 $missing_processes = [];
 $monitored_processes_str = $monitor['monitored_processes'] ?? '';

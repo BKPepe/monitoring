@@ -1439,7 +1439,7 @@ function get_service_profiles() {
         ],
         'openwrt' => [
             'label' => t('profile_label_openwrt'),
-            'icon' => 'fa-router',
+            'icon' => 'fa-wifi',
         ],
     ];
 }

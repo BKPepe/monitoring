@@ -223,7 +223,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
         case 'port':
             return '<i class="fas fa-network-wired" style="color:#60a5fa;font-size:'.$size.';" title="Port"></i>';
         case 'openwrt':
-            return '<i class="fas fa-router" style="color:#f39c12;font-size:'.$size.';" title="OpenWrt"></i>';
+            return '<i class="fas fa-wifi" style="color:#f39c12;font-size:'.$size.';" title="OpenWrt"></i>';
         case 'web':
         default:
             // Extract domain for favicon lookup
