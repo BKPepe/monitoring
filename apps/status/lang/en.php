@@ -249,6 +249,13 @@ return [
     'insight_trend_latency_up' => 'Latency has increased by roughly %d%% over the last 14 days.',
     'insight_trend_latency_down' => 'Latency has decreased by roughly %d%% over the last 14 days.',
     'insight_trend_latency_basis' => 'Average before: %d ms, now: %d ms.',
+
+    // Insights (Level 2 Anomaly Detection) - deviation from this monitor's own history
+    'insight_anomaly_cpu' => 'Unusual CPU utilization: %s%%.',
+    'insight_anomaly_ram' => 'Unusual RAM utilization: %s%%.',
+    'insight_anomaly_latency' => 'Unusual latency: %d ms.',
+    'insight_anomaly_range' => 'Normally %s-%s%%.',
+    'insight_anomaly_range_ms' => 'Normally %d-%d ms.',
     'knowledge_tip_temperature_high' => 'High CPU temperature can trigger throttling and reduced performance - check cooling.',
     'knowledge_tip_smart_warning' => 'SMART is reporting a warning - the disk may be failing, back up data and plan a replacement.',
     'knowledge_tip_reboot_required' => 'The system is waiting for a reboot (typically after a kernel update) - schedule one during a low-traffic window.',

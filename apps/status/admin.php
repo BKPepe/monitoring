@@ -1068,7 +1068,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                         <button type="button" data-agent-tab="agent-tab-bash"><i class="fas fa-terminal"></i> Bash/Shell</button>
                         <button type="button" data-agent-tab="agent-tab-powershell"><i class="fab fa-windows"></i> Windows</button>
                         <button type="button" data-agent-tab="agent-tab-docker"><i class="fab fa-docker"></i> Docker</button>
-                        <button type="button" data-agent-tab="agent-tab-openwrt"><i class="fas fa-router"></i> OpenWrt</button>
+                        <button type="button" data-agent-tab="agent-tab-openwrt"><i class="fas fa-wifi"></i> OpenWrt</button>
                     </div>
 
                     <div class="settings-tab-panel active" id="agent-tab-python">

@@ -592,6 +592,119 @@ function render_insights_panel(array $insights) {
 }
 
 /**
+ * Insights v2 (Level 2 Anomaly Detection) - sdílená matematika. Na rozdíl od
+ * Knowledge tipů (pevný práh stejný pro všechny monitory) se tu zjišťuje, jestli
+ * je aktuální hodnota neobvyklá VZHLEDEM K VLASTNÍ historii tohoto konkrétního
+ * monitoru - server, který běžně jede na 85 % CPU, tu nikdy nenaskočí, i kdyby
+ * pevný Knowledge práh (>80 %) hlásil "vysoké" pořád.
+ *
+ * @param array $baseline_values Číselné hodnoty z "klidového" období (bez posledních pár dní)
+ * @param float $current Aktuální (nejnovější) hodnota, mimo baseline okno
+ * @param float $min_sigma Podlaha pro efektivní sigma - brání falešným poplachům
+ *        na monitoru s podezřele plochou historií (sigma blízko 0)
+ * @param float $sigma_multiplier Kolik efektivních sigma od průměru už je "neobvyklé"
+ * @return array{low: float, high: float, mean: float, current: float}|null
+ *         null = nedost dat, nebo hodnota je v normálu
+ */
+function bk_compute_baseline_anomaly(array $baseline_values, float $current, float $min_sigma, float $sigma_multiplier = 2.5) {
+    $baseline_values = array_values(array_filter($baseline_values, fn($v) => $v !== null));
+    $n = count($baseline_values);
+    if ($n < 20) {
+        return null; // Málo historie na to, aby průměr/sigma dávaly smysl
+    }
+
+    $mean = array_sum($baseline_values) / $n;
+    $variance = array_sum(array_map(fn($v) => ($v - $mean) ** 2, $baseline_values)) / $n;
+    $sigma = sqrt($variance);
+    $effective_sigma = max($sigma, $min_sigma);
+
+    if (abs($current - $mean) <= $sigma_multiplier * $effective_sigma) {
+        return null; // V normálu pro tenhle konkrétní monitor
+    }
+
+    return [
+        'low' => $mean - $sigma_multiplier * $effective_sigma,
+        'high' => $mean + $sigma_multiplier * $effective_sigma,
+        'mean' => $mean,
+        'current' => $current,
+    ];
+}
+
+/**
+ * Insights v2 (Level 2 Anomaly Detection) - tři pravidla (CPU/RAM/latence),
+ * všechna nad bk_compute_baseline_anomaly(). Baseline okno je 3-30 dní zpět
+ * (mezera před "teď", aby trvající anomálie nezkreslila vlastní baseline),
+ * aktuální hodnota je poslední skutečný vzorek mimo toto okno.
+ */
+function bk_get_anomaly_insights($pdo, $monitor) {
+    $insights = [];
+    $monitor_id = $monitor['id'];
+
+    // --- CPU / RAM anomálie (vps_metrics) ---
+    $stmt = $pdo->prepare("SELECT checked_at, cpu_usage, ram_usage FROM vps_metrics WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at ASC");
+    $stmt->execute([$monitor_id]);
+    $metrics_rows = $stmt->fetchAll();
+
+    $cutoff = time() - (3 * 86400);
+    $baseline_rows = array_filter($metrics_rows, fn($r) => strtotime($r['checked_at']) < $cutoff);
+    $recent_rows = array_filter($metrics_rows, fn($r) => strtotime($r['checked_at']) >= $cutoff);
+
+    if (!empty($recent_rows)) {
+        $latest = end($recent_rows);
+
+        $cpu_anomaly = bk_compute_baseline_anomaly(array_column($baseline_rows, 'cpu_usage'), (float)$latest['cpu_usage'], 3.0);
+        if ($cpu_anomaly !== null) {
+            $insights[] = [
+                'type' => 'anomaly',
+                'icon' => 'fa-triangle-exclamation',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('insight_anomaly_cpu'), number_format($cpu_anomaly['current'], 1, ',', ' ')),
+                'detail' => sprintf(t('insight_anomaly_range'), number_format(max(0, $cpu_anomaly['low']), 0), number_format(min(100, $cpu_anomaly['high']), 0)),
+            ];
+        }
+
+        $ram_anomaly = bk_compute_baseline_anomaly(array_column($baseline_rows, 'ram_usage'), (float)$latest['ram_usage'], 3.0);
+        if ($ram_anomaly !== null) {
+            $insights[] = [
+                'type' => 'anomaly',
+                'icon' => 'fa-triangle-exclamation',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('insight_anomaly_ram'), number_format($ram_anomaly['current'], 1, ',', ' ')),
+                'detail' => sprintf(t('insight_anomaly_range'), number_format(max(0, $ram_anomaly['low']), 0), number_format(min(100, $ram_anomaly['high']), 0)),
+            ];
+        }
+    }
+
+    // --- Latence anomálie (monitor_logs) ---
+    $stmt2 = $pdo->prepare("SELECT checked_at, response_time FROM monitor_logs WHERE monitor_id = ? AND status = 'up' AND response_time IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at ASC");
+    $stmt2->execute([$monitor_id]);
+    $latency_rows = $stmt2->fetchAll();
+
+    $lat_baseline_rows = array_filter($latency_rows, fn($r) => strtotime($r['checked_at']) < $cutoff);
+    $lat_recent_rows = array_filter($latency_rows, fn($r) => strtotime($r['checked_at']) >= $cutoff);
+
+    if (!empty($lat_recent_rows)) {
+        $lat_baseline_values = array_column($lat_baseline_rows, 'response_time');
+        $lat_mean_for_floor = !empty($lat_baseline_values) ? array_sum($lat_baseline_values) / count($lat_baseline_values) : 0;
+        $latency_min_sigma = max(5.0, $lat_mean_for_floor * 0.10);
+
+        $latest_lat = end($lat_recent_rows);
+        $lat_anomaly = bk_compute_baseline_anomaly($lat_baseline_values, (float)$latest_lat['response_time'], $latency_min_sigma);
+        if ($lat_anomaly !== null) {
+            $insights[] = [
+                'type' => 'anomaly',
+                'icon' => 'fa-triangle-exclamation',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('insight_anomaly_latency'), (int)round($lat_anomaly['current'])),
+                'detail' => sprintf(t('insight_anomaly_range_ms'), (int)round(max(0, $lat_anomaly['low'])), (int)round($lat_anomaly['high'])),
+            ];
+        }
+    }
+
+    return $insights;
+}
+
+/**
  * Vrátí informace o aktuální verzi aplikace.
  * Ve produkci čte soubor version.php vygenerovaný GitHub Actions deployem.
  * Lokálně (dev) se jako záloha pokusí o git log.

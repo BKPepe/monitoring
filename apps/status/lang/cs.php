@@ -250,6 +250,13 @@ return [
     'insight_trend_latency_up' => 'Latence se za posledních 14 dní zvýšila přibližně o %d %%.',
     'insight_trend_latency_down' => 'Latence se za posledních 14 dní snížila přibližně o %d %%.',
     'insight_trend_latency_basis' => 'Průměr dříve: %d ms, nyní: %d ms.',
+
+    // Insights (Level 2 Anomaly Detection) - odchylka od vlastní historie monitoru
+    'insight_anomaly_cpu' => 'Neobvyklé využití CPU: %s %%.',
+    'insight_anomaly_ram' => 'Neobvyklé využití RAM: %s %%.',
+    'insight_anomaly_latency' => 'Neobvyklá latence: %d ms.',
+    'insight_anomaly_range' => 'Normálně bývá %s-%s %%.',
+    'insight_anomaly_range_ms' => 'Normálně bývá %d-%d ms.',
     'knowledge_tip_temperature_high' => 'Vysoká teplota CPU může vést k throttlingu a snížení výkonu - zkontrolujte chlazení.',
     'knowledge_tip_smart_warning' => 'SMART hlásí varování - disk může selhávat, zálohujte data a naplánujte jeho výměnu.',
     'knowledge_tip_reboot_required' => 'Systém čeká na restart (typicky po aktualizaci jádra) - naplánujte si restart v době nízkého provozu.',

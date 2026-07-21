@@ -1627,7 +1627,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                  </div>
                                             <?php endif; ?>
                                             <?php echo render_knowledge_panel($knowledge_tips); ?>
-                                            <?php echo render_insights_panel(bk_get_forecast_insights($pdo, $monitor)); ?>
+                                            <?php echo render_insights_panel(array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor))); ?>
                                             <?php
                                             // Query metrics history for the charts
                                             $show_charts = false;
