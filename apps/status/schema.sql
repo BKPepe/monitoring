@@ -169,6 +169,12 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 ('ts3_latest_version', ''),
 -- Token pro automatickou registraci nových agentů (agent_api.php?action=register)
 ('agent_registration_token', ''),
+-- Pushover & PagerDuty notifikace
+('pushover_user_key', ''),
+('pushover_api_token', ''),
+('pagerduty_routing_key', ''),
+-- Hranice varování pro vypršení SSL certifikátu (ve dnech)
+('ssl_alert_days', '14'),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
 ('schema_version', '20260726')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;

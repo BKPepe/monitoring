@@ -152,6 +152,16 @@ foreach ($monitors as $monitor) {
         case 'web':
             $check_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
             detect_config_changes($pdo, $monitor, $check_result);
+            
+            // Kontrola expirace SSL certifikátu oproti konfiguraci ssl_alert_days
+            if (isset($check_result['check_stages']['tls']['cert']['days_remaining'])) {
+                $days_rem = (int)$check_result['check_stages']['tls']['cert']['days_remaining'];
+                $ssl_threshold = (int)get_setting('ssl_alert_days', '14');
+                if ($days_rem <= $ssl_threshold && $days_rem >= 0) {
+                    $ssl_msg = "SSL certifikát pro {$target} vyprší za {$days_rem} dní! Obnovte certifikát včas.";
+                    trigger_notifications($pdo, $monitor, 'up', $ssl_msg);
+                }
+            }
             break;
             
         case 'cpanel':

@@ -989,6 +989,33 @@ $portal_url = trim(get_setting('portal_url'));
                                                             </div>
                                                         <?php endif; ?>
 
+                                                        <?php
+                                                        // Načtení latence z geografických měřících uzlů
+                                                        try {
+                                                            $stmt_nodes = $pdo->prepare("
+                                                                SELECT checked_from, AVG(response_time) as avg_resp, COUNT(*) as cnt 
+                                                                FROM monitor_logs 
+                                                                WHERE monitor_id = ? AND checked_from IS NOT NULL AND checked_from != '' AND checked_at >= NOW() - INTERVAL 7 DAY 
+                                                                GROUP BY checked_from
+                                                            ");
+                                                            $stmt_nodes->execute([$mid]);
+                                                            $node_locs = $stmt_nodes->fetchAll();
+                                                            if (!empty($node_locs)):
+                                                        ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-globe"></i> Odezva z geografických uzlů</div>
+                                                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                                                                <?php foreach ($node_locs as $nl): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 0.4rem 0.65rem; border-radius: 6px; flex: 1; min-width: 100px; text-align: center;">
+                                                                        <div style="color: var(--text-muted); font-size: 0.68rem; font-weight: 600;"><i class="fas fa-server" style="color: var(--color-red); font-size: 0.65rem;"></i> <?php echo htmlspecialchars($nl['checked_from']); ?></div>
+                                                                        <div style="font-weight: bold; color: #fff; font-family: monospace; margin-top: 0.15rem; font-size: 0.95rem;"><?php echo round($nl['avg_resp'], 1); ?> ms</div>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php 
+                                                            endif;
+                                                        } catch (PDOException $e) {}
+                                                        ?>
+
                                                     </div>
                                                     <div>
                                                         <div class="detail-section-title">

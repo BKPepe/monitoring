@@ -130,12 +130,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
     }
     
     if ($password_correct) {
-        $_SESSION['admin_logged_in'] = true;
-        $_SESSION['admin_username'] = $user['username'];
-        $_SESSION['admin_id'] = $user['id'];
-        $_SESSION['admin_role'] = $user['role'];
-        header('Location: admin.php');
-        exit;
+        if (!empty($user['totp_enabled'])) {
+            $totp_input = trim($_POST['totp_code'] ?? '');
+            if (!empty($totp_input)) {
+                if (bk_totp_verify_code($user['totp_secret'], $totp_input)) {
+                    $_SESSION['admin_logged_in'] = true;
+                    $_SESSION['admin_username'] = $user['username'];
+                    $_SESSION['admin_id'] = $user['id'];
+                    $_SESSION['admin_role'] = $user['role'];
+                    unset($_SESSION['pending_2fa_username']);
+                    header('Location: admin.php');
+                    exit;
+                } else {
+                    $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
+                    $_SESSION['pending_2fa_username'] = $user['username'];
+                }
+            } else {
+                $_SESSION['pending_2fa_username'] = $user['username'];
+            }
+        } else {
+            $_SESSION['admin_logged_in'] = true;
+            $_SESSION['admin_username'] = $user['username'];
+            $_SESSION['admin_id'] = $user['id'];
+            $_SESSION['admin_role'] = $user['role'];
+            header('Location: admin.php');
+            exit;
+        }
     } else {
         $login_error = 'Neplatné přihlašovací údaje.';
     }
@@ -329,7 +349,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
         'custom_logo_url', 'custom_color_theme', 'custom_nav_links', 'portal_url',
-        'metrics_token', 'sla_goal_pct', 'ts3_latest_version'
+        'metrics_token', 'sla_goal_pct', 'ts3_latest_version',
+        'pushover_user_key', 'pushover_api_token', 'pagerduty_routing_key', 'ssl_alert_days', 'agent_registration_token'
     ];
 
     // Checkboxy - nezaškrtnuté pole nedorazí v POST, ukládáme proto explicitně '0' / '1'
@@ -1513,6 +1534,34 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <div class="form-group">
                                 <label for="telegram_chat_id">Telegram Chat ID</label>
                                 <input type="text" name="telegram_chat_id" id="telegram_chat_id" value="<?php echo htmlspecialchars(get_setting('telegram_chat_id')); ?>" class="form-control" placeholder="-100123456789">
+                            </div>
+                        </div>
+
+                        <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">Pushover & PagerDuty</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="pushover_user_key">Pushover User Key</label>
+                                <input type="text" name="pushover_user_key" id="pushover_user_key" value="<?php echo htmlspecialchars(get_setting('pushover_user_key')); ?>" class="form-control" placeholder="uQiROw1C4K3Y...">
+                            </div>
+                            <div class="form-group">
+                                <label for="pushover_api_token">Pushover API Token</label>
+                                <input type="password" name="pushover_api_token" id="pushover_api_token" value="<?php echo htmlspecialchars(get_setting('pushover_api_token')); ?>" class="form-control" autocomplete="new-password">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="pagerduty_routing_key">PagerDuty Integration / Routing Key</label>
+                            <input type="password" name="pagerduty_routing_key" id="pagerduty_routing_key" value="<?php echo htmlspecialchars(get_setting('pagerduty_routing_key')); ?>" class="form-control" autocomplete="new-password">
+                        </div>
+
+                        <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">SSL Expirace & Registrace Agenta</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="ssl_alert_days">Varování před vypršením SSL (dní)</label>
+                                <input type="number" name="ssl_alert_days" id="ssl_alert_days" value="<?php echo htmlspecialchars(get_setting('ssl_alert_days', '14')); ?>" class="form-control" min="1" max="90">
+                            </div>
+                            <div class="form-group">
+                                <label for="agent_registration_token">Token pro auto-registraci agentů</label>
+                                <input type="text" name="agent_registration_token" id="agent_registration_token" value="<?php echo htmlspecialchars(get_setting('agent_registration_token')); ?>" class="form-control" placeholder="TajnyRegistracniToken123">
                             </div>
                         </div>
 

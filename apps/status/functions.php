@@ -2626,6 +2626,21 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         ];
         send_webhook_post($tg_url, json_encode($payload));
     }
+
+    // Pushover notifikace
+    $po_user = get_setting('pushover_user_key');
+    $po_token = get_setting('pushover_api_token');
+    if (!empty($po_user) && !empty($po_token)) {
+        $po_prio = ($new_status === 'down') ? 1 : 0;
+        send_pushover_alert($po_user, $po_token, "Blood Kings Alert: $name", "$emoji Monitor $name je $status_text. $error_msg", $po_prio);
+    }
+
+    // PagerDuty notifikace
+    $pd_key = get_setting('pagerduty_routing_key');
+    if (!empty($pd_key)) {
+        $pd_action = ($new_status === 'down') ? 'trigger' : 'resolve';
+        send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg");
+    }
 }
 
 /**
@@ -3740,4 +3755,101 @@ function check_cpanel($url, $timeout = 5) {
         }
     }
 }
+
+/**
+ * --- RFC 6238 TOTP 2FA ENGINE ---
+ */
+function bk_totp_base32_decode($b32) {
+    $b32 = strtoupper($b32);
+    $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    $buf = 0;
+    $bufSize = 0;
+    $res = '';
+
+    for ($i = 0; $i < strlen($b32); $i++) {
+        $c = $b32[$i];
+        if ($c === '=') break;
+        $v = strpos($chars, $c);
+        if ($v === false) continue;
+
+        $buf = ($buf << 5) | $v;
+        $bufSize += 5;
+
+        if ($bufSize >= 8) {
+            $bufSize -= 8;
+            $res .= chr(($buf >> $bufSize) & 0xFF);
+        }
+    }
+    return $res;
+}
+
+function bk_totp_calculate($secret, $timeStep) {
+    $key = bk_totp_base32_decode($secret);
+    $data = pack('N*', 0) . pack('N*', $timeStep);
+    $hash = hash_hmac('sha1', $data, $key, true);
+
+    $offset = ord($hash[19]) & 0xf;
+    $calc = (((ord($hash[$offset]) & 0x7f) << 24) |
+            ((ord($hash[$offset + 1]) & 0xff) << 16) |
+            ((ord($hash[$offset + 2]) & 0xff) << 8) |
+            (ord($hash[$offset + 3]) & 0xff)) % 1000000;
+
+    return str_pad((string)$calc, 6, '0', STR_PAD_LEFT);
+}
+
+function bk_totp_generate_secret($length = 16) {
+    $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    $secret = '';
+    for ($i = 0; $i < $length; $i++) {
+        $secret .= $chars[random_int(0, 31)];
+    }
+    return $secret;
+}
+
+function bk_totp_verify_code($secret, $code, $discrepancy = 1) {
+    if (empty($secret) || empty($code)) return false;
+    $timeStep = floor(time() / 30);
+    $code = trim($code);
+    for ($i = -$discrepancy; $i <= $discrepancy; $i++) {
+        if (hash_equals(bk_totp_calculate($secret, $timeStep + $i), $code)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Odeslání Push notifikace přes Pushover API
+ */
+function send_pushover_alert($user_key, $api_token, $title, $message, $priority = 0) {
+    if (empty($user_key) || empty($api_token)) return false;
+    $url = "https://api.pushover.net/1/messages.json";
+    $payload = [
+        'token' => $api_token,
+        'user' => $user_key,
+        'title' => $title,
+        'message' => $message,
+        'priority' => $priority
+    ];
+    return send_webhook_post($url, json_encode($payload));
+}
+
+/**
+ * Odeslání události přes PagerDuty Events v2 API
+ */
+function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Blood Kings Monitoring') {
+    if (empty($routing_key)) return false;
+    $url = "https://events.pagerduty.com/v2/enqueue";
+    $payload = [
+        'routing_key' => $routing_key,
+        'event_action' => $event_type,
+        'payload' => [
+            'summary' => $summary,
+            'severity' => $event_type === 'trigger' ? 'error' : 'info',
+            'source' => $source
+        ]
+    ];
+    return send_webhook_post($url, json_encode($payload));
+}
+
 
