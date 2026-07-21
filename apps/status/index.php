@@ -689,6 +689,25 @@ $portal_url = trim(get_setting('portal_url'));
                                             }
                                             $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages_shared, $status, $enabled_metrics);
 
+                                            // Insights a health score se počítají tady nahoře jednou (ne znovu níže u
+                                            // Insights panelu / TS3 Health Score sekce), aby to mohl použít i Executive
+                                            // Summary a aby se stejné SQL dotazy neopakovaly dvakrát na jednom requestu.
+                                            $monitor_insights = array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor));
+                                            $health_areas = null;
+                                            $health_score = null;
+                                            if ($m_type === 'teamspeak') {
+                                                $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details);
+                                                $health_score = bk_compute_health_score($health_areas);
+                                            }
+                                            $monitor_timeline = bk_get_monitor_timeline($pdo, $mid);
+                                            $exec_summary_text = bk_build_executive_summary($monitor, $health_score, $knowledge_tips, $monitor_insights, $monitor_timeline);
+                                            ?>
+                                            <?php if ($exec_summary_text !== ''): ?>
+                                            <div class="exec-summary" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary);">
+                                                <i class="fas fa-file-lines" style="color: var(--text-muted); margin-right: 0.4rem;"></i><?php echo htmlspecialchars($exec_summary_text); ?>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php
                                             $stmt_outages = $pdo->prepare("SELECT checked_at, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? AND status = 'down' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_outages->execute([$mid]);
                                             $monitor_outages = $stmt_outages->fetchAll();
@@ -1095,15 +1114,12 @@ $portal_url = trim(get_setting('portal_url'));
 
                                                  <?php
                                                  // --- TeamSpeak Health Score + hloubkový monitoring (Service Profile) ---
-                                                 $ts3_check_stages = null;
-                                                 if (!empty($last_logs[0]['check_stages'])) {
-                                                     $decoded_ts3_stages = json_decode($last_logs[0]['check_stages'], true);
-                                                     if (is_array($decoded_ts3_stages)) {
-                                                         $ts3_check_stages = $decoded_ts3_stages;
-                                                     }
-                                                 }
-                                                 $ts3_health_areas = build_teamspeak_health_areas($monitor, $status, $ts3_check_stages, $details);
-                                                 $ts3_health = bk_compute_health_score($ts3_health_areas);
+                                                 // $health_areas/$health_score/$check_stages_shared už spočítané nahoře
+                                                 // (viz Executive Summary) - jen přejmenováno, ať zbytek šablony beze
+                                                 // změny funguje dál pod původními jmény.
+                                                 $ts3_check_stages = $check_stages_shared;
+                                                 $ts3_health_areas = $health_areas;
+                                                 $ts3_health = $health_score;
                                                  $ts3_voice_quality = bk_ts3_voice_quality($pdo, $mid);
                                                  $ts3_status_labels = [
                                                      'ok' => t('ts3_health_status_ok'),
@@ -1689,7 +1705,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                  </div>
                                             <?php endif; ?>
                                             <?php echo render_knowledge_panel($knowledge_tips); ?>
-                                            <?php echo render_insights_panel(array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor))); ?>
+                                            <?php echo render_insights_panel($monitor_insights); ?>
                                             <?php
                                             // Query metrics history for the charts
                                             $show_charts = false;
@@ -1888,13 +1904,47 @@ $portal_url = trim(get_setting('portal_url'));
                                                                      $mo_time = date('d.m.Y H:i:s', strtotime($mo['checked_at']));
                                                                  ?>
                                                                      <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary);">
-                                                                         <td style="padding: 0.5rem 0.25rem; font-weight: 500; color: #fff; white-space: nowrap;"><?php echo $mo_time; ?></td>
+                                                                         <td style="padding: 0.5rem 0.25rem; font-weight: 500; color: var(--text-primary); white-space: nowrap;"><?php echo $mo_time; ?></td>
                                                                          <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars($mo['error_message'] ?: t('unspecified_connection_error')); ?></td>
                                                                          <td style="padding: 0.5rem 0.25rem; text-align: right; white-space: nowrap;"><i class="fas fa-map-marker-alt" style="font-size: 0.65rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($mo['checked_from'] ?: 'Main Server'); ?></td>
                                                                      </tr>
                                                                  <?php endforeach; ?>
                                                              </tbody>
                                                          </table>
+                                                     </div>
+                                                 </div>
+                                             <?php endif; ?>
+
+                                             <?php if (!empty($monitor_timeline)): ?>
+                                                 <div class="monitor-timeline-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                     <div class="detail-section-title"><i class="fas fa-clock-rotate-left"></i> <?php echo htmlspecialchars(t('timeline_heading')); ?></div>
+                                                     <div style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.9rem;">
+                                                         <?php
+                                                         $tl_grouped = [];
+                                                         foreach ($monitor_timeline as $tl_item) {
+                                                             $tl_grouped[bk_relative_time_label($tl_item['ts'])][] = $tl_item;
+                                                         }
+                                                         ?>
+                                                         <?php foreach ($tl_grouped as $tl_day_label => $tl_items): ?>
+                                                             <div>
+                                                                 <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-bottom: 0.35rem;"><?php echo htmlspecialchars($tl_day_label); ?></div>
+                                                                 <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                                                                     <?php foreach ($tl_items as $tl_item):
+                                                                         $tl_label_key = 'timeline_event_' . $tl_item['event_type'];
+                                                                         $tl_label = t($tl_label_key);
+                                                                         if ($tl_label === $tl_label_key) { $tl_label = $tl_item['description'] ?: $tl_item['event_type']; }
+                                                                     ?>
+                                                                         <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
+                                                                             <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo date('H:i', strtotime($tl_item['ts'])); ?></span>
+                                                                             <span style="color: var(--text-primary);"><?php echo htmlspecialchars($tl_label); ?></span>
+                                                                             <?php if (!empty($tl_item['description']) && $tl_label !== $tl_item['description']): ?>
+                                                                                 <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($tl_item['description']); ?></span>
+                                                                             <?php endif; ?>
+                                                                         </div>
+                                                                     <?php endforeach; ?>
+                                                                 </div>
+                                                             </div>
+                                                         <?php endforeach; ?>
                                                      </div>
                                                  </div>
                                              <?php endif; ?>

@@ -356,4 +356,35 @@ return [
 
     // JS
     'js_metrics_load_error' => 'Failed to load metrics history:',
+
+    // Executive Summary (summary shown at the top of the monitor detail view)
+    'exec_summary_down' => '%s is currently down.',
+    'exec_summary_healthy_score' => '%s is healthy (%d/100).',
+    'exec_summary_warn_score' => '%s is running, but has a few issues (%d/100).',
+    'exec_summary_fail_score' => '%s has serious problems (%d/100).',
+    'exec_summary_up' => '%s is currently online.',
+    'exec_summary_no_concerns' => 'No current issues detected.',
+    'exec_summary_last_event' => 'Latest: %s (%s).',
+    'exec_summary_last_checked' => 'Data last updated: %s.',
+
+    // Timeline (event history shown in the monitor detail view)
+    'timeline_heading' => 'Timeline',
+    'timeline_empty' => 'No events recorded yet.',
+    'timeline_today' => 'today',
+    'timeline_yesterday' => 'yesterday',
+    'timeline_days_ago' => '%d days ago',
+    'timeline_event_monitor_added' => 'Monitor added',
+    'timeline_event_monitor_removed' => 'Monitor removed',
+    'timeline_event_agent_connected' => 'Agent connected',
+    'timeline_event_agent_disconnected' => 'Agent stopped reporting',
+    'timeline_event_process_restarted' => 'Process restarted',
+    'timeline_event_scheme_upgraded' => 'Upgraded to HTTPS',
+    'timeline_event_dns_lost' => 'DNS stopped resolving',
+    'timeline_event_dns_recovered' => 'DNS recovered',
+    'timeline_event_cert_renewed' => 'TLS certificate renewed',
+    'timeline_event_threshold_exceeded' => 'Threshold exceeded',
+    'timeline_event_config_changed' => 'Configuration changed',
+    'timeline_event_remote_action' => 'Remote action',
+    'timeline_event_status_changed_down' => 'Went down',
+    'timeline_event_status_changed_up' => 'Came back up',
 ];

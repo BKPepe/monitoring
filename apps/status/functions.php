@@ -757,6 +757,156 @@ function bk_get_anomaly_insights($pdo, $monitor) {
 }
 
 /**
+ * Sloučí monitor_events (přidání/odebrání, DNS/cert/schéma, agent
+ * connect/disconnect, limity, config změny...), agent_actions (Remote
+ * Actions historie) a stavové přechody odvozené z monitor_logs do jednoho
+ * chronologického seznamu (nejnovější první). Čistě datová funkce - den/den
+ * skupinové popisky ("Dnes"/"Včera") a i18n štítky řeší až šablona, aby
+ * zůstala testovatelná bez závislosti na t()/aktuálním datu.
+ * @return array<int, array{event_type: string, description: ?string, ts: string}>
+ */
+function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
+    $timeline = [];
+
+    try {
+        $stmt = $pdo->prepare("SELECT event_type, description, occurred_at FROM monitor_events WHERE monitor_id = ? AND occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY occurred_at DESC");
+        $stmt->execute([$monitor_id, $days]);
+        foreach ($stmt->fetchAll() as $row) {
+            $timeline[] = [
+                'event_type' => $row['event_type'],
+                'description' => $row['description'],
+                'ts' => $row['occurred_at'],
+            ];
+        }
+    } catch (PDOException $e) {
+        // Tabulka/sloupec chybí (stará instalace před migrací) - timeline bude jen částečná
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT action_type, status, created_at, result_message FROM agent_actions WHERE monitor_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY created_at DESC");
+        $stmt->execute([$monitor_id, $days]);
+        foreach ($stmt->fetchAll() as $row) {
+            $desc = $row['action_type'] . ' (' . $row['status'] . ')';
+            if (!empty($row['result_message'])) {
+                $desc .= ' - ' . $row['result_message'];
+            }
+            $timeline[] = [
+                'event_type' => 'remote_action',
+                'description' => $desc,
+                'ts' => $row['created_at'],
+            ];
+        }
+    } catch (PDOException $e) {
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT status, checked_at FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY checked_at ASC");
+        $stmt->execute([$monitor_id, $days]);
+        $prev_status = null;
+        foreach ($stmt->fetchAll() as $row) {
+            if ($prev_status !== null && $row['status'] !== $prev_status) {
+                $timeline[] = [
+                    'event_type' => $row['status'] === 'down' ? 'status_changed_down' : 'status_changed_up',
+                    'description' => null,
+                    'ts' => $row['checked_at'],
+                ];
+            }
+            $prev_status = $row['status'];
+        }
+    } catch (PDOException $e) {
+    }
+
+    usort($timeline, function ($a, $b) {
+        return strtotime($b['ts']) <=> strtotime($a['ts']);
+    });
+
+    return $timeline;
+}
+
+/**
+ * Poskládá krátké shrnutí monitoru (2-4 věty) z už existujících dat - health
+ * score, Knowledge tips, Insights (forecast/anomaly) a poslední události z
+ * Timeline. Čistě deterministická skládačka šablon (t() + sprintf), žádné AI
+ * volání - stejná filozofie jako zbytek Insights enginu.
+ */
+function bk_build_executive_summary($monitor, $health_score, array $knowledge_tips, array $insights, array $recent_events) {
+    $sentences = [];
+    $name = $monitor['name'] ?? '';
+
+    // 1. Celkový stav
+    if (($monitor['status'] ?? '') !== 'up') {
+        $sentences[] = sprintf(t('exec_summary_down'), $name);
+    } elseif (is_array($health_score) && isset($health_score['score'])) {
+        $score = (int)$health_score['score'];
+        if ($score >= 90) {
+            $sentences[] = sprintf(t('exec_summary_healthy_score'), $name, $score);
+        } elseif ($score >= 70) {
+            $sentences[] = sprintf(t('exec_summary_warn_score'), $name, $score);
+        } else {
+            $sentences[] = sprintf(t('exec_summary_fail_score'), $name, $score);
+        }
+    } else {
+        $sentences[] = sprintf(t('exec_summary_up'), $name);
+    }
+
+    // 2. Nejzávažnější aktuální problém (critical tip > warn tip > insight)
+    $top_concern = null;
+    foreach ($knowledge_tips as $tip) {
+        if (($tip['severity'] ?? '') === 'critical') { $top_concern = $tip['text']; break; }
+    }
+    if ($top_concern === null) {
+        foreach ($knowledge_tips as $tip) {
+            if (($tip['severity'] ?? '') === 'warn') { $top_concern = $tip['text']; break; }
+        }
+    }
+    if ($top_concern === null && !empty($insights)) {
+        $top_concern = $insights[0]['text'] ?? null;
+    }
+    if ($top_concern !== null) {
+        $sentences[] = $top_concern;
+    } elseif (($monitor['status'] ?? '') === 'up') {
+        $sentences[] = t('exec_summary_no_concerns');
+    }
+
+    // 3. Nejnovější pozoruhodná událost (jen pokud je "čerstvá" - starší než 7
+    // dní by na shrnutí nahoře jen matlo, na to je Timeline dole)
+    if (!empty($recent_events)) {
+        $latest = $recent_events[0];
+        $age_days = (time() - strtotime($latest['ts'])) / 86400;
+        if ($age_days <= 7) {
+            $label = t('timeline_event_' . $latest['event_type']);
+            if ($label === 'timeline_event_' . $latest['event_type']) {
+                // Neznámý/nepřeložený typ - použij popis, pokud existuje
+                $label = $latest['description'] ?? $latest['event_type'];
+            }
+            $sentences[] = sprintf(t('exec_summary_last_event'), $label, bk_relative_time_label($latest['ts']));
+        }
+    }
+
+    // 4. Stáří dat
+    if (!empty($monitor['last_checked'])) {
+        $sentences[] = sprintf(t('exec_summary_last_checked'), bk_relative_time_label($monitor['last_checked']));
+    }
+
+    return implode(' ', $sentences);
+}
+
+/**
+ * Hrubý relativní popisek času ("dnes", "včera", "N dní zpět") - sdílený
+ * mezi Executive Summary a Timeline, aby oboje mluvily stejnou řečí.
+ */
+function bk_relative_time_label($timestamp) {
+    $ts = strtotime((string)$timestamp);
+    if (!$ts) return '';
+    $today = date('Y-m-d');
+    $that_day = date('Y-m-d', $ts);
+    if ($that_day === $today) return t('timeline_today');
+    if ($that_day === date('Y-m-d', strtotime('-1 day'))) return t('timeline_yesterday');
+    $days_ago = (int)round((strtotime($today) - strtotime($that_day)) / 86400);
+    return sprintf(t('timeline_days_ago'), $days_ago);
+}
+
+/**
  * Vrátí informace o aktuální verzi aplikace.
  * Ve produkci čte soubor version.php vygenerovaný GitHub Actions deployem.
  * Lokálně (dev) se jako záloha pokusí o git log.

@@ -357,4 +357,35 @@ return [
 
     // JS
     'js_metrics_load_error' => 'Nepodařilo se načíst historii metrik:',
+
+    // Executive Summary (shrnutí nahoře v detailu monitoru)
+    'exec_summary_down' => '%s je aktuálně nedostupný.',
+    'exec_summary_healthy_score' => '%s je zdravý (%d/100).',
+    'exec_summary_warn_score' => '%s funguje, ale má pár problémů (%d/100).',
+    'exec_summary_fail_score' => '%s má vážné problémy (%d/100).',
+    'exec_summary_up' => '%s je momentálně online.',
+    'exec_summary_no_concerns' => 'Žádné aktuální problémy nebyly zjištěny.',
+    'exec_summary_last_event' => 'Naposledy: %s (%s).',
+    'exec_summary_last_checked' => 'Poslední aktualizace dat: %s.',
+
+    // Timeline (historie událostí v detailu monitoru)
+    'timeline_heading' => 'Historie',
+    'timeline_empty' => 'Zatím žádné zaznamenané události.',
+    'timeline_today' => 'dnes',
+    'timeline_yesterday' => 'včera',
+    'timeline_days_ago' => '%d dní zpět',
+    'timeline_event_monitor_added' => 'Monitor přidán',
+    'timeline_event_monitor_removed' => 'Monitor odebrán',
+    'timeline_event_agent_connected' => 'Agent se připojil',
+    'timeline_event_agent_disconnected' => 'Agent přestal hlásit data',
+    'timeline_event_process_restarted' => 'Proces restartován',
+    'timeline_event_scheme_upgraded' => 'Přechod na HTTPS',
+    'timeline_event_dns_lost' => 'DNS přestalo odpovídat',
+    'timeline_event_dns_recovered' => 'DNS se obnovilo',
+    'timeline_event_cert_renewed' => 'TLS certifikát obnoven',
+    'timeline_event_threshold_exceeded' => 'Limit překročen',
+    'timeline_event_config_changed' => 'Nastavení upraveno',
+    'timeline_event_remote_action' => 'Vzdálená akce',
+    'timeline_event_status_changed_down' => 'Přešel do stavu Nedostupný',
+    'timeline_event_status_changed_up' => 'Přešel do stavu Dostupný',
 ];

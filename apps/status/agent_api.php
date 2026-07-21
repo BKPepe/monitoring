@@ -202,24 +202,27 @@ try {
     if ($cpu >= $cpu_threshold) {
         if (!$cpu_alert_sent) {
             trigger_notifications($pdo, $monitor, 'vps_warning', "Vytížení CPU dosáhlo {$cpu}%.");
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "CPU dosáhlo {$cpu}% (limit {$cpu_threshold}%)");
             $cpu_alert_sent = true;
         }
     } else {
         $cpu_alert_sent = false;
     }
-    
+
     if ($ram >= $ram_threshold) {
         if (!$ram_alert_sent) {
             trigger_notifications($pdo, $monitor, 'vps_warning', "Vytížení RAM dosáhlo {$ram}%.");
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "RAM dosáhla {$ram}% (limit {$ram_threshold}%)");
             $ram_alert_sent = true;
         }
     } else {
         $ram_alert_sent = false;
     }
-    
+
     if ($hdd >= $hdd_threshold) {
         if (!$hdd_alert_sent) {
             trigger_notifications($pdo, $monitor, 'vps_warning', "Vytížení disku (HDD) dosáhlo {$hdd}%.");
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "Disk (HDD) dosáhl {$hdd}% (limit {$hdd_threshold}%)");
             $hdd_alert_sent = true;
         }
     } else {
