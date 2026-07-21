@@ -2196,9 +2196,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 targetDesc.textContent = "Volitelné - libovolný textový identifikátor VPS serveru (není síťová adresa). Pokud necháte prázdné, doplní se automaticky podle hostname z první zprávy agenta.";
                 targetInput.required = false;
             } else if (type === 'openwrt') {
-                targetLabel.textContent = "Název routeru / Identifikátor";
-                targetInput.placeholder = "Např. turris-domov";
-                targetDesc.textContent = "Volitelné - libovolný textový identifikátor routeru. Pokud necháte prázdné, doplní se automaticky podle hostname nebo WAN IP adresy z první zprávy agenta.";
+                targetLabel.textContent = "Interní poznámka (volitelné)";
+                targetInput.placeholder = "Nepovinné - necháte-li prázdné, doplní se samo";
+                targetDesc.textContent = "Toto pole nemá na OpenWrt monitor žádný vliv - router se identifikuje sám přes agenta. Klidně nechte prázdné, po prvním hlášení agenta se doplní hostname nebo WAN IP adresa routeru.";
                 targetInput.required = false;
             } else if (type === 'cpanel') {
                 targetLabel.textContent = "cPanel Stats URL (cpanel_stats.php s klíčem)";

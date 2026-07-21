@@ -223,6 +223,10 @@ try {
         'smart' => isset($data['smart']) ? trim($data['smart']) : null,
         'ports' => isset($data['ports']) && is_array($data['ports']) ? $data['ports'] : [],
         'os' => isset($data['os']) ? trim($data['os']) : null,
+        // Který agent hlásí (bash/python/powershell/openwrt) - uloženo, aby
+        // dashboard mohl srovnávat nahlášenou verzi se správným "nejnovějším"
+        // číslem (viz bk_get_agent_latest_version() ve functions.php).
+        'agent_type' => isset($data['agent_type']) ? strtolower(trim($data['agent_type'])) : null,
         'model' => $ow_model,
         'board_name' => $ow_board_name,
         'wan_up' => $ow_wan_up,
@@ -324,26 +328,25 @@ try {
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
 
     // Informace o dostupné aktualizaci agenta - verzi čteme přímo ze souborů
-    // agentů na serveru, takže se udržuje na jediném místě (v samotném skriptu).
+    // agentů na serveru (viz bk_get_agent_latest_version() ve functions.php),
+    // takže se udržuje na jediném místě (v samotném skriptu).
     $agent_type = isset($data['agent_type']) ? strtolower(trim($data['agent_type'])) : '';
     $client_version = isset($data['version']) ? trim($data['version']) : '';
-    $agent_files = ['bash' => 'agent.sh', 'python' => 'agent.py', 'powershell' => 'agent.ps1'];
+    $agent_files = bk_agent_files();
 
     if ($client_version !== '' && isset($agent_files[$agent_type])) {
-        $agent_file = __DIR__ . '/' . $agent_files[$agent_type];
-        if (is_readable($agent_file)) {
+        $latest_version = bk_get_agent_latest_version($agent_type);
+        if ($latest_version !== null) {
+            $agent_file = __DIR__ . '/' . $agent_files[$agent_type];
             $agent_source = (string)file_get_contents($agent_file);
-            if (preg_match('/\$?AGENT_VERSION\s*=\s*["\']([0-9][0-9A-Za-z.\-]*)["\']/', $agent_source, $vm)) {
-                $latest_version = $vm[1];
-                $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-                $base_url = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/');
+            $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+            $base_url = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/');
 
-                $response_payload['latest_version'] = $latest_version;
-                $response_payload['update_available'] = version_compare($client_version, $latest_version, '<');
-                if ($response_payload['update_available']) {
-                    $response_payload['update_url'] = $base_url . '/' . $agent_files[$agent_type];
-                    $response_payload['update_sha256'] = hash('sha256', $agent_source);
-                }
+            $response_payload['latest_version'] = $latest_version;
+            $response_payload['update_available'] = version_compare($client_version, $latest_version, '<');
+            if ($response_payload['update_available']) {
+                $response_payload['update_url'] = $base_url . '/' . $agent_files[$agent_type];
+                $response_payload['update_sha256'] = hash('sha256', $agent_source);
             }
         }
     }

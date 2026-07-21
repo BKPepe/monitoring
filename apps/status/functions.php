@@ -6,6 +6,43 @@
 require_once __DIR__ . '/db.php';
 
 /**
+ * Mapování agent_type -> soubor agenta na serveru. Jediné místo, které oba
+ * spotřebitelé (kontrola aktualizace v agent_api.php i zobrazení verze na
+ * dashboardu) sdílí, aby se nikde neopakoval hardcoded seznam.
+ */
+function bk_agent_files() {
+    return [
+        'bash' => 'agent.sh',
+        'python' => 'agent.py',
+        'powershell' => 'agent.ps1',
+        'openwrt' => 'agent_openwrt.sh',
+    ];
+}
+
+/**
+ * Přečte AGENT_VERSION přímo z live souboru agenta na serveru (jediné místo
+ * pravdy - stejná hodnota, kterou agent skutečně obsahuje), podle typu, který
+ * agent sám nahlásil. Vrací null, pokud typ neznáme nebo soubor nejde přečíst
+ * (např. stará data bez uloženého agent_type) - volající pak nedělá žádné
+ * srovnání verzí, místo srovnávání proti cizímu/neplatnému číslu.
+ */
+function bk_get_agent_latest_version($agent_type) {
+    $agent_files = bk_agent_files();
+    if (!isset($agent_files[$agent_type])) {
+        return null;
+    }
+    $agent_file = __DIR__ . '/' . $agent_files[$agent_type];
+    if (!is_readable($agent_file)) {
+        return null;
+    }
+    $agent_source = (string)file_get_contents($agent_file);
+    if (preg_match('/\$?AGENT_VERSION\s*=\s*["\']([0-9][0-9A-Za-z.\-]*)["\']/', $agent_source, $vm)) {
+        return $vm[1];
+    }
+    return null;
+}
+
+/**
  * Zformátuje sekundy uptimu do české gramatiky
  */
 function format_uptime_cz($seconds) {
@@ -91,10 +128,13 @@ function render_vps_agent_details($details, $monitor = null) {
     
     <?php if (isset($details['uptime']) || isset($details['smart']) || isset($details['ports']) || isset($details['version']) || isset($details['os']) || isset($details['hostname']) || isset($details['iowait'])): ?>
         <div style="margin-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.85rem; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.45rem;">
-            <?php if (isset($details['version'])): 
+            <?php if (isset($details['version'])):
                 $v_reported = trim($details['version']);
-                $latest_v = "1.2.0";
-                $has_update = version_compare($v_reported, $latest_v, '<');
+                // Správné "nejnovější" číslo se odvíjí od toho, KTERÝ agent
+                // hlásí (VPS Python/Bash/PowerShell a OpenWrt agent mají
+                // vlastní, na sobě nezávislé verzování) - viz bk_get_agent_latest_version().
+                $latest_v = bk_get_agent_latest_version($details['agent_type'] ?? '');
+                $has_update = $latest_v !== null && version_compare($v_reported, $latest_v, '<');
             ?>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: var(--text-muted);">Verze agenta:</span>

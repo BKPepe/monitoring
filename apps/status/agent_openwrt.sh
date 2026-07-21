@@ -46,9 +46,10 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
     done < "$ScriptPath/agent_openwrt.cfg"
 fi
 
-AGENT_VERSION="1.0.0"
+AGENT_VERSION="1.1.0"
 LOG_FILE="$ScriptPath/agent_openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
+NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
 
 log_message() {
     ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -166,13 +167,14 @@ os_combined="$ow_distribution $ow_os_version"
 log_message "Identita: hostname=$ow_hostname model=$ow_model board=$ow_board_name os=$os_combined kernel=$ow_kernel"
 
 # --- 4. WAN stav (ubus network.interface.wan status) ---
-wan_up="false"; wan_proto=""; wan_uptime="null"; wan_ipv4=""; wan_gateway=""; wan_dns=""
+wan_up="false"; wan_proto=""; wan_uptime="null"; wan_ipv4=""; wan_gateway=""; wan_dns=""; wan_l3_device=""
 wan_json=$(ubus call network.interface.wan status 2>/dev/null)
 if [ -n "$wan_json" ]; then
     json_load "$wan_json"
     json_get_var wan_up up
     json_get_var wan_proto proto
     json_get_var wan_uptime uptime
+    json_get_var wan_l3_device l3_device
 
     # Prvni IPv4 adresa (pole "ipv4-address")
     json_get_keys ipv4_keys "ipv4-address"
@@ -211,6 +213,39 @@ if [ -n "$wan_json" ]; then
     done
 fi
 
+# --- 4a. Vytizeni site (KB/s) - stejny tick/tock princip jako agent.sh, ale
+# jen na WAN zarizeni (l3_device z ubus výše), ne soucet vsech rozhrani -
+# u routeru by scitani LAN+WAN+WiFi davalo zavadejici cislo (provoz uvnitr
+# domaci site by se zapocital jako "sitovy provoz", coz neni to, co chceme). ---
+net="null"
+if [ -n "$wan_l3_device" ] && [ -f /proc/net/dev ]; then
+    net_bytes=$(awk -v iface="$wan_l3_device" '
+    NR > 2 {
+        line = $0;
+        colon = index(line, ":");
+        if (colon == 0) next;
+        ifname = substr(line, 1, colon - 1);
+        gsub(/^[ \t]+|[ \t]+$/, "", ifname);
+        if (ifname != iface) next;
+        n = split(substr(line, colon + 1), f, " ");
+        printf "%.0f", (f[1] + 0) + (f[9] + 0);
+    }' /proc/net/dev 2>/dev/null)
+    if [ -n "$net_bytes" ]; then
+        if [ -f "$NET_STATE_FILE" ]; then
+            prev_ts=$(cut -d',' -f1 "$NET_STATE_FILE" 2>/dev/null)
+            prev_bytes=$(cut -d',' -f2 "$NET_STATE_FILE" 2>/dev/null)
+            if [ -n "$prev_ts" ] && [ -n "$prev_bytes" ]; then
+                elapsed=$((now_ts - prev_ts))
+                delta=$((net_bytes - prev_bytes))
+                if [ "$elapsed" -gt 0 ] && [ "$delta" -ge 0 ]; then
+                    net=$(awk -v d="$delta" -v e="$elapsed" 'BEGIN { printf "%.1f", (d / e) / 1024 }')
+                fi
+            fi
+        fi
+        echo "${now_ts},${net_bytes}" > "$NET_STATE_FILE" 2>/dev/null || true
+    fi
+fi
+
 # --- 4b. Realna smerovatelna IPv6 - hleda se na samostatnem logickem rozhrani
 # "wan6" (typicke pro PPPoE + DHCPv6-PD), protoze "wan" samo casto ma jen
 # link-local fe80:: adresu, ktera pro verejne zobrazeni nema smysl. ---
@@ -243,7 +278,7 @@ if [ -n "$dump_json" ]; then
     done
     json_select ..
 fi
-log_message "WAN: up=$wan_up proto=$wan_proto ipv4=$wan_ipv4 gateway=$wan_gateway dns=$wan_dns ipv6=$wan_ipv6"
+log_message "WAN: up=$wan_up proto=$wan_proto ipv4=$wan_ipv4 gateway=$wan_gateway dns=$wan_dns ipv6=$wan_ipv6 net=${net}KB/s (l3_device=$wan_l3_device)"
 
 # --- 5. Sestaveni JSON payloadu ---
 # jshn muze vracet bool jako "1"/"0" nebo "true"/"false" v zavislosti na
@@ -261,6 +296,7 @@ payload=$(cat <<EOF
   "os": "$os_combined",
   "cpu": $cpu,
   "ram": $ram,
+  "net": $net,
   "hdd": $hdd,
   "load1": $load1,
   "load5": $load5,

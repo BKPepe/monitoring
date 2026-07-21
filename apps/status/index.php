@@ -1492,16 +1492,18 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                                 <?php if (!empty($details['wan_proto'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_proto')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(strtoupper($details['wan_proto'])); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if (!empty($details['wan_ipv4'])): ?>
-                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv4')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv4']); ?></strong></div>
+                                                                <?php // IP adresy/brána/DNS jsou identifikující údaje o síti uživatele -
+                                                                // zobrazují se jen přihlášenému adminovi, ne veřejně. ?>
+                                                                <?php if ($is_admin && !empty($details['wan_ipv4'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);" title="<?php echo htmlspecialchars(t('openwrt_wan_ipv4_hint')); ?>"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv4')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv4']); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if (!empty($details['wan_ipv6'])): ?>
+                                                                <?php if ($is_admin && !empty($details['wan_ipv6'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv6')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv6']); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if (!empty($details['wan_gateway'])): ?>
+                                                                <?php if ($is_admin && !empty($details['wan_gateway'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_gateway')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_gateway']); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if (!empty($details['wan_dns'])): ?>
+                                                                <?php if ($is_admin && !empty($details['wan_dns'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_dns')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_dns']); ?></strong></div>
                                                                 <?php endif; ?>
                                                                 <?php if (!empty($details['wan_uptime'])): ?>

@@ -213,6 +213,7 @@ return [
     'openwrt_wan_gateway' => 'Brána',
     'openwrt_wan_dns' => 'DNS',
     'openwrt_wan_uptime' => 'Uptime WAN',
+    'openwrt_wan_ipv4_hint' => 'Toto je IP adresa na WAN rozhraní routeru. Pokud je poskytovatel používá CGNAT, nemusí jít o vaši skutečnou veřejnou IP adresu.',
     'metric_label_check_pipeline' => 'Check Pipeline (DNS/TCP/TLS/HTTP)',
     'metric_label_response_breakdown' => 'Rozpad doby odezvy',
     'metric_label_ssl_card' => 'SSL certifikát',

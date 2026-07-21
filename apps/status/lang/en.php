@@ -212,6 +212,7 @@ return [
     'openwrt_wan_gateway' => 'Gateway',
     'openwrt_wan_dns' => 'DNS',
     'openwrt_wan_uptime' => 'WAN Uptime',
+    'openwrt_wan_ipv4_hint' => 'This is the IP address on the router\'s WAN interface. If your ISP uses CGNAT, this may not be your actual public IP address.',
     'metric_label_check_pipeline' => 'Check Pipeline (DNS/TCP/TLS/HTTP)',
     'metric_label_response_breakdown' => 'Response time breakdown',
     'metric_label_ssl_card' => 'SSL certificate',
