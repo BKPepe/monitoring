@@ -326,6 +326,62 @@ case "$wan_up" in
     *) wan_up_json="false" ;;
 esac
 
+# --- Deep OpenWrt Telemetry ---
+swap_pct=$(awk '/^SwapTotal:/ {total=$2} /^SwapFree:/ {free=$2} END { if (total > 0) printf "%.1f", ((total - free) / total) * 100; else print "0.0"; }' /proc/meminfo)
+[ -z "$swap_pct" ] && swap_pct="0.0"
+
+entropy="null"
+[ -f /proc/sys/kernel/random/entropy_avail ] && entropy=$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null)
+
+conntrack_pct="null"
+if [ -f /proc/net/nf_conntrack_count ] && [ -f /proc/sys/net/netfilter/nf_conntrack_max ]; then
+    conntrack_pct=$(awk 'NR==1 {cnt=$1} END {if (getline < "/proc/sys/net/netfilter/nf_conntrack_max") {max=$1; if (max>0) printf "%.1f", (cnt/max)*100; else print "0.0"}}' /proc/net/nf_conntrack_count 2>/dev/null)
+fi
+
+upgradable_packages="null"
+if command -v opkg >/dev/null 2>&1; then
+    upgradable_packages=$(opkg list-upgradable 2>/dev/null | wc -l | xargs)
+fi
+
+wifi_clients_count=0
+if command -v iwinfo >/dev/null 2>&1; then
+    wifi_clients_count=$(iwinfo 2>/dev/null | grep -i "assoc" | awk '{sum+=$NF} END {print sum+0}')
+fi
+
+interfaces_json="[]"
+if [ -f /proc/net/dev ]; then
+    interfaces_json=$(awk '
+    NR > 2 {
+        gsub(":", "", $1);
+        if ($1 !~ /^(lo|ifb)/) {
+            if (count > 0) printf ", ";
+            printf "{\"iface\":\"%s\", \"rx_bytes\":%s, \"tx_bytes\":%s, \"rx_errors\":%s, \"tx_errors\":%s}", $1, $2, $10, $3, $11;
+            count++;
+        }
+    }
+    BEGIN { printf "[" }
+    END { printf "]" }' /proc/net/dev 2>/dev/null)
+fi
+
+# --- Service Discovery Scanner ---
+disc_list=""
+if [ -f /proc/net/tcp ] && grep -q "271B" /proc/net/tcp 2>/dev/null; then
+    disc_list="{\"name\":\"TeamSpeak 3 Server\",\"type\":\"teamspeak\",\"port\":10011,\"confidence\":99}"
+fi
+if [ -f /proc/net/tcp ] && grep -q "63DD" /proc/net/tcp 2>/dev/null; then
+    [ -n "$disc_list" ] && disc_list="$disc_list, "
+    disc_list="${disc_list}{\"name\":\"Minecraft Server\",\"type\":\"minecraft\",\"port\":25565,\"confidence\":95}"
+fi
+if [ -f /proc/net/tcp ] && (grep -q "0050" /proc/net/tcp || grep -q "01BB" /proc/net/tcp) 2>/dev/null; then
+    [ -n "$disc_list" ] && disc_list="$disc_list, "
+    disc_list="${disc_list}{\"name\":\"Web Server (HTTP/HTTPS)\",\"type\":\"web\",\"port\":80,\"confidence\":90}"
+fi
+if [ -f /proc/net/tcp ] && grep -q "0035" /proc/net/tcp 2>/dev/null; then
+    [ -n "$disc_list" ] && disc_list="$disc_list, "
+    disc_list="${disc_list}{\"name\":\"AdGuard Home / DNS\",\"type\":\"port\",\"port\":53,\"confidence\":85}"
+fi
+discovered_services_json="[$disc_list]"
+
 payload=$(cat <<EOF
 {
   "agent_key": "$AGENT_KEY",
@@ -334,6 +390,13 @@ payload=$(cat <<EOF
   "os": "$os_combined",
   "cpu": $cpu,
   "ram": $ram,
+  "swap_pct": $swap_pct,
+  "entropy": $entropy,
+  "conntrack_pct": $conntrack_pct,
+  "upgradable_packages": $upgradable_packages,
+  "wifi_clients_count": $wifi_clients_count,
+  "interfaces": $interfaces_json,
+  "discovered_services": $discovered_services_json,
   "net": $net,
   "hdd": $hdd,
   "btrfs_errors": $btrfs_errors,

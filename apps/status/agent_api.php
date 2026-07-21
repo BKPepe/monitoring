@@ -313,6 +313,10 @@ try {
         $new_data['ts3_process'] = $ts3_process;
     }
 
+    if (isset($data['discovered_services']) && is_array($data['discovered_services'])) {
+        $new_data['discovered_services'] = $data['discovered_services'];
+    }
+
     $merged_details_arr = array_merge($old_details, $new_data);
     $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
 

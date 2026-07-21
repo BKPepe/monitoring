@@ -570,6 +570,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_incident']) &&
     }
 }
 
+// 1-Click Import Objevené Služby (Service Discovery)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service']) && $user_role === 'admin') {
+    $s_name = trim($_POST['service_name'] ?? '');
+    $s_type = $_POST['service_type'] ?? 'web';
+    $s_port = !empty($_POST['service_port']) ? (int)$_POST['service_port'] : null;
+    $s_target = trim($_POST['service_target'] ?? '127.0.0.1');
+    
+    if (!empty($s_name)) {
+        $agent_key = bin2hex(random_bytes(16));
+        $stmt = $pdo->prepare("
+            INSERT INTO monitors (name, type, target, port, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold)
+            VALUES (?, ?, ?, ?, 'unknown', ?, 90, 90, 95)
+        ");
+        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key]);
+        $new_id = (int)$pdo->lastInsertId();
+        log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
+        $success_msg = "Monitor '{$s_name}' byl úspěšně vytvořen z automatické detekce!";
+    }
+}
+
 // Zpracování odeslání testovacího e-mailu (pouze pro Admina)
 if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role === 'admin') {
     $to = $me['email'] ?? '';

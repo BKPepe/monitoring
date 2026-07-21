@@ -850,6 +850,7 @@ def main():
     teamspeak_servers = get_local_teamspeak_servers(ports)
     ts3_process = get_ts3_process_info()
     zombie_count, top_cpu_processes, top_ram_processes = get_process_snapshot()
+    discovered_services = get_discovered_services(ports, processes)
 
     payload = {
         "agent_key": AGENT_KEY,
