@@ -376,7 +376,7 @@ try {
         
         if ($act_id > 0) {
             $stmt_act = $pdo->prepare("UPDATE agent_actions SET status = ?, result_message = ?, executed_at = NOW() WHERE id = ? AND monitor_id = ?");
-            $stmt_act->execute([$act_status, $act_msg, $act_id, $id]);
+            $stmt_act->execute([$act_status, $act_msg, $act_id, $monitor_id]);
         }
     }
 
@@ -384,29 +384,45 @@ try {
 
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
 
-    // Kontrola nevyřízených akcí ve frontě pro tohoto agenta
+    // Kontrola nevyřízených akcí ve frontě pro tohoto agenta. Souhlas se
+    // ověřuje znovu tady (ne jen při zařazení v admin.php) - monitor mohl být
+    // mezitím překonfigurován a konkrétní akci už nemusí povolovat.
     try {
-        $stmt_pact = $pdo->prepare("SELECT id, action_type FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1");
-        $stmt_pact->execute([$id]);
-        $pending_act = $stmt_pact->fetch();
+        $ra_allowed_here = !empty($monitor['remote_actions_enabled'])
+            ? array_filter(explode(',', (string)($monitor['allowed_actions'] ?? '')))
+            : [];
 
-        if ($pending_act) {
-            $action_id = (int)$pending_act['id'];
-            $action_type = $pending_act['action_type'];
-            $timestamp = time();
-            $nonce = bin2hex(random_bytes(8));
-            
-            // HMAC-SHA256 podpis požadavku klíčem monitoru ($monitor['agent_key'])
-            $sig_payload = "action={$action_type}|ts={$timestamp}|nonce={$nonce}";
-            $signature = hash_hmac('sha256', $sig_payload, $monitor['agent_key']);
-            
-            $response_payload['pending_action'] = [
-                'action_id' => $action_id,
-                'action' => $action_type,
-                'timestamp' => $timestamp,
-                'nonce' => $nonce,
-                'signature' => $signature
-            ];
+        if (!empty($ra_allowed_here)) {
+            $stmt_pact = $pdo->prepare("SELECT id, action_type FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1");
+            $stmt_pact->execute([$monitor_id]);
+            $pending_act = $stmt_pact->fetch();
+
+            if ($pending_act && in_array($pending_act['action_type'], $ra_allowed_here, true)) {
+                $action_id = (int)$pending_act['id'];
+                $action_type = $pending_act['action_type'];
+                $timestamp = time();
+                $nonce = bin2hex(random_bytes(8));
+
+                // HMAC-SHA256 podpis požadavku klíčem monitoru ($monitor['agent_key'])
+                $sig_payload = "action={$action_type}|ts={$timestamp}|nonce={$nonce}";
+                $signature = hash_hmac('sha256', $sig_payload, $monitor['agent_key']);
+
+                $response_payload['pending_action'] = [
+                    'action_id' => $action_id,
+                    'action' => $action_type,
+                    'timestamp' => $timestamp,
+                    'nonce' => $nonce,
+                    'signature' => $signature
+                ];
+
+                // Označit jako 'sent' HNED, ne až po potvrzení agentem - jinak
+                // by stejná (stále 'pending') akce byla znovu podepsána a
+                // odeslána při každém dalším pollu, dokud nedorazí ack. U
+                // reboot_router by to znamenalo smyčku restartů u routeru,
+                // který se stihne vzpamatovat pomaleji než jeden cron interval.
+                $stmt_mark_sent = $pdo->prepare("UPDATE agent_actions SET status = 'sent' WHERE id = ?");
+                $stmt_mark_sent->execute([$action_id]);
+            }
         }
     } catch (PDOException $e) {}
 

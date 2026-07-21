@@ -40,6 +40,8 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
                 case "$key" in
                     API_URL) API_URL="$val" ;;
                     AGENT_KEY) AGENT_KEY="$val" ;;
+                    REMOTE_ACTIONS_ENABLED) REMOTE_ACTIONS_ENABLED="$val" ;;
+                    ALLOWED_ACTIONS) ALLOWED_ACTIONS="$val" ;;
                 esac
                 ;;
         esac

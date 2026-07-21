@@ -25,7 +25,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260727');
+    define('BK_SCHEMA_VERSION', '20260728');
 
     $bk_current_schema = false;
     try {
@@ -348,6 +348,23 @@ try {
         "ALTER TABLE users ADD COLUMN totp_secret VARCHAR(32) DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN totp_enabled TINYINT(1) DEFAULT 0",
         "CREATE TABLE IF NOT EXISTS `agent_actions` (`id` INT AUTO_INCREMENT PRIMARY KEY, `monitor_id` INT NOT NULL, `action_type` VARCHAR(50) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'pending', `result_message` TEXT NULL, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, `executed_at` DATETIME DEFAULT NULL, FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    ] as $migration_sql) {
+        try {
+            $pdo->exec($migration_sql);
+        } catch (PDOException $e) {
+            // Ignorujeme
+        }
+    }
+
+    // Automatická migrace - Remote Actions: chybějící per-monitor souhlas.
+    // Předchozí implementace (ed31853) měla HMAC podpis a časové okno správně,
+    // ale žádnou serverovou kontrolu, jestli daný router vzdálené akce vůbec
+    // povolil - kdokoliv admin mohl zařadit reboot pro libovolný monitor.
+    // Výchozí hodnota 0/NULL = žádný monitor nemá nic povoleno, dokud si to
+    // admin v jeho nastavení výslovně nezapne.
+    foreach ([
+        "ALTER TABLE monitors ADD COLUMN remote_actions_enabled TINYINT(1) DEFAULT 0",
+        "ALTER TABLE monitors ADD COLUMN allowed_actions VARCHAR(255) DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

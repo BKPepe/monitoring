@@ -273,6 +273,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $sq_password = !empty($_POST['sq_password']) && $type === 'teamspeak' ? trim($_POST['sq_password']) : null;
     $ts3_filetransfer_port = !empty($_POST['ts3_filetransfer_port']) && $type === 'teamspeak' ? intval($_POST['ts3_filetransfer_port']) : null;
 
+    // Volitelné RCON přihlášení (TPS přes Paper/Spigot příkaz "tps")
+    $rcon_port = !empty($_POST['rcon_port']) && $type === 'minecraft' ? intval($_POST['rcon_port']) : null;
+    $rcon_password = !empty($_POST['rcon_password']) && $type === 'minecraft' ? trim($_POST['rcon_password']) : null;
+
+    // Remote Actions - souhlas je VÝSLOVNĚ per-monitor, výchozí vypnuto. Ani
+    // pro OpenWrt monitory se nikdy nezapíná automaticky - musí ho admin sám
+    // zaškrtnout v editaci monitoru (viz remote-actions-group níže).
+    $remote_actions_enabled = ($type === 'openwrt' && isset($_POST['remote_actions_enabled'])) ? 1 : 0;
+    $allowed_actions_post = isset($_POST['allowed_actions']) && is_array($_POST['allowed_actions'])
+        ? array_values(array_intersect($_POST['allowed_actions'], ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp']))
+        : [];
+    $allowed_actions = ($type === 'openwrt' && $remote_actions_enabled && !empty($allowed_actions_post))
+        ? implode(',', $allowed_actions_post)
+        : null;
+
     // Service Profiles - zapnuté sekce dashboardu. Prázdný výběr (nebo typ bez
     // checklistu v get_service_profiles()) ukládáme jako NULL, aby se uplatnily
     // recommended výchozí hodnoty profilu (viz bk_get_enabled_metrics()).
@@ -307,19 +322,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
 
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?, enabled_metrics = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = ?, remote_actions_enabled = ?, allowed_actions = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $id]);
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
             // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
             $agent_key = bin2hex(random_bytes(16));
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions]);
             log_monitor_event($pdo, (int)$pdo->lastInsertId(), $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
@@ -525,9 +540,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_maintenance' && isset(
         $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 0, maintenance_description = NULL, maintenance_start = NULL, maintenance_end = NULL, status = 'unknown' WHERE id = ?");
         $stmt_tog->execute([$t_id]);
     } else {
-        // Okamžité zapnutí údržby
-        $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 1, status = 'maintenance' WHERE id = ?");
-        $stmt_tog->execute([$t_id]);
+        // Okamžité zapnutí údržby (nepovinný popis z rychlého přepínače v tabulce)
+        $t_desc = !empty($_GET['desc']) ? trim($_GET['desc']) : null;
+        $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 1, status = 'maintenance', maintenance_description = ? WHERE id = ?");
+        $stmt_tog->execute([$t_desc, $t_id]);
     }
     
     header('Location: admin.php');
@@ -616,9 +632,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action']) && $user_role === 'admin') {
     $mid = intval($_POST['monitor_id'] ?? 0);
     $action_type = trim($_POST['action_type'] ?? '');
-    
+
     $allowed_action_types = ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp'];
-    if ($mid > 0 && in_array($action_type, $allowed_action_types, true)) {
+    $stmt_ra = $pdo->prepare("SELECT remote_actions_enabled, allowed_actions, name FROM monitors WHERE id = ?");
+    $stmt_ra->execute([$mid]);
+    $ra_monitor = $stmt_ra->fetch();
+
+    // Souhlas se kontroluje na monitoru samotném, ne jen proti globálnímu
+    // seznamu typů akcí - bez toho by šlo zařadit i reboot pro router, jehož
+    // vlastník Remote Actions nikdy nepovolil (viz bezpečnostní audit).
+    $ra_monitor_allowed = $ra_monitor ? array_filter(explode(',', (string)($ra_monitor['allowed_actions'] ?? ''))) : [];
+    if (!$ra_monitor || empty($ra_monitor['remote_actions_enabled'])) {
+        $error_msg = 'Remote Actions nejsou pro tento monitor povolené - nejdřív je zapněte v jeho nastavení.';
+    } elseif (!in_array($action_type, $allowed_action_types, true) || !in_array($action_type, $ra_monitor_allowed, true)) {
+        $error_msg = "Akce '{$action_type}' není pro tento monitor v seznamu povolených akcí.";
+    } else {
         $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (?, ?, 'pending')");
         $stmt->execute([$mid, $action_type]);
         $success_msg = "Požadavek na akční příkaz '{$action_type}' byl podepsán a zařazen do fronty pro agenta.";
@@ -1025,7 +1053,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                             <td data-label="Akce">
                                                 <div class="action-btns">
                                                     <a href="admin.php?action=edit&id=<?php echo $mon['id']; ?>" class="btn btn-secondary btn-sm" title="Upravit"><i class="fas fa-edit"></i></a>
-                                                    <a href="admin.php?action=toggle_maintenance&id=<?php echo $mon['id']; ?>" class="btn btn-sm" style="background: <?php echo $mon['maintenance'] ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.05)'; ?>; border: 1px solid <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--border-color)'; ?>; color: <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--text-secondary)'; ?>;" title="<?php echo $mon['maintenance'] ? 'Ukončit režim údržby (vyčistí starý popis)' : 'Okamžitě zapnout režim údržby'; ?>"><i class="fas fa-wrench"></i></a>
+                                                    <a href="admin.php?action=toggle_maintenance&id=<?php echo $mon['id']; ?>" class="btn btn-sm" style="background: <?php echo $mon['maintenance'] ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.05)'; ?>; border: 1px solid <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--border-color)'; ?>; color: <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--text-secondary)'; ?>;" title="<?php echo $mon['maintenance'] ? 'Ukončit režim údržby (vyčistí starý popis)' : 'Okamžitě zapnout režim údržby'; ?>" <?php if (!$mon['maintenance']): ?>onclick="event.preventDefault(); var d = prompt('Popis údržby (zobrazí se uživatelům, nepovinné):', ''); if (d !== null) { window.location.href = this.href + '&desc=' + encodeURIComponent(d); }"<?php endif; ?>><i class="fas fa-wrench"></i></a>
                                                     <a href="admin.php?action=clear_history&id=<?php echo $mon['id']; ?>" class="btn btn-warning btn-sm" onclick="return confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
                                                     <a href="admin.php?action=delete&id=<?php echo $mon['id']; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Opravdu chcete smazat tento monitor?')" title="Smazat"><i class="fas fa-trash"></i></a>
                                                     <?php if (!empty($mon['agent_key'])): ?>
@@ -1282,6 +1310,13 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-openwrt">KLIC</span>"
                                 </div>
+                            </li>
+                            <li>Volitelné - Remote Actions (restart WAN/WireGuard, reboot, obnova DHCP na dálku z administrace). Bez tohoto kroku router žádnou vzdálenou akci nikdy neprovede, i kdyby ji administrace zařadila do fronty:<br>
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
+                                    REMOTE_ACTIONS_ENABLED = "<span style="color: var(--color-green); font-family: monospace;">1</span>"<br>
+                                    ALLOWED_ACTIONS = "<span style="color: var(--color-green); font-family: monospace;">restart_wan,restart_wireguard,reboot_router,renew_dhcp</span>"
+                                </div>
+                                <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.35rem;">Toto povoluje akce jen na straně routeru. Musíte je navíc zaškrtnout i zde v administraci u tohoto monitoru (sekce "Remote Actions" ve formuláři) - server odešle akci jen tehdy, když ji povolují OBĚ strany.</small>
                             </li>
                             <li>Povolte spuštění: <code>chmod +x /root/agent_openwrt.sh</code></li>
                             <li>Nejdřív spusťte ručně a zkontrolujte log, než ho zařadíte do cronu:<br>
@@ -1878,6 +1913,68 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             </small>
                         </div>
 
+                        <?php
+                        $ra_enabled = $edit_monitor && !empty($edit_monitor['remote_actions_enabled']);
+                        $ra_allowed = $edit_monitor ? array_filter(explode(',', (string)($edit_monitor['allowed_actions'] ?? ''))) : [];
+                        $ra_action_labels = [
+                            'restart_wan' => 'Restartovat WAN',
+                            'restart_wireguard' => 'Restartovat WireGuard (wg0)',
+                            'reboot_router' => 'Restartovat celý router',
+                            'renew_dhcp' => 'Obnovit DHCP nájem na WAN',
+                        ];
+                        ?>
+                        <div class="form-group" id="remote-actions-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] === 'openwrt') ? 'block' : 'none'; ?>;">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600;">
+                                <input type="checkbox" name="remote_actions_enabled" id="remote_actions_enabled" value="1" <?php echo $ra_enabled ? 'checked' : ''; ?> onchange="document.getElementById('allowed-actions-list').style.opacity = this.checked ? '1' : '0.4';">
+                                Povolit Remote Actions pro tento router
+                            </label>
+                            <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin: 0.25rem 0 0.75rem;">
+                                Ve výchozím stavu VYPNUTO. Bez zaškrtnutí server nikdy nezařadí žádnou akci do fronty pro tento konkrétní monitor, bez ohledu na to, co se pokusí odeslat administrace.
+                            </small>
+                            <div id="allowed-actions-list" style="display: flex; flex-direction: column; gap: 0.4rem; opacity: <?php echo $ra_enabled ? '1' : '0.4'; ?>;">
+                                <?php foreach ($ra_action_labels as $ra_key => $ra_label): ?>
+                                    <label class="metric-checkbox-label">
+                                        <input type="checkbox" name="allowed_actions[]" value="<?php echo htmlspecialchars($ra_key); ?>" <?php echo in_array($ra_key, $ra_allowed, true) ? 'checked' : ''; ?>>
+                                        <?php echo htmlspecialchars($ra_label); ?>
+                                        <?php if ($ra_key === 'reboot_router'): ?>
+                                            <span class="metric-recommended-badge" style="background: none; color: var(--color-red);">Restartuje celé zařízení</span>
+                                        <?php endif; ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+
+                            <?php if ($edit_monitor && $ra_enabled && !empty($ra_allowed)): ?>
+                                <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
+                                    <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vyvolat akci nyní</label>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                                        <?php foreach ($ra_action_labels as $ra_key => $ra_label): if (!in_array($ra_key, $ra_allowed, true)) continue; ?>
+                                            <button type="button" class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.4rem 0.75rem;" onclick="triggerRemoteAction(<?php echo (int)$edit_monitor['id']; ?>, '<?php echo htmlspecialchars($ra_key, ENT_QUOTES); ?>', '<?php echo htmlspecialchars($ra_label, ENT_QUOTES); ?>')"><?php echo htmlspecialchars($ra_label); ?></button>
+                                        <?php endforeach; ?>
+                                    </div>
+
+                                    <?php
+                                    $stmt_ra_hist = $pdo->prepare("SELECT action_type, status, created_at, executed_at, result_message FROM agent_actions WHERE monitor_id = ? ORDER BY id DESC LIMIT 5");
+                                    $stmt_ra_hist->execute([$edit_monitor['id']]);
+                                    $ra_history = $stmt_ra_hist->fetchAll();
+                                    $ra_status_colors = ['pending' => 'var(--text-muted)', 'sent' => '#e0a800', 'executed' => 'var(--color-green, #2ecc71)', 'failed' => 'var(--color-red, #e74c3c)'];
+                                    $ra_status_labels = ['pending' => 'čeká na odeslání', 'sent' => 'odesláno, čeká na potvrzení', 'executed' => 'provedeno', 'failed' => 'selhalo'];
+                                    ?>
+                                    <?php if (!empty($ra_history)): ?>
+                                        <div style="margin-top: 0.75rem; font-size: 0.78rem;">
+                                            <div style="color: var(--text-muted); text-transform: uppercase; font-size: 0.7rem; margin-bottom: 0.35rem;">Poslední akce</div>
+                                            <?php foreach ($ra_history as $rh): ?>
+                                                <div style="display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.3rem 0; border-top: 1px solid rgba(128,128,128,0.15);" title="<?php echo htmlspecialchars($rh['result_message'] ?? ''); ?>">
+                                                    <span><?php echo htmlspecialchars($ra_action_labels[$rh['action_type']] ?? $rh['action_type']); ?></span>
+                                                    <span style="color: <?php echo $ra_status_colors[$rh['status']] ?? 'inherit'; ?>;"><?php echo htmlspecialchars($ra_status_labels[$rh['status']] ?? $rh['status']); ?></span>
+                                                    <span style="color: var(--text-muted); white-space: nowrap;"><?php echo date('d.m. H:i', strtotime($rh['created_at'])); ?></span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+
                         <div class="form-group" id="processes-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord' && $edit_monitor['type'] !== 'openwrt') ? 'block' : 'none'; ?>;">
                             <label for="monitored_processes">Sledované procesy (čárkou oddělené)</label>
                             <input type="text" name="monitored_processes" id="monitored_processes" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['monitored_processes'] ?? '') : ''; ?>" class="form-control" placeholder="Např. ts3server, nginx, mysql">
@@ -2274,6 +2371,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             const ts3FiletransferGroup = document.getElementById('ts3-filetransfer-group');
             const sqLoginGroup = document.getElementById('sq-login-group');
             const rconGroup = document.getElementById('rcon-group');
+            const remoteActionsGroup = document.getElementById('remote-actions-group');
 
             // Výchozí zobrazení
             portGroup.style.display = 'none';
@@ -2302,6 +2400,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             }
             if (rconGroup) {
                 rconGroup.style.display = 'none';
+            }
+            if (remoteActionsGroup) {
+                remoteActionsGroup.style.display = 'none';
             }
             if (portLabel) {
                 portLabel.textContent = "Síťový port";
@@ -2365,6 +2466,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 targetInput.placeholder = "Nepovinné - necháte-li prázdné, doplní se samo";
                 targetDesc.textContent = "Toto pole nemá na OpenWrt monitor žádný vliv - router se identifikuje sám přes agenta. Klidně nechte prázdné, po prvním hlášení agenta se doplní hostname nebo WAN IP adresa routeru.";
                 targetInput.required = false;
+                if (remoteActionsGroup) {
+                    remoteActionsGroup.style.display = 'block';
+                }
             } else if (type === 'cpanel') {
                 targetLabel.textContent = "cPanel Stats URL (cpanel_stats.php s klíčem)";
                 targetInput.placeholder = "Např. https://bloodkings.eu/cpanel_stats.php?key=TajnyKlic";
@@ -2386,7 +2490,26 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 }
             }
         }
-        
+
+        function triggerRemoteAction(monitorId, actionType, actionLabel) {
+            if (!confirm('Opravdu chcete provést akci "' + actionLabel + '" na tomto routeru?')) return;
+            // Samostatný formulář mimo hlavní edit-form (do <form> nelze vnořit další <form>).
+            const f = document.createElement('form');
+            f.method = 'POST';
+            f.action = 'admin.php';
+            f.style.display = 'none';
+            const fields = { trigger_remote_action: '1', monitor_id: monitorId, action_type: actionType };
+            for (const key in fields) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = key;
+                input.value = fields[key];
+                f.appendChild(input);
+            }
+            document.body.appendChild(f);
+            f.submit();
+        }
+
         function toggleSMSFields(gateway) {
             const twilioFields = document.getElementById('twilio-fields');
             const smsbranaFields = document.getElementById('smsbrana-fields');
