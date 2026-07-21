@@ -677,7 +677,20 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                             $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_last_logs->execute([$mid]);
                                             $last_logs = $stmt_last_logs->fetchAll();
-                                            
+
+                                            // Knowledge layer - vysvětlení aktuálně překročených prahů (viz
+                                            // bk_get_knowledge_tips() ve functions.php). Vlastní decode check_stages,
+                                            // nezávislý na $pipeline/$ts3_check_stages níže, aby fungoval pro
+                                            // jakýkoli typ bez ohledu na to, kde se v šabloně zrovna nacházíme.
+                                            $check_stages_shared = null;
+                                            if (!empty($last_logs[0]['check_stages'])) {
+                                                $decoded_check_stages_shared = json_decode($last_logs[0]['check_stages'], true);
+                                                if (is_array($decoded_check_stages_shared)) {
+                                                    $check_stages_shared = $decoded_check_stages_shared;
+                                                }
+                                            }
+                                            $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages_shared, $status, $enabled_metrics);
+
                                             $stmt_outages = $pdo->prepare("SELECT checked_at, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? AND status = 'down' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_outages->execute([$mid]);
                                             $monitor_outages = $stmt_outages->fetchAll();
@@ -1544,6 +1557,7 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
                                                      </div>
                                                  </div>
                                             <?php endif; ?>
+                                            <?php echo render_knowledge_panel($knowledge_tips); ?>
                                             <?php
                                             // Query metrics history for the charts
                                             $show_charts = false;

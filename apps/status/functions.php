@@ -274,6 +274,148 @@ function render_vps_agent_details($details, $monitor = null) {
     return ob_get_clean();
 }
 
+/**
+ * Knowledge layer - vrátí pole tipů vysvětlujících, co znamená aktuálně
+ * překročený práh u některé z metrik. Nevymýšlí nové prahy - každé pravidlo
+ * zrcadlí práh, který už dnes rozhoduje o červené/žluté barvě jinde v kódu
+ * (render_vps_agent_details() výše, SSL karta a check pipeline v index.php,
+ * status polí z build_teamspeak_health_areas()). Tipy dědí viditelnost od
+ * metriky, kterou vysvětlují (viz $enabled_metrics) - nejsou samostatně
+ * vypínatelné, protože bez zobrazené metriky by tip nedával smysl.
+ *
+ * @return array<int, array{icon: string, severity: string, text: string}>
+ */
+function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics) {
+    $tips = [];
+    $add = function ($severity, $tip_key, ...$args) use (&$tips) {
+        $text = $args ? sprintf(t($tip_key), ...$args) : t($tip_key);
+        $tips[] = [
+            'icon' => $severity === 'critical' ? 'fa-exclamation-circle' : 'fa-exclamation-triangle',
+            'severity' => $severity,
+            'text' => $text,
+        ];
+    };
+
+    // --- VPS / agent (platí pro jakýkoli typ s propojeným agentem, stejně
+    // jako render_vps_agent_details() sama není omezená na type=vps) ---
+    if (is_array($details)) {
+        if (isset($details['cpu'])) {
+            $cpu = floatval($details['cpu']);
+            if ($cpu > 80) $add('critical', 'knowledge_tip_cpu_high');
+            elseif ($cpu > 50) $add('warn', 'knowledge_tip_cpu_high');
+        }
+        if (isset($details['ram'])) {
+            $ram = floatval($details['ram']);
+            if ($ram > 85) $add('critical', 'knowledge_tip_ram_high');
+            elseif ($ram > 60) $add('warn', 'knowledge_tip_ram_high');
+        }
+        if (isset($details['hdd'])) {
+            $hdd = floatval($details['hdd']);
+            if ($hdd > 90) $add('critical', 'knowledge_tip_hdd_high');
+            elseif ($hdd > 70) $add('warn', 'knowledge_tip_hdd_high');
+        }
+        if (isset($details['iowait']) && $details['iowait'] !== null) {
+            if ($details['iowait'] > 20) $add('critical', 'knowledge_tip_iowait_high');
+            elseif ($details['iowait'] > 10) $add('warn', 'knowledge_tip_iowait_high');
+        }
+        if (isset($details['inode_usage']) && $details['inode_usage'] !== null) {
+            if ($details['inode_usage'] > 90) $add('critical', 'knowledge_tip_inode_high');
+            elseif ($details['inode_usage'] > 70) $add('warn', 'knowledge_tip_inode_high');
+        }
+        if (isset($details['zombie_count']) && $details['zombie_count'] !== null && $details['zombie_count'] > 5) {
+            $add('critical', 'knowledge_tip_zombie_high');
+        }
+        if (isset($details['temperature']) && $details['temperature'] !== null) {
+            if ($details['temperature'] > 80) $add('critical', 'knowledge_tip_temperature_high');
+            elseif ($details['temperature'] > 65) $add('warn', 'knowledge_tip_temperature_high');
+        }
+        if (isset($details['smart']) && strpos((string)$details['smart'], 'WARNING') !== false) {
+            $add('critical', 'knowledge_tip_smart_warning');
+        }
+        if (!empty($details['reboot_required'])) {
+            $add('warn', 'knowledge_tip_reboot_required');
+        }
+        if ($monitor && !empty($monitor['monitored_processes'])) {
+            $missing = $details['missing_processes'] ?? [];
+            foreach ($missing as $proc) {
+                $add('critical', 'knowledge_tip_process_missing', $proc);
+            }
+        }
+    }
+
+    $web_enabled = $enabled_metrics === null || in_array('check_pipeline', $enabled_metrics, true);
+    $ssl_enabled = $enabled_metrics === null || in_array('ssl_card', $enabled_metrics, true);
+    $health_score_enabled = $enabled_metrics === null || in_array('health_score', $enabled_metrics, true);
+
+    // --- Web check pipeline (DNS/TCP/TLS/HTTP) ---
+    if ($monitor && $monitor['type'] === 'web' && is_array($check_stages)) {
+        if ($web_enabled) {
+            $stage_tip_keys = [
+                'dns' => 'knowledge_tip_web_dns_fail',
+                'tcp' => 'knowledge_tip_web_tcp_fail',
+                'tls' => 'knowledge_tip_web_tls_fail',
+                'http' => 'knowledge_tip_web_http_fail',
+            ];
+            foreach ($stage_tip_keys as $stage => $tip_key) {
+                if (isset($check_stages[$stage]) && empty($check_stages[$stage]['ok'])) {
+                    $add('critical', $tip_key);
+                }
+            }
+        }
+        if ($ssl_enabled && isset($check_stages['tls']['cert']['days_remaining'])) {
+            $days = (int)$check_stages['tls']['cert']['days_remaining'];
+            if ($days < 14) $add('critical', 'knowledge_tip_ssl_expiring');
+            elseif ($days < 30) $add('warn', 'knowledge_tip_ssl_expiring');
+        }
+    }
+
+    // --- TeamSpeak Health Score areas - jen pokud je tabulka vůbec zobrazená ---
+    if ($monitor && $monitor['type'] === 'teamspeak' && $health_score_enabled) {
+        $ts3_area_tip_keys = [
+            'availability' => 'knowledge_tip_ts3_availability',
+            'process' => 'knowledge_tip_ts3_process',
+            'serverquery' => 'knowledge_tip_ts3_serverquery',
+            'ports' => 'knowledge_tip_ts3_ports',
+            'vps' => 'knowledge_tip_ts3_vps',
+            'clients' => 'knowledge_tip_ts3_clients',
+            'version' => 'knowledge_tip_ts3_version',
+        ];
+        $areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details);
+        foreach ($areas as $area) {
+            if ($area['status'] === 'fail') {
+                $add('critical', $ts3_area_tip_keys[$area['key']]);
+            } elseif ($area['status'] === 'warn') {
+                $add('warn', $ts3_area_tip_keys[$area['key']]);
+            }
+        }
+    }
+
+    return $tips;
+}
+
+/**
+ * Vykreslí panel s Knowledge tipy (viz bk_get_knowledge_tips()). Prázdné pole
+ * = prázdný řetězec, žádný panel se nezobrazí.
+ */
+function render_knowledge_panel(array $tips) {
+    if (empty($tips)) return '';
+    ob_start();
+    ?>
+    <div class="knowledge-panel-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+        <div class="detail-section-title"><?php echo htmlspecialchars(t('knowledge_panel_heading')); ?></div>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.6rem;">
+            <?php foreach ($tips as $tip): ?>
+                <?php $color = $tip['severity'] === 'critical' ? 'var(--color-red)' : 'var(--color-yellow)'; ?>
+                <div style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; line-height: 1.4; color: var(--text-secondary);">
+                    <i class="fas <?php echo htmlspecialchars($tip['icon']); ?>" style="color: <?php echo $color; ?>; margin-top: 0.15rem; flex-shrink: 0;"></i>
+                    <span><?php echo htmlspecialchars($tip['text']); ?></span>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php
+    return ob_get_clean();
+}
 
 /**
  * Vrátí informace o aktuální verzi aplikace.
