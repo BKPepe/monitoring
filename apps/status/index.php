@@ -695,9 +695,26 @@ $portal_url = trim(get_setting('portal_url'));
                                             $monitor_insights = array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor));
                                             $health_areas = null;
                                             $health_score = null;
+                                            $ts3_clients_labels = [];
+                                            $ts3_clients_data = [];
                                             if ($m_type === 'teamspeak') {
                                                 $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details);
                                                 $health_score = bk_compute_health_score($health_areas);
+
+                                                // Přesunuto sem nahoru (dřív se počítalo až u samotné sekce grafu) -
+                                                // panel tabů níže potřebuje vědět předem, jestli je dost dat na graf,
+                                                // aby vykreslil tlačítko "Historie klientů" jen když má co ukázat.
+                                                $stmt_ts3_clients_hist = $pdo->prepare("
+                                                    SELECT checked_at, ts_clients_online
+                                                    FROM vps_metrics
+                                                    WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND ts_clients_online IS NOT NULL
+                                                    ORDER BY checked_at ASC
+                                                ");
+                                                $stmt_ts3_clients_hist->execute([$mid]);
+                                                foreach ($stmt_ts3_clients_hist->fetchAll() as $ch) {
+                                                    $ts3_clients_labels[] = date('H:i', strtotime($ch['checked_at']));
+                                                    $ts3_clients_data[] = (int)$ch['ts_clients_online'];
+                                                }
                                             }
                                             $monitor_timeline = bk_get_monitor_timeline($pdo, $mid);
                                             $exec_summary_text = bk_build_executive_summary($monitor, $health_score, $knowledge_tips, $monitor_insights, $monitor_timeline);
@@ -794,7 +811,38 @@ $portal_url = trim(get_setting('portal_url'));
                                             $agent_sh_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.sh";
                                             $agent_sh_url = str_replace('\\', '/', $agent_sh_url); // Normalize paths for Windows/Mac
                                             ?>
-                                            
+
+                                            <?php
+                                            // Panel tabů (Overview/Health Score/Ports/...). Tlačítko se vykreslí jen
+                                            // tehdy, když by se za ním reálně něco zobrazilo - používá stejné podmínky
+                                            // jako samotná sekce níže, jen o kousek dřív, protože v tuhle chvíli ještě
+                                            // nevstupujeme do type-větve.
+                                            $mtabs_teamspeak = $m_type === 'teamspeak';
+                                            ?>
+                                            <div class="monitor-tabs" data-monitor="<?php echo $mid; ?>">
+                                                <button type="button" data-tab="overview" class="active"><?php echo htmlspecialchars(t('mtab_overview')); ?></button>
+                                                <?php if ($pipeline !== null): ?>
+                                                    <?php if ($enabled_metrics === null || in_array('check_pipeline', $enabled_metrics)): ?><button type="button" data-tab="check_pipeline"><?php echo htmlspecialchars(t('mtab_check_pipeline')); ?></button><?php endif; ?>
+                                                    <?php if ($enabled_metrics === null || in_array('response_breakdown', $enabled_metrics)): ?><button type="button" data-tab="response_breakdown"><?php echo htmlspecialchars(t('mtab_response_breakdown')); ?></button><?php endif; ?>
+                                                    <?php if (!empty($pipeline['tls']['cert']) && ($enabled_metrics === null || in_array('ssl_card', $enabled_metrics))): ?><button type="button" data-tab="ssl_card"><?php echo htmlspecialchars(t('mtab_ssl_card')); ?></button><?php endif; ?>
+                                                    <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?><button type="button" data-tab="headers"><?php echo htmlspecialchars(t('mtab_headers')); ?></button><?php endif; ?>
+                                                <?php endif; ?>
+                                                <?php if ($mtabs_teamspeak): ?>
+                                                    <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?><button type="button" data-tab="health_score"><?php echo htmlspecialchars(t('mtab_health_score')); ?></button><?php endif; ?>
+                                                    <?php if ($check_stages_shared !== null): ?>
+                                                        <?php if (is_array($details['ts3_process'] ?? null) && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?><button type="button" data-tab="process"><?php echo htmlspecialchars(t('mtab_process')); ?></button><?php endif; ?>
+                                                        <?php if ($enabled_metrics === null || in_array('service', $enabled_metrics)): ?><button type="button" data-tab="service"><?php echo htmlspecialchars(t('mtab_service')); ?></button><?php endif; ?>
+                                                        <?php if ($enabled_metrics === null || in_array('quality', $enabled_metrics)): ?><button type="button" data-tab="quality"><?php echo htmlspecialchars(t('mtab_quality')); ?></button><?php endif; ?>
+                                                        <?php if ($enabled_metrics === null || in_array('ports', $enabled_metrics)): ?><button type="button" data-tab="ports"><?php echo htmlspecialchars(t('mtab_ports')); ?></button><?php endif; ?>
+                                                        <?php if ($enabled_metrics === null || in_array('license_version', $enabled_metrics)): ?><button type="button" data-tab="license_version"><?php echo htmlspecialchars(t('mtab_license_version')); ?></button><?php endif; ?>
+                                                        <?php if (count($ts3_clients_data) > 1 && ($enabled_metrics === null || in_array('clients_chart', $enabled_metrics))): ?><button type="button" data-tab="clients_chart"><?php echo htmlspecialchars(t('mtab_clients_chart')); ?></button><?php endif; ?>
+                                                    <?php endif; ?>
+                                                <?php endif; ?>
+                                                <?php if (!empty($knowledge_tips) || !empty($monitor_insights)): ?><button type="button" data-tab="insights"><?php echo htmlspecialchars(t('mtab_insights')); ?></button><?php endif; ?>
+                                                <?php if (!empty($monitor_outages) || !empty($monitor_timeline)): ?><button type="button" data-tab="timeline"><?php echo htmlspecialchars(t('mtab_timeline')); ?></button><?php endif; ?>
+                                            </div>
+                                            <div class="monitor-tab-panel active" data-tab="overview">
+
                                             <?php if (!empty($monitor['maintenance_start']) && !empty($monitor['maintenance_end']) && strtotime($monitor['maintenance_end']) > time()): ?>
                                                 <div style="background: rgba(243, 156, 18, 0.1); border-left: 4px solid #f39c12; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.25rem; font-size: 0.82rem; border: 1px solid rgba(243, 156, 18, 0.15);">
                                                     <strong style="color: #f39c12; display: flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; margin-bottom: 0.35rem;">
@@ -825,9 +873,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                     </div>
                                                 </div>
                                             <?php endif; ?>
+                                            </div>
 
                                             <?php if ($pipeline !== null): ?>
                                                 <?php if ($enabled_metrics === null || in_array('check_pipeline', $enabled_metrics)): ?>
+                                                <div class="monitor-tab-panel" data-tab="check_pipeline">
                                                 <div class="check-pipeline-section" style="margin-bottom: 1.25rem;">
                                                     <div class="detail-section-title">
                                                         <i class="fas fa-route"></i> <?php echo htmlspecialchars(t('pipeline_heading')); ?>
@@ -860,9 +910,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <?php endforeach; ?>
                                                     </div>
                                                 </div>
+                                                </div>
                                                 <?php endif; ?>
 
                                                 <?php if ($enabled_metrics === null || in_array('response_breakdown', $enabled_metrics)): ?>
+                                                <div class="monitor-tab-panel" data-tab="response_breakdown">
                                                 <div class="response-breakdown-section" style="margin-bottom: 1.25rem;">
                                                     <div class="detail-section-title"><i class="fas fa-stopwatch"></i> <?php echo htmlspecialchars(t('response_breakdown_heading')); ?></div>
                                                     <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -881,9 +933,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+                                                </div>
                                                 <?php endif; ?>
 
                                                 <?php if (!empty($pipeline['tls']['cert']) && ($enabled_metrics === null || in_array('ssl_card', $enabled_metrics))): $cert = $pipeline['tls']['cert']; ?>
+                                                    <div class="monitor-tab-panel" data-tab="ssl_card">
                                                     <div class="ssl-card-section" style="margin-bottom: 1.25rem;">
                                                         <div class="detail-section-title"><i class="fas fa-lock"></i> <?php echo htmlspecialchars(t('ssl_card_heading')); ?></div>
                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -914,9 +968,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                             <?php endif; ?>
                                                         </div>
                                                     </div>
+                                                    </div>
                                                 <?php endif; ?>
 
                                                 <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?>
+                                                    <div class="monitor-tab-panel" data-tab="headers">
                                                     <details class="headers-section" style="margin-bottom: 1.25rem;">
                                                         <summary class="detail-section-title" style="cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem;"><i class="fas fa-list"></i> <?php echo htmlspecialchars(t('headers_heading')); ?></summary>
                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -947,10 +1003,12 @@ $portal_url = trim(get_setting('portal_url'));
                                                             <?php endif; ?>
                                                         </div>
                                                     </details>
+                                                    </div>
                                                 <?php endif; ?>
                                             <?php endif; ?>
 
                                             <?php if ($m_type === 'minecraft'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="game-details-grid">
                                                     <div>
                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('server_info_heading')); ?></div>
@@ -1052,7 +1110,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+                                                </div>
                                             <?php elseif ($m_type === 'teamspeak'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="game-details-grid">
                                                     <div>
                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('server_info_heading')); ?></div>
@@ -1111,6 +1171,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                           </p>
                                                      </div>
                                                  </div>
+                                                 </div>
 
                                                  <?php
                                                  // --- TeamSpeak Health Score + hloubkový monitoring (Service Profile) ---
@@ -1137,6 +1198,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                  ?>
 
                                                  <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?>
+                                                 <div class="monitor-tab-panel" data-tab="health_score">
                                                  <div class="ts3-health-score-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                      <div class="detail-section-title">
                                                          <i class="fas fa-heartbeat"></i> <?php echo htmlspecialchars(t('ts3_health_score_heading')); ?>
@@ -1190,6 +1252,7 @@ $portal_url = trim(get_setting('portal_url'));
 
                                                  <?php if ($ts3_check_stages !== null): ?>
                                                      <?php if (is_array($details['ts3_process'] ?? null) && ($enabled_metrics === null || in_array('process', $enabled_metrics))): $tsp = $details['ts3_process']; ?>
+                                                         <div class="monitor-tab-panel" data-tab="process">
                                                          <div class="ts3-process-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                              <div class="detail-section-title"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('ts3_process_heading')); ?></div>
                                                              <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1201,9 +1264,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_fds')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['open_fds'] ?? 0); ?></strong></div>
                                                              </div>
                                                          </div>
+                                                         </div>
                                                      <?php endif; ?>
 
                                                      <?php if ($enabled_metrics === null || in_array('service', $enabled_metrics)): ?>
+                                                     <div class="monitor-tab-panel" data-tab="service">
                                                      <div class="ts3-service-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('ts3_service_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1233,9 +1298,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                              </div>
                                                          <?php endif; ?>
                                                      </div>
+                                                     </div>
                                                      <?php endif; ?>
 
                                                      <?php if ($enabled_metrics === null || in_array('quality', $enabled_metrics)): ?>
+                                                     <div class="monitor-tab-panel" data-tab="quality">
                                                      <div class="ts3-quality-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-wave-square"></i> <?php echo htmlspecialchars(t('ts3_quality_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1251,9 +1318,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                          </div>
                                                          <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('ts3_quality_estimate_note')); ?></p>
                                                      </div>
+                                                     </div>
                                                      <?php endif; ?>
 
                                                      <?php if ($enabled_metrics === null || in_array('ports', $enabled_metrics)): ?>
+                                                     <div class="monitor-tab-panel" data-tab="ports">
                                                      <div class="ts3-ports-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-plug"></i> <?php echo htmlspecialchars(t('ts3_ports_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
@@ -1267,9 +1336,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                              <?php endforeach; ?>
                                                          </div>
                                                      </div>
+                                                     </div>
                                                      <?php endif; ?>
 
                                                      <?php if ($enabled_metrics === null || in_array('license_version', $enabled_metrics)): ?>
+                                                     <div class="monitor-tab-panel" data-tab="license_version">
                                                      <div class="ts3-license-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-id-badge"></i> <?php echo htmlspecialchars(t('ts3_license_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
@@ -1296,38 +1367,28 @@ $portal_url = trim(get_setting('portal_url'));
                                                              <?php endif; ?>
                                                          </div>
                                                      </div>
+                                                     </div>
                                                      <?php endif; ?>
 
                                                      <?php
-                                                     // --- Graf historie klientů (24 hodin) - jednoduchý statický graf bez
-                                                     // přepínače období (na rozdíl od hlavního metrics-history grafu výše).
-                                                     $stmt_ts3_clients_hist = $pdo->prepare("
-                                                         SELECT checked_at, ts_clients_online
-                                                         FROM vps_metrics
-                                                         WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND ts_clients_online IS NOT NULL
-                                                         ORDER BY checked_at ASC
-                                                     ");
-                                                     $stmt_ts3_clients_hist->execute([$mid]);
-                                                     $ts3_clients_hist = $stmt_ts3_clients_hist->fetchAll();
-                                                     $ts3_clients_labels = [];
-                                                     $ts3_clients_data = [];
-                                                     foreach ($ts3_clients_hist as $ch) {
-                                                         $ts3_clients_labels[] = date('H:i', strtotime($ch['checked_at']));
-                                                         $ts3_clients_data[] = (int)$ch['ts_clients_online'];
-                                                     }
+                                                     // $ts3_clients_labels/$ts3_clients_data už spočítané nahoře (viz sdílené
+                                                     // nastavení na začátku panelu) - potřeboval to i panel s tlačítky tabů.
                                                      ?>
                                                      <?php if (count($ts3_clients_data) > 1 && ($enabled_metrics === null || in_array('clients_chart', $enabled_metrics))): ?>
+                                                         <div class="monitor-tab-panel" data-tab="clients_chart">
                                                          <div class="ts3-clients-chart-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                              <div class="detail-section-title"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('ts3_clients_chart_heading')); ?></div>
                                                              <div style="position: relative; height: 180px; width: 100%; margin-top: 0.6rem;">
                                                                  <canvas id="ts3ClientsChart-<?php echo $mid; ?>"></canvas>
                                                              </div>
                                                          </div>
+                                                         </div>
                                                          <script>
                                                          document.addEventListener("DOMContentLoaded", function() {
                                                              const ctx = document.getElementById('ts3ClientsChart-<?php echo $mid; ?>');
                                                              if (!ctx) return;
-                                                             new Chart(ctx, {
+                                                             window.bkTs3ClientsCharts = window.bkTs3ClientsCharts || {};
+                                                             window.bkTs3ClientsCharts[<?php echo $mid; ?>] = new Chart(ctx, {
                                                                  type: 'line',
                                                                  data: {
                                                                      labels: <?php echo json_encode($ts3_clients_labels); ?>,
@@ -1357,6 +1418,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                      <?php endif; ?>
                                                  <?php endif; ?>
                                             <?php elseif ($m_type === 'discord'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="game-details-grid">
                                                     <div>
                                                         <div class="detail-section-title"><i class="fas fa-volume-up"></i> <?php echo htmlspecialchars(t('voice_channels_heading')); ?></div>
@@ -1412,8 +1474,10 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+                                                </div>
                                             <?php elseif ($m_type === 'cpanel' || ($m_type === 'web' && isset($details['cpanel_stats']))): ?>
-                                                 <?php 
+                                                 <div class="monitor-tab-panel active" data-tab="overview">
+                                                 <?php
                                                  $cp_details = ($m_type === 'web') ? ($details['cpanel_stats'] ?? null) : $details;
                                                  ?>
                                                  <div class="game-details-grid" style="grid-template-columns: 1fr 1fr;">
@@ -1515,7 +1579,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <?php endif; ?>
                                                      </div>
                                                  </div>
+                                                 </div>
                                             <?php elseif ($m_type === 'vps'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="game-details-grid">
                                                     <div>
                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('agent_info_heading')); ?></div>
@@ -1542,7 +1608,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+                                                </div>
                                             <?php elseif ($m_type === 'openwrt'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="game-details-grid">
                                                     <div>
                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('agent_info_heading')); ?></div>
@@ -1609,7 +1677,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+                                                </div>
                                             <?php else: ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="game-details-grid">
                                                      <div>
                                                           <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('monitor_stats_heading')); ?></div>
@@ -1703,9 +1773,14 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <?php endif; ?>
                                                      </div>
                                                  </div>
+                                                 </div>
                                             <?php endif; ?>
+                                            <?php if (!empty($knowledge_tips) || !empty($monitor_insights)): ?>
+                                            <div class="monitor-tab-panel" data-tab="insights">
                                             <?php echo render_knowledge_panel($knowledge_tips); ?>
                                             <?php echo render_insights_panel($monitor_insights); ?>
+                                            </div>
+                                            <?php endif; ?>
                                             <?php
                                             // Query metrics history for the charts
                                             $show_charts = false;
@@ -1769,6 +1844,7 @@ $portal_url = trim(get_setting('portal_url'));
                                             }
                                             ?>
                                             <?php if ($show_charts): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
                                                 <div class="metrics-history-charts" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                     <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
                                                         <div class="detail-section-title" style="margin-bottom: 0;"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('load_history_heading')); ?></div>
@@ -1885,8 +1961,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                     });
                                                 });
                                                 </script>
+                                                </div>
                                              <?php endif; ?>
-                                             
+
+                                             <?php if (!empty($monitor_outages) || !empty($monitor_timeline)): ?>
+                                             <div class="monitor-tab-panel" data-tab="timeline">
                                              <?php if (!empty($monitor_outages)): ?>
                                                  <div class="monitor-outages-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                      <div class="detail-section-title" style="color: var(--color-red); margin-bottom: 0.75rem;"><i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars(t('recent_outages_heading')); ?></div>
@@ -1947,6 +2026,8 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <?php endforeach; ?>
                                                      </div>
                                                  </div>
+                                             <?php endif; ?>
+                                             </div>
                                              <?php endif; ?>
                                          </div>
                                     </div>
@@ -2065,11 +2146,11 @@ $portal_url = trim(get_setting('portal_url'));
     function toggleDetails(id) {
         const item = document.getElementById('monitor-item-' + id);
         const panel = document.getElementById('details-panel-' + id);
-        
+
         if (!item || !panel) return;
-        
+
         const isOpen = item.classList.contains('open');
-        
+
         if (isOpen) {
             panel.style.maxHeight = null;
             item.classList.remove('open');
@@ -2078,6 +2159,59 @@ $portal_url = trim(get_setting('portal_url'));
             item.classList.add('open');
         }
     }
+
+    // Přepínání tabů v detailu monitoru (Overview/Health Score/Ports/...). Pamatuje
+    // si naposledy otevřený tab per-monitor v localStorage, stejný vzorec jako
+    // záložky v administraci.
+    function switchMonitorTab(monitorId, tabId) {
+        const container = document.getElementById('details-panel-' + monitorId);
+        if (!container) return;
+        const buttons = container.querySelectorAll('.monitor-tabs button[data-tab]');
+        // Poznámka: víc panelů může sdílet stejné data-tab (např. "overview" je
+        // poskládané z několika oddělených bloků existujícího markupu) - proto se
+        // necílí přes unikátní id, ale přes data-tab atribut.
+        const panels = container.querySelectorAll('.monitor-tab-panel[data-tab]');
+
+        buttons.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabId));
+        panels.forEach((p) => p.classList.toggle('active', p.dataset.tab === tabId));
+
+        try { localStorage.setItem('bk_monitor_tab_' + monitorId, tabId); } catch (e) {}
+
+        // Chart.js canvasy vytvořené uvnitř skrytého (display:none) tabu se
+        // vykreslí s nulovou velikostí - při přepnutí NA tab s grafem je potřeba
+        // ho ručně přepočítat. Load History graf tomu unikl tím, že žije v
+        // defaultně aktivním Overview tabu, ale Client History (TS3) je svůj
+        // vlastní tab, takže potřebuje tenhle fix.
+        if (tabId === 'clients_chart' && window.bkTs3ClientsCharts && window.bkTs3ClientsCharts[monitorId]) {
+            window.bkTs3ClientsCharts[monitorId].resize();
+        }
+
+        // Přepnutí tabu mění viditelnou výšku obsahu - pokud je panel právě
+        // otevřený, musíme přepočítat maxHeight (viz toggleDetails výše), jinak
+        // by se vyšší tab mohl oříznout na výšku toho předchozího.
+        const item = document.getElementById('monitor-item-' + monitorId);
+        if (item && item.classList.contains('open')) {
+            container.style.maxHeight = container.scrollHeight + "px";
+        }
+    }
+
+    function initMonitorTabs(monitorId, defaultTab) {
+        let tabId = defaultTab;
+        try {
+            const saved = localStorage.getItem('bk_monitor_tab_' + monitorId);
+            const container = document.getElementById('details-panel-' + monitorId);
+            if (saved && container && container.querySelector('.monitor-tabs button[data-tab="' + CSS.escape(saved) + '"]')) {
+                tabId = saved;
+            }
+        } catch (e) {}
+        switchMonitorTab(monitorId, tabId);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.monitor-tabs[data-monitor]').forEach(function (tabs) {
+            initMonitorTabs(tabs.dataset.monitor, 'overview');
+        });
+    });
 
     // Přepínač období grafů vytížení (24h / 7d / 30d)
     document.querySelectorAll('.chart-period-switch').forEach((sw) => {

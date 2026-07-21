@@ -367,6 +367,22 @@ return [
     'exec_summary_last_event' => 'Latest: %s (%s).',
     'exec_summary_last_checked' => 'Data last updated: %s.',
 
+    // Monitor detail view tabs
+    'mtab_overview' => 'Overview',
+    'mtab_check_pipeline' => 'Check Pipeline',
+    'mtab_response_breakdown' => 'Response Breakdown',
+    'mtab_ssl_card' => 'SSL/TLS',
+    'mtab_headers' => 'Headers',
+    'mtab_health_score' => 'Health Score',
+    'mtab_process' => 'Process',
+    'mtab_service' => 'Service',
+    'mtab_quality' => 'Voice Quality',
+    'mtab_ports' => 'Ports',
+    'mtab_license_version' => 'License & Version',
+    'mtab_clients_chart' => 'Client History',
+    'mtab_insights' => 'Insights',
+    'mtab_timeline' => 'Timeline',
+
     // Timeline (event history shown in the monitor detail view)
     'timeline_heading' => 'Timeline',
     'timeline_empty' => 'No events recorded yet.',

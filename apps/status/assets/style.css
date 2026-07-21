@@ -1107,6 +1107,44 @@ select.form-control {
   max-height: 1000px; /* Větší výška pro dlouhé seznamy členů */
 }
 
+.monitor-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 1.1rem;
+}
+
+.monitor-tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-family: inherit;
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.monitor-tabs button:hover {
+  color: var(--text-primary);
+}
+
+.monitor-tabs button.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--color-red);
+}
+
+.monitor-tab-panel {
+  display: none;
+}
+
+.monitor-tab-panel.active {
+  display: block;
+}
+
 .details-content-inner {
   padding: 1.25rem 1.5rem;
   font-size: 0.85rem;

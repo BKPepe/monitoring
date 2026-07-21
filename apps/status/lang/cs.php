@@ -368,6 +368,22 @@ return [
     'exec_summary_last_event' => 'Naposledy: %s (%s).',
     'exec_summary_last_checked' => 'Poslední aktualizace dat: %s.',
 
+    // Taby v detailu monitoru
+    'mtab_overview' => 'Přehled',
+    'mtab_check_pipeline' => 'Kontrolní řetězec',
+    'mtab_response_breakdown' => 'Rozklad odezvy',
+    'mtab_ssl_card' => 'SSL/TLS',
+    'mtab_headers' => 'Hlavičky',
+    'mtab_health_score' => 'Health Score',
+    'mtab_process' => 'Proces',
+    'mtab_service' => 'Služba',
+    'mtab_quality' => 'Kvalita hlasu',
+    'mtab_ports' => 'Porty',
+    'mtab_license_version' => 'Licence a verze',
+    'mtab_clients_chart' => 'Historie klientů',
+    'mtab_insights' => 'Insights',
+    'mtab_timeline' => 'Historie',
+
     // Timeline (historie událostí v detailu monitoru)
     'timeline_heading' => 'Historie',
     'timeline_empty' => 'Zatím žádné zaznamenané události.',
