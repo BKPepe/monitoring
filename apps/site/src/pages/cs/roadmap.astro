@@ -100,29 +100,50 @@ import Layout from '../../layouts/Layout.astro';
         <div class="milestone-status-tag tag-progress">Ve vývoji</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.3.0</span>
-          <h2>Multi-tenant & SSO</h2>
-          <p>Zaměřeno na týmovou spolupráci, bezpečnost a škálovatelnost.</p>
+          <h2>Zabezpečení, Embedy & Automatická Detekce</h2>
+          <p>Zaměřeno na 2FA, odznáčky/widgety pro web, OpenWrt telemetrii a automatickou detekci služeb.</p>
         </div>
         <ul class="roadmap-checklist">
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
-              <strong>Multi-tenant struktura</strong>
-              <span>Možnost spravovat více oddělených projektů pod jedním serverem.</span>
+              <strong>2FA / TOTP Zabezpečení a SSO</strong>
+              <span>Dvoufázové ověření (RFC 6238) a přihlašování přes GitHub pro admin účty.</span>
             </div>
           </li>
           <li class="checked">
             <span class="check-box">✓</span>
             <div class="task-info">
-              <strong>Single Sign-On (SSO / OIDC)</strong>
-              <span>Přihlašování přes GitHub už funguje. Google a firemní SAML jsou stále v plánu.</span>
+              <strong>SVG Štítky a iFrame Widgety</strong>
+              <span>Vektorové Shields.io SVG status odznáčky a tmavé iFrame karty pro vložení na web.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Pushover & PagerDuty Notifikace</strong>
+              <span>Mobilní push výstrahy přes Pushover a routing incidentů přes PagerDuty vedle Telegramu a Discordu.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>OpenWrt Telemetrie & Podepsané Vzdálené Akce</strong>
+              <span>Hluboké metriky OpenWrt (conntrack, Wi-Fi, rozhraní) a HMAC podepsané vzdálené akce routerů.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Service Discovery Engine (Automatická Detekce)</strong>
+              <span>Automatické prohledávání služeb (TS3, Minecraft, Nginx, Docker) s importem na 1 kliknutí.</span>
             </div>
           </li>
           <li>
             <span class="check-box">○</span>
             <div class="task-info">
-              <strong>Katalog komunitních agentů</strong>
-              <span>Veřejný katalog skriptů pro specifické aplikace (MySQL, Redis, Nginx, Synology).</span>
+              <strong>Multi-tenant struktura</strong>
+              <span>Možnost spravovat více oddělených projektů pod jedním serverem.</span>
             </div>
           </li>
         </ul>

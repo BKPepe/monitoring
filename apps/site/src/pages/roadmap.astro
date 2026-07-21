@@ -100,29 +100,50 @@ import Layout from '../layouts/Layout.astro';
         <div class="milestone-status-tag tag-progress">In Progress</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.3.0</span>
-          <h2>Multi-tenant & SSO</h2>
-          <p>Focusing on secure team environments, authorization layers, and scale.</p>
+          <h2>Security, Embeds & Auto-Discovery</h2>
+          <p>Focusing on secure environments, status embeds, and OpenWrt router management.</p>
         </div>
         <ul class="roadmap-checklist">
-          <li>
-            <span class="check-box">○</span>
+          <li class="checked">
+            <span class="check-box">✓</span>
             <div class="task-info">
-              <strong>Multi-tenant Accounts</strong>
-              <span>Manage isolated projects and teams separately under a single server instance.</span>
+              <strong>2FA / TOTP Security & SSO</strong>
+              <span>Multi-factor authentication (RFC 6238) and GitHub OAuth login for admin accounts.</span>
             </div>
           </li>
           <li class="checked">
             <span class="check-box">✓</span>
             <div class="task-info">
-              <strong>SSO / OIDC Authentication</strong>
-              <span>GitHub OAuth login is live. Google and custom corporate SAML are still planned.</span>
+              <strong>SVG Badges & iFrame Widgets</strong>
+              <span>Vector Shields.io SVG status badges and dark glassmorphic iFrame embed cards.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Pushover & PagerDuty Alerts</strong>
+              <span>Pushover mobile push notifications and PagerDuty incident routing alongside Telegram & Discord.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>OpenWrt Router Telemetry & Signed Remote Actions</strong>
+              <span>Deep OpenWrt metrics (conntrack, WiFi, interfaces) and HMAC-signed opt-in remote actions.</span>
+            </div>
+          </li>
+          <li class="checked">
+            <span class="check-box">✓</span>
+            <div class="task-info">
+              <strong>Agent Service Discovery Engine</strong>
+              <span>Automated service detection (TeamSpeak, Minecraft, Nginx, Docker) with 1-click admin import.</span>
             </div>
           </li>
           <li>
             <span class="check-box">○</span>
             <div class="task-info">
-              <strong>Community Agent Catalog</strong>
-              <span>Public repository of custom scripts for monitoring services like Redis, MySQL, Nginx, or Synology NAS.</span>
+              <strong>Multi-tenant Accounts</strong>
+              <span>Manage isolated projects and teams separately under a single server instance.</span>
             </div>
           </li>
         </ul>
