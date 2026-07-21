@@ -1,0 +1,57 @@
+name: Deploy Status App to cPanel
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/status/**'
+      - '.github/workflows/deploy-status.yml'
+
+jobs:
+  deploy:
+    name: Build and Deploy Status App
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Inject Status Database Config
+        env:
+          STATUS_CONFIG_PHP: ${{ secrets.STATUS_CONFIG_PHP || secrets.status_config_php }}
+        run: |
+          if [ -n "$STATUS_CONFIG_PHP" ]; then
+            echo "Creating apps/status/config.php from GitHub Actions secret..."
+            printf '%s' "$STATUS_CONFIG_PHP" > apps/status/config.php
+          else
+            echo "STATUS_CONFIG_PHP secret is not set. Using config.sample.php as fallback."
+            cp apps/status/config.sample.php apps/status/config.php
+          fi
+
+      - name: Generate Version File
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          DEPLOY_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+          cat > apps/status/version.php << PHPEOF
+          <?php
+          // Automaticky vygenerováno GitHub Actions deployem – NEUPRAVUJTE RUČNĚ
+          define('APP_VERSION_HASH', '${SHORT_SHA}');
+          define('APP_VERSION_DATE', '${DEPLOY_DATE}');
+          define('APP_VERSION_LABEL', '${DEPLOY_DATE} · ${SHORT_SHA}');
+          PHPEOF
+          echo "Version file generated: ${DEPLOY_DATE} · ${SHORT_SHA}"
+
+      - name: FTP Deploy to cPanel (status/ subfolder)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./apps/status/
+          server-dir: public_html/status/
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            .github/**
