@@ -1905,43 +1905,55 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $color_theme = '#f39c12'; // orange
     }
     
+    // Vše inline (+ reálné <table>), ne v <style> bloku - Gmail, Outlook a
+    // většina webmailů <style>/<head> při doručení ořízne, e-mail by dorazil
+    // bez formátování. Viz stejný přístup u render_email_wrapper() (digest).
+    $font = "font-family: Arial, Helvetica, sans-serif;";
     $html_body = '
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8">
-        <style>
-            body { font-family: Arial, sans-serif; background-color: #0f0f13; color: #e1e1e6; margin: 0; padding: 20px; }
-            .container { max-width: 600px; margin: 0 auto; background-color: #1a1a24; border-radius: 8px; border-top: 5px solid ' . $color_theme . '; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-            .header { padding: 25px; text-align: center; background-color: #12121a; }
-            .header h1 { margin: 0; font-size: 22px; color: #ffffff; }
-            .content { padding: 30px; line-height: 1.6; }
-            .status-badge { display: inline-block; padding: 6px 12px; border-radius: 4px; font-weight: bold; color: #ffffff; background-color: ' . $color_theme . '; margin-bottom: 20px; text-transform: uppercase; }
-            .details { background-color: #12121a; border-left: 3px solid #ff4444; padding: 15px; margin: 20px 0; border-radius: 0 4px 4px 0; }
-            .footer { padding: 15px 30px; text-align: center; font-size: 12px; color: #888896; border-top: 1px solid #22222f; background-color: #12121a; }
-        </style>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Blood Kings Status</title>
     </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>Blood Kings Status</h1>
-            </div>
-            <div class="content">
-                <div class="status-badge">' . $status_text . '</div>
-                <p>Upozorňujeme na změnu stavu vašeho monitorovaného serveru/služby.</p>
-                <div class="details">
-                    <strong>Název:</strong> ' . htmlspecialchars($name) . '<br>
-                    <strong>Typ:</strong> ' . htmlspecialchars(strtoupper($type)) . '<br>
-                    <strong>Cíl:</strong> ' . htmlspecialchars($target) . ($port ? ':'.$port : '') . '<br>
-                    <strong>Čas změny:</strong> ' . $time . '<br>
-                    ' . (!empty($error_msg) ? '<strong>Popis/Chyba:</strong> ' . htmlspecialchars($error_msg) . '<br>' : '') . '
-                </div>
-                <p>Systém bude nadále monitorovat tuto službu a obdržíte další upozornění, jakmile se její stav změní.</p>
-            </div>
-            <div class="footer">
-                Tento e-mail byl automaticky generován systémem Blood Kings.
-            </div>
-        </div>
+    <body style="margin:0; padding:20px; background-color:#0f0f13; ' . $font . '">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td align="center">
+                    <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; width:100%; background-color:#1a1a24; border-radius:8px; border-top:5px solid ' . $color_theme . '; overflow:hidden;">
+                        <tr>
+                            <td style="padding:25px; text-align:center; background-color:#12121a;">
+                                <h1 style="margin:0; font-size:22px; color:#ffffff; ' . $font . '">Blood Kings Status</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding:30px; line-height:1.6; color:#e1e1e6; font-size:14px; ' . $font . '">
+                                <span style="display:inline-block; padding:6px 12px; border-radius:4px; font-weight:bold; color:#ffffff; background-color:' . $color_theme . '; margin-bottom:20px; text-transform:uppercase; ' . $font . '">' . $status_text . '</span>
+                                <p style="' . $font . '">Upozorňujeme na změnu stavu vašeho monitorovaného serveru/služby.</p>
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#12121a; margin:20px 0;">
+                                    <tr>
+                                        <td style="border-left:3px solid #ff4444; padding:15px; ' . $font . '">
+                                            <strong>Název:</strong> ' . htmlspecialchars($name) . '<br>
+                                            <strong>Typ:</strong> ' . htmlspecialchars(strtoupper($type)) . '<br>
+                                            <strong>Cíl:</strong> ' . htmlspecialchars($target) . ($port ? ':'.$port : '') . '<br>
+                                            <strong>Čas změny:</strong> ' . $time . '<br>
+                                            ' . (!empty($error_msg) ? '<strong>Popis/Chyba:</strong> ' . htmlspecialchars($error_msg) . '<br>' : '') . '
+                                        </td>
+                                    </tr>
+                                </table>
+                                <p style="' . $font . '">Systém bude nadále monitorovat tuto službu a obdržíte další upozornění, jakmile se její stav změní.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding:15px 30px; text-align:center; font-size:12px; color:#888896; border-top:1px solid #22222f; background-color:#12121a; ' . $font . '">
+                                Tento e-mail byl automaticky generován systémem Blood Kings.
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
     </body>
     </html>';
     
@@ -2603,45 +2615,39 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
  * Odděleno od šablony upozornění v trigger_notifications() - ta zůstává beze změny.
  */
 function render_email_wrapper($title, $subtitle, $accent_color, $body_html) {
+    // Veškerý layout je inline (+ reálné <table>), ne v <style> bloku - Gmail,
+    // Outlook a většina webmailů <style>/<head> při doručení ořízne, takže by
+    // e-mail dorazil bez formátování. Viz stejný přístup u trigger_notifications().
+    $font = "font-family: Arial, Helvetica, sans-serif;";
     return '
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8">
-        <style>
-            body { font-family: Arial, sans-serif; background-color: #0f0f13; color: #e1e1e6; margin: 0; padding: 20px; }
-            .container { max-width: 640px; margin: 0 auto; background-color: #1a1a24; border-radius: 8px; border-top: 5px solid ' . $accent_color . '; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-            .header { padding: 25px; text-align: center; background-color: #12121a; }
-            .header h1 { margin: 0; font-size: 21px; color: #ffffff; }
-            .header p { margin: 6px 0 0 0; color: #888896; font-size: 13px; }
-            .content { padding: 28px; line-height: 1.55; }
-            .section { margin-bottom: 26px; }
-            .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888896; margin-bottom: 10px; font-weight: bold; }
-            .stat-grid { display: table; width: 100%; margin-bottom: 8px; }
-            .stat-box { display: table-cell; text-align: center; padding: 10px 4px; background-color: #12121a; }
-            .stat-box .value { font-size: 19px; font-weight: bold; color: #ffffff; }
-            .stat-box .label { font-size: 10px; color: #888896; text-transform: uppercase; margin-top: 4px; }
-            table.report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
-            table.report-table th { text-align: left; padding: 7px 10px; color: #888896; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #22222f; }
-            table.report-table td { padding: 7px 10px; border-top: 1px solid #22222f; }
-            .kv-row { display: table; width: 100%; padding: 6px 0; border-top: 1px solid #22222f; }
-            .kv-label { display: table-cell; color: #888896; font-size: 13px; }
-            .kv-value { display: table-cell; text-align: right; font-weight: bold; font-size: 13px; color: #ffffff; }
-            .exec-summary { background-color: #12121a; border-radius: 6px; padding: 16px 18px; margin-bottom: 26px; }
-            .exec-summary p { margin: 5px 0; font-size: 14px; }
-            .heatmap-cell { text-align: center; font-size: 11px; color: #0f0f13; font-weight: bold; padding: 8px 0; }
-            .footer { padding: 15px 30px; text-align: center; font-size: 12px; color: #888896; border-top: 1px solid #22222f; background-color: #12121a; }
-        </style>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>' . htmlspecialchars($title) . '</title>
     </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>' . htmlspecialchars($title) . '</h1>
-                <p>' . $subtitle . '</p>
-            </div>
-            <div class="content">' . $body_html . '</div>
-            <div class="footer">' . htmlspecialchars(get_setting('site_title', 'Blood Kings Status')) . ' &mdash; ' . date('d.m.Y H:i') . '</div>
-        </div>
+    <body style="margin:0; padding:20px; background-color:#0f0f13; ' . $font . '">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td align="center">
+                    <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="max-width:640px; width:100%; background-color:#1a1a24; border-radius:8px; border-top:5px solid ' . $accent_color . '; overflow:hidden;">
+                        <tr>
+                            <td style="padding:25px; text-align:center; background-color:#12121a;">
+                                <h1 style="margin:0; font-size:21px; color:#ffffff; ' . $font . '">' . htmlspecialchars($title) . '</h1>
+                                <p style="margin:6px 0 0 0; color:#888896; font-size:13px; ' . $font . '">' . $subtitle . '</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding:28px; line-height:1.55; color:#e1e1e6; font-size:14px; ' . $font . '">' . $body_html . '</td>
+                        </tr>
+                        <tr>
+                            <td style="padding:15px 30px; text-align:center; font-size:12px; color:#888896; border-top:1px solid #22222f; background-color:#12121a; ' . $font . '">' . htmlspecialchars(get_setting('site_title', 'Blood Kings Status')) . ' &mdash; ' . date('d.m.Y H:i') . '</td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
     </body>
     </html>';
 }
@@ -2657,15 +2663,63 @@ function bk_trend_glyph($direction, $good_when_up = true) {
 }
 
 function bk_email_stat_box($value, $label) {
-    return '<div class="stat-box"><div class="value">' . $value . '</div><div class="label">' . htmlspecialchars($label) . '</div></div>';
+    $font = "font-family: Arial, Helvetica, sans-serif;";
+    return '<td align="center" valign="top" style="padding:10px 4px; background-color:#12121a;">'
+        . '<div style="font-size:19px; font-weight:bold; color:#ffffff; ' . $font . '">' . $value . '</div>'
+        . '<div style="font-size:10px; color:#888896; text-transform:uppercase; margin-top:4px; ' . $font . '">' . htmlspecialchars($label) . '</div>'
+        . '</td>';
+}
+
+/**
+ * Obalí několik bk_email_stat_box() buněk do skutečné <table><tr> - e-mailoví
+ * klienti CSS "display: table" (dřívější .stat-grid) nerespektují.
+ */
+function bk_email_stat_grid($cells_html) {
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; margin-bottom:8px;"><tr>' . $cells_html . '</tr></table>';
 }
 
 function bk_email_section($title, $inner_html) {
-    return '<div class="section"><div class="section-title">' . htmlspecialchars($title) . '</div>' . $inner_html . '</div>';
+    $font = "font-family: Arial, Helvetica, sans-serif;";
+    return '<div style="margin-bottom:26px;">'
+        . '<div style="font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:#888896; margin-bottom:10px; font-weight:bold; ' . $font . '">' . htmlspecialchars($title) . '</div>'
+        . $inner_html
+        . '</div>';
+}
+
+/**
+ * Otevírací <table><thead> pro report-table sekce digestu (nahrazuje dřívější
+ * .report-table CSS třídu, kterou e-mailoví klienti ignorují). $headers je pole
+ * popisků; první je vlevo, zbytek zarovnaný vpravo (číselné sloupce).
+ */
+function bk_email_report_table_open(array $headers) {
+    $th_base = 'padding:7px 10px; color:#888896; font-size:11px; text-transform:uppercase; border-bottom:1px solid #22222f;';
+    $html = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; border-collapse:collapse; font-size:13px; margin-top:4px;"><thead><tr>';
+    foreach ($headers as $i => $h) {
+        $align = $i === 0 ? 'left' : 'right';
+        $html .= '<th style="text-align:' . $align . '; ' . $th_base . '">' . htmlspecialchars($h) . '</th>';
+    }
+    $html .= '</tr></thead><tbody>';
+    return $html;
+}
+
+function bk_email_report_table_row(array $cells) {
+    $td_base = 'padding:7px 10px; border-top:1px solid #22222f;';
+    $html = '<tr>';
+    foreach ($cells as $i => $cell) {
+        $align = $i === 0 ? 'left' : 'right';
+        $color = $cell['color'] ?? '#e1e1e6';
+        $html .= '<td style="text-align:' . $align . '; ' . $td_base . ' color:' . $color . ';">' . $cell['html'] . '</td>';
+    }
+    $html .= '</tr>';
+    return $html;
 }
 
 function bk_email_kv($label, $value_html) {
-    return '<div class="kv-row"><span class="kv-label">' . htmlspecialchars($label) . '</span><span class="kv-value">' . $value_html . '</span></div>';
+    $font = "font-family: Arial, Helvetica, sans-serif;";
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; border-top:1px solid #22222f;"><tr>'
+        . '<td style="padding:6px 0; color:#888896; font-size:13px; ' . $font . '">' . htmlspecialchars($label) . '</td>'
+        . '<td align="right" style="padding:6px 0; font-weight:bold; font-size:13px; color:#ffffff; ' . $font . '">' . $value_html . '</td>'
+        . '</tr></table>';
 }
 
 /**
@@ -2698,9 +2752,9 @@ function render_digest_html($data) {
     // --- Executive Summary ---
     $exec_html = '';
     foreach ($data['executive_summary'] as $line) {
-        $exec_html .= '<p>' . htmlspecialchars($line) . '</p>';
+        $exec_html .= '<p style="margin:5px 0; font-size:14px;">' . htmlspecialchars($line) . '</p>';
     }
-    $body .= '<div class="exec-summary">' . $exec_html . '</div>';
+    $body .= '<div style="background-color:#12121a; border-radius:6px; padding:16px 18px; margin-bottom:26px;">' . $exec_html . '</div>';
 
     // --- Operational Overview: KPI mřížka ---
     $stat_html = bk_email_stat_box(number_format($data['availability'], 3, ',', ' ') . '%', 'Availability')
@@ -2711,7 +2765,7 @@ function render_digest_html($data) {
         . bk_email_stat_box($data['agent_count'], 'Agents')
         . bk_email_stat_box($data['region_count'], 'Regions')
         . bk_email_stat_box($is_monthly ? ($data['monthly']['sla_goal'] . '%') : '&mdash;', $is_monthly ? 'SLA Goal' : '');
-    $body .= bk_email_section('Operational Overview', '<div class="stat-grid">' . $stat_html . '</div><div class="stat-grid">' . $stat_html2 . '</div>');
+    $body .= bk_email_section('Operational Overview', bk_email_stat_grid($stat_html) . bk_email_stat_grid($stat_html2));
 
     // --- Trend ---
     $trend_html = bk_email_kv('Availability', bk_trend_glyph($data['trend_availability']))
@@ -2724,16 +2778,19 @@ function render_digest_html($data) {
 
     // --- Nejlepší / nejhorší monitory ---
     if (!empty($data['best_monitors']) || !empty($data['worst_monitors'])) {
-        $bw_html = '<table class="report-table"><thead><tr><th>Monitor</th><th style="text-align:right;">Dostupnost</th></tr></thead><tbody>';
+        $bw_html = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; border-collapse:collapse; font-size:13px; margin-top:4px;"><thead><tr>'
+            . '<th style="text-align:left; padding:7px 10px; color:#888896; font-size:11px; text-transform:uppercase; border-bottom:1px solid #22222f;">Monitor</th>'
+            . '<th style="text-align:right; padding:7px 10px; color:#888896; font-size:11px; text-transform:uppercase; border-bottom:1px solid #22222f;">Dostupnost</th>'
+            . '</tr></thead><tbody>';
         foreach ($data['best_monitors'] as $m) {
-            $bw_html .= '<tr><td>' . htmlspecialchars($m['name']) . '</td><td style="text-align:right; color:#1ec773;">100%</td></tr>';
+            $bw_html .= '<tr><td style="padding:7px 10px; border-top:1px solid #22222f; color:#e1e1e6;">' . htmlspecialchars($m['name']) . '</td><td style="padding:7px 10px; border-top:1px solid #22222f; text-align:right; color:#1ec773;">100%</td></tr>';
         }
         foreach ($data['worst_monitors'] as $m) {
             $u = $m['total_count'] > 0 ? round(($m['up_count'] / $m['total_count']) * 100, 2) : 100.0;
-            $bw_html .= '<tr><td>' . htmlspecialchars($m['name']) . '</td><td style="text-align:right; color:#ef233c;">' . $u . '%</td></tr>';
+            $bw_html .= '<tr><td style="padding:7px 10px; border-top:1px solid #22222f; color:#e1e1e6;">' . htmlspecialchars($m['name']) . '</td><td style="padding:7px 10px; border-top:1px solid #22222f; text-align:right; color:#ef233c;">' . $u . '%</td></tr>';
         }
         if (empty($data['worst_monitors'])) {
-            $bw_html .= '<tr><td colspan="2" style="color:#888896;">Žádné výpadky v tomto období.</td></tr>';
+            $bw_html .= '<tr><td colspan="2" style="padding:7px 10px; border-top:1px solid #22222f; color:#888896;">Žádné výpadky v tomto období.</td></tr>';
         }
         $bw_html .= '</tbody></table>';
         $body .= bk_email_section('Nejlepší / nejhorší monitory', $bw_html);
@@ -2751,9 +2808,13 @@ function render_digest_html($data) {
 
     // --- Region overview ---
     if (!empty($data['regions'])) {
-        $reg_html = '<table class="report-table"><thead><tr><th>Region</th><th style="text-align:right;">Dostupnost</th><th style="text-align:right;">Latence</th></tr></thead><tbody>';
+        $reg_html = bk_email_report_table_open(['Region', 'Dostupnost', 'Latence']);
         foreach ($data['regions'] as $r) {
-            $reg_html .= '<tr><td>' . htmlspecialchars($r['name']) . '</td><td style="text-align:right;">' . $r['uptime'] . '%</td><td style="text-align:right;">' . ($r['avg_latency'] !== null ? $r['avg_latency'] . ' ms' : 'N/A') . '</td></tr>';
+            $reg_html .= bk_email_report_table_row([
+                ['html' => htmlspecialchars($r['name'])],
+                ['html' => $r['uptime'] . '%'],
+                ['html' => ($r['avg_latency'] !== null ? $r['avg_latency'] . ' ms' : 'N/A')],
+            ]);
         }
         $reg_html .= '</tbody></table>';
         $body .= bk_email_section('Region Overview', $reg_html);
@@ -2761,9 +2822,14 @@ function render_digest_html($data) {
 
     // --- Agent Health ---
     if (!empty($data['agent_health'])) {
-        $ah_html = '<table class="report-table"><thead><tr><th>Agent</th><th style="text-align:right;">CPU</th><th style="text-align:right;">RAM</th><th style="text-align:right;">Disk</th></tr></thead><tbody>';
+        $ah_html = bk_email_report_table_open(['Agent', 'CPU', 'RAM', 'Disk']);
         foreach ($data['agent_health'] as $ah) {
-            $ah_html .= '<tr><td>' . htmlspecialchars($ah['name']) . '</td><td style="text-align:right;">' . $ah['cpu_usage'] . '%</td><td style="text-align:right;">' . $ah['ram_usage'] . '%</td><td style="text-align:right;">' . $ah['hdd_usage'] . '%</td></tr>';
+            $ah_html .= bk_email_report_table_row([
+                ['html' => htmlspecialchars($ah['name'])],
+                ['html' => $ah['cpu_usage'] . '%'],
+                ['html' => $ah['ram_usage'] . '%'],
+                ['html' => $ah['hdd_usage'] . '%'],
+            ]);
         }
         $ah_html .= '</tbody></table>';
         $body .= bk_email_section('Agent Health', $ah_html);
@@ -2851,7 +2917,7 @@ function render_digest_html($data) {
         $hm_html = '<table style="width:100%; border-collapse:collapse;"><tr>';
         foreach ($mo['incident_heatmap'] as $day => $cnt) {
             $bgcolor = $cnt === 0 ? '#1ec773' : ($cnt <= 2 ? '#f39c12' : '#ef233c');
-            $hm_html .= '<td bgcolor="' . $bgcolor . '" class="heatmap-cell" style="background-color:' . $bgcolor . ';">' . htmlspecialchars($day) . '<br>' . $cnt . '</td>';
+            $hm_html .= '<td bgcolor="' . $bgcolor . '" style="background-color:' . $bgcolor . '; text-align:center; font-size:11px; color:#0f0f13; font-weight:bold; padding:8px 0;">' . htmlspecialchars($day) . '<br>' . $cnt . '</td>';
         }
         $hm_html .= '</tr></table>';
         $body .= bk_email_section('Incident Heatmap (dle dne v týdnu)', $hm_html);
@@ -2870,7 +2936,7 @@ function render_digest_html($data) {
         }
 
         $growth_html = bk_email_stat_box('+' . $mo['growth']['new_monitors'], 'New Monitors') . bk_email_stat_box('+' . $mo['growth']['new_users'], 'New Users');
-        $body .= bk_email_section('Growth', '<div class="stat-grid">' . $growth_html . '</div>');
+        $body .= bk_email_section('Growth', bk_email_stat_grid($growth_html));
 
         if ($mo['score_last_month'] !== null) {
             $score_cmp_html = bk_email_kv('Last Month', $mo['score_last_month']) . bk_email_kv('This Month', $data['score']);
