@@ -144,7 +144,7 @@ function render_vps_agent_details($details, $monitor = null) {
         <div>
             <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.25rem;">
                 <span style="color: var(--text-secondary);">Zatížení CPU</span>
-                <strong style="color: #fff;" class="stat-val"><?php echo $cpu; ?>%</strong>
+                <strong style="color: var(--text-primary);" class="stat-val"><?php echo $cpu; ?>%</strong>
             </div>
             <div class="chart-bar-container" style="height: 6px;">
                 <div class="chart-bar-fill <?php echo $cpu_color; ?>" style="width: <?php echo $cpu; ?>%"></div>
@@ -153,7 +153,7 @@ function render_vps_agent_details($details, $monitor = null) {
         <div>
             <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.25rem;">
                 <span style="color: var(--text-secondary);">Physical Memory Usage</span>
-                <strong style="color: #fff;" class="stat-val"><?php echo $ram; ?>%</strong>
+                <strong style="color: var(--text-primary);" class="stat-val"><?php echo $ram; ?>%</strong>
             </div>
             <div class="chart-bar-container" style="height: 6px;">
                 <div class="chart-bar-fill <?php echo $ram_color; ?>" style="width: <?php echo $ram; ?>%"></div>
@@ -162,7 +162,7 @@ function render_vps_agent_details($details, $monitor = null) {
         <div>
             <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.25rem;">
                 <span style="color: var(--text-secondary);">Disk (HDD Usage)</span>
-                <strong style="color: #fff;" class="stat-val"><?php echo $hdd; ?>%</strong>
+                <strong style="color: var(--text-primary);" class="stat-val"><?php echo $hdd; ?>%</strong>
             </div>
             <div class="chart-bar-container" style="height: 6px;">
                 <div class="chart-bar-fill <?php echo $hdd_color; ?>" style="width: <?php echo $hdd; ?>%"></div>
@@ -183,7 +183,7 @@ function render_vps_agent_details($details, $monitor = null) {
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: var(--text-muted);">Verze agenta:</span>
                     <div>
-                        <strong style="color: #fff;"><?php echo htmlspecialchars($v_reported); ?></strong>
+                        <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($v_reported); ?></strong>
                         <?php if ($has_update && $is_admin): ?>
                             <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; padding: 0.05rem 0.35rem; border-radius: 4px; font-size: 0.65rem; margin-left: 0.35rem;" title="Nová verze <?php echo $latest_v; ?> je k dispozici. Stáhněte nový agent skript ze sekce návodu níže."><i class="fas fa-arrow-up"></i> Aktualizace</span>
                         <?php endif; ?>
@@ -193,31 +193,31 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php if (isset($details['os'])): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Operační systém:</span>
-                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['os']); ?></strong>
+                    <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($details['os']); ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (!empty($details['hostname'])): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Hostname:</span>
-                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['hostname']); ?></strong>
+                    <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($details['hostname']); ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (!empty($details['kernel'])): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Kernel:</span>
-                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['kernel']); ?></strong>
+                    <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($details['kernel']); ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (!empty($details['timezone'])): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Časové pásmo:</span>
-                    <strong style="color: #fff;"><?php echo htmlspecialchars($details['timezone']); ?></strong>
+                    <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($details['timezone']); ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Poskytovatel / virtualizace:</span>
-                    <strong style="color: #fff;">
+                    <strong style="color: var(--text-primary);">
                         <?php echo htmlspecialchars($details['cloud_provider'] ?? '?'); ?><?php if (!empty($details['virtualization'])): ?> (<?php echo htmlspecialchars($details['virtualization']); ?>)<?php endif; ?>
                     </strong>
                 </div>
@@ -231,13 +231,13 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php if (isset($details['iowait']) && $details['iowait'] !== null): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">IO Wait:</span>
-                    <strong style="color: <?php echo $details['iowait'] > 20 ? 'var(--color-red)' : (($details['iowait'] > 10) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['iowait']; ?>%</strong>
+                    <strong style="color: <?php echo $details['iowait'] > 20 ? 'var(--color-red)' : (($details['iowait'] > 10) ? 'var(--color-yellow)' : 'var(--text-primary)'); ?>;"><?php echo $details['iowait']; ?>%</strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['inode_usage']) && $details['inode_usage'] !== null): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Zaplnění inodů:</span>
-                    <strong style="color: <?php echo $details['inode_usage'] > 90 ? 'var(--color-red)' : (($details['inode_usage'] > 70) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['inode_usage']; ?>%</strong>
+                    <strong style="color: <?php echo $details['inode_usage'] > 90 ? 'var(--color-red)' : (($details['inode_usage'] > 70) ? 'var(--color-yellow)' : 'var(--text-primary)'); ?>;"><?php echo $details['inode_usage']; ?>%</strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['btrfs_errors']) && $details['btrfs_errors'] !== null): ?>
@@ -249,25 +249,25 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php if (isset($details['zombie_count']) && $details['zombie_count'] !== null): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Zombie procesy:</span>
-                    <strong style="color: <?php echo $details['zombie_count'] > 5 ? 'var(--color-red)' : '#fff'; ?>;"><?php echo (int)$details['zombie_count']; ?></strong>
+                    <strong style="color: <?php echo $details['zombie_count'] > 5 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo (int)$details['zombie_count']; ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['fork_rate']) && $details['fork_rate'] !== null): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Nové procesy (od posl. kontroly):</span>
-                    <strong style="color: #fff;"><?php echo (int)$details['fork_rate']; ?></strong>
+                    <strong style="color: var(--text-primary);"><?php echo (int)$details['fork_rate']; ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['temperature']) && $details['temperature'] !== null): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Teplota:</span>
-                    <strong style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : (($details['temperature'] > 65) ? 'var(--color-yellow)' : '#fff'); ?>;"><?php echo $details['temperature']; ?>°C</strong>
+                    <strong style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : (($details['temperature'] > 65) ? 'var(--color-yellow)' : 'var(--text-primary)'); ?>;"><?php echo $details['temperature']; ?>°C</strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['uptime'])): ?>
                 <div style="display: flex; justify-content: space-between;">
                     <span style="color: var(--text-muted);">Uptime serveru:</span>
-                    <strong style="color: #fff;"><?php echo format_uptime_cz($details['uptime']); ?></strong>
+                    <strong style="color: var(--text-primary);"><?php echo format_uptime_cz($details['uptime']); ?></strong>
                 </div>
             <?php endif; ?>
             <?php if (isset($details['smart'])): 
@@ -336,8 +336,8 @@ function render_vps_agent_details($details, $monitor = null) {
                             <div style="display: flex; flex-direction: column; gap: 0.2rem;">
                                 <?php foreach ($details['top_cpu_processes'] as $tp): ?>
                                     <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
-                                        <span style="color: #e1e1e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
-                                        <strong style="color: #fff; margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['cpu'] ?? 0)); ?>%</strong>
+                                        <span style="color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                        <strong style="color: var(--text-primary); margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['cpu'] ?? 0)); ?>%</strong>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -349,8 +349,8 @@ function render_vps_agent_details($details, $monitor = null) {
                             <div style="display: flex; flex-direction: column; gap: 0.2rem;">
                                 <?php foreach ($details['top_ram_processes'] as $tp): ?>
                                     <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
-                                        <span style="color: #e1e1e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
-                                        <strong style="color: #fff; margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['ram_mb'] ?? 0)); ?> MB</strong>
+                                        <span style="color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                        <strong style="color: var(--text-primary); margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['ram_mb'] ?? 0)); ?> MB</strong>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -2042,6 +2042,12 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
     }
 
     $details = bk_ts3_parse_kv_line($info);
+    // ServerQuery hlásí skutečný filetransfer port přímo v serverinfo - použijeme
+    // ho místo ručně nastavené hodnoty, pokud je k dispozici (server se nemůže mýlit
+    // sám o sobě, na rozdíl od ručně vyplněného pole v administraci).
+    if (isset($details['virtualserver_filetransfer_port']) && (int)$details['virtualserver_filetransfer_port'] > 0) {
+        $filetransfer_port = (int)$details['virtualserver_filetransfer_port'];
+    }
     $clients_online = isset($details['virtualserver_clientsonline']) ? (int)$details['virtualserver_clientsonline'] : 0;
     $query_clients = isset($details['virtualserver_queryclientsonline']) ? (int)$details['virtualserver_queryclientsonline'] : 0;
     $clients_max = isset($details['virtualserver_maxclients']) ? (int)$details['virtualserver_maxclients'] : 0;

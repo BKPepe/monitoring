@@ -1146,12 +1146,24 @@ $portal_url = trim(get_setting('portal_url'));
                                                                      'clients' => 'ts3_health_area_clients',
                                                                      'version' => 'ts3_health_area_version',
                                                                  ];
+                                                                 // Napoveda k tomu, CO konkretne "warn"/"na" u dane oblasti znamena - stejne
+                                                                 // texty jako Knowledge tips, jen zpristupnene i tady jako tooltip radku.
+                                                                 $ts3_area_hint_keys = [
+                                                                     'availability' => ['fail' => 'knowledge_tip_ts3_availability'],
+                                                                     'process' => ['fail' => 'knowledge_tip_ts3_process'],
+                                                                     'serverquery' => ['fail' => 'knowledge_tip_ts3_serverquery'],
+                                                                     'ports' => ['warn' => 'knowledge_tip_ts3_ports'],
+                                                                     'vps' => ['warn' => 'knowledge_tip_ts3_vps'],
+                                                                     'clients' => ['warn' => 'knowledge_tip_ts3_clients'],
+                                                                     'version' => ['warn' => 'knowledge_tip_ts3_version', 'na' => 'ts3_health_na_version_hint'],
+                                                                 ];
                                                                  ?>
                                                                  <?php foreach ($ts3_health_areas as $area): ?>
-                                                                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                                                     <?php $ts3_hint_key = $ts3_area_hint_keys[$area['key']][$area['status']] ?? null; ?>
+                                                                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);" <?php if ($ts3_hint_key): ?>title="<?php echo htmlspecialchars(t($ts3_hint_key)); ?>"<?php endif; ?>>
                                                                          <td style="padding: 0.4rem 0.5rem;"><?php echo htmlspecialchars(t($ts3_area_label_keys[$area['key']] ?? $area['label'])); ?></td>
                                                                          <td style="padding: 0.4rem 0.5rem; text-align: right; color: var(--text-muted);"><?php echo (int)$area['weight_pct']; ?>%</td>
-                                                                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: <?php echo $ts3_status_colors[$area['status']] ?? '#fff'; ?>;"><?php echo htmlspecialchars($ts3_status_labels[$area['status']] ?? $area['status']); ?></td>
+                                                                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: <?php echo $ts3_status_colors[$area['status']] ?? '#fff'; ?>;"><?php echo htmlspecialchars($ts3_status_labels[$area['status']] ?? $area['status']); ?><?php if ($ts3_hint_key): ?> <i class="fas fa-info-circle" style="font-size: 0.7rem; opacity: 0.6;"></i><?php endif; ?></td>
                                                                      </tr>
                                                                  <?php endforeach; ?>
                                                              </tbody>
@@ -1231,8 +1243,8 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
                                                              <?php $ts3_ports = $ts3_check_stages['ports'] ?? []; ?>
                                                              <?php foreach (['query' => 'ts3_port_query', 'filetransfer' => 'ts3_port_filetransfer', 'voice' => 'ts3_port_voice'] as $pk => $pl): ?>
-                                                                 <?php $pinfo = $ts3_ports[$pk] ?? null; if ($pinfo === null) continue; $pok = $pinfo['ok']; ?>
-                                                                 <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $pok === true ? 'rgba(30, 199, 115, 0.08)' : ($pok === false ? 'rgba(239, 35, 60, 0.08)' : 'rgba(255,255,255,0.03)'); ?>; border: 1px solid <?php echo $pok === true ? 'rgba(30, 199, 115, 0.2)' : ($pok === false ? 'rgba(239, 35, 60, 0.2)' : 'rgba(255,255,255,0.08)'); ?>;">
+                                                                 <?php $pinfo = $ts3_ports[$pk] ?? null; if ($pinfo === null) continue; $pok = $pinfo['ok']; $pport = $pinfo['port'] ?? null; ?>
+                                                                 <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $pok === true ? 'rgba(30, 199, 115, 0.08)' : ($pok === false ? 'rgba(239, 35, 60, 0.08)' : 'rgba(255,255,255,0.03)'); ?>; border: 1px solid <?php echo $pok === true ? 'rgba(30, 199, 115, 0.2)' : ($pok === false ? 'rgba(239, 35, 60, 0.2)' : 'rgba(255,255,255,0.08)'); ?>;" <?php if ($pport): ?>title="Port: <?php echo (int)$pport; ?><?php echo $pok === false ? ' - ' . htmlspecialchars(t('knowledge_tip_ts3_ports')) : ''; ?>"<?php endif; ?>>
                                                                      <i class="fas <?php echo $pok === true ? 'fa-check-circle' : ($pok === false ? 'fa-times-circle' : 'fa-question-circle'); ?>" style="color: <?php echo $pok === true ? 'var(--color-green)' : ($pok === false ? 'var(--color-red)' : 'var(--text-muted)'); ?>;"></i>
                                                                      <span><?php echo htmlspecialchars(t($pl)); ?></span>
                                                                  </div>

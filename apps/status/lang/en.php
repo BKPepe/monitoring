@@ -291,6 +291,7 @@ return [
     'ts3_health_status_warn' => 'Warning',
     'ts3_health_status_fail' => 'Fail',
     'ts3_health_status_na' => 'Not verifiable',
+    'ts3_health_na_version_hint' => 'Not verifiable - the "Latest known TeamSpeak server version" field in Settings (General tab) is empty.',
     'ts3_health_area_column' => 'Area',
     'ts3_health_weight_column' => 'Weight',
     'ts3_health_status_column' => 'Status',

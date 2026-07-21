@@ -292,6 +292,7 @@ return [
     'ts3_health_status_warn' => 'Pozor',
     'ts3_health_status_fail' => 'Chyba',
     'ts3_health_status_na' => 'Nelze ověřit',
+    'ts3_health_na_version_hint' => 'Nelze ověřit - v Nastavení (záložka Obecné) není vyplněná "Poslední známá verze TeamSpeak serveru".',
     'ts3_health_area_column' => 'Oblast',
     'ts3_health_weight_column' => 'Váha',
     'ts3_health_status_column' => 'Stav',
