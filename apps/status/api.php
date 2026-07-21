@@ -213,6 +213,11 @@ $response = [
         'players_online' => 0,
         'players_max' => 0,
         'version' => ''
+    ],
+    'discord' => [
+        'online' => false,
+        'online_count' => 0,
+        'total_count' => 0
     ]
 ];
 
@@ -244,6 +249,20 @@ try {
             $response['minecraft']['players_online'] = (int)($details['players_online'] ?? 0);
             $response['minecraft']['players_max'] = (int)($details['players_max'] ?? 0);
             $response['minecraft']['version'] = $details['version'] ?? '';
+        }
+    }
+
+    // 3. Načtení stavu Discordu
+    $stmt = $pdo->prepare("SELECT status, last_details FROM monitors WHERE type = 'discord' LIMIT 1");
+    $stmt->execute();
+    $dc = $stmt->fetch();
+    
+    if ($dc) {
+        $response['discord']['online'] = ($dc['status'] === 'up');
+        $details = json_decode($dc['last_details'] ?? '', true);
+        if ($details) {
+            $response['discord']['online_count'] = (int)($details['presence_count'] ?? $details['online_count'] ?? 0);
+            $response['discord']['total_count'] = (int)($details['member_count'] ?? $details['total_count'] ?? 0);
         }
     }
 } catch (Exception $e) {
