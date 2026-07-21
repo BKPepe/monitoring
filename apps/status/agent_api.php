@@ -368,9 +368,47 @@ try {
         $stmt_update->execute([$details, $monitor_id]);
     }
     
+    if (isset($data['action_result']) && is_array($data['action_result'])) {
+        $act_res = $data['action_result'];
+        $act_id = intval($act_res['action_id'] ?? 0);
+        $act_status = trim($act_res['status'] ?? 'failed');
+        $act_msg = trim($act_res['message'] ?? '');
+        
+        if ($act_id > 0) {
+            $stmt_act = $pdo->prepare("UPDATE agent_actions SET status = ?, result_message = ?, executed_at = NOW() WHERE id = ? AND monitor_id = ?");
+            $stmt_act->execute([$act_status, $act_msg, $act_id, $id]);
+        }
+    }
+
     $pdo->commit();
 
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
+
+    // Kontrola nevyřízených akcí ve frontě pro tohoto agenta
+    try {
+        $stmt_pact = $pdo->prepare("SELECT id, action_type FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1");
+        $stmt_pact->execute([$id]);
+        $pending_act = $stmt_pact->fetch();
+
+        if ($pending_act) {
+            $action_id = (int)$pending_act['id'];
+            $action_type = $pending_act['action_type'];
+            $timestamp = time();
+            $nonce = bin2hex(random_bytes(8));
+            
+            // HMAC-SHA256 podpis požadavku klíčem monitoru ($monitor['agent_key'])
+            $sig_payload = "action={$action_type}|ts={$timestamp}|nonce={$nonce}";
+            $signature = hash_hmac('sha256', $sig_payload, $monitor['agent_key']);
+            
+            $response_payload['pending_action'] = [
+                'action_id' => $action_id,
+                'action' => $action_type,
+                'timestamp' => $timestamp,
+                'nonce' => $nonce,
+                'signature' => $signature
+            ];
+        }
+    } catch (PDOException $e) {}
 
     // Informace o dostupné aktualizaci agenta - verzi čteme přímo ze souborů
     // agentů na serveru (viz bk_get_agent_latest_version() ve functions.php),

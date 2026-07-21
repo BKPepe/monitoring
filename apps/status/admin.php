@@ -590,6 +590,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service
     }
 }
 
+// 2. Zpracování zařazení vzdálené akce (Remote Actions)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action']) && $user_role === 'admin') {
+    $mid = intval($_POST['monitor_id'] ?? 0);
+    $action_type = trim($_POST['action_type'] ?? '');
+    
+    $allowed_action_types = ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp'];
+    if ($mid > 0 && in_array($action_type, $allowed_action_types, true)) {
+        $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (?, ?, 'pending')");
+        $stmt->execute([$mid, $action_type]);
+        $success_msg = "Požadavek na akční příkaz '{$action_type}' byl podepsán a zařazen do fronty pro agenta.";
+    }
+}
+
 // Zpracování odeslání testovacího e-mailu (pouze pro Admina)
 if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role === 'admin') {
     $to = $me['email'] ?? '';

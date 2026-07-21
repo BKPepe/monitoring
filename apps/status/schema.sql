@@ -198,3 +198,14 @@ CREATE TABLE IF NOT EXISTS `incident_updates` (
   FOREIGN KEY (`incident_id`) REFERENCES `incidents`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `agent_actions` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `monitor_id` INT NOT NULL,
+  `action_type` VARCHAR(50) NOT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'executed', 'failed'
+  `result_message` TEXT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `executed_at` DATETIME DEFAULT NULL,
+  FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

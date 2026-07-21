@@ -446,6 +446,59 @@ fi
 
 if [ "$http_code" = "200" ]; then
     log_message "OK: Statistiky uspesne odeslany."
+    
+    # --- Spracovani vzdalenych akci (Remote Actions) ---
+    REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
+    ALLOWED_ACTIONS="${ALLOWED_ACTIONS:-restart_wan,restart_wireguard,reboot_router,renew_dhcp}"
+    
+    if [ "$REMOTE_ACTIONS_ENABLED" = "1" ] && [ -n "$body" ]; then
+        act_id=$(echo "$body" | awk -F'"action_id":' '{print $2}' | awk -F'[,}]' '{print $1}' | tr -d '[:space:]')
+        act_type=$(echo "$body" | awk -F'"action":' '{print $2}' | awk -F'[,"]' '{print $2}' | tr -d '[:space:]')
+        act_ts=$(echo "$body" | awk -F'"timestamp":' '{print $2}' | awk -F'[,}]' '{print $1}' | tr -d '[:space:]')
+        act_sig=$(echo "$body" | awk -F'"signature":' '{print $2}' | awk -F'[,"]' '{print $2}' | tr -d '[:space:]')
+        act_nonce=$(echo "$body" | awk -F'"nonce":' '{print $2}' | awk -F'[,"]' '{print $2}' | tr -d '[:space:]')
+        
+        if [ -n "$act_id" ] && [ -n "$act_type" ] && [ -n "$act_ts" ] && [ -n "$act_sig" ]; then
+            now_ts=$(date +%s 2>/dev/null || echo 0)
+            time_diff=$((now_ts - act_ts))
+            [ $time_diff -lt 0 ] && time_diff=$(( -time_diff ))
+            
+            if [ $time_diff -le 30 ]; then
+                calc_str="action=${act_type}|ts=${act_ts}|nonce=${act_nonce}"
+                calc_sig=""
+                if command -v openssl >/dev/null 2>&1; then
+                    calc_sig=$(echo -n "$calc_str" | openssl dgst -sha256 -hmac "$AGENT_KEY" 2>/dev/null | awk '{print $NF}')
+                fi
+                
+                if [ -n "$calc_sig" ] && [ "$calc_sig" = "$act_sig" ]; then
+                    log_message "Aktivovana bezpecna vzdalena akce: $act_type (ID: $act_id)"
+                    case "$act_type" in
+                        restart_wan)
+                            /sbin/ifdown wan >/dev/null 2>&1 || true
+                            sleep 2
+                            /sbin/ifup wan >/dev/null 2>&1 || true
+                            ;;
+                        restart_wireguard)
+                            /sbin/ifdown wg0 >/dev/null 2>&1 || true
+                            sleep 1
+                            /sbin/ifup wg0 >/dev/null 2>&1 || true
+                            ;;
+                        renew_dhcp)
+                            ubus call network.interface.wan renew >/dev/null 2>&1 || true
+                            ;;
+                        reboot_router)
+                            log_message "PROVADIM REBOOT ROUTERU DLE PODEPSANEHO POKYNU..."
+                            /sbin/reboot >/dev/null 2>&1 || true
+                            ;;
+                    esac
+                else
+                    log_message "VAROVANI: Odmitnuta vzdalena akce - neplatny HMAC podpis!"
+                fi
+            else
+                log_message "VAROVANI: Odmitnuta vzdalena akce - vyprsena platnost (casove okno > 30s)"
+            fi
+        fi
+    fi
 else
     log_message "CHYBA: Odeslani selhalo (HTTP $http_code). Odpoved: $body"
     exit 1
