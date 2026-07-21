@@ -110,6 +110,63 @@ services:
           <strong>Aktivní monitoring (Pinger):</strong> Centrální server spouští cron skripty, které provádějí HTTP/HTTPS, TCP a ICMP ping požadavky na vámi zadané vzdálené cíle.
         </p>
       </section>
+
+      <!-- Central Server Sekce -->
+      <section id="server-config" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Konfigurace Databáze Serveru</h1>
+        <p>Blood Kings Monitoring se připojuje k MySQL nebo MariaDB databázi pomocí PDO. Údaje nastavte v souboru <code>status/config.php</code>:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>define('DB_HOST', '127.0.0.1');
+define('DB_NAME', 'bloodkings_status');
+define('DB_USER', 'bloodkings_user');
+define('DB_PASS', 'VaseSilneHeslo123!');
+define('TIMEZONE', 'Europe/Prague');</code></pre>
+        </div>
+      </section>
+
+      <section id="server-env" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Proměnné Prostředí a Tokeny</h1>
+        <p>Klíčové bezpečnostní tokeny se definují přímo v <code>config.php</code> nebo v prostředí serveru:</p>
+        <ul>
+          <li><code>cron_key</code>: Tajný klíč pro autorizaci spouštění <code>cron.php</code> z externích služeb a webhooků.</li>
+          <li><code>agent_registration_token</code>: Sdílené heslo autorizující automatickou auto-registraci nově nainstalovaných agentů.</li>
+          <li><code>metrics_token</code>: Bearer token chránící Prometheus endpoint <code>metrics.php</code>.</li>
+        </ul>
+      </section>
+
+      <section id="server-status" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Veřejné Status Stránky a Branding</h1>
+        <p>Vzhled veřejných status stránek upravíte v Administraci (Nastavení -> Branding). Můžete nahrát vlastní logo, nastavit barvy a konfiguraci 24h / 7d / 30d SLA agregační souborové cache.</p>
+      </section>
+
+      <!-- Agent Sekce -->
+      <section id="agent-install" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Instalace a Registrace Agenta</h1>
+        <p>Agenti jsou samostné telemetrické skripty dostupné pro Linux (Bash), Python, PowerShell a OpenWrt routery. Auto-registraci spustíte s tokenem serveru:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>./agent.sh --register --token="VásRegistračníToken" --url="https://monitoring.bloodkings.eu/status/agent_api.php"</code></pre>
+        </div>
+      </section>
+
+      <section id="agent-config" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Intervaly Agenta a Vzdálené Akce</h1>
+        <p>Agent spouští měření v nastavitelném intervalu (výchozí: 60 sekund). Na OpenWrt routerech lze zapnout opt-in HMAC podepsané Vzdálené akce nastavením <code>REMOTE_ACTIONS_ENABLED=1</code> v konfiguraci agenta.</p>
+      </section>
+
+      <section id="agent-trouble" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Řešení Problémů s Agenty</h1>
+        <p>Pokud agent přestane hlásit data, zkontrolujte odchozí přístup na port 443 a nahlédněte do logů:</p>
+        <div class="docs-code-wrapper">
+          <pre><code># Kontrola logů systemd služby agenta
+journalctl -u bloodkings-agent -n 50 --no-pager</code></pre>
+        </div>
+      </section>
     </main>
   </div>
 </Layout>

@@ -110,6 +110,63 @@ services:
           <strong>Active Probing (Pinger):</strong> The central server initiates cron runs to ping targets (HTTP/HTTPS, TCP connection checks, ICMP pings) directly from server threads.
         </p>
       </section>
+
+      <!-- Central Server Sections -->
+      <section id="server-config" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Central Server Database Config</h1>
+        <p>Blood Kings Monitoring connects to standard MySQL or MariaDB database servers using PDO. Configure your database details inside <code>status/config.php</code>:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>define('DB_HOST', '127.0.0.1');
+define('DB_NAME', 'bloodkings_status');
+define('DB_USER', 'bloodkings_user');
+define('DB_PASS', 'YourStrongPassword123!');
+define('TIMEZONE', 'Europe/Prague');</code></pre>
+        </div>
+      </section>
+
+      <section id="server-env" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Environment Variables & Tokens</h1>
+        <p>Essential security keys can be configured directly in <code>config.php</code> or via environment variables:</p>
+        <ul>
+          <li><code>cron_key</code>: Secret key authorizing <code>cron.php</code> execution from external webhooks or timers.</li>
+          <li><code>agent_registration_token</code>: Shared secret authorizing automatic agent auto-registration.</li>
+          <li><code>metrics_token</code>: Bearer token protecting Prometheus <code>metrics.php</code> endpoint.</li>
+        </ul>
+      </section>
+
+      <section id="server-status" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Public Status Pages & Branding</h1>
+        <p>Customize public status pages directly inside the Admin Panel (Settings -> Branding). You can upload a custom logo, set accent color themes, and configure 24h / 7d / 30d SLA aggregation caching.</p>
+      </section>
+
+      <!-- Agent Sections -->
+      <section id="agent-install" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Agent Registration & Setup</h1>
+        <p>Agents are self-contained telemetry daemons available for Bash, Python, PowerShell, and OpenWrt router systems. Run auto-registration with your server token:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>./agent.sh --register --token="YourRegistrationToken" --url="https://monitoring.bloodkings.eu/status/agent_api.php"</code></pre>
+        </div>
+      </section>
+
+      <section id="agent-config" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Agent Intervals & Remote Actions</h1>
+        <p>Agents run on a configurable cron interval (default: 60 seconds). For OpenWrt routers, opt-in HMAC-signed Remote Actions can be enabled by setting <code>REMOTE_ACTIONS_ENABLED=1</code> in the agent script.</p>
+      </section>
+
+      <section id="agent-trouble" class="docs-section">
+        <hr class="docs-divider" />
+        <h1>Agent Troubleshooting</h1>
+        <p>If an agent stops reporting telemetry, verify outgoing HTTPS access to port 443 and check local logs:</p>
+        <div class="docs-code-wrapper">
+          <pre><code># Check systemd agent service logs
+journalctl -u bloodkings-agent -n 50 --no-pager</code></pre>
+        </div>
+      </section>
     </main>
   </div>
 </Layout>
