@@ -9,6 +9,32 @@ ErrorDocument 500 /status/error.php?code=500
     Header set X-XSS-Protection "1; mode=block"
 </IfModule>
 
+# Komprese textových odpovědí (HTML/CSS/JS/JSON) - platí i pro dynamický výstup
+# PHP skriptů (index.php, api.php...), ne jen statické soubory, protože mod_deflate
+# komprimuje podle Content-Type odpovědi, ne podle zdroje.
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/css text/plain text/xml text/javascript
+    AddOutputFilterByType DEFLATE application/javascript application/json application/xml
+    AddOutputFilterByType DEFLATE image/svg+xml
+</IfModule>
+
+# Cache hlavičky jen pro statické assety (podle MIME typu - PHP výstup má vždy
+# text/html a sem proto nespadá, i kdyby se v budoucnu accidentally rozšířilo).
+# CSS/JS mají delší TTL, protože assets/style.css se už linkuje s cache-busting
+# parametrem (?v=<?php echo filemtime(...) ?>), takže obsahová změna = nová URL.
+# Obrázky/favicon zatím verzované nejsou, proto kratší TTL jako bezpečnější default.
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 year"
+    ExpiresByType application/javascript "access plus 1 year"
+    ExpiresByType text/javascript "access plus 1 year"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/jpeg "access plus 1 month"
+    ExpiresByType image/webp "access plus 1 month"
+    ExpiresByType image/svg+xml "access plus 1 month"
+    ExpiresByType image/x-icon "access plus 1 month"
+</IfModule>
+
 # Blokace přímého přístupu ke konfiguraci na úrovni webserveru - nezávislé na
 # PHP guardu v config.php (count(get_included_files()) === 1). Druhá vrstva
 # ochrany: i kdyby se PHP interpret pro tuto cestu někdy přestal spouštět
