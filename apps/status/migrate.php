@@ -113,9 +113,15 @@ function bk_get_migrations(): array {
 // --- Spuštění migrací ---
 try {
     // Zjistit aktuální verzi
+    $force = $is_cli ? in_array('--force', $argv ?? []) : !empty($_GET['force']);
     $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'schema_version'");
     $stmt->execute();
     $current_version = $stmt->fetchColumn() ?: '0';
+
+    if ($force) {
+        migrate_log("FORCE mode - přeskakuji kontrolu verze (aktuální: $current_version)");
+        $current_version = '0';
+    }
 
     migrate_log("Aktuální schema_version: $current_version");
 
