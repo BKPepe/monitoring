@@ -1325,6 +1325,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <div class="monitor-tab-panel" data-tab="process">
                                                          <div class="ts3-process-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                              <div class="detail-section-title"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('ts3_process_heading')); ?></div>
+                                                             <?php if (empty($tsp['pid'])): ?>
+                                                                 <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.6rem;"><?php echo htmlspecialchars(t('ts3_process_not_found')); ?></p>
+                                                             <?php else: ?>
                                                              <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_status')); ?>:</span> <strong style="color: var(--color-green); margin-left: 0.25rem;"><?php echo htmlspecialchars(t('ts3_process_running')); ?></strong></div>
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_uptime')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(format_uptime_cz((int)($tsp['uptime_sec'] ?? 0))); ?></strong></div>
@@ -1333,6 +1336,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_threads')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['threads'] ?? 0); ?></strong></div>
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_fds')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['open_fds'] ?? 0); ?></strong></div>
                                                              </div>
+                                                             <?php endif; ?>
                                                          </div>
                                                          </div>
                                                      <?php endif; ?>
@@ -1341,8 +1345,14 @@ $portal_url = trim(get_setting('portal_url'));
                                                      <div class="monitor-tab-panel" data-tab="service">
                                                      <div class="ts3-service-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('ts3_service_heading')); ?></div>
+                                                         <?php
+                                                         $ts3_svc = $ts3_check_stages['service'] ?? [];
+                                                         $ts3_svc_has_data = isset($ts3_svc['slot_usage_pct']) || $ts3_svc['channel_count'] !== null || $ts3_svc['active_channel_count'] !== null || $ts3_svc['query_client_count'] !== null || $ts3_svc['server_group_count'] !== null;
+                                                         ?>
+                                                         <?php if (!$ts3_svc_has_data): ?>
+                                                             <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.6rem;"><?php echo htmlspecialchars(t('ts3_service_no_data')); ?></p>
+                                                         <?php else: ?>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
-                                                             <?php $ts3_svc = $ts3_check_stages['service'] ?? []; ?>
                                                              <?php if (isset($ts3_svc['slot_usage_pct'])): ?>
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_slots')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo $ts3_svc['slot_usage_pct']; ?>%</strong></div>
                                                              <?php endif; ?>
@@ -1359,6 +1369,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_groups')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['server_group_count']; ?></strong></div>
                                                              <?php endif; ?>
                                                          </div>
+                                                         <?php endif; ?>
                                                          <?php if (!empty($ts3_svc['voice_activity'])): $va = $ts3_svc['voice_activity']; ?>
                                                              <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-comment" style="color: var(--color-green);"></i> <?php echo htmlspecialchars(t('ts3_voice_talking')); ?>: <strong style="color: #fff;"><?php echo (int)$va['talking']; ?></strong></div>
