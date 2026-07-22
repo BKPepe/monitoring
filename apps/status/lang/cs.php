@@ -266,6 +266,8 @@ return [
     'profile_metric_recommended' => 'Doporučeno',
     'agent_badge' => 'Agent',
     'agent_badge_title' => 'Tento monitor má aktivně hlásícího VPS-metrics agenta (CPU, RAM, disk)',
+    'agent_discovered_services' => 'Zjištěné služby:',
+    'agent_svc_missing' => 'chybí',
 
     // Knowledge layer - vysvětlení, co znamená překročený práh u konkrétní metriky
     'knowledge_panel_heading' => '💡 Doporučení',

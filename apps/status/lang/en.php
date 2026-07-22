@@ -265,6 +265,8 @@ return [
     'profile_metric_recommended' => 'Recommended',
     'agent_badge' => 'Agent',
     'agent_badge_title' => 'This monitor has an actively reporting VPS metrics agent (CPU, RAM, disk)',
+    'agent_discovered_services' => 'Discovered services:',
+    'agent_svc_missing' => 'missing',
 
     // Knowledge layer - explains what an already-crossed threshold means
     'knowledge_panel_heading' => '💡 Recommendations',

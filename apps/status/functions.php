@@ -453,6 +453,32 @@ function render_vps_agent_details($details, $monitor = null) {
                 </div>
             <?php endif; ?>
 
+            <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
+                <div style="margin-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.45rem;">
+                    <span style="color: var(--text-muted); display: block; margin-bottom: 0.35rem;"><?php echo htmlspecialchars(t('agent_discovered_services')); ?></span>
+                    <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                        <?php foreach ($details['discovered_services'] as $svc):
+                            $svc_conf = (int)($svc['confidence'] ?? 0);
+                            $svc_color = $svc_conf >= 70 ? 'var(--color-green)' : ($svc_conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
+                            $svc_bg = $svc_conf >= 70 ? 'rgba(30,199,115,0.1)' : ($svc_conf >= 40 ? 'rgba(243,156,18,0.1)' : 'rgba(148,163,184,0.08)');
+                            $svc_border = $svc_conf >= 70 ? 'rgba(30,199,115,0.2)' : ($svc_conf >= 40 ? 'rgba(243,156,18,0.2)' : 'rgba(148,163,184,0.15)');
+                            $svc_evidence = $svc['evidence'] ?? [];
+                            $svc_missing = $svc['missing'] ?? [];
+                            $svc_title = implode(', ', $svc_evidence);
+                            if (!empty($svc_missing)) $svc_title .= ' | ' . t('agent_svc_missing') . ': ' . implode(', ', $svc_missing);
+                        ?>
+                            <div style="display: flex; justify-content: space-between; align-items: center; background: <?php echo $svc_bg; ?>; border: 1px solid <?php echo $svc_border; ?>; padding: 0.25rem 0.5rem; border-radius: 5px;" title="<?php echo htmlspecialchars($svc_title); ?>">
+                                <span style="font-size: 0.72rem; color: var(--text-primary); font-weight: 600;">
+                                    <i class="fas fa-cube" style="color: <?php echo $svc_color; ?>; margin-right: 0.3rem;"></i><?php echo htmlspecialchars($svc['name'] ?? '?'); ?>
+                                    <?php if (!empty($svc['port'])): ?><span style="color: var(--text-muted); font-weight: normal; font-family: monospace; font-size: 0.65rem; margin-left: 0.3rem;">:<?php echo (int)$svc['port']; ?></span><?php endif; ?>
+                                </span>
+                                <span style="font-size: 0.65rem; font-weight: bold; color: <?php echo $svc_color; ?>;"><?php echo $svc_conf; ?>%</span>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <?php if (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes'])): ?>
                 <div style="margin-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.45rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
                     <?php if (!empty($details['top_cpu_processes'])): ?>
