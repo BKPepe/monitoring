@@ -70,24 +70,27 @@ if (isset($_GET['code']) && isset($_GET['state'])) {
             $resp_emails = curl_exec($ch);
             curl_close($ch);
             
+            // Kontrola proti VŠEM ověřeným e-mailům z GitHub účtu, ne jen "primary" -
+            // uživatel může mít v Blood Kings registrovaný jiný (i tak ověřený)
+            // e-mail, než který má GitHub zrovna nastavený jako primární.
             $emails = json_decode($resp_emails, true);
-            $primary_email = '';
+            $verified_emails = [];
             if (is_array($emails)) {
                 foreach ($emails as $email_entry) {
-                    if ($email_entry['primary'] && $email_entry['verified']) {
-                        $primary_email = $email_entry['email'];
-                        break;
+                    if (!empty($email_entry['verified']) && !empty($email_entry['email'])) {
+                        $verified_emails[] = $email_entry['email'];
                     }
                 }
             }
-            
-            if (empty($primary_email)) {
-                $login_error = 'Na vašem GitHub účtu nebyl nalezen ověřený primární e-mail.';
+
+            if (empty($verified_emails)) {
+                $login_error = 'Na vašem GitHub účtu nebyl nalezen žádný ověřený e-mail.';
             } else {
-                $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? LIMIT 1");
-                $stmt->execute([$primary_email]);
+                $placeholders = implode(',', array_fill(0, count($verified_emails), '?'));
+                $stmt = $pdo->prepare("SELECT * FROM users WHERE email IN ($placeholders) LIMIT 1");
+                $stmt->execute($verified_emails);
                 $user = $stmt->fetch();
-                
+
                 if ($user) {
                     $stmt_up_oauth = $pdo->prepare("UPDATE users SET oauth_provider = 'github' WHERE id = ?");
                     $stmt_up_oauth->execute([$user['id']]);
@@ -102,7 +105,7 @@ if (isset($_GET['code']) && isset($_GET['state'])) {
                     header('Location: admin.php');
                     exit;
                 } else {
-                    $login_error = 'Uživatel s e-mailem ' . htmlspecialchars($primary_email) . ' není v systému registrován jako administrátor.';
+                    $login_error = 'Žádný z ověřených e-mailů vašeho GitHub účtu (' . htmlspecialchars(implode(', ', $verified_emails)) . ') není v systému registrován jako administrátor.';
                 }
             }
         }
@@ -504,6 +507,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
         $stmt->execute([$_SESSION['admin_id']]);
         $me = $stmt->fetch();
     }
+}
+
+// 4b. Zapnutí 2FA - krok 1: vygenerovat nový secret a uložit ho jen do session,
+// dokud uživatel nepotvrdí kódem z appky, že se mu opravdu naskenoval (viz
+// totp_confirm níže). Do DB (totp_secret/totp_enabled) se nic nezapisuje, dokud
+// se to takhle neověří - jinak by šlo omylem zamknout účet naskenovaným, ale
+// nikdy neověřeným secretem.
+if (isset($_GET['action']) && $_GET['action'] === 'totp_setup_start') {
+    $_SESSION['totp_pending_secret'] = bk_totp_generate_secret();
+    header('Location: admin.php#totp-section');
+    exit;
+}
+
+// Zapnutí 2FA - krok 2: ověření kódu z appky proti pending secretu ze session.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
+    $pending_secret = $_SESSION['totp_pending_secret'] ?? '';
+    $totp_confirm_code = trim($_POST['totp_code'] ?? '');
+    if (empty($pending_secret)) {
+        $error_msg = '2FA nastavení vypršelo, zkuste to prosím znovu.';
+    } elseif (bk_totp_verify_code($pending_secret, $totp_confirm_code)) {
+        $stmt_totp = $pdo->prepare("UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?");
+        $stmt_totp->execute([$pending_secret, $_SESSION['admin_id']]);
+        unset($_SESSION['totp_pending_secret']);
+        $success_msg = 'Dvoufázové ověření (2FA) bylo úspěšně zapnuto.';
+    } else {
+        $error_msg = 'Neplatný kód z autentikační aplikace - zkuste to znovu.';
+    }
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$_SESSION['admin_id']]);
+    $me = $stmt->fetch();
+}
+
+// Vypnutí 2FA - vyžaduje potvrzení aktuálním heslem, aby to nešlo tiše
+// vypnout jen tak (např. přes ukradenou/CSRF session bez znalosti hesla).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$_SESSION['admin_id']]);
+    $me = $stmt->fetch();
+    if ($me && password_verify($_POST['totp_disable_password'] ?? '', $me['password_hash'])) {
+        $stmt_totp = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
+        $stmt_totp->execute([$_SESSION['admin_id']]);
+        $success_msg = 'Dvoufázové ověření (2FA) bylo vypnuto.';
+    } else {
+        $error_msg = 'Nesprávné heslo - 2FA zůstává zapnuté.';
+    }
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$_SESSION['admin_id']]);
+    $me = $stmt->fetch();
 }
 
 // 5. Zpracování uložení odběrů notifikací běžného uživatele
@@ -2353,6 +2404,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     </form>
                 </div>
 
+                <?php echo bk_render_totp_section($me, $site_title); ?>
+
         <!-- SEKCE: Správa uživatelů (pouze pro Admina) -->
         <div class="admin-grid" style="margin-top: 2rem;">
             <!-- LEVÝ SLOUPEC: Seznam uživatelů -->
@@ -2580,10 +2633,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <button type="submit" name="change_password" class="btn"><i class="fas fa-user-edit"></i> Aktualizovat profil</button>
                     </form>
                   </div>
+
+                  <?php echo bk_render_totp_section($me, $site_title); ?>
               </div>
-              
+
           </div>
-          
+
           <?php endif; ?>
 
       </div>

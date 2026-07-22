@@ -4374,6 +4374,49 @@ function bk_totp_verify_code($secret, $code, $discrepancy = 1) {
 }
 
 /**
+ * Vykreslí kartu pro zapnutí/vypnutí 2FA na vlastním účtu (Profil administrátora
+ * i běžného uživatele - obě sdílí tuhle jednu implementaci). QR kód se generuje
+ * čistě na klientovi (qrcodejs z CDN) - secret se tak nikdy neposílá žádné třetí
+ * straně jako u veřejných QR-generátorových API, jen zůstává v odpovědi vlastní
+ * autentizované stránky.
+ */
+function bk_render_totp_section($me, $site_title) {
+    $html = '<div class="admin-card" id="totp-section">'
+        . '<div class="admin-header"><h2><i class="fas fa-shield-halved"></i> Dvoufázové ověření (2FA)</h2></div>';
+
+    if (!empty($me['totp_enabled'])) {
+        $html .= '<p style="font-size: 0.85rem; color: var(--color-green);"><i class="fas fa-check-circle"></i> 2FA je na tomhle účtu zapnuté.</p>'
+            . '<form action="admin.php#totp-section" method="POST" style="max-width: 320px;">'
+            . '<div class="form-group"><label for="totp_disable_password">Heslo pro potvrzení vypnutí</label>'
+            . '<input type="password" name="totp_disable_password" id="totp_disable_password" class="form-control" autocomplete="off" required></div>'
+            . '<button type="submit" name="totp_disable" class="btn btn-danger" onclick="return confirm(\'Opravdu vypnout 2FA? Účet pak bude chráněný jen heslem.\');"><i class="fas fa-shield-halved"></i> Vypnout 2FA</button>'
+            . '</form>';
+    } elseif (!empty($_SESSION['totp_pending_secret'])) {
+        $secret = $_SESSION['totp_pending_secret'];
+        $issuer = rawurlencode($site_title);
+        $account = rawurlencode($me['username'] ?? 'admin');
+        $otpauth_uri = "otpauth://totp/{$issuer}:{$account}?secret={$secret}&issuer={$issuer}&algorithm=SHA1&digits=6&period=30";
+
+        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Naskenujte QR kód v autentikační aplikaci (Google Authenticator, Authy, 2FAS...) a potvrďte 6místným kódem.</p>'
+            . '<div id="totp-qr" style="width: 184px; height: 184px; margin: 0.75rem 0; background: #fff; padding: 8px; border-radius: 6px;"></div>'
+            . '<p style="font-size: 0.75rem; color: var(--text-muted);">Nebo zadejte ručně: <code style="user-select: all;">' . htmlspecialchars($secret) . '</code></p>'
+            . '<form action="admin.php#totp-section" method="POST" style="max-width: 220px; margin-top: 0.75rem;">'
+            . '<div class="form-group"><label for="totp_code">6místný kód z appky</label>'
+            . '<input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></div>'
+            . '<button type="submit" name="totp_confirm" class="btn"><i class="fas fa-check"></i> Potvrdit a zapnout</button>'
+            . '</form>'
+            . '<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>'
+            . '<script>new QRCode(document.getElementById("totp-qr"), { text: ' . json_encode($otpauth_uri) . ', width: 184, height: 184 });</script>';
+    } else {
+        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">2FA je vypnuté. Doporučujeme ho zapnout, hlavně pokud se přihlašujete heslem (ne přes GitHub OAuth).</p>'
+            . '<a href="admin.php?action=totp_setup_start" class="btn"><i class="fas fa-qrcode"></i> Zapnout 2FA</a>';
+    }
+
+    $html .= '</div>';
+    return $html;
+}
+
+/**
  * Odeslání Push notifikace přes Pushover API
  */
 function send_pushover_alert($user_key, $api_token, $title, $message, $priority = 0) {
