@@ -17,6 +17,18 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
     exit;
 }
 
+// Zapomenuté heslo / nastavení hesla přes e-mailový odkaz - musí být
+// dostupné bez přihlášení (to je celý smysl), proto se řeší dřív, než se
+// vůbec kontroluje $is_logged_in.
+if (isset($_GET['action']) && $_GET['action'] === 'forgot_password') {
+    bk_render_forgot_password_page($pdo, get_setting('site_title', 'Blood Kings'));
+    exit;
+}
+if (isset($_GET['action']) && $_GET['action'] === 'set_password') {
+    bk_render_set_password_page($pdo, get_setting('site_title', 'Blood Kings'));
+    exit;
+}
+
 // GitHub OAuth SSO Přihlášení
 if (isset($_GET['login_oauth']) && $_GET['login_oauth'] === 'github') {
     $client_id = get_setting('oauth_github_client_id');
@@ -195,7 +207,7 @@ if (!$is_logged_in) {
         <meta charset="UTF-8">
         <title>Přihlášení | <?php echo htmlspecialchars($site_title); ?></title>
         <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime('assets/style.css'); ?>">
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css">
+        <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
         <script>
             if (localStorage.getItem('theme') === 'light') {
                 document.documentElement.classList.add('light-theme');
@@ -232,6 +244,7 @@ if (!$is_logged_in) {
                     <input type="password" name="password" id="password" class="form-control" required autocomplete="current-password">
                 </div>
                 <button type="submit" name="login" class="btn" style="width: 100%; margin-top: 1rem;"><i class="fas fa-sign-in-alt"></i> Přihlásit se</button>
+                <a href="admin.php?action=forgot_password" style="display:block; text-align:center; margin-top:0.75rem; font-size:0.8rem; color: var(--text-muted);">Zapomenuté heslo?</a>
                 <?php
                 $gh_client_id = get_setting('oauth_github_client_id');
                 if (!empty($gh_client_id)):
@@ -358,7 +371,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     // zaškrtnout v editaci monitoru (viz remote-actions-group níže).
     $remote_actions_enabled = ($type === 'openwrt' && isset($_POST['remote_actions_enabled'])) ? 1 : 0;
     $allowed_actions_post = isset($_POST['allowed_actions']) && is_array($_POST['allowed_actions'])
-        ? array_values(array_intersect($_POST['allowed_actions'], ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp']))
+        ? array_values(array_intersect($_POST['allowed_actions'], ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe']))
         : [];
     $allowed_actions = ($type === 'openwrt' && $remote_actions_enabled && !empty($allowed_actions_post))
         ? implode(',', $allowed_actions_post)
@@ -695,14 +708,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                 bk_audit_log($pdo, 'user_updated', $u_username . (!empty($changes) ? ' (' . implode(', ', $changes) . ')' : ' (beze změny)'), 'user', $u_id);
                 $success_msg = 'Uživatel byl úspěšně upraven.';
             } else {
-                if (empty($u_password)) {
-                    $error_msg = 'Pro nového uživatele je nutné zadat heslo.';
-                } else {
+                if (!empty($u_password)) {
+                    // Admin heslo zadal ručně - uloží se rovnou, žádný pozvánkový e-mail.
                     $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
                     $stmt_ins = $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)");
                     $stmt_ins->execute([$u_username, $u_email, $u_phone, $u_role, $new_pass_hash]);
-                    bk_audit_log($pdo, 'user_created', $u_username . ' (' . $u_role . ')', 'user', (int)$pdo->lastInsertId());
+                    bk_audit_log($pdo, 'user_created', $u_username . ' (' . $u_role . ', heslo nastaveno adminem)', 'user', (int)$pdo->lastInsertId());
                     $success_msg = 'Nový uživatel byl úspěšně vytvořen.';
+                } else {
+                    // Heslo nevyplněné - vytvoří se s nepoužitelným placeholder hashem
+                    // (nikdy se nedá uhodnout, protože žádnou plaintext hodnotu
+                    // neodpovídá) a pošle se pozvánkový odkaz na nastavení hesla.
+                    // Admin tak sám heslo uživatele nikdy nezná.
+                    $placeholder_hash = password_hash(bin2hex(random_bytes(32)), PASSWORD_BCRYPT);
+                    $stmt_ins = $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)");
+                    $stmt_ins->execute([$u_username, $u_email, $u_phone, $u_role, $placeholder_hash]);
+                    $new_user_id = (int)$pdo->lastInsertId();
+
+                    $raw_token = bk_issue_password_reset_token($pdo, $new_user_id);
+                    $set_link = bk_current_admin_url() . '?action=set_password&token=' . $raw_token;
+                    $site_title_mail = get_setting('site_title', 'Blood Kings');
+                    $subject = 'Nastavení hesla - ' . $site_title_mail;
+                    $body = '<h1>Vítejte v ' . htmlspecialchars($site_title_mail) . '</h1>'
+                        . '<p>Byl pro vás vytvořen účet <strong>' . htmlspecialchars($u_username) . '</strong>. Nastavte si prosím heslo kliknutím na odkaz níže (platnost 48 hodin):</p>'
+                        . '<p><a href="' . htmlspecialchars($set_link) . '">' . htmlspecialchars($set_link) . '</a></p>';
+
+                    bk_audit_log($pdo, 'user_created', $u_username . ' (' . $u_role . ', pozvánka e-mailem)', 'user', $new_user_id);
+                    if (send_email($u_email, $subject, $body)) {
+                        $success_msg = 'Nový uživatel byl vytvořen. Na jeho e-mail byl odeslán odkaz pro nastavení hesla.';
+                    } else {
+                        $detail = !empty($GLOBALS['last_mail_error']) ? ' (' . htmlspecialchars($GLOBALS['last_mail_error']) . ')' : '';
+                        $error_msg = "Uživatel byl vytvořen, ale pozvánkový e-mail se nepodařilo odeslat{$detail}. Otevřete jeho editaci a nastavte mu heslo ručně, nebo zkuste pozvánku odeslat znovu.";
+                    }
                 }
             }
         } catch (Exception $e) {
@@ -881,7 +918,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action
     $mid = intval($_POST['monitor_id'] ?? 0);
     $action_type = trim($_POST['action_type'] ?? '');
 
-    $allowed_action_types = ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp'];
+    $allowed_action_types = ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe'];
     $stmt_ra = $pdo->prepare("SELECT remote_actions_enabled, allowed_actions, name FROM monitors WHERE id = ?");
     $stmt_ra->execute([$mid]);
     $ra_monitor = $stmt_ra->fetch();
@@ -1032,7 +1069,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
     <title>Administrace | <?php echo htmlspecialchars($site_title); ?></title>
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime('assets/style.css'); ?>">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css">
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
     <style>
         /* Záložky ve formuláři nastavení */
         .settings-tabs {
@@ -1636,7 +1673,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <li>Volitelné - Remote Actions (restart WAN/WireGuard, reboot, obnova DHCP na dálku z administrace). Bez tohoto kroku router žádnou vzdálenou akci nikdy neprovede, i kdyby ji administrace zařadila do fronty:<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     REMOTE_ACTIONS_ENABLED = "<span style="color: var(--color-green); font-family: monospace;">1</span>"<br>
-                                    ALLOWED_ACTIONS = "<span style="color: var(--color-green); font-family: monospace;">restart_wan,restart_wireguard,reboot_router,renew_dhcp</span>"
+                                    ALLOWED_ACTIONS = "<span style="color: var(--color-green); font-family: monospace;">restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe</span>"
                                 </div>
                                 <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.35rem;">Toto povoluje akce jen na straně routeru. Musíte je navíc zaškrtnout i zde v administraci u tohoto monitoru (sekce "Remote Actions" ve formuláři) - server odešle akci jen tehdy, když ji povolují OBĚ strany.</small>
                             </li>
@@ -2268,6 +2305,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             'restart_wireguard' => 'Restartovat WireGuard (wg0)',
                             'reboot_router' => 'Restartovat celý router',
                             'renew_dhcp' => 'Obnovit DHCP nájem na WAN',
+                            'reconnect_pppoe' => 'Znovu připojit PPPoE',
+                            'restart_service' => 'Restartovat službu',
                         ];
                         ?>
                         <div class="form-group" id="remote-actions-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] === 'openwrt') ? 'block' : 'none'; ?>;">
@@ -2618,8 +2657,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </div>
                         
                         <div class="form-group">
-                            <label for="u_password">Heslo <?php echo $edit_user ? '(nechte prázdné pro beze změny)' : ''; ?></label>
-                            <input type="password" name="password" id="u_password" class="form-control" autocomplete="new-password" <?php echo $edit_user ? '' : 'required'; ?>>
+                            <label for="u_password">Heslo <?php echo $edit_user ? '(nechte prázdné pro beze změny)' : '(nepovinné)'; ?></label>
+                            <input type="password" name="password" id="u_password" class="form-control" autocomplete="new-password">
+                            <small style="font-size: 0.75rem; color: var(--text-muted);"><?php echo $edit_user ? 'Nastaví nové heslo přímo.' : 'Necháte-li prázdné, uživateli přijde e-mail s odkazem, kterým si heslo nastaví sám - vy ho tak nikdy neznáte.'; ?></small>
                         </div>
                         
                         <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">

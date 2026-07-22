@@ -5,6 +5,20 @@
 
 require_once __DIR__ . '/db.php';
 
+// CDN verze frontend knihoven - JEDINÉ místo, které se upravuje při aktualizaci.
+// apps/status/package.json zrcadlí stejná čísla jen kvůli Dependabotu (žádný
+// build krok tu není, Dependabot ale potřebuje manifest, aby vůbec věděl, že
+// tahle verze existuje a dá se sledovat) - najdeš je i tam, ale nejsou svázané
+// automaticky, aktualizace se musí udělat na obou místech ručně.
+// ECharts je jediná knihovna pro grafy v celé appce (index.php i Level 3 detail
+// stránka) - Chart.js byl odstraněný, aby se nemusely držet dvě různé knihovny
+// pro totéž. Má dostupnou 6.x větev, ale je to major verze s možnými breaking
+// changes v obou místech, co ji používají - záměrně necháno na 5.5.1, dokud
+// to někdo neověří v prohlížeči (tady není jak).
+define('BK_CDN_FONTAWESOME', 'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.1/css/all.min.css');
+define('BK_CDN_ECHARTS', 'https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js');
+define('BK_CDN_QRCODE', 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js');
+
 /**
  * Vrátí HTML ikonu pro daný typ monitoru (+ cíl u typu 'web', pro favicon).
  * Sdíleno mezi index.php (veřejný dashboard) a admin.php (seznam monitorů),
@@ -1100,8 +1114,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <title><?php echo htmlspecialchars($metric_label . ' - ' . $monitor['name'] . ' - ' . $site_title); ?></title>
     <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime(__DIR__ . '/assets/style.css'); ?>">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
+    <script src="<?php echo BK_CDN_ECHARTS; ?>"></script>
     <script>
         if (localStorage.getItem('theme') === 'light') { document.documentElement.classList.add('light-theme'); }
     </script>
@@ -4397,9 +4411,7 @@ function bk_render_totp_section($me, $site_title) {
         $account = rawurlencode($me['username'] ?? 'admin');
         $otpauth_uri = "otpauth://totp/{$issuer}:{$account}?secret={$secret}&issuer={$issuer}&algorithm=SHA1&digits=6&period=30";
 
-        // Verze CDN knihovny (qrcode@1.5.4) je zrcadlená v apps/status/package.json,
-        // aby ji hlídal Dependabot - PHP soubor sám o sobě pro něj neviditelný.
-        // Při bumpu přes Dependabot PR je potřeba ručně přepsat i tuhle URL.
+        // Verze BK_CDN_QRCODE (viz konstanty na začátku souboru).
         $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Naskenujte QR kód v autentikační aplikaci (např. Proton Pass) a potvrďte 6místným kódem.</p>'
             . '<canvas id="totp-qr" style="margin: 0.75rem 0; background: #fff; padding: 8px; border-radius: 6px;"></canvas>'
             . '<p style="font-size: 0.75rem; color: var(--text-muted);">Nebo zadejte ručně: <code style="user-select: all;">' . htmlspecialchars($secret) . '</code></p>'
@@ -4408,7 +4420,7 @@ function bk_render_totp_section($me, $site_title) {
             . '<input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></div>'
             . '<button type="submit" name="totp_confirm" class="btn"><i class="fas fa-check"></i> Potvrdit a zapnout</button>'
             . '</form>'
-            . '<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js"></script>'
+            . '<script src="' . BK_CDN_QRCODE . '"></script>'
             . '<script>QRCode.toCanvas(document.getElementById("totp-qr"), ' . json_encode($otpauth_uri) . ', { width: 184 }, function (err) { if (err) console.error(err); });</script>';
     } else {
         $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">2FA je vypnuté. Doporučujeme ho zapnout, hlavně pokud se přihlašujete heslem (ne přes GitHub OAuth).</p>'
@@ -4530,7 +4542,7 @@ function bk_render_audit_log_page($pdo, $site_title) {
 
     echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Audit log | ' . htmlspecialchars($site_title) . '</title>'
         . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
-        . '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css"></head>'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
         . '<body>'
         . '<header><div class="container header-wrapper"><a href="admin.php" class="logo"><i class="fas fa-server" style="color: var(--color-red);"></i> ' . htmlspecialchars($site_title) . ' <span>Admin</span></a>'
         . '<div class="nav-links"><a href="admin.php"><i class="fas fa-arrow-left"></i> Zpět do administrace</a></div></div></header>'
@@ -4540,6 +4552,146 @@ function bk_render_audit_log_page($pdo, $site_title) {
         . '<div style="overflow-x:auto;"><table class="admin-table"><thead><tr><th>Kdy</th><th>Kdo</th><th>Akce</th><th>Detail</th><th>IP</th></tr></thead><tbody>' . $rows_html . '</tbody></table></div>'
         . $pagination
         . '</div></div></body></html>';
+    exit;
+}
+
+/**
+ * Vygeneruje token na nastavení hesla (pozvánka nového uživatele i zapomenuté
+ * heslo sdílí tenhle mechanismus) - do DB se ukládá jen sha256 hash tokenu,
+ * ne token samotný, aby ho případný únik DB dumpu nešel rovnou použít. Vrací
+ * SUROVÝ token pro sestavení odkazu v e-mailu.
+ */
+function bk_issue_password_reset_token($pdo, $user_id, $ttl_seconds = 172800) {
+    $raw_token = bin2hex(random_bytes(32));
+    $token_hash = hash('sha256', $raw_token);
+    $expires = date('Y-m-d H:i:s', time() + $ttl_seconds);
+    $stmt = $pdo->prepare("UPDATE users SET password_reset_token_hash = ?, password_reset_expires = ? WHERE id = ?");
+    $stmt->execute([$token_hash, $expires, $user_id]);
+    return $raw_token;
+}
+
+/**
+ * Absolutní URL na aktuální admin.php odvozená z requestu - stejný přístup
+ * jako u OAuth redirect_uri. Na rozdíl od digest e-mailů (cron, žádný request)
+ * tady vždycky běžíme uvnitř HTTP requestu, takže site_url setting není potřeba.
+ */
+function bk_current_admin_url() {
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+    return $scheme . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['SCRIPT_NAME'];
+}
+
+/**
+ * "Zapomenuté heslo" - formulář na zadání e-mailu + odeslání odkazu. Odpověď
+ * je vždy stejná bez ohledu na to, jestli e-mail v systému existuje, jinak by
+ * šel formulář zneužít k ověřování, které e-maily jsou zaregistrované.
+ */
+function bk_render_forgot_password_page($pdo, $site_title) {
+    $sent = false;
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['forgot_password_request'])) {
+        bk_csrf_check();
+        $email = trim($_POST['email'] ?? '');
+        if (!empty($email)) {
+            $stmt = $pdo->prepare("SELECT id, username FROM users WHERE email = ? LIMIT 1");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
+            if ($user) {
+                $raw_token = bk_issue_password_reset_token($pdo, $user['id'], 7200);
+                $set_link = bk_current_admin_url() . '?action=set_password&token=' . $raw_token;
+                $subject = 'Obnovení hesla - ' . $site_title;
+                $body = '<h1>Obnovení hesla</h1>'
+                    . '<p>Někdo (doufejme vy) požádal o obnovení hesla k účtu <strong>' . htmlspecialchars($user['username']) . '</strong>. '
+                    . 'Klikněte na odkaz níže pro nastavení nového hesla (platnost 2 hodiny):</p>'
+                    . '<p><a href="' . htmlspecialchars($set_link) . '">' . htmlspecialchars($set_link) . '</a></p>'
+                    . '<p>Pokud jste o obnovení hesla nežádali, tento e-mail můžete ignorovat.</p>';
+                send_email($email, $subject, $body);
+                bk_audit_log($pdo, 'password_reset_requested', $email, 'user', $user['id'], $user['id'], $user['username']);
+            }
+        }
+        $sent = true;
+    }
+
+    $body_html = '<h2><i class="fas fa-unlock-alt" style="color: var(--color-red); margin-right: 0.5rem;"></i> Zapomenuté heslo</h2>';
+    if ($sent) {
+        $body_html .= '<div class="alert alert-success">Pokud e-mail existuje v systému, byl na něj odeslán odkaz pro nastavení nového hesla.</div>'
+            . '<a href="admin.php" class="btn btn-secondary" style="width:100%;">Zpět na přihlášení</a>';
+    } else {
+        $body_html .= '<form action="admin.php?action=forgot_password" method="POST">' . bk_csrf_field()
+            . '<div class="form-group"><label for="email">E-mail</label><input type="email" name="email" id="email" class="form-control" required autofocus></div>'
+            . '<button type="submit" name="forgot_password_request" class="btn" style="width:100%; margin-top:1rem;"><i class="fas fa-paper-plane"></i> Odeslat odkaz</button>'
+            . '</form><a href="admin.php" style="display:block; text-align:center; margin-top:1rem; font-size:0.85rem; color: var(--text-muted);">Zpět na přihlášení</a>';
+    }
+
+    echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Zapomenuté heslo | ' . htmlspecialchars($site_title) . '</title>'
+        . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
+        . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
+        . '<div class="login-wrapper" style="max-width: 380px;">' . $body_html . '</div>'
+        . '</body></html>';
+    exit;
+}
+
+/**
+ * Nastavení hesla přes e-mailový odkaz - slouží pro pozvánku nového uživatele
+ * (viz save_user v admin.php) i zapomenuté heslo (viz výše). Token dokazuje
+ * vlastnictví e-mailu, ne totožnost jinak.
+ */
+function bk_render_set_password_page($pdo, $site_title) {
+    $raw_token = trim($_GET['token'] ?? $_POST['token'] ?? '');
+    $error = '';
+    $done = false;
+    $user = null;
+
+    if (empty($raw_token)) {
+        $error = 'Chybí token pro nastavení hesla.';
+    } else {
+        $token_hash = hash('sha256', $raw_token);
+        $stmt = $pdo->prepare("SELECT id, username FROM users WHERE password_reset_token_hash = ? AND password_reset_expires > NOW() LIMIT 1");
+        $stmt->execute([$token_hash]);
+        $user = $stmt->fetch();
+
+        if (!$user) {
+            $error = 'Odkaz je neplatný nebo už vypršel. Požádejte prosím o nový.';
+        } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_password'])) {
+            bk_csrf_check();
+            $new_password = $_POST['password'] ?? '';
+            $confirm = $_POST['password_confirm'] ?? '';
+            if (strlen($new_password) < 8) {
+                $error = 'Heslo musí mít alespoň 8 znaků.';
+            } elseif ($new_password !== $confirm) {
+                $error = 'Hesla se neshodují.';
+            } else {
+                $new_hash = password_hash($new_password, PASSWORD_BCRYPT);
+                $stmt_up = $pdo->prepare("UPDATE users SET password_hash = ?, password_reset_token_hash = NULL, password_reset_expires = NULL WHERE id = ?");
+                $stmt_up->execute([$new_hash, $user['id']]);
+                bk_audit_log($pdo, 'password_set_via_link', '', 'user', $user['id'], $user['id'], $user['username']);
+                $done = true;
+            }
+        }
+    }
+
+    $body_html = '<h2><i class="fas fa-key" style="color: var(--color-red); margin-right: 0.5rem;"></i> Nastavení hesla</h2>';
+    if ($done) {
+        $body_html .= '<div class="alert alert-success">Heslo bylo úspěšně nastaveno.</div><a href="admin.php" class="btn" style="width:100%;">Přihlásit se</a>';
+    } elseif (!empty($error) && !$user) {
+        $body_html .= '<div class="alert alert-danger">' . htmlspecialchars($error) . '</div>'
+            . '<a href="admin.php?action=forgot_password" class="btn btn-secondary" style="width:100%;">Požádat o nový odkaz</a>';
+    } else {
+        if (!empty($error)) {
+            $body_html .= '<div class="alert alert-danger">' . htmlspecialchars($error) . '</div>';
+        }
+        $body_html .= '<form action="admin.php?action=set_password&token=' . htmlspecialchars($raw_token) . '" method="POST">' . bk_csrf_field()
+            . '<div class="form-group"><label for="password">Nové heslo</label><input type="password" name="password" id="password" class="form-control" autocomplete="new-password" required autofocus></div>'
+            . '<div class="form-group"><label for="password_confirm">Nové heslo znovu</label><input type="password" name="password_confirm" id="password_confirm" class="form-control" autocomplete="new-password" required></div>'
+            . '<button type="submit" name="set_password" class="btn" style="width:100%; margin-top:1rem;"><i class="fas fa-check"></i> Nastavit heslo</button>'
+            . '</form>';
+    }
+
+    echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Nastavení hesla | ' . htmlspecialchars($site_title) . '</title>'
+        . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
+        . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
+        . '<div class="login-wrapper" style="max-width: 380px;">' . $body_html . '</div>'
+        . '</body></html>';
     exit;
 }
 
@@ -4648,7 +4800,7 @@ function bk_render_setup_wizard($pdo, $me) {
 
     echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Dokončení instalace | ' . htmlspecialchars($site_title_current) . '</title>'
         . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
-        . '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css"></head>'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
         . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
         . '<div class="login-wrapper" style="max-width: 420px;">' . $body . '</div>'
         . '</body></html>';

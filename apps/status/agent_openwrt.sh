@@ -16,6 +16,7 @@
 # Hodnoty můžete nechat zde, nebo vytvořit soubor 'agent_openwrt.cfg' ve stejné složce.
 API_URL="http://localhost/status/agent_api.php"
 AGENT_KEY="ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
+AUTO_UPDATE="0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
 # ===========================
 
 if [ -n "$STATUS_API_URL" ]; then
@@ -23,6 +24,9 @@ if [ -n "$STATUS_API_URL" ]; then
 fi
 if [ -n "$STATUS_AGENT_KEY" ]; then
     AGENT_KEY="$STATUS_AGENT_KEY"
+fi
+if [ -n "$STATUS_AUTO_UPDATE" ]; then
+    AUTO_UPDATE="$STATUS_AUTO_UPDATE"
 fi
 
 ScriptPath=$(dirname "$0")
@@ -40,6 +44,7 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
                 case "$key" in
                     API_URL) API_URL="$val" ;;
                     AGENT_KEY) AGENT_KEY="$val" ;;
+                    AUTO_UPDATE) AUTO_UPDATE="$val" ;;
                     REMOTE_ACTIONS_ENABLED) REMOTE_ACTIONS_ENABLED="$val" ;;
                     ALLOWED_ACTIONS) ALLOWED_ACTIONS="$val" ;;
                 esac
@@ -365,6 +370,126 @@ if [ -f /proc/net/dev ]; then
     END { printf "]" }' /proc/net/dev 2>/dev/null)
 fi
 
+# --- WiFi per-radio detail (iwinfo) ---
+wifi_radios_json="[]"
+if command -v iwinfo >/dev/null 2>&1; then
+    wifi_radios_json=$(for radio in $(iwinfo 2>/dev/null | awk '/^[a-z]/ {print $1}'); do
+        info=$(iwinfo "$radio" info 2>/dev/null)
+        ssid=$(echo "$info" | grep -i "essid" | sed 's/.*ESSID: "\([^"]*\)".*/\1/')
+        channel=$(echo "$info" | grep -i "channel" | awk '{print $2}')
+        freq=$(echo "$info" | grep -i "frequency" | awk '{print $2}')
+        tx_power=$(echo "$info" | grep -i "tx-power" | awk '{print $2}')
+        noise=$(echo "$info" | grep -i "noise" | awk '{print $2}')
+        clients=$(iwinfo "$radio" assoclist 2>/dev/null | grep -c "Address:")
+        # Band detection from frequency
+        band="2.4GHz"
+        [ -n "$freq" ] && [ "$freq" -ge 5000 ] 2>/dev/null && band="5GHz"
+        [ -n "$freq" ] && [ "$freq" -ge 6000 ] 2>/dev/null && band="6GHz"
+        [ -n "$ssid" ] || ssid="unknown"
+        [ -n "$channel" ] || channel="0"
+        [ -n "$clients" ] || clients="0"
+        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%s,\"tx_power\":%s,\"noise\":%s,\"clients\":%s}, " \
+            "$radio" "$ssid" "$band" "${channel:-0}" "${tx_power:-0}" "${noise:-0}" "${clients:-0}"
+    done | sed 's/, $//')
+    [ -n "$wifi_radios_json" ] && wifi_radios_json="[$wifi_radios_json]" || wifi_radios_json="[]"
+fi
+
+# --- LAN / DHCP ---
+lan_subnet=""
+lan_json=$(ubus call network.interface.lan status 2>/dev/null)
+if [ -n "$lan_json" ]; then
+    json_load "$lan_json"
+    json_get_keys lan_v4_keys "ipv4-address"
+    for k in $lan_v4_keys; do
+        json_select "ipv4-address"
+        json_select "$k"
+        lan_addr=""; lan_mask=""
+        json_get_var lan_addr address
+        json_get_var lan_mask mask
+        if [ -n "$lan_addr" ] && [ -n "$lan_mask" ]; then
+            lan_subnet="$lan_addr/$lan_mask"
+        fi
+        json_select ..
+        json_select ..
+        break
+    done
+fi
+dhcp_leases_count=0
+if [ -f /tmp/dhcp.leases ]; then
+    dhcp_leases_count=$(wc -l < /tmp/dhcp.leases 2>/dev/null | xargs)
+fi
+dhcp_reservations_count=0
+if command -v uci >/dev/null 2>&1; then
+    dhcp_reservations_count=$(uci show dhcp 2>/dev/null | grep -c "=host$")
+fi
+
+# --- DNS (dnsmasq stats) ---
+dns_queries="null"
+dns_cache_hits="null"
+dns_cache_misses="null"
+if [ -f /tmp/dnsmasq.stats ] || (pidof dnsmasq >/dev/null 2>&1 && kill -USR1 $(pidof dnsmasq) 2>/dev/null && sleep 1); then
+    if [ -f /tmp/dnsmasq.stats ]; then
+        dns_queries=$(awk '/queries received/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+        dns_cache_hits=$(awk '/cache hits/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+        dns_cache_misses=$(awk '/cache misses/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+    fi
+fi
+[ -z "$dns_queries" ] && dns_queries="null"
+[ -z "$dns_cache_hits" ] && dns_cache_hits="null"
+[ -z "$dns_cache_misses" ] && dns_cache_misses="null"
+
+# --- Firewall packet counters (iptables/nftables) ---
+fw_accepted="null"
+fw_dropped="null"
+fw_rejected="null"
+if command -v iptables >/dev/null 2>&1; then
+    fw_accepted=$(iptables -L FORWARD -v -n -x 2>/dev/null | awk '/^Chain/{next} NR==2{print $1}')
+    fw_dropped=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "drop" | awk '{sum+=$1} END{print sum+0}')
+    fw_rejected=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "reject" | awk '{sum+=$1} END{print sum+0}')
+elif command -v nft >/dev/null 2>&1; then
+    fw_dropped=$(nft list ruleset 2>/dev/null | grep -i "drop" | grep "packets" | awk '{sum+=$4} END{print sum+0}')
+fi
+[ -z "$fw_accepted" ] && fw_accepted="null"
+[ -z "$fw_dropped" ] && fw_dropped="null"
+[ -z "$fw_rejected" ] && fw_rejected="null"
+
+# --- WireGuard peers (if wg command or wg0 interface exists) ---
+wireguard_peers_json="[]"
+if command -v wg >/dev/null 2>&1; then
+    wg_dump=$(wg show all dump 2>/dev/null)
+    if [ -n "$wg_dump" ]; then
+        wireguard_peers_json=$(echo "$wg_dump" | awk '
+        BEGIN { printf "[" }
+        {
+            if (count > 0) printf ", ";
+            split($3, ep, ":");
+            endpoint = ep[1];
+            handshake = $5;
+            rx = $6;
+            tx = $7;
+            printf "{\"interface\":\"%s\",\"public_key\":\"%s\",\"endpoint\":\"%s\",\"latest_handshake\":%s,\"rx_bytes\":%s,\"tx_bytes\":%s}", $1, substr($2,1,12)"...", endpoint, handshake, rx, tx;
+            count++;
+        }
+        END { printf "]" }')
+    fi
+elif [ -d /sys/class/net/wg0 ]; then
+    wireguard_peers_json="[{\"interface\":\"wg0\",\"public_key\":\"\",\"endpoint\":\"\",\"latest_handshake\":0,\"rx_bytes\":0,\"tx_bytes\":0}]"
+fi
+
+# --- Top CPU processes (pro Knowledge Tips) ---
+top_cpu_json="[]"
+if command -v top >/dev/null 2>&1; then
+    top_cpu_json=$(top -bn1 2>/dev/null | awk '
+    BEGIN { printf "["; count=0 }
+    NR > 7 && count < 3 {
+        if (count > 0) printf ", ";
+        gsub(/%/, "", $7);
+        printf "{\"pid\":%s,\"name\":\"%s\",\"cpu\":%s}", $1, $8, $7;
+        count++;
+    }
+    END { printf "]" }')
+fi
+
 # --- Service Discovery Scanner ---
 disc_list=""
 if [ -f /proc/net/tcp ] && grep -q "271B" /proc/net/tcp 2>/dev/null; then
@@ -397,8 +522,20 @@ payload=$(cat <<EOF
   "conntrack_pct": $conntrack_pct,
   "upgradable_packages": $upgradable_packages,
   "wifi_clients_count": $wifi_clients_count,
+  "wifi_radios": $wifi_radios_json,
   "interfaces": $interfaces_json,
   "discovered_services": $discovered_services_json,
+  "lan_subnet": "$lan_subnet",
+  "dhcp_leases_count": $dhcp_leases_count,
+  "dhcp_reservations_count": $dhcp_reservations_count,
+  "dns_queries": $dns_queries,
+  "dns_cache_hits": $dns_cache_hits,
+  "dns_cache_misses": $dns_cache_misses,
+  "fw_accepted": $fw_accepted,
+  "fw_dropped": $fw_dropped,
+  "fw_rejected": $fw_rejected,
+  "wireguard_peers": $wireguard_peers_json,
+  "top_cpu_processes": $top_cpu_json,
   "net": $net,
   "hdd": $hdd,
   "btrfs_errors": $btrfs_errors,
@@ -451,7 +588,7 @@ if [ "$http_code" = "200" ]; then
     
     # --- Spracovani vzdalenych akci (Remote Actions) ---
     REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
-    ALLOWED_ACTIONS="${ALLOWED_ACTIONS:-restart_wan,restart_wireguard,reboot_router,renew_dhcp}"
+    ALLOWED_ACTIONS="${ALLOWED_ACTIONS:-restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe}"
     
     if [ "$REMOTE_ACTIONS_ENABLED" = "1" ] && [ -n "$body" ]; then
         act_id=$(echo "$body" | awk -F'"action_id":' '{print $2}' | awk -F'[,}]' '{print $1}' | tr -d '[:space:]')
@@ -488,6 +625,21 @@ if [ "$http_code" = "200" ]; then
                         renew_dhcp)
                             ubus call network.interface.wan renew >/dev/null 2>&1 || true
                             ;;
+                        reconnect_pppoe)
+                            /sbin/ifdown wan >/dev/null 2>&1 || true
+                            sleep 3
+                            /sbin/ifup wan >/dev/null 2>&1 || true
+                            ;;
+                        restart_service)
+                            # Service name je v poli "service_name" v payloadu akce
+                            svc_name=$(echo "$body" | sed -n 's/.*"service_name":"\([^"]*\)".*/\1/p')
+                            if [ -n "$svc_name" ] && [ -x "/etc/init.d/$svc_name" ]; then
+                                /etc/init.d/"$svc_name" restart >/dev/null 2>&1 || true
+                                log_message "Restartovana sluzba: $svc_name"
+                            else
+                                log_message "VAROVANI: Sluzba '$svc_name' nenalezena nebo neni spustitelna."
+                            fi
+                            ;;
                         reboot_router)
                             log_message "PROVADIM REBOOT ROUTERU DLE PODEPSANEHO POKYNU..."
                             /sbin/reboot >/dev/null 2>&1 || true
@@ -501,6 +653,65 @@ if [ "$http_code" = "200" ]; then
             fi
         fi
     fi
+    # --- 6. Automatická aktualizace agenta (opt-in přes AUTO_UPDATE=1) ---
+    # Server v odpovědi oznámí novější verzi včetně SHA-256 checksumu. Nová verze
+    # se stáhne do dočasného souboru, ověří se checksum i syntaxe (sh -n) a teprve
+    # potom se atomicky nahradí tento skript. Při dalším spuštění (cron) už poběží
+    # nová verze.
+    if [ "$AUTO_UPDATE" = "1" ]; then
+        update_available=$(echo "$body" | grep -o '"update_available":[a-z]*' | cut -d: -f2)
+        if [ "$update_available" = "true" ]; then
+            update_url=$(echo "$body" | sed -n 's/.*"update_url":"\([^"]*\)".*/\1/p' | sed 's,\\/,/,g')
+            update_sha=$(echo "$body" | sed -n 's/.*"update_sha256":"\([a-f0-9]*\)".*/\1/p')
+            latest_version=$(echo "$body" | sed -n 's/.*"latest_version":"\([^"]*\)".*/\1/p')
+
+            if [ -n "$update_url" ] && [ -n "$update_sha" ]; then
+                self_path="$0"
+                tmp_file=$(mktemp /tmp/status-openwrt-update.XXXXXX 2>/dev/null || echo "/tmp/status-openwrt-update-$$")
+                log_message "K dispozici je nova verze agenta $latest_version (aktualni $AGENT_VERSION), stahuji z $update_url..."
+
+                download_ok=0
+                if command -v curl >/dev/null 2>&1; then
+                    curl -fsS -o "$tmp_file" "$update_url" && download_ok=1
+                elif command -v uclient-fetch >/dev/null 2>&1; then
+                    uclient-fetch -q -O "$tmp_file" "$update_url" && download_ok=1
+                elif command -v wget >/dev/null 2>&1; then
+                    wget -q -O "$tmp_file" "$update_url" && download_ok=1
+                fi
+
+                if [ "$download_ok" = "1" ]; then
+                    actual_sha=""
+                    if command -v sha256sum >/dev/null 2>&1; then
+                        actual_sha=$(sha256sum "$tmp_file" | awk '{print $1}')
+                    elif command -v shasum >/dev/null 2>&1; then
+                        actual_sha=$(shasum -a 256 "$tmp_file" 2>/dev/null | awk '{print $1}')
+                    fi
+
+                    if [ -n "$actual_sha" ] && [ "$actual_sha" = "$update_sha" ]; then
+                        if sh -n "$tmp_file" 2>/dev/null; then
+                            cp "$self_path" "$self_path.bak" 2>/dev/null || true
+                            chmod +x "$tmp_file"
+                            if mv "$tmp_file" "$self_path"; then
+                                log_message "OK: Agent aktualizovan na verzi $latest_version. Nova verze se pouzije pri pristim spusteni."
+                                exit 0
+                            else
+                                log_message "CHYBA UPDATE: Nepodarilo se nahradit $self_path (prava?). Aktualizace zrusena."
+                            fi
+                        else
+                            log_message "CHYBA UPDATE: Stazeny soubor neprosel kontrolou syntaxe. Aktualizace zrusena."
+                        fi
+                    else
+                        log_message "CHYBA UPDATE: Checksum nesouhlasi (oceavan $update_sha, stazen $actual_sha). Aktualizace zrusena."
+                    fi
+                else
+                    log_message "CHYBA UPDATE: Stazeni nove verze se nezdarilo."
+                fi
+                rm -f "$tmp_file" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    log_message "Hotovo."
 else
     log_message "CHYBA: Odeslani selhalo (HTTP $http_code). Odpoved: $body"
     exit 1

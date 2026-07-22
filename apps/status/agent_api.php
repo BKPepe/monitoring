@@ -114,6 +114,24 @@ $ow_wan_dns = (isset($data['wan_dns']) && $data['wan_dns'] !== null && $data['wa
 $ow_wan_uptime = (isset($data['wan_uptime']) && $data['wan_uptime'] !== null) ? intval($data['wan_uptime']) : null;
 $ow_btrfs_errors = (isset($data['btrfs_errors']) && $data['btrfs_errors'] !== null) ? intval($data['btrfs_errors']) : null;
 
+// OpenWrt Deep Telemetry - WiFi, LAN/DHCP, DNS, Firewall, WireGuard (viz agent_openwrt.sh)
+$ow_wifi_radios = (isset($data['wifi_radios']) && is_array($data['wifi_radios'])) ? $data['wifi_radios'] : null;
+$ow_lan_subnet = (isset($data['lan_subnet']) && $data['lan_subnet'] !== null && $data['lan_subnet'] !== '') ? trim($data['lan_subnet']) : null;
+$ow_dhcp_leases = (isset($data['dhcp_leases_count']) && $data['dhcp_leases_count'] !== null) ? intval($data['dhcp_leases_count']) : null;
+$ow_dhcp_reservations = (isset($data['dhcp_reservations_count']) && $data['dhcp_reservations_count'] !== null) ? intval($data['dhcp_reservations_count']) : null;
+$ow_dns_queries = (isset($data['dns_queries']) && $data['dns_queries'] !== null) ? intval($data['dns_queries']) : null;
+$ow_dns_cache_hits = (isset($data['dns_cache_hits']) && $data['dns_cache_hits'] !== null) ? intval($data['dns_cache_hits']) : null;
+$ow_dns_cache_misses = (isset($data['dns_cache_misses']) && $data['dns_cache_misses'] !== null) ? intval($data['dns_cache_misses']) : null;
+$ow_fw_accepted = (isset($data['fw_accepted']) && $data['fw_accepted'] !== null) ? intval($data['fw_accepted']) : null;
+$ow_fw_dropped = (isset($data['fw_dropped']) && $data['fw_dropped'] !== null) ? intval($data['fw_dropped']) : null;
+$ow_fw_rejected = (isset($data['fw_rejected']) && $data['fw_rejected'] !== null) ? intval($data['fw_rejected']) : null;
+$ow_wireguard_peers = (isset($data['wireguard_peers']) && is_array($data['wireguard_peers'])) ? $data['wireguard_peers'] : null;
+$ow_conntrack_pct = (isset($data['conntrack_pct']) && $data['conntrack_pct'] !== null) ? floatval($data['conntrack_pct']) : null;
+$ow_swap_pct = (isset($data['swap_pct']) && $data['swap_pct'] !== null) ? floatval($data['swap_pct']) : null;
+$ow_entropy = (isset($data['entropy']) && $data['entropy'] !== null) ? intval($data['entropy']) : null;
+$ow_upgradable_packages = (isset($data['upgradable_packages']) && $data['upgradable_packages'] !== null) ? intval($data['upgradable_packages']) : null;
+$ow_wifi_clients_count = (isset($data['wifi_clients_count']) && $data['wifi_clients_count'] !== null) ? intval($data['wifi_clients_count']) : null;
+
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Chybí povinné údaje (agent_key, cpu, ram, hdd).']);
@@ -281,6 +299,23 @@ try {
         'wan_dns' => $ow_wan_dns,
         'wan_uptime' => $ow_wan_uptime,
         'btrfs_errors' => $ow_btrfs_errors,
+        // OpenWrt Deep Telemetry
+        'wifi_radios' => $ow_wifi_radios,
+        'lan_subnet' => $ow_lan_subnet,
+        'dhcp_leases_count' => $ow_dhcp_leases,
+        'dhcp_reservations_count' => $ow_dhcp_reservations,
+        'dns_queries' => $ow_dns_queries,
+        'dns_cache_hits' => $ow_dns_cache_hits,
+        'dns_cache_misses' => $ow_dns_cache_misses,
+        'fw_accepted' => $ow_fw_accepted,
+        'fw_dropped' => $ow_fw_dropped,
+        'fw_rejected' => $ow_fw_rejected,
+        'wireguard_peers' => $ow_wireguard_peers,
+        'conntrack_pct' => $ow_conntrack_pct,
+        'swap_pct' => $ow_swap_pct,
+        'entropy' => $ow_entropy,
+        'upgradable_packages' => $ow_upgradable_packages,
+        'wifi_clients_count' => $ow_wifi_clients_count,
         'cpu_alert_sent' => $cpu_alert_sent,
         'ram_alert_sent' => $ram_alert_sent,
         'hdd_alert_sent' => $hdd_alert_sent,
@@ -336,8 +371,9 @@ try {
             load_avg_1, load_avg_5, load_avg_15, cpu_steal, swap_usage,
             disk_io_read_kbps, disk_io_write_kbps, net_errors,
             ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
-            iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c,
+            wifi_clients_total, conntrack_pct
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
     $stmt_metrics->execute([
         $monitor_id, $cpu, $ram, $hdd, $net,
@@ -345,6 +381,7 @@ try {
         $disk_io_read, $disk_io_write, $net_errors,
         $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
         $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
+        $ow_wifi_clients_count, $ow_conntrack_pct,
     ]);
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {

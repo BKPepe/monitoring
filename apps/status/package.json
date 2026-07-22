@@ -1,10 +1,9 @@
 {
   "name": "bloodkings-status-frontend-deps",
   "private": true,
-  "description": "apps/status has no build step - it's plain PHP deployed as-is via FTP. This manifest exists only so Dependabot can see and version-bump the frontend libraries that are actually loaded via pinned CDN <script>/<link> URLs directly in the PHP templates (functions.php, index.php, admin.php). There is no npm install here and no node_modules gets deployed. When Dependabot opens a bump PR, the matching CDN URL in the PHP file must be updated by hand to match.",
+  "description": "apps/status has no build step - it's plain PHP deployed as-is via FTP. This manifest exists only so Dependabot can see and version-bump the frontend libraries that are actually loaded via pinned CDN URLs. The URLs themselves live in ONE place - the BK_CDN_* constants at the top of functions.php - not scattered across templates. There is no npm install here and no node_modules gets deployed. When Dependabot opens a bump PR, update the matching BK_CDN_* constant in functions.php to match (echarts is intentionally held at 5.x - see the comment above the constants for why).",
   "dependencies": {
-    "@fortawesome/fontawesome-free": "7.3.0",
-    "chart.js": "4.5.0",
+    "@fortawesome/fontawesome-free": "7.3.1",
     "echarts": "5.5.1",
     "qrcode": "1.5.4"
   }

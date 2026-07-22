@@ -238,8 +238,8 @@ $portal_url = trim(get_setting('portal_url'));
     <?php if ($custom_color !== ''): ?>
     <style>:root { --color-red: <?php echo $custom_color; ?>; }</style>
     <?php endif; ?>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
+    <script src="<?php echo BK_CDN_ECHARTS; ?>"></script>
     <script>
         if (localStorage.getItem('theme') === 'light') {
             document.documentElement.classList.add('light-theme');
@@ -1466,43 +1466,46 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <div class="monitor-tab-panel" data-tab="clients_chart">
                                                          <div class="ts3-clients-chart-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                              <div class="detail-section-title"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('ts3_clients_chart_heading')); ?></div>
-                                                             <div style="position: relative; height: 180px; width: 100%; margin-top: 0.6rem;">
-                                                                 <canvas id="ts3ClientsChart-<?php echo $mid; ?>"></canvas>
-                                                             </div>
-                                                         </div>
-                                                         </div>
-                                                         <script>
-                                                         document.addEventListener("DOMContentLoaded", function() {
-                                                             const ctx = document.getElementById('ts3ClientsChart-<?php echo $mid; ?>');
-                                                             if (!ctx) return;
-                                                             window.bkTs3ClientsCharts = window.bkTs3ClientsCharts || {};
-                                                             window.bkTs3ClientsCharts[<?php echo $mid; ?>] = new Chart(ctx, {
-                                                                 type: 'line',
-                                                                 data: {
-                                                                     labels: <?php echo json_encode($ts3_clients_labels); ?>,
-                                                                     datasets: [{
-                                                                         label: 'Clients',
-                                                                         data: <?php echo json_encode($ts3_clients_data); ?>,
-                                                                         borderColor: '#1ec773',
-                                                                         backgroundColor: 'rgba(30, 199, 115, 0.08)',
-                                                                         borderWidth: 2,
-                                                                         pointRadius: 0,
-                                                                         tension: 0.3,
-                                                                         fill: true
-                                                                     }]
-                                                                 },
-                                                                 options: {
-                                                                     responsive: true,
-                                                                     maintainAspectRatio: false,
-                                                                     plugins: { legend: { display: false } },
-                                                                     scales: {
-                                                                         x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#8b8ba0', maxTicksLimit: 8, font: { size: 10 } } },
-                                                                         y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#8b8ba0', font: { size: 10 }, precision: 0 } }
-                                                                     }
-                                                                 }
-                                                             });
-                                                         });
-                                                         </script>
+                                                            <div style="position: relative; height: 180px; width: 100%; margin-top: 0.6rem;">
+                                                                <div id="ts3ClientsChart-<?php echo $mid; ?>" style="position: absolute; inset: 0;"></div>
+                                                            </div>
+                                                        </div>
+                                                        </div>
+                                                        <script>
+                                                        document.addEventListener("DOMContentLoaded", function() {
+                                                            const el = document.getElementById('ts3ClientsChart-<?php echo $mid; ?>');
+                                                            if (!el) return;
+                                                            window.bkTs3ClientsCharts = window.bkTs3ClientsCharts || {};
+                                                            const chart = echarts.init(el, (localStorage.getItem('theme') === 'light') ? null : 'dark');
+                                                            chart.setOption({
+                                                                backgroundColor: 'transparent',
+                                                                grid: { left: 34, right: 10, top: 8, bottom: 22 },
+                                                                tooltip: { trigger: 'axis' },
+                                                                xAxis: {
+                                                                    type: 'category',
+                                                                    data: <?php echo json_encode($ts3_clients_labels); ?>,
+                                                                    axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                                    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+                                                                    splitLine: { show: false }
+                                                                },
+                                                                yAxis: {
+                                                                    type: 'value',
+                                                                    min: 0,
+                                                                    axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                                    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.03)' } }
+                                                                },
+                                                                series: [{
+                                                                    type: 'line',
+                                                                    data: <?php echo json_encode($ts3_clients_data); ?>,
+                                                                    showSymbol: false,
+                                                                    smooth: 0.3,
+                                                                    lineStyle: { color: '#1ec773', width: 2 },
+                                                                    areaStyle: { color: '#1ec773', opacity: 0.08 }
+                                                                }]
+                                                            });
+                                                            window.bkTs3ClientsCharts[<?php echo $mid; ?>] = chart;
+                                                        });
+                                                        </script>
                                                      <?php endif; ?>
                                                  <?php endif; ?>
                                             <?php elseif ($m_type === 'discord'): ?>
@@ -1961,92 +1964,90 @@ $portal_url = trim(get_setting('portal_url'));
                                                         </a>
                                                     </div>
                                                     <div style="position: relative; height: 220px; width: 100%;">
-                                                        <canvas id="metricsChart-<?php echo $mid; ?>"></canvas>
+                                                    <div style="position: relative; height: 220px; width: 100%;">
+                                                        <div id="metricsChart-<?php echo $mid; ?>" style="position: absolute; inset: 0;"></div>
                                                     </div>
                                                 </div>
-                                                
+
                                                 <script>
                                                 document.addEventListener("DOMContentLoaded", function() {
-                                                    const ctx = document.getElementById('metricsChart-<?php echo $mid; ?>');
-                                                    if (!ctx) return;
+                                                    const el = document.getElementById('metricsChart-<?php echo $mid; ?>');
+                                                    if (!el) return;
                                                     window.bkMetricsCharts = window.bkMetricsCharts || {};
-                                                    window.bkMetricsCharts[<?php echo $mid; ?>] = new Chart(ctx, {
-                                                        type: 'line',
-                                                        data: {
-                                                            labels: <?php echo json_encode($labels); ?>,
-                                                            datasets: [
-                                                                {
-                                                                    label: 'CPU (%)',
-                                                                    data: <?php echo json_encode($cpu_data); ?>,
-                                                                    borderColor: '#c1121f',
-                                                                    backgroundColor: 'rgba(193, 18, 31, 0.05)',
-                                                                    borderWidth: 2,
-                                                                    pointRadius: 0,
-                                                                    tension: 0.3,
-                                                                    fill: true
-                                                                },
-                                                                {
-                                                                    label: 'RAM (%)',
-                                                                    data: <?php echo json_encode($ram_data); ?>,
-                                                                    borderColor: '#1ec773',
-                                                                    backgroundColor: 'rgba(30, 199, 115, 0.05)',
-                                                                    borderWidth: 2,
-                                                                    pointRadius: 0,
-                                                                    tension: 0.3,
-                                                                    fill: true
-                                                                },
-                                                                {
-                                                                    label: 'Disk (%)',
-                                                                    data: <?php echo json_encode($hdd_data); ?>,
-                                                                    borderColor: '#ffb703',
-                                                                    backgroundColor: 'rgba(255, 183, 3, 0.05)',
-                                                                    borderWidth: 2,
-                                                                    pointRadius: 0,
-                                                                    tension: 0.3,
-                                                                    fill: true
-                                                                },
-                                                                {
-                                                                    label: 'Síť (KB/s)',
-                                                                    data: <?php echo json_encode($net_data); ?>,
-                                                                    borderColor: '#8b5cf6',
-                                                                    backgroundColor: 'rgba(139, 92, 246, 0.05)',
-                                                                    borderWidth: 2,
-                                                                    pointRadius: 0,
-                                                                    tension: 0.3,
-                                                                    fill: false,
-                                                                    spanGaps: true,
-                                                                    yAxisID: 'y1'
-                                                                }
-                                                            ]
+                                                    const chart = echarts.init(el, (localStorage.getItem('theme') === 'light') ? null : 'dark');
+                                                    chart.setOption({
+                                                        backgroundColor: 'transparent',
+                                                        grid: { left: 40, right: 46, top: 34, bottom: 26 },
+                                                        tooltip: { trigger: 'axis' },
+                                                        legend: {
+                                                            data: ['CPU (%)', 'RAM (%)', 'Disk (%)', 'S\u00ed\u0165 (KB/s)'],
+                                                            top: 0,
+                                                            textStyle: { color: '#e1e1e6', fontSize: 11 }
                                                         },
-                                                        options: {
-                                                            responsive: true,
-                                                            maintainAspectRatio: false,
-                                                            plugins: {
-                                                                legend: {
-                                                                    labels: { color: '#e1e1e6', boxWidth: 12, font: { size: 11 } }
-                                                                }
+                                                        xAxis: {
+                                                            type: 'category',
+                                                            data: <?php echo json_encode($labels); ?>,
+                                                            axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                            axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+                                                            splitLine: { show: false }
+                                                        },
+                                                        yAxis: [
+                                                            {
+                                                                type: 'value',
+                                                                min: 0,
+                                                                max: 100,
+                                                                axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                                splitLine: { lineStyle: { color: 'rgba(255,255,255,0.03)' } }
                                                             },
-                                                            scales: {
-                                                                x: {
-                                                                    grid: { color: 'rgba(255,255,255,0.03)' },
-                                                                    ticks: { color: '#8b8ba0', maxTicksLimit: 12, font: { size: 10 } }
-                                                                },
-                                                                y: {
-                                                                    min: 0,
-                                                                    max: 100,
-                                                                    grid: { color: 'rgba(255,255,255,0.03)' },
-                                                                    ticks: { color: '#8b8ba0', font: { size: 10 } }
-                                                                },
-                                                                y1: {
-                                                                    position: 'right',
-                                                                    min: 0,
-                                                                    grid: { display: false },
-                                                                    ticks: { color: '#8b5cf6', font: { size: 10 } }
-                                                                }
+                                                            {
+                                                                type: 'value',
+                                                                min: 0,
+                                                                position: 'right',
+                                                                axisLabel: { color: '#8b5cf6', fontSize: 10 },
+                                                                splitLine: { show: false }
                                                             }
-                                                        }
+                                                        ],
+                                                        series: [
+                                                            {
+                                                                name: 'CPU (%)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($cpu_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                lineStyle: { color: '#c1121f', width: 2 },
+                                                                areaStyle: { color: '#c1121f', opacity: 0.05 }
+                                                            },
+                                                            {
+                                                                name: 'RAM (%)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($ram_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                lineStyle: { color: '#1ec773', width: 2 },
+                                                                areaStyle: { color: '#1ec773', opacity: 0.05 }
+                                                            },
+                                                            {
+                                                                name: 'Disk (%)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($hdd_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                lineStyle: { color: '#ffb703', width: 2 },
+                                                                areaStyle: { color: '#ffb703', opacity: 0.05 }
+                                                            },
+                                                            {
+                                                                name: 'S\u00ed\u0165 (KB/s)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($net_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                connectNulls: true,
+                                                                lineStyle: { color: '#8b5cf6', width: 2 },
+                                                                yAxisIndex: 1
+                                                            }
+                                                        ]
                                                     });
+                                                    window.bkMetricsCharts[<?php echo $mid; ?>] = chart;
                                                 });
                                                 </script>
                                                 </div>
@@ -2277,11 +2278,11 @@ $portal_url = trim(get_setting('portal_url'));
 
         try { localStorage.setItem('bk_monitor_tab_' + monitorId, tabId); } catch (e) {}
 
-        // Chart.js canvasy vytvořené uvnitř skrytého (display:none) tabu se
+        // ECharts instance vytvořené uvnitř skrytého (display:none) tabu se
         // vykreslí s nulovou velikostí - při přepnutí NA tab s grafem je potřeba
-        // ho ručně přepočítat. Load History graf tomu unikl tím, že žije v
-        // defaultně aktivním Overview tabu, ale Client History (TS3) je svůj
-        // vlastní tab, takže potřebuje tenhle fix.
+        // ho ručně přepočítat (.resize()). Load History graf tomu unikl tím, že
+        // žije v defaultně aktivním Overview tabu, ale Client History (TS3) je
+        // svůj vlastní tab, takže potřebuje tenhle fix.
         if (tabId === 'clients_chart' && window.bkTs3ClientsCharts && window.bkTs3ClientsCharts[monitorId]) {
             window.bkTs3ClientsCharts[monitorId].resize();
         }
@@ -2336,12 +2337,15 @@ $portal_url = trim(get_setting('portal_url'));
                 try {
                     const res = await fetch('api.php?action=metrics_history&monitor_id=' + encodeURIComponent(monitorId) + '&period=' + encodeURIComponent(btn.dataset.period));
                     const data = await res.json();
-                    chart.data.labels = data.labels;
-                    chart.data.datasets[0].data = data.cpu;
-                    chart.data.datasets[1].data = data.ram;
-                    if (chart.data.datasets[2]) chart.data.datasets[2].data = data.hdd;
-                    if (chart.data.datasets[3]) chart.data.datasets[3].data = data.net;
-                    chart.update();
+                    chart.setOption({
+                        xAxis: { data: data.labels },
+                        series: [
+                            { data: data.cpu },
+                            { data: data.ram },
+                            { data: data.hdd || [] },
+                            { data: data.net || [] }
+                        ]
+                    });
 
                     const cpuStats = document.getElementById('cpuStats-' + monitorId);
                     const ramStats = document.getElementById('ramStats-' + monitorId);

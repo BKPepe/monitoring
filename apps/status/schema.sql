@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `rcon_port` INT DEFAULT NULL, -- Minecraft RCON port (výchozí 25575) - volitelné, umožní TPS přes Paper/Spigot
   `rcon_password` VARCHAR(255) DEFAULT NULL,
   `remote_actions_enabled` TINYINT(1) DEFAULT 0, -- Souhlas s Remote Actions pro tento konkrétní monitor - výchozí VYPNUTO
-  `allowed_actions` VARCHAR(255) DEFAULT NULL, -- Čárkou oddělený seznam povolených akcí (podmnožina restart_wan,restart_wireguard,reboot_router,renew_dhcp)
+  `allowed_actions` VARCHAR(255) DEFAULT NULL, -- Čárkou oddělený seznam povolených akcí (podmnožina restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe)
   `asset_id` INT DEFAULT NULL, -- Fyzické/logické zařízení, ke kterému monitor patří (viz `assets`) - NULL = zatím nepřiřazeno
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`),
@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `zombie_count` INT DEFAULT NULL, -- Počet procesů ve stavu zombie (Z)
   `fork_rate` INT DEFAULT NULL, -- Nové procesy (fork) od posledního běhu agenta
   `temperature_c` FLOAT DEFAULT NULL, -- Teplota CPU/desky ve °C (NULL, pokud hostitel/VM nevystavuje thermal zóny)
+  `wifi_clients_total` INT DEFAULT NULL, -- Celkový počet Wi-Fi klientů (OpenWrt)
+  `conntrack_pct` FLOAT DEFAULT NULL, -- Využití conntrack tabulky v % (OpenWrt/firewall)
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
@@ -207,8 +209,20 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Hranice varování pro vypršení SSL certifikátu (ve dnech)
 ('ssl_alert_days', '14'),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260729')
+('schema_version', '20260730')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;
+
+CREATE TABLE IF NOT EXISTS `metric_annotations` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `monitor_id` INT NOT NULL,
+  `metric_key` VARCHAR(30) NOT NULL,
+  `timestamp` DATETIME NOT NULL,
+  `note` TEXT NOT NULL,
+  `created_by` INT DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
+  INDEX (`monitor_id`, `metric_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `incidents` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
