@@ -199,6 +199,18 @@ header {
   box-shadow: 0 4px 12px rgba(243, 156, 18, 0.3);
 }
 
+/* GitHub brand button - vlastní třída místo inline "color: #fff", protože
+   .light-theme má blanket pravidlo [style*="color: #fff"] s !important
+   (oprava viditelnosti bílého textu na světlém pozadí), které by jinak
+   přepsalo i tohle tlačítko a nechalo tmavý text na tmavém pozadí. */
+.btn-github {
+  background: #24292e !important;
+  color: #fff !important;
+}
+.btn-github:hover {
+  background: #1a1e22 !important;
+}
+
 .btn-warning:hover {
   background: #e67e22;
 }

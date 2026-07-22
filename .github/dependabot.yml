@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Workspace root - covers apps/site (Astro) and apps/worker (Cloudflare Worker),
+  # both listed in the root package.json "workspaces" array.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # apps/status has no build step (plain PHP, deployed via FTP) - its package.json
+  # exists only to give Dependabot something to track for the pinned CDN <script>
+  # URLs in the PHP templates. See apps/status/package.json for details; a bump
+  # PR here still requires manually updating the matching CDN URL in the PHP file.
+  - package-ecosystem: "npm"
+    directory: "/apps/status"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions used by the deploy/release workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

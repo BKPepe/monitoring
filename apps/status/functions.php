@@ -4376,7 +4376,7 @@ function bk_totp_verify_code($secret, $code, $discrepancy = 1) {
 /**
  * Vykreslí kartu pro zapnutí/vypnutí 2FA na vlastním účtu (Profil administrátora
  * i běžného uživatele - obě sdílí tuhle jednu implementaci). QR kód se generuje
- * čistě na klientovi (qrcodejs z CDN) - secret se tak nikdy neposílá žádné třetí
+ * čistě na klientovi (knihovna qrcode z CDN) - secret se tak nikdy neposílá žádné třetí
  * straně jako u veřejných QR-generátorových API, jen zůstává v odpovědi vlastní
  * autentizované stránky.
  */
@@ -4397,23 +4397,162 @@ function bk_render_totp_section($me, $site_title) {
         $account = rawurlencode($me['username'] ?? 'admin');
         $otpauth_uri = "otpauth://totp/{$issuer}:{$account}?secret={$secret}&issuer={$issuer}&algorithm=SHA1&digits=6&period=30";
 
-        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Naskenujte QR kód v autentikační aplikaci (Google Authenticator, Authy, 2FAS...) a potvrďte 6místným kódem.</p>'
-            . '<div id="totp-qr" style="width: 184px; height: 184px; margin: 0.75rem 0; background: #fff; padding: 8px; border-radius: 6px;"></div>'
+        // Verze CDN knihovny (qrcode@1.5.4) je zrcadlená v apps/status/package.json,
+        // aby ji hlídal Dependabot - PHP soubor sám o sobě pro něj neviditelný.
+        // Při bumpu přes Dependabot PR je potřeba ručně přepsat i tuhle URL.
+        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Naskenujte QR kód v autentikační aplikaci (např. Proton Pass) a potvrďte 6místným kódem.</p>'
+            . '<canvas id="totp-qr" style="margin: 0.75rem 0; background: #fff; padding: 8px; border-radius: 6px;"></canvas>'
             . '<p style="font-size: 0.75rem; color: var(--text-muted);">Nebo zadejte ručně: <code style="user-select: all;">' . htmlspecialchars($secret) . '</code></p>'
             . '<form action="admin.php#totp-section" method="POST" style="max-width: 220px; margin-top: 0.75rem;">'
             . '<div class="form-group"><label for="totp_code">6místný kód z appky</label>'
             . '<input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></div>'
             . '<button type="submit" name="totp_confirm" class="btn"><i class="fas fa-check"></i> Potvrdit a zapnout</button>'
             . '</form>'
-            . '<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>'
-            . '<script>new QRCode(document.getElementById("totp-qr"), { text: ' . json_encode($otpauth_uri) . ', width: 184, height: 184 });</script>';
+            . '<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js"></script>'
+            . '<script>QRCode.toCanvas(document.getElementById("totp-qr"), ' . json_encode($otpauth_uri) . ', { width: 184 }, function (err) { if (err) console.error(err); });</script>';
     } else {
         $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">2FA je vypnuté. Doporučujeme ho zapnout, hlavně pokud se přihlašujete heslem (ne přes GitHub OAuth).</p>'
-            . '<a href="admin.php?action=totp_setup_start" class="btn"><i class="fas fa-qrcode"></i> Zapnout 2FA</a>';
+            . '<form action="admin.php#totp-section" method="POST" style="display:inline;">' . bk_csrf_field()
+            . '<button type="submit" name="totp_setup_start" class="btn"><i class="fas fa-qrcode"></i> Zapnout 2FA</button></form>';
     }
 
     $html .= '</div>';
     return $html;
+}
+
+/**
+ * CSRF ochrana (synchronizer token pattern) - jeden token na session, líné
+ * vygenerování při první potřebě. bk_csrf_field() se vkládá do každého
+ * <form>, bk_csrf_check() se volá na začátku každého handleru, co mění stav
+ * (mazání, přepínání, odesílání e-mailů...). Čtecí/needitující akce (login
+ * formulář samotný, logout, náhledy, prefill editace) token nepotřebují.
+ */
+function bk_csrf_token() {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function bk_csrf_field() {
+    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(bk_csrf_token()) . '">';
+}
+
+function bk_csrf_check() {
+    $submitted = (string)($_POST['csrf_token'] ?? '');
+    if (empty($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $submitted)) {
+        http_response_code(403);
+        exit('Neplatný nebo vypršelý bezpečnostní token (CSRF). Obnovte stránku a zkuste akci znovu.');
+    }
+}
+
+/**
+ * Vynucený setup wizard po čerstvé instalaci - 3 kroky (účet, cron_key,
+ * základy webu), po dokončení nastaví jediný zdroj pravdy setup_completed
+ * v settings. admin.php volá tuhle funkci a rovnou ukončuje request, dokud
+ * flag není '1' - žádná jiná admin akce se dřív neprovede (viz volání níže).
+ * Nahrazuje dřívější porovnávání natvrdo psaného hashe hesla v security banneru.
+ */
+function bk_render_setup_wizard($pdo, $me) {
+    $step = (int)($_GET['step'] ?? 1);
+    if ($step < 1 || $step > 3) $step = 1;
+    $error = '';
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        bk_csrf_check();
+
+        if (isset($_POST['wizard_step1'])) {
+            $new_username = trim($_POST['username'] ?? '');
+            $new_email = trim($_POST['email'] ?? '');
+            $new_password = $_POST['password'] ?? '';
+            $confirm_password = $_POST['password_confirm'] ?? '';
+            if (empty($new_username) || empty($new_email)) {
+                $error = 'Uživatelské jméno a e-mail jsou povinné.';
+            } elseif (strlen($new_password) < 8) {
+                $error = 'Heslo musí mít alespoň 8 znaků.';
+            } elseif ($new_password !== $confirm_password) {
+                $error = 'Hesla se neshodují.';
+            } else {
+                $new_hash = password_hash($new_password, PASSWORD_BCRYPT);
+                $stmt = $pdo->prepare("UPDATE users SET username = ?, email = ?, password_hash = ? WHERE id = ?");
+                $stmt->execute([$new_username, $new_email, $new_hash, $me['id']]);
+                $_SESSION['admin_username'] = $new_username;
+                header('Location: admin.php?action=setup_wizard&step=2');
+                exit;
+            }
+            $step = 1;
+        } elseif (isset($_POST['wizard_step2'])) {
+            $cron_key = trim($_POST['cron_key'] ?? '');
+            if (empty($cron_key)) {
+                $error = 'Cron key nesmí být prázdný.';
+            } else {
+                $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = ?");
+                $stmt->execute([$cron_key, $cron_key]);
+                header('Location: admin.php?action=setup_wizard&step=3');
+                exit;
+            }
+            $step = 2;
+        } elseif (isset($_POST['wizard_step3'])) {
+            $new_site_title = trim($_POST['site_title'] ?? '') ?: 'Blood Kings Status';
+            $new_site_url = trim($_POST['site_url'] ?? '');
+            foreach (['site_title' => $new_site_title, 'site_url' => $new_site_url, 'setup_completed' => '1'] as $k => $v) {
+                $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
+                $stmt->execute([$k, $v, $v]);
+            }
+            header('Location: admin.php');
+            exit;
+        }
+    }
+
+    $steps_labels = ['1' => 'Účet', '2' => 'Cron key', '3' => 'Základy webu'];
+    $site_title_current = get_setting('site_title', 'Blood Kings');
+
+    $body = '<h2><i class="fas fa-flag-checkered" style="color: var(--color-red); margin-right: 0.5rem;"></i> Dokončení instalace</h2>'
+        . '<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">Než budete moct appku běžně používat, projděte prosím tyhle kroky - vyřeší se tím výchozí přístupové údaje z čerstvé instalace.</p>';
+
+    $body .= '<div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem;">';
+    foreach ($steps_labels as $n => $label) {
+        $active = ((int)$n === $step);
+        $done = ((int)$n < $step);
+        $color = $active ? 'var(--color-red)' : ($done ? 'var(--color-green)' : 'var(--text-muted)');
+        $body .= '<div style="flex:1; text-align:center; font-size:0.75rem; color:' . $color . '; border-bottom: 2px solid ' . $color . '; padding-bottom: 0.4rem;">' . ($done ? '<i class="fas fa-check"></i> ' : htmlspecialchars($n) . '. ') . htmlspecialchars($label) . '</div>';
+    }
+    $body .= '</div>';
+
+    if (!empty($error)) {
+        $body .= '<div class="alert alert-danger">' . htmlspecialchars($error) . '</div>';
+    }
+
+    if ($step === 1) {
+        $body .= '<form action="admin.php?action=setup_wizard" method="POST">' . bk_csrf_field()
+            . '<div class="form-group"><label for="username">Uživatelské jméno</label><input type="text" name="username" id="username" class="form-control" value="' . htmlspecialchars($me['username']) . '" required></div>'
+            . '<div class="form-group"><label for="email">E-mail</label><input type="email" name="email" id="email" class="form-control" value="' . htmlspecialchars($me['email'] ?? '') . '" required></div>'
+            . '<div class="form-group"><label for="password">Nové heslo</label><input type="password" name="password" id="password" class="form-control" autocomplete="new-password" required></div>'
+            . '<div class="form-group"><label for="password_confirm">Nové heslo znovu</label><input type="password" name="password_confirm" id="password_confirm" class="form-control" autocomplete="new-password" required></div>'
+            . '<button type="submit" name="wizard_step1" class="btn" style="width:100%; margin-top:1rem;"><i class="fas fa-arrow-right"></i> Pokračovat</button>'
+            . '</form>';
+    } elseif ($step === 2) {
+        $suggested_key = bin2hex(random_bytes(16));
+        $body .= '<p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">Chrání HTTP spouštění cron.php a Distributed Node API (node_api.php). Předvyplněná náhodná hodnota je bezpečná, klidně ji nechte tak.</p>'
+            . '<form action="admin.php?action=setup_wizard" method="POST">' . bk_csrf_field()
+            . '<div class="form-group"><label for="cron_key">Cron key</label><input type="text" name="cron_key" id="cron_key" class="form-control" value="' . htmlspecialchars($suggested_key) . '" required></div>'
+            . '<button type="submit" name="wizard_step2" class="btn" style="width:100%; margin-top:1rem;"><i class="fas fa-arrow-right"></i> Pokračovat</button>'
+            . '</form>';
+    } else {
+        $body .= '<form action="admin.php?action=setup_wizard" method="POST">' . bk_csrf_field()
+            . '<div class="form-group"><label for="site_title">Název webu</label><input type="text" name="site_title" id="site_title" class="form-control" value="' . htmlspecialchars($site_title_current) . '" required></div>'
+            . '<div class="form-group"><label for="site_url">URL webu (pro odkazy v digestu)</label><input type="url" name="site_url" id="site_url" class="form-control" value="' . htmlspecialchars(get_setting('site_url', '')) . '" placeholder="https://status.vasedomena.cz"></div>'
+            . '<button type="submit" name="wizard_step3" class="btn" style="width:100%; margin-top:1rem;"><i class="fas fa-check"></i> Dokončit instalaci</button>'
+            . '</form>';
+    }
+
+    echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Dokončení instalace | ' . htmlspecialchars($site_title_current) . '</title>'
+        . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
+        . '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css"></head>'
+        . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
+        . '<div class="login-wrapper" style="max-width: 420px;">' . $body . '</div>'
+        . '</body></html>';
+    exit;
 }
 
 /**

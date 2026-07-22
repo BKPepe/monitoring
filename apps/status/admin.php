@@ -115,38 +115,20 @@ if (isset($_GET['code']) && isset($_GET['state'])) {
 // Zpracování přihlášení (chybu z OAuth callbacku výše nesmíme přepsat)
 $login_error = $login_error ?? '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
+    bk_csrf_check();
     $username = trim($_POST['username']);
     $password = $_POST['password'];
-    
+
     $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
     $stmt->execute([$username]);
     $user = $stmt->fetch();
-    
-    $password_correct = false;
+
     if ($user && password_verify($password, $user['password_hash'])) {
-        $password_correct = true;
-    }
-    
-    if ($password_correct) {
         if (!empty($user['totp_enabled'])) {
-            $totp_input = trim($_POST['totp_code'] ?? '');
-            if (!empty($totp_input)) {
-                if (bk_totp_verify_code($user['totp_secret'], $totp_input)) {
-                    session_regenerate_id(true);
-                    $_SESSION['admin_logged_in'] = true;
-                    $_SESSION['admin_username'] = $user['username'];
-                    $_SESSION['admin_id'] = $user['id'];
-                    $_SESSION['admin_role'] = $user['role'];
-                    unset($_SESSION['pending_2fa_username']);
-                    header('Location: admin.php');
-                    exit;
-                } else {
-                    $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
-                    $_SESSION['pending_2fa_username'] = $user['username'];
-                }
-            } else {
-                $_SESSION['pending_2fa_username'] = $user['username'];
-            }
+            // Heslo sedí, ale účet má 2FA - do session jde jen ID (důkaz, že
+            // tahle session už prošla heslem), samotné heslo se nikam neukládá.
+            // Krok 2 (kód) zpracovává samostatný handler níže.
+            $_SESSION['pending_2fa_user_id'] = $user['id'];
         } else {
             session_regenerate_id(true);
             $_SESSION['admin_logged_in'] = true;
@@ -158,6 +140,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
         }
     } else {
         $login_error = 'Neplatné přihlašovací údaje.';
+    }
+}
+
+// Krok 2 přihlášení s 2FA - ověření 6místného kódu proti účtu, co už prošel
+// heslem v kroku výše (pending_2fa_user_id). Samostatný POST handler, protože
+// přihlašovací formulář teď v tomhle kroku posílá jen kód, ne username/password.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_login_code'])) {
+    bk_csrf_check();
+    $pending_user_id = $_SESSION['pending_2fa_user_id'] ?? 0;
+    $totp_input = trim($_POST['totp_code'] ?? '');
+
+    if (empty($pending_user_id)) {
+        $login_error = 'Relace vypršela, přihlaste se prosím znovu.';
+    } else {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+        $stmt->execute([$pending_user_id]);
+        $user = $stmt->fetch();
+
+        if ($user && bk_totp_verify_code($user['totp_secret'], $totp_input)) {
+            session_regenerate_id(true);
+            $_SESSION['admin_logged_in'] = true;
+            $_SESSION['admin_username'] = $user['username'];
+            $_SESSION['admin_id'] = $user['id'];
+            $_SESSION['admin_role'] = $user['role'];
+            unset($_SESSION['pending_2fa_user_id']);
+            header('Location: admin.php');
+            exit;
+        } else {
+            $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
+        }
     }
 }
 
@@ -190,7 +202,18 @@ if (!$is_logged_in) {
             <?php if (!empty($login_error)): ?>
                 <div class="alert alert-danger"><?php echo $login_error; ?></div>
             <?php endif; ?>
+            <?php if (!empty($_SESSION['pending_2fa_user_id'])): ?>
+                <form action="admin.php" method="POST">
+                    <?php echo bk_csrf_field(); ?>
+                    <div class="form-group">
+                        <label for="totp_code">6místný kód z autentikační aplikace</label>
+                        <input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autofocus autocomplete="one-time-code">
+                    </div>
+                    <button type="submit" name="totp_login_code" class="btn" style="width: 100%; margin-top: 1rem;"><i class="fas fa-shield-halved"></i> Potvrdit</button>
+                </form>
+            <?php else: ?>
             <form action="admin.php" method="POST">
+                <?php echo bk_csrf_field(); ?>
                 <div class="form-group">
                     <label for="username">Uživatelské jméno</label>
                     <input type="text" name="username" id="username" class="form-control" required autofocus autocomplete="username">
@@ -204,11 +227,12 @@ if (!$is_logged_in) {
                 $gh_client_id = get_setting('oauth_github_client_id');
                 if (!empty($gh_client_id)):
                 ?>
-                    <a href="admin.php?login_oauth=github" class="btn" style="width: 100%; margin-top: 0.5rem; background-color: #24292e; color: #fff; display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: none;">
+                    <a href="admin.php?login_oauth=github" class="btn btn-github" style="width: 100%; margin-top: 0.5rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: none;">
                         <i class="fab fa-github"></i> Přihlásit se přes GitHub
                     </a>
                 <?php endif; ?>
             </form>
+            <?php endif; ?>
         </div>
         
         <script>
@@ -241,19 +265,28 @@ $stmt_me->execute([$user_id]);
 $me = $stmt_me->fetch();
 $user_role = $me ? $me['role'] : 'user';
 
-// Bezpečnostní upozornění na nedokončenou instalaci - nesmí zůstat tiché.
-// cron_key prázdný = cron.php běží přes HTTP bez ověření a node_api.php je
-// úplně vypnutý (fail closed, viz node_api.php); '$2y$12$rRP/Lm2...' je hash
-// výchozího hesla z schema.sql (admin / BloodKingsAdmin123!) - pokud ho má
-// aktuálně přihlášený admin pořád nastavený, ještě si heslo nezměnil.
+// Vynucený setup wizard po čerstvé instalaci - jediný zdroj pravdy je
+// setup_completed flag v settings, žádné porovnávání natvrdo psaných hashů.
+// Dokud admin wizardem neprojde, žádná jiná akce v admin.php se nespustí.
+if ($user_role === 'admin' && get_setting('setup_completed', '') !== '1') {
+    // Migrace pro instalace, co existovaly už před wizardem - mít vyplněný
+    // vlastní cron_key jasně znamená, že instalace není "čerstvá" a nemá smysl
+    // nutit admina projít wizard od nuly jen kvůli chybějícímu flagu.
+    if (trim((string)get_setting('cron_key', '')) !== '') {
+        $stmt_sc = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+        $stmt_sc->execute();
+        $GLOBALS['system_settings']['setup_completed'] = '1';
+    } elseif (!(isset($_GET['action']) && $_GET['action'] === 'logout')) {
+        bk_render_setup_wizard($pdo, $me);
+        exit;
+    }
+}
+
+// Zbývající bezpečnostní upozornění, co wizard neřeší napřímo (cron_key se sice
+// nastavuje v kroku 2, ale admin ho mohl později v nastavení zase vymazat).
 $security_warnings = [];
-if ($user_role === 'admin') {
-    if (trim((string)get_setting('cron_key', '')) === '') {
-        $security_warnings[] = 'Není nastavený "Cron key" (záložka Notifikace -> Cron). Bez něj jede cron.php přes HTTP bez ověření a Distributed Node API (node_api.php) je úplně vypnuté - nastavte si vlastní klíč.';
-    }
-    if ($me && $me['password_hash'] === '$2y$12$rRP/Lm2dxcJQmC2xwkhnE.1q.EypQOSl33iBR.t/5HPStN4MPPxme') {
-        $security_warnings[] = 'Používáte výchozí heslo z čerstvé instalace (admin / BloodKingsAdmin123!) - změňte si ho v Profilu.';
-    }
+if ($user_role === 'admin' && trim((string)get_setting('cron_key', '')) === '') {
+    $security_warnings[] = 'Není nastavený "Cron key" (záložka Notifikace -> Cron). Bez něj jede cron.php přes HTTP bez ověření a Distributed Node API (node_api.php) je úplně vypnuté - nastavte si vlastní klíč.';
 }
 
 $success_msg = '';
@@ -261,6 +294,7 @@ $error_msg = '';
 
 // 1. Zpracování přidání / úpravy monitoru
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $user_role === 'admin') {
+    bk_csrf_check();
     $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
     $name = trim($_POST['name']);
     $type = $_POST['type'];
@@ -385,8 +419,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
 }
 
 // 2. Zpracování smazání monitoru
-if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id']) && $user_role === 'admin') {
-    $del_id = intval($_GET['id']);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_monitor']) && isset($_POST['id']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $del_id = intval($_POST['id']);
     $stmt_del_info = $pdo->prepare("SELECT name, type FROM monitors WHERE id = ?");
     $stmt_del_info->execute([$del_id]);
     $del_info = $stmt_del_info->fetch();
@@ -400,6 +435,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
 
 // 2b. Přejmenování assetu (Phase 4)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_asset']) && $user_role === 'admin') {
+    bk_csrf_check();
     $ra_asset_id = (int)($_POST['asset_id'] ?? 0);
     $ra_new_name = trim($_POST['asset_name'] ?? '');
     if ($ra_asset_id > 0 && $ra_new_name !== '') {
@@ -413,8 +449,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_asset']) && $u
 // neosiřely monitory (viz FOREIGN KEY ... ON DELETE SET NULL v db.php, což by
 // se stalo, kdyby šlo smazat i neprázdný asset - raději to admin udělá vědomě
 // přeřazením monitorů jinam, ne omylem kliknutím na "smazat").
-if (isset($_GET['action']) && $_GET['action'] === 'delete_asset' && isset($_GET['id']) && $user_role === 'admin') {
-    $da_id = (int)$_GET['id'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_asset']) && isset($_POST['id']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $da_id = (int)$_POST['id'];
     $stmt_da_check = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ?");
     $stmt_da_check->execute([$da_id]);
     if ((int)$stmt_da_check->fetchColumn() === 0) {
@@ -428,6 +465,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete_asset' && isset($_GET[
 
 // 3. Zpracování uložení konfigurace
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $user_role === 'admin') {
+    bk_csrf_check();
     $settings_to_save = [
         'site_title', 'site_url', 'email_lang', 'cron_key', 'cron_location', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
         'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from', 'smsbrana_user', 'smsbrana_password',
@@ -470,6 +508,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
 
 // 4. Zpracování změny hesla / profilu
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
+    bk_csrf_check();
     $email = trim($_POST['email']);
     $phone = trim($_POST['phone']);
     $wa_apikey = trim($_POST['whatsapp_apikey'] ?? '');
@@ -514,7 +553,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
 // totp_confirm níže). Do DB (totp_secret/totp_enabled) se nic nezapisuje, dokud
 // se to takhle neověří - jinak by šlo omylem zamknout účet naskenovaným, ale
 // nikdy neověřeným secretem.
-if (isset($_GET['action']) && $_GET['action'] === 'totp_setup_start') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_setup_start'])) {
+    bk_csrf_check();
     $_SESSION['totp_pending_secret'] = bk_totp_generate_secret();
     header('Location: admin.php#totp-section');
     exit;
@@ -522,6 +562,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'totp_setup_start') {
 
 // Zapnutí 2FA - krok 2: ověření kódu z appky proti pending secretu ze session.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
+    bk_csrf_check();
     $pending_secret = $_SESSION['totp_pending_secret'] ?? '';
     $totp_confirm_code = trim($_POST['totp_code'] ?? '');
     if (empty($pending_secret)) {
@@ -542,6 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
 // Vypnutí 2FA - vyžaduje potvrzení aktuálním heslem, aby to nešlo tiše
 // vypnout jen tak (např. přes ukradenou/CSRF session bez znalosti hesla).
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
+    bk_csrf_check();
     $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
     $stmt->execute([$_SESSION['admin_id']]);
     $me = $stmt->fetch();
@@ -559,6 +601,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
 
 // 5. Zpracování uložení odběrů notifikací běžného uživatele
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_subscriptions']) && $user_role === 'user') {
+    bk_csrf_check();
     try {
         $pdo->beginTransaction();
         $stmt_del = $pdo->prepare("DELETE FROM user_subscriptions WHERE user_id = ?");
@@ -585,6 +628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_subscriptions'])
 
 // 6. Zpracování správy uživatelů (pouze pro Admina)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user_role === 'admin') {
+    bk_csrf_check();
     $u_id = isset($_POST['user_id']) ? intval($_POST['user_id']) : 0;
     $u_username = trim($_POST['username']);
     $u_email = trim($_POST['email']);
@@ -623,8 +667,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
 }
 
 // Smazání uživatele (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'delete_user' && isset($_GET['id']) && $user_role === 'admin') {
-    $del_u_id = intval($_GET['id']);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_user']) && isset($_POST['id']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $del_u_id = intval($_POST['id']);
     if ($del_u_id === $user_id) {
         $error_msg = 'Nemůžete smazat svůj vlastní přihlášený účet.';
     } else {
@@ -635,9 +680,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete_user' && isset($_GET['
 }
 
 // Rychlé přepnutí notifikace z tabulky (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'toggle_notif' && isset($_GET['field']) && isset($_GET['id']) && $user_role === 'admin') {
-    $t_id = intval($_GET['id']);
-    $field = $_GET['field'] === 'email' ? 'email_notifications' : 'sms_notifications';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_notif']) && isset($_POST['field']) && isset($_POST['id']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $t_id = intval($_POST['id']);
+    $field = $_POST['field'] === 'email' ? 'email_notifications' : 'sms_notifications';
     
     $stmt_tog = $pdo->prepare("UPDATE monitors SET $field = 1 - $field WHERE id = ?");
     $stmt_tog->execute([$t_id]);
@@ -647,31 +693,33 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_notif' && isset($_GET[
 }
 
 // Rychlé přepnutí / okamžité zapnutí či ukončení režimu údržby z tabulky (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'toggle_maintenance' && isset($_GET['id']) && $user_role === 'admin') {
-    $t_id = intval($_GET['id']);
-    
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_maintenance']) && isset($_POST['id']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $t_id = intval($_POST['id']);
+
     $stmt_m = $pdo->prepare("SELECT maintenance FROM monitors WHERE id = ?");
     $stmt_m->execute([$t_id]);
     $curr_m = (int)$stmt_m->fetchColumn();
-    
+
     if ($curr_m === 1) {
         // Vypnutí údržby -> vyčistit popis a časování staré údržby
         $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 0, maintenance_description = NULL, maintenance_start = NULL, maintenance_end = NULL, status = 'unknown' WHERE id = ?");
         $stmt_tog->execute([$t_id]);
     } else {
         // Okamžité zapnutí údržby (nepovinný popis z rychlého přepínače v tabulce)
-        $t_desc = !empty($_GET['desc']) ? trim($_GET['desc']) : null;
+        $t_desc = !empty($_POST['desc']) ? trim($_POST['desc']) : null;
         $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 1, status = 'maintenance', maintenance_description = ? WHERE id = ?");
         $stmt_tog->execute([$t_desc, $t_id]);
     }
-    
+
     header('Location: admin.php');
     exit;
 }
 
 // Smazání historie monitoru (logy a VPS metriky) (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'clear_history' && isset($_GET['id']) && $user_role === 'admin') {
-    $clear_id = intval($_GET['id']);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clear_history']) && isset($_POST['id']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $clear_id = intval($_POST['id']);
     
     $stmt_del_logs = $pdo->prepare("DELETE FROM monitor_logs WHERE monitor_id = ?");
     $stmt_del_logs->execute([$clear_id]);
@@ -687,6 +735,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'clear_history' && isset($_GET
 
 // Zpracování vytvoření/úpravy incidentu (Správa incidentů)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_incident']) && $user_role === 'admin') {
+    bk_csrf_check();
     $inc_action = $_POST['action_incident'];
     if ($inc_action === 'create') {
         $title = trim($_POST['inc_title'] ?? '');
@@ -729,6 +778,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_incident']) &&
 
 // 1-Click Import Objevené Služby (Service Discovery)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service']) && $user_role === 'admin') {
+    bk_csrf_check();
     $s_name = trim($_POST['service_name'] ?? '');
     $s_type = $_POST['service_type'] ?? 'web';
     $s_port = !empty($_POST['service_port']) ? (int)$_POST['service_port'] : null;
@@ -771,6 +821,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service
 
 // 2. Zpracování zařazení vzdálené akce (Remote Actions)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action']) && $user_role === 'admin') {
+    bk_csrf_check();
     $mid = intval($_POST['monitor_id'] ?? 0);
     $action_type = trim($_POST['action_type'] ?? '');
 
@@ -795,7 +846,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action
 }
 
 // Zpracování odeslání testovacího e-mailu (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role === 'admin') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $user_role === 'admin') {
+    bk_csrf_check();
     $to = $me['email'] ?? '';
     if (empty($to)) {
         $error_msg = 'Chyba: Administrátor nemá nastavenou e-mailovou adresu.';
@@ -823,7 +875,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role ===
 }
 
 // Vynucení nové detekce geolokační lokace serveru (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'redetect_location' && $user_role === 'admin') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) && $user_role === 'admin') {
+    bk_csrf_check();
     $loc = detect_server_location();
     $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
     $stmt_set->execute(['ip_loc_local', $loc, $loc]);
@@ -831,7 +884,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'redetect_location' && $user_r
 }
 
 // Ruční odeslání týdenního reportu/digestu (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'send_weekly_digest' && $user_role === 'admin') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_weekly_digest']) && $user_role === 'admin') {
+    bk_csrf_check();
     if (send_digest_report($pdo, 'weekly')) {
         $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
             ? 'Týdenní report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
@@ -843,7 +897,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_weekly_digest' && $user_
 }
 
 // Ruční odeslání měsíčního reportu/digestu (pouze pro Admina)
-if (isset($_GET['action']) && $_GET['action'] === 'send_monthly_digest' && $user_role === 'admin') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_monthly_digest']) && $user_role === 'admin') {
+    bk_csrf_check();
     if (send_digest_report($pdo, 'monthly')) {
         $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
             ? 'Měsíční report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
@@ -1117,6 +1172,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                 <td><?php echo (int)$a['member_count']; ?></td>
                                 <td>
                                     <form method="POST" style="display: flex; gap: 0.4rem;">
+                                        <?php echo bk_csrf_field(); ?>
                                         <input type="hidden" name="asset_id" value="<?php echo (int)$a['id']; ?>">
                                         <input type="text" name="asset_name" value="<?php echo htmlspecialchars($a['name']); ?>" class="form-control" style="font-size: 0.8rem; padding: 0.3rem 0.5rem;">
                                         <button type="submit" name="rename_asset" value="1" class="btn btn-secondary btn-sm"><i class="fas fa-save"></i></button>
@@ -1230,10 +1286,10 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                 </span>
                                             </td>
                                             <td data-label="Notifikace">
-                                                <a href="admin.php?action=toggle_notif&field=email&id=<?php echo $mon['id']; ?>" class="notif-toggle-link" title="Přepnout E-mail notifikace">
+                                                <a href="#" onclick="bkPostAction({toggle_notif: '1', field: 'email', id: <?php echo (int)$mon['id']; ?>}); return false;" class="notif-toggle-link" title="Přepnout E-mail notifikace">
                                                     <span style="color: <?php echo $mon['email_notifications'] ? 'var(--color-green)' : 'var(--text-muted)'; ?>; margin-right: 0.5rem;"><i class="fas fa-envelope"></i></span>
                                                 </a>
-                                                <a href="admin.php?action=toggle_notif&field=sms&id=<?php echo $mon['id']; ?>" class="notif-toggle-link" title="Přepnout WhatsApp / SMS notifikace">
+                                                <a href="#" onclick="bkPostAction({toggle_notif: '1', field: 'sms', id: <?php echo (int)$mon['id']; ?>}); return false;" class="notif-toggle-link" title="Přepnout WhatsApp / SMS notifikace">
                                                     <?php if ($mon['sms_notifications']): ?>
                                                         <?php if (get_setting('sms_gateway_type') === 'whatsapp'): ?>
                                                             <span style="color: var(--color-green);"><i class="fab fa-whatsapp" style="font-size: 1.1rem; vertical-align: middle;"></i></span>
@@ -1255,9 +1311,9 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                             <td data-label="Akce">
                                                 <div class="action-btns">
                                                     <a href="admin.php?action=edit&id=<?php echo $mon['id']; ?>" class="btn btn-secondary btn-sm" title="Upravit"><i class="fas fa-edit"></i></a>
-                                                    <a href="admin.php?action=toggle_maintenance&id=<?php echo $mon['id']; ?>" class="btn btn-sm" style="background: <?php echo $mon['maintenance'] ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.05)'; ?>; border: 1px solid <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--border-color)'; ?>; color: <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--text-secondary)'; ?>;" title="<?php echo $mon['maintenance'] ? 'Ukončit režim údržby (vyčistí starý popis)' : 'Okamžitě zapnout režim údržby'; ?>" <?php if (!$mon['maintenance']): ?>onclick="event.preventDefault(); var d = prompt('Popis údržby (zobrazí se uživatelům, nepovinné):', ''); if (d !== null) { window.location.href = this.href + '&desc=' + encodeURIComponent(d); }"<?php endif; ?>><i class="fas fa-wrench"></i></a>
-                                                    <a href="admin.php?action=clear_history&id=<?php echo $mon['id']; ?>" class="btn btn-warning btn-sm" onclick="return confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
-                                                    <a href="admin.php?action=delete&id=<?php echo $mon['id']; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Opravdu chcete smazat tento monitor?')" title="Smazat"><i class="fas fa-trash"></i></a>
+                                                    <a href="#" class="btn btn-sm" style="background: <?php echo $mon['maintenance'] ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.05)'; ?>; border: 1px solid <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--border-color)'; ?>; color: <?php echo $mon['maintenance'] ? '#f59e0b' : 'var(--text-secondary)'; ?>;" title="<?php echo $mon['maintenance'] ? 'Ukončit režim údržby (vyčistí starý popis)' : 'Okamžitě zapnout režim údržby'; ?>" onclick="<?php if ($mon['maintenance']): ?>bkPostAction({toggle_maintenance: '1', id: <?php echo (int)$mon['id']; ?>});<?php else: ?>var d = prompt('Popis údržby (zobrazí se uživatelům, nepovinné):', ''); if (d !== null) { bkPostAction({toggle_maintenance: '1', id: <?php echo (int)$mon['id']; ?>, desc: d}); }<?php endif; ?> return false;"><i class="fas fa-wrench"></i></a>
+                                                    <a href="#" onclick="if (confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')) bkPostAction({clear_history: '1', id: <?php echo (int)$mon['id']; ?>}); return false;" class="btn btn-warning btn-sm" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
+                                                    <a href="#" onclick="if (confirm('Opravdu chcete smazat tento monitor?')) bkPostAction({delete_monitor: '1', id: <?php echo (int)$mon['id']; ?>}); return false;" class="btn btn-danger btn-sm" title="Smazat"><i class="fas fa-trash"></i></a>
                                                     <?php if (!empty($mon['agent_key'])): ?>
                                                         <button id="agent-btn-<?php echo $mon['id']; ?>" class="btn btn-success btn-sm" onclick="showAgentInstructions('<?php echo $mon['agent_key']; ?>', '<?php echo htmlspecialchars($mon['name']); ?>', '<?php echo htmlspecialchars($mon['type']); ?>')" title="Klíč a instalace agenta"><i class="fas fa-terminal"></i></button>
                                                     <?php elseif ($mon['type'] === 'cpanel'): ?>
@@ -1643,6 +1699,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     </div>
                     
                     <form action="admin.php" method="POST" id="settings-form">
+                        <?php echo bk_csrf_field(); ?>
                         <div class="settings-tabs" role="tablist">
                             <button type="button" data-tab="tab-obecne" class="active"><i class="fas fa-sliders-h"></i> Obecné</button>
                             <button type="button" data-tab="tab-notifikace"><i class="fas fa-bell"></i> Notifikace</button>
@@ -1696,12 +1753,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             if ($detected_loc): ?>
                                 <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--color-green);">
                                     <i class="fas fa-map-marker-alt"></i> Automaticky detekovaná lokace serveru: <strong><?php echo htmlspecialchars($detected_loc); ?></strong>
-                                    <a href="admin.php?action=redetect_location" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; border-radius: 4px;" title="Vynutí opětovný dotaz na IP geolokační API"><i class="fas fa-sync-alt"></i> Znovu detekovat</a>
+                                    <a href="#" onclick="bkPostAction({redetect_location: '1'}); return false;" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; border-radius: 4px;" title="Vynutí opětovný dotaz na IP geolokační API"><i class="fas fa-sync-alt"></i> Znovu detekovat</a>
                                 </div>
                             <?php else: ?>
                                 <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted);">
                                     <i class="fas fa-info-circle"></i> Lokace hostingu dosud nebyla automaticky zjištěna (zjistí se sama při příštím běhu cronu).
-                                    <a href="admin.php?action=redetect_location" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; border-radius: 4px;"><i class="fas fa-sync-alt"></i> Detekovat nyní</a>
+                                    <a href="#" onclick="bkPostAction({redetect_location: '1'}); return false;" class="btn btn-secondary btn-sm" style="display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem; border-radius: 4px;"><i class="fas fa-sync-alt"></i> Detekovat nyní</a>
                                 </div>
                             <?php endif; ?>
                         </div>
@@ -1993,6 +2050,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     </div>
 
                     <form action="admin.php" method="POST">
+                        <?php echo bk_csrf_field(); ?>
                         <?php if ($edit_monitor): ?>
                             <input type="hidden" name="id" value="<?php echo $edit_monitor['id']; ?>">
                         <?php endif; ?>
@@ -2227,6 +2285,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                         $ds_target = $ds['target'] ?? $edit_monitor['target'] ?? '127.0.0.1';
                                         ?>
                                         <form method="POST" style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.4rem 0.6rem;">
+                                            <?php echo bk_csrf_field(); ?>
                                             <input type="hidden" name="service_name" value="<?php echo htmlspecialchars($ds_name); ?>">
                                             <input type="hidden" name="service_type" value="<?php echo htmlspecialchars($ds_type); ?>">
                                             <input type="hidden" name="service_port" value="<?php echo htmlspecialchars((string)$ds_port); ?>">
@@ -2354,6 +2413,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     </div>
                     
                     <form action="admin.php" method="POST">
+                        <?php echo bk_csrf_field(); ?>
                         <div class="form-group">
                             <label for="email">Kontaktní E-mail (pro notifikace)</label>
                             <input type="email" name="email" id="email" value="<?php echo htmlspecialchars($me['email'] ?? ''); ?>" class="form-control" required>
@@ -2396,9 +2456,9 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </div>
                         
                         <button type="submit" name="change_password" class="btn"><i class="fas fa-user-edit"></i> Aktualizovat profil</button>
-                        <a href="admin.php?action=test_email" class="btn btn-secondary" style="margin-left: 0.5rem;"><i class="fas fa-paper-plane"></i> Odeslat testovací e-mail</a>
-                        <a href="admin.php?action=send_weekly_digest" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat týdenní digest všem adminům"><i class="fas fa-chart-bar"></i> Odeslat týdenní digest</a>
-                        <a href="admin.php?action=send_monthly_digest" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat měsíční digest všem adminům"><i class="fas fa-chart-pie"></i> Odeslat měsíční digest</a>
+                        <a href="#" onclick="bkPostAction({test_email: '1'}); return false;" class="btn btn-secondary" style="margin-left: 0.5rem;"><i class="fas fa-paper-plane"></i> Odeslat testovací e-mail</a>
+                        <a href="#" onclick="bkPostAction({send_weekly_digest: '1'}); return false;" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat týdenní digest všem adminům"><i class="fas fa-chart-bar"></i> Odeslat týdenní digest</a>
+                        <a href="#" onclick="bkPostAction({send_monthly_digest: '1'}); return false;" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat měsíční digest všem adminům"><i class="fas fa-chart-pie"></i> Odeslat měsíční digest</a>
                         <a href="admin.php?action=preview_weekly_digest" target="_blank" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Zobrazit náhled týdenního reportu v prohlížeči (bez odeslání)"><i class="fas fa-eye"></i> Náhled týdenního reportu</a>
                         <a href="admin.php?action=preview_monthly_digest" target="_blank" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Zobrazit náhled měsíčního reportu v prohlížeči (bez odeslání)"><i class="fas fa-eye"></i> Náhled měsíčního reportu</a>
                     </form>
@@ -2440,7 +2500,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                             <div class="action-btns">
                                                 <a href="admin.php?action=edit_user&id=<?php echo $u['id']; ?>" class="btn btn-secondary btn-sm" title="Upravit"><i class="fas fa-edit"></i></a>
                                                 <?php if ($u['id'] !== $user_id): ?>
-                                                    <a href="admin.php?action=delete_user&id=<?php echo $u['id']; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Opravdu chcete smazat tohoto uživatele?')" title="Smazat"><i class="fas fa-trash"></i></a>
+                                                    <a href="#" onclick="if (confirm('Opravdu chcete smazat tohoto uživatele?')) bkPostAction({delete_user: '1', id: <?php echo (int)$u['id']; ?>}); return false;" class="btn btn-danger btn-sm" title="Smazat"><i class="fas fa-trash"></i></a>
                                                 <?php endif; ?>
                                             </div>
                                         </td>
@@ -2465,6 +2525,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </h2>
                     </div>
                     <form action="admin.php" method="POST">
+                        <?php echo bk_csrf_field(); ?>
                         <?php if ($edit_user): ?>
                             <input type="hidden" name="user_id" value="<?php echo $edit_user['id']; ?>">
                         <?php endif; ?>
@@ -2494,7 +2555,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         
                         <div class="form-group">
                             <label for="u_password">Heslo <?php echo $edit_user ? '(nechte prázdné pro beze změny)' : ''; ?></label>
-                            <input type="password" name="password" id="u_password" class="form-control" <?php echo $edit_user ? '' : 'required'; ?>>
+                            <input type="password" name="password" id="u_password" class="form-control" autocomplete="new-password" <?php echo $edit_user ? '' : 'required'; ?>>
                         </div>
                         
                         <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
@@ -2523,6 +2584,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     </p>
                     
                     <form action="admin.php" method="POST">
+                        <?php echo bk_csrf_field(); ?>
                         <div style="overflow-x: auto;">
                             <table class="admin-table">
                                 <thead>
@@ -2583,6 +2645,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                     </p>
                     
                     <form action="admin.php" method="POST">
+                        <?php echo bk_csrf_field(); ?>
                         <div class="form-group">
                             <label for="email">Můj E-mail (pro notifikace)</label>
                             <input type="email" name="email" id="email" value="<?php echo htmlspecialchars($me['email'] ?? ''); ?>" class="form-control" required>
@@ -2645,6 +2708,31 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
 
     <!-- Script pro interaktivní přepínání polí v administraci -->
     <script>
+        // CSRF token pro akce spouštěné z JS (jednoduché ikonové odkazy v tabulkách,
+        // kde by samostatný <form> na každou buňku byl zbytečně těžkopádný) - stejný
+        // token jako u <?php echo 'bk_csrf_field()'; ?> ve formulářích, jen vložený jednou globálně.
+        const BK_CSRF_TOKEN = <?php echo json_encode(bk_csrf_token()); ?>;
+
+        // Sestaví a odešle skrytý POST formulář - náhrada za dřívější GET odkazy
+        // (admin.php?action=...), aby šly stavové akce chránit CSRF tokenem a
+        // aby je nešlo spustit jen tak otevřením odkazu/obrázku (viz bezpečnostní audit).
+        function bkPostAction(fields) {
+            const f = document.createElement('form');
+            f.method = 'POST';
+            f.action = 'admin.php';
+            f.style.display = 'none';
+            fields.csrf_token = BK_CSRF_TOKEN;
+            for (const key in fields) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = key;
+                input.value = fields[key];
+                f.appendChild(input);
+            }
+            document.body.appendChild(f);
+            f.submit();
+        }
+
         function togglePortField(type) {
             const portGroup = document.getElementById('port-group');
             const targetLabel = document.getElementById('target-label');
@@ -2781,21 +2869,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
 
         function triggerRemoteAction(monitorId, actionType, actionLabel) {
             if (!confirm('Opravdu chcete provést akci "' + actionLabel + '" na tomto routeru?')) return;
-            // Samostatný formulář mimo hlavní edit-form (do <form> nelze vnořit další <form>).
-            const f = document.createElement('form');
-            f.method = 'POST';
-            f.action = 'admin.php';
-            f.style.display = 'none';
-            const fields = { trigger_remote_action: '1', monitor_id: monitorId, action_type: actionType };
-            for (const key in fields) {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = key;
-                input.value = fields[key];
-                f.appendChild(input);
-            }
-            document.body.appendChild(f);
-            f.submit();
+            bkPostAction({ trigger_remote_action: '1', monitor_id: monitorId, action_type: actionType });
         }
 
         function toggleSMSFields(gateway) {
