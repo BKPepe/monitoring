@@ -225,6 +225,36 @@ services:
     } catch (e) {
       console.warn('Could not load versions from API, falling back to static tags.', e);
     }
+
+    // Fetch per-platform agent versions from /api/agents
+    try {
+      const agentsRes = await fetch(`${apiOrigin}/api/agents`);
+      if (!agentsRes.ok) return;
+      const agents = await agentsRes.json();
+      if (!agents) return;
+
+      // Map platform panels to agent version keys
+      const platformMap = { linux: 'python', windows: 'powershell', raspberry: 'bash' };
+      for (const [platform, key] of Object.entries(platformMap)) {
+        if (agents[key] && agents[key] !== 'unknown') {
+          const panel = document.getElementById(`panel-${platform}`);
+          if (panel) {
+            const badge = panel.querySelector('.current-agent-version');
+            if (badge) badge.textContent = `v${agents[key]}`;
+          }
+        }
+      }
+      // Docker uses python agent
+      if (agents.python && agents.python !== 'unknown') {
+        const dockerPanel = document.getElementById('panel-docker');
+        if (dockerPanel) {
+          const tag = dockerPanel.querySelector('.current-agent-tag');
+          if (tag) tag.textContent = `v${agents.python}`;
+        }
+      }
+    } catch (e) {
+      // Non-critical, static fallback is fine
+    }
   }
 
   // Load versions

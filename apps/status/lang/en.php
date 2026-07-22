@@ -268,6 +268,20 @@ return [
     'agent_discovered_services' => 'Discovered services:',
     'agent_svc_missing' => 'missing',
 
+    // Monitor detail page (Level 2 - monitor.php)
+    'mp_uptime_30d' => 'Uptime (30 days)',
+    'mp_agent_info' => 'Agent & System Info',
+    'mp_agent_version' => 'Agent version',
+    'mp_timezone' => 'Timezone',
+    'mp_provider' => 'Provider / Virtualization',
+    'mp_reboot' => 'System',
+    'mp_reboot_needed' => 'Reboot required',
+    'mp_temperature' => 'Temperature',
+    'mp_processes' => 'Processes',
+    'mp_ports' => 'Active Ports',
+    'mp_timeline' => 'Event Timeline',
+    'mp_detail_page' => 'Open detail page',
+
     // Knowledge layer - explains what an already-crossed threshold means
     'knowledge_panel_heading' => '💡 Recommendations',
     'knowledge_tip_cpu_high' => 'Sustained high CPU may indicate an overloaded process or a need to scale up the server.',

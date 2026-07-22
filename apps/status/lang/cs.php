@@ -269,6 +269,20 @@ return [
     'agent_discovered_services' => 'Zjištěné služby:',
     'agent_svc_missing' => 'chybí',
 
+    // Monitor detail stránka (Level 2 - monitor.php)
+    'mp_uptime_30d' => 'Dostupnost (30 dní)',
+    'mp_agent_info' => 'Agent a systémové informace',
+    'mp_agent_version' => 'Verze agenta',
+    'mp_timezone' => 'Časové pásmo',
+    'mp_provider' => 'Poskytovatel / virtualizace',
+    'mp_reboot' => 'Systém',
+    'mp_reboot_needed' => 'Vyžaduje restart',
+    'mp_temperature' => 'Teplota',
+    'mp_processes' => 'Procesy',
+    'mp_ports' => 'Aktivní porty',
+    'mp_timeline' => 'Časová osa událostí',
+    'mp_detail_page' => 'Otevřít detailní stránku',
+
     // Knowledge layer - vysvětlení, co znamená překročený práh u konkrétní metriky
     'knowledge_panel_heading' => '💡 Doporučení',
     'knowledge_tip_cpu_high' => 'Trvale vysoké CPU může znamenat přetížený proces nebo potřebu navýšit výkon serveru.',

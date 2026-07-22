@@ -393,6 +393,26 @@ try {
 
     if (isset($data['discovered_services']) && is_array($data['discovered_services'])) {
         $new_data['discovered_services'] = $data['discovered_services'];
+
+        // Detekce změn v discovered services - logování událostí
+        $old_svcs = $old_details['discovered_services'] ?? [];
+        $new_svcs = $data['discovered_services'];
+        $old_names = [];
+        foreach ($old_svcs as $os) { if (($os['confidence'] ?? 0) >= 50) $old_names[$os['name'] ?? ''] = $os; }
+        $new_names = [];
+        foreach ($new_svcs as $ns) { if (($ns['confidence'] ?? 0) >= 50) $new_names[$ns['name'] ?? ''] = $ns; }
+        // Nově objevená služba
+        foreach ($new_names as $sname => $svc) {
+            if (!isset($old_names[$sname]) && !empty($old_svcs)) {
+                log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'service_discovered', "Nová služba: {$sname} (" . ($svc['confidence'] ?? 0) . "%)");
+            }
+        }
+        // Zmizelá služba
+        foreach ($old_names as $sname => $svc) {
+            if (!isset($new_names[$sname]) && !empty($new_svcs)) {
+                log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'service_lost', "Služba zmizela: {$sname}");
+            }
+        }
     }
 
     $merged_details_arr = array_merge($old_details, $new_data);

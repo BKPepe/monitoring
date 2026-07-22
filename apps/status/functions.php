@@ -1570,7 +1570,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
         <nav style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem;">
             <a href="index.php" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars(t('breadcrumb_dashboard')); ?></a>
             <span style="margin: 0 0.4rem;">/</span>
-            <a href="index.php?expand=<?php echo (int)$monitor['id']; ?>#monitor-item-<?php echo (int)$monitor['id']; ?>" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars($monitor['name']); ?></a>
+            <a href="monitor.php?id=<?php echo (int)$monitor['id']; ?>" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars($monitor['name']); ?></a>
             <span style="margin: 0 0.4rem;">/</span>
             <span style="color: var(--text-primary);"><?php echo htmlspecialchars($metric_label); ?></span>
         </nav>

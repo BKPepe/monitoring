@@ -228,6 +228,77 @@ if (($_GET['action'] ?? '') === 'save_annotation' || (($_POST['action'] ?? '') =
     exit;
 }
 
+// Response time history pro Level 2 detail stránku (monitor.php).
+// Vrací body [unix_ts, response_ms] z monitor_logs.
+if (($_GET['action'] ?? '') === 'response_history') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $period = $_GET['period'] ?? '24h';
+    $result = ['points' => [], 'label' => 'Response time', 'unit' => 'ms'];
+    try {
+        $hours_map = ['24h' => 24, '7d' => 168, '30d' => 720];
+        $hours = $hours_map[$period] ?? 24;
+        if ($hours <= 24) {
+            $stmt = $pdo->prepare("SELECT UNIX_TIMESTAMP(checked_at) AS ts, response_time AS val FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? HOUR) AND response_time IS NOT NULL AND status = 'up' ORDER BY checked_at ASC");
+            $stmt->execute([$monitor_id, $hours]);
+        } elseif ($hours <= 168) {
+            $stmt = $pdo->prepare("SELECT UNIX_TIMESTAMP(MIN(checked_at)) AS ts, AVG(response_time) AS val FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND response_time IS NOT NULL AND status = 'up' GROUP BY DATE_FORMAT(checked_at, '%Y-%m-%d %H') ORDER BY ts ASC");
+            $stmt->execute([$monitor_id]);
+        } else {
+            $stmt = $pdo->prepare("SELECT UNIX_TIMESTAMP(MIN(checked_at)) AS ts, AVG(response_time) AS val FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND response_time IS NOT NULL AND status = 'up' GROUP BY DATE(checked_at) ORDER BY ts ASC");
+            $stmt->execute([$monitor_id]);
+        }
+        while ($row = $stmt->fetch()) {
+            $result['points'][] = [(int)$row['ts'], round((float)$row['val'], 1)];
+        }
+    } catch (Exception $e) { /* empty */ }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// Status history pro uptime bar na Level 2 stránce (monitor.php).
+// Vrací pole dní: {date, uptime_pct, avg_response, incidents}.
+if (($_GET['action'] ?? '') === 'status_history') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $days = min(90, max(1, (int)($_GET['days'] ?? 30)));
+    $result = ['days' => []];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT DATE(checked_at) AS day,
+                   SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count,
+                   COUNT(*) AS total_count,
+                   AVG(CASE WHEN status = 'up' AND response_time IS NOT NULL THEN response_time ELSE NULL END) AS avg_rt,
+                   SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_count
+            FROM monitor_logs
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            GROUP BY DATE(checked_at)
+            ORDER BY day ASC
+        ");
+        $stmt->execute([$monitor_id, $days]);
+        // Vyplníme i dny bez dat (100% uptime)
+        $rows_by_day = [];
+        while ($row = $stmt->fetch()) {
+            $rows_by_day[$row['day']] = $row;
+        }
+        for ($i = $days - 1; $i >= 0; $i--) {
+            $date = date('Y-m-d', strtotime("-$i days"));
+            if (isset($rows_by_day[$date])) {
+                $r = $rows_by_day[$date];
+                $pct = $r['total_count'] > 0 ? ($r['up_count'] / $r['total_count']) * 100 : 100;
+                $result['days'][] = [
+                    'date' => date('d.m.', strtotime($date)),
+                    'uptime_pct' => round($pct, 2),
+                    'avg_response' => $r['avg_rt'] !== null ? (int)round($r['avg_rt']) : null,
+                    'incidents' => (int)$r['down_count'],
+                ];
+            } else {
+                $result['days'][] = ['date' => date('d.m.', strtotime($date)), 'uptime_pct' => 100, 'avg_response' => null, 'incidents' => 0];
+            }
+        }
+    } catch (Exception $e) { /* empty */ }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // Veřejný agregovaný přehled pro externí zobrazení (např. marketingový web).
 // Záměrně neobsahuje jména/cíle jednotlivých monitorů ani checked_from detaily
 // jednotlivých kontrol - jen souhrnná čísla a seznam distribuovaných lokací,

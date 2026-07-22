@@ -300,4 +300,57 @@ app.get('/api/test', async (c) => {
   })
 })
 
+// 6. GET /api/agents - Current agent versions (for download page)
+app.get('/api/agents', async (c) => {
+  const token = c.env?.GITHUB_TOKEN
+
+  try {
+    const agents = await withCache('github-agents', 3600, async () => {
+      // Fetch agent files from GitHub to extract version numbers
+      const files: Record<string, string> = {
+        bash: 'apps/status/agent.sh',
+        python: 'apps/status/agent.py',
+        powershell: 'apps/status/agent.ps1',
+        openwrt: 'apps/status/agent_openwrt.sh',
+      }
+
+      const versions: Record<string, string> = {}
+
+      for (const [key, path] of Object.entries(files)) {
+        try {
+          const res = await fetch(
+            `https://raw.githubusercontent.com/BKPepe/monitoring/main/${path}`,
+            { headers: token ? { Authorization: `token ${token}` } : {} }
+          )
+          if (res.ok) {
+            const content = await res.text()
+            const match = content.match(/\$?AGENT_VERSION\s*=\s*["']([0-9][0-9A-Za-z.\-]*)["']/)
+            versions[key] = match ? match[1] : 'unknown'
+          } else {
+            versions[key] = 'unknown'
+          }
+        } catch {
+          versions[key] = 'unknown'
+        }
+      }
+
+      return {
+        ...versions,
+        updatedAt: new Date().toISOString(),
+      }
+    })
+
+    return c.json(agents)
+  } catch (err: any) {
+    return c.json({
+      bash: '1.7.0',
+      python: '1.7.0',
+      powershell: '1.7.0',
+      openwrt: '1.3.0',
+      updatedAt: new Date().toISOString(),
+      error: err.message,
+    })
+  }
+})
+
 export default app

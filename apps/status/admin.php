@@ -2478,6 +2478,49 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Zadejte názvy procesů, které má agent na VPS hlídat. Pokud některý z nich nepoběží, monitor bude označen jako DOWN.</small>
                         </div>
 
+                        <?php
+                        // Discovered services - zobrazení služeb objevených agentem + tlačítko pro vytvoření monitoru
+                        if ($edit_monitor && !empty($edit_monitor['last_details'])):
+                            $ds_details = json_decode($edit_monitor['last_details'], true);
+                            $ds_services = $ds_details['discovered_services'] ?? [];
+                            if (!empty($ds_services) && is_array($ds_services)):
+                                // Najdi existující monitory se stejným target+port pro párování
+                                $ds_stmt = $pdo->prepare("SELECT id, name, target, port, type FROM monitors WHERE id != ?");
+                                $ds_stmt->execute([$edit_monitor['id']]);
+                                $ds_existing = $ds_stmt->fetchAll();
+                        ?>
+                        <div class="form-group" style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 1rem;">
+                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;"><i class="fas fa-cubes" style="margin-right: 0.3rem;"></i> <?php echo htmlspecialchars(t('agent_discovered_services')); ?></label>
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                <?php foreach ($ds_services as $ds_svc):
+                                    $ds_conf = (int)($ds_svc['confidence'] ?? 0);
+                                    $ds_color = $ds_conf >= 70 ? 'var(--color-green)' : ($ds_conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
+                                    // Zkus najít existující monitor s tímto portem
+                                    $ds_matched = null;
+                                    if (!empty($ds_svc['port'])) {
+                                        foreach ($ds_existing as $em) {
+                                            if ((int)$em['port'] === (int)$ds_svc['port']) { $ds_matched = $em; break; }
+                                        }
+                                    }
+                                ?>
+                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 0.6rem; background: rgba(255,255,255,0.03); border-radius: 6px;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <i class="fas fa-cube" style="color: <?php echo $ds_color; ?>;"></i>
+                                            <strong style="font-size: 0.8rem; color: var(--text-primary);"><?php echo htmlspecialchars($ds_svc['name'] ?? '?'); ?></strong>
+                                            <?php if (!empty($ds_svc['port'])): ?><span style="font-family: monospace; font-size: 0.72rem; color: var(--text-muted);">:<?php echo (int)$ds_svc['port']; ?></span><?php endif; ?>
+                                            <span style="font-size: 0.7rem; font-weight: bold; color: <?php echo $ds_color; ?>;"><?php echo $ds_conf; ?>%</span>
+                                        </div>
+                                        <?php if ($ds_matched): ?>
+                                            <a href="admin.php?edit=<?php echo (int)$ds_matched['id']; ?>" style="font-size: 0.72rem; color: var(--color-green); text-decoration: none;"><i class="fas fa-link"></i> <?php echo htmlspecialchars($ds_matched['name']); ?></a>
+                                        <?php else: ?>
+                                            <a href="admin.php?add=1&pre_type=<?php echo htmlspecialchars($ds_svc['type'] ?? 'port'); ?>&pre_target=<?php echo htmlspecialchars($edit_monitor['target']); ?>&pre_port=<?php echo (int)($ds_svc['port'] ?? 0); ?>&pre_name=<?php echo urlencode($ds_svc['name'] ?? ''); ?>&pre_asset=<?php echo (int)($edit_monitor['asset_id'] ?? 0); ?>" class="btn btn-secondary btn-sm" style="font-size: 0.68rem; padding: 0.2rem 0.5rem;"><i class="fas fa-plus"></i> Vytvořit monitor</a>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <?php endif; endif; ?>
+
                         <div class="form-group" id="agent-thresholds-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord') ? 'block' : 'none'; ?>;">
                             <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Výstražné limity agenta</label>
                             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">

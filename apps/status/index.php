@@ -403,7 +403,7 @@ $portal_url = trim(get_setting('portal_url'));
                     ?>
                         <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
                             <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo htmlspecialchars(bk_relative_time_label($fe['occurred_at'])); ?></span>
-                            <a href="index.php?expand=<?php echo (int)$fe['monitor_id']; ?>#monitor-item-<?php echo (int)$fe['monitor_id']; ?>" style="color: var(--text-primary); font-weight: 500; text-decoration: none;"><?php echo htmlspecialchars($fe['monitor_name']); ?></a>
+                            <a href="monitor.php?id=<?php echo (int)$fe['monitor_id']; ?>" style="color: var(--text-primary); font-weight: 500; text-decoration: none;"><?php echo htmlspecialchars($fe['monitor_name']); ?></a>
                             <span style="color: var(--text-secondary);"><?php echo htmlspecialchars($fe_label); ?></span>
                             <?php if (!empty($fe['description']) && $fe_label !== $fe['description']): ?>
                                 <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($fe['description']); ?></span>
@@ -568,7 +568,8 @@ $portal_url = trim(get_setting('portal_url'));
                                         <div class="monitor-details">
                                             <h3 style="display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;">
                                                 <?php echo monitor_type_icon($m_type, $monitor['target']); ?>
-                                                <?php echo htmlspecialchars($monitor['name']); ?>
+                                                <a href="monitor.php?id=<?php echo $mid; ?>" style="color:inherit;text-decoration:none;" title="<?php echo htmlspecialchars(t('mp_detail_page')); ?>" onclick="event.stopPropagation();"><?php echo htmlspecialchars($monitor['name']); ?></a>
+                                                <a href="monitor.php?id=<?php echo $mid; ?>" style="color:var(--text-muted);font-size:0.7rem;text-decoration:none;" onclick="event.stopPropagation();" title="<?php echo htmlspecialchars(t('mp_detail_page')); ?>"><i class="fas fa-arrow-up-right-from-square"></i></a>
                                                 <?php if ($status === 'maintenance'): ?>
                                                     <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="<?php echo htmlspecialchars(t('maintenance_badge_title')); ?>"><i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_badge')); ?></span>
                                                 <?php endif; ?>
