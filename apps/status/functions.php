@@ -907,6 +907,306 @@ function bk_relative_time_label($timestamp) {
 }
 
 /**
+ * Registr metrik dostupných na Level 3 Metric Detail stránce (index.php
+ * ?view=metric). Jeden zdroj pravdy pro klíč->sloupec mapování, sdílený mezi
+ * api.php (dotaz do vps_metrics) a renderem stránky (popisky/jednotky/Related
+ * Metrics odkazy) - viz project_dashboard_ia_redesign.md v paměti.
+ */
+function bk_get_metric_registry() {
+    return [
+        'cpu' => ['column' => 'cpu_usage', 'label_key' => 'metric_label_cpu', 'unit' => '%'],
+        'ram' => ['column' => 'ram_usage', 'label_key' => 'metric_label_ram', 'unit' => '%'],
+        'hdd' => ['column' => 'hdd_usage', 'label_key' => 'metric_label_hdd', 'unit' => '%'],
+        'net' => ['column' => 'net_usage', 'label_key' => 'metric_label_net', 'unit' => 'KB/s'],
+        'load1' => ['column' => 'load_avg_1', 'label_key' => 'metric_label_load1', 'unit' => ''],
+        'load5' => ['column' => 'load_avg_5', 'label_key' => 'metric_label_load5', 'unit' => ''],
+        'load15' => ['column' => 'load_avg_15', 'label_key' => 'metric_label_load15', 'unit' => ''],
+        'cpu_steal' => ['column' => 'cpu_steal', 'label_key' => 'metric_label_cpu_steal', 'unit' => '%'],
+        'swap' => ['column' => 'swap_usage', 'label_key' => 'metric_label_swap', 'unit' => '%'],
+        'disk_io_read' => ['column' => 'disk_io_read_kbps', 'label_key' => 'metric_label_disk_io_read', 'unit' => 'KB/s'],
+        'disk_io_write' => ['column' => 'disk_io_write_kbps', 'label_key' => 'metric_label_disk_io_write', 'unit' => 'KB/s'],
+        'net_errors' => ['column' => 'net_errors', 'label_key' => 'metric_label_net_errors', 'unit' => ''],
+        'iowait' => ['column' => 'iowait_pct', 'label_key' => 'metric_label_iowait', 'unit' => '%'],
+        'inode_usage' => ['column' => 'inode_usage_pct', 'label_key' => 'metric_label_inode_usage', 'unit' => '%'],
+        'ts_clients' => ['column' => 'ts_clients_online', 'label_key' => 'metric_label_ts_clients', 'unit' => ''],
+        'ts_process_cpu' => ['column' => 'ts_process_cpu', 'label_key' => 'metric_label_ts_process_cpu', 'unit' => '%'],
+        'ts_process_ram' => ['column' => 'ts_process_ram', 'label_key' => 'metric_label_ts_process_ram', 'unit' => 'MB'],
+    ];
+}
+
+/**
+ * Sáhne do vps_metrics pro jednu metriku (sloupec z bk_get_metric_registry())
+ * v daném období a vrátí syrové body [timestamp, hodnota, špička]. Sdíleno
+ * mezi api.php (JSON pro graf) a render_metric_detail_page() (číslo pro stat
+ * kartu při prvním vykreslení stránky) - jedna SQL logika, ne dvě kopie.
+ * $column musí pocházet z bk_get_metric_registry(), nikdy přímo z $_GET.
+ */
+function bk_fetch_metric_series($pdo, $monitor_id, $column, $period) {
+    $points = [];
+    if ($period === '30d') {
+        $stmt = $pdo->prepare("
+            SELECT UNIX_TIMESTAMP(MIN(checked_at)) AS ts, AVG($column) AS val, MAX($column) AS val_peak
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND $column IS NOT NULL
+            GROUP BY DATE(checked_at)
+            ORDER BY ts ASC
+        ");
+    } elseif ($period === '7d') {
+        $stmt = $pdo->prepare("
+            SELECT UNIX_TIMESTAMP(MIN(checked_at)) AS ts, AVG($column) AS val, MAX($column) AS val_peak
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND $column IS NOT NULL
+            GROUP BY DATE_FORMAT(checked_at, '%Y-%m-%d %H')
+            ORDER BY ts ASC
+        ");
+    } else {
+        $hours = ['1h' => 1, '6h' => 6, '24h' => 24][$period] ?? 24;
+        $stmt = $pdo->prepare("
+            SELECT UNIX_TIMESTAMP(checked_at) AS ts, $column AS val, $column AS val_peak
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL $hours HOUR) AND $column IS NOT NULL
+            ORDER BY checked_at ASC
+        ");
+    }
+    $stmt->execute([$monitor_id]);
+    foreach ($stmt->fetchAll() as $r) {
+        $points[] = [(int)$r['ts'], round((float)$r['val'], 2), round((float)$r['val_peak'], 2)];
+    }
+    return $points;
+}
+
+/**
+ * Current/average/peak/trend pro jednu metriku - $points je výstup
+ * bk_fetch_metric_series() ([timestamp, hodnota, špička] řádky, chronologicky
+ * vzestupně). Trend se počítá stejnou technikou jako bk_half_window_rate()
+ * (starší/novější polovina okna), jen vrací procentuální změnu místo rate/den
+ * - pro stat kartu chceme "o kolik % je to jinak než dřív", ne projekci.
+ * @return array{current: ?float, average: ?float, peak: ?float, trend_pct: ?float}
+ */
+function bk_compute_metric_stats(array $points) {
+    $values = [];
+    foreach ($points as $p) {
+        if (isset($p[1]) && $p[1] !== null) {
+            $values[] = (float)$p[1];
+        }
+    }
+    if (empty($values)) {
+        return ['current' => null, 'average' => null, 'peak' => null, 'trend_pct' => null];
+    }
+
+    $current = end($values);
+    $average = round(array_sum($values) / count($values), 1);
+    $peak = round(max($values), 1);
+
+    $trend_pct = null;
+    $count = count($values);
+    if ($count >= 4) {
+        $half = intdiv($count, 2);
+        $older = array_slice($values, 0, $half);
+        $newer = array_slice($values, $half);
+        $older_avg = array_sum($older) / count($older);
+        $newer_avg = array_sum($newer) / count($newer);
+        if (abs($older_avg) > 0.01) {
+            $trend_pct = round((($newer_avg - $older_avg) / $older_avg) * 100, 1);
+        } elseif ($newer_avg > 0.01) {
+            $trend_pct = 100.0;
+        }
+    }
+
+    return ['current' => round($current, 1), 'average' => $average, 'peak' => $peak, 'trend_pct' => $trend_pct];
+}
+
+/**
+ * Level 3 Metric Detail stránka (index.php?view=metric&monitor=X&metric=Y) -
+ * vlastní samostatná HTML stránka (ne tab v panelu), protože potřebuje být
+ * adresovatelná URL kvůli breadcrumbům a Related Metrics odkazům. Ukončuje
+ * request sama (exit), volající (index.php) do ní jen předá $pdo/$monitor/
+ * $metric_key/$is_admin a nic dalšího po ní nerenderuje.
+ */
+function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
+    $registry = bk_get_metric_registry();
+    $site_title = get_setting('site_title', 'Blood Kings');
+
+    if (!$monitor || !isset($registry[$metric_key])) {
+        http_response_code(404);
+        echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' . htmlspecialchars($site_title) . '</title><link rel="stylesheet" href="assets/style.css"></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;"><p style="color:var(--text-secondary,#94a3b8);">' . htmlspecialchars(t('metric_not_found')) . ' <a href="index.php">' . htmlspecialchars(t('breadcrumb_dashboard')) . '</a></p></body></html>';
+        exit;
+    }
+
+    $meta = $registry[$metric_key];
+    $column = $meta['column'];
+    $metric_label = t($meta['label_key']);
+    $unit = $meta['unit'];
+
+    $points_24h = bk_fetch_metric_series($pdo, $monitor['id'], $column, '24h');
+    $stats = bk_compute_metric_stats($points_24h);
+
+    // Related Metrics - jen ty, u kterých tenhle monitor reálně hlásí data
+    // (poslední řádek vps_metrics), aby se neproklikávalo do prázdna.
+    $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
+    $stmt_latest->execute([$monitor['id']]);
+    $latest_row = $stmt_latest->fetch();
+    $related = [];
+    if ($latest_row) {
+        foreach ($registry as $rkey => $rmeta) {
+            if ($rkey === $metric_key) continue;
+            if (isset($latest_row[$rmeta['column']]) && $latest_row[$rmeta['column']] !== null) {
+                $related[$rkey] = $rmeta;
+            }
+        }
+    }
+
+    // "Proč" vrstva - poslední pozoruhodná událost za stejné okno jako graf (24h),
+    // stejný zdroj dat jako Timeline (Phase 1) a Executive Summary.
+    $recent_events = bk_get_monitor_timeline($pdo, $monitor['id'], 1);
+    $latest_event_line = null;
+    if (!empty($recent_events)) {
+        $ev = $recent_events[0];
+        $ev_label_key = 'timeline_event_' . $ev['event_type'];
+        $ev_label = t($ev_label_key);
+        if ($ev_label === $ev_label_key) { $ev_label = $ev['description'] ?: $ev['event_type']; }
+        $latest_event_line = sprintf(t('exec_summary_last_event'), $ev_label, bk_relative_time_label($ev['ts']));
+    }
+
+    $trend_dir = 'flat';
+    if ($stats['trend_pct'] !== null) {
+        $trend_dir = $stats['trend_pct'] > 2 ? 'up' : ($stats['trend_pct'] < -2 ? 'down' : 'flat');
+    }
+    ?>
+<!DOCTYPE html>
+<html lang="<?php echo htmlspecialchars($GLOBALS['BK_LANG']); ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+    <title><?php echo htmlspecialchars($metric_label . ' - ' . $monitor['name'] . ' - ' . $site_title); ?></title>
+    <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime(__DIR__ . '/assets/style.css'); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <script>
+        if (localStorage.getItem('theme') === 'light') { document.documentElement.classList.add('light-theme'); }
+    </script>
+</head>
+<body>
+    <div class="container" style="max-width: 900px; margin: 0 auto; padding: 1.5rem 1rem;">
+        <nav style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+            <a href="index.php" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars(t('breadcrumb_dashboard')); ?></a>
+            <span style="margin: 0 0.4rem;">/</span>
+            <a href="index.php?open=<?php echo (int)$monitor['id']; ?>#monitor-item-<?php echo (int)$monitor['id']; ?>" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars($monitor['name']); ?></a>
+            <span style="margin: 0 0.4rem;">/</span>
+            <span style="color: var(--text-primary);"><?php echo htmlspecialchars($metric_label); ?></span>
+        </nav>
+
+        <h1 style="font-size: 1.3rem; margin: 0 0 1rem 0;"><?php echo htmlspecialchars($metric_label); ?></h1>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem;">
+            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem 1rem; min-width: 120px;">
+                <div style="color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('metric_stat_current')); ?></div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);"><?php echo $stats['current'] !== null ? $stats['current'] . $unit : '—'; ?></div>
+                <?php if ($stats['trend_pct'] !== null): ?>
+                    <div style="font-size: 0.75rem; color: <?php echo $trend_dir === 'up' ? 'var(--color-red)' : ($trend_dir === 'down' ? 'var(--color-green)' : 'var(--text-muted)'); ?>;">
+                        <i class="fas fa-arrow-<?php echo $trend_dir === 'up' ? 'up' : ($trend_dir === 'down' ? 'down' : 'right'); ?>"></i> <?php echo ($stats['trend_pct'] > 0 ? '+' : '') . $stats['trend_pct']; ?>%
+                    </div>
+                <?php endif; ?>
+            </div>
+            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem 1rem; min-width: 120px;">
+                <div style="color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('metric_stat_average')); ?></div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);"><?php echo $stats['average'] !== null ? $stats['average'] . $unit : '—'; ?></div>
+            </div>
+            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem 1rem; min-width: 120px;">
+                <div style="color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('metric_stat_peak')); ?></div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);"><?php echo $stats['peak'] !== null ? $stats['peak'] . $unit : '—'; ?></div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.25rem; margin-bottom: 0.5rem;" id="metricPeriodSwitch" data-monitor="<?php echo (int)$monitor['id']; ?>" data-metric="<?php echo htmlspecialchars($metric_key); ?>">
+            <?php foreach (['1h', '6h', '24h', '7d', '30d'] as $p): ?>
+                <button type="button" data-period="<?php echo $p; ?>" class="btn btn-secondary btn-sm <?php echo $p === '24h' ? 'active' : ''; ?>" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_' . $p)); ?></button>
+            <?php endforeach; ?>
+        </div>
+        <div style="position: relative; height: 340px; width: 100%; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
+            <div id="metricChart" style="position: absolute; inset: 0;"></div>
+        </div>
+
+        <?php if ($latest_event_line): ?>
+            <div style="margin-top: 1rem; font-size: 0.82rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem 1rem;">
+                <i class="fas fa-file-lines" style="color: var(--text-muted); margin-right: 0.4rem;"></i><?php echo htmlspecialchars($latest_event_line); ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($related)): ?>
+            <div style="margin-top: 1.5rem;">
+                <div class="detail-section-title" style="margin-bottom: 0.6rem;"><i class="fas fa-diagram-project"></i> <?php echo htmlspecialchars(t('related_metrics_heading')); ?></div>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                    <?php foreach ($related as $rkey => $rmeta): ?>
+                        <a href="index.php?view=metric&monitor=<?php echo (int)$monitor['id']; ?>&metric=<?php echo htmlspecialchars($rkey); ?>" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.4rem 0.75rem; font-size: 0.8rem; color: var(--text-secondary); text-decoration: none;"><?php echo htmlspecialchars(t($rmeta['label_key'])); ?></a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <script>
+    (function () {
+        var chart = echarts.init(document.getElementById('metricChart'), (localStorage.getItem('theme') === 'light') ? null : 'dark');
+        var switcher = document.getElementById('metricPeriodSwitch');
+        var monitorId = switcher.dataset.monitor;
+        var metricKey = switcher.dataset.metric;
+        var unit = <?php echo json_encode($unit); ?>;
+
+        function render(payload) {
+            var seriesData = payload.points.map(function (p) { return [p[0] * 1000, p[1]]; });
+            var markPoints = (payload.events || []).map(function (ev) {
+                return { name: ev.label, coord: [ev.ts * 1000, null], value: ev.label };
+            });
+            chart.setOption({
+                backgroundColor: 'transparent',
+                grid: { left: 50, right: 20, top: 20, bottom: 40 },
+                tooltip: { trigger: 'axis', valueFormatter: function (v) { return v + ' ' + unit; } },
+                xAxis: { type: 'time' },
+                yAxis: { type: 'value', axisLabel: { formatter: '{value}' + unit } },
+                dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 0 }],
+                series: [{
+                    type: 'line',
+                    showSymbol: false,
+                    data: seriesData,
+                    areaStyle: { opacity: 0.08 },
+                    lineStyle: { width: 2 },
+                    markPoint: {
+                        symbol: 'pin',
+                        symbolSize: 28,
+                        data: markPoints
+                    }
+                }]
+            }, true);
+        }
+
+        function load(period) {
+            fetch('api.php?action=metric_series&monitor_id=' + encodeURIComponent(monitorId) + '&metric=' + encodeURIComponent(metricKey) + '&period=' + encodeURIComponent(period))
+                .then(function (r) { return r.json(); })
+                .then(render)
+                .catch(function () {});
+        }
+
+        switcher.querySelectorAll('button[data-period]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                switcher.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                load(btn.dataset.period);
+            });
+        });
+
+        window.addEventListener('resize', function () { chart.resize(); });
+        load('24h');
+    })();
+    </script>
+</body>
+</html>
+    <?php
+    exit;
+}
+
+/**
  * Vrátí informace o aktuální verzi aplikace.
  * Ve produkci čte soubor version.php vygenerovaný GitHub Actions deployem.
  * Lokálně (dev) se jako záloha pokusí o git log.

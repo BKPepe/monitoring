@@ -12,6 +12,7 @@ header('Access-Control-Allow-Methods: GET');
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/lang.php';
 
 // Historie metrik pro grafy vytížení (přepínač 24h / 7d / 30d na dashboardu).
 // Delší období se agregují po hodinách/dnech, aby odpověď nepřenášela tisíce řádků.
@@ -91,6 +92,49 @@ if (($_GET['action'] ?? '') === 'metrics_history') {
         }
         if ($net_count > 0) {
             $result['net_avg'] = round($net_sum / $net_count, 1);
+        }
+    } catch (Exception $e) {
+        // Vracíme prázdná data
+    }
+
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// Level 3 Metric Detail (index.php?view=metric) - na rozdíl od metrics_history
+// výše vrací syrová UNIX timestampy (ne předformátované popisky), aby graf
+// uměl skutečný zoom/pan, a umí libovolnou metriku z bk_get_metric_registry(),
+// ne jen cpu/ram/hdd/net. Rozlišení kopíruje stejný princip jako výše (raw pro
+// krátká období, hodinové/denní agregace pro delší) - viz plán ve paměti
+// project_dashboard_ia_redesign.md k tomu, proč 90d/1y/All zatím nejsou v
+// nabídce (30denní retence vps_metrics).
+if (($_GET['action'] ?? '') === 'metric_series') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $metric_key = (string)($_GET['metric'] ?? '');
+    $period = $_GET['period'] ?? '24h';
+
+    $registry = bk_get_metric_registry();
+    if (!isset($registry[$metric_key])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Unknown metric'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $column = $registry[$metric_key]['column'];
+
+    $result = ['points' => [], 'events' => []];
+
+    try {
+        $result['points'] = bk_fetch_metric_series($pdo, $monitor_id, $column, $period);
+
+        $period_days = ['1h' => 1, '6h' => 1, '24h' => 1, '7d' => 7, '30d' => 30][$period] ?? 1;
+        $timeline = bk_get_monitor_timeline($pdo, $monitor_id, $period_days);
+        foreach ($timeline as $ev) {
+            $ev_label_key = 'timeline_event_' . $ev['event_type'];
+            $ev_label = t($ev_label_key);
+            if ($ev_label === $ev_label_key) {
+                $ev_label = $ev['description'] ?: $ev['event_type'];
+            }
+            $result['events'][] = ['ts' => strtotime($ev['ts']), 'label' => $ev_label];
         }
     } catch (Exception $e) {
         // Vracíme prázdná data

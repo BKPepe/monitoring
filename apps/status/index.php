@@ -30,6 +30,21 @@ $last_checked_global = $stats['last_checked'] ?? null;
 $stmt_monitors = $pdo->query("SELECT * FROM monitors ORDER BY category, name");
 $monitors = $stmt_monitors->fetchAll();
 
+// Level 3 Metric Detail (?view=metric&monitor=X&metric=Y) - samostatná
+// stránka, vykreslí se a skončí request dřív, než začne cokoliv z běžného
+// dashboardu níže (drahé 30denní agregace apod. by se pro ni vůbec nehodily).
+if (($_GET['view'] ?? '') === 'metric') {
+    $vm_id = (int)($_GET['monitor'] ?? 0);
+    $vm_metric = (string)($_GET['metric'] ?? '');
+    $vm_monitor = null;
+    foreach ($monitors as $m) {
+        if ((int)$m['id'] === $vm_id) { $vm_monitor = $m; break; }
+    }
+    render_metric_detail_page($pdo, $vm_monitor, $vm_metric, $is_admin);
+    // render_metric_detail_page() vždy končí exit; - řádek níže je jen pojistka.
+    exit;
+}
+
 // Seskupení monitorů podle kategorií
 $categories = [];
 foreach ($monitors as $m) {
@@ -359,7 +374,33 @@ $portal_url = trim(get_setting('portal_url'));
             </div>
         </div>
 
-        <?php 
+        <?php
+        // Recent Events - napříč celou flotilou monitorů (Level 1 Dashboard).
+        // Čte se přímo z monitor_events, ne přes plný Insights výpočet pro každý
+        // monitor - to by na hlavní stránce znamenalo N+1 dotazů navíc.
+        $stmt_fleet_events = $pdo->query("SELECT monitor_id, monitor_name, monitor_type, event_type, description, occurred_at FROM monitor_events ORDER BY occurred_at DESC LIMIT 8");
+        $fleet_events = $stmt_fleet_events->fetchAll();
+        ?>
+        <?php if (!empty($fleet_events)): ?>
+            <div class="fleet-events-section" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;">
+                <div class="detail-section-title" style="margin-bottom: 0.75rem;"><i class="fas fa-stream"></i> <?php echo htmlspecialchars(t('recent_events_heading')); ?></div>
+                <div style="display: flex; flex-direction: column; gap: 0.45rem;">
+                    <?php foreach ($fleet_events as $fe):
+                        $fe_label_key = 'timeline_event_' . $fe['event_type'];
+                        $fe_label = t($fe_label_key);
+                        if ($fe_label === $fe_label_key) { $fe_label = $fe['description'] ?: $fe['event_type']; }
+                    ?>
+                        <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
+                            <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo htmlspecialchars(bk_relative_time_label($fe['occurred_at'])); ?></span>
+                            <a href="index.php?open=<?php echo (int)$fe['monitor_id']; ?>#monitor-item-<?php echo (int)$fe['monitor_id']; ?>" style="color: var(--text-primary); font-weight: 500; text-decoration: none;"><?php echo htmlspecialchars($fe['monitor_name']); ?></a>
+                            <span style="color: var(--text-secondary);"><?php echo htmlspecialchars($fe_label); ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <?php
         $maintenance_monitors = [];
         foreach ($monitors as $m) {
             if ($m['status'] === 'maintenance' && is_in_maintenance($m)) {
@@ -2159,6 +2200,17 @@ $portal_url = trim(get_setting('portal_url'));
             item.classList.add('open');
         }
     }
+
+    // Odkaz z breadcrumbu na Level 3 Metric Detail stránce (index.php?open=ID)
+    // automaticky rozbalí a odscrolluje na daný monitor.
+    document.addEventListener('DOMContentLoaded', function () {
+        const openId = new URLSearchParams(window.location.search).get('open');
+        if (!openId) return;
+        const item = document.getElementById('monitor-item-' + openId);
+        if (!item || item.classList.contains('open')) return;
+        toggleDetails(openId);
+        item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
 
     // Přepínání tabů v detailu monitoru (Overview/Health Score/Ports/...). Pamatuje
     // si naposledy otevřený tab per-monitor v localStorage, stejný vzorec jako
