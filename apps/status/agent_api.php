@@ -447,7 +447,13 @@ try {
             $ow_wifi_clients_count, $ow_conntrack_pct,
         ]);
     } catch (PDOException $e) {
-        error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $e->getMessage());
+        $metrics_error = $e->getMessage();
+        error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $metrics_error);
+        // Zapsat varování do monitor_logs (viditelné v adminu)
+        try {
+            $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, 'warning', 0, ?)")
+                ->execute([$monitor_id, 'Schema drift: ' . mb_substr($metrics_error, 0, 200)]);
+        } catch (PDOException $e2) { /* log table itself might be broken */ }
     }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
@@ -490,6 +496,11 @@ try {
     $pdo->commit();
 
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
+    
+    // Pokud metrics INSERT selhal, informovat agenta (viditelné v jeho logu)
+    if (!empty($metrics_error)) {
+        $response_payload['schema_warning'] = 'DB schema out of date - metrics not saved. Run migrate.php?force=1';
+    }
 
     // Kontrola nevyřízených akcí ve frontě pro tohoto agenta. Souhlas se
     // ověřuje znovu tady (ne jen při zařazení v admin.php) - monitor mohl být

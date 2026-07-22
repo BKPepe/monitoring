@@ -21,6 +21,25 @@ if (!$is_cli && !empty($cron_key)) {
 
 echo "Spouštím kontrolu monitorů... \n";
 
+// --- Schema self-test (1x denně) --- detekuje chybějící sloupce dřív než agent narazí na chybu
+$last_schema_check = get_setting('last_schema_check', '');
+if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 hours')) {
+    try {
+        $required_cols = ['iowait_pct','inode_usage_pct','zombie_count','fork_rate','temperature_c','wifi_clients_total','conntrack_pct'];
+        $stmt_cols = $pdo->query("DESCRIBE vps_metrics");
+        $existing = array_column($stmt_cols->fetchAll(PDO::FETCH_ASSOC), 'Field');
+        $missing = array_diff($required_cols, $existing);
+        if (!empty($missing)) {
+            $warn = 'SCHEMA DRIFT: vps_metrics missing columns: ' . implode(', ', $missing) . '. Run migrate.php?force=1';
+            error_log('[cron] ' . $warn);
+            echo "VAROVÁNÍ: $warn\n";
+        }
+        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_schema_check', NOW()) ON DUPLICATE KEY UPDATE key_value = NOW()")->execute();
+    } catch (PDOException $e) {
+        error_log('[cron] Schema check failed: ' . $e->getMessage());
+    }
+}
+
 // Načtení všech monitorů
 $stmt = $pdo->query("SELECT * FROM monitors");
 $monitors = $stmt->fetchAll();
