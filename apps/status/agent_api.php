@@ -164,6 +164,7 @@ $stmt->execute([$agent_key]);
 $monitor = $stmt->fetch();
 
 if (!$monitor) {
+    error_log('[agent_api] Auth failed: invalid agent_key from ' . ($_SERVER['REMOTE_ADDR'] ?? '?') . ' (key prefix: ' . substr($agent_key, 0, 8) . '...)');
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Neplatný klíč agenta nebo monitor neexistuje.']);
     exit;
