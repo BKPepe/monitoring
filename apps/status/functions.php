@@ -2135,8 +2135,9 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         
         // Získání HTTP kódu z hlaviček
         $http_code = 200;
-        if (isset($http_response_header) && isset($http_response_header[0])) {
-            preg_match('{HTTP\/\S*\s(\d\d\d)}', $http_response_header[0], $matches);
+        $resp_headers = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : ($http_response_header ?? []);
+        if (!empty($resp_headers[0])) {
+            preg_match('{HTTP\/\S*\s(\d\d\d)}', $resp_headers[0], $matches);
             if (isset($matches[1])) {
                 $http_code = (int)$matches[1];
             }
@@ -3282,8 +3283,9 @@ function check_discord($guild_id, $timeout = 3) {
         ]);
         $response = @file_get_contents($url, false, $context);
         $http_code = 200;
-        if (isset($http_response_header) && isset($http_response_header[0])) {
-            preg_match('{HTTP\/\S*\s(\d\d\d)}', $http_response_header[0], $matches);
+        $resp_headers = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : ($http_response_header ?? []);
+        if (!empty($resp_headers[0])) {
+            preg_match('{HTTP\/\S*\s(\d\d\d)}', $resp_headers[0], $matches);
             if (isset($matches[1])) {
                 $http_code = (int)$matches[1];
             }
