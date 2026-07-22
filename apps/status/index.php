@@ -405,6 +405,9 @@ $portal_url = trim(get_setting('portal_url'));
                             <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo htmlspecialchars(bk_relative_time_label($fe['occurred_at'])); ?></span>
                             <a href="index.php?open=<?php echo (int)$fe['monitor_id']; ?>#monitor-item-<?php echo (int)$fe['monitor_id']; ?>" style="color: var(--text-primary); font-weight: 500; text-decoration: none;"><?php echo htmlspecialchars($fe['monitor_name']); ?></a>
                             <span style="color: var(--text-secondary);"><?php echo htmlspecialchars($fe_label); ?></span>
+                            <?php if (!empty($fe['description']) && $fe_label !== $fe['description']): ?>
+                                <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($fe['description']); ?></span>
+                            <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -1406,8 +1409,11 @@ $portal_url = trim(get_setting('portal_url'));
                                                      <div class="monitor-tab-panel" data-tab="ports">
                                                      <div class="ts3-ports-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-plug"></i> <?php echo htmlspecialchars(t('ts3_ports_heading')); ?></div>
+                                                         <?php $ts3_ports = $ts3_check_stages['ports'] ?? []; ?>
+                                                         <?php if (empty($ts3_ports)): ?>
+                                                             <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.6rem;"><?php echo htmlspecialchars(t('ts3_ports_no_data')); ?></p>
+                                                         <?php else: ?>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
-                                                             <?php $ts3_ports = $ts3_check_stages['ports'] ?? []; ?>
                                                              <?php foreach (['query' => 'ts3_port_query', 'filetransfer' => 'ts3_port_filetransfer', 'voice' => 'ts3_port_voice'] as $pk => $pl): ?>
                                                                  <?php $pinfo = $ts3_ports[$pk] ?? null; if ($pinfo === null) continue; $pok = $pinfo['ok']; $pport = $pinfo['port'] ?? null; ?>
                                                                  <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $pok === true ? 'rgba(30, 199, 115, 0.08)' : ($pok === false ? 'rgba(239, 35, 60, 0.08)' : 'rgba(255,255,255,0.03)'); ?>; border: 1px solid <?php echo $pok === true ? 'rgba(30, 199, 115, 0.2)' : ($pok === false ? 'rgba(239, 35, 60, 0.2)' : 'rgba(255,255,255,0.08)'); ?>;" <?php if ($pport): ?>title="Port: <?php echo (int)$pport; ?><?php echo $pok === false ? ' - ' . htmlspecialchars(t('knowledge_tip_ts3_ports')) : ''; ?>"<?php endif; ?>>
@@ -1416,6 +1422,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                  </div>
                                                              <?php endforeach; ?>
                                                          </div>
+                                                         <?php endif; ?>
                                                      </div>
                                                      </div>
                                                      <?php endif; ?>
@@ -1935,23 +1942,23 @@ $portal_url = trim(get_setting('portal_url'));
                                                             <button type="button" data-period="30d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_30d')); ?></button>
                                                         </div>
                                                     </div>
-                                                    <div style="display: flex; gap: 1rem; margin: 0.75rem 0 1rem 0; font-size: 0.8rem;">
-                                                        <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                    <div style="display: flex; gap: 1rem; margin: 0.75rem 0 1rem 0; font-size: 0.8rem; flex-wrap: wrap;">
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=cpu" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('cpu_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="cpuStats-<?php echo $mid; ?>"><?php echo $cpu_avg; ?>% / <?php echo $cpu_max; ?>%</strong>
-                                                        </div>
-                                                        <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                        </a>
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=ram" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ram_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="ramStats-<?php echo $mid; ?>"><?php echo $ram_avg; ?>% / <?php echo $ram_max; ?>%</strong>
-                                                        </div>
-                                                        <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                        </a>
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=hdd" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('hdd_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="hddStats-<?php echo $mid; ?>"><?php echo $hdd_avg; ?>% / <?php echo $hdd_max; ?>%</strong>
-                                                        </div>
-                                                        <div class="net-stats-box" id="netStatsBox-<?php echo $mid; ?>" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); <?php echo $net_max > 0 ? '' : 'display: none;'; ?>">
+                                                        </a>
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=net" class="net-stats-box" id="netStatsBox-<?php echo $mid; ?>" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit; <?php echo $net_max > 0 ? '' : 'display: none;'; ?>" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('net_avg_max')); ?></span>
                                                             <strong style="color: #fff; margin-left: 0.25rem;" id="netStats-<?php echo $mid; ?>"><?php echo $net_avg; ?> / <?php echo $net_max; ?> KB/s</strong>
-                                                        </div>
+                                                        </a>
                                                     </div>
                                                     <div style="position: relative; height: 220px; width: 100%;">
                                                         <canvas id="metricsChart-<?php echo $mid; ?>"></canvas>

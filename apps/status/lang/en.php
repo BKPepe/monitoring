@@ -176,6 +176,7 @@ return [
     'period_30d' => '30 days',
 
     // Level 3 Metric Detail
+    'metric_detail_link_hint' => 'View this metric in detail (chart, history, related metrics)',
     'metric_not_found' => 'Metric not found.',
     'metric_stat_current' => 'Current',
     'metric_stat_average' => 'Average',
@@ -353,6 +354,7 @@ return [
     'ts3_port_query' => 'ServerQuery',
     'ts3_port_filetransfer' => 'File Transfer',
     'ts3_port_voice' => 'Voice (UDP, inferred)',
+    'ts3_ports_no_data' => "Port data isn't available yet - it'll show up after the next scheduled check (see cron).",
     'ts3_license_heading' => 'License & Version',
     'ts3_license_label' => 'License',
     'ts3_version_current' => 'Current Version',

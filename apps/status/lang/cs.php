@@ -177,6 +177,7 @@ return [
     'period_30d' => '30 dní',
 
     // Level 3 Metric Detail
+    'metric_detail_link_hint' => 'Zobrazit detail téhle metriky (graf, historie, související metriky)',
     'metric_not_found' => 'Metrika nenalezena.',
     'metric_stat_current' => 'Aktuálně',
     'metric_stat_average' => 'Průměr',
@@ -354,6 +355,7 @@ return [
     'ts3_port_query' => 'ServerQuery',
     'ts3_port_filetransfer' => 'File Transfer',
     'ts3_port_voice' => 'Voice (UDP, odvozeno)',
+    'ts3_ports_no_data' => 'Data o portech zatím nejsou k dispozici - projeví se po dalším proběhlém měření (viz cron).',
     'ts3_license_heading' => 'Licence a verze',
     'ts3_license_label' => 'Licence',
     'ts3_version_current' => 'Aktuální verze',
