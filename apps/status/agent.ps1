@@ -13,7 +13,7 @@ $AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 $AUTO_UPDATE = "0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
 # ===========================
 
-$AGENT_VERSION = "1.6.0"
+$AGENT_VERSION = "1.7.0"
 
 # Načtení z Environment proměnných
 if ($env:STATUS_API_URL) { $API_URL = $env:STATUS_API_URL }
@@ -290,6 +290,31 @@ try {
     }
 } catch {}
 
+# --- Service Discovery ---
+$discoveredServices = @()
+$detectors = @(
+    @{ Name = "TeamSpeak"; Type = "teamspeak"; Port = 10011; Proc = "ts3server"; Cfg = @() },
+    @{ Name = "Minecraft"; Type = "minecraft"; Port = 25565; Proc = "java"; Cfg = @() },
+    @{ Name = "Nginx"; Type = "nginx"; Port = 80; Proc = "nginx"; Cfg = @("C:\nginx\conf\nginx.conf") },
+    @{ Name = "Docker"; Type = "docker"; Port = $null; Proc = "dockerd"; Cfg = @("C:\ProgramData\Docker") },
+    @{ Name = "PostgreSQL"; Type = "postgresql"; Port = 5432; Proc = "postgres"; Cfg = @("C:\Program Files\PostgreSQL") },
+    @{ Name = "AdGuard Home"; Type = "adguard"; Port = 3000; Proc = "AdGuardHome"; Cfg = @() },
+    @{ Name = "Mosquitto"; Type = "mosquitto"; Port = 1883; Proc = "mosquitto"; Cfg = @("C:\Program Files\mosquitto\mosquitto.conf") }
+)
+foreach ($det in $detectors) {
+    $conf = 0; $evidence = @(); $missing = @()
+    if ($det.Proc -and $processes -contains $det.Proc) { $conf += 30; $evidence += "process" } elseif ($det.Proc) { $missing += "process" }
+    if ($det.Port -and $ports -contains $det.Port) { $conf += 25; $evidence += "port" } elseif ($det.Port) { $missing += "port" }
+    $cfgFound = $false
+    foreach ($cp in $det.Cfg) { if (Test-Path $cp) { $cfgFound = $true; break } }
+    if ($cfgFound) { $conf += 25; $evidence += "config" } elseif ($det.Cfg.Count -gt 0) { $missing += "config" }
+    if ($det.Port -and $ports -contains $det.Port) { $conf += 19; $evidence += "active_verify" } else { $missing += "active_verify" }
+    if ($conf -gt 99) { $conf = 99 }
+    if ($conf -ge 25) {
+        $discoveredServices += @{ name = $det.Name; type = $det.Type; port = $det.Port; confidence = $conf; evidence = $evidence; missing = $missing }
+    }
+}
+
 $payload = @{
     agent_key = $AGENT_KEY
     agent_type = "powershell"
@@ -325,6 +350,7 @@ $payload = @{
     reboot_required = $null
     cloud_provider = $cloud_provider
     virtualization = $virtualization
+    discovered_services = $discoveredServices
 } | ConvertTo-Json -Depth 4
 
 $netLog = if ($null -ne $net) { "$net KB/s" } else { "N/A (první běh)" }
