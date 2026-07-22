@@ -132,6 +132,26 @@ $ow_entropy = (isset($data['entropy']) && $data['entropy'] !== null) ? intval($d
 $ow_upgradable_packages = (isset($data['upgradable_packages']) && $data['upgradable_packages'] !== null) ? intval($data['upgradable_packages']) : null;
 $ow_wifi_clients_count = (isset($data['wifi_clients_count']) && $data['wifi_clients_count'] !== null) ? intval($data['wifi_clients_count']) : null;
 
+// OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
+$ow_mwan3_policies = (isset($data['mwan3_policies']) && is_array($data['mwan3_policies'])) ? $data['mwan3_policies'] : null;
+$ow_mwan3_active_gw = (isset($data['mwan3_active_gw']) && $data['mwan3_active_gw'] !== null) ? trim($data['mwan3_active_gw']) : null;
+$ow_sqm_enabled = (isset($data['sqm_enabled']) && $data['sqm_enabled'] === true) ? true : false;
+$ow_sqm_download_kbps = (isset($data['sqm_download_kbps']) && $data['sqm_download_kbps'] !== null) ? intval($data['sqm_download_kbps']) : null;
+$ow_sqm_upload_kbps = (isset($data['sqm_upload_kbps']) && $data['sqm_upload_kbps'] !== null) ? intval($data['sqm_upload_kbps']) : null;
+$ow_sqm_dropped = (isset($data['sqm_dropped']) && $data['sqm_dropped'] !== null) ? intval($data['sqm_dropped']) : null;
+$ow_sqm_ecn = (isset($data['sqm_ecn']) && $data['sqm_ecn'] !== null) ? intval($data['sqm_ecn']) : null;
+$ow_lte_rsrp = (isset($data['lte_rsrp']) && $data['lte_rsrp'] !== null) ? floatval($data['lte_rsrp']) : null;
+$ow_lte_rsrq = (isset($data['lte_rsrq']) && $data['lte_rsrq'] !== null) ? floatval($data['lte_rsrq']) : null;
+$ow_lte_sinr = (isset($data['lte_sinr']) && $data['lte_sinr'] !== null) ? floatval($data['lte_sinr']) : null;
+$ow_lte_band = (isset($data['lte_band']) && $data['lte_band'] !== null) ? $data['lte_band'] : null;
+$ow_lte_carrier = (isset($data['lte_carrier']) && $data['lte_carrier'] !== null) ? trim($data['lte_carrier']) : null;
+$ow_service_restarts = (isset($data['service_restarts']) && is_array($data['service_restarts'])) ? $data['service_restarts'] : null;
+$ow_wan_reconnect_count = (isset($data['wan_reconnect_count']) && $data['wan_reconnect_count'] !== null) ? intval($data['wan_reconnect_count']) : null;
+$ow_wan_last_reconnect = (isset($data['wan_last_reconnect']) && $data['wan_last_reconnect'] !== null) ? intval($data['wan_last_reconnect']) : null;
+$ow_installed_packages = (isset($data['installed_packages']) && $data['installed_packages'] !== null) ? intval($data['installed_packages']) : null;
+$ow_log_errors_24h = (isset($data['log_errors_24h']) && $data['log_errors_24h'] !== null) ? intval($data['log_errors_24h']) : null;
+$ow_log_warnings_24h = (isset($data['log_warnings_24h']) && $data['log_warnings_24h'] !== null) ? intval($data['log_warnings_24h']) : null;
+
 if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Chybí povinné údaje (agent_key, cpu, ram, hdd).']);
@@ -316,6 +336,25 @@ try {
         'entropy' => $ow_entropy,
         'upgradable_packages' => $ow_upgradable_packages,
         'wifi_clients_count' => $ow_wifi_clients_count,
+        // OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
+        'mwan3_policies' => $ow_mwan3_policies,
+        'mwan3_active_gw' => $ow_mwan3_active_gw,
+        'sqm_enabled' => $ow_sqm_enabled,
+        'sqm_download_kbps' => $ow_sqm_download_kbps,
+        'sqm_upload_kbps' => $ow_sqm_upload_kbps,
+        'sqm_dropped' => $ow_sqm_dropped,
+        'sqm_ecn' => $ow_sqm_ecn,
+        'lte_rsrp' => $ow_lte_rsrp,
+        'lte_rsrq' => $ow_lte_rsrq,
+        'lte_sinr' => $ow_lte_sinr,
+        'lte_band' => $ow_lte_band,
+        'lte_carrier' => $ow_lte_carrier,
+        'service_restarts' => $ow_service_restarts,
+        'wan_reconnect_count' => $ow_wan_reconnect_count,
+        'wan_last_reconnect' => $ow_wan_last_reconnect,
+        'installed_packages' => $ow_installed_packages,
+        'log_errors_24h' => $ow_log_errors_24h,
+        'log_warnings_24h' => $ow_log_warnings_24h,
         'cpu_alert_sent' => $cpu_alert_sent,
         'ram_alert_sent' => $ram_alert_sent,
         'hdd_alert_sent' => $hdd_alert_sent,

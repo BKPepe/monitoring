@@ -170,6 +170,7 @@ return [
     // Metrics chart
     'load_history_heading' => 'Load History',
     'period_1h' => '1 hour',
+    'period_15m' => '15 min',
     'period_6h' => '6 hours',
     'period_24h' => '24 hours',
     'period_7d' => '7 days',
@@ -414,6 +415,44 @@ return [
     'mtab_clients_chart' => 'Client History',
     'mtab_insights' => 'Insights',
     'mtab_timeline' => 'Timeline',
+    'mtab_asset_timeline' => 'Asset Timeline',
+    'no_events' => 'No events in the last 30 days.',
+    'mtab_wifi' => 'Wi-Fi',
+    'mtab_network' => 'Network',
+    'mtab_firewall' => 'Firewall',
+    'mtab_dhcp_dns' => 'DHCP / DNS',
+
+    // OpenWrt Telemetry
+    'ow_wifi_heading' => 'Wi-Fi Radios',
+    'ow_radio' => 'Radio',
+    'ow_band' => 'Band',
+    'ow_channel' => 'Channel',
+    'ow_clients' => 'Clients',
+    'ow_noise' => 'Noise',
+    'ow_tx_power' => 'TX Power',
+    'ow_interfaces_heading' => 'Network Interfaces',
+    'ow_iface' => 'Interface',
+    'ow_firewall_heading' => 'Firewall',
+    'ow_conntrack' => 'Conntrack',
+    'ow_fw_accepted' => 'Accepted',
+    'ow_fw_dropped' => 'Dropped',
+    'ow_fw_rejected' => 'Rejected',
+    'ow_lan_subnet' => 'LAN Subnet',
+    'ow_dhcp_leases' => 'DHCP Leases',
+    'ow_dhcp_reservations' => 'DHCP Reservations',
+    'ow_dns_queries' => 'DNS Queries',
+    'ow_dns_cache_hit_rate' => 'DNS Cache Hit',
+
+    // Charting UX
+    'chart_view_line' => 'Line',
+    'chart_view_heatmap' => 'Heatmap',
+    'chart_view_histogram' => 'Histogram',
+    'chart_compare_yesterday' => 'Compare with yesterday',
+    'chart_show_baseline' => 'Show 7-day average',
+    'chart_yesterday' => 'Yesterday',
+    'chart_baseline' => '7-day average',
+    'chart_count' => 'Count',
+    'chart_annotation_prompt' => 'Add annotation for this point:',
 
     // Timeline (event history shown in the monitor detail view)
     'timeline_heading' => 'Timeline',
@@ -561,4 +600,23 @@ return [
     'test_email_body1' => 'This email was sent as a functionality test from the Blood Kings status panel.',
     'test_email_body2' => 'If you received this email, outgoing mail from your web hosting is working correctly.',
     'test_email_sent_at' => 'Sent at:',
+
+    // Network Insights
+    'net_insight_wan_reconnects' => 'WAN disconnected %d times in the last 7 days.',
+    'net_insight_wan_reconnects_detail' => 'Frequent WAN drops may indicate an ISP, cable, or router issue.',
+    'net_insight_conntrack_high' => 'Conntrack table is %s%% full.',
+    'net_insight_conntrack_detail' => 'When the conntrack table fills up, new connections will be dropped. Consider increasing nf_conntrack_max.',
+    'net_insight_wifi_noise' => 'Wi-Fi %s has high interference (noise %d dBm).',
+    'net_insight_wifi_noise_detail' => 'A high noise floor indicates interference from neighboring networks. Consider changing the channel.',
+    'net_insight_wg_stale' => 'WireGuard peer %s... has been inactive for %d hours.',
+    'net_insight_wg_stale_detail' => 'Peer has not connected in over 48 hours. Check configuration or remote availability.',
+    'net_insight_dns_cache_low' => 'DNS cache hit rate is only %s%%.',
+    'net_insight_dns_cache_detail' => 'Low cache efficiency. Consider increasing cache-size in dnsmasq.',
+    'net_insight_lte_weak' => 'LTE signal is very weak (RSRP %d dBm).',
+    'net_insight_lte_weak_detail' => 'Weak signal may cause drops and low speed. Consider repositioning the antenna.',
+
+    // OpenWrt service-specific knowledge tips
+    'knowledge_tip_ow_hostapd_cpu' => 'CPU is loaded by hostapd (%s%%). Wi-Fi clients: %d. Check band utilization.',
+    'knowledge_tip_ow_wg_cpu' => 'CPU is loaded by WireGuard (%s%%). Throughput: RX %s MB / TX %s MB.',
+    'knowledge_tip_ow_dns_cpu' => 'CPU is loaded by dnsmasq (%s%%). DNS queries: %d. Consider cache optimization.',
 ];

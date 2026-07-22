@@ -565,18 +565,30 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
     if (is_array($details)) {
         if (isset($details['cpu'])) {
             $cpu = floatval($details['cpu']);
-            if ($cpu > 80) $add('critical', 'knowledge_tip_cpu_high');
-            elseif ($cpu > 50) $add('warn', 'knowledge_tip_cpu_high');
+            if ($cpu > 80) {
+                $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'cpu_usage', 80) : null;
+                $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
+                $add('critical', 'knowledge_tip_cpu_high');
+                $tips[count($tips)-1]['text'] .= $suffix;
+            } elseif ($cpu > 50) $add('warn', 'knowledge_tip_cpu_high');
         }
         if (isset($details['ram'])) {
             $ram = floatval($details['ram']);
-            if ($ram > 85) $add('critical', 'knowledge_tip_ram_high');
-            elseif ($ram > 60) $add('warn', 'knowledge_tip_ram_high');
+            if ($ram > 85) {
+                $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'ram_usage', 85) : null;
+                $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
+                $add('critical', 'knowledge_tip_ram_high');
+                $tips[count($tips)-1]['text'] .= $suffix;
+            } elseif ($ram > 60) $add('warn', 'knowledge_tip_ram_high');
         }
         if (isset($details['hdd'])) {
             $hdd = floatval($details['hdd']);
-            if ($hdd > 90) $add('critical', 'knowledge_tip_hdd_high');
-            elseif ($hdd > 70) $add('warn', 'knowledge_tip_hdd_high');
+            if ($hdd > 90) {
+                $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'hdd_usage', 90) : null;
+                $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
+                $add('critical', 'knowledge_tip_hdd_high');
+                $tips[count($tips)-1]['text'] .= $suffix;
+            } elseif ($hdd > 70) $add('warn', 'knowledge_tip_hdd_high');
         }
         if (isset($details['iowait']) && $details['iowait'] !== null) {
             if ($details['iowait'] > 20) $add('critical', 'knowledge_tip_iowait_high');
@@ -662,6 +674,35 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
             } elseif ($area['status'] === 'warn') {
                 $add('warn', $ts3_area_tip_keys[$area['key']]);
             }
+        }
+    }
+
+    // --- OpenWrt service-specific context tips ---
+    if ($monitor && $monitor['type'] === 'openwrt' && is_array($details)) {
+        $top_procs = $details['top_cpu_processes'] ?? [];
+        $top_proc_name = !empty($top_procs) ? ($top_procs[0]['name'] ?? '') : '';
+        $top_proc_cpu = !empty($top_procs) ? ($top_procs[0]['cpu'] ?? 0) : 0;
+
+        // CPU high + hostapd -> WiFi client context
+        if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'hostapd') !== false) {
+            $wifi_clients = 0;
+            if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
+                foreach ($details['wifi_radios'] as $r) { $wifi_clients += (int)($r['clients'] ?? 0); }
+            }
+            $add('warn', 'knowledge_tip_ow_hostapd_cpu', $top_proc_cpu, $wifi_clients);
+        }
+        // CPU high + wireguard -> WG throughput context
+        if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'wireguard') !== false) {
+            $wg_rx = 0; $wg_tx = 0;
+            if (!empty($details['wireguard_peers']) && is_array($details['wireguard_peers'])) {
+                foreach ($details['wireguard_peers'] as $p) { $wg_rx += (int)($p['rx_bytes'] ?? 0); $wg_tx += (int)($p['tx_bytes'] ?? 0); }
+            }
+            $add('warn', 'knowledge_tip_ow_wg_cpu', $top_proc_cpu, round($wg_rx / 1048576, 1), round($wg_tx / 1048576, 1));
+        }
+        // CPU high + dnsmasq -> DNS query rate context
+        if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'dnsmasq') !== false) {
+            $dns_q = $details['dns_queries'] ?? 0;
+            $add('warn', 'knowledge_tip_ow_dns_cpu', $top_proc_cpu, $dns_q);
         }
     }
 
@@ -854,6 +895,130 @@ function bk_compute_baseline_anomaly(array $baseline_values, float $current, flo
         'mean' => $mean,
         'current' => $current,
     ];
+}
+
+/**
+ * Network Insights - rolling-window analýza síťových dat pro OpenWrt/VPS monitory.
+ * Vrací pole insightů ve stejném formátu jako bk_get_anomaly_insights().
+ */
+function bk_get_network_insights($pdo, $monitor, $details) {
+    $insights = [];
+    if (!is_array($details)) return $insights;
+    $monitor_id = $monitor['id'];
+
+    // WAN reconnect frequency (7d rolling window)
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM monitor_events WHERE monitor_id = ? AND event_type = 'status_changed_down' AND occurred_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
+        $stmt->execute([$monitor_id]);
+        $row = $stmt->fetch();
+        $down_count = (int)($row['cnt'] ?? 0);
+        if ($down_count >= 5) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-rotate',
+                'color' => 'var(--color-red)',
+                'text' => sprintf(t('net_insight_wan_reconnects'), $down_count),
+                'detail' => t('net_insight_wan_reconnects_detail'),
+            ];
+        } elseif ($down_count >= 2) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-rotate',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('net_insight_wan_reconnects'), $down_count),
+                'detail' => t('net_insight_wan_reconnects_detail'),
+            ];
+        }
+    } catch (PDOException $e) {}
+
+    // Conntrack table pressure
+    if (isset($details['conntrack_pct']) && $details['conntrack_pct'] !== null) {
+        $ct = (float)$details['conntrack_pct'];
+        if ($ct > 90) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-table-list',
+                'color' => 'var(--color-red)',
+                'text' => sprintf(t('net_insight_conntrack_high'), number_format($ct, 1)),
+                'detail' => t('net_insight_conntrack_detail'),
+            ];
+        } elseif ($ct > 80) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-table-list',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('net_insight_conntrack_high'), number_format($ct, 1)),
+                'detail' => t('net_insight_conntrack_detail'),
+            ];
+        }
+    }
+
+    // WiFi interference (noise floor)
+    if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
+        foreach ($details['wifi_radios'] as $radio) {
+            $noise = (int)($radio['noise'] ?? -95);
+            if ($noise > -70) {
+                $insights[] = [
+                    'type' => 'network',
+                    'icon' => 'fa-wifi',
+                    'color' => 'var(--color-orange, #f39c12)',
+                    'text' => sprintf(t('net_insight_wifi_noise'), $radio['ssid'] ?? $radio['radio'] ?? '?', $noise),
+                    'detail' => t('net_insight_wifi_noise_detail'),
+                ];
+                break; // Jeden insight stačí
+            }
+        }
+    }
+
+    // WireGuard stale peer
+    if (!empty($details['wireguard_peers']) && is_array($details['wireguard_peers'])) {
+        $now = time();
+        foreach ($details['wireguard_peers'] as $peer) {
+            $hs = (int)($peer['latest_handshake'] ?? 0);
+            if ($hs > 0 && ($now - $hs) > 172800) { // 48h
+                $insights[] = [
+                    'type' => 'network',
+                    'icon' => 'fa-shield-halved',
+                    'color' => 'var(--color-orange, #f39c12)',
+                    'text' => sprintf(t('net_insight_wg_stale'), $peer['public_key'] ?? '?', round(($now - $hs) / 3600)),
+                    'detail' => t('net_insight_wg_stale_detail'),
+                ];
+                break;
+            }
+        }
+    }
+
+    // DNS cache efficiency
+    if (isset($details['dns_queries']) && $details['dns_queries'] !== null && $details['dns_queries'] > 0) {
+        $hits = (int)($details['dns_cache_hits'] ?? 0);
+        $total = (int)$details['dns_queries'];
+        $hit_rate = $total > 0 ? ($hits / $total) * 100 : 0;
+        if ($hit_rate < 50 && $total > 100) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-magnifying-glass',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('net_insight_dns_cache_low'), number_format($hit_rate, 0)),
+                'detail' => t('net_insight_dns_cache_detail'),
+            ];
+        }
+    }
+
+    // LTE signal quality
+    if (isset($details['lte_rsrp']) && $details['lte_rsrp'] !== null) {
+        $rsrp = (float)$details['lte_rsrp'];
+        if ($rsrp < -120) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-signal',
+                'color' => 'var(--color-red)',
+                'text' => sprintf(t('net_insight_lte_weak'), $rsrp),
+                'detail' => t('net_insight_lte_weak_detail'),
+            ];
+        }
+    }
+
+    return $insights;
 }
 
 /**
@@ -1237,11 +1402,12 @@ function bk_fetch_metric_series($pdo, $monitor_id, $column, $period) {
             ORDER BY ts ASC
         ");
     } else {
-        $hours = ['1h' => 1, '6h' => 6, '24h' => 24][$period] ?? 24;
+        $hours = ['15m' => 0.25, '1h' => 1, '6h' => 6, '24h' => 24][$period] ?? 24;
+        $interval_expr = $hours < 1 ? sprintf('%d MINUTE', (int)($hours * 60)) : sprintf('%d HOUR', (int)$hours);
         $stmt = $pdo->prepare("
             SELECT UNIX_TIMESTAMP(checked_at) AS ts, $column AS val, $column AS val_peak
             FROM vps_metrics
-            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL $hours HOUR) AND $column IS NOT NULL
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL $interval_expr) AND $column IS NOT NULL
             ORDER BY checked_at ASC
         ");
     }
@@ -1349,6 +1515,15 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     if ($stats['trend_pct'] !== null) {
         $trend_dir = $stats['trend_pct'] > 2 ? 'up' : ($stats['trend_pct'] < -2 ? 'down' : 'flat');
     }
+
+    // Alert Regions - threshold bands pro metriky s nastavitelným prahem
+    $warn_threshold = null;
+    $crit_threshold = null;
+    $threshold_map = ['cpu' => 'cpu_threshold', 'ram' => 'ram_threshold', 'hdd' => 'hdd_threshold'];
+    if (isset($threshold_map[$metric_key]) && !empty($monitor[$threshold_map[$metric_key]])) {
+        $crit_threshold = (float)$monitor[$threshold_map[$metric_key]];
+        $warn_threshold = max(0, $crit_threshold - 15); // Warning zone 15% pod critical
+    }
     ?>
 <!DOCTYPE html>
 <html lang="<?php echo htmlspecialchars($GLOBALS['BK_LANG']); ?>">
@@ -1369,7 +1544,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
         <nav style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem;">
             <a href="index.php" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars(t('breadcrumb_dashboard')); ?></a>
             <span style="margin: 0 0.4rem;">/</span>
-            <a href="index.php?open=<?php echo (int)$monitor['id']; ?>#monitor-item-<?php echo (int)$monitor['id']; ?>" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars($monitor['name']); ?></a>
+            <a href="index.php?expand=<?php echo (int)$monitor['id']; ?>#monitor-item-<?php echo (int)$monitor['id']; ?>" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars($monitor['name']); ?></a>
             <span style="margin: 0 0.4rem;">/</span>
             <span style="color: var(--text-primary);"><?php echo htmlspecialchars($metric_label); ?></span>
         </nav>
@@ -1403,7 +1578,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                 <button type="button" data-view="histogram" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><i class="fas fa-chart-bar"></i> <?php echo htmlspecialchars(t('chart_view_histogram')); ?></button>
             </div>
             <div style="display: flex; gap: 0.25rem;" id="metricPeriodSwitch" data-monitor="<?php echo (int)$monitor['id']; ?>" data-metric="<?php echo htmlspecialchars($metric_key); ?>">
-                <?php foreach (['1h', '6h', '24h', '7d', '30d'] as $p): ?>
+                <?php foreach (['15m', '1h', '6h', '24h', '7d', '30d'] as $p): ?>
                     <button type="button" data-period="<?php echo $p; ?>" class="btn btn-secondary btn-sm <?php echo $p === '24h' ? 'active' : ''; ?>" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_' . $p)); ?></button>
                 <?php endforeach; ?>
             </div>
@@ -1430,8 +1605,19 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
             <div style="margin-top: 1.5rem;">
                 <div class="detail-section-title" style="margin-bottom: 0.6rem;"><i class="fas fa-diagram-project"></i> <?php echo htmlspecialchars(t('related_metrics_heading')); ?></div>
                 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-                    <?php foreach ($related as $rkey => $rmeta): ?>
-                        <a href="index.php?view=metric&monitor=<?php echo (int)$monitor['id']; ?>&metric=<?php echo htmlspecialchars($rkey); ?>" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.4rem 0.75rem; font-size: 0.8rem; color: var(--text-secondary); text-decoration: none;"><?php echo htmlspecialchars(t($rmeta['label_key'])); ?></a>
+                    <?php foreach ($related as $rkey => $rmeta):
+                        $rval = $latest_row[$rmeta['column']] ?? null;
+                        $rdot = 'var(--color-green)';
+                        if ($rval !== null) {
+                            if (in_array($rkey, ['cpu', 'ram', 'hdd']) && $rval > 80) $rdot = 'var(--color-red)';
+                            elseif (in_array($rkey, ['cpu', 'ram', 'hdd']) && $rval > 50) $rdot = 'var(--color-yellow)';
+                        }
+                    ?>
+                        <a href="index.php?view=metric&monitor=<?php echo (int)$monitor['id']; ?>&metric=<?php echo htmlspecialchars($rkey); ?>" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.4rem 0.75rem; font-size: 0.8rem; color: var(--text-secondary); text-decoration: none; display: flex; align-items: center; gap: 0.4rem;">
+                            <span style="width:7px;height:7px;border-radius:50%;background:<?php echo $rdot; ?>;flex-shrink:0;"></span>
+                            <?php echo htmlspecialchars(t($rmeta['label_key'])); ?>
+                            <?php if ($rval !== null): ?><strong style="color:var(--text-primary);font-size:0.78rem;"><?php echo is_numeric($rval) ? round((float)$rval, 1) : htmlspecialchars((string)$rval); ?><?php echo htmlspecialchars($rmeta['unit']); ?></strong><?php endif; ?>
+                        </a>
                     <?php endforeach; ?>
                 </div>
             </div>
@@ -1448,6 +1634,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
         var monitorId = switcher.dataset.monitor;
         var metricKey = switcher.dataset.metric;
         var unit = <?php echo json_encode($unit); ?>;
+        var warnThreshold = <?php echo $warn_threshold !== null ? $warn_threshold : 'null'; ?>;
+        var critThreshold = <?php echo $crit_threshold !== null ? $crit_threshold : 'null'; ?>;
         var currentView = 'line';
         var currentPeriod = '24h';
         var cachedPayload = null;
@@ -1464,7 +1652,14 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                 data: seriesData,
                 areaStyle: { opacity: 0.08 },
                 lineStyle: { width: 2 },
-                markPoint: { symbol: 'pin', symbolSize: 28, data: markPoints }
+                markPoint: { symbol: 'pin', symbolSize: 28, data: markPoints },
+                markArea: (warnThreshold !== null && critThreshold !== null) ? {
+                    silent: true,
+                    data: [
+                        [{ yAxis: warnThreshold, itemStyle: { color: 'rgba(243,156,18,0.07)' } }, { yAxis: critThreshold }],
+                        [{ yAxis: critThreshold, itemStyle: { color: 'rgba(231,76,60,0.09)' } }, { yAxis: 100 }]
+                    ]
+                } : undefined
             }];
             if (compareData && compareData.length > 0) {
                 series.push({
@@ -1493,7 +1688,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                 tooltip: { trigger: 'axis', valueFormatter: function (v) { return v !== null && v !== undefined ? v + ' ' + unit : '—'; } },
                 xAxis: { type: 'time' },
                 yAxis: { type: 'value', axisLabel: { formatter: '{value}' + unit } },
-                dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 0 }],
+                dataZoom: [{ type: 'inside' }, { type: 'slider', height: 28, bottom: 0, borderColor: 'rgba(255,255,255,0.1)', fillerColor: 'rgba(88,166,255,0.1)' }],
                 series: series
             }, true);
         }
@@ -4446,7 +4641,7 @@ function render_digest_html($data) {
         foreach ($data['new_servers'] as $s) {
             $ns_label = htmlspecialchars($s['name']) . ' <span style="color:#888896;">(' . htmlspecialchars($s['type']) . ')</span>';
             if ($site_url !== '' && !empty($s['id'])) {
-                $ns_label = '<a href="' . htmlspecialchars($site_url . '/index.php?open=' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
+                $ns_label = '<a href="' . htmlspecialchars($site_url . '/index.php?expand=' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
             }
             $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . $ns_label . '</div>';
         }

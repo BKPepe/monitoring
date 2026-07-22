@@ -171,6 +171,7 @@ return [
     // Metriky graf
     'load_history_heading' => 'Historie vytížení',
     'period_1h' => '1 hodina',
+    'period_15m' => '15 min',
     'period_6h' => '6 hodin',
     'period_24h' => '24 hodin',
     'period_7d' => '7 dní',
@@ -415,6 +416,44 @@ return [
     'mtab_clients_chart' => 'Historie klientů',
     'mtab_insights' => 'Insights',
     'mtab_timeline' => 'Historie',
+    'mtab_asset_timeline' => 'Historie assetu',
+    'no_events' => 'Žádné události za posledních 30 dní.',
+    'mtab_wifi' => 'Wi-Fi',
+    'mtab_network' => 'Síť',
+    'mtab_firewall' => 'Firewall',
+    'mtab_dhcp_dns' => 'DHCP / DNS',
+
+    // OpenWrt Telemetry
+    'ow_wifi_heading' => 'Wi-Fi rádia',
+    'ow_radio' => 'Rádio',
+    'ow_band' => 'Pásmo',
+    'ow_channel' => 'Kanál',
+    'ow_clients' => 'Klienti',
+    'ow_noise' => 'Šum',
+    'ow_tx_power' => 'TX výkon',
+    'ow_interfaces_heading' => 'Síťová rozhraní',
+    'ow_iface' => 'Rozhraní',
+    'ow_firewall_heading' => 'Firewall',
+    'ow_conntrack' => 'Conntrack',
+    'ow_fw_accepted' => 'Přijato',
+    'ow_fw_dropped' => 'Zahozeno',
+    'ow_fw_rejected' => 'Odmítnuto',
+    'ow_lan_subnet' => 'LAN subnet',
+    'ow_dhcp_leases' => 'DHCP výpůjčky',
+    'ow_dhcp_reservations' => 'DHCP rezervace',
+    'ow_dns_queries' => 'DNS dotazy',
+    'ow_dns_cache_hit_rate' => 'DNS cache hit',
+
+    // Charting UX
+    'chart_view_line' => 'Graf',
+    'chart_view_heatmap' => 'Heatmapa',
+    'chart_view_histogram' => 'Histogram',
+    'chart_compare_yesterday' => 'Porovnat se včerejškem',
+    'chart_show_baseline' => 'Zobrazit průměr (7 dní)',
+    'chart_yesterday' => 'Včera',
+    'chart_baseline' => 'Průměr 7 dní',
+    'chart_count' => 'Počet',
+    'chart_annotation_prompt' => 'Přidat poznámku k tomuto bodu:',
 
     // Timeline (historie událostí v detailu monitoru)
     'timeline_heading' => 'Historie',
@@ -562,4 +601,23 @@ return [
     'test_email_body1' => 'Tento e-mail byl odeslán jako test funkčnosti ze status panelu Blood Kings.',
     'test_email_body2' => 'Pokud jste obdrželi tento e-mail, odchozí pošta z vašeho webhostingu funguje správně.',
     'test_email_sent_at' => 'Odesláno v:',
+
+    // Network Insights
+    'net_insight_wan_reconnects' => 'WAN se za posledních 7 dní odpojila %d×.',
+    'net_insight_wan_reconnects_detail' => 'Časté výpadky WAN mohou značit problém s ISP, kabelem nebo routerem.',
+    'net_insight_conntrack_high' => 'Conntrack tabulka je z %s %% zaplněná.',
+    'net_insight_conntrack_detail' => 'Při zaplnění conntrack tabulky budou nová spojení odmítnuta. Zvažte zvýšení nf_conntrack_max.',
+    'net_insight_wifi_noise' => 'Wi-Fi %s má vysoké rušení (noise %d dBm).',
+    'net_insight_wifi_noise_detail' => 'Vysoký noise floor značí rušení od sousedních sítí. Zvažte změnu kanálu.',
+    'net_insight_wg_stale' => 'WireGuard peer %s... nebyl aktivní %d hodin.',
+    'net_insight_wg_stale_detail' => 'Peer se nepřipojil více než 48 hodin. Zkontrolujte konfiguraci nebo dostupnost protistrany.',
+    'net_insight_dns_cache_low' => 'DNS cache hit rate je pouze %s %%.',
+    'net_insight_dns_cache_detail' => 'Nízká efektivita cache. Zvažte zvýšení cache-size v dnsmasq.',
+    'net_insight_lte_weak' => 'LTE signál je velmi slabý (RSRP %d dBm).',
+    'net_insight_lte_weak_detail' => 'Slabý signál může způsobovat výpadky a nízkou rychlost. Zvažte reposici antény.',
+
+    // OpenWrt service-specific knowledge tips
+    'knowledge_tip_ow_hostapd_cpu' => 'CPU je zatíženo procesem hostapd (%s %%). Wi-Fi klientů: %d. Zkontrolujte vytížení pásma.',
+    'knowledge_tip_ow_wg_cpu' => 'CPU je zatíženo WireGuard (%s %%). Průchod: RX %s MB / TX %s MB.',
+    'knowledge_tip_ow_dns_cpu' => 'CPU je zatíženo dnsmasq (%s %%). DNS dotazů: %d. Zvažte optimalizaci cache.',
 ];

@@ -353,7 +353,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $maintenance = isset($_POST['maintenance']) ? 1 : 0;
     $monitored_processes = isset($_POST['monitored_processes']) ? trim($_POST['monitored_processes']) : null;
     $maintenance_description = ($maintenance === 1 && !empty($_POST['maintenance_description'])) ? trim($_POST['maintenance_description']) : null;
-    $maintenance_start = ($maintenance === 1 && !empty($_POST['maintenance_start'])) ? $_POST['maintenance_start'] : null;
+    $maintenance_start = ($maintenance === 1 && !empty($_POST['maintenance_start'])) ? $_POST['maintenance_start'] : ($maintenance === 1 ? date('Y-m-d H:i:s') : null);
     $maintenance_end = ($maintenance === 1 && !empty($_POST['maintenance_end'])) ? $_POST['maintenance_end'] : null;
     $cpu_threshold = !empty($_POST['cpu_threshold']) ? intval($_POST['cpu_threshold']) : 90;
     $ram_threshold = !empty($_POST['ram_threshold']) ? intval($_POST['ram_threshold']) : 95;
@@ -2438,15 +2438,33 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                         $ds_type = $ds['type'] ?? 'web';
                                         $ds_port = $ds['port'] ?? null;
                                         $ds_target = $ds['target'] ?? $edit_monitor['target'] ?? '127.0.0.1';
+                                        $ds_confidence = $ds['confidence'] ?? 0;
+                                        $ds_evidence = $ds['evidence'] ?? [];
+                                        $ds_missing = $ds['missing'] ?? [];
+                                        $conf_color = $ds_confidence >= 80 ? 'var(--color-green)' : ($ds_confidence >= 60 ? 'var(--color-yellow, #f39c12)' : 'var(--color-red)');
                                         ?>
-                                        <form method="POST" style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.4rem 0.6rem;">
+                                        <form method="POST" style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.6rem; flex-wrap: wrap;">
                                             <?php echo bk_csrf_field(); ?>
                                             <input type="hidden" name="service_name" value="<?php echo htmlspecialchars($ds_name); ?>">
                                             <input type="hidden" name="service_type" value="<?php echo htmlspecialchars($ds_type); ?>">
                                             <input type="hidden" name="service_port" value="<?php echo htmlspecialchars((string)$ds_port); ?>">
                                             <input type="hidden" name="service_target" value="<?php echo htmlspecialchars($ds_target); ?>">
                                             <input type="hidden" name="source_monitor_id" value="<?php echo (int)$edit_monitor['id']; ?>">
-                                            <span style="flex: 1; font-size: 0.82rem;"><?php echo htmlspecialchars($ds_name); ?><?php if ($ds_port): ?> <span style="color: var(--text-muted);">:<?php echo htmlspecialchars((string)$ds_port); ?></span><?php endif; ?></span>
+                                            <span style="flex: 1; font-size: 0.82rem; min-width: 140px;">
+                                                <?php echo htmlspecialchars($ds_name); ?><?php if ($ds_port): ?> <span style="color: var(--text-muted);">:<?php echo htmlspecialchars((string)$ds_port); ?></span><?php endif; ?>
+                                                <span style="font-size: 0.7rem; color: var(--text-muted); margin-left: 0.3rem;"><?php echo htmlspecialchars($ds_type); ?></span>
+                                            </span>
+                                            <span style="font-size: 0.72rem; font-weight: 700; color: <?php echo $conf_color; ?>; min-width: 36px; text-align: right;"><?php echo (int)$ds_confidence; ?>%</span>
+                                            <?php if (!empty($ds_evidence)): ?>
+                                                <span style="font-size: 0.65rem; color: var(--color-green);" title="Detected: <?php echo htmlspecialchars(implode(', ', $ds_evidence)); ?>">
+                                                    <?php foreach ($ds_evidence as $ev): ?><i class="fas fa-check" style="margin-right:2px;"></i><?php endforeach; ?>
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if (!empty($ds_missing)): ?>
+                                                <span style="font-size: 0.65rem; color: var(--text-muted);" title="Missing: <?php echo htmlspecialchars(implode(', ', $ds_missing)); ?>">
+                                                    <?php foreach ($ds_missing as $ms): ?><i class="fas fa-xmark" style="margin-right:2px;"></i><?php endforeach; ?>
+                                                </span>
+                                            <?php endif; ?>
                                             <button type="submit" name="action_import_service" value="1" class="btn btn-secondary btn-sm"><i class="fas fa-plus"></i> Sledovat</button>
                                         </form>
                                     <?php endforeach; ?>
@@ -2529,26 +2547,33 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <h3 style="font-size: 0.85rem; color: var(--text-secondary); margin: 1.5rem 0 0.5rem 0; text-transform: uppercase;">Režim plánované údržby (Maintenance)</h3>
                         <div class="form-group" style="background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border-color); margin-top: 0.5rem;">
                             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; font-weight: bold; color: var(--color-yellow);">
-                                <input type="checkbox" name="maintenance" <?php echo ($edit_monitor && $edit_monitor['maintenance']) ? 'checked' : ''; ?>>
+                                <input type="checkbox" name="maintenance" id="maintenance_checkbox" <?php echo ($edit_monitor && $edit_monitor['maintenance']) ? 'checked' : ''; ?>>
                                 <span><i class="fas fa-tools"></i> Manuální údržba (Okamžitě zapnout)</span>
                             </label>
                             
-                            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem;">
+                            <div id="maintenance_times" style="margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem; <?php echo ($edit_monitor && $edit_monitor['maintenance']) ? '' : 'display: none;'; ?>">
                                 <div class="form-group" style="margin-bottom: 0;">
-                                    <label for="maintenance_start">Plánovaný začátek</label>
+                                    <label for="maintenance_start">Plánovaný začátek <span style="color: var(--text-muted); font-weight: normal;">(nevyplněno = nyní)</span></label>
                                     <input type="datetime-local" name="maintenance_start" id="maintenance_start" value="<?php echo ($edit_monitor && $edit_monitor['maintenance_start']) ? date('Y-m-d\TH:i', strtotime($edit_monitor['maintenance_start'])) : ''; ?>" class="form-control" style="font-size: 0.85rem;">
                                 </div>
                                 <div class="form-group" style="margin-bottom: 0;">
-                                    <label for="maintenance_end">Plánovaný konec</label>
+                                    <label for="maintenance_end">Plánovaný konec <span style="color: var(--text-muted); font-weight: normal;">(volitelné)</span></label>
                                     <input type="datetime-local" name="maintenance_end" id="maintenance_end" value="<?php echo ($edit_monitor && $edit_monitor['maintenance_end']) ? date('Y-m-d\TH:i', strtotime($edit_monitor['maintenance_end'])) : ''; ?>" class="form-control" style="font-size: 0.85rem;">
                                 </div>
                             </div>
                             
-                            <div class="form-group" style="margin-top: 1rem; margin-bottom: 0;">
+                            <div class="form-group" style="margin-top: 1rem; margin-bottom: 0; <?php echo ($edit_monitor && $edit_monitor['maintenance']) ? '' : 'display: none;'; ?>" id="maintenance_desc_wrap">
                                 <label for="maintenance_description">Popis údržby (zobrazí se uživatelům)</label>
                                 <textarea name="maintenance_description" id="maintenance_description" class="form-control" style="height: 60px; resize: vertical; font-size: 0.85rem;" placeholder="Např. Stěhování serveru do jiné serverovny, údržba databáze..."><?php echo htmlspecialchars($edit_monitor['maintenance_description'] ?? ''); ?></textarea>
                             </div>
                         </div>
+                        <script>
+                        document.getElementById('maintenance_checkbox').addEventListener('change', function() {
+                            var show = this.checked;
+                            document.getElementById('maintenance_times').style.display = show ? 'flex' : 'none';
+                            document.getElementById('maintenance_desc_wrap').style.display = show ? '' : 'none';
+                        });
+                        </script>
                         <?php endif; ?>
                         
                         <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">

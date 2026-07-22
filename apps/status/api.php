@@ -112,6 +112,8 @@ if (($_GET['action'] ?? '') === 'metric_series') {
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $metric_key = (string)($_GET['metric'] ?? '');
     $period = $_GET['period'] ?? '24h';
+    $compare = $_GET['compare'] ?? null;
+    $baseline = $_GET['baseline'] ?? null;
 
     $registry = bk_get_metric_registry();
     if (!isset($registry[$metric_key])) {
@@ -123,10 +125,29 @@ if (($_GET['action'] ?? '') === 'metric_series') {
 
     $result = ['points' => [], 'events' => []];
 
-    try {
-        $result['points'] = bk_fetch_metric_series($pdo, $monitor_id, $column, $period);
+    // Dynamic downsampling - bucket size per period
+    $bucket_secs = ['15m' => 0, '1h' => 0, '6h' => 300, '24h' => 300, '7d' => 1800, '30d' => 7200][$period] ?? 0;
 
-        $period_days = ['1h' => 1, '6h' => 1, '24h' => 1, '7d' => 7, '30d' => 30][$period] ?? 1;
+    try {
+        if ($bucket_secs > 0) {
+            // Downsampled query with AVG aggregation
+            $interval_map = ['15m' => '15 MINUTE', '1h' => '1 HOUR', '6h' => '6 HOUR', '24h' => '24 HOUR', '7d' => '7 DAY', '30d' => '30 DAY'];
+            $interval = $interval_map[$period] ?? '24 HOUR';
+            $stmt_ds = $pdo->prepare("
+                SELECT FLOOR(UNIX_TIMESTAMP(checked_at) / ?) * ? AS bucket_ts, AVG($column) AS val
+                FROM vps_metrics
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL $interval) AND $column IS NOT NULL
+                GROUP BY bucket_ts ORDER BY bucket_ts ASC
+            ");
+            $stmt_ds->execute([$bucket_secs, $bucket_secs, $monitor_id]);
+            foreach ($stmt_ds->fetchAll() as $r) {
+                $result['points'][] = [(int)$r['bucket_ts'], round((float)$r['val'], 2)];
+            }
+        } else {
+            $result['points'] = bk_fetch_metric_series($pdo, $monitor_id, $column, $period);
+        }
+
+        $period_days = ['15m' => 1, '1h' => 1, '6h' => 1, '24h' => 1, '7d' => 7, '30d' => 30][$period] ?? 1;
         $timeline = bk_get_monitor_timeline($pdo, $monitor_id, $period_days);
         foreach ($timeline as $ev) {
             $ev_label_key = 'timeline_event_' . $ev['event_type'];
@@ -136,11 +157,74 @@ if (($_GET['action'] ?? '') === 'metric_series') {
             }
             $result['events'][] = ['ts' => strtotime($ev['ts']), 'label' => $ev_label];
         }
+
+        // Compare with yesterday - shift timestamps by +24h to overlay
+        if ($compare === 'yesterday') {
+            $hours = ['1h' => 1, '6h' => 6, '24h' => 24][$period] ?? 24;
+            $stmt_cmp = $pdo->prepare("
+                SELECT UNIX_TIMESTAMP(checked_at) + 86400 AS ts, $column AS val
+                FROM vps_metrics
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(DATE_SUB(NOW(), INTERVAL 1 DAY), INTERVAL $hours HOUR)
+                  AND checked_at < DATE_SUB(NOW(), INTERVAL 1 DAY) AND $column IS NOT NULL
+                ORDER BY checked_at ASC
+            ");
+            $stmt_cmp->execute([$monitor_id]);
+            $result['compare'] = [];
+            foreach ($stmt_cmp->fetchAll() as $r) {
+                $result['compare'][] = [(int)$r['ts'], round((float)$r['val'], 2)];
+            }
+        }
+
+        // Baseline - 7-day average for same time of day
+        if ($baseline === '7d') {
+            $hours = ['1h' => 1, '6h' => 6, '24h' => 24][$period] ?? 24;
+            $stmt_base = $pdo->prepare("
+                SELECT UNIX_TIMESTAMP(MIN(checked_at)) AS ts, AVG($column) AS val
+                FROM vps_metrics
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND $column IS NOT NULL
+                GROUP BY HOUR(checked_at)
+                ORDER BY ts ASC
+            ");
+            $stmt_base->execute([$monitor_id]);
+            $result['baseline'] = [];
+            foreach ($stmt_base->fetchAll() as $r) {
+                $result['baseline'][] = [(int)$r['ts'], round((float)$r['val'], 2)];
+            }
+        }
     } catch (Exception $e) {
         // Vracíme prázdná data
     }
 
     echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// Uložení anotace k grafu (pouze admin)
+if (($_GET['action'] ?? '') === 'save_annotation' || (($_POST['action'] ?? '') === 'save_annotation')) {
+    session_start();
+    if (empty($_SESSION['user_id'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true);
+    $mon_id = (int)($input['monitor_id'] ?? 0);
+    $m_key = trim($input['metric_key'] ?? '');
+    $ts = trim($input['timestamp'] ?? '');
+    $note = trim($input['note'] ?? '');
+    if ($mon_id > 0 && $m_key !== '' && $ts !== '' && $note !== '') {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO metric_annotations (monitor_id, metric_key, timestamp, note, created_by) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute([$mon_id, $m_key, $ts, $note, $_SESSION['user_id']]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        }
+    } else {
+        http_response_code(400);
+        echo json_encode(['error' => 'Missing required fields'], JSON_UNESCAPED_UNICODE);
+    }
     exit;
 }
 

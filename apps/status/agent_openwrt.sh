@@ -490,23 +490,203 @@ if command -v top >/dev/null 2>&1; then
     END { printf "]" }')
 fi
 
-# --- Service Discovery Scanner ---
+# --- mwan3 (multi-WAN) ---
+mwan3_policies_json="[]"
+mwan3_active_gw=""
+if [ -f /etc/config/mwan3 ]; then
+    mwan3_status=$(mwan3 status 2>/dev/null)
+    if [ -n "$mwan3_status" ]; then
+        mwan3_active_gw=$(echo "$mwan3_status" | grep -i "active" | head -1 | awk '{print $NF}')
+        mwan3_policies_json=$(echo "$mwan3_status" | awk '
+        /policy/ { pol=$2 }
+        /online/ { if (count > 0) printf ", "; printf "{\"policy\":\"%s\",\"interface\":\"%s\",\"status\":\"online\"}", pol, $2; count++ }
+        /offline/ { if (count > 0) printf ", "; printf "{\"policy\":\"%s\",\"interface\":\"%s\",\"status\":\"offline\"}", pol, $2; count++ }
+        BEGIN { printf "[" }
+        END { printf "]" }')
+        [ -z "$mwan3_policies_json" ] && mwan3_policies_json="[]"
+    fi
+fi
+[ -z "$mwan3_active_gw" ] && mwan3_active_gw="null" || mwan3_active_gw="\"$mwan3_active_gw\""
+
+# --- SQM (Smart Queue Management / CAKE) ---
+sqm_enabled="false"
+sqm_download_kbps="null"
+sqm_upload_kbps="null"
+sqm_dropped="null"
+sqm_ecn="null"
+if [ -f /etc/config/sqm ]; then
+    sqm_enabled=$(uci get sqm.@queue[0].enabled 2>/dev/null)
+    [ "$sqm_enabled" = "1" ] && sqm_enabled="true" || sqm_enabled="false"
+    if [ "$sqm_enabled" = "true" ]; then
+        sqm_download_kbps=$(uci get sqm.@queue[0].download 2>/dev/null)
+        sqm_upload_kbps=$(uci get sqm.@queue[0].upload 2>/dev/null)
+        [ -z "$sqm_download_kbps" ] && sqm_download_kbps="null"
+        [ -z "$sqm_upload_kbps" ] && sqm_upload_kbps="null"
+        # CAKE stats from tc
+        sqm_iface=$(uci get sqm.@queue[0].interface 2>/dev/null)
+        if [ -n "$sqm_iface" ] && command -v tc >/dev/null 2>&1; then
+            tc_out=$(tc -s qdisc show dev "$sqm_iface" 2>/dev/null | grep -A5 "cake")
+            sqm_dropped=$(echo "$tc_out" | grep -i "dropped" | awk '{print $NF}' | head -1)
+            sqm_ecn=$(echo "$tc_out" | grep -i "ecn" | awk '{print $NF}' | head -1)
+        fi
+        [ -z "$sqm_dropped" ] && sqm_dropped="null"
+        [ -z "$sqm_ecn" ] && sqm_ecn="null"
+    fi
+fi
+
+# --- LTE/WWAN modem ---
+lte_rsrp="null"
+lte_rsrq="null"
+lte_sinr="null"
+lte_band="null"
+lte_carrier="null"
+if command -v uqmi >/dev/null 2>&1; then
+    lte_signal=$(uqmi --get-signal-info 2>/dev/null)
+    if [ -n "$lte_signal" ]; then
+        lte_rsrp=$(echo "$lte_signal" | jsonfilter -e '@.rsrp' 2>/dev/null)
+        lte_rsrq=$(echo "$lte_signal" | jsonfilter -e '@.rsrq' 2>/dev/null)
+        lte_sinr=$(echo "$lte_signal" | jsonfilter -e '@.sinr' 2>/dev/null)
+        lte_band=$(echo "$lte_signal" | jsonfilter -e '@.band' 2>/dev/null)
+    fi
+    lte_carrier=$(uqmi --get-network-registration 2>/dev/null | jsonfilter -e '@.description' 2>/dev/null)
+elif command -v mmcli >/dev/null 2>&1; then
+    mm_out=$(mmcli -m any --signal-get 2>/dev/null)
+    if [ -n "$mm_out" ]; then
+        lte_rsrp=$(echo "$mm_out" | grep -i "rsrp" | awk -F: '{gsub(/[^0-9.-]/, "", $2); print $2}')
+        lte_rsrq=$(echo "$mm_out" | grep -i "rsrq" | awk -F: '{gsub(/[^0-9.-]/, "", $2); print $2}')
+        lte_sinr=$(echo "$mm_out" | grep -i "sinr" | awk -F: '{gsub(/[^0-9.-]/, "", $2); print $2}')
+    fi
+fi
+[ -z "$lte_rsrp" ] && lte_rsrp="null"
+[ -z "$lte_rsrq" ] && lte_rsrq="null"
+[ -z "$lte_sinr" ] && lte_sinr="null"
+[ -z "$lte_band" ] && lte_band="null"
+[ -z "$lte_carrier" ] && lte_carrier="null" || lte_carrier="\"$lte_carrier\""
+
+# --- Services restart tracking (last 24h from logread) ---
+service_restarts_json="{}"
+if command -v logread >/dev/null 2>&1; then
+    svc_list="dnsmasq odhcpd hostapd mwan3 uhttpd nginx wireguard"
+    svc_parts=""
+    for svc in $svc_list; do
+        if [ -f "/etc/init.d/$svc" ]; then
+            cnt=$(logread 2>/dev/null | grep -i "$svc" | grep -ci "start" 2>/dev/null)
+            [ -z "$cnt" ] && cnt=0
+            [ -n "$svc_parts" ] && svc_parts="$svc_parts, "
+            svc_parts="${svc_parts}\"$svc\": $cnt"
+        fi
+    done
+    [ -n "$svc_parts" ] && service_restarts_json="{$svc_parts}"
+fi
+
+# --- WAN reconnect stats (state file) ---
+wan_reconnect_count=0
+wan_last_reconnect="null"
+bk_state_file="/tmp/bk_wan_state"
+if [ -n "$wan_uptime" ] && [ "$wan_uptime" != "null" ] && [ "$wan_uptime" -gt 0 ] 2>/dev/null; then
+    if [ -f "$bk_state_file" ]; then
+        prev_uptime=$(awk -F= '/^uptime=/{print $2}' "$bk_state_file" 2>/dev/null)
+        prev_count=$(awk -F= '/^count=/{print $2}' "$bk_state_file" 2>/dev/null)
+        prev_reconnect=$(awk -F= '/^reconnect=/{print $2}' "$bk_state_file" 2>/dev/null)
+        wan_reconnect_count=${prev_count:-0}
+        [ -n "$prev_reconnect" ] && wan_last_reconnect="$prev_reconnect"
+        # WAN uptime reset = reconnect detected
+        if [ -n "$prev_uptime" ] && [ "$wan_uptime" -lt "$prev_uptime" ] 2>/dev/null; then
+            wan_reconnect_count=$((wan_reconnect_count + 1))
+            wan_last_reconnect=$(date +%s)
+        fi
+    fi
+    printf "uptime=%s\ncount=%s\nreconnect=%s\n" "$wan_uptime" "$wan_reconnect_count" "$wan_last_reconnect" > "$bk_state_file" 2>/dev/null
+fi
+
+# --- Packages + Logs stats ---
+installed_packages="null"
+if command -v opkg >/dev/null 2>&1; then
+    installed_packages=$(opkg list-installed 2>/dev/null | wc -l | xargs)
+fi
+log_errors_24h="null"
+log_warnings_24h="null"
+if command -v logread >/dev/null 2>&1; then
+    log_errors_24h=$(logread -l 500 2>/dev/null | grep -ci "<err>" 2>/dev/null)
+    log_warnings_24h=$(logread -l 500 2>/dev/null | grep -ci "<warn>" 2>/dev/null)
+    [ -z "$log_errors_24h" ] && log_errors_24h=0
+    [ -z "$log_warnings_24h" ] && log_warnings_24h=0
+fi
+
+# --- Service Discovery Scanner (structured detectors with confidence scoring) ---
 disc_list=""
-if [ -f /proc/net/tcp ] && grep -q "271B" /proc/net/tcp 2>/dev/null; then
-    disc_list="{\"name\":\"TeamSpeak 3 Server\",\"type\":\"teamspeak\",\"port\":10011,\"confidence\":99}"
-fi
-if [ -f /proc/net/tcp ] && grep -q "63DD" /proc/net/tcp 2>/dev/null; then
-    [ -n "$disc_list" ] && disc_list="$disc_list, "
-    disc_list="${disc_list}{\"name\":\"Minecraft Server\",\"type\":\"minecraft\",\"port\":25565,\"confidence\":95}"
-fi
-if [ -f /proc/net/tcp ] && (grep -q "0050" /proc/net/tcp || grep -q "01BB" /proc/net/tcp) 2>/dev/null; then
-    [ -n "$disc_list" ] && disc_list="$disc_list, "
-    disc_list="${disc_list}{\"name\":\"Web Server (HTTP/HTTPS)\",\"type\":\"web\",\"port\":80,\"confidence\":90}"
-fi
-if [ -f /proc/net/tcp ] && grep -q "0035" /proc/net/tcp 2>/dev/null; then
-    [ -n "$disc_list" ] && disc_list="$disc_list, "
-    disc_list="${disc_list}{\"name\":\"AdGuard Home / DNS\",\"type\":\"port\",\"port\":53,\"confidence\":85}"
-fi
+
+# Detector helper: process + port + config + active_verify -> confidence
+# Usage: detect_svc "Name" "type" "process" "port_hex" "config_path" "port_dec"
+detect_svc() {
+    _name="$1"; _type="$2"; _proc="$3"; _porthex="$4"; _config="$5"; _portdec="$6"
+    _conf=0; _evidence=""; _missing=""
+    # 1. Process detection
+    if pidof "$_proc" >/dev/null 2>&1; then
+        _conf=$((_conf + 30)); _evidence="${_evidence}\"process\","
+    else
+        _missing="${_missing}\"process\","
+    fi
+    # 2. Port detection
+    if [ -f /proc/net/tcp ] && grep -qi "$_porthex" /proc/net/tcp 2>/dev/null; then
+        _conf=$((_conf + 25)); _evidence="${_evidence}\"port\","
+    elif [ -f /proc/net/tcp6 ] && grep -qi "$_porthex" /proc/net/tcp6 2>/dev/null; then
+        _conf=$((_conf + 25)); _evidence="${_evidence}\"port\","
+    else
+        _missing="${_missing}\"port\","
+    fi
+    # 3. Config file
+    if [ -n "$_config" ] && [ -f "$_config" ]; then
+        _conf=$((_conf + 25)); _evidence="${_evidence}\"config\","
+    elif [ -n "$_config" ]; then
+        _missing="${_missing}\"config\","
+    fi
+    # 4. Active verification (service-specific, adds up to 19)
+    _active_ok=0
+    case "$_type" in
+        teamspeak)
+            if command -v nc >/dev/null 2>&1 && echo "version" | nc -w2 127.0.0.1 ${_portdec:-10011} 2>/dev/null | grep -qi "TS3"; then _active_ok=1; fi
+            ;;
+        minecraft)
+            if [ -f /proc/net/tcp ] && grep -qi "63DD" /proc/net/tcp 2>/dev/null; then _active_ok=1; fi
+            ;;
+        docker)
+            if [ -S /var/run/docker.sock ]; then _active_ok=1; fi
+            ;;
+        wireguard)
+            if [ -d /sys/class/net/wg0 ]; then _active_ok=1; fi
+            ;;
+        *)
+            # Generic: if process + port both found, count as active
+            if [ $_conf -ge 55 ]; then _active_ok=1; fi
+            ;;
+    esac
+    if [ $_active_ok -eq 1 ]; then
+        _conf=$((_conf + 19)); _evidence="${_evidence}\"active_verify\","
+    else
+        _missing="${_missing}\"active_verify\","
+    fi
+    # Cap at 99
+    [ $_conf -gt 99 ] && _conf=99
+    # Only report if confidence >= 50
+    if [ $_conf -ge 50 ]; then
+        _evidence=$(echo "$_evidence" | sed 's/,$//')
+        _missing=$(echo "$_missing" | sed 's/,$//')
+        [ -n "$disc_list" ] && disc_list="$disc_list, "
+        disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"evidence\":[$_evidence],\"missing\":[$_missing]}"
+    fi
+}
+
+# Run detectors
+detect_svc "TeamSpeak 3 Server" "teamspeak" "ts3server" "271B" "/etc/ts3server.ini" 10011
+detect_svc "Minecraft Server" "minecraft" "java" "63DD" "" 25565
+detect_svc "Nginx" "web" "nginx" "0050" "/etc/nginx/nginx.conf" 80
+detect_svc "Docker" "docker" "dockerd" "" "/var/run/docker.sock" 2375
+detect_svc "PostgreSQL" "port" "postgres" "1538" "/etc/postgresql/postgresql.conf" 5432
+detect_svc "AdGuard Home" "port" "AdGuardHome" "0BB8" "/usr/bin/AdGuardHome" 3000
+detect_svc "WireGuard" "wireguard" "" "" "/etc/config/wireguard" 51820
+detect_svc "Mosquitto MQTT" "port" "mosquitto" "075B" "/etc/mosquitto/mosquitto.conf" 1883
+
 discovered_services_json="[$disc_list]"
 
 payload=$(cat <<EOF
@@ -554,7 +734,25 @@ payload=$(cat <<EOF
   "wan_ipv6": "$wan_ipv6",
   "wan_gateway": "$wan_gateway",
   "wan_dns": "$wan_dns",
-  "wan_uptime": $wan_uptime
+  "wan_uptime": $wan_uptime,
+  "mwan3_policies": $mwan3_policies_json,
+  "mwan3_active_gw": $mwan3_active_gw,
+  "sqm_enabled": $sqm_enabled,
+  "sqm_download_kbps": $sqm_download_kbps,
+  "sqm_upload_kbps": $sqm_upload_kbps,
+  "sqm_dropped": $sqm_dropped,
+  "sqm_ecn": $sqm_ecn,
+  "lte_rsrp": $lte_rsrp,
+  "lte_rsrq": $lte_rsrq,
+  "lte_sinr": $lte_sinr,
+  "lte_band": $lte_band,
+  "lte_carrier": $lte_carrier,
+  "service_restarts": $service_restarts_json,
+  "wan_reconnect_count": $wan_reconnect_count,
+  "wan_last_reconnect": $wan_last_reconnect,
+  "installed_packages": $installed_packages,
+  "log_errors_24h": $log_errors_24h,
+  "log_warnings_24h": $log_warnings_24h
 }
 EOF
 )
