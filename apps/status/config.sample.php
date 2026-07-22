@@ -21,6 +21,20 @@ error_reporting(E_ALL);
 
 // Spuštění session pro administraci
 if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    // Zpevnění session cookie - musí být nastaveno před session_start().
+    // HttpOnly: JS se ke cookie nedostane (XSS nemůže ukrást session ID).
+    // SameSite=Lax: cookie se neposílá při cross-site POST/fetch (základní
+    // obrana proti CSRF, nenahrazuje to ale CSRF token na citlivých akcích).
+    // Secure jen když běžíme přes HTTPS - jinak by cookie na čistém HTTP vůbec nefungovala.
+    $bk_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => $bk_https,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
     @session_start();
 }
 
@@ -43,6 +57,7 @@ define('DB_PASS', 'heslo_databaze');
 // define('SMTP_SECURE', 'ssl'); // 'ssl', 'tls', nebo 'none'
 
 // --- OSTATNÍ NASTAVENÍ ---
-define('ADMIN_PASS_DEFAULT', 'BloodKingsAdmin123!'); // Výchozí heslo pokud není změněno
+// Výchozí přihlašovací účet po importu schema.sql je admin / BloodKingsAdmin123!
+// - změňte si ho hned po prvním přihlášení (Admin -> Profil -> Změnit heslo).
 define('TIMEZONE', 'Europe/Prague');
 date_default_timezone_set(TIMEZONE);

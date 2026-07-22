@@ -16,10 +16,13 @@ $timeout_seconds = 5;                              // Výchozí timeout pro test
 
 // --- KONEC KONFIGURACE ---
 
-ini_set('display_errors', 1);
+$is_cli = (php_sapi_name() === 'cli');
+// Chyby na obrazovku jen z CLI (ruční ladění) - tenhle skript se dá spustit i
+// přes web (viz větev níže s <pre>) a display_errors=1 by tam komukoliv, kdo
+// trefí URL, ukázal PHP warningy/cesty na disku.
+ini_set('display_errors', $is_cli ? 1 : 0);
 error_reporting(E_ALL);
 
-$is_cli = (php_sapi_name() === 'cli');
 if (!$is_cli) {
     echo "<pre>";
 }

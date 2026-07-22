@@ -22,13 +22,16 @@ try {
     // Sloupec již existuje, ignorujeme chybu
 }
 
-// 2. Bezpečnostní kontrola API klíče
-$node_key = get_setting('cron_key', 'BloodKingsNodeDefaultKey123!');
-$client_key = isset($_GET['key']) ? $_GET['key'] : (isset($_SERVER['HTTP_X_NODE_KEY']) ? $_SERVER['HTTP_X_NODE_KEY'] : '');
+// 2. Bezpečnostní kontrola API klíče - žádný natvrdo psaný fallback klíč.
+// Prázdný cron_key znamená, že endpoint je úplně vypnutý (fail closed), ne že
+// se použije nějaký veřejně známý výchozí klíč (to byla reálná díra, protože
+// stejný literál je zveřejněný v node_client.php jako výchozí hodnota k okopírování).
+$node_key = trim((string)get_setting('cron_key', ''));
+$client_key = isset($_GET['key']) ? (string)$_GET['key'] : (isset($_SERVER['HTTP_X_NODE_KEY']) ? (string)$_SERVER['HTTP_X_NODE_KEY'] : '');
 
-if (empty($client_key) || $client_key !== $node_key) {
+if ($node_key === '' || $client_key === '' || !hash_equals($node_key, $client_key)) {
     http_response_code(403);
-    echo json_encode(['error' => 'Neautorizovaný přístup. Neplatný nebo chybějící API klíč (key).']);
+    echo json_encode(['error' => 'Neautorizovaný přístup. Neplatný, chybějící nebo nenastavený API klíč (key).']);
     exit;
 }
 

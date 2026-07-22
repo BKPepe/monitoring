@@ -140,10 +140,12 @@ CREATE TABLE IF NOT EXISTS `settings` (
   `key_value` TEXT DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Výchozí nastavení a uživatel (heslo bude po instalaci / prvním spuštění hashováno nebo nastaveno)
+-- Výchozí nastavení a uživatel - heslo změňte hned po prvním přihlášení.
 -- Default uživatel: admin / heslo: BloodKingsAdmin123!
+-- Hash níže je skutečný bcrypt hash tohoto hesla (password_hash('BloodKingsAdmin123!', PASSWORD_BCRYPT)),
+-- ne placeholder - přihlášení proto jde přes běžný password_verify(), žádný speciální obchvat v admin.php.
 INSERT INTO `users` (`username`, `password_hash`, `email`, `role`)
-VALUES ('admin', '$2y$10$wK10b5JgOq3qg7g3qg7qg.2V2WpXy9B1e5D6F7G8H9I0J1K2L3M4N', 'admin@bloodkings.eu', 'admin')
+VALUES ('admin', '$2y$12$rRP/Lm2dxcJQmC2xwkhnE.1q.EypQOSl33iBR.t/5HPStN4MPPxme', 'admin@bloodkings.eu', 'admin')
 ON DUPLICATE KEY UPDATE `id`=`id`;
 
 INSERT INTO `settings` (`key_name`, `key_value`) VALUES

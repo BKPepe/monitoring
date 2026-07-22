@@ -91,7 +91,10 @@ if (isset($_GET['code']) && isset($_GET['state'])) {
                 if ($user) {
                     $stmt_up_oauth = $pdo->prepare("UPDATE users SET oauth_provider = 'github' WHERE id = ?");
                     $stmt_up_oauth->execute([$user['id']]);
-                    
+
+                    // Nová session ID při přihlášení - session fixation ochrana (útočník
+                    // nemůže vnutit oběti předem známé ID a pak ho po loginu použít).
+                    session_regenerate_id(true);
                     $_SESSION['admin_logged_in'] = true;
                     $_SESSION['admin_username'] = $user['username'];
                     $_SESSION['admin_id'] = $user['id'];
@@ -117,16 +120,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
     $user = $stmt->fetch();
     
     $password_correct = false;
-    if ($user) {
-        if (password_verify($password, $user['password_hash'])) {
-            $password_correct = true;
-        } elseif ($user['username'] === 'admin' && $user['password_hash'] === '$2y$10$wK10b5JgOq3qg7g3qg7qg.2V2WpXy9B1e5D6F7G8H9I0J1K2L3M4N' && $password === 'BloodKingsAdmin123!') {
-            $password_correct = true;
-            // Přehashovat heslo správným bcryptem
-            $new_hash = password_hash('BloodKingsAdmin123!', PASSWORD_BCRYPT);
-            $stmt_hash = $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
-            $stmt_hash->execute([$new_hash, $user['id']]);
-        }
+    if ($user && password_verify($password, $user['password_hash'])) {
+        $password_correct = true;
     }
     
     if ($password_correct) {
@@ -134,6 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
             $totp_input = trim($_POST['totp_code'] ?? '');
             if (!empty($totp_input)) {
                 if (bk_totp_verify_code($user['totp_secret'], $totp_input)) {
+                    session_regenerate_id(true);
                     $_SESSION['admin_logged_in'] = true;
                     $_SESSION['admin_username'] = $user['username'];
                     $_SESSION['admin_id'] = $user['id'];
@@ -149,6 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
                 $_SESSION['pending_2fa_username'] = $user['username'];
             }
         } else {
+            session_regenerate_id(true);
             $_SESSION['admin_logged_in'] = true;
             $_SESSION['admin_username'] = $user['username'];
             $_SESSION['admin_id'] = $user['id'];
@@ -240,6 +237,21 @@ $stmt_me = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
 $stmt_me->execute([$user_id]);
 $me = $stmt_me->fetch();
 $user_role = $me ? $me['role'] : 'user';
+
+// Bezpečnostní upozornění na nedokončenou instalaci - nesmí zůstat tiché.
+// cron_key prázdný = cron.php běží přes HTTP bez ověření a node_api.php je
+// úplně vypnutý (fail closed, viz node_api.php); '$2y$12$rRP/Lm2...' je hash
+// výchozího hesla z schema.sql (admin / BloodKingsAdmin123!) - pokud ho má
+// aktuálně přihlášený admin pořád nastavený, ještě si heslo nezměnil.
+$security_warnings = [];
+if ($user_role === 'admin') {
+    if (trim((string)get_setting('cron_key', '')) === '') {
+        $security_warnings[] = 'Není nastavený "Cron key" (záložka Notifikace -> Cron). Bez něj jede cron.php přes HTTP bez ověření a Distributed Node API (node_api.php) je úplně vypnuté - nastavte si vlastní klíč.';
+    }
+    if ($me && $me['password_hash'] === '$2y$12$rRP/Lm2dxcJQmC2xwkhnE.1q.EypQOSl33iBR.t/5HPStN4MPPxme') {
+        $security_warnings[] = 'Používáte výchozí heslo z čerstvé instalace (admin / BloodKingsAdmin123!) - změňte si ho v Profilu.';
+    }
+}
 
 $success_msg = '';
 $error_msg = '';
@@ -1014,6 +1026,19 @@ $site_title = get_setting('site_title', 'Blood Kings');
         
         <?php if (!empty($error_msg)): ?>
             <div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> <?php echo $error_msg; ?></div>
+        <?php endif; ?>
+
+        <?php if (!empty($security_warnings)): ?>
+        <div class="admin-card" style="border: 2px solid var(--color-red); background: rgba(193,18,31,0.08);">
+            <div class="admin-header">
+                <h2 style="color: var(--color-red);"><i class="fas fa-exclamation-triangle"></i> Bezpečnostní upozornění - nedokončená instalace</h2>
+            </div>
+            <ul style="margin: 0; padding-left: 1.25rem;">
+                <?php foreach ($security_warnings as $w): ?>
+                    <li style="margin-bottom: 0.4rem;"><?php echo htmlspecialchars($w); ?></li>
+                <?php endforeach; ?>
+            </ul>
+        </div>
         <?php endif; ?>
 
         <?php if ($user_role === 'admin'): ?>

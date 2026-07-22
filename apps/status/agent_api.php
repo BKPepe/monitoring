@@ -34,7 +34,7 @@ if (isset($data['action']) && $data['action'] === 'register') {
         $reg_token = get_setting('cron_key');
     }
     
-    if (empty($reg_token) || $token !== $reg_token) {
+    if (empty($reg_token) || !hash_equals((string)$reg_token, $token)) {
         http_response_code(403);
         echo json_encode(['success' => false, 'message' => 'Neplatný registrační token.']);
         exit;
