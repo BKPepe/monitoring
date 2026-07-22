@@ -8,6 +8,9 @@ require_once __DIR__ . '/lang.php';
 
 // Zpracování odhlášení
 if (isset($_GET['action']) && $_GET['action'] === 'logout') {
+    if (!empty($_SESSION['admin_logged_in'])) {
+        bk_audit_log($pdo, 'logout');
+    }
     unset($_SESSION['admin_logged_in']);
     session_destroy();
     header('Location: admin.php');
@@ -102,9 +105,11 @@ if (isset($_GET['code']) && isset($_GET['state'])) {
                     $_SESSION['admin_username'] = $user['username'];
                     $_SESSION['admin_id'] = $user['id'];
                     $_SESSION['admin_role'] = $user['role'];
+                    bk_audit_log($pdo, 'login_success', 'Přes GitHub OAuth', 'user', $user['id'], $user['id'], $user['username']);
                     header('Location: admin.php');
                     exit;
                 } else {
+                    bk_audit_log($pdo, 'login_failed', 'GitHub OAuth - žádný účet neodpovídá ověřeným e-mailům: ' . implode(', ', $verified_emails));
                     $login_error = 'Žádný z ověřených e-mailů vašeho GitHub účtu (' . htmlspecialchars(implode(', ', $verified_emails)) . ') není v systému registrován jako administrátor.';
                 }
             }
@@ -135,10 +140,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
             $_SESSION['admin_username'] = $user['username'];
             $_SESSION['admin_id'] = $user['id'];
             $_SESSION['admin_role'] = $user['role'];
+            bk_audit_log($pdo, 'login_success', 'Jméno a heslo', 'user', $user['id'], $user['id'], $user['username']);
             header('Location: admin.php');
             exit;
         }
     } else {
+        bk_audit_log($pdo, 'login_failed', 'Neplatné jméno/heslo, zadané jméno: ' . $username, null, null, null, $username);
         $login_error = 'Neplatné přihlašovací údaje.';
     }
 }
@@ -165,9 +172,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_login_code'])) {
             $_SESSION['admin_id'] = $user['id'];
             $_SESSION['admin_role'] = $user['role'];
             unset($_SESSION['pending_2fa_user_id']);
+            bk_audit_log($pdo, 'login_success', 'Jméno a heslo + 2FA', 'user', $user['id'], $user['id'], $user['username']);
             header('Location: admin.php');
             exit;
         } else {
+            bk_audit_log($pdo, 'login_failed', 'Neplatný 2FA kód', null, null, $pending_user_id, $user['username'] ?? null);
             $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
         }
     }
@@ -289,6 +298,12 @@ if ($user_role === 'admin' && trim((string)get_setting('cron_key', '')) === '') 
     $security_warnings[] = 'Není nastavený "Cron key" (záložka Notifikace -> Cron). Bez něj jede cron.php přes HTTP bez ověření a Distributed Node API (node_api.php) je úplně vypnuté - nastavte si vlastní klíč.';
 }
 
+// Audit log - samostatná read-only stránka (viz bk_render_audit_log_page()).
+if ($user_role === 'admin' && ($_GET['view'] ?? '') === 'audit_log') {
+    bk_render_audit_log_page($pdo, get_setting('site_title', 'Blood Kings'));
+    exit;
+}
+
 $success_msg = '';
 $error_msg = '';
 
@@ -395,6 +410,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
             ");
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
             log_monitor_event($pdo, $id, $name, $type, 'config_changed', 'Nastavení monitoru bylo upraveno');
+            bk_audit_log($pdo, 'monitor_updated', $name, 'monitor', $id);
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
             // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
@@ -412,7 +428,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
-            log_monitor_event($pdo, (int)$pdo->lastInsertId(), $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
+            $new_monitor_id = (int)$pdo->lastInsertId();
+            log_monitor_event($pdo, $new_monitor_id, $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
+            bk_audit_log($pdo, 'monitor_created', $name, 'monitor', $new_monitor_id);
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
     }
@@ -430,6 +448,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_monitor']) && 
     }
     $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
     $stmt->execute([$del_id]);
+    bk_audit_log($pdo, 'monitor_deleted', $del_info['name'] ?? ('#' . $del_id), 'monitor', $del_id);
     $success_msg = 'Monitor byl úspěšně smazán.';
 }
 
@@ -441,6 +460,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_asset']) && $u
     if ($ra_asset_id > 0 && $ra_new_name !== '') {
         $stmt = $pdo->prepare("UPDATE assets SET name = ? WHERE id = ?");
         $stmt->execute([$ra_new_name, $ra_asset_id]);
+        bk_audit_log($pdo, 'asset_renamed', $ra_new_name, 'asset', $ra_asset_id);
         $success_msg = 'Asset byl přejmenován.';
     }
 }
@@ -457,6 +477,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_asset']) && is
     if ((int)$stmt_da_check->fetchColumn() === 0) {
         $stmt = $pdo->prepare("DELETE FROM assets WHERE id = ?");
         $stmt->execute([$da_id]);
+        bk_audit_log($pdo, 'asset_deleted', '#' . $da_id, 'asset', $da_id);
         $success_msg = 'Prázdný asset byl smazán.';
     } else {
         $error_msg = 'Asset nelze smazat - pořád k němu patří monitory. Nejdřív je přeřaďte jinam.';
@@ -496,8 +517,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
             $stmt_set->execute([$key, $val, $val]);
         }
         $pdo->commit();
+        bk_audit_log($pdo, 'settings_updated', implode(', ', $settings_to_save));
         $success_msg = 'Nastavení systému bylo úspěšně uloženo.';
-        
+
         // Znovu načíst nastavení
         $system_settings = get_settings($pdo);
     } catch (Exception $e) {
@@ -531,6 +553,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 $new_hash = password_hash($new_pass, PASSWORD_BCRYPT);
                 $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, password_hash = ? WHERE id = ?");
                 $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $new_hash, $me['id']]);
+                bk_audit_log($pdo, 'password_changed', 'Vlastní profil', 'user', $me['id']);
                 $success_msg = 'Profil a heslo byly úspěšně aktualizovány.';
             } else {
                 $error_msg = 'Stávající heslo je nesprávné. Změna profilu neproběhla.';
@@ -539,6 +562,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             // Pouze aktualizace profilu bez hesla
             $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ? WHERE id = ?");
             $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $me['id']]);
+            bk_audit_log($pdo, 'profile_updated', 'Vlastní profil', 'user', $me['id']);
             $success_msg = 'Profil byl úspěšně aktualizován.';
         }
         // Znovu načíst $me pro zobrazení formuláře s aktualizovanými hodnotami
@@ -571,6 +595,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
         $stmt_totp = $pdo->prepare("UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?");
         $stmt_totp->execute([$pending_secret, $_SESSION['admin_id']]);
         unset($_SESSION['totp_pending_secret']);
+        bk_audit_log($pdo, 'totp_enabled', '', 'user', $_SESSION['admin_id']);
         $success_msg = 'Dvoufázové ověření (2FA) bylo úspěšně zapnuto.';
     } else {
         $error_msg = 'Neplatný kód z autentikační aplikace - zkuste to znovu.';
@@ -590,6 +615,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
     if ($me && password_verify($_POST['totp_disable_password'] ?? '', $me['password_hash'])) {
         $stmt_totp = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
         $stmt_totp->execute([$_SESSION['admin_id']]);
+        bk_audit_log($pdo, 'totp_disabled', '', 'user', $_SESSION['admin_id']);
         $success_msg = 'Dvoufázové ověření (2FA) bylo vypnuto.';
     } else {
         $error_msg = 'Nesprávné heslo - 2FA zůstává zapnuté.';
@@ -619,6 +645,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_subscriptions'])
             }
         }
         $pdo->commit();
+        bk_audit_log($pdo, 'subscriptions_updated', '', 'user', $user_id);
         $success_msg = 'Vaše předvolby notifikací byly úspěšně uloženy.';
     } catch (Exception $e) {
         $pdo->rollBack();
@@ -641,6 +668,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
     } else {
         try {
             if ($u_id > 0) {
+                // Před uložením zachytit staré hodnoty, aby audit log ukázal, co se
+                // skutečně změnilo (hlavně e-mail - viz bezpečnostní poznámka u
+                // OAuth loginu: tichá změna e-mailu jiného účtu je vektor převzetí).
+                $stmt_old = $pdo->prepare("SELECT username, email, phone, role FROM users WHERE id = ?");
+                $stmt_old->execute([$u_id]);
+                $old_row = $stmt_old->fetch();
+
                 if (!empty($u_password)) {
                     $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
                     $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?");
@@ -649,6 +683,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                     $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?");
                     $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $u_id]);
                 }
+
+                $changes = [];
+                if ($old_row) {
+                    if ($old_row['username'] !== $u_username) $changes[] = "jméno {$old_row['username']} -> {$u_username}";
+                    if ($old_row['email'] !== $u_email) $changes[] = "e-mail {$old_row['email']} -> {$u_email}";
+                    if ($old_row['phone'] !== $u_phone) $changes[] = "telefon změněn";
+                    if ($old_row['role'] !== $u_role) $changes[] = "role {$old_row['role']} -> {$u_role}";
+                }
+                if (!empty($u_password)) $changes[] = 'heslo nastaveno adminem';
+                bk_audit_log($pdo, 'user_updated', $u_username . (!empty($changes) ? ' (' . implode(', ', $changes) . ')' : ' (beze změny)'), 'user', $u_id);
                 $success_msg = 'Uživatel byl úspěšně upraven.';
             } else {
                 if (empty($u_password)) {
@@ -657,6 +701,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                     $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
                     $stmt_ins = $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)");
                     $stmt_ins->execute([$u_username, $u_email, $u_phone, $u_role, $new_pass_hash]);
+                    bk_audit_log($pdo, 'user_created', $u_username . ' (' . $u_role . ')', 'user', (int)$pdo->lastInsertId());
                     $success_msg = 'Nový uživatel byl úspěšně vytvořen.';
                 }
             }
@@ -673,8 +718,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_user']) && iss
     if ($del_u_id === $user_id) {
         $error_msg = 'Nemůžete smazat svůj vlastní přihlášený účet.';
     } else {
+        $stmt_du = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+        $stmt_du->execute([$del_u_id]);
+        $del_u_username = $stmt_du->fetchColumn();
         $stmt_del = $pdo->prepare("DELETE FROM users WHERE id = ?");
         $stmt_del->execute([$del_u_id]);
+        bk_audit_log($pdo, 'user_deleted', $del_u_username ?: ('#' . $del_u_id), 'user', $del_u_id);
         $success_msg = 'Uživatel byl úspěšně smazán.';
     }
 }
@@ -687,7 +736,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_notif']) && is
     
     $stmt_tog = $pdo->prepare("UPDATE monitors SET $field = 1 - $field WHERE id = ?");
     $stmt_tog->execute([$t_id]);
-    
+    bk_audit_log($pdo, 'monitor_notif_toggled', $field, 'monitor', $t_id);
+
     header('Location: admin.php');
     exit;
 }
@@ -711,6 +761,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_maintenance'])
         $stmt_tog = $pdo->prepare("UPDATE monitors SET maintenance = 1, status = 'maintenance', maintenance_description = ? WHERE id = ?");
         $stmt_tog->execute([$t_desc, $t_id]);
     }
+    bk_audit_log($pdo, 'monitor_maintenance_toggled', $curr_m === 1 ? 'vypnuto' : 'zapnuto', 'monitor', $t_id);
 
     header('Location: admin.php');
     exit;
@@ -720,7 +771,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_maintenance'])
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clear_history']) && isset($_POST['id']) && $user_role === 'admin') {
     bk_csrf_check();
     $clear_id = intval($_POST['id']);
-    
+    bk_audit_log($pdo, 'monitor_history_cleared', '', 'monitor', $clear_id);
+
     $stmt_del_logs = $pdo->prepare("DELETE FROM monitor_logs WHERE monitor_id = ?");
     $stmt_del_logs->execute([$clear_id]);
     
@@ -750,20 +802,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_incident']) &&
             
             $stmt_up = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)");
             $stmt_up->execute([$inc_id, $status, $message]);
+            bk_audit_log($pdo, 'incident_created', $title, 'incident', $inc_id);
             $success_msg = 'Incident byl úspěšně zaznamenán.';
         }
     } elseif ($inc_action === 'add_update') {
         $inc_id = (int)($_POST['inc_id'] ?? 0);
         $status = $_POST['inc_status'] ?? 'investigating';
         $message = trim($_POST['inc_message'] ?? '');
-        
+
         if ($inc_id > 0 && !empty($message)) {
             $stmt_up = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)");
             $stmt_up->execute([$inc_id, $status, $message]);
-            
+
             $resolved_at = ($status === 'resolved') ? date('Y-m-d H:i:s') : null;
             $stmt_inc = $pdo->prepare("UPDATE incidents SET status = ?, resolved_at = COALESCE(resolved_at, ?) WHERE id = ?");
             $stmt_inc->execute([$status, $resolved_at, $inc_id]);
+            bk_audit_log($pdo, 'incident_updated', $status, 'incident', $inc_id);
             $success_msg = 'Aktualizace incidentu byla přidána.';
         }
     } elseif ($inc_action === 'delete') {
@@ -771,6 +825,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_incident']) &&
         if ($inc_id > 0) {
             $stmt = $pdo->prepare("DELETE FROM incidents WHERE id = ?");
             $stmt->execute([$inc_id]);
+            bk_audit_log($pdo, 'incident_deleted', '', 'incident', $inc_id);
             $success_msg = 'Incident byl smazán.';
         }
     }
@@ -815,6 +870,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service
         $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key, $discovered_asset_id]);
         $new_id = (int)$pdo->lastInsertId();
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
+        bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
         $success_msg = "Monitor '{$s_name}' byl úspěšně vytvořen z automatické detekce!";
     }
 }
@@ -841,6 +897,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action
     } else {
         $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (?, ?, 'pending')");
         $stmt->execute([$mid, $action_type]);
+        bk_audit_log($pdo, 'remote_action_triggered', $action_type . ' na ' . ($ra_monitor['name'] ?? ('#' . $mid)), 'monitor', $mid);
         $success_msg = "Požadavek na akční příkaz '{$action_type}' byl podepsán a zařazen do fronty pro agenta.";
     }
 }
@@ -864,6 +921,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $use
         });
 
         if (send_email($to, $subject, $body)) {
+            bk_audit_log($pdo, 'test_email_sent', $to);
             $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
                 ? 'Testovací e-mail byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) na adresu ' . htmlspecialchars($to) . ' - zkontrolujte, zda opravdu dorazil, tohle jen potvrzuje, že to webhosting přijal ke zpracování.'
                 : 'Testovací e-mail byl úspěšně odeslán na adresu ' . htmlspecialchars($to) . '.';
@@ -880,6 +938,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) 
     $loc = detect_server_location();
     $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
     $stmt_set->execute(['ip_loc_local', $loc, $loc]);
+    bk_audit_log($pdo, 'location_redetected', $loc);
     $success_msg = 'Lokace serveru byla úspěšně znovuzjištěna: ' . htmlspecialchars($loc);
 }
 
@@ -887,6 +946,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_weekly_digest']) && $user_role === 'admin') {
     bk_csrf_check();
     if (send_digest_report($pdo, 'weekly')) {
+        bk_audit_log($pdo, 'digest_sent', 'weekly');
         $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
             ? 'Týdenní report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
             : 'Týdenní report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
@@ -900,6 +960,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_weekly_digest'])
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_monthly_digest']) && $user_role === 'admin') {
     bk_csrf_check();
     if (send_digest_report($pdo, 'monthly')) {
+        bk_audit_log($pdo, 'digest_sent', 'monthly');
         $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
             ? 'Měsíční report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
             : 'Měsíční report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
@@ -1118,6 +1179,9 @@ $site_title = get_setting('site_title', 'Blood Kings');
             </a>
             <div class="nav-links">
                 <a href="index.php"><i class="fas fa-chart-line"></i> Dashboard</a>
+                <?php if ($user_role === 'admin'): ?>
+                <a href="admin.php?view=audit_log"><i class="fas fa-clipboard-list"></i> Audit log</a>
+                <?php endif; ?>
                 <a href="admin.php?action=logout" class="btn btn-secondary btn-sm"><i class="fas fa-sign-out-alt"></i> Odhlásit (<?php echo htmlspecialchars($_SESSION['admin_username']); ?>)</a>
                 <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
             </div>

@@ -16,7 +16,25 @@ CREATE TABLE IF NOT EXISTS `users` (
   `role` VARCHAR(20) DEFAULT 'user',
   `oauth_provider` VARCHAR(50) DEFAULT NULL,
   `oauth_id` VARCHAR(100) DEFAULT NULL,
+  `totp_secret` VARCHAR(32) DEFAULT NULL,
+  `totp_enabled` TINYINT(1) DEFAULT 0,
+  `password_reset_token_hash` VARCHAR(64) DEFAULT NULL, -- sha256 raw tokenu, ne sam token (viz set_password v admin.php)
+  `password_reset_expires` DATETIME DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `audit_log` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `actor_user_id` INT DEFAULT NULL, -- NULL u neúspěšného loginu neznámým/neexistujícím uživatelem
+  `actor_username` VARCHAR(50) DEFAULT NULL, -- kopie jména v čase akce, přežije i smazání uživatele
+  `action` VARCHAR(50) NOT NULL,
+  `target_type` VARCHAR(30) DEFAULT NULL,
+  `target_id` INT DEFAULT NULL,
+  `description` TEXT DEFAULT NULL,
+  `ip_address` VARCHAR(45) DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX (`created_at`),
+  INDEX (`actor_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `assets` (

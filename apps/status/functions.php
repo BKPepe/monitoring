@@ -4447,6 +4447,103 @@ function bk_csrf_check() {
 }
 
 /**
+ * Zápis do audit logu - kdo/kdy/co. $actor_user_id/$actor_username se berou
+ * ze session, pokud nejsou předané explicitně (potřeba jen pro neúspěšný
+ * login, kde přihlášený uživatel ještě neexistuje). Nikdy nevyhazuje výjimku
+ * ven - audit log nesmí shodit samotnou akci, kterou zaznamenává.
+ */
+function bk_audit_log($pdo, $action, $description = '', $target_type = null, $target_id = null, $actor_user_id = null, $actor_username = null) {
+    if ($actor_user_id === null && isset($_SESSION['admin_id'])) {
+        $actor_user_id = $_SESSION['admin_id'];
+    }
+    if ($actor_username === null && isset($_SESSION['admin_username'])) {
+        $actor_username = $_SESSION['admin_username'];
+    }
+    $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+    try {
+        $stmt = $pdo->prepare("INSERT INTO audit_log (actor_user_id, actor_username, action, target_type, target_id, description, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$actor_user_id, $actor_username, $action, $target_type, $target_id, $description, $ip]);
+    } catch (PDOException $e) {
+        // Tabulka ještě neexistuje nebo DB chyba - audit log je best-effort, nesmí shodit hlavní akci
+    }
+}
+
+/**
+ * Samostatná stránka s posledními záznamy audit logu (kdo/kdy/co) - jen pro
+ * admina, read-only (žádný CSRF token potřeba). Vlastní shell místo napojení
+ * na hlavní admin.php šablonu, aby to nezáviselo na proměnných z hlavního
+ * requestu (stejný přístup jako bk_render_setup_wizard()).
+ */
+function bk_render_audit_log_page($pdo, $site_title) {
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $per_page = 100;
+    $offset = ($page - 1) * $per_page;
+
+    $total = (int)$pdo->query("SELECT COUNT(*) FROM audit_log")->fetchColumn();
+    $stmt = $pdo->prepare("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?");
+    $stmt->bindValue(1, $per_page, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = $stmt->fetchAll();
+
+    $action_labels = [
+        'login_success' => 'Přihlášení', 'login_failed' => 'Neúspěšné přihlášení', 'logout' => 'Odhlášení',
+        'monitor_created' => 'Monitor vytvořen', 'monitor_updated' => 'Monitor upraven', 'monitor_deleted' => 'Monitor smazán',
+        'monitor_notif_toggled' => 'Přepnuta notifikace monitoru', 'monitor_maintenance_toggled' => 'Přepnuta údržba',
+        'monitor_history_cleared' => 'Vymazána historie monitoru',
+        'asset_renamed' => 'Asset přejmenován', 'asset_deleted' => 'Asset smazán',
+        'settings_updated' => 'Nastavení uloženo', 'profile_updated' => 'Profil upraven', 'password_changed' => 'Heslo změněno',
+        'totp_enabled' => '2FA zapnuto', 'totp_disabled' => '2FA vypnuto', 'subscriptions_updated' => 'Odběry upraveny',
+        'user_created' => 'Uživatel vytvořen', 'user_updated' => 'Uživatel upraven', 'user_deleted' => 'Uživatel smazán',
+        'incident_created' => 'Incident vytvořen', 'incident_updated' => 'Incident upraven', 'incident_deleted' => 'Incident smazán',
+        'remote_action_triggered' => 'Vzdálená akce zařazena', 'test_email_sent' => 'Testovací e-mail odeslán',
+        'location_redetected' => 'Lokace znovu zjištěna', 'digest_sent' => 'Digest odeslán',
+        'wizard_step_completed' => 'Krok wizardu dokončen', 'wizard_completed' => 'Wizard dokončen',
+    ];
+
+    $rows_html = '';
+    foreach ($rows as $r) {
+        $label = $action_labels[$r['action']] ?? $r['action'];
+        $color = str_contains($r['action'], 'failed') || str_contains($r['action'], 'deleted') ? '#ef233c'
+            : (str_contains($r['action'], 'created') || str_contains($r['action'], 'success') || $r['action'] === 'wizard_completed' ? '#1ec773' : '#e1e1e6');
+        $rows_html .= '<tr>'
+            . '<td style="white-space:nowrap;">' . htmlspecialchars(date('d.m.Y H:i:s', strtotime($r['created_at']))) . '</td>'
+            . '<td>' . htmlspecialchars($r['actor_username'] ?? '(neznámý)') . '</td>'
+            . '<td style="color:' . $color . ';">' . htmlspecialchars($label) . '</td>'
+            . '<td>' . htmlspecialchars($r['description'] ?? '') . '</td>'
+            . '<td style="white-space:nowrap; color: var(--text-muted);">' . htmlspecialchars($r['ip_address'] ?? '') . '</td>'
+            . '</tr>';
+    }
+    if (empty($rows)) {
+        $rows_html = '<tr><td colspan="5" style="text-align:center; color: var(--text-muted); padding: 2rem;">Zatím žádné záznamy.</td></tr>';
+    }
+
+    $total_pages = max(1, (int)ceil($total / $per_page));
+    $pagination = '';
+    if ($total_pages > 1) {
+        $pagination = '<div style="display:flex; gap:0.5rem; justify-content:center; margin-top:1rem;">';
+        if ($page > 1) $pagination .= '<a href="admin.php?view=audit_log&page=' . ($page - 1) . '" class="btn btn-secondary btn-sm">&laquo; Novější</a>';
+        $pagination .= '<span style="align-self:center; font-size:0.8rem; color: var(--text-muted);">Strana ' . $page . ' / ' . $total_pages . '</span>';
+        if ($page < $total_pages) $pagination .= '<a href="admin.php?view=audit_log&page=' . ($page + 1) . '" class="btn btn-secondary btn-sm">Starší &raquo;</a>';
+        $pagination .= '</div>';
+    }
+
+    echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Audit log | ' . htmlspecialchars($site_title) . '</title>'
+        . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
+        . '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.0/css/all.min.css"></head>'
+        . '<body>'
+        . '<header><div class="container header-wrapper"><a href="admin.php" class="logo"><i class="fas fa-server" style="color: var(--color-red);"></i> ' . htmlspecialchars($site_title) . ' <span>Admin</span></a>'
+        . '<div class="nav-links"><a href="admin.php"><i class="fas fa-arrow-left"></i> Zpět do administrace</a></div></div></header>'
+        . '<div class="container">'
+        . '<div class="admin-card"><div class="admin-header"><h2><i class="fas fa-clipboard-list"></i> Audit log (' . $total . ' záznamů)</h2></div>'
+        . '<p style="font-size:0.8rem; color: var(--text-muted); margin-bottom:1rem;">Kdo, kdy a co udělal v administraci - přihlášení, mazání, změny nastavení a uživatelů, odeslané e-maily.</p>'
+        . '<div style="overflow-x:auto;"><table class="admin-table"><thead><tr><th>Kdy</th><th>Kdo</th><th>Akce</th><th>Detail</th><th>IP</th></tr></thead><tbody>' . $rows_html . '</tbody></table></div>'
+        . $pagination
+        . '</div></div></body></html>';
+    exit;
+}
+
+/**
  * Vynucený setup wizard po čerstvé instalaci - 3 kroky (účet, cron_key,
  * základy webu), po dokončení nastaví jediný zdroj pravdy setup_completed
  * v settings. admin.php volá tuhle funkci a rovnou ukončuje request, dokud
@@ -4477,6 +4574,7 @@ function bk_render_setup_wizard($pdo, $me) {
                 $stmt = $pdo->prepare("UPDATE users SET username = ?, email = ?, password_hash = ? WHERE id = ?");
                 $stmt->execute([$new_username, $new_email, $new_hash, $me['id']]);
                 $_SESSION['admin_username'] = $new_username;
+                bk_audit_log($pdo, 'wizard_step_completed', 'Krok 1 - účet', 'user', $me['id']);
                 header('Location: admin.php?action=setup_wizard&step=2');
                 exit;
             }
@@ -4488,6 +4586,7 @@ function bk_render_setup_wizard($pdo, $me) {
             } else {
                 $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = ?");
                 $stmt->execute([$cron_key, $cron_key]);
+                bk_audit_log($pdo, 'wizard_step_completed', 'Krok 2 - cron_key', 'user', $me['id']);
                 header('Location: admin.php?action=setup_wizard&step=3');
                 exit;
             }
@@ -4499,6 +4598,7 @@ function bk_render_setup_wizard($pdo, $me) {
                 $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
                 $stmt->execute([$k, $v, $v]);
             }
+            bk_audit_log($pdo, 'wizard_completed', $new_site_title, 'user', $me['id']);
             header('Location: admin.php');
             exit;
         }
