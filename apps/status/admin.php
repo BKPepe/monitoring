@@ -414,7 +414,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete_asset' && isset($_GET[
 // 3. Zpracování uložení konfigurace
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $user_role === 'admin') {
     $settings_to_save = [
-        'site_title', 'site_url', 'cron_key', 'cron_location', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
+        'site_title', 'site_url', 'email_lang', 'cron_key', 'cron_location', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
         'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from', 'smsbrana_user', 'smsbrana_password',
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
@@ -737,13 +737,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role ===
     if (empty($to)) {
         $error_msg = 'Chyba: Administrátor nemá nastavenou e-mailovou adresu.';
     } else {
-        $subject = 'Zkušební e-mail - Blood Kings';
-        $body = '<h1>Test SMTP / Mail odchozí pošty</h1>
-                 <p>Tento e-mail byl odeslán jako test funkčnosti ze status panelu <strong>Blood Kings</strong>.</p>
-                 <p>Pokud jste obdrželi tento e-mail, odchozí pošta z vašeho webhostingu funguje správně.</p>
+        $sent_at = date('d.m.Y H:i:s');
+        [$subject, $body] = bk_with_email_lang(get_setting('email_lang', 'cs'), function () use ($sent_at) {
+            $subject = t('test_email_subject');
+            $body = '<h1>' . htmlspecialchars(t('test_email_heading')) . '</h1>
+                 <p>' . htmlspecialchars(t('test_email_body1')) . '</p>
+                 <p>' . htmlspecialchars(t('test_email_body2')) . '</p>
                  <hr>
-                 <p>Odesláno v: ' . date('d.m.Y H:i:s') . '</p>';
-        
+                 <p>' . htmlspecialchars(t('test_email_sent_at')) . ' ' . $sent_at . '</p>';
+            return [$subject, $body];
+        });
+
         if (send_email($to, $subject, $body)) {
             $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
                 ? 'Testovací e-mail byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) na adresu ' . htmlspecialchars($to) . ' - zkontrolujte, zda opravdu dorazil, tohle jen potvrzuje, že to webhosting přijal ke zpracování.'
@@ -790,8 +794,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_monthly_digest' && $user
 // Náhled infrastructure reportu v prohlížeči (bez odeslání e-mailu) - pouze pro Admina
 if (isset($_GET['action']) && in_array($_GET['action'], ['preview_weekly_digest', 'preview_monthly_digest'], true) && $user_role === 'admin') {
     $preview_period = $_GET['action'] === 'preview_monthly_digest' ? 'monthly' : 'weekly';
-    $preview_data = build_digest_data($pdo, $preview_period, false);
-    echo render_digest_html($preview_data);
+    echo bk_with_email_lang(get_setting('email_lang', 'cs'), function () use ($pdo, $preview_period) {
+        $preview_data = build_digest_data($pdo, $preview_period, false);
+        return render_digest_html($preview_data);
+    });
     exit;
 }
 
@@ -1631,7 +1637,16 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
                             Nastavte si SMTP připojení pro bezpečné a spolehlivé odesílání notifikací. Pokud necháte SMTP Server prázdný, použije se výchozí PHP funkce <code>mail()</code>.
                         </p>
-                        
+
+                        <div class="form-group" style="max-width: 280px;">
+                            <label for="email_lang">Jazyk odchozích e-mailů</label>
+                            <select name="email_lang" id="email_lang" class="form-control">
+                                <option value="cs" <?php echo get_setting('email_lang', 'cs') === 'cs' ? 'selected' : ''; ?>>Čeština</option>
+                                <option value="en" <?php echo get_setting('email_lang', 'cs') === 'en' ? 'selected' : ''; ?>>English</option>
+                            </select>
+                            <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Platí pro digest reporty, výstražná upozornění a testovací e-mail - nezávisí na jazyce prohlížeče, e-maily nemají "návštěvníka".</small>
+                        </div>
+
                         <?php
                         $is_smtp_env = is_setting_env_defined('smtp_host') || is_setting_env_defined('smtp_port') || is_setting_env_defined('smtp_user') || is_setting_env_defined('smtp_pass');
                         ?>

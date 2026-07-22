@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/lang.php';
 
 // Spouštění pouze z CLI (příkazová řádka) nebo se správným bezpečnostním klíčem v URL
 $is_cli = (php_sapi_name() === 'cli' || !isset($_SERVER['HTTP_HOST']));
