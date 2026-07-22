@@ -679,6 +679,42 @@ if [ -n "$ts3_pid" ] && [ -d "/proc/$ts3_pid" ]; then
     ts3_process_json="{\"pid\": $ts3_pid, \"cpu\": $ts3_cpu, \"ram_mb\": $ts3_ram_mb, \"threads\": $ts3_threads, \"open_fds\": $ts3_fds, \"uptime_sec\": $ts3_uptime}"
 fi
 
+# 7.7 Service Discovery - detekce běžících služeb (process + port + config + active)
+discovered_json=""
+detect_svc() {
+    local name="$1" stype="$2" port="$3" proc="$4" cfg="$5"
+    local conf=0 ev="" miss=""
+    # Process (30)
+    if [ -n "$proc" ] && echo ",$process_list," | grep -qi ",$proc,"; then
+        conf=$((conf+30)); ev="${ev}\"process\","
+    elif [ -n "$proc" ]; then miss="${miss}\"process\","; fi
+    # Port (25)
+    if [ -n "$port" ] && echo ",$ports_json," | grep -q ", $port,"; then
+        conf=$((conf+25)); ev="${ev}\"port\","
+    elif [ -n "$port" ]; then miss="${miss}\"port\","; fi
+    # Config (25)
+    if [ -n "$cfg" ] && [ -e "$cfg" ]; then
+        conf=$((conf+25)); ev="${ev}\"config\","
+    elif [ -n "$cfg" ]; then miss="${miss}\"config\","; fi
+    # Active (19) - port listening = active
+    if [ -n "$port" ] && echo ",$ports_json," | grep -q ", $port,"; then
+        conf=$((conf+19)); ev="${ev}\"active_verify\","
+    else miss="${miss}\"active_verify\","; fi
+    [ $conf -gt 99 ] && conf=99
+    [ $conf -lt 25 ] && return
+    ev="${ev%,}"; miss="${miss%,}"
+    local entry="{\"name\": \"$name\", \"type\": \"$stype\", \"port\": ${port:-null}, \"confidence\": $conf, \"evidence\": [$ev], \"missing\": [$miss]}"
+    if [ -z "$discovered_json" ]; then discovered_json="$entry"; else discovered_json="$discovered_json, $entry"; fi
+}
+detect_svc "TeamSpeak" "teamspeak" 10011 "ts3server" ""
+detect_svc "Minecraft" "minecraft" 25565 "java" ""
+detect_svc "Nginx" "nginx" 80 "nginx" "/etc/nginx/nginx.conf"
+detect_svc "Docker" "docker" "" "dockerd" "/var/run/docker.sock"
+detect_svc "PostgreSQL" "postgresql" 5432 "postgres" "/etc/postgresql"
+detect_svc "AdGuard Home" "adguard" 3000 "AdGuardHome" ""
+detect_svc "WireGuard" "wireguard" 51820 "" "/etc/wireguard"
+detect_svc "Mosquitto" "mosquitto" 1883 "mosquitto" "/etc/mosquitto/mosquitto.conf"
+
 # 8. Sestavení JSON payloadu
 payload=$(cat <<EOF
 {
@@ -716,7 +752,8 @@ payload=$(cat <<EOF
   "timezone": "$sys_timezone",
   "reboot_required": $reboot_required_json,
   "cloud_provider": $cloud_provider_json,
-  "virtualization": $virtualization_json
+  "virtualization": $virtualization_json,
+  "discovered_services": [$discovered_json]
 }
 EOF
 )

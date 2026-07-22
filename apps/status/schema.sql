@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `enabled_metrics` TEXT DEFAULT NULL, -- JSON pole klíčů zapnutých metrik (Service Profiles). NULL = použít recommended výchozí hodnoty profilu.
   `rcon_port` INT DEFAULT NULL, -- Minecraft RCON port (výchozí 25575) - volitelné, umožní TPS přes Paper/Spigot
   `rcon_password` VARCHAR(255) DEFAULT NULL,
+  `discord_webhook_url` VARCHAR(255) DEFAULT NULL, -- Per-monitor Discord webhook (přepíše globální nastavení)
+  `telegram_bot_token` VARCHAR(255) DEFAULT NULL, -- Per-monitor Telegram bot token
+  `telegram_chat_id` VARCHAR(100) DEFAULT NULL, -- Per-monitor Telegram chat ID
+  `slack_webhook_url` VARCHAR(255) DEFAULT NULL, -- Per-monitor Slack webhook
   `remote_actions_enabled` TINYINT(1) DEFAULT 0, -- Souhlas s Remote Actions pro tento konkrétní monitor - výchozí VYPNUTO
   `allowed_actions` VARCHAR(255) DEFAULT NULL, -- Čárkou oddělený seznam povolených akcí (podmnožina restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe)
   `asset_id` INT DEFAULT NULL, -- Fyzické/logické zařízení, ke kterému monitor patří (viz `assets`) - NULL = zatím nepřiřazeno

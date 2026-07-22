@@ -826,13 +826,103 @@ def self_update(update_info):
 
 
 def get_discovered_services(ports, processes):
-    # Zástupná implementace - volalo se to v main() bez definice, což shazovalo
-    # celého Python agenta výjimkou NameError při každém běhu (main() nemá
-    # kolem téhle sekce žádný try/except). Skutečná detekce služeb podle
-    # portů/procesů je popsaná v project_service_discovery.md (per-service
-    # detektory, confidence score) - zatím jen bezpečná no-op náhrada, aby
-    # agent přestal padat a hlásil data dál.
-    return []
+    """Detekce běžících služeb podle portů/procesů/konfiguračních souborů.
+    Vrací seznam dictů: {name, type, port, confidence, evidence, missing}.
+    Confidence je součet bodů (process=30, port=25, config=25, active=19), max 99."""
+    detectors = [
+        # (name, type, port, process_pattern, config_paths)
+        ("TeamSpeak", "teamspeak", 10011, "ts3server", ["/etc/ts3server.ini", "/opt/teamspeak3/ts3server.ini"]),
+        ("Minecraft", "minecraft", 25565, "java", []),
+        ("Nginx", "nginx", 80, "nginx", ["/etc/nginx/nginx.conf"]),
+        ("Docker", "docker", None, "dockerd", ["/var/run/docker.sock"]),
+        ("PostgreSQL", "postgresql", 5432, "postgres", ["/etc/postgresql", "/var/lib/pgsql/data/postgresql.conf"]),
+        ("AdGuard Home", "adguard", 3000, "AdGuardHome", ["/opt/AdGuardHome/AdGuardHome.yaml", "/etc/AdGuardHome.yaml"]),
+        ("WireGuard", "wireguard", 51820, None, ["/etc/wireguard", "/etc/config/wireguard"]),
+        ("Mosquitto", "mosquitto", 1883, "mosquitto", ["/etc/mosquitto/mosquitto.conf", "/etc/mosquitto.conf"]),
+    ]
+
+    results = []
+    for name, stype, port, proc_pattern, config_paths in detectors:
+        confidence = 0
+        evidence = []
+        missing = []
+
+        # 1. Process detection (30 pts)
+        if proc_pattern and proc_pattern in processes:
+            confidence += 30
+            evidence.append("process")
+        elif proc_pattern:
+            missing.append("process")
+
+        # 2. Port detection (25 pts)
+        if port and port in ports:
+            confidence += 25
+            evidence.append("port")
+        elif port:
+            missing.append("port")
+
+        # 3. Config file (25 pts)
+        config_found = False
+        for cp in config_paths:
+            if os.path.exists(cp):
+                config_found = True
+                break
+        if config_found:
+            confidence += 25
+            evidence.append("config")
+        elif config_paths:
+            missing.append("config")
+
+        # 4. Active verification (19 pts) - lightweight check
+        active_ok = False
+        try:
+            if stype == "wireguard":
+                # Check if wg0 interface exists
+                if os.path.exists("/sys/class/net/wg0"):
+                    active_ok = True
+            elif stype == "docker":
+                if os.path.exists("/var/run/docker.sock"):
+                    active_ok = True
+            elif stype == "minecraft" and proc_pattern in processes:
+                # Verify java has minecraft-related args
+                for pid in os.listdir('/proc'):
+                    if not pid.isdigit():
+                        continue
+                    try:
+                        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                            cmdline = f.read().decode('utf-8', errors='ignore')
+                        if 'minecraft' in cmdline or 'paper' in cmdline or 'spigot' in cmdline or 'purpur' in cmdline:
+                            active_ok = True
+                            break
+                    except (IOError, OSError):
+                        continue
+            elif port and port in ports:
+                # Port is listening = active
+                active_ok = True
+        except Exception:
+            pass
+
+        if active_ok:
+            confidence += 19
+            evidence.append("active_verify")
+        else:
+            missing.append("active_verify")
+
+        # Cap at 99
+        confidence = min(confidence, 99)
+
+        # Only report if at least some evidence found
+        if confidence >= 25:
+            results.append({
+                "name": name,
+                "type": stype,
+                "port": port,
+                "confidence": confidence,
+                "evidence": evidence,
+                "missing": missing,
+            })
+
+    return results
 
 
 def main():
@@ -897,7 +987,8 @@ def main():
         "timezone": identity['timezone'],
         "reboot_required": identity['reboot_required'],
         "cloud_provider": identity['cloud_provider'],
-        "virtualization": identity['virtualization']
+        "virtualization": identity['virtualization'],
+        "discovered_services": discovered_services
     }
 
     net_log = f"{net} KB/s" if net is not None else "N/A (první běh)"
