@@ -113,7 +113,7 @@ function bk_get_migrations(): array {
 // --- Spuštění migrací ---
 try {
     // Zjistit aktuální verzi
-    $stmt = $pdo->prepare("SELECT setting_value FROM settings WHERE setting_name = 'schema_version'");
+    $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'schema_version'");
     $stmt->execute();
     $current_version = $stmt->fetchColumn() ?: '0';
 
@@ -147,7 +147,7 @@ try {
         }
 
         // Aktualizovat verzi
-        $pdo->prepare("UPDATE settings SET setting_value = ? WHERE setting_name = 'schema_version'")->execute([$version]);
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'schema_version'")->execute([$version]);
         $applied++;
         migrate_log("  Hotovo: $version");
     }
