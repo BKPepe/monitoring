@@ -280,6 +280,8 @@ return [
     'mp_processes' => 'Processes',
     'mp_ports' => 'Active Ports',
     'mp_timeline' => 'Event Timeline',
+    'mp_asset_timeline' => 'Asset Timeline',
+    'mp_asset_siblings' => 'Other monitors in this asset',
     'mp_detail_page' => 'Open detail page',
 
     // Knowledge layer - explains what an already-crossed threshold means
@@ -467,6 +469,9 @@ return [
     'chart_show_baseline' => 'Show 7-day average',
     'chart_yesterday' => 'Yesterday',
     'chart_baseline' => '7-day average',
+    'chart_compare_last_week' => 'Compare with last week',
+    'chart_prediction' => 'Prediction',
+    'chart_estimated_full' => 'Estimated full in %d days',
     'chart_count' => 'Count',
     'chart_annotation_prompt' => 'Add annotation for this point:',
 

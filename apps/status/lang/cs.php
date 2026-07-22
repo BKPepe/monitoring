@@ -281,6 +281,8 @@ return [
     'mp_processes' => 'Procesy',
     'mp_ports' => 'Aktivní porty',
     'mp_timeline' => 'Časová osa událostí',
+    'mp_asset_timeline' => 'Časová osa assetu',
+    'mp_asset_siblings' => 'Další monitory v tomto assetu',
     'mp_detail_page' => 'Otevřít detailní stránku',
 
     // Knowledge layer - vysvětlení, co znamená překročený práh u konkrétní metriky
@@ -468,6 +470,9 @@ return [
     'chart_show_baseline' => 'Zobrazit průměr (7 dní)',
     'chart_yesterday' => 'Včera',
     'chart_baseline' => 'Průměr 7 dní',
+    'chart_compare_last_week' => 'Porovnat s minulým týdnem',
+    'chart_prediction' => 'Predikce',
+    'chart_estimated_full' => 'Odhadované zaplnění za %d dní',
     'chart_count' => 'Počet',
     'chart_annotation_prompt' => 'Přidat poznámku k tomuto bodu:',
 

@@ -54,6 +54,20 @@ $has_response_data = ((int)$stmt_rt->fetchColumn()) > 0;
 // Timeline events
 $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
 
+// Asset-level aggregate timeline (only for multi-member assets)
+$asset_timeline = [];
+$asset_siblings = [];
+if (!empty($monitor['asset_id'])) {
+    $stmt_siblings = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ?");
+    $stmt_siblings->execute([$monitor['asset_id']]);
+    if ((int)$stmt_siblings->fetchColumn() > 1) {
+        $asset_timeline = bk_get_asset_timeline($pdo, $monitor['asset_id'], 30);
+        $stmt_sib = $pdo->prepare("SELECT id, name, type, status FROM monitors WHERE asset_id = ? AND id != ?");
+        $stmt_sib->execute([$monitor['asset_id'], $monitor_id]);
+        $asset_siblings = $stmt_sib->fetchAll();
+    }
+}
+
 // Insights
 $monitor_insights = array_merge(
     bk_get_forecast_insights($pdo, $monitor),
@@ -348,6 +362,48 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
     </div>
     <?php endif; ?>
 
+    <!-- Asset Timeline (multi-member assets only) -->
+    <?php if (!empty($asset_timeline)): ?>
+    <div class="mp-section">
+        <div class="mp-section-title"><i class="fas fa-layer-group"></i> <?php echo htmlspecialchars(t('mp_asset_timeline')); ?> <span style="font-weight: 400; font-size: 0.72rem; color: var(--text-muted);">(<?php echo htmlspecialchars($monitor['asset_name']); ?>)</span></div>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <?php foreach (array_slice($asset_timeline, 0, 20) as $ev):
+                $ev_label_key = 'timeline_event_' . $ev['event_type'];
+                $ev_label = t($ev_label_key);
+                if ($ev_label === $ev_label_key) $ev_label = $ev['description'] ?: $ev['event_type'];
+                $ev_icons = ['status_up' => 'fa-circle-check', 'status_down' => 'fa-circle-xmark', 'agent_connected' => 'fa-plug-circle-check', 'agent_disconnected' => 'fa-plug-circle-xmark', 'service_discovered' => 'fa-cube', 'service_lost' => 'fa-cube', 'remote_action' => 'fa-terminal'];
+                $ev_icon = $ev_icons[$ev['event_type']] ?? 'fa-circle-info';
+                $ev_color = str_contains($ev['event_type'], 'down') || str_contains($ev['event_type'], 'lost') || str_contains($ev['event_type'], 'disconnected') ? 'var(--color-red)' : (str_contains($ev['event_type'], 'up') || str_contains($ev['event_type'], 'connected') || str_contains($ev['event_type'], 'discovered') ? 'var(--color-green)' : 'var(--text-muted)');
+            ?>
+                <div style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.78rem;">
+                    <i class="fas <?php echo $ev_icon; ?>" style="color: <?php echo $ev_color; ?>; width: 16px; text-align: center;"></i>
+                    <span style="color: var(--text-secondary); flex: 1;"><?php echo htmlspecialchars($ev_label); ?>
+                        <span style="color: var(--text-muted); font-size: 0.68rem; margin-left: 0.3rem;"><?php echo htmlspecialchars($ev['monitor_name'] ?? ''); ?></span>
+                    </span>
+                    <span style="color: var(--text-muted); font-size: 0.7rem; white-space: nowrap;"><?php echo htmlspecialchars(bk_relative_time_label($ev['ts'])); ?></span>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- Sibling monitors in same asset -->
+    <?php if (!empty($asset_siblings)): ?>
+    <div class="mp-section">
+        <div class="mp-section-title"><i class="fas fa-object-group"></i> <?php echo htmlspecialchars(t('mp_asset_siblings')); ?></div>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+            <?php foreach ($asset_siblings as $sib):
+                $sib_color = ['up' => 'var(--color-green)', 'down' => 'var(--color-red)', 'maintenance' => 'var(--color-yellow)'][$sib['status']] ?? 'var(--text-muted)';
+            ?>
+                <a href="monitor.php?id=<?php echo (int)$sib['id']; ?>" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.35rem 0.65rem; font-size: 0.75rem; color: var(--text-secondary); text-decoration: none; display: flex; align-items: center; gap: 0.35rem;">
+                    <span style="width:7px;height:7px;border-radius:50%;background:<?php echo $sib_color; ?>;flex-shrink:0;"></span>
+                    <?php echo htmlspecialchars($sib['name']); ?>
+                </a>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <!-- Insights -->
     <?php if (!empty($monitor_insights)): ?>
     <div class="mp-section">
@@ -388,6 +444,11 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
             var el = document.getElementById(cfg.id);
             if (el) charts[cfg.id] = echarts.init(el, isDark ? 'dark' : null);
         });
+        // Synchronized crosshairs - all charts show same timestamp on hover
+        var chartInstances = Object.values(charts);
+        if (chartInstances.length > 1) {
+            echarts.connect(chartInstances);
+        }
     }
 
     function loadChart(cfg, period) {
@@ -401,7 +462,7 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
                     chart.setOption({
                         backgroundColor: 'transparent',
                         grid: { left: 50, right: 15, top: 20, bottom: 35 },
-                        tooltip: { trigger: 'axis', valueFormatter: function (v) { return v !== null ? v + ' ms' : '—'; } },
+                        tooltip: { trigger: 'axis', axisPointer: { type: 'cross', label: { backgroundColor: '#333' } }, valueFormatter: function (v) { return v !== null ? v + ' ms' : '—'; } },
                         xAxis: { type: 'time' },
                         yAxis: { type: 'value', axisLabel: { formatter: '{value} ms' } },
                         dataZoom: [{ type: 'inside' }],
@@ -436,7 +497,7 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
                 backgroundColor: 'transparent',
                 grid: { left: 50, right: 15, top: legend.length > 1 ? 28 : 15, bottom: 35 },
                 legend: legend.length > 1 ? { top: 0, textStyle: { fontSize: 10 } } : undefined,
-                tooltip: { trigger: 'axis', valueFormatter: function (v) { return v !== null && v !== undefined ? v + ' ' + unit : '—'; } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'cross', label: { backgroundColor: '#333' } }, valueFormatter: function (v) { return v !== null && v !== undefined ? v + ' ' + unit : '—'; } },
                 xAxis: { type: 'time' },
                 yAxis: { type: 'value', axisLabel: { formatter: '{value}' + (unit ? ' ' + unit : '') } },
                 dataZoom: [{ type: 'inside' }],

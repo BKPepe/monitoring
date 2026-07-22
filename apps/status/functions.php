@@ -1597,6 +1597,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
             </div>
         </div>
 
+        <div id="predictionBadge" style="display: none; margin-bottom: 1rem; font-size: 0.8rem; color: var(--color-red); background: rgba(231,76,60,0.08); border: 1px solid rgba(231,76,60,0.2); border-radius: 6px; padding: 0.5rem 0.75rem; align-items: center; gap: 0.4rem;"></div>
+
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
             <div style="display: flex; gap: 0.25rem;" id="metricViewSwitch">
                 <button type="button" data-view="line" class="btn btn-secondary btn-sm active" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('chart_view_line')); ?></button>
@@ -1609,9 +1611,12 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                 <?php endforeach; ?>
             </div>
         </div>
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
             <label style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
                 <input type="checkbox" id="compareToggle" style="width: auto;"> <?php echo htmlspecialchars(t('chart_compare_yesterday')); ?>
+            </label>
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+                <input type="checkbox" id="compareWeekToggle" style="width: auto;"> <?php echo htmlspecialchars(t('chart_compare_last_week')); ?>
             </label>
             <label style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
                 <input type="checkbox" id="baselineToggle" style="width: auto;"> <?php echo htmlspecialchars(t('chart_show_baseline')); ?>
@@ -1656,6 +1661,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
         var switcher = document.getElementById('metricPeriodSwitch');
         var viewSwitch = document.getElementById('metricViewSwitch');
         var compareToggle = document.getElementById('compareToggle');
+        var compareWeekToggle = document.getElementById('compareWeekToggle');
         var baselineToggle = document.getElementById('baselineToggle');
         var monitorId = switcher.dataset.monitor;
         var metricKey = switcher.dataset.metric;
@@ -1687,6 +1693,18 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                     ]
                 } : undefined
             }];
+            // Prediction band (dashed trend line for growth metrics)
+            if (payload.prediction && payload.prediction.length > 1) {
+                series.push({
+                    type: 'line',
+                    name: '<?php echo htmlspecialchars(t('chart_prediction')); ?>',
+                    showSymbol: false,
+                    data: payload.prediction.map(function (p) { return [p[0] * 1000, p[1]]; }),
+                    lineStyle: { width: 2, type: 'dashed', color: '#e74c3c' },
+                    itemStyle: { color: '#e74c3c' },
+                    areaStyle: { opacity: 0.04, color: '#e74c3c' }
+                });
+            }
             if (compareData && compareData.length > 0) {
                 series.push({
                     type: 'line',
@@ -1788,6 +1806,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
             currentPeriod = period;
             var url = 'api.php?action=metric_series&monitor_id=' + encodeURIComponent(monitorId) + '&metric=' + encodeURIComponent(metricKey) + '&period=' + encodeURIComponent(period);
             if (compareToggle.checked) url += '&compare=yesterday';
+            else if (compareWeekToggle.checked) url += '&compare=last_week';
             if (baselineToggle.checked) url += '&baseline=7d';
             fetch(url)
                 .then(function (r) { return r.json(); })
@@ -1799,6 +1818,16 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                         renderHeatmap(payload);
                     } else {
                         renderHistogram(payload);
+                    }
+                    // Show prediction info badge
+                    var badge = document.getElementById('predictionBadge');
+                    if (badge) {
+                        if (payload.days_to_full) {
+                            badge.style.display = 'inline-flex';
+                            badge.innerHTML = '<i class="fas fa-triangle-exclamation"></i> ' + <?php echo json_encode(t('chart_estimated_full')); ?>.replace('%d', payload.days_to_full);
+                        } else {
+                            badge.style.display = 'none';
+                        }
                     }
                 })
                 .catch(function () {});
@@ -1821,7 +1850,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
             });
         });
 
-        compareToggle.addEventListener('change', function () { load(currentPeriod); });
+        compareToggle.addEventListener('change', function () { if (this.checked) compareWeekToggle.checked = false; load(currentPeriod); });
+        compareWeekToggle.addEventListener('change', function () { if (this.checked) compareToggle.checked = false; load(currentPeriod); });
         baselineToggle.addEventListener('change', function () { load(currentPeriod); });
 
         // Click-to-annotate (admin only)

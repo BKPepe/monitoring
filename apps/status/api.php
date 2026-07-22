@@ -158,14 +158,16 @@ if (($_GET['action'] ?? '') === 'metric_series') {
             $result['events'][] = ['ts' => strtotime($ev['ts']), 'label' => $ev_label];
         }
 
-        // Compare with yesterday - shift timestamps by +24h to overlay
-        if ($compare === 'yesterday') {
-            $hours = ['1h' => 1, '6h' => 6, '24h' => 24][$period] ?? 24;
+        // Compare with yesterday/last_week/last_month - shift timestamps to overlay
+        if ($compare === 'yesterday' || $compare === 'last_week' || $compare === 'last_month') {
+            $shift_map = ['yesterday' => 86400, 'last_week' => 604800, 'last_month' => 2592000];
+            $shift = $shift_map[$compare];
+            $hours = ['15m' => 0.25, '1h' => 1, '6h' => 6, '24h' => 24, '7d' => 168, '30d' => 720][$period] ?? 24;
             $stmt_cmp = $pdo->prepare("
-                SELECT UNIX_TIMESTAMP(checked_at) + 86400 AS ts, $column AS val
+                SELECT UNIX_TIMESTAMP(checked_at) + $shift AS ts, $column AS val
                 FROM vps_metrics
-                WHERE monitor_id = ? AND checked_at >= DATE_SUB(DATE_SUB(NOW(), INTERVAL 1 DAY), INTERVAL $hours HOUR)
-                  AND checked_at < DATE_SUB(NOW(), INTERVAL 1 DAY) AND $column IS NOT NULL
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(DATE_SUB(NOW(), INTERVAL $shift SECOND), INTERVAL " . (int)($hours * 3600) . " SECOND)
+                  AND checked_at < DATE_SUB(NOW(), INTERVAL $shift SECOND) AND $column IS NOT NULL
                 ORDER BY checked_at ASC
             ");
             $stmt_cmp->execute([$monitor_id]);
@@ -189,6 +191,46 @@ if (($_GET['action'] ?? '') === 'metric_series') {
             $result['baseline'] = [];
             foreach ($stmt_base->fetchAll() as $r) {
                 $result['baseline'][] = [(int)$r['ts'], round((float)$r['val'], 2)];
+            }
+        }
+
+        // Prediction band - linear trend projection for growth metrics (hdd, ram, inode)
+        $predictable = ['hdd', 'ram', 'inode_usage'];
+        if (in_array($metric_key, $predictable) && count($result['points']) >= 10) {
+            $pts = $result['points'];
+            $n = count($pts);
+            // Use last 7 days of data (or all if less)
+            $window = min($n, (int)(7 * 86400 / max(1, ($pts[1][0] - $pts[0][0]))));
+            $window = max($window, 10);
+            $recent = array_slice($pts, -$window);
+            // Linear regression: y = a + b*x
+            $sx = 0; $sy = 0; $sxx = 0; $sxy = 0; $cnt = count($recent);
+            foreach ($recent as $p) { $sx += $p[0]; $sy += $p[1]; $sxx += $p[0]*$p[0]; $sxy += $p[0]*$p[1]; }
+            $denom = $cnt * $sxx - $sx * $sx;
+            if ($denom != 0) {
+                $b = ($cnt * $sxy - $sx * $sy) / $denom; // slope per second
+                $a = ($sy - $b * $sx) / $cnt;
+                $last_ts = $pts[$n - 1][0];
+                $last_val = $pts[$n - 1][1];
+                // Only show prediction if growing (b > 0) and current > 20%
+                if ($b > 0 && $last_val > 20) {
+                    $result['prediction'] = [];
+                    // Start from last real point
+                    $result['prediction'][] = [$last_ts, round($last_val, 2)];
+                    // Project 7 days forward (or until 100%)
+                    $step = 3600; // hourly steps
+                    for ($t = $last_ts + $step; $t <= $last_ts + 7 * 86400; $t += $step) {
+                        $predicted = $a + $b * $t;
+                        if ($predicted > 100) { $predicted = 100; }
+                        $result['prediction'][] = [$t, round($predicted, 2)];
+                        if ($predicted >= 100) break;
+                    }
+                    // Days until full (100%)
+                    if ($b > 0) {
+                        $secs_to_full = (100 - $last_val) / $b;
+                        $result['days_to_full'] = round($secs_to_full / 86400, 1);
+                    }
+                }
             }
         }
     } catch (Exception $e) {

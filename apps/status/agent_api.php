@@ -420,28 +420,34 @@ try {
 
     // Zapsat metriky do databáze - včetně TeamSpeak klientů/procesu, pokud jsou
     // k dispozici (viz výše), aby graf historie měl data z tohoto běhu.
+    // Non-fatal: pokud INSERT selže (chybějící sloupec ve staré DB), agent stále
+    // dostane validní odpověď s update info - chyba se zaloguje do error_logu.
     $ts3_clients_online = $new_data['ts3_clients_online'] ?? null;
     $ts3_clients_max = $new_data['ts3_clients_max'] ?? null;
     $ts3_process_cpu = $ts3_process['cpu'] ?? null;
     $ts3_process_ram = $ts3_process['ram_mb'] ?? null;
-    $stmt_metrics = $pdo->prepare("
-        INSERT INTO vps_metrics (
-            monitor_id, cpu_usage, ram_usage, hdd_usage, net_usage,
-            load_avg_1, load_avg_5, load_avg_15, cpu_steal, swap_usage,
-            disk_io_read_kbps, disk_io_write_kbps, net_errors,
-            ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
-            iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c,
-            wifi_clients_total, conntrack_pct
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ");
-    $stmt_metrics->execute([
-        $monitor_id, $cpu, $ram, $hdd, $net,
-        $load1, $load5, $load15, $cpu_steal, $swap,
-        $disk_io_read, $disk_io_write, $net_errors,
-        $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
-        $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
-        $ow_wifi_clients_count, $ow_conntrack_pct,
-    ]);
+    try {
+        $stmt_metrics = $pdo->prepare("
+            INSERT INTO vps_metrics (
+                monitor_id, cpu_usage, ram_usage, hdd_usage, net_usage,
+                load_avg_1, load_avg_5, load_avg_15, cpu_steal, swap_usage,
+                disk_io_read_kbps, disk_io_write_kbps, net_errors,
+                ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
+                iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c,
+                wifi_clients_total, conntrack_pct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt_metrics->execute([
+            $monitor_id, $cpu, $ram, $hdd, $net,
+            $load1, $load5, $load15, $cpu_steal, $swap,
+            $disk_io_read, $disk_io_write, $net_errors,
+            $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
+            $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
+            $ow_wifi_clients_count, $ow_conntrack_pct,
+        ]);
+    } catch (PDOException $e) {
+        error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $e->getMessage());
+    }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
         // Zapsat běžný log kontroly
