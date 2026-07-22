@@ -2734,7 +2734,13 @@ function check_discord($guild_id, $timeout = 3) {
  */
 function send_email($to, $subject, $html_body) {
     $GLOBALS['last_mail_error'] = '';
-    
+    // 'smtp' = ověřené odeslání přes autentizovaný SMTP server (silný signál
+    // úspěchu), 'fallback' = neautentizovaný PHP mail() - vrátí true, i když
+    // to jen znamená "místní MTA to přijal ke zpracování", ne že to reálně
+    // dorazilo. Volající (digest apod.) podle tohohle rozlišuje, jak sebejistě
+    // formulovat hlášku o úspěchu - viz send_digest_report_inner().
+    $GLOBALS['last_mail_method'] = null;
+
     $smtp_host = get_setting('smtp_host', '');
     $smtp_port = (int) get_setting('smtp_port', 587);
     $smtp_user = get_setting('smtp_user', '');
@@ -2770,6 +2776,7 @@ function send_email($to, $subject, $html_body) {
             $mail->Body       = $html_body;
             
             $mail->send();
+            $GLOBALS['last_mail_method'] = 'smtp';
             return true;
         } catch (Exception $e) {
             $GLOBALS['last_mail_error'] = $mail->ErrorInfo ?? $e->getMessage();
@@ -2778,7 +2785,9 @@ function send_email($to, $subject, $html_body) {
     }
     
     // Záloha: PHP mail() bez SMTP autentizace (funguje jen pokud webhosting povoluje)
-    $from = !empty($smtp_user) ? $smtp_user : 'status@bloodkings.eu';
+    // noreply@example.com je záměrně obecná - IANA vyhrazená doména pro dokumentaci
+    // (RFC 2606), ne odhad skutečné domény nasazení.
+    $from = !empty($smtp_user) ? $smtp_user : 'noreply@example.com';
     $headers = [
         'MIME-Version: 1.0',
         'Content-type: text/html; charset=utf-8',
@@ -2793,6 +2802,9 @@ function send_email($to, $subject, $html_body) {
     restore_error_handler();
     if (!$result && empty($GLOBALS['last_mail_error'])) {
         $GLOBALS['last_mail_error'] = 'mail() vrátilo false – SMTP host/heslo nejsou nastaveny, zkuste nakonfigurovat SMTP v nastavení systému.';
+    }
+    if ($result) {
+        $GLOBALS['last_mail_method'] = 'fallback';
     }
     return $result;
 }
@@ -3395,7 +3407,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
 
     $stmt_events_recent = $pdo->prepare("
-        SELECT monitor_name, monitor_type, event_type, description, occurred_at
+        SELECT monitor_id, monitor_name, monitor_type, event_type, description, occurred_at
         FROM monitor_events
         WHERE occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
         ORDER BY occurred_at DESC
@@ -3409,9 +3421,12 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $config_change_examples = [];
     foreach ($recent_events as $ev) {
         if ($ev['event_type'] === 'monitor_added') {
-            $new_servers[] = $ev['monitor_name'];
+            // monitor_id tu ještě existuje (monitor právě přibyl) - jde proklik.
+            $new_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => $ev['monitor_id']];
         } elseif ($ev['event_type'] === 'monitor_removed') {
-            $removed_servers[] = $ev['monitor_name'];
+            // monitor_id je tu vždycky NULL (ON DELETE SET NULL - monitor už
+            // neexistuje, proto se to vůbec loguje), proklik proto nejde nikdy.
+            $removed_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => null];
         } elseif (in_array($ev['event_type'], ['scheme_upgraded', 'dns_lost', 'dns_recovered', 'cert_renewed', 'agent_connected', 'agent_disconnected'], true)) {
             $config_change_examples[] = $ev['monitor_name'] . ': ' . $ev['description'];
         }
@@ -3967,11 +3982,17 @@ function render_digest_html($data) {
     // --- Nové / odstraněné servery ---
     if (!empty($data['new_servers']) || !empty($data['removed_servers'])) {
         $ns_html = '';
+        $site_url = rtrim((string)get_setting('site_url', ''), '/');
         foreach ($data['new_servers'] as $s) {
-            $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . htmlspecialchars($s) . '</div>';
+            $ns_label = htmlspecialchars($s['name']) . ' <span style="color:#888896;">(' . htmlspecialchars($s['type']) . ')</span>';
+            if ($site_url !== '' && !empty($s['id'])) {
+                $ns_label = '<a href="' . htmlspecialchars($site_url . '/index.php?open=' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
+            }
+            $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . $ns_label . '</div>';
         }
         foreach ($data['removed_servers'] as $s) {
-            $ns_html .= '<div style="color:#ef233c; font-size:13px; padding:3px 0;">- ' . htmlspecialchars($s) . '</div>';
+            // Odstraněný monitor už neexistuje - proklik cíleně nejde (viz build_digest_data()).
+            $ns_html .= '<div style="color:#ef233c; font-size:13px; padding:3px 0;">- ' . htmlspecialchars($s['name']) . ' <span style="color:#888896;">(' . htmlspecialchars($s['type']) . ')</span></div>';
         }
         $body .= bk_email_section('Nové / odstraněné servery', $ns_html);
     }

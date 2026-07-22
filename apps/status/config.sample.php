@@ -31,6 +31,17 @@ define('DB_NAME', 'nazev_databaze');
 define('DB_USER', 'uzivatel_databaze');
 define('DB_PASS', 'heslo_databaze');
 
+// --- SMTP (VOLITELNÉ) ---
+// Pokud tyto konstanty odkomentujete a vyplníte, mají přednost před nastavením
+// z databáze (E-mailové notifikace v administraci) - stejně jako DB_HOST výše.
+// Užitečné hlavně pro nasazení přes GitHub Actions secret (STATUS_CONFIG_PHP),
+// kde SMTP přihlašovací údaje nechcete mít uložené v databázi.
+// define('SMTP_HOST', 'smtp.vasedomena.cz');
+// define('SMTP_PORT', 465);
+// define('SMTP_USER', 'status@vasedomena.cz');
+// define('SMTP_PASS', 'heslo_k_emailu');
+// define('SMTP_SECURE', 'ssl'); // 'ssl', 'tls', nebo 'none'
+
 // --- OSTATNÍ NASTAVENÍ ---
 define('ADMIN_PASS_DEFAULT', 'BloodKingsAdmin123!'); // Výchozí heslo pokud není změněno
 define('TIMEZONE', 'Europe/Prague');

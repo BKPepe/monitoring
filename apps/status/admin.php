@@ -414,7 +414,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete_asset' && isset($_GET[
 // 3. Zpracování uložení konfigurace
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $user_role === 'admin') {
     $settings_to_save = [
-        'site_title', 'cron_key', 'cron_location', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
+        'site_title', 'site_url', 'cron_key', 'cron_location', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
         'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from', 'smsbrana_user', 'smsbrana_password',
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
@@ -745,7 +745,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'test_email' && $user_role ===
                  <p>Odesláno v: ' . date('d.m.Y H:i:s') . '</p>';
         
         if (send_email($to, $subject, $body)) {
-            $success_msg = 'Testovací e-mail byl úspěšně odeslán na adresu ' . htmlspecialchars($to) . '.';
+            $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
+                ? 'Testovací e-mail byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) na adresu ' . htmlspecialchars($to) . ' - zkontrolujte, zda opravdu dorazil, tohle jen potvrzuje, že to webhosting přijal ke zpracování.'
+                : 'Testovací e-mail byl úspěšně odeslán na adresu ' . htmlspecialchars($to) . '.';
         } else {
             $detail = !empty($GLOBALS['last_mail_error']) ? ' Systémová chyba: ' . htmlspecialchars($GLOBALS['last_mail_error']) : ' Funkce mail() vrátila false – pravděpodobně chybí konfigurace odesílatele nebo webhostingový mail() je zakázán.';
             $error_msg = 'Chyba při odesílání e-mailu.' . $detail;
@@ -764,7 +766,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'redetect_location' && $user_r
 // Ruční odeslání týdenního reportu/digestu (pouze pro Admina)
 if (isset($_GET['action']) && $_GET['action'] === 'send_weekly_digest' && $user_role === 'admin') {
     if (send_digest_report($pdo, 'weekly')) {
-        $success_msg = 'Týdenní report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
+        $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
+            ? 'Týdenní report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
+            : 'Týdenní report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
     } else {
         $detail = !empty($GLOBALS['last_mail_error']) ? ' Detaily: ' . htmlspecialchars($GLOBALS['last_mail_error']) : '';
         $error_msg = 'Chyba při odesílání týdenního reportu.' . $detail;
@@ -774,7 +778,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_weekly_digest' && $user_
 // Ruční odeslání měsíčního reportu/digestu (pouze pro Admina)
 if (isset($_GET['action']) && $_GET['action'] === 'send_monthly_digest' && $user_role === 'admin') {
     if (send_digest_report($pdo, 'monthly')) {
-        $success_msg = 'Měsíční report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
+        $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
+            ? 'Měsíční report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
+            : 'Měsíční report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
     } else {
         $detail = !empty($GLOBALS['last_mail_error']) ? ' Detaily: ' . htmlspecialchars($GLOBALS['last_mail_error']) : '';
         $error_msg = 'Chyba při odesílání měsíčního reportu.' . $detail;
@@ -1569,6 +1575,13 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <input type="text" name="site_title" id="site_title" value="<?php echo htmlspecialchars(get_setting('site_title')); ?>" class="form-control" required>
                             </div>
                             <div class="form-group">
+                                <label for="site_url">Veřejná URL status stránky (bez lomítka na konci)</label>
+                                <input type="url" name="site_url" id="site_url" value="<?php echo htmlspecialchars(get_setting('site_url')); ?>" class="form-control" placeholder="https://status.vasedomena.cz">
+                                <small style="font-size: 0.75rem; color: var(--text-muted);">Používá se k prokliku z e-mailů (digest, upozornění) zpět na konkrétní monitor - bez vyplnění se v e-mailech nezobrazí odkazy, jen text.</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
                                 <label for="cron_key">Cron Bezpečnostní Klíč (URL parametr ?key=...)</label>
                                 <input type="text" name="cron_key" id="cron_key" value="<?php echo htmlspecialchars(get_setting('cron_key')); ?>" class="form-control" placeholder="Např. secure123key">
                                 <small style="font-size: 0.75rem; color: var(--text-muted);">
@@ -1626,13 +1639,13 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <?php if (!$is_smtp_env): ?>
                         <div class="form-group">
                             <label for="smtp_user">Odesílatel zpráv (E-mailový účet / From E-mail)</label>
-                            <input type="email" name="smtp_user" id="smtp_user" value="<?php echo htmlspecialchars(get_setting('smtp_user', 'status@bloodkings.eu')); ?>" class="form-control" placeholder="status@bloodkings.eu">
+                            <input type="email" name="smtp_user" id="smtp_user" value="<?php echo htmlspecialchars(get_setting('smtp_user', '')); ?>" class="form-control" placeholder="např. status@vasedomena.cz">
                         </div>
 
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="smtp_host">SMTP Server (Host)</label>
-                                <input type="text" name="smtp_host" id="smtp_host" value="<?php echo htmlspecialchars(get_setting('smtp_host')); ?>" class="form-control" placeholder="např. pixel.mxrouting.net">
+                                <input type="text" name="smtp_host" id="smtp_host" value="<?php echo htmlspecialchars(get_setting('smtp_host')); ?>" class="form-control" placeholder="např. smtp.vasedomena.cz">
                             </div>
                             <div class="form-group">
                                 <label for="smtp_port">SMTP Port</label>
@@ -1654,8 +1667,15 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 </select>
                             </div>
                         </div>
+                        <?php else: ?>
+                        <div class="form-group" style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 0.75rem 1rem;">
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0;">
+                                <i class="fas fa-lock" style="color: #3b82f6; margin-right: 0.4rem;"></i>
+                                SMTP je nastaveno pevně v <code>config.php</code> (nebo proměnné prostředí serveru) a nelze ho změnit odsud - úprava databáze by neměla žádný efekt. Pokud potřebujete změnit přihlašovací údaje, upravte je v <code>config.php</code> (příp. v GitHub Actions secretu <code>STATUS_CONFIG_PHP</code>, pokud nasazujete přes CI).
+                            </p>
+                        </div>
                         <?php endif; ?>
-                        
+
                         <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">SMS Gateway Notifikace</h3>
                         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
                             SMS a WhatsApp jsou dva nezávislé kanály - lze mít aktivní jen SMS bránu, jen WhatsApp, nebo oba zároveň.
