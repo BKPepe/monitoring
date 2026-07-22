@@ -26,8 +26,19 @@ $down_monitors = (int)($stats['down_count'] ?? 0);
 $maintenance_monitors_count = (int)($stats['maintenance_count'] ?? 0);
 $last_checked_global = $stats['last_checked'] ?? null;
 
-// Načtení všech monitorů
-$stmt_monitors = $pdo->query("SELECT * FROM monitors ORDER BY category, name");
+// Načtení všech monitorů - včetně jména assetu, ke kterému patří (Phase 4).
+// Po migraci má každý monitor svůj vlastní 1:1 asset, takže se navenek nic
+// nemění, dokud ho admin ručně nesloučí s jiným (asset_member_count > 1).
+// Řazení podle asset_name (ne jen category/name) drží monitory patřící pod
+// stejný asset vedle sebe, aby je šlo v render loopu vizuálně seskupit bez
+// přestavby celé té smyčky.
+$stmt_monitors = $pdo->query("
+    SELECT m.*, a.name AS asset_name,
+           (SELECT COUNT(*) FROM monitors m2 WHERE m2.asset_id = m.asset_id) AS asset_member_count
+    FROM monitors m
+    LEFT JOIN assets a ON a.id = m.asset_id
+    ORDER BY m.category, COALESCE(a.name, m.name), m.name
+");
 $monitors = $stmt_monitors->fetchAll();
 
 // Level 3 Metric Detail (?view=metric&monitor=X&metric=Y) - samostatná
@@ -488,8 +499,26 @@ $portal_url = trim(get_setting('portal_url'));
                     </h2>
                     
                     <div class="monitors-grid">
-                        <?php foreach ($monitor_list as $monitor): 
+                        <?php
+                        // Asset seskupení (Phase 4) - $monitor_list je seřazený podle asset_name,
+                        // takže monitory patřící pod stejný (víc-monitorový) asset jsou vedle sebe.
+                        // Po migraci má každý monitor svůj vlastní 1:1 asset (asset_member_count=1),
+                        // takže tahle větev je dnes typicky no-op - vizuální wrapper se objeví jen
+                        // u assetů, které admin ručně sloučil (viz admin.php).
+                        $open_asset_group_id = null;
+                        ?>
+                        <?php foreach ($monitor_list as $monitor):
                             $mid = $monitor['id'];
+                            $is_asset_grouped = ((int)($monitor['asset_member_count'] ?? 1)) > 1;
+                            if ($open_asset_group_id !== null && (!$is_asset_grouped || $monitor['asset_id'] != $open_asset_group_id)) {
+                                echo '</div>';
+                                $open_asset_group_id = null;
+                            }
+                            if ($is_asset_grouped && $open_asset_group_id === null) {
+                                echo '<div class="asset-group" style="border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0.6rem; margin-bottom: 0.75rem;">';
+                                echo '<div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); padding: 0 0.25rem 0.5rem;"><i class="fas fa-layer-group"></i> ' . htmlspecialchars($monitor['asset_name'] ?: $monitor['name']) . '</div>';
+                                $open_asset_group_id = $monitor['asset_id'];
+                            }
                             $status = $monitor['status'];
                             if ($status === 'maintenance' && !is_in_maintenance($monitor)) {
                                 $status = 'unknown';
@@ -2075,6 +2104,7 @@ $portal_url = trim(get_setting('portal_url'));
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
+                        <?php if ($open_asset_group_id !== null): ?></div><?php endif; ?>
                     </div>
                 </section>
             <?php endforeach; ?>
@@ -2261,7 +2291,15 @@ $portal_url = trim(get_setting('portal_url'));
 
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('.monitor-tabs[data-monitor]').forEach(function (tabs) {
-            initMonitorTabs(tabs.dataset.monitor, 'overview');
+            const monitorId = tabs.dataset.monitor;
+            // Chybělo: samotné kliknutí na tab tlačítko nic nedělalo, protože
+            // switchMonitorTab() se nikde nenavěsilo jako click handler.
+            tabs.querySelectorAll('button[data-tab]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    switchMonitorTab(monitorId, btn.dataset.tab);
+                });
+            });
+            initMonitorTabs(monitorId, 'overview');
         });
     });
 

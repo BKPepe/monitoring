@@ -252,6 +252,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $target = trim($_POST['target']);
     $port = !empty($_POST['port']) ? intval($_POST['port']) : null;
     $category = trim($_POST['category']);
+
+    // Asset (Phase 4) - fyzické/logické zařízení, ke kterému monitor patří.
+    // Nové jméno v poli má přednost před výběrem z existujících (vytvoří nový
+    // asset při ukládání - typicky "odpojení" monitoru do vlastní skupiny).
+    $new_asset_name = trim($_POST['new_asset_name'] ?? '');
+    $asset_id = !empty($_POST['asset_id']) ? (int)$_POST['asset_id'] : null;
+    if ($new_asset_name !== '') {
+        $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
+        $stmt_new_asset->execute([$new_asset_name]);
+        $asset_id = (int)$pdo->lastInsertId();
+    }
+
     $timeout = !empty($_POST['timeout']) ? intval($_POST['timeout']) : 5;
     $email_notifications = isset($_POST['email_notifications']) ? 1 : 0;
     $sms_notifications = isset($_POST['sms_notifications']) ? 1 : 0;
@@ -312,30 +324,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
         if ($id > 0) {
             // Úprava stávajícího monitoru
             // Pokud stávající monitor nemá agent_key, vygenerujeme ho dodatečně
-            $stmt_check = $pdo->prepare("SELECT agent_key FROM monitors WHERE id = ?");
+            $stmt_check = $pdo->prepare("SELECT agent_key, asset_id FROM monitors WHERE id = ?");
             $stmt_check->execute([$id]);
-            $existing_key = $stmt_check->fetchColumn();
+            $existing_row = $stmt_check->fetch();
+            $existing_key = $existing_row['agent_key'] ?? null;
             if (empty($existing_key)) {
                 $stmt_up_key = $pdo->prepare("UPDATE monitors SET agent_key = ? WHERE id = ?");
                 $stmt_up_key->execute([bin2hex(random_bytes(16)), $id]);
             }
+            // Obranná záloha - pokud formulář z nějakého důvodu neposlal ani
+            // výběr, ani nové jméno, monitor si podrží svůj současný asset
+            // místo aby o něj tiše přišel.
+            if ($asset_id === null && !empty($existing_row['asset_id'])) {
+                $asset_id = (int)$existing_row['asset_id'];
+            }
 
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = ?, remote_actions_enabled = ?, allowed_actions = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = ?, remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
             log_monitor_event($pdo, $id, $name, $type, 'config_changed', 'Nastavení monitoru bylo upraveno');
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
             // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
             $agent_key = bin2hex(random_bytes(16));
+            // Monitor nikdy nezůstává bez assetu - bez výběru/nového jména dostane
+            // vlastní 1:1 asset pojmenovaný po sobě (stejný fallback jako zpětná
+            // migrace v db.php pro monitory, co existovaly před Phase 4).
+            if ($asset_id === null) {
+                $stmt_auto_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
+                $stmt_auto_asset->execute([$name]);
+                $asset_id = (int)$pdo->lastInsertId();
+            }
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
             log_monitor_event($pdo, (int)$pdo->lastInsertId(), $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
             $success_msg = 'Monitor byl úspěšně přidán.';
         }
@@ -354,6 +381,34 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
     $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
     $stmt->execute([$del_id]);
     $success_msg = 'Monitor byl úspěšně smazán.';
+}
+
+// 2b. Přejmenování assetu (Phase 4)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_asset']) && $user_role === 'admin') {
+    $ra_asset_id = (int)($_POST['asset_id'] ?? 0);
+    $ra_new_name = trim($_POST['asset_name'] ?? '');
+    if ($ra_asset_id > 0 && $ra_new_name !== '') {
+        $stmt = $pdo->prepare("UPDATE assets SET name = ? WHERE id = ?");
+        $stmt->execute([$ra_new_name, $ra_asset_id]);
+        $success_msg = 'Asset byl přejmenován.';
+    }
+}
+
+// 2c. Smazání assetu (Phase 4) - jen pokud je prázdný, aby nikdy tiše
+// neosiřely monitory (viz FOREIGN KEY ... ON DELETE SET NULL v db.php, což by
+// se stalo, kdyby šlo smazat i neprázdný asset - raději to admin udělá vědomě
+// přeřazením monitorů jinam, ne omylem kliknutím na "smazat").
+if (isset($_GET['action']) && $_GET['action'] === 'delete_asset' && isset($_GET['id']) && $user_role === 'admin') {
+    $da_id = (int)$_GET['id'];
+    $stmt_da_check = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ?");
+    $stmt_da_check->execute([$da_id]);
+    if ((int)$stmt_da_check->fetchColumn() === 0) {
+        $stmt = $pdo->prepare("DELETE FROM assets WHERE id = ?");
+        $stmt->execute([$da_id]);
+        $success_msg = 'Prázdný asset byl smazán.';
+    } else {
+        $error_msg = 'Asset nelze smazat - pořád k němu patří monitory. Nejdřív je přeřaďte jinam.';
+    }
 }
 
 // 3. Zpracování uložení konfigurace
@@ -615,14 +670,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service
     $s_type = $_POST['service_type'] ?? 'web';
     $s_port = !empty($_POST['service_port']) ? (int)$_POST['service_port'] : null;
     $s_target = trim($_POST['service_target'] ?? '127.0.0.1');
-    
+
+    // Phase 4 - pokud import přišel z návrhu Service Discovery (viz níže),
+    // víme, KTERÝ monitor tu službu objevil - jeho agent běží na stejném
+    // fyzickém stroji, takže nový monitor rovnou dostane jeho asset. Jediné
+    // místo v aplikaci, kde má smysl přiřazení assetu odhadovat automaticky,
+    // protože tenhle signál je skutečně spolehlivý (na rozdíl od hádání podle
+    // jména apod.).
+    $source_monitor_id = !empty($_POST['source_monitor_id']) ? (int)$_POST['source_monitor_id'] : null;
+    $discovered_asset_id = null;
+    if ($source_monitor_id) {
+        $stmt_src = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+        $stmt_src->execute([$source_monitor_id]);
+        $src_asset_id = $stmt_src->fetchColumn();
+        if ($src_asset_id) {
+            $discovered_asset_id = (int)$src_asset_id;
+        }
+    }
+    if ($discovered_asset_id === null) {
+        $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
+        $stmt_new_asset->execute([$s_name]);
+        $discovered_asset_id = (int)$pdo->lastInsertId();
+    }
+
     if (!empty($s_name)) {
         $agent_key = bin2hex(random_bytes(16));
         $stmt = $pdo->prepare("
-            INSERT INTO monitors (name, type, target, port, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold)
-            VALUES (?, ?, ?, ?, 'unknown', ?, 90, 90, 95)
+            INSERT INTO monitors (name, type, target, port, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
+            VALUES (?, ?, ?, ?, 'unknown', ?, 90, 90, 95, ?)
         ");
-        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key]);
+        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key, $discovered_asset_id]);
         $new_id = (int)$pdo->lastInsertId();
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
         $success_msg = "Monitor '{$s_name}' byl úspěšně vytvořen z automatické detekce!";
@@ -928,6 +1005,42 @@ $site_title = get_setting('site_title', 'Blood Kings');
         <?php endif; ?>
 
         <?php if ($user_role === 'admin'): ?>
+        <?php
+        // Assets (Phase 4) - fyzická/logická zařízení, která můžou sdružovat víc
+        // monitorů. Po migraci má typicky každý monitor svůj vlastní 1:1 asset -
+        // tenhle panel je hlavně pro sloučené případy (víc služeb na jednom VPS).
+        $stmt_assets_panel = $pdo->query("SELECT a.id, a.name, COUNT(m.id) AS member_count FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id GROUP BY a.id, a.name ORDER BY member_count DESC, a.name");
+        $assets_panel = $stmt_assets_panel->fetchAll();
+        $multi_assets = array_filter($assets_panel, function ($a) { return (int)$a['member_count'] > 1; });
+        ?>
+        <?php if (!empty($multi_assets)): ?>
+        <div class="admin-card">
+            <div class="admin-header">
+                <h2><i class="fas fa-layer-group"></i> Assety se sloučenými monitory</h2>
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem;">Tyhle assety mají víc než jeden monitor - na veřejném dashboardu se zobrazí vizuálně seskupené. Ostatní assety (1:1 s monitorem) tu kvůli přehlednosti nejsou vypsané - najdete je ve výběru assetu v editaci monitoru.</p>
+            <div style="overflow-x: auto;">
+                <table class="admin-table">
+                    <thead><tr><th>Jméno</th><th>Počet monitorů</th><th>Přejmenovat</th></tr></thead>
+                    <tbody>
+                        <?php foreach ($multi_assets as $a): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($a['name']); ?></td>
+                                <td><?php echo (int)$a['member_count']; ?></td>
+                                <td>
+                                    <form method="POST" style="display: flex; gap: 0.4rem;">
+                                        <input type="hidden" name="asset_id" value="<?php echo (int)$a['id']; ?>">
+                                        <input type="text" name="asset_name" value="<?php echo htmlspecialchars($a['name']); ?>" class="form-control" style="font-size: 0.8rem; padding: 0.3rem 0.5rem;">
+                                        <button type="submit" name="rename_asset" value="1" class="btn btn-secondary btn-sm"><i class="fas fa-save"></i></button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <?php endif; ?>
         <!-- Seznam monitorů - vlastní plná šířka, aby se tabulka nemusela vejít vedle jiné karty -->
         <div class="admin-card">
                     <div class="admin-header">
@@ -1976,6 +2089,46 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <?php endif; ?>
                         </div>
 
+                        <?php
+                        // Service Discovery - "propose" krok (Phase 4). Backend ukládání
+                        // objevených služeb existovalo už dřív (agent_api.php), ale nikde
+                        // v adminu se to nikdy nečetlo zpátky - tenhle panel to napravuje.
+                        // Import defaultně přiřadí nový monitor ke stejnému assetu jako
+                        // objevující monitor (viz action_import_service výše).
+                        $discovered_services = [];
+                        if ($edit_monitor) {
+                            $ed_details = json_decode($edit_monitor['last_details'] ?? '', true);
+                            if (is_array($ed_details) && !empty($ed_details['discovered_services']) && is_array($ed_details['discovered_services'])) {
+                                $discovered_services = $ed_details['discovered_services'];
+                            }
+                        }
+                        ?>
+                        <?php if (!empty($discovered_services)): ?>
+                            <div class="form-group">
+                                <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;"><i class="fas fa-magnifying-glass"></i> Objevené služby na tomto hostu</label>
+                                <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">Agent na tomto monitoru zjistil běžící služby, které se zatím nesledují. Import vytvoří nový monitor a rovnou ho přiřadí ke stejnému assetu.</small>
+                                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                                    <?php foreach ($discovered_services as $ds): ?>
+                                        <?php
+                                        $ds_name = $ds['name'] ?? $ds['service_name'] ?? '?';
+                                        $ds_type = $ds['type'] ?? 'web';
+                                        $ds_port = $ds['port'] ?? null;
+                                        $ds_target = $ds['target'] ?? $edit_monitor['target'] ?? '127.0.0.1';
+                                        ?>
+                                        <form method="POST" style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.4rem 0.6rem;">
+                                            <input type="hidden" name="service_name" value="<?php echo htmlspecialchars($ds_name); ?>">
+                                            <input type="hidden" name="service_type" value="<?php echo htmlspecialchars($ds_type); ?>">
+                                            <input type="hidden" name="service_port" value="<?php echo htmlspecialchars((string)$ds_port); ?>">
+                                            <input type="hidden" name="service_target" value="<?php echo htmlspecialchars($ds_target); ?>">
+                                            <input type="hidden" name="source_monitor_id" value="<?php echo (int)$edit_monitor['id']; ?>">
+                                            <span style="flex: 1; font-size: 0.82rem;"><?php echo htmlspecialchars($ds_name); ?><?php if ($ds_port): ?> <span style="color: var(--text-muted);">:<?php echo htmlspecialchars((string)$ds_port); ?></span><?php endif; ?></span>
+                                            <button type="submit" name="action_import_service" value="1" class="btn btn-secondary btn-sm"><i class="fas fa-plus"></i> Sledovat</button>
+                                        </form>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
                         <div class="form-group" id="processes-group" style="display: <?php echo ($edit_monitor && $edit_monitor['type'] !== 'cpanel' && $edit_monitor['type'] !== 'discord' && $edit_monitor['type'] !== 'openwrt') ? 'block' : 'none'; ?>;">
                             <label for="monitored_processes">Sledované procesy (čárkou oddělené)</label>
                             <input type="text" name="monitored_processes" id="monitored_processes" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['monitored_processes'] ?? '') : ''; ?>" class="form-control" placeholder="Např. ts3server, nginx, mysql">
@@ -2005,7 +2158,26 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <label for="category">Kategorie</label>
                             <input type="text" name="category" id="category" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['category'] ?? 'Weby') : 'Weby'; ?>" class="form-control" required placeholder="Weby, VPS, Herní servery...">
                         </div>
-                        
+
+                        <?php
+                        // Asset (Phase 4) - fyzické/logické zařízení, ke kterému monitor patří.
+                        // Víc monitorů se stejným assetem (např. web + TeamSpeak na jednom VPS)
+                        // se na veřejném dashboardu zobrazí vizuálně seskupené.
+                        $stmt_all_assets = $pdo->query("SELECT a.id, a.name, COUNT(m.id) AS member_count FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id GROUP BY a.id, a.name ORDER BY a.name");
+                        $all_assets = $stmt_all_assets->fetchAll();
+                        ?>
+                        <div class="form-group">
+                            <label for="asset_id">Asset (fyzické/logické zařízení)</label>
+                            <select name="asset_id" id="asset_id" class="form-control">
+                                <option value="">-- Vlastní nový asset (výchozí) --</option>
+                                <?php foreach ($all_assets as $a): ?>
+                                    <option value="<?php echo (int)$a['id']; ?>" <?php echo ($edit_monitor && (int)($edit_monitor['asset_id'] ?? 0) === (int)$a['id']) ? 'selected' : ''; ?>><?php echo htmlspecialchars($a['name']); ?> (<?php echo (int)$a['member_count']; ?> <?php echo (int)$a['member_count'] === 1 ? 'monitor' : 'monitorů'; ?>)</option>
+                                <?php endforeach; ?>
+                            </select>
+                            <input type="text" name="new_asset_name" id="new_asset_name" class="form-control" style="margin-top: 0.4rem;" placeholder="Nebo sem napište jméno pro nový asset...">
+                            <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Monitory se stejným assetem se na dashboardu zobrazí seskupené (např. web + TeamSpeak na jednom fyzickém serveru). Vyplnění pole "nový asset" má přednost před výběrem výše.</small>
+                        </div>
+
                         <div class="form-group">
                             <label for="timeout">Timeout kontroly (sekund)</label>
                             <input type="number" name="timeout" id="timeout" value="<?php echo $edit_monitor ? htmlspecialchars($edit_monitor['timeout'] ?? '5') : '5'; ?>" class="form-control" min="1" max="60">

@@ -825,6 +825,16 @@ def self_update(update_info):
         return False
 
 
+def get_discovered_services(ports, processes):
+    # Zástupná implementace - volalo se to v main() bez definice, což shazovalo
+    # celého Python agenta výjimkou NameError při každém běhu (main() nemá
+    # kolem téhle sekce žádný try/except). Skutečná detekce služeb podle
+    # portů/procesů je popsaná v project_service_discovery.md (per-service
+    # detektory, confidence score) - zatím jen bezpečná no-op náhrada, aby
+    # agent přestal padat a hlásil data dál.
+    return []
+
+
 def main():
     if AGENT_KEY == "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE":
         log_message("CHYBA: Nebyl nastaven AGENT_KEY. Upravte skript nebo 'agent.cfg'.")

@@ -25,7 +25,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260728');
+    define('BK_SCHEMA_VERSION', '20260729');
 
     $bk_current_schema = false;
     try {
@@ -371,6 +371,39 @@ try {
         } catch (PDOException $e) {
             // Ignorujeme
         }
+    }
+
+    // Automatická migrace - Assets: fyzické/logické zařízení, které může
+    // sdružovat víc monitorů (dřív tuhle vazbu nešlo vyjádřit vůbec - každý
+    // monitor byl nezávislý). Každý existující monitor bez asset_id dostane
+    // svůj vlastní nový 1:1 asset - žádné hádání, které monitory spolu
+    // "opravdu" patří (pro to není spolehlivý signál - agent_key je vždy
+    // unikátní, category je jen popisek). Slučování víc monitorů do jednoho
+    // assetu je od teď výhradně ruční akce administrátora (viz admin.php).
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `assets` (`id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(150) NOT NULL, `icon` VARCHAR(30) DEFAULT NULL, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    } catch (PDOException $e) {
+    }
+    try {
+        $pdo->exec("ALTER TABLE monitors ADD COLUMN asset_id INT DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+    try {
+        $pdo->exec("ALTER TABLE monitors ADD CONSTRAINT fk_monitors_asset_id FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL");
+    } catch (PDOException $e) {
+        // Constraint už existuje (nebo hosting nepodporuje pojmenované FK přes ALTER) - bez tvrdého selhání
+    }
+    try {
+        $stmt_unassigned = $pdo->query("SELECT id, name FROM monitors WHERE asset_id IS NULL");
+        foreach ($stmt_unassigned->fetchAll() as $um) {
+            $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
+            $stmt_new_asset->execute([$um['name']]);
+            $stmt_assign = $pdo->prepare("UPDATE monitors SET asset_id = ? WHERE id = ?");
+            $stmt_assign->execute([(int)$pdo->lastInsertId(), $um['id']]);
+        }
+    } catch (PDOException $e) {
+        // Tabulka monitors/assets ještě neexistuje (čerstvá instalace před importem schema.sql) - ignorujeme
     }
 
     // Uložení aktuální verze schématu - migrace se příště přeskočí

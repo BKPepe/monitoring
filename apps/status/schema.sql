@@ -19,6 +19,13 @@ CREATE TABLE IF NOT EXISTS `users` (
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `assets` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(150) NOT NULL, -- Fyzické/logické zařízení (server, router, host) - může sdružovat víc monitorů
+  `icon` VARCHAR(30) DEFAULT NULL, -- Volitelná FontAwesome ikona, jinak se odvodí od typu prvního monitoru
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `monitors` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `name` VARCHAR(100) NOT NULL,
@@ -54,8 +61,10 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `rcon_password` VARCHAR(255) DEFAULT NULL,
   `remote_actions_enabled` TINYINT(1) DEFAULT 0, -- Souhlas s Remote Actions pro tento konkrétní monitor - výchozí VYPNUTO
   `allowed_actions` VARCHAR(255) DEFAULT NULL, -- Čárkou oddělený seznam povolených akcí (podmnožina restart_wan,restart_wireguard,reboot_router,renew_dhcp)
+  `asset_id` INT DEFAULT NULL, -- Fyzické/logické zařízení, ke kterému monitor patří (viz `assets`) - NULL = zatím nepřiřazeno
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX (`agent_key`)
+  INDEX (`agent_key`),
+  FOREIGN KEY (`asset_id`) REFERENCES `assets`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `monitor_events` (
@@ -178,7 +187,7 @@ INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 -- Hranice varování pro vypršení SSL certifikátu (ve dnech)
 ('ssl_alert_days', '14'),
 -- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260728')
+('schema_version', '20260729')
 ON DUPLICATE KEY UPDATE `key_name`=`key_name`;
 
 CREATE TABLE IF NOT EXISTS `incidents` (

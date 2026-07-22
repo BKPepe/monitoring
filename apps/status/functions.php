@@ -824,10 +824,12 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
 }
 
 /**
- * Poskládá krátké shrnutí monitoru (2-4 věty) z už existujících dat - health
- * score, Knowledge tips, Insights (forecast/anomaly) a poslední události z
- * Timeline. Čistě deterministická skládačka šablon (t() + sprintf), žádné AI
- * volání - stejná filozofie jako zbytek Insights enginu.
+ * Poskládá krátké shrnutí monitoru (1-2 věty: celkový stav + nejzávažnější
+ * aktuální problém, pokud nějaký je) z už existujících dat - health score,
+ * Knowledge tips, Insights (forecast/anomaly). Záměrně neopakuje nic, co už
+ * je vidět jinde v Overview tabu (Server Information) nebo v Timeline tabu.
+ * Čistě deterministická skládačka šablon (t() + sprintf), žádné AI volání -
+ * stejná filozofie jako zbytek Insights enginu.
  */
 function bk_build_executive_summary($monitor, $health_score, array $knowledge_tips, array $insights, array $recent_events) {
     $sentences = [];
@@ -868,26 +870,11 @@ function bk_build_executive_summary($monitor, $health_score, array $knowledge_ti
         $sentences[] = t('exec_summary_no_concerns');
     }
 
-    // 3. Nejnovější pozoruhodná událost (jen pokud je "čerstvá" - starší než 7
-    // dní by na shrnutí nahoře jen matlo, na to je Timeline dole)
-    if (!empty($recent_events)) {
-        $latest = $recent_events[0];
-        $age_days = (time() - strtotime($latest['ts'])) / 86400;
-        if ($age_days <= 7) {
-            $label = t('timeline_event_' . $latest['event_type']);
-            if ($label === 'timeline_event_' . $latest['event_type']) {
-                // Neznámý/nepřeložený typ - použij popis, pokud existuje
-                $label = $latest['description'] ?? $latest['event_type'];
-            }
-            $sentences[] = sprintf(t('exec_summary_last_event'), $label, bk_relative_time_label($latest['ts']));
-        }
-    }
-
-    // 4. Stáří dat
-    if (!empty($monitor['last_checked'])) {
-        $sentences[] = sprintf(t('exec_summary_last_checked'), bk_relative_time_label($monitor['last_checked']));
-    }
-
+    // Dřív tu byla i "nejnovější událost" a "stáří dat" věta - odstraněno,
+    // duplikovalo se to se sekcí Server Information v Overview tabu (Poslední
+    // kontrola / Poslední změna stavu) a s Timeline tabem, který má tu samou
+    // událost v plném kontextu. Shrnutí teď záměrně obsahuje jen to, co jinde
+    // není vidět na první pohled - celkový stav a nejzávažnější problém.
     return implode(' ', $sentences);
 }
 
@@ -2206,6 +2193,29 @@ function bk_compute_health_score(array $areas) {
     }
     $score = $available_weight > 0 ? (int)round(($weighted_sum / $available_weight) * 100) : 0;
     return ['score' => $score, 'areas' => $areas];
+}
+
+/**
+ * Agregovaný stav assetu = nejhorší stav mezi jeho monitory (down je nejhorší,
+ * pak unknown, pak maintenance, up je nejlepší). $statuses je pole hodnot
+ * monitors.status ('up'/'down'/'maintenance'/'unknown') pro monitory patřící
+ * pod jeden asset. Prázdné pole (asset bez monitorů) vrací 'unknown'.
+ */
+function bk_compute_asset_status(array $statuses) {
+    if (empty($statuses)) {
+        return 'unknown';
+    }
+    $priority = ['down' => 0, 'unknown' => 1, 'maintenance' => 2, 'up' => 3];
+    $worst = 'up';
+    $worst_rank = $priority['up'];
+    foreach ($statuses as $s) {
+        $rank = $priority[$s] ?? $priority['unknown'];
+        if ($rank < $worst_rank) {
+            $worst_rank = $rank;
+            $worst = $s;
+        }
+    }
+    return $worst;
 }
 
 /**
