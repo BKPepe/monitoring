@@ -3,7 +3,7 @@
   "private": true,
   "description": "apps/status has no build step - it's plain PHP deployed as-is via FTP. This manifest exists only so Dependabot can see and version-bump the frontend libraries that are actually loaded via pinned CDN <script>/<link> URLs directly in the PHP templates (functions.php, index.php, admin.php). There is no npm install here and no node_modules gets deployed. When Dependabot opens a bump PR, the matching CDN URL in the PHP file must be updated by hand to match.",
   "dependencies": {
-    "@fortawesome/fontawesome-free": "7.3.0",
+    "@fortawesome/fontawesome-free": "7.3.1",
     "chart.js": "4.5.0",
     "echarts": "5.5.1",
     "qrcode": "1.5.4"
