@@ -29,100 +29,106 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_password') {
     exit;
 }
 
-// GitHub OAuth SSO Přihlášení
-if (isset($_GET['login_oauth']) && $_GET['login_oauth'] === 'github') {
-    $client_id = get_setting('oauth_github_client_id');
+// OAuth SSO přihlášení - start flow pro libovolného nakonfigurovaného
+// poskytovatele (github/google/discord/gitlab, viz bk_oauth_providers()).
+if (isset($_GET['login_oauth']) && array_key_exists($_GET['login_oauth'], bk_oauth_providers())) {
+    $oauth_provider_key = $_GET['login_oauth'];
+    $oauth_cfg = bk_oauth_providers()[$oauth_provider_key];
+    $client_id = get_setting('oauth_' . $oauth_provider_key . '_client_id');
     if (!empty($client_id)) {
-        $redirect_uri = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[SCRIPT_NAME]";
         $state = bin2hex(random_bytes(16));
         $_SESSION['oauth_state'] = $state;
-        $authorize_url = "https://github.com/login/oauth/authorize?" . http_build_query([
+        $_SESSION['oauth_provider'] = $oauth_provider_key;
+        unset($_SESSION['oauth_link_user_id']);
+        $authorize_url = $oauth_cfg['authorize_url'] . '?' . http_build_query([
             'client_id' => $client_id,
-            'redirect_uri' => $redirect_uri,
-            'scope' => 'user:email',
-            'state' => $state
+            'redirect_uri' => bk_current_admin_url(),
+            'scope' => $oauth_cfg['scope'],
+            'state' => $state,
+            'response_type' => 'code',
         ]);
         header('Location: ' . $authorize_url);
         exit;
     }
 }
 
-// GitHub Callback zpracování
+// Propojení OAuth účtu k JIŽ přihlášenému účtu (Profil) - na rozdíl od
+// login_oauth výše se tu netvrdí nic o totožnosti, jen se k aktuální session
+// přidá oauth_provider/oauth_id. Vyžaduje aktivní session (kontrola stejná
+// jako $is_logged_in níže, ale ta se počítá až pod tímhle blokem).
+if (isset($_GET['link_oauth']) && array_key_exists($_GET['link_oauth'], bk_oauth_providers()) && !empty($_SESSION['admin_logged_in'])) {
+    $oauth_provider_key = $_GET['link_oauth'];
+    $oauth_cfg = bk_oauth_providers()[$oauth_provider_key];
+    $client_id = get_setting('oauth_' . $oauth_provider_key . '_client_id');
+    if (!empty($client_id)) {
+        $state = bin2hex(random_bytes(16));
+        $_SESSION['oauth_state'] = $state;
+        $_SESSION['oauth_provider'] = $oauth_provider_key;
+        $_SESSION['oauth_link_user_id'] = $_SESSION['admin_id'];
+        $authorize_url = $oauth_cfg['authorize_url'] . '?' . http_build_query([
+            'client_id' => $client_id,
+            'redirect_uri' => bk_current_admin_url(),
+            'scope' => $oauth_cfg['scope'],
+            'state' => $state,
+            'response_type' => 'code',
+        ]);
+        header('Location: ' . $authorize_url);
+        exit;
+    }
+}
+
+// OAuth callback (sdílený pro login i propojení účtu, viz oauth_link_user_id).
+// Identita se ověřuje výhradně přes neměnné ID účtu u poskytovatele
+// (oauth_provider + oauth_id), nikdy přes e-mail. Dřív se přihlášení matchovalo
+// podle e-mailu z GitHub API - jenže e-mail je pole, které admin může komukoliv
+// tiše přepsat v editaci uživatele (viz audit log u user_updated), takže by šlo
+// změnou e-mailu cizího účtu a přihlášením přes vlastní OAuth ten účet převzít.
+// oauth_id se nastavuje jen tady, jen po výslovném propojení vlastníkem účtu.
 if (isset($_GET['code']) && isset($_GET['state'])) {
     if (!isset($_SESSION['oauth_state']) || $_GET['state'] !== $_SESSION['oauth_state']) {
         $login_error = 'Neplatný stav OAuth (CSRF ochrana).';
     } else {
         unset($_SESSION['oauth_state']);
-        $client_id = get_setting('oauth_github_client_id');
-        $client_secret = get_setting('oauth_github_client_secret');
-        
-        $token_url = "https://github.com/login/oauth/access_token";
-        $ch = curl_init($token_url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
-            'client_id' => $client_id,
-            'client_secret' => $client_secret,
-            'code' => $_GET['code']
-        ]));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/json']);
-        $resp = curl_exec($ch);
-        curl_close($ch);
-        
-        $token_data = json_decode($resp, true);
-        $access_token = $token_data['access_token'] ?? '';
-        
-        if (empty($access_token)) {
-            $login_error = 'Chyba při získávání přístupového tokenu z GitHubu.';
-        } else {
-            $emails_url = "https://api.github.com/user/emails";
-            $ch = curl_init($emails_url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Authorization: token ' . $access_token,
-                'User-Agent: BloodKingsStatus/1.3.0'
-            ]);
-            $resp_emails = curl_exec($ch);
-            curl_close($ch);
-            
-            // Kontrola proti VŠEM ověřeným e-mailům z GitHub účtu, ne jen "primary" -
-            // uživatel může mít v Blood Kings registrovaný jiný (i tak ověřený)
-            // e-mail, než který má GitHub zrovna nastavený jako primární.
-            $emails = json_decode($resp_emails, true);
-            $verified_emails = [];
-            if (is_array($emails)) {
-                foreach ($emails as $email_entry) {
-                    if (!empty($email_entry['verified']) && !empty($email_entry['email'])) {
-                        $verified_emails[] = $email_entry['email'];
-                    }
-                }
-            }
+        $oauth_provider_key = $_SESSION['oauth_provider'] ?? '';
+        unset($_SESSION['oauth_provider']);
+        $oauth_link_user_id = $_SESSION['oauth_link_user_id'] ?? null;
+        unset($_SESSION['oauth_link_user_id']);
 
-            if (empty($verified_emails)) {
-                $login_error = 'Na vašem GitHub účtu nebyl nalezen žádný ověřený e-mail.';
+        $providers = bk_oauth_providers();
+        if (empty($oauth_provider_key) || !isset($providers[$oauth_provider_key])) {
+            $login_error = 'Neplatný OAuth požadavek (neznámý poskytovatel).';
+        } else {
+            $identity = bk_oauth_fetch_identity($oauth_provider_key, $_GET['code'], bk_current_admin_url());
+            $provider_label = $providers[$oauth_provider_key]['label'];
+
+            if (!$identity['ok']) {
+                $login_error = $provider_label . ' OAuth: ' . $identity['error'];
+            } elseif ($oauth_link_user_id) {
+                // Propojení - jen zapsat oauth_provider/oauth_id k účtu, co je
+                // právě přihlášený (dokázal to heslem/OAuth předtím).
+                $stmt = $pdo->prepare("UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?");
+                $stmt->execute([$oauth_provider_key, $identity['id'], $oauth_link_user_id]);
+                bk_audit_log($pdo, 'oauth_linked', $provider_label, 'user', $oauth_link_user_id, $oauth_link_user_id, $_SESSION['admin_username'] ?? null);
+                header('Location: admin.php#profile-section');
+                exit;
             } else {
-                $placeholders = implode(',', array_fill(0, count($verified_emails), '?'));
-                $stmt = $pdo->prepare("SELECT * FROM users WHERE email IN ($placeholders) LIMIT 1");
-                $stmt->execute($verified_emails);
+                // Login - hledá se výhradně podle (provider, oauth_id).
+                $stmt = $pdo->prepare("SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ? LIMIT 1");
+                $stmt->execute([$oauth_provider_key, $identity['id']]);
                 $user = $stmt->fetch();
 
                 if ($user) {
-                    $stmt_up_oauth = $pdo->prepare("UPDATE users SET oauth_provider = 'github' WHERE id = ?");
-                    $stmt_up_oauth->execute([$user['id']]);
-
-                    // Nová session ID při přihlášení - session fixation ochrana (útočník
-                    // nemůže vnutit oběti předem známé ID a pak ho po loginu použít).
                     session_regenerate_id(true);
                     $_SESSION['admin_logged_in'] = true;
                     $_SESSION['admin_username'] = $user['username'];
                     $_SESSION['admin_id'] = $user['id'];
                     $_SESSION['admin_role'] = $user['role'];
-                    bk_audit_log($pdo, 'login_success', 'Přes GitHub OAuth', 'user', $user['id'], $user['id'], $user['username']);
+                    bk_audit_log($pdo, 'login_success', 'Přes ' . $provider_label . ' OAuth', 'user', $user['id'], $user['id'], $user['username']);
                     header('Location: admin.php');
                     exit;
                 } else {
-                    bk_audit_log($pdo, 'login_failed', 'GitHub OAuth - žádný účet neodpovídá ověřeným e-mailům: ' . implode(', ', $verified_emails));
-                    $login_error = 'Žádný z ověřených e-mailů vašeho GitHub účtu (' . htmlspecialchars(implode(', ', $verified_emails)) . ') není v systému registrován jako administrátor.';
+                    bk_audit_log($pdo, 'login_failed', $provider_label . ' OAuth - žádný účet nemá tenhle účet propojený');
+                    $login_error = 'Tenhle ' . htmlspecialchars($provider_label) . ' účet není propojený s žádným uživatelem. Přihlaste se heslem a propojte ho v Profilu.';
                 }
             }
         }
@@ -245,14 +251,13 @@ if (!$is_logged_in) {
                 </div>
                 <button type="submit" name="login" class="btn" style="width: 100%; margin-top: 1rem;"><i class="fas fa-sign-in-alt"></i> Přihlásit se</button>
                 <a href="admin.php?action=forgot_password" style="display:block; text-align:center; margin-top:0.75rem; font-size:0.8rem; color: var(--text-muted);">Zapomenuté heslo?</a>
-                <?php
-                $gh_client_id = get_setting('oauth_github_client_id');
-                if (!empty($gh_client_id)):
-                ?>
-                    <a href="admin.php?login_oauth=github" class="btn btn-github" style="width: 100%; margin-top: 0.5rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: none;">
-                        <i class="fab fa-github"></i> Přihlásit se přes GitHub
-                    </a>
-                <?php endif; ?>
+                <?php foreach (bk_oauth_providers() as $op_key => $op_cfg): ?>
+                    <?php if (!empty(get_setting('oauth_' . $op_key . '_client_id'))): ?>
+                        <a href="admin.php?login_oauth=<?php echo $op_key; ?>" class="btn btn-oauth" style="--oauth-bg: <?php echo htmlspecialchars($op_cfg['brand_color']); ?>; width: 100%; margin-top: 0.5rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: none;">
+                            <i class="<?php echo htmlspecialchars($op_cfg['icon']); ?>"></i> Přihlásit se přes <?php echo htmlspecialchars($op_cfg['label']); ?>
+                        </a>
+                    <?php endif; ?>
+                <?php endforeach; ?>
             </form>
             <?php endif; ?>
         </div>
@@ -506,6 +511,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
+        'oauth_google_client_id', 'oauth_google_client_secret',
+        'oauth_discord_client_id', 'oauth_discord_client_secret',
+        'oauth_gitlab_client_id', 'oauth_gitlab_client_secret',
         'custom_logo_url', 'custom_color_theme', 'custom_nav_links', 'portal_url',
         'metrics_token', 'sla_goal_pct', 'ts3_latest_version',
         'pushover_user_key', 'pushover_api_token', 'pagerduty_routing_key', 'ssl_alert_days', 'agent_registration_token'
@@ -632,6 +640,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
         $success_msg = 'Dvoufázové ověření (2FA) bylo vypnuto.';
     } else {
         $error_msg = 'Nesprávné heslo - 2FA zůstává zapnuté.';
+    }
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$_SESSION['admin_id']]);
+    $me = $stmt->fetch();
+}
+
+// Odpojení propojeného OAuth účtu - stejná ochrana heslem jako u vypnutí 2FA.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['oauth_unlink'])) {
+    bk_csrf_check();
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$_SESSION['admin_id']]);
+    $me = $stmt->fetch();
+    if ($me && password_verify($_POST['oauth_unlink_password'] ?? '', $me['password_hash'])) {
+        $unlinked_provider = $me['oauth_provider'];
+        $stmt_up = $pdo->prepare("UPDATE users SET oauth_provider = NULL, oauth_id = NULL WHERE id = ?");
+        $stmt_up->execute([$_SESSION['admin_id']]);
+        bk_audit_log($pdo, 'oauth_unlinked', $unlinked_provider, 'user', $_SESSION['admin_id']);
+        $success_msg = 'Propojený účet byl odpojen.';
+    } else {
+        $error_msg = 'Nesprávné heslo - propojení zůstává aktivní.';
     }
     $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
     $stmt->execute([$_SESSION['admin_id']]);
@@ -1250,27 +1278,52 @@ $site_title = get_setting('site_title', 'Blood Kings');
 
         <?php if ($user_role === 'admin'): ?>
         <?php
-        // Assets (Phase 4) - fyzická/logická zařízení, která můžou sdružovat víc
-        // monitorů. Po migraci má typicky každý monitor svůj vlastní 1:1 asset -
-        // tenhle panel je hlavně pro sloučené případy (víc služeb na jednom VPS).
-        $stmt_assets_panel = $pdo->query("SELECT a.id, a.name, COUNT(m.id) AS member_count FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id GROUP BY a.id, a.name ORDER BY member_count DESC, a.name");
+        // Assets (Phase 4) - kompletní přehled všech assetů s počtem monitorů a SLA.
+        $stmt_assets_panel = $pdo->query("
+            SELECT a.id, a.name, COUNT(m.id) AS member_count,
+                   GROUP_CONCAT(m.name ORDER BY m.name SEPARATOR ', ') AS monitor_names
+            FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id
+            GROUP BY a.id, a.name ORDER BY member_count DESC, a.name
+        ");
         $assets_panel = $stmt_assets_panel->fetchAll();
-        $multi_assets = array_filter($assets_panel, function ($a) { return (int)$a['member_count'] > 1; });
+        // SLA per asset (30d uptime průměr)
+        $stmt_asset_sla = $pdo->query("
+            SELECT m.asset_id,
+                   ROUND(AVG(CASE WHEN ml.total_count > 0 THEN (ml.up_count / ml.total_count) * 100 ELSE 100 END), 2) AS sla_pct
+            FROM monitors m
+            LEFT JOIN (
+                SELECT monitor_id,
+                       SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count,
+                       SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) AS total_count
+                FROM monitor_logs WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                GROUP BY monitor_id
+            ) ml ON ml.monitor_id = m.id
+            WHERE m.asset_id IS NOT NULL
+            GROUP BY m.asset_id
+        ");
+        $asset_sla_map = [];
+        foreach ($stmt_asset_sla->fetchAll() as $_sla_row) {
+            $asset_sla_map[(int)$_sla_row['asset_id']] = (float)$_sla_row['sla_pct'];
+        }
         ?>
-        <?php if (!empty($multi_assets)): ?>
         <div class="admin-card">
             <div class="admin-header">
-                <h2><i class="fas fa-layer-group"></i> Assety se sloučenými monitory</h2>
+                <h2><i class="fas fa-layer-group"></i> Assety (<?php echo count($assets_panel); ?>)</h2>
             </div>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem;">Tyhle assety mají víc než jeden monitor - na veřejném dashboardu se zobrazí vizuálně seskupené. Ostatní assety (1:1 s monitorem) tu kvůli přehlednosti nejsou vypsané - najdete je ve výběru assetu v editaci monitoru.</p>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem;">Fyzická/logická zařízení sdružující monitory. Assety s více monitory se na dashboardu zobrazí seskupené s agregovaným SLA.</p>
             <div style="overflow-x: auto;">
                 <table class="admin-table">
-                    <thead><tr><th>Jméno</th><th>Počet monitorů</th><th>Přejmenovat</th></tr></thead>
+                    <thead><tr><th>Jméno</th><th>Monitory</th><th>SLA (30d)</th><th>Přejmenovat</th></tr></thead>
                     <tbody>
-                        <?php foreach ($multi_assets as $a): ?>
+                        <?php foreach ($assets_panel as $a): ?>
+                            <?php $_sla = $asset_sla_map[(int)$a['id']] ?? 100.00; $_sla_cls = $_sla >= 99 ? 'up' : ($_sla >= 95 ? 'warn' : 'down'); ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($a['name']); ?></td>
-                                <td><?php echo (int)$a['member_count']; ?></td>
+                                <td>
+                                    <?php echo htmlspecialchars($a['name']); ?>
+                                    <?php if ((int)$a['member_count'] > 1): ?><span style="font-size:0.7rem;color:var(--color-orange);margin-left:0.3rem;"><i class="fas fa-object-group"></i> <?php echo (int)$a['member_count']; ?>×</span><?php endif; ?>
+                                </td>
+                                <td style="font-size:0.78rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?php echo htmlspecialchars($a['monitor_names'] ?? ''); ?>"><?php echo htmlspecialchars($a['monitor_names'] ?? '—'); ?></td>
+                                <td><span class="<?php echo $_sla_cls; ?>" style="font-weight:600;"><?php echo number_format($_sla, 2); ?>%</span></td>
                                 <td>
                                     <form method="POST" style="display: flex; gap: 0.4rem;">
                                         <?php echo bk_csrf_field(); ?>
@@ -1285,7 +1338,6 @@ $site_title = get_setting('site_title', 'Blood Kings');
                 </table>
             </div>
         </div>
-        <?php endif; ?>
         <!-- Seznam monitorů - vlastní plná šířka, aby se tabulka nemusela vejít vedle jiné karty -->
         <div class="admin-card">
                     <div class="admin-header">
@@ -2074,23 +2126,23 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <small style="font-size: 0.75rem; color: var(--text-muted);">Scraper předává token jako <code>?token=...</code> nebo hlavičkou <code>Authorization: Bearer ...</code>. Vygenerujte např. <code>openssl rand -hex 24</code>.</small>
                         </div>
 
-                        <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">Přihlášení přes GitHub (SSO / OIDC)</h3>
+                        <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">Přihlášení přes OAuth (SSO)</h3>
+                        <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.75rem;">
+                            OAuth přihlášení funguje jen pro účty, které si ho samy propojily v Profilu (heslem ověřená akce) - nikdy nejde založit nový účet ani se přihlásit k cizímu jen tím, že se sedí na stejném e-mailu.
+                            Jako Authorization/Redirect callback URL u každého poskytovatele zadejte <code><?php echo htmlspecialchars(bk_current_admin_url()); ?></code>.
+                        </small>
+                        <?php foreach (bk_oauth_providers() as $op_key => $op_cfg): ?>
                         <div class="form-row">
                             <div class="form-group">
-                                <label for="oauth_github_client_id">GitHub Client ID</label>
-                                <input type="text" name="oauth_github_client_id" id="oauth_github_client_id" value="<?php echo htmlspecialchars(get_setting('oauth_github_client_id')); ?>" class="form-control">
+                                <label for="oauth_<?php echo $op_key; ?>_client_id"><i class="<?php echo htmlspecialchars($op_cfg['icon']); ?>"></i> <?php echo htmlspecialchars($op_cfg['label']); ?> Client ID</label>
+                                <input type="text" name="oauth_<?php echo $op_key; ?>_client_id" id="oauth_<?php echo $op_key; ?>_client_id" value="<?php echo htmlspecialchars(get_setting('oauth_' . $op_key . '_client_id')); ?>" class="form-control">
                             </div>
                             <div class="form-group">
-                                <label for="oauth_github_client_secret">GitHub Client Secret</label>
-                                <input type="password" name="oauth_github_client_secret" id="oauth_github_client_secret" value="<?php echo htmlspecialchars(get_setting('oauth_github_client_secret')); ?>" class="form-control" autocomplete="new-password">
+                                <label for="oauth_<?php echo $op_key; ?>_client_secret"><?php echo htmlspecialchars($op_cfg['label']); ?> Client Secret</label>
+                                <input type="password" name="oauth_<?php echo $op_key; ?>_client_secret" id="oauth_<?php echo $op_key; ?>_client_secret" value="<?php echo htmlspecialchars(get_setting('oauth_' . $op_key . '_client_secret')); ?>" class="form-control" autocomplete="new-password">
                             </div>
                         </div>
-                        <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: -0.25rem;">
-                            Tlačítko „Přihlásit se přes GitHub" se na přihlašovací stránce zobrazí až po vyplnění a uložení Client ID.
-                            OAuth App vytvoříte na GitHubu v <strong>Settings → Developer settings → OAuth Apps</strong>;
-                            jako Authorization callback URL zadejte <code><?php echo htmlspecialchars((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://{$_SERVER['HTTP_HOST']}{$_SERVER['SCRIPT_NAME']}"); ?></code>.
-                            Přihlásit se mohou pouze uživatelé, jejichž ověřený GitHub e-mail patří existujícímu administrátorovi.
-                        </small>
+                        <?php endforeach; ?>
 
                         </div>
 
@@ -2509,12 +2561,19 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 </div>
                 </div>
 
-                <!-- Profil administrátora (E-mail, SMS telefon a heslo) -->
-                <div class="admin-card">
+                <!-- Profil administrátora (E-mail, SMS telefon, heslo, 2FA, propojené účty) -->
+                <div class="admin-card" id="profile-section">
                     <div class="admin-header">
                         <h2><i class="fas fa-user-shield"></i> Profil administrátora</h2>
                     </div>
-                    
+
+                    <div class="settings-tabs" role="tablist" id="profile-tabs">
+                        <button type="button" data-tab="profile-tab-contact" class="active"><i class="fas fa-address-card"></i> Profil a heslo</button>
+                        <button type="button" data-tab="profile-tab-2fa"><i class="fas fa-shield-halved"></i> 2FA</button>
+                        <button type="button" data-tab="profile-tab-oauth"><i class="fas fa-link"></i> Propojené účty</button>
+                    </div>
+
+                    <div class="settings-tab-panel active" id="profile-tab-contact">
                     <form action="admin.php" method="POST">
                         <?php echo bk_csrf_field(); ?>
                         <div class="form-group">
@@ -2545,10 +2604,10 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <span>Zapnout SMS notifikace pro tento účet</span>
                             </label>
                         </div>
-                        
+
                         <h3 style="font-size: 0.85rem; color: var(--color-red); margin: 1.5rem 0 0.5rem 0; text-transform: uppercase;">Změna hesla</h3>
                         <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">Nechte prázdné, pokud heslo nechcete měnit.</p>
-                        
+
                         <div class="form-group">
                             <label for="old_password">Stávající heslo</label>
                             <input type="password" name="old_password" id="old_password" class="form-control" autocomplete="off">
@@ -2557,7 +2616,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <label for="new_password">Nové heslo</label>
                             <input type="password" name="new_password" id="new_password" class="form-control" autocomplete="new-password">
                         </div>
-                        
+
                         <button type="submit" name="change_password" class="btn"><i class="fas fa-user-edit"></i> Aktualizovat profil</button>
                         <a href="#" onclick="bkPostAction({test_email: '1'}); return false;" class="btn btn-secondary" style="margin-left: 0.5rem;"><i class="fas fa-paper-plane"></i> Odeslat testovací e-mail</a>
                         <a href="#" onclick="bkPostAction({send_weekly_digest: '1'}); return false;" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Odeslat týdenní digest všem adminům"><i class="fas fa-chart-bar"></i> Odeslat týdenní digest</a>
@@ -2565,9 +2624,35 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <a href="admin.php?action=preview_weekly_digest" target="_blank" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Zobrazit náhled týdenního reportu v prohlížeči (bez odeslání)"><i class="fas fa-eye"></i> Náhled týdenního reportu</a>
                         <a href="admin.php?action=preview_monthly_digest" target="_blank" class="btn btn-secondary" style="margin-left: 0.5rem;" title="Zobrazit náhled měsíčního reportu v prohlížeči (bez odeslání)"><i class="fas fa-eye"></i> Náhled měsíčního reportu</a>
                     </form>
-                </div>
+                    </div>
 
-                <?php echo bk_render_totp_section($me, $site_title); ?>
+                    <div class="settings-tab-panel" id="profile-tab-2fa">
+                        <?php echo bk_render_totp_section($me, $site_title); ?>
+                    </div>
+
+                    <div class="settings-tab-panel" id="profile-tab-oauth">
+                        <?php echo bk_render_oauth_section($me); ?>
+                    </div>
+
+                    <script>
+                    (function() {
+                        const card = document.getElementById('profile-section');
+                        if (!card) return;
+                        const tabButtons = card.querySelectorAll('#profile-tabs button[data-tab]');
+                        const panels = card.querySelectorAll('.settings-tab-panel');
+                        tabButtons.forEach((btn) => {
+                            btn.addEventListener('click', () => {
+                                tabButtons.forEach((b) => b.classList.toggle('active', b === btn));
+                                panels.forEach((p) => p.classList.toggle('active', p.id === btn.dataset.tab));
+                            });
+                        });
+                        if (window.location.hash === '#profile-section' || window.location.hash === '#totp-section') {
+                            const twoFaBtn = card.querySelector('[data-tab="profile-tab-2fa"]');
+                            if (twoFaBtn) twoFaBtn.click();
+                        }
+                    })();
+                    </script>
+                </div>
 
         <!-- SEKCE: Správa uživatelů (pouze pro Admina) -->
         <div class="admin-grid" style="margin-top: 2rem;">
@@ -2585,6 +2670,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                     <th>E-mail</th>
                                     <th>Telefon (WhatsApp)</th>
                                     <th>Role</th>
+                                    <th>Zabezpečení</th>
                                     <th>Akce</th>
                                 </tr>
                             </thead>
@@ -2598,6 +2684,16 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                             <span class="category-badge" style="background: <?php echo $u['role'] === 'admin' ? 'var(--color-red)' : 'var(--color-green)'; ?>;">
                                                 <?php echo $u['role'] === 'admin' ? 'Admin' : 'Uživatel'; ?>
                                             </span>
+                                        </td>
+                                        <td data-label="Zabezpečení">
+                                            <?php if (!empty($u['totp_enabled'])): ?>
+                                                <span title="2FA zapnuto" style="color: var(--color-green);"><i class="fas fa-shield-halved"></i></span>
+                                            <?php else: ?>
+                                                <span title="2FA vypnuto" style="color: var(--text-muted); opacity: 0.4;"><i class="fas fa-shield-halved"></i></span>
+                                            <?php endif; ?>
+                                            <?php if (!empty($u['oauth_provider']) && isset(bk_oauth_providers()[$u['oauth_provider']])): $u_op = bk_oauth_providers()[$u['oauth_provider']]; ?>
+                                                <span title="Propojeno s <?php echo htmlspecialchars($u_op['label']); ?>" style="color: <?php echo htmlspecialchars($u_op['brand_color']); ?>; margin-left: 0.4rem;"><i class="<?php echo htmlspecialchars($u_op['icon']); ?>"></i></span>
+                                            <?php endif; ?>
                                         </td>
                                         <td data-label="Akce">
                                             <div class="action-btns">
@@ -2740,14 +2836,21 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
             
             <!-- PRAVÝ SLOUPEC: Můj profil (Nastavení kontaktu) -->
             <div>
-                <div class="admin-card" style="border-top: 4px solid var(--color-green);">
+                <div class="admin-card" style="border-top: 4px solid var(--color-green);" id="profile-section">
                     <div class="admin-header">
                         <h2><i class="fas fa-user-cog"></i> Můj profil odběratele</h2>
                     </div>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
                         Ujistěte se, že máte zadané správné kontaktní údaje pro doručování upozornění.
                     </p>
-                    
+
+                    <div class="settings-tabs" role="tablist" id="profile-tabs">
+                        <button type="button" data-tab="profile-tab-contact" class="active"><i class="fas fa-address-card"></i> Profil a heslo</button>
+                        <button type="button" data-tab="profile-tab-2fa"><i class="fas fa-shield-halved"></i> 2FA</button>
+                        <button type="button" data-tab="profile-tab-oauth"><i class="fas fa-link"></i> Propojené účty</button>
+                    </div>
+
+                    <div class="settings-tab-panel active" id="profile-tab-contact">
                     <form action="admin.php" method="POST">
                         <?php echo bk_csrf_field(); ?>
                         <div class="form-group">
@@ -2799,9 +2902,36 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         
                         <button type="submit" name="change_password" class="btn"><i class="fas fa-user-edit"></i> Aktualizovat profil</button>
                     </form>
+                    </div>
+
+                    <div class="settings-tab-panel" id="profile-tab-2fa">
+                        <?php echo bk_render_totp_section($me, $site_title); ?>
+                    </div>
+
+                    <div class="settings-tab-panel" id="profile-tab-oauth">
+                        <?php echo bk_render_oauth_section($me); ?>
+                    </div>
+
+                    <script>
+                    (function() {
+                        const card = document.getElementById('profile-section');
+                        if (!card) return;
+                        const tabButtons = card.querySelectorAll('#profile-tabs button[data-tab]');
+                        const panels = card.querySelectorAll('.settings-tab-panel');
+                        tabButtons.forEach((btn) => {
+                            btn.addEventListener('click', () => {
+                                tabButtons.forEach((b) => b.classList.toggle('active', b === btn));
+                                panels.forEach((p) => p.classList.toggle('active', p.id === btn.dataset.tab));
+                            });
+                        });
+                        if (window.location.hash === '#profile-section' || window.location.hash === '#totp-section') {
+                            const twoFaBtn = card.querySelector('[data-tab="profile-tab-2fa"]');
+                            if (twoFaBtn) twoFaBtn.click();
+                        }
+                    })();
+                    </script>
                   </div>
 
-                  <?php echo bk_render_totp_section($me, $site_title); ?>
               </div>
 
           </div>

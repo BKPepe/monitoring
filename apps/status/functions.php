@@ -20,6 +20,117 @@ define('BK_CDN_ECHARTS', 'https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echart
 define('BK_CDN_QRCODE', 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js');
 
 /**
+ * Konfigurace podporovaných OAuth poskytovatelů - jedno místo pro všechny 4,
+ * místo separátní kopie GitHub-specifické logiky pro každého zvlášť. Scope je
+ * vždy jen "přečti mi stabilní ID účtu", nic víc (žádný e-mail) - přihlášení
+ * i propojení účtu se řeší výhradně přes users.oauth_provider/oauth_id
+ * (nastavuje se jen explicitním propojením ve vlastním Profilu, nikdy
+ * automaticky podle e-mailu - viz bezpečnostní poznámka u OAuth callbacku
+ * v admin.php, proč byl e-mail jako identifikátor problém).
+ */
+function bk_oauth_providers() {
+    return [
+        'github' => [
+            'label' => 'GitHub',
+            'icon' => 'fab fa-github',
+            'brand_color' => '#24292e',
+            'authorize_url' => 'https://github.com/login/oauth/authorize',
+            'token_url' => 'https://github.com/login/oauth/access_token',
+            'scope' => 'read:user',
+            'user_url' => 'https://api.github.com/user',
+            'id_field' => 'id',
+            'extra_headers' => ['User-Agent: BloodKingsStatus/1.3.0'],
+        ],
+        'google' => [
+            'label' => 'Google',
+            'icon' => 'fab fa-google',
+            'brand_color' => '#4285f4',
+            'authorize_url' => 'https://accounts.google.com/o/oauth2/v2/auth',
+            'token_url' => 'https://oauth2.googleapis.com/token',
+            'scope' => 'openid profile',
+            'user_url' => 'https://www.googleapis.com/oauth2/v3/userinfo',
+            'id_field' => 'sub',
+            'extra_headers' => [],
+        ],
+        'discord' => [
+            'label' => 'Discord',
+            'icon' => 'fab fa-discord',
+            'brand_color' => '#5865F2',
+            'authorize_url' => 'https://discord.com/api/oauth2/authorize',
+            'token_url' => 'https://discord.com/api/oauth2/token',
+            'scope' => 'identify',
+            'user_url' => 'https://discord.com/api/users/@me',
+            'id_field' => 'id',
+            'extra_headers' => [],
+        ],
+        'gitlab' => [
+            'label' => 'GitLab',
+            'icon' => 'fab fa-gitlab',
+            'brand_color' => '#fc6d26',
+            'authorize_url' => 'https://gitlab.com/oauth/authorize',
+            'token_url' => 'https://gitlab.com/oauth/token',
+            'scope' => 'read_user',
+            'user_url' => 'https://gitlab.com/api/v4/user',
+            'id_field' => 'id',
+            'extra_headers' => [],
+        ],
+    ];
+}
+
+/**
+ * Provede OAuth token exchange (code -> access_token) + načtení stabilního ID
+ * uživatele u zadaného poskytovatele. Vrací ['ok' => bool, 'id' => string|null,
+ * 'error' => string|null] - nikdy nevyhazuje výjimku, volající si jen ověří 'ok'.
+ */
+function bk_oauth_fetch_identity($provider_key, $code, $redirect_uri) {
+    $providers = bk_oauth_providers();
+    if (!isset($providers[$provider_key])) {
+        return ['ok' => false, 'id' => null, 'error' => 'Neznámý OAuth poskytovatel.'];
+    }
+    $cfg = $providers[$provider_key];
+    $client_id = get_setting('oauth_' . $provider_key . '_client_id');
+    $client_secret = get_setting('oauth_' . $provider_key . '_client_secret');
+
+    $ch = curl_init($cfg['token_url']);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+        'client_id' => $client_id,
+        'client_secret' => $client_secret,
+        'code' => $code,
+        'redirect_uri' => $redirect_uri,
+        'grant_type' => 'authorization_code',
+    ]));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/json']);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    $resp = curl_exec($ch);
+    curl_close($ch);
+
+    $token_data = json_decode((string)$resp, true);
+    $access_token = $token_data['access_token'] ?? '';
+    if (empty($access_token)) {
+        return ['ok' => false, 'id' => null, 'error' => 'Nepodařilo se získat přístupový token.'];
+    }
+
+    $ch = curl_init($cfg['user_url']);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge(
+        ['Authorization: Bearer ' . $access_token],
+        $cfg['extra_headers']
+    ));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    $resp_user = curl_exec($ch);
+    curl_close($ch);
+
+    $user_data = json_decode((string)$resp_user, true);
+    $id = $user_data[$cfg['id_field']] ?? null;
+    if (empty($id)) {
+        return ['ok' => false, 'id' => null, 'error' => 'Nepodařilo se načíst identitu účtu.'];
+    }
+    return ['ok' => true, 'id' => (string)$id, 'error' => null];
+}
+
+/**
  * Vrátí HTML ikonu pro daný typ monitoru (+ cíl u typu 'web', pro favicon).
  * Sdíleno mezi index.php (veřejný dashboard) a admin.php (seznam monitorů),
  * aby oba místa vždy zobrazovaly stejnou ikonu pro stejný typ.
@@ -389,7 +500,56 @@ function render_vps_agent_details($details, $monitor = null) {
  *
  * @return array<int, array{icon: string, severity: string, text: string}>
  */
-function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics) {
+/**
+ * Zjistí, jak dlouho (v minutách) je metrika nad daným prahem.
+ * Vrací null pokud není dostatek dat nebo metrika aktuálně pod prahem je.
+ */
+function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookback_hours = 24) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT checked_at, $column AS val FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+            ORDER BY checked_at DESC
+        ");
+        $stmt->execute([$monitor_id, $lookback_hours]);
+        $rows = $stmt->fetchAll();
+    } catch (PDOException $e) {
+        return null;
+    }
+
+    if (empty($rows)) return null;
+
+    // Aktuální hodnota musí být nad prahem
+    $latest = (float)$rows[0]['val'];
+    if ($latest <= $threshold) return null;
+
+    // Projdi od nejnovějšího zpět a najdi první vzorek pod prahem
+    $above_since = strtotime($rows[0]['checked_at']);
+    foreach ($rows as $row) {
+        if ((float)$row['val'] <= $threshold) {
+            break;
+        }
+        $above_since = strtotime($row['checked_at']);
+    }
+
+    $minutes = (int)round((time() - $above_since) / 60);
+    return $minutes > 0 ? $minutes : null;
+}
+
+/**
+ * Zformátuje dobu trvání v minutách do čitelného řetězce (ČR/EN).
+ */
+function bk_format_duration($minutes) {
+    if ($minutes < 60) return $minutes . ' min';
+    $h = floor($minutes / 60);
+    $m = $minutes % 60;
+    if ($h < 24) return $h . ' h' . ($m > 0 ? ' ' . $m . ' min' : '');
+    $d = floor($h / 24);
+    $h = $h % 24;
+    return $d . ' d ' . $h . ' h';
+}
+
+function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics, $pdo = null) {
     $tips = [];
     $add = function ($severity, $tip_key, ...$args) use (&$tips) {
         $text = $args ? sprintf(t($tip_key), ...$args) : t($tip_key);
@@ -838,6 +998,90 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
 }
 
 /**
+ * Asset-level Timeline - sloučí události ze všech monitorů patřících pod asset.
+ * Každá událost nese navíc monitor_name pro identifikaci zdroje.
+ */
+function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
+    $timeline = [];
+
+    // Získej všechny monitory assetu
+    $stmt = $pdo->prepare("SELECT id, name FROM monitors WHERE asset_id = ?");
+    $stmt->execute([$asset_id]);
+    $monitors = $stmt->fetchAll();
+
+    if (empty($monitors)) {
+        return $timeline;
+    }
+
+    $monitor_ids = array_column($monitors, 'id');
+    $monitor_names = [];
+    foreach ($monitors as $m) {
+        $monitor_names[$m['id']] = $m['name'];
+    }
+    $placeholders = implode(',', array_fill(0, count($monitor_ids), '?'));
+
+    // Monitor events
+    try {
+        $stmt = $pdo->prepare("SELECT monitor_id, event_type, description, occurred_at FROM monitor_events WHERE monitor_id IN ($placeholders) AND occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY occurred_at DESC");
+        $stmt->execute(array_merge($monitor_ids, [$days]));
+        foreach ($stmt->fetchAll() as $row) {
+            $timeline[] = [
+                'event_type' => $row['event_type'],
+                'description' => $row['description'],
+                'ts' => $row['occurred_at'],
+                'monitor_name' => $monitor_names[$row['monitor_id']] ?? '?',
+            ];
+        }
+    } catch (PDOException $e) {
+    }
+
+    // Remote actions
+    try {
+        $stmt = $pdo->prepare("SELECT monitor_id, action_type, status, created_at, result_message FROM agent_actions WHERE monitor_id IN ($placeholders) AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY created_at DESC");
+        $stmt->execute(array_merge($monitor_ids, [$days]));
+        foreach ($stmt->fetchAll() as $row) {
+            $desc = $row['action_type'] . ' (' . $row['status'] . ')';
+            if (!empty($row['result_message'])) {
+                $desc .= ' - ' . $row['result_message'];
+            }
+            $timeline[] = [
+                'event_type' => 'remote_action',
+                'description' => $desc,
+                'ts' => $row['created_at'],
+                'monitor_name' => $monitor_names[$row['monitor_id']] ?? '?',
+            ];
+        }
+    } catch (PDOException $e) {
+    }
+
+    // Status changes
+    try {
+        $stmt = $pdo->prepare("SELECT monitor_id, status, checked_at FROM monitor_logs WHERE monitor_id IN ($placeholders) AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY checked_at ASC");
+        $stmt->execute(array_merge($monitor_ids, [$days]));
+        $prev_status = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $mid = $row['monitor_id'];
+            if (isset($prev_status[$mid]) && $row['status'] !== $prev_status[$mid]) {
+                $timeline[] = [
+                    'event_type' => $row['status'] === 'down' ? 'status_changed_down' : 'status_changed_up',
+                    'description' => null,
+                    'ts' => $row['checked_at'],
+                    'monitor_name' => $monitor_names[$mid] ?? '?',
+                ];
+            }
+            $prev_status[$mid] = $row['status'];
+        }
+    } catch (PDOException $e) {
+    }
+
+    usort($timeline, function ($a, $b) {
+        return strtotime($b['ts']) <=> strtotime($a['ts']);
+    });
+
+    return $timeline;
+}
+
+/**
  * Poskládá krátké shrnutí monitoru (1-2 věty: celkový stav + nejzávažnější
  * aktuální problém, pokud nějaký je) z už existujících dat - health score,
  * Knowledge tips, Insights (forecast/anomaly). Záměrně neopakuje nic, co už
@@ -1152,10 +1396,25 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
             </div>
         </div>
 
-        <div style="display: flex; justify-content: flex-end; gap: 0.25rem; margin-bottom: 0.5rem;" id="metricPeriodSwitch" data-monitor="<?php echo (int)$monitor['id']; ?>" data-metric="<?php echo htmlspecialchars($metric_key); ?>">
-            <?php foreach (['1h', '6h', '24h', '7d', '30d'] as $p): ?>
-                <button type="button" data-period="<?php echo $p; ?>" class="btn btn-secondary btn-sm <?php echo $p === '24h' ? 'active' : ''; ?>" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_' . $p)); ?></button>
-            <?php endforeach; ?>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; gap: 0.25rem;" id="metricViewSwitch">
+                <button type="button" data-view="line" class="btn btn-secondary btn-sm active" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('chart_view_line')); ?></button>
+                <button type="button" data-view="heatmap" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><i class="fas fa-table-cells"></i> <?php echo htmlspecialchars(t('chart_view_heatmap')); ?></button>
+                <button type="button" data-view="histogram" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><i class="fas fa-chart-bar"></i> <?php echo htmlspecialchars(t('chart_view_histogram')); ?></button>
+            </div>
+            <div style="display: flex; gap: 0.25rem;" id="metricPeriodSwitch" data-monitor="<?php echo (int)$monitor['id']; ?>" data-metric="<?php echo htmlspecialchars($metric_key); ?>">
+                <?php foreach (['1h', '6h', '24h', '7d', '30d'] as $p): ?>
+                    <button type="button" data-period="<?php echo $p; ?>" class="btn btn-secondary btn-sm <?php echo $p === '24h' ? 'active' : ''; ?>" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_' . $p)); ?></button>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+                <input type="checkbox" id="compareToggle" style="width: auto;"> <?php echo htmlspecialchars(t('chart_compare_yesterday')); ?>
+            </label>
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+                <input type="checkbox" id="baselineToggle" style="width: auto;"> <?php echo htmlspecialchars(t('chart_show_baseline')); ?>
+            </label>
         </div>
         <div style="position: relative; height: 340px; width: 100%; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
             <div id="metricChart" style="position: absolute; inset: 0;"></div>
@@ -1183,41 +1442,144 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     (function () {
         var chart = echarts.init(document.getElementById('metricChart'), (localStorage.getItem('theme') === 'light') ? null : 'dark');
         var switcher = document.getElementById('metricPeriodSwitch');
+        var viewSwitch = document.getElementById('metricViewSwitch');
+        var compareToggle = document.getElementById('compareToggle');
+        var baselineToggle = document.getElementById('baselineToggle');
         var monitorId = switcher.dataset.monitor;
         var metricKey = switcher.dataset.metric;
         var unit = <?php echo json_encode($unit); ?>;
+        var currentView = 'line';
+        var currentPeriod = '24h';
+        var cachedPayload = null;
 
-        function render(payload) {
+        function renderLine(payload, compareData, baselineData) {
             var seriesData = payload.points.map(function (p) { return [p[0] * 1000, p[1]]; });
             var markPoints = (payload.events || []).map(function (ev) {
                 return { name: ev.label, coord: [ev.ts * 1000, null], value: ev.label };
             });
+            var series = [{
+                type: 'line',
+                name: '<?php echo htmlspecialchars($metric_label); ?>',
+                showSymbol: false,
+                data: seriesData,
+                areaStyle: { opacity: 0.08 },
+                lineStyle: { width: 2 },
+                markPoint: { symbol: 'pin', symbolSize: 28, data: markPoints }
+            }];
+            if (compareData && compareData.length > 0) {
+                series.push({
+                    type: 'line',
+                    name: '<?php echo htmlspecialchars(t('chart_yesterday')); ?>',
+                    showSymbol: false,
+                    data: compareData.map(function (p) { return [p[0] * 1000, p[1]]; }),
+                    lineStyle: { width: 1, type: 'dashed', opacity: 0.5 },
+                    itemStyle: { opacity: 0.5 }
+                });
+            }
+            if (baselineData && baselineData.length > 0) {
+                series.push({
+                    type: 'line',
+                    name: '<?php echo htmlspecialchars(t('chart_baseline')); ?>',
+                    showSymbol: false,
+                    data: baselineData.map(function (p) { return [p[0] * 1000, p[1]]; }),
+                    lineStyle: { width: 1, type: 'dotted', color: '#888' },
+                    itemStyle: { color: '#888' }
+                });
+            }
             chart.setOption({
                 backgroundColor: 'transparent',
-                grid: { left: 50, right: 20, top: 20, bottom: 40 },
-                tooltip: { trigger: 'axis', valueFormatter: function (v) { return v + ' ' + unit; } },
+                grid: { left: 50, right: 20, top: 30, bottom: 40 },
+                legend: series.length > 1 ? { top: 0, textStyle: { fontSize: 11 } } : undefined,
+                tooltip: { trigger: 'axis', valueFormatter: function (v) { return v !== null && v !== undefined ? v + ' ' + unit : '—'; } },
                 xAxis: { type: 'time' },
                 yAxis: { type: 'value', axisLabel: { formatter: '{value}' + unit } },
                 dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 0 }],
-                series: [{
-                    type: 'line',
-                    showSymbol: false,
-                    data: seriesData,
-                    areaStyle: { opacity: 0.08 },
-                    lineStyle: { width: 2 },
-                    markPoint: {
-                        symbol: 'pin',
-                        symbolSize: 28,
-                        data: markPoints
-                    }
-                }]
+                series: series
             }, true);
         }
 
+        function renderHeatmap(payload) {
+            var data = [];
+            var hours = [];
+            var days = [];
+            for (var h = 0; h < 24; h++) hours.push(h + ':00');
+            payload.points.forEach(function (p) {
+                var d = new Date(p[0] * 1000);
+                var dayKey = d.toLocaleDateString();
+                if (days.indexOf(dayKey) === -1) days.push(dayKey);
+                var dayIdx = days.indexOf(dayKey);
+                data.push([d.getHours(), dayIdx, p[1]]);
+            });
+            var maxVal = Math.max.apply(null, data.map(function (d) { return d[2]; }).concat([1]));
+            chart.setOption({
+                backgroundColor: 'transparent',
+                grid: { left: 80, right: 40, top: 20, bottom: 60 },
+                tooltip: { position: 'top', formatter: function (p) { return days[p.value[1]] + ' ' + hours[p.value[0]] + '<br/>' + p.value[2] + ' ' + unit; } },
+                xAxis: { type: 'category', data: hours, splitArea: { show: true } },
+                yAxis: { type: 'category', data: days, splitArea: { show: true } },
+                visualMap: { min: 0, max: maxVal, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, inRange: { color: ['#313695', '#4575b4', '#74add1', '#abd9e9', '#fee090', '#fdae61', '#f46d43', '#d73027'] } },
+                series: [{ type: 'heatmap', data: data, label: { show: false }, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } } }]
+            }, true);
+        }
+
+        function renderHistogram(payload) {
+            var values = payload.points.map(function (p) { return p[1]; }).filter(function (v) { return v !== null; });
+            var min = Math.min.apply(null, values);
+            var max = Math.max.apply(null, values);
+            var bucketCount = 10;
+            var bucketSize = (max - min) / bucketCount || 1;
+            var buckets = [];
+            var counts = [];
+            for (var i = 0; i < bucketCount; i++) {
+                var lo = min + i * bucketSize;
+                var hi = lo + bucketSize;
+                buckets.push(Math.round(lo) + '-' + Math.round(hi));
+                counts.push(0);
+            }
+            values.forEach(function (v) {
+                var idx = Math.min(Math.floor((v - min) / bucketSize), bucketCount - 1);
+                counts[idx]++;
+            });
+            chart.setOption({
+                backgroundColor: 'transparent',
+                grid: { left: 50, right: 20, top: 20, bottom: 40 },
+                tooltip: { trigger: 'axis' },
+                xAxis: { type: 'category', data: buckets, axisLabel: { rotate: 45, fontSize: 10 } },
+                yAxis: { type: 'value', name: '<?php echo htmlspecialchars(t('chart_count')); ?>' },
+                series: [{ type: 'bar', data: counts, itemStyle: { color: '#5470c6' } }]
+            }, true);
+        }
+
+        function render(payload) {
+            cachedPayload = payload;
+            var compareData = null;
+            var baselineData = null;
+            if (currentView === 'line') {
+                renderLine(payload, compareData, baselineData);
+            } else if (currentView === 'heatmap') {
+                renderHeatmap(payload);
+            } else if (currentView === 'histogram') {
+                renderHistogram(payload);
+            }
+        }
+
         function load(period) {
-            fetch('api.php?action=metric_series&monitor_id=' + encodeURIComponent(monitorId) + '&metric=' + encodeURIComponent(metricKey) + '&period=' + encodeURIComponent(period))
+            currentPeriod = period;
+            var url = 'api.php?action=metric_series&monitor_id=' + encodeURIComponent(monitorId) + '&metric=' + encodeURIComponent(metricKey) + '&period=' + encodeURIComponent(period);
+            if (compareToggle.checked) url += '&compare=yesterday';
+            if (baselineToggle.checked) url += '&baseline=7d';
+            fetch(url)
                 .then(function (r) { return r.json(); })
-                .then(render)
+                .then(function (payload) {
+                    cachedPayload = payload;
+                    if (currentView === 'line') {
+                        renderLine(payload, payload.compare || null, payload.baseline || null);
+                    } else if (currentView === 'heatmap') {
+                        renderHeatmap(payload);
+                    } else {
+                        renderHistogram(payload);
+                    }
+                })
                 .catch(function () {});
         }
 
@@ -1228,6 +1590,35 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
                 load(btn.dataset.period);
             });
         });
+
+        viewSwitch.querySelectorAll('button[data-view]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                viewSwitch.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                currentView = btn.dataset.view;
+                if (cachedPayload) render(cachedPayload);
+            });
+        });
+
+        compareToggle.addEventListener('change', function () { load(currentPeriod); });
+        baselineToggle.addEventListener('change', function () { load(currentPeriod); });
+
+        // Click-to-annotate (admin only)
+        <?php if ($is_admin): ?>
+        chart.on('click', function (params) {
+            if (params.componentType === 'series' && params.data) {
+                var ts = new Date(params.data[0]);
+                var note = prompt('<?php echo htmlspecialchars(t('chart_annotation_prompt')); ?>', '');
+                if (note) {
+                    fetch('api.php?action=save_annotation', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ monitor_id: parseInt(monitorId), metric_key: metricKey, timestamp: ts.toISOString().slice(0, 19).replace('T', ' '), note: note })
+                    }).then(function () { load(currentPeriod); });
+                }
+            }
+        });
+        <?php endif; ?>
 
         window.addEventListener('resize', function () { chart.resize(); });
         load('24h');
@@ -4433,6 +4824,42 @@ function bk_render_totp_section($me, $site_title) {
 }
 
 /**
+ * Vykreslí kartu propojených OAuth účtů (Profil) - jen jeden poskytovatel
+ * najednou (schema má jediný oauth_provider/oauth_id sloupec na uživatele).
+ * Propojení jde jen skrz link_oauth (viz admin.php), nikdy podle e-mailu.
+ */
+function bk_render_oauth_section($me) {
+    $providers = bk_oauth_providers();
+    $linked_provider = $me['oauth_provider'] ?? null;
+
+    $html = '<div id="oauth-section">';
+    if (!empty($linked_provider) && isset($providers[$linked_provider])) {
+        $cfg = $providers[$linked_provider];
+        $html .= '<p style="font-size: 0.85rem;"><i class="' . htmlspecialchars($cfg['icon']) . '" style="color: ' . htmlspecialchars($cfg['brand_color']) . ';"></i> Propojeno s <strong>' . htmlspecialchars($cfg['label']) . '</strong>.</p>'
+            . '<form action="admin.php#profile-section" method="POST" style="max-width: 320px;">' . bk_csrf_field()
+            . '<div class="form-group"><label for="oauth_unlink_password">Heslo pro potvrzení odpojení</label>'
+            . '<input type="password" name="oauth_unlink_password" id="oauth_unlink_password" class="form-control" autocomplete="off" required></div>'
+            . '<button type="submit" name="oauth_unlink" class="btn btn-danger" onclick="return confirm(\'Opravdu odpojit propojený účet?\');"><i class="fas fa-link-slash"></i> Odpojit</button>'
+            . '</form>';
+    } else {
+        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Žádný účet zatím není propojený. Propojení umožní přihlášení bez hesla.</p>'
+            . '<div style="display: flex; flex-direction: column; gap: 0.5rem; max-width: 280px;">';
+        $any_configured = false;
+        foreach ($providers as $key => $cfg) {
+            if (empty(get_setting('oauth_' . $key . '_client_id'))) continue;
+            $any_configured = true;
+            $html .= '<a href="admin.php?link_oauth=' . $key . '" class="btn btn-oauth" style="--oauth-bg: ' . htmlspecialchars($cfg['brand_color']) . ';"><i class="' . htmlspecialchars($cfg['icon']) . '"></i> Propojit ' . htmlspecialchars($cfg['label']) . '</a>';
+        }
+        if (!$any_configured) {
+            $html .= '<p style="font-size: 0.8rem; color: var(--text-muted);">Žádný OAuth poskytovatel není nakonfigurovaný - nastavte Client ID/Secret v Nastavení -> Integrace.</p>';
+        }
+        $html .= '</div>';
+    }
+    $html .= '</div>';
+    return $html;
+}
+
+/**
  * CSRF ochrana (synchronizer token pattern) - jeden token na session, líné
  * vygenerování při první potřebě. bk_csrf_field() se vkládá do každého
  * <form>, bk_csrf_check() se volá na začátku každého handleru, co mění stav
@@ -4511,6 +4938,8 @@ function bk_render_audit_log_page($pdo, $site_title) {
         'remote_action_triggered' => 'Vzdálená akce zařazena', 'test_email_sent' => 'Testovací e-mail odeslán',
         'location_redetected' => 'Lokace znovu zjištěna', 'digest_sent' => 'Digest odeslán',
         'wizard_step_completed' => 'Krok wizardu dokončen', 'wizard_completed' => 'Wizard dokončen',
+        'oauth_linked' => 'OAuth účet propojen', 'oauth_unlinked' => 'OAuth účet odpojen',
+        'password_reset_requested' => 'Vyžádán reset hesla', 'password_set_via_link' => 'Heslo nastaveno přes odkaz',
     ];
 
     $rows_html = '';
