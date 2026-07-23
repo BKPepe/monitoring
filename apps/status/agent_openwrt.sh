@@ -78,7 +78,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.3.1"
+AGENT_VERSION="1.3.2"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -424,11 +424,21 @@ interfaces_json="[]"
 if [ -f /proc/net/dev ]; then
     interfaces_json=$(awk '
     NR > 2 {
-        gsub(":", "", $1);
-        if ($1 !~ /^(lo|ifb)/) {
-            if (count > 0) printf ", ";
-            printf "{\"iface\":\"%s\", \"rx_bytes\":%s, \"tx_bytes\":%s, \"rx_errors\":%s, \"tx_errors\":%s}", $1, $2, $10, $3, $11;
-            count++;
+        line = $0;
+        colon = index(line, ":");
+        if (colon > 0) {
+            ifname = substr(line, 1, colon - 1);
+            gsub(/^[ \t]+|[ \t]+$/, "", ifname);
+            if (ifname !~ /^(lo|ifb)/) {
+                split(substr(line, colon + 1), f, " ");
+                rx_b = f[1] + 0;
+                rx_e = f[3] + 0;
+                tx_b = f[9] + 0;
+                tx_e = f[11] + 0;
+                if (count > 0) printf ", ";
+                printf "{\"iface\":\"%s\",\"rx_bytes\":%.0f,\"tx_bytes\":%.0f,\"rx_errors\":%.0f,\"tx_errors\":%.0f}", ifname, rx_b, tx_b, rx_e, tx_e;
+                count++;
+            }
         }
     }
     BEGIN { printf "[" }
@@ -438,23 +448,27 @@ fi
 # --- WiFi per-radio detail (iwinfo) ---
 wifi_radios_json="[]"
 if command -v iwinfo >/dev/null 2>&1; then
-    wifi_radios_json=$(for radio in $(iwinfo 2>/dev/null | awk '/^[a-z]/ {print $1}'); do
+    wifi_radios_json=$(for radio in $(iwinfo 2>/dev/null | awk '/^[a-z0-9]/ {print $1}'); do
         info=$(iwinfo "$radio" info 2>/dev/null)
-        ssid=$(echo "$info" | grep -i "essid" | sed 's/.*ESSID: "\([^"]*\)".*/\1/')
-        channel=$(echo "$info" | grep -i "channel" | awk '{print $2}')
-        freq=$(echo "$info" | grep -i "frequency" | awk '{print $2}')
-        tx_power=$(echo "$info" | grep -i "tx-power" | awk '{print $2}')
-        noise=$(echo "$info" | grep -i "noise" | awk '{print $2}')
-        clients=$(iwinfo "$radio" assoclist 2>/dev/null | grep -c "Address:")
+        ssid=$(echo "$info" | grep -i "essid" | sed 's/.*ESSID: "\([^"]*\)".*/\1/' | sed 's/["\\]//g')
+        channel=$(echo "$info" | grep -i "channel" | awk '{print $2}' | tr -cd '0-9')
+        freq=$(echo "$info" | grep -i "frequency" | awk '{print $2}' | tr -cd '0-9')
+        tx_power=$(echo "$info" | grep -i "tx-power" | awk '{print $2}' | tr -cd '0-9-')
+        noise=$(echo "$info" | grep -i "noise" | awk '{print $2}' | tr -cd '0-9-')
+        clients=$(iwinfo "$radio" assoclist 2>/dev/null | grep -c "Address:" | tr -cd '0-9')
         # Band detection from frequency
         band="2.4GHz"
         [ -n "$freq" ] && [ "$freq" -ge 5000 ] 2>/dev/null && band="5GHz"
         [ -n "$freq" ] && [ "$freq" -ge 6000 ] 2>/dev/null && band="6GHz"
+        
         [ -n "$ssid" ] || ssid="unknown"
         [ -n "$channel" ] || channel="0"
+        [ -n "$tx_power" ] || tx_power="0"
+        [ -n "$noise" ] || noise="0"
         [ -n "$clients" ] || clients="0"
-        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%s,\"tx_power\":%s,\"noise\":%s,\"clients\":%s}, " \
-            "$radio" "$ssid" "$band" "${channel:-0}" "${tx_power:-0}" "${noise:-0}" "${clients:-0}"
+
+        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%d,\"tx_power\":%d,\"noise\":%d,\"clients\":%d}, " \
+            "$radio" "$ssid" "$band" "$channel" "$tx_power" "$noise" "$clients"
     done | sed 's/, $//')
     [ -n "$wifi_radios_json" ] && wifi_radios_json="[$wifi_radios_json]" || wifi_radios_json="[]"
 fi
