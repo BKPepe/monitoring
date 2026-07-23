@@ -1722,7 +1722,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     <strong>Obsah agent.cfg (doporučeno pro zachování při deployi):</strong><br>
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
-                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key">KLIC</span>"
+                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key">KLIC</span>"<br>
+                                    AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
                             </li>
                             <li>Povolte spuštění: <code>chmod +x agent.py</code></li>
@@ -1742,7 +1743,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     <strong>Obsah agent.cfg (doporučeno pro zachování při deployi):</strong><br>
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
-                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-sh">KLIC</span>"
+                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-sh">KLIC</span>"<br>
+                                    AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
                             </li>
                             <li>Povolte spuštění: <code>chmod +x agent.sh</code></li>
@@ -1761,7 +1763,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
                             <li>Nastavte konfiguraci vytvořením souboru <code>agent.cfg</code> ve stejné složce jako <code>agent.ps1</code>:<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
-                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-ps1">KLIC</span>"
+                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-ps1">KLIC</span>"<br>
+                                    AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
                             </li>
                             <li>Vytvořte naplánovanou úlohu spouštěnou každých 5 minut (spusťte v PowerShellu jako Administrátor):<br>
@@ -1800,8 +1803,11 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O /root/agent_openwrt.sh <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_openwrt.sh', $_SERVER['REQUEST_URI']); ?></pre>
                                 Pokud router nemá SSL podporu ve <code>wget</code>, použijte <code>uclient-fetch</code> místo <code>wget</code>.
                             </li>
+                            <li>Nastavte konfiguraci vytvořením souboru <code>/root/agent_openwrt.cfg</code>:<br>
+                                <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
-                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-openwrt">KLIC</span>"
+                                    AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-openwrt">KLIC</span>"<br>
+                                    AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
                             </li>
                             <li>Volitelné - Remote Actions (restart WAN/WireGuard, reboot, obnova DHCP na dálku z administrace). Bez tohoto kroku router žádnou vzdálenou akci nikdy neprovede, i kdyby ji administrace zařadila do fronty:<br>
