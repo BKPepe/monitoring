@@ -43,7 +43,7 @@ jobs:
           echo "Version file generated: ${DEPLOY_DATE} · ${SHORT_SHA}"
 
       - name: FTP Deploy to cPanel (status/ subfolder)
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
           server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
           username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
