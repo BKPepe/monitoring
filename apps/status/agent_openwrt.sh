@@ -949,14 +949,14 @@ detect_svc "Minecraft Server" "minecraft" "java" "63DD" "" 25565 "Minecraft hern
 
 [ -n "$disc_list" ] && discovered_services_json="[$disc_list]" || discovered_services_json="[]"
 
-[ -z "$top_cpu_json" ] || [ "$top_cpu_json" = "" ] && top_cpu_json="[]"
-[ -z "$top_ram_json" ] || [ "$top_ram_json" = "" ] && top_ram_json="[]"
-[ -z "$wifi_radios_json" ] || [ "$wifi_radios_json" = "" ] && wifi_radios_json="[]"
-[ -z "$interfaces_json" ] || [ "$interfaces_json" = "" ] && interfaces_json="[]"
-[ -z "$wireguard_peers_json" ] || [ "$wireguard_peers_json" = "" ] && wireguard_peers_json="[]"
-[ -z "$mwan3_policies_json" ] || [ "$mwan3_policies_json" = "" ] && mwan3_policies_json="[]"
-[ -z "$service_restarts_json" ] || [ "$service_restarts_json" = "" ] && service_restarts_json="[]"
-[ -z "$mwan3_active_gw" ] || [ "$mwan3_active_gw" = "" ] && mwan3_active_gw="null"
+[ -z "$top_cpu_json" ] && top_cpu_json="[]"
+[ -z "$top_ram_json" ] && top_ram_json="[]"
+[ -z "$wifi_radios_json" ] && wifi_radios_json="[]"
+[ -z "$interfaces_json" ] && interfaces_json="[]"
+[ -z "$wireguard_peers_json" ] && wireguard_peers_json="[]"
+[ -z "$mwan3_policies_json" ] && mwan3_policies_json="[]"
+[ -z "$service_restarts_json" ] && service_restarts_json="[]"
+[ -z "$mwan3_active_gw" ] && mwan3_active_gw="null"
 
 # Sanitace všech numerických proměnných
 for var in cpu ram ram_total_mb ram_used_mb ram_available_mb ram_free_mb swap_pct entropy conntrack_pct upgradable_packages wifi_clients_count dhcp_leases_count dhcp_reservations_count dns_queries dns_cache_hits dns_cache_misses fw_accepted fw_dropped fw_rejected net net_ipv4_kbps net_ipv6_kbps hdd disk_io_write btrfs_errors load1 load5 load15 uptime_sec temperature wan_uptime sqm_download_kbps sqm_upload_kbps sqm_dropped sqm_ecn lte_rsrp lte_rsrq lte_sinr wan_reconnect_count wan_last_reconnect installed_packages log_errors_24h log_warnings_24h; do
