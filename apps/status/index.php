@@ -1387,7 +1387,6 @@ $portal_url = trim(get_setting('portal_url'));
                                                      </div>
                                                      </div>
                                                      <?php endif; ?>
-                                                     <?php endif; // ts3_check_stages !== null (service + quality) ?>
 
                                                      <?php if ($enabled_metrics === null || in_array('ports', $enabled_metrics)): ?>
                                                      <div class="monitor-tab-panel" data-tab="ports">
