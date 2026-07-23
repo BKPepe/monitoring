@@ -78,7 +78,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.3.3"
+AGENT_VERSION="1.4.1"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -751,11 +751,14 @@ if command -v iwinfo >/dev/null 2>&1; then
         channel=$(echo "$info" | grep -i "channel" | sed -n 's/.*Channel: \([0-9]*\).*/\1/p')
         [ -z "$channel" ] && channel=$(echo "$info" | grep -i "channel" | tr -cd '0-9')
 
-        freq_ghz=$(echo "$info" | grep -i "channel" | sed -n 's/.*(\([0-9.]*\) GHz).*/\1/p')
         band="2.4GHz"
-        if echo "$freq_ghz" | grep -q '^5'; then band="5GHz"; fi
-        if echo "$freq_ghz" | grep -q '^6'; then band="6GHz"; fi
-        if [ "$channel" -gt 14 ] 2>/dev/null; then band="5GHz"; fi
+        if echo "$info" | grep -qi -E '5\.[0-9]+ \?GHz|5[0-9]{3} \?MHz|a/n/ac|802\.11a|802\.11ac|5GHz'; then
+            band="5GHz"
+        elif echo "$info" | grep -qi -E '6\.[0-9]+ \?GHz|6[0-9]{3} \?MHz|6GHz'; then
+            band="6GHz"
+        elif [ -n "$channel" ] && [ "$channel" -gt 14 ] 2>/dev/null; then
+            band="5GHz"
+        fi
 
         tx_power=$(echo "$info" | grep -i "tx-power" | sed -n 's/.*Tx-Power: \([0-9-]*\).*/\1/p')
         [ -z "$tx_power" ] && tx_power="0"

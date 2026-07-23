@@ -450,11 +450,6 @@ try {
     } catch (PDOException $e) {
         $metrics_error = $e->getMessage();
         error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $metrics_error);
-        // Zapsat varování do monitor_logs (viditelné v adminu)
-        try {
-            $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, 'warning', 0, ?)")
-                ->execute([$monitor_id, 'Schema drift: ' . mb_substr($metrics_error, 0, 200)]);
-        } catch (PDOException $e2) { /* log table itself might be broken */ }
     }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
