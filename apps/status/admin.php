@@ -832,6 +832,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_maintenance'])
     exit;
 }
 
+// Bulk maintenance - hromadné zapnutí/vypnutí údržby pro vybrané monitory (pouze Admin)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_maintenance']) && $user_role === 'admin') {
+    bk_csrf_check();
+    $bulk_ids = isset($_POST['bulk_ids']) ? array_map('intval', (array)$_POST['bulk_ids']) : [];
+    $bulk_action = $_POST['bulk_maintenance']; // 'enable' | 'disable'
+    $bulk_desc = !empty($_POST['bulk_desc']) ? trim($_POST['bulk_desc']) : null;
+
+    if (!empty($bulk_ids)) {
+        $placeholders = implode(',', array_fill(0, count($bulk_ids), '?'));
+        if ($bulk_action === 'enable') {
+            $pdo->prepare("UPDATE monitors SET maintenance = 1, status = 'maintenance', maintenance_description = ? WHERE id IN ($placeholders)")
+                ->execute(array_merge([$bulk_desc], $bulk_ids));
+        } else {
+            $pdo->prepare("UPDATE monitors SET maintenance = 0, maintenance_description = NULL, maintenance_start = NULL, maintenance_end = NULL, status = 'unknown' WHERE id IN ($placeholders)")
+                ->execute($bulk_ids);
+        }
+        bk_audit_log($pdo, 'bulk_maintenance', $bulk_action . ' (' . count($bulk_ids) . ' monitorů)', 'monitors', null);
+        $success_msg = 'Údržba ' . ($bulk_action === 'enable' ? 'zapnuta' : 'vypnuta') . ' pro ' . count($bulk_ids) . ' monitorů.';
+    }
+    header('Location: admin.php');
+    exit;
+}
+
 // Smazání historie monitoru (logy a VPS metriky) (pouze pro Admina)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clear_history']) && isset($_POST['id']) && $user_role === 'admin') {
     bk_csrf_check();
@@ -1344,13 +1367,28 @@ $site_title = get_setting('site_title', 'Blood Kings');
         <div class="admin-card">
                     <div class="admin-header">
                         <h2><i class="fas fa-list-ul"></i> Sledované servery a služby</h2>
-                        <button type="button" onclick="openMonitorModal()" class="btn btn-sm"><i class="fas fa-plus"></i> Přidat monitor</button>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <button type="button" id="bulk-maint-btn" class="btn btn-secondary btn-sm" style="display:none;" onclick="toggleBulkBar()"><i class="fas fa-tools"></i> Údržba (<span id="bulk-count">0</span>)</button>
+                            <button type="button" onclick="openMonitorModal()" class="btn btn-sm"><i class="fas fa-plus"></i> Přidat monitor</button>
+                        </div>
+                    </div>
+
+                    <!-- Bulk maintenance bar -->
+                    <div id="bulk-bar" style="display:none; background: rgba(243,156,18,0.08); border: 1px solid rgba(243,156,18,0.2); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                        <form method="POST" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; width: 100%;">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                            <input type="text" name="bulk_desc" placeholder="Popis údržby (volitelné)" class="form-control" style="max-width: 250px; padding: 0.4rem 0.6rem; font-size: 0.8rem;">
+                            <button type="submit" name="bulk_maintenance" value="enable" class="btn btn-sm" style="background: rgba(243,156,18,0.15); border: 1px solid rgba(243,156,18,0.3); color: #f39c12;"><i class="fas fa-tools"></i> Zapnout údržbu</button>
+                            <button type="submit" name="bulk_maintenance" value="disable" class="btn btn-secondary btn-sm"><i class="fas fa-check"></i> Vypnout údržbu</button>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);" id="bulk-selected-label">0 vybráno</span>
+                        </form>
                     </div>
 
                     <div style="overflow-x: auto;">
                         <table class="admin-table">
                             <thead>
                                 <tr>
+                                    <th style="width: 30px;"><input type="checkbox" id="select-all-monitors" onchange="toggleAllMonitors(this)"></th>
                                     <th>Název</th>
                                     <th class="hide-mobile">Kategorie</th>
                                     <th class="hide-mobile">Typ</th>
@@ -1363,11 +1401,12 @@ $site_title = get_setting('site_title', 'Blood Kings');
                             <tbody>
                                 <?php if (empty($all_monitors)): ?>
                                     <tr>
-                                        <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">Zatím nejsou nastaveny žádné monitory.</td>
+                                        <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2rem;">Zatím nejsou nastaveny žádné monitory.</td>
                                     </tr>
                                 <?php else: ?>
                                     <?php foreach ($all_monitors as $mon): ?>
                                         <tr>
+                                            <td><input type="checkbox" class="monitor-bulk-cb" value="<?php echo (int)$mon['id']; ?>" onchange="updateBulkUI()"></td>
                                             <td>
                                                 <strong><?php echo htmlspecialchars($mon['name']); ?></strong>
                                                 <?php 
@@ -1388,7 +1427,14 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                         } else {
                                                             $time_lbl = ($mins <= 0) ? 'nyní' : "před {$mins} min";
                                                             $ver_str = $version ? " v" . htmlspecialchars($version) : "";
-                                                            echo "<span style='color: var(--color-green); font-size: 0.72rem; display: block; margin-top: 0.2rem;'><i class='fas fa-check-circle'></i> Agent{$ver_str} (aktivní {$time_lbl})</span>";
+                                                            // Porovnání s nejnovější verzí agenta na serveru
+                                                            $agent_type_reported = $det['agent_type'] ?? 'bash';
+                                                            $latest_ver = bk_get_agent_latest_version($agent_type_reported);
+                                                            $update_badge = '';
+                                                            if ($version && $latest_ver && version_compare($version, $latest_ver, '<')) {
+                                                                $update_badge = " <span style='color: var(--color-yellow); font-weight: bold;' title='Dostupná aktualizace: v{$latest_ver}'><i class='fas fa-arrow-up'></i> v{$latest_ver}</span>";
+                                                            }
+                                                            echo "<span style='color: var(--color-green); font-size: 0.72rem; display: block; margin-top: 0.2rem;'><i class='fas fa-check-circle'></i> Agent{$ver_str}{$update_badge} (aktivní {$time_lbl})</span>";
                                                         }
                                                         
                                                         if (!empty($det['os']) || !empty($det['uptime']) || !empty($det['ports']) || !empty($det['processes'])): 
@@ -3295,6 +3341,36 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                 updateIcon();
             });
         })();
+    </script>
+
+    <script>
+    // Bulk maintenance - výběr monitorů
+    function toggleAllMonitors(master) {
+        document.querySelectorAll('.monitor-bulk-cb').forEach(cb => cb.checked = master.checked);
+        updateBulkUI();
+    }
+    function updateBulkUI() {
+        const checked = document.querySelectorAll('.monitor-bulk-cb:checked');
+        const count = checked.length;
+        const btn = document.getElementById('bulk-maint-btn');
+        const cntEl = document.getElementById('bulk-count');
+        const label = document.getElementById('bulk-selected-label');
+        btn.style.display = count > 0 ? 'inline-flex' : 'none';
+        cntEl.textContent = count;
+        label.textContent = count + ' vybráno';
+        // Sync hidden inputs in bulk form
+        const form = document.querySelector('#bulk-bar form');
+        form.querySelectorAll('input[name="bulk_ids[]"]').forEach(el => el.remove());
+        checked.forEach(cb => {
+            const inp = document.createElement('input');
+            inp.type = 'hidden'; inp.name = 'bulk_ids[]'; inp.value = cb.value;
+            form.appendChild(inp);
+        });
+    }
+    function toggleBulkBar() {
+        const bar = document.getElementById('bulk-bar');
+        bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+    }
     </script>
 
     <!-- Footer -->
