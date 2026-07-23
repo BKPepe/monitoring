@@ -16,8 +16,11 @@ require_once __DIR__ . '/db.php';
 // changes v obou místech, co ji používají - záměrně necháno na 5.5.1, dokud
 // to někdo neověří v prohlížeči (tady není jak).
 define('BK_CDN_FONTAWESOME', 'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.1/css/all.min.css');
+define('BK_CDN_FONTAWESOME_SRI', 'sha384-qrALq7+6jBOZIQsNnT6xGkMDru64qD6uTlDra39xrt2SoXl4pO3FX6Roz/RpR/BS');
 define('BK_CDN_ECHARTS', 'https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js');
+define('BK_CDN_ECHARTS_SRI', 'sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR');
 define('BK_CDN_QRCODE', 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js');
+define('BK_CDN_QRCODE_SRI', 'sha384-dykayVHnol2xD+KCZ38PbDk0WZnbP5x/sO6gOXKU3h+bodE3ILyIk1FOEfwO1hya');
 
 /**
  * Konfigurace podporovaných OAuth poskytovatelů - jedno místo pro všechny 4,
@@ -1563,8 +1566,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <title><?php echo htmlspecialchars($metric_label . ' - ' . $monitor['name'] . ' - ' . $site_title); ?></title>
     <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime(__DIR__ . '/assets/style.css'); ?>">
-    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
-    <script src="<?php echo BK_CDN_ECHARTS; ?>"></script>
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
+    <script src="<?php echo BK_CDN_ECHARTS; ?>" integrity="<?php echo BK_CDN_ECHARTS_SRI; ?>" crossorigin="anonymous"></script>
     <script>
         if (localStorage.getItem('theme') === 'light') { document.documentElement.classList.add('light-theme'); }
     </script>
@@ -5257,7 +5260,7 @@ function bk_render_totp_section($me, $site_title) {
             . '<input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></div>'
             . '<button type="submit" name="totp_confirm" class="btn"><i class="fas fa-check"></i> Potvrdit a zapnout</button>'
             . '</form>'
-            . '<script src="' . BK_CDN_QRCODE . '"></script>'
+            . '<script src="' . BK_CDN_QRCODE . '" integrity="' . BK_CDN_QRCODE_SRI . '" crossorigin="anonymous"></script>'
             . '<script>QRCode.toCanvas(document.getElementById("totp-qr"), ' . json_encode($otpauth_uri) . ', { width: 184 }, function (err) { if (err) console.error(err); });</script>';
     } else {
         $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">2FA je vypnuté. Doporučujeme ho zapnout, hlavně pokud se přihlašujete heslem (ne přes GitHub OAuth).</p>'
@@ -5354,6 +5357,47 @@ function bk_audit_log($pdo, $action, $description = '', $target_type = null, $ta
 }
 
 /**
+ * Rate limiting / lockout pro login.
+ * Vrací počet zbývajících sekund lockoutu (0 = není zamčeno).
+ * Limit: 5 neúspěšných pokusů za 15 minut → lockout 15 minut.
+ */
+function bk_login_lockout_seconds($pdo, $username) {
+    $max_attempts = 5;
+    $window_min = 15;
+    $lockout_min = 15;
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    try {
+        // Počet neúspěšných pokusů pro toto jméno NEBO tuto IP v posledním okně
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM audit_log
+            WHERE action = 'login_failed'
+              AND (actor_username = ? OR ip_address = ?)
+              AND created_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+        ");
+        $stmt->execute([$username, $ip, $window_min]);
+        $attempts = (int)$stmt->fetchColumn();
+        if ($attempts < $max_attempts) return 0;
+
+        // Najít čas posledního neúspěšného pokusu → od něj běží lockout
+        $stmt2 = $pdo->prepare("
+            SELECT created_at FROM audit_log
+            WHERE action = 'login_failed'
+              AND (actor_username = ? OR ip_address = ?)
+            ORDER BY created_at DESC LIMIT 1
+        ");
+        $stmt2->execute([$username, $ip]);
+        $last_fail = $stmt2->fetchColumn();
+        if (!$last_fail) return 0;
+
+        $lockout_end = strtotime($last_fail) + ($lockout_min * 60);
+        $remaining = $lockout_end - time();
+        return max(0, $remaining);
+    } catch (PDOException $e) {
+        return 0; // best-effort: při DB chybě nezamykat
+    }
+}
+
+/**
  * Samostatná stránka s posledními záznamy audit logu (kdo/kdy/co) - jen pro
  * admina, read-only (žádný CSRF token potřeba). Vlastní shell místo napojení
  * na hlavní admin.php šablonu, aby to nezáviselo na proměnných z hlavního
@@ -5417,7 +5461,7 @@ function bk_render_audit_log_page($pdo, $site_title) {
 
     echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Audit log | ' . htmlspecialchars($site_title) . '</title>'
         . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
-        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '" integrity="' . BK_CDN_FONTAWESOME_SRI . '" crossorigin="anonymous"></head>'
         . '<body>'
         . '<header><div class="container header-wrapper"><a href="admin.php" class="logo"><i class="fas fa-server" style="color: var(--color-red);"></i> ' . htmlspecialchars($site_title) . ' <span>Admin</span></a>'
         . '<div class="nav-links"><a href="admin.php"><i class="fas fa-arrow-left"></i> Zpět do administrace</a></div></div></header>'
@@ -5498,7 +5542,7 @@ function bk_render_forgot_password_page($pdo, $site_title) {
 
     echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Zapomenuté heslo | ' . htmlspecialchars($site_title) . '</title>'
         . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
-        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '" integrity="' . BK_CDN_FONTAWESOME_SRI . '" crossorigin="anonymous"></head>'
         . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
         . '<div class="login-wrapper" style="max-width: 380px;">' . $body_html . '</div>'
         . '</body></html>';
@@ -5563,7 +5607,7 @@ function bk_render_set_password_page($pdo, $site_title) {
 
     echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Nastavení hesla | ' . htmlspecialchars($site_title) . '</title>'
         . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
-        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '" integrity="' . BK_CDN_FONTAWESOME_SRI . '" crossorigin="anonymous"></head>'
         . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
         . '<div class="login-wrapper" style="max-width: 380px;">' . $body_html . '</div>'
         . '</body></html>';
@@ -5675,7 +5719,7 @@ function bk_render_setup_wizard($pdo, $me) {
 
     echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Dokončení instalace | ' . htmlspecialchars($site_title_current) . '</title>'
         . '<link rel="stylesheet" href="assets/style.css?v=' . filemtime(__DIR__ . '/assets/style.css') . '">'
-        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '"></head>'
+        . '<link rel="stylesheet" href="' . BK_CDN_FONTAWESOME . '" integrity="' . BK_CDN_FONTAWESOME_SRI . '" crossorigin="anonymous"></head>'
         . '<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding: 2rem 0;">'
         . '<div class="login-wrapper" style="max-width: 420px;">' . $body . '</div>'
         . '</body></html>';

@@ -142,6 +142,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
     $username = trim($_POST['username']);
     $password = $_POST['password'];
 
+    // Rate limiting: 5 neúspěšných pokusů / 15 min → lockout 15 min
+    $lockout_secs = bk_login_lockout_seconds($pdo, $username);
+    if ($lockout_secs > 0) {
+        $login_error = 'Příliš mnoho neúspěšných pokusů. Zkuste to znovu za ' . ceil($lockout_secs / 60) . ' min.';
+    } else {
+
     $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
     $stmt->execute([$username]);
     $user = $stmt->fetch();
@@ -166,6 +172,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
         bk_audit_log($pdo, 'login_failed', 'Neplatné jméno/heslo, zadané jméno: ' . $username, null, null, null, $username);
         $login_error = 'Neplatné přihlašovací údaje.';
     }
+
+    } // end lockout check
 }
 
 // Krok 2 přihlášení s 2FA - ověření 6místného kódu proti účtu, co už prošel
@@ -213,7 +221,7 @@ if (!$is_logged_in) {
         <meta charset="UTF-8">
         <title>Přihlášení | <?php echo htmlspecialchars($site_title); ?></title>
         <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime('assets/style.css'); ?>">
-        <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
+        <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
         <script>
             if (localStorage.getItem('theme') === 'light') {
                 document.documentElement.classList.add('light-theme');
@@ -578,7 +586,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     } else {
         // Kontrola a změna hesla
         if (!empty($new_pass)) {
-            if (password_verify($old_pass, $me['password_hash'])) {
+            if (strlen($new_pass) < 8) {
+                $error_msg = 'Heslo musí mít alespoň 8 znaků.';
+            } elseif (password_verify($old_pass, $me['password_hash'])) {
                 $new_hash = password_hash($new_pass, PASSWORD_BCRYPT);
                 $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, password_hash = ? WHERE id = ?");
                 $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $new_hash, $me['id']]);
@@ -725,9 +735,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                 $old_row = $stmt_old->fetch();
 
                 if (!empty($u_password)) {
+                    if (strlen($u_password) < 8) {
+                        $error_msg = 'Heslo musí mít alespoň 8 znaků.';
+                    } else {
                     $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
                     $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?");
                     $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $new_pass_hash, $u_id]);
+                    }
                 } else {
                     $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?");
                     $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $u_id]);
@@ -746,11 +760,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
             } else {
                 if (!empty($u_password)) {
                     // Admin heslo zadal ručně - uloží se rovnou, žádný pozvánkový e-mail.
+                    if (strlen($u_password) < 8) {
+                        $error_msg = 'Heslo musí mít alespoň 8 znaků.';
+                    } else {
                     $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
                     $stmt_ins = $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)");
                     $stmt_ins->execute([$u_username, $u_email, $u_phone, $u_role, $new_pass_hash]);
                     bk_audit_log($pdo, 'user_created', $u_username . ' (' . $u_role . ', heslo nastaveno adminem)', 'user', (int)$pdo->lastInsertId());
                     $success_msg = 'Nový uživatel byl úspěšně vytvořen.';
+                    }
                 } else {
                     // Heslo nevyplněné - vytvoří se s nepoužitelným placeholder hashem
                     // (nikdy se nedá uhodnout, protože žádnou plaintext hodnotu
@@ -1128,7 +1146,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
     <title>Administrace | <?php echo htmlspecialchars($site_title); ?></title>
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime('assets/style.css'); ?>">
-    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
     <style>
         /* Záložky ve formuláři nastavení */
         .settings-tabs {

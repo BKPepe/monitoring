@@ -201,8 +201,8 @@ foreach ($timeline as $ev) {
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <title><?php echo htmlspecialchars($monitor['name'] . ' — ' . $site_title); ?></title>
     <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime(__DIR__ . '/assets/style.css'); ?>">
-    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
-    <script src="<?php echo BK_CDN_ECHARTS; ?>"></script>
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
+    <script src="<?php echo BK_CDN_ECHARTS; ?>" integrity="<?php echo BK_CDN_ECHARTS_SRI; ?>" crossorigin="anonymous"></script>
     <script>if (localStorage.getItem('theme') === 'light') { document.documentElement.classList.add('light-theme'); }</script>
     <style>
         .mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 1rem; }

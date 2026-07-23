@@ -468,6 +468,8 @@ foreach ($monitors as $monitor) {
 try {
     $pdo->exec("DELETE FROM monitor_logs WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
     $pdo->exec("DELETE FROM vps_metrics WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
+    // Audit log: delší retence (90 dní) - bezpečnostní záznamy
+    $pdo->exec("DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)");
     echo "Vyčištění starých dat dokončeno.\n";
 } catch (PDOException $e) {
     echo "Chyba při čištění starých logů: " . $e->getMessage() . "\n";

@@ -238,8 +238,8 @@ $portal_url = trim(get_setting('portal_url'));
     <?php if ($custom_color !== ''): ?>
     <style>:root { --color-red: <?php echo $custom_color; ?>; }</style>
     <?php endif; ?>
-    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
-    <script src="<?php echo BK_CDN_ECHARTS; ?>"></script>
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
+    <script src="<?php echo BK_CDN_ECHARTS; ?>" integrity="<?php echo BK_CDN_ECHARTS_SRI; ?>" crossorigin="anonymous"></script>
     <script>
         if (localStorage.getItem('theme') === 'light') {
             document.documentElement.classList.add('light-theme');
