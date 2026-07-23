@@ -122,7 +122,7 @@ function ao_resolve_value($source, $details, $latest_metrics, $monitor, $pdo, $m
             'ts_clients' => isset($details['clients_online']) ? $details['clients_online'] . '/' . ($details['max_clients'] ?? '?') : null,
             'ts_voice' => $details['voice_quality'] ?? null,
             'ts_ping' => $details['ping'] ?? null,
-            'mc_players' => isset($details['players_online']) ? $details['players_online'] . '/' . ($details['max_players'] ?? '?') : null,
+            'mc_players' => isset($details['players_online']) ? ($details['players_online'] . (!empty($details['max_players']) ? '/' . $details['max_players'] : '')) : null,
             'response_time' => (function() use ($pdo, $monitor_id) {
                 try {
                     $s = $pdo->prepare("SELECT AVG(response_time) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND status = 'up'");
@@ -216,6 +216,8 @@ foreach ($timeline as $ev) {
 
 <!-- Sticky Health Bar -->
 <div class="ao-sticky-bar">
+    <span style="font-size: 0.72rem; color: var(--text-muted);"><i class="fas fa-server" style="color: var(--color-red); margin-right: 0.2rem;"></i><?php echo htmlspecialchars($site_title); ?> monitoring</span>
+    <span style="color: rgba(255,255,255,0.15);">|</span>
     <span class="ao-name"><?php echo htmlspecialchars($monitor['name']); ?></span>
     <span class="ao-pill" style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>;"><?php echo htmlspecialchars($status_label); ?></span>
     <span style="font-size: 0.75rem; color: var(--text-muted);"><?php echo $health_score; ?>/100</span>

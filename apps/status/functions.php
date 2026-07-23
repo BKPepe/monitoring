@@ -1165,14 +1165,18 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
     }
 
     try {
-        $stmt = $pdo->prepare("SELECT status, checked_at FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY checked_at ASC");
+        $stmt = $pdo->prepare("SELECT status, checked_at, error_message FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY checked_at ASC");
         $stmt->execute([$monitor_id, $days]);
         $prev_status = null;
         foreach ($stmt->fetchAll() as $row) {
             if ($prev_status !== null && $row['status'] !== $prev_status) {
+                $desc = null;
+                if ($row['status'] === 'down' && !empty($row['error_message'])) {
+                    $desc = mb_substr($row['error_message'], 0, 120);
+                }
                 $timeline[] = [
                     'event_type' => $row['status'] === 'down' ? 'status_changed_down' : 'status_changed_up',
-                    'description' => null,
+                    'description' => $desc,
                     'ts' => $row['checked_at'],
                 ];
             }
