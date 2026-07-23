@@ -1,8 +1,8 @@
 <?php
 /**
- * Level 2 - Detailní stránka monitoru (server/služba)
- * Přístup: monitor.php?id=X
- * Zobrazuje bohaté grafy, agent info, procesy, porty, timeline, insights.
+ * Asset Overview — Operations Center (Level 2)
+ * Philosophy: Status → Insights → Timeline → Charts (charts LAST).
+ * Access: monitor.php?id=X
  */
 
 require_once __DIR__ . '/functions.php';
@@ -31,7 +31,7 @@ if (!$monitor) {
 $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
 if (!is_array($details)) $details = [];
 
-// Available metrics for this monitor (check latest vps_metrics row)
+// Latest metrics row
 $registry = bk_get_metric_registry();
 $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
 $stmt_latest->execute([$monitor_id]);
@@ -46,26 +46,23 @@ if ($latest_metrics) {
     }
 }
 
-// Response time data availability
+// Response time availability
 $stmt_rt = $pdo->prepare("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)");
 $stmt_rt->execute([$monitor_id]);
 $has_response_data = ((int)$stmt_rt->fetchColumn()) > 0;
 
-// Timeline events
+// === Asset Overview data ===
+$health_score = bk_compute_asset_health_score($pdo, $monitor, $details, $latest_metrics);
+$health_dots = bk_get_30day_health_dots($pdo, $monitor_id);
+$card_profile = bk_get_type_card_profile($monitor['type']);
 $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
 
-// Asset-level aggregate timeline (only for multi-member assets)
-$asset_timeline = [];
+// Asset siblings
 $asset_siblings = [];
 if (!empty($monitor['asset_id'])) {
-    $stmt_siblings = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ?");
-    $stmt_siblings->execute([$monitor['asset_id']]);
-    if ((int)$stmt_siblings->fetchColumn() > 1) {
-        $asset_timeline = bk_get_asset_timeline($pdo, $monitor['asset_id'], 30);
-        $stmt_sib = $pdo->prepare("SELECT id, name, type, status FROM monitors WHERE asset_id = ? AND id != ?");
-        $stmt_sib->execute([$monitor['asset_id'], $monitor_id]);
-        $asset_siblings = $stmt_sib->fetchAll();
-    }
+    $stmt_sib = $pdo->prepare("SELECT id, name, type, status FROM monitors WHERE asset_id = ? AND id != ?");
+    $stmt_sib->execute([$monitor['asset_id'], $monitor_id]);
+    $asset_siblings = $stmt_sib->fetchAll();
 }
 
 // Insights
@@ -75,18 +72,125 @@ $monitor_insights = array_merge(
     bk_get_network_insights($pdo, $monitor, $details)
 );
 
-// Status color
+// Executive summary
+$exec_summary = bk_build_executive_summary($monitor, ['score' => $health_score], [], $monitor_insights, array_slice($timeline, 0, 3));
+
+// Status helpers
+$status_map = ['up' => 'ao_healthy', 'down' => 'ao_critical', 'maintenance' => 'ao_maintenance', 'unknown' => 'ao_offline'];
+$status_label = t($status_map[$monitor['status']] ?? 'ao_offline');
 $status_color = ['up' => 'var(--color-green)', 'down' => 'var(--color-red)', 'maintenance' => 'var(--color-yellow)'][$monitor['status']] ?? 'var(--text-muted)';
-$status_label = t('status_' . $monitor['status']);
+$status_bg = ['up' => 'rgba(30,199,115,0.12)', 'down' => 'rgba(193,18,31,0.12)', 'maintenance' => 'rgba(243,156,18,0.12)'][$monitor['status']] ?? 'rgba(148,163,184,0.1)';
+
+// Score ring color
+$ring_color = $health_score >= 80 ? 'var(--color-green)' : ($health_score >= 50 ? 'var(--color-yellow)' : 'var(--color-red)');
 
 // Type icon
-$type_icons = ['web' => 'fa-globe', 'port' => 'fa-network-wired', 'vps' => 'fa-server', 'minecraft' => 'fa-cube', 'teamspeak' => 'fa-headset', 'discord' => 'fa-brands fa-discord'];
+$type_icons = ['web' => 'fa-globe', 'port' => 'fa-network-wired', 'vps' => 'fa-server', 'minecraft' => 'fa-cube', 'teamspeak' => 'fa-headset', 'discord' => 'fa-brands fa-discord', 'openwrt' => 'fa-wifi'];
 $type_icon = $type_icons[$monitor['type']] ?? 'fa-circle';
 
-// Uptime duration
+// Last seen
+$last_seen_str = '';
+$agent_last_seen = $details['agent_last_seen'] ?? null;
+if ($agent_last_seen) {
+    $last_seen_str = bk_relative_time_label((int)$agent_last_seen);
+} elseif ($monitor['last_checked']) {
+    $last_seen_str = bk_relative_time_label(strtotime($monitor['last_checked']));
+}
+
+// Uptime string
 $uptime_str = '';
-if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
+if (!empty($details['uptime'])) {
+    $uptime_str = format_uptime_cz($details['uptime']);
+} elseif ($monitor['last_status_change'] && $monitor['status'] === 'up') {
     $uptime_str = format_uptime_cz(time() - strtotime($monitor['last_status_change']));
+}
+
+// Resolve card values from details
+function ao_resolve_value($source, $details, $latest_metrics, $monitor, $pdo, $monitor_id) {
+    if (str_starts_with($source, 'details.')) {
+        $path = explode('.', substr($source, 8));
+        $val = $details;
+        foreach ($path as $p) { $val = $val[$p] ?? null; if ($val === null) break; }
+        return $val;
+    }
+    if (str_starts_with($source, 'special.')) {
+        $key = substr($source, 8);
+        return match($key) {
+            'wan' => ($details['wan_status'] ?? null) ? t('ao_online') : null,
+            'wireguard' => isset($details['wireguard_peers']) ? $details['wireguard_peers'] . ' ' . t('ao_peers') : null,
+            'wifi' => isset($details['wifi_clients_total']) ? $details['wifi_clients_total'] . ' ' . t('ao_clients') : null,
+            'ts_clients' => isset($details['clients_online']) ? $details['clients_online'] . '/' . ($details['max_clients'] ?? '?') : null,
+            'ts_voice' => $details['voice_quality'] ?? null,
+            'ts_ping' => $details['ping'] ?? null,
+            'mc_players' => isset($details['players_online']) ? $details['players_online'] . '/' . ($details['max_players'] ?? '?') : null,
+            'response_time' => (function() use ($pdo, $monitor_id) {
+                try {
+                    $s = $pdo->prepare("SELECT AVG(response_time) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND status = 'up'");
+                    $s->execute([$monitor_id]);
+                    $v = $s->fetchColumn();
+                    return $v !== null ? round((float)$v) : null;
+                } catch (PDOException $e) { return null; }
+            })(),
+            'ssl_days' => $details['ssl_days_remaining'] ?? null,
+            'uptime_pct' => (function() use ($pdo, $monitor_id) {
+                try {
+                    $s = $pdo->prepare("SELECT SUM(status='up')*100.0/COUNT(*) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
+                    $s->execute([$monitor_id]);
+                    $v = $s->fetchColumn();
+                    return $v !== null ? round((float)$v, 1) : null;
+                } catch (PDOException $e) { return null; }
+            })(),
+            default => null,
+        };
+    }
+    return null;
+}
+
+// Build card data with context
+$cards_data = [];
+foreach ($card_profile as $key => $cfg) {
+    $val = ao_resolve_value($cfg['source'], $details, $latest_metrics, $monitor, $pdo, $monitor_id);
+    if ($val === null) continue;
+    $ctx = null;
+    // Get context for numeric metrics from vps_metrics
+    $metric_col_map = ['cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage', 'temperature' => 'temperature', 'load' => 'load1', 'net' => 'net_io', 'swap' => 'swap_usage', 'conntrack' => 'conntrack_pct'];
+    if (isset($metric_col_map[$key]) && is_numeric($val)) {
+        $ctx = bk_metric_context($pdo, $monitor_id, $metric_col_map[$key], (float)$val);
+    }
+    $cards_data[] = ['key' => $key, 'cfg' => $cfg, 'value' => $val, 'ctx' => $ctx];
+}
+
+// Chart configs
+$chart_configs = [];
+$metric_groups = [
+    'cpu' => ['metrics' => ['cpu', 'cpu_steal'], 'title' => 'CPU'],
+    'ram' => ['metrics' => ['ram', 'swap'], 'title' => 'RAM / Swap'],
+    'hdd' => ['metrics' => ['hdd', 'inode_usage'], 'title' => t('metric_label_hdd') . ' / Inode'],
+    'net' => ['metrics' => ['net'], 'title' => t('metric_label_net')],
+    'load' => ['metrics' => ['load1', 'load5', 'load15'], 'title' => 'Load Average'],
+    'diskio' => ['metrics' => ['disk_io_read', 'disk_io_write'], 'title' => 'Disk I/O'],
+    'iowait' => ['metrics' => ['iowait'], 'title' => 'IO Wait'],
+    'ts_clients' => ['metrics' => ['ts_clients'], 'title' => t('metric_label_ts_clients')],
+    'ts_proc' => ['metrics' => ['ts_process_cpu', 'ts_process_ram'], 'title' => 'TS3 Process'],
+];
+foreach ($metric_groups as $gid => $group) {
+    $has_data = false;
+    foreach ($group['metrics'] as $mk) {
+        if (isset($available_metrics[$mk])) { $has_data = true; break; }
+    }
+    if ($has_data) {
+        $chart_configs[] = ['id' => 'mpc_' . $gid, 'metrics' => array_values(array_intersect($group['metrics'], array_keys($available_metrics))), 'title' => $group['title']];
+    }
+}
+if ($has_response_data) {
+    $chart_configs[] = ['id' => 'mpc_response', 'metrics' => ['__response__'], 'title' => t('response_time')];
+}
+
+// Group timeline by day
+$timeline_grouped = [];
+foreach ($timeline as $ev) {
+    $day = date('Y-m-d', strtotime($ev['ts']));
+    $timeline_grouped[$day][] = $ev;
 }
 ?>
 <!DOCTYPE html>
@@ -95,7 +199,7 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/png" href="assets/favicon.png">
-    <title><?php echo htmlspecialchars($monitor['name'] . ' - ' . $site_title); ?></title>
+    <title><?php echo htmlspecialchars($monitor['name'] . ' — ' . $site_title); ?></title>
     <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime(__DIR__ . '/assets/style.css'); ?>">
     <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>">
     <script src="<?php echo BK_CDN_ECHARTS; ?>"></script>
@@ -105,335 +209,300 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
         .mp-chart-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 0.75rem; }
         .mp-chart-card h3 { font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 0.5rem 0; font-weight: 600; }
         .mp-chart-box { height: 220px; width: 100%; }
-        .mp-stat-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem 1rem; text-align: center; min-width: 100px; }
-        .mp-stat-card .val { font-size: 1.3rem; font-weight: 700; color: var(--text-primary); }
-        .mp-stat-card .lbl { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.15rem; }
-        .mp-section { margin-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem; }
-        .mp-section-title { font-size: 0.85rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem; }
-        .mp-section-title i { color: var(--text-muted); margin-right: 0.4rem; }
-        .mp-info-row { display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.78rem; }
-        .mp-info-row .k { color: var(--text-muted); }
-        .mp-info-row .v { color: var(--text-primary); font-weight: 500; }
-        .mp-uptime-bar { display: flex; gap: 2px; height: 32px; align-items: stretch; }
-        .mp-uptime-bar .day { flex: 1; border-radius: 3px; min-width: 4px; cursor: pointer; transition: transform 0.1s; }
-        .mp-uptime-bar .day:hover { transform: scaleY(1.2); }
         @media (max-width: 900px) { .mp-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
-<div class="container" style="max-width: 1100px; margin: 0 auto; padding: 1.5rem 1rem;">
 
-    <!-- Breadcrumb -->
-    <nav style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+<!-- Sticky Health Bar -->
+<div class="ao-sticky-bar">
+    <span class="ao-name"><?php echo htmlspecialchars($monitor['name']); ?></span>
+    <span class="ao-pill" style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>;"><?php echo htmlspecialchars($status_label); ?></span>
+    <span style="font-size: 0.75rem; color: var(--text-muted);"><?php echo $health_score; ?>/100</span>
+    <?php if ($last_seen_str): ?><span style="font-size: 0.72rem; color: var(--text-muted); margin-left: auto;"><?php echo htmlspecialchars(t('ao_last_seen')); ?>: <?php echo htmlspecialchars($last_seen_str); ?></span><?php endif; ?>
+</div>
+
+<div class="container" style="max-width: 1200px; margin: 0 auto; padding: 1.5rem 1rem;">
+
+    <!-- Breadcrumb + Branding -->
+    <nav style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.4rem;">
+        <a href="index.php" style="color: var(--text-muted); text-decoration: none;"><i class="fas fa-server" style="color: var(--color-red); margin-right: 0.2rem;"></i><?php echo htmlspecialchars($site_title); ?></a>
+        <span>/</span>
         <a href="index.php" style="color: var(--text-muted); text-decoration: none;"><?php echo htmlspecialchars(t('breadcrumb_dashboard')); ?></a>
-        <span style="margin: 0 0.4rem;">/</span>
-        <span style="color: var(--text-primary);"><?php echo htmlspecialchars($monitor['name']); ?></span>
+        <span>/</span>
+        <span style="color: var(--text-primary); font-weight: 600;"><?php echo htmlspecialchars($monitor['name']); ?></span>
     </nav>
 
-    <!-- Header -->
-    <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
-        <div style="width: 44px; height: 44px; border-radius: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center;">
-            <i class="fas <?php echo $type_icon; ?>" style="font-size: 1.2rem; color: <?php echo $status_color; ?>;"></i>
-        </div>
-        <div style="flex: 1;">
-            <h1 style="font-size: 1.4rem; margin: 0; color: var(--text-primary);"><?php echo htmlspecialchars($monitor['name']); ?></h1>
-            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
-                <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
-                    <span style="width: 8px; height: 8px; border-radius: 50%; background: <?php echo $status_color; ?>;"></span>
-                    <?php echo htmlspecialchars($status_label); ?>
-                </span>
-                <?php if ($uptime_str): ?> &middot; <i class="fas fa-clock"></i> <?php echo htmlspecialchars($uptime_str); ?><?php endif; ?>
-                <?php if ($monitor['type']): ?> &middot; <span style="text-transform: uppercase; font-size: 0.68rem; background: rgba(255,255,255,0.05); padding: 0.1rem 0.4rem; border-radius: 4px;"><?php echo htmlspecialchars($monitor['type']); ?></span><?php endif; ?>
-                <?php if (!empty($monitor['asset_name'])): ?> &middot; <i class="fas fa-layer-group"></i> <?php echo htmlspecialchars($monitor['asset_name']); ?><?php endif; ?>
-            </div>
-        </div>
-        <?php if ($is_admin): ?>
-            <a href="admin.php?edit=<?php echo (int)$monitor['id']; ?>" class="btn btn-secondary btn-sm" style="font-size: 0.75rem;"><i class="fas fa-pen"></i> <?php echo htmlspecialchars(t('btn_edit')); ?></a>
-        <?php endif; ?>
-    </div>
-
-    <!-- Overview stat cards -->
-    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.5rem;">
-        <?php if (isset($details['cpu'])): ?>
-            <div class="mp-stat-card"><div class="val" style="color: <?php echo $details['cpu'] > 80 ? 'var(--color-red)' : ($details['cpu'] > 50 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>;"><?php echo htmlspecialchars($details['cpu']); ?>%</div><div class="lbl">CPU</div></div>
-        <?php endif; ?>
-        <?php if (isset($details['ram'])): ?>
-            <div class="mp-stat-card"><div class="val" style="color: <?php echo $details['ram'] > 85 ? 'var(--color-red)' : ($details['ram'] > 60 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>;"><?php echo htmlspecialchars($details['ram']); ?>%</div><div class="lbl">RAM</div></div>
-        <?php endif; ?>
-        <?php if (isset($details['hdd'])): ?>
-            <div class="mp-stat-card"><div class="val" style="color: <?php echo $details['hdd'] > 90 ? 'var(--color-red)' : ($details['hdd'] > 70 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>;"><?php echo htmlspecialchars($details['hdd']); ?>%</div><div class="lbl"><?php echo htmlspecialchars(t('metric_label_hdd')); ?></div></div>
-        <?php endif; ?>
-        <?php if (isset($details['net'])): ?>
-            <div class="mp-stat-card"><div class="val"><?php echo htmlspecialchars($details['net']); ?></div><div class="lbl">KB/s</div></div>
-        <?php endif; ?>
-        <?php if ($has_response_data && $monitor['type'] !== 'vps'): ?>
-            <div class="mp-stat-card"><div class="val"><?php
-                $stmt_avg_rt = $pdo->prepare("SELECT AVG(response_time) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND status = 'up'");
-                $stmt_avg_rt->execute([$monitor_id]);
-                $avg_rt = $stmt_avg_rt->fetchColumn();
-                echo $avg_rt !== null ? round((float)$avg_rt) . ' ms' : '—';
-            ?></div><div class="lbl"><?php echo htmlspecialchars(t('response_time')); ?></div></div>
-        <?php endif; ?>
-        <?php if (isset($details['uptime'])): ?>
-            <div class="mp-stat-card"><div class="val" style="font-size: 1rem;"><?php echo htmlspecialchars(format_uptime_cz($details['uptime'])); ?></div><div class="lbl">Uptime</div></div>
-        <?php endif; ?>
-    </div>
-
-    <!-- Period switcher -->
-    <?php if (!empty($available_metrics) || $has_response_data): ?>
-    <div style="display: flex; justify-content: flex-end; margin-bottom: 0.75rem;">
-        <div style="display: flex; gap: 0.25rem;" id="mpPeriodSwitch">
-            <?php foreach (['24h', '7d', '30d'] as $p): ?>
-                <button type="button" data-period="<?php echo $p; ?>" class="btn btn-secondary btn-sm <?php echo $p === '24h' ? 'active' : ''; ?>" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_' . $p)); ?></button>
-            <?php endforeach; ?>
-        </div>
-    </div>
-
-    <!-- Charts grid -->
-    <div class="mp-grid" id="mpChartsGrid">
-        <?php
-        // Build chart configs based on available metrics
-        $chart_configs = [];
-        $metric_groups = [
-            'cpu' => ['metrics' => ['cpu', 'cpu_steal'], 'title' => 'CPU'],
-            'ram' => ['metrics' => ['ram', 'swap'], 'title' => 'RAM / Swap'],
-            'hdd' => ['metrics' => ['hdd', 'inode_usage'], 'title' => t('metric_label_hdd') . ' / Inode'],
-            'net' => ['metrics' => ['net'], 'title' => t('metric_label_net')],
-            'load' => ['metrics' => ['load1', 'load5', 'load15'], 'title' => 'Load Average'],
-            'diskio' => ['metrics' => ['disk_io_read', 'disk_io_write'], 'title' => 'Disk I/O'],
-            'iowait' => ['metrics' => ['iowait'], 'title' => 'IO Wait'],
-            'ts_clients' => ['metrics' => ['ts_clients'], 'title' => t('metric_label_ts_clients')],
-            'ts_proc' => ['metrics' => ['ts_process_cpu', 'ts_process_ram'], 'title' => 'TS3 Process'],
-        ];
-        foreach ($metric_groups as $gid => $group) {
-            $has_data = false;
-            foreach ($group['metrics'] as $mk) {
-                if (isset($available_metrics[$mk])) { $has_data = true; break; }
-            }
-            if ($has_data) {
-                $chart_configs[] = ['id' => 'mpc_' . $gid, 'metrics' => array_values(array_intersect($group['metrics'], array_keys($available_metrics))), 'title' => $group['title']];
-            }
-        }
-        // Response time chart for non-VPS monitors
-        if ($has_response_data) {
-            $chart_configs[] = ['id' => 'mpc_response', 'metrics' => ['__response__'], 'title' => t('response_time')];
-        }
-        foreach ($chart_configs as $cc):
-        ?>
-            <div class="mp-chart-card">
-                <h3><?php echo htmlspecialchars($cc['title']); ?></h3>
-                <div class="mp-chart-box" id="<?php echo $cc['id']; ?>"></div>
-            </div>
-        <?php endforeach; ?>
-    </div>
-    <?php endif; ?>
-
-    <!-- Uptime bar (30 days) -->
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-chart-simple"></i> <?php echo htmlspecialchars(t('mp_uptime_30d')); ?></div>
-        <div class="mp-uptime-bar" id="mpUptimeBar"></div>
-        <div style="display: flex; justify-content: space-between; font-size: 0.65rem; color: var(--text-muted); margin-top: 0.3rem;">
-            <span><?php echo date('d.m.', strtotime('-30 days')); ?></span>
-            <span><?php echo date('d.m.'); ?></span>
-        </div>
-    </div>
-
-    <!-- Agent info -->
-    <?php if (!empty($details['os']) || !empty($details['hostname']) || !empty($details['version'])): ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('mp_agent_info')); ?></div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0 2rem;">
-            <?php if (!empty($details['version'])): ?>
-                <?php $latest_v = bk_get_agent_latest_version($details['agent_type'] ?? ''); $has_update = $latest_v !== null && version_compare($details['version'], $latest_v, '<'); ?>
-                <div class="mp-info-row"><span class="k"><?php echo htmlspecialchars(t('mp_agent_version')); ?></span><span class="v"><?php echo htmlspecialchars($details['version']); ?><?php if ($has_update): ?> <span style="color: var(--color-yellow); font-size: 0.68rem;">(<i class="fas fa-arrow-up"></i> <?php echo htmlspecialchars($latest_v); ?>)</span><?php endif; ?></span></div>
-            <?php endif; ?>
-            <?php if (!empty($details['os'])): ?><div class="mp-info-row"><span class="k">OS</span><span class="v"><?php echo htmlspecialchars($details['os']); ?></span></div><?php endif; ?>
-            <?php if (!empty($details['hostname'])): ?><div class="mp-info-row"><span class="k">Hostname</span><span class="v"><?php echo htmlspecialchars($details['hostname']); ?></span></div><?php endif; ?>
-            <?php if (!empty($details['kernel'])): ?><div class="mp-info-row"><span class="k">Kernel</span><span class="v"><?php echo htmlspecialchars($details['kernel']); ?></span></div><?php endif; ?>
-            <?php if (!empty($details['timezone'])): ?><div class="mp-info-row"><span class="k"><?php echo htmlspecialchars(t('mp_timezone')); ?></span><span class="v"><?php echo htmlspecialchars($details['timezone']); ?></span></div><?php endif; ?>
-            <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?><div class="mp-info-row"><span class="k"><?php echo htmlspecialchars(t('mp_provider')); ?></span><span class="v"><?php echo htmlspecialchars($details['cloud_provider'] ?? '?'); ?><?php if (!empty($details['virtualization'])): ?> (<?php echo htmlspecialchars($details['virtualization']); ?>)<?php endif; ?></span></div><?php endif; ?>
-            <?php if (!empty($details['smart']) && strpos($details['smart'], 'chybí') === false && $details['smart'] !== 'N/A'): ?><div class="mp-info-row"><span class="k">SMART</span><span class="v" style="color: <?php echo strpos($details['smart'], 'WARNING') !== false ? 'var(--color-red)' : 'var(--color-green)'; ?>;"><?php echo htmlspecialchars($details['smart']); ?></span></div><?php endif; ?>
-            <?php if (!empty($details['reboot_required'])): ?><div class="mp-info-row"><span class="k"><?php echo htmlspecialchars(t('mp_reboot')); ?></span><span class="v" style="color: var(--color-yellow);"><i class="fas fa-power-off"></i> <?php echo htmlspecialchars(t('mp_reboot_needed')); ?></span></div><?php endif; ?>
-            <?php if (isset($details['temperature']) && $details['temperature'] !== null): ?><div class="mp-info-row"><span class="k"><?php echo htmlspecialchars(t('mp_temperature')); ?></span><span class="v" style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo $details['temperature']; ?>°C</span></div><?php endif; ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Discovered services -->
-    <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-cubes"></i> <?php echo htmlspecialchars(t('agent_discovered_services')); ?></div>
-        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-            <?php foreach ($details['discovered_services'] as $svc):
-                $conf = (int)($svc['confidence'] ?? 0);
-                $sc = $conf >= 70 ? 'var(--color-green)' : ($conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
-                $sbg = $conf >= 70 ? 'rgba(30,199,115,0.1)' : ($conf >= 40 ? 'rgba(243,156,18,0.1)' : 'rgba(148,163,184,0.08)');
-                $sbd = $conf >= 70 ? 'rgba(30,199,115,0.2)' : ($conf >= 40 ? 'rgba(243,156,18,0.2)' : 'rgba(148,163,184,0.15)');
-            ?>
-                <div style="background: <?php echo $sbg; ?>; border: 1px solid <?php echo $sbd; ?>; padding: 0.4rem 0.7rem; border-radius: 6px; font-size: 0.75rem; display: flex; align-items: center; gap: 0.4rem;" title="<?php echo htmlspecialchars(implode(', ', $svc['evidence'] ?? [])); ?>">
-                    <i class="fas fa-cube" style="color: <?php echo $sc; ?>;"></i>
-                    <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($svc['name'] ?? '?'); ?></strong>
-                    <?php if (!empty($svc['port'])): ?><span style="font-family: monospace; color: var(--text-muted); font-size: 0.68rem;">:<?php echo (int)$svc['port']; ?></span><?php endif; ?>
-                    <span style="color: <?php echo $sc; ?>; font-weight: bold; font-size: 0.68rem;"><?php echo $conf; ?>%</span>
+    <!-- HERO -->
+    <div class="ao-hero">
+        <div style="display: flex; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px;">
+                <h1 class="ao-hero-title"><?php echo htmlspecialchars($monitor['name']); ?></h1>
+                <div class="ao-hero-sub" style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.4rem;">
+                    <span class="ao-pill" style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase;"><i class="fas <?php echo $type_icon; ?>" style="margin-right: 0.3rem;"></i><?php echo htmlspecialchars($status_label); ?></span>
+                    <span style="font-size: 0.72rem; background: rgba(255,255,255,0.05); padding: 0.15rem 0.5rem; border-radius: 4px; text-transform: uppercase;"><?php echo htmlspecialchars($monitor['type']); ?></span>
+                    <?php if (!empty($monitor['asset_name'])): ?><span style="font-size: 0.75rem; color: var(--text-muted);"><i class="fas fa-layer-group"></i> <?php echo htmlspecialchars($monitor['asset_name']); ?></span><?php endif; ?>
+                    <?php if ($uptime_str): ?><span style="font-size: 0.75rem; color: var(--text-muted);"><i class="fas fa-clock"></i> <?php echo htmlspecialchars($uptime_str); ?></span><?php endif; ?>
                 </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
 
-    <!-- Processes -->
-    <?php
-    $monitored_str = $monitor['monitored_processes'] ?? '';
-    $monitored_arr = !empty($monitored_str) ? array_filter(array_map('trim', explode(',', $monitored_str))) : [];
-    $missing_arr = $details['missing_processes'] ?? [];
-    $has_top_procs = !empty($details['top_cpu_processes']) || !empty($details['top_ram_processes']);
-    if (!empty($monitored_arr) || $has_top_procs):
-    ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-list-check"></i> <?php echo htmlspecialchars(t('mp_processes')); ?></div>
-        <?php if (!empty($monitored_arr)): ?>
-            <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem;">
-                <?php foreach ($monitored_arr as $proc):
-                    $is_missing = in_array($proc, $missing_arr);
-                ?>
-                    <span style="background: <?php echo $is_missing ? 'rgba(193,18,31,0.1)' : 'rgba(30,199,115,0.1)'; ?>; border: 1px solid <?php echo $is_missing ? 'rgba(193,18,31,0.2)' : 'rgba(30,199,115,0.2)'; ?>; color: <?php echo $is_missing ? 'var(--color-red)' : 'var(--color-green)'; ?>; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: bold; display: inline-flex; align-items: center; gap: 0.3rem;">
-                        <i class="fas <?php echo $is_missing ? 'fa-times-circle' : 'fa-check-circle'; ?>"></i> <?php echo htmlspecialchars($proc); ?>
-                    </span>
+                <!-- Quick indicators -->
+                <div class="ao-indicators">
+                    <?php if (isset($details['cpu'])): ?>
+                        <div class="ao-indicator"><div class="val" style="color: <?php echo $details['cpu'] > 80 ? 'var(--color-red)' : ($details['cpu'] > 50 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>;"><?php echo htmlspecialchars($details['cpu']); ?>%</div><div class="lbl">CPU</div></div>
+                    <?php endif; ?>
+                    <?php if (isset($details['ram'])): ?>
+                        <div class="ao-indicator"><div class="val" style="color: <?php echo $details['ram'] > 85 ? 'var(--color-red)' : ($details['ram'] > 60 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>;"><?php echo htmlspecialchars($details['ram']); ?>%</div><div class="lbl">RAM</div></div>
+                    <?php endif; ?>
+                    <?php if (isset($details['hdd'])): ?>
+                        <div class="ao-indicator"><div class="val" style="color: <?php echo $details['hdd'] > 90 ? 'var(--color-red)' : ($details['hdd'] > 70 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>;"><?php echo htmlspecialchars($details['hdd']); ?>%</div><div class="lbl">Disk</div></div>
+                    <?php endif; ?>
+                    <?php if (isset($details['temperature'])): ?>
+                        <div class="ao-indicator"><div class="val" style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo $details['temperature']; ?>°C</div><div class="lbl">Temp</div></div>
+                    <?php endif; ?>
+                    <?php if ($has_response_data && $monitor['type'] !== 'vps'): ?>
+                        <div class="ao-indicator"><div class="val"><?php
+                            $stmt_avg_rt = $pdo->prepare("SELECT AVG(response_time) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND status = 'up'");
+                            $stmt_avg_rt->execute([$monitor_id]);
+                            $avg_rt = $stmt_avg_rt->fetchColumn();
+                            echo $avg_rt !== null ? round((float)$avg_rt) . ' ms' : '—';
+                        ?></div><div class="lbl"><?php echo htmlspecialchars(t('response_time')); ?></div></div>
+                    <?php endif; ?>
+                    <?php if (!empty($details['version'])): ?>
+                        <div class="ao-indicator"><div class="val" style="font-size: 0.9rem;"><?php echo htmlspecialchars($details['version']); ?></div><div class="lbl"><?php echo htmlspecialchars(t('ao_version')); ?></div></div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- Health Score Ring -->
+            <div style="text-align: center;">
+                <div class="ao-score-ring" style="--ao-score: <?php echo $health_score; ?>; --ao-ring-color: <?php echo $ring_color; ?>;"><?php echo $health_score; ?></div>
+                <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.4rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('ao_health_score')); ?></div>
+            </div>
+        </div>
+
+        <!-- 30-day health dots -->
+        <?php if (!empty($health_dots)): ?>
+        <div style="margin-top: 1.25rem;">
+            <div style="font-size: 0.68rem; color: var(--text-muted); margin-bottom: 0.4rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('ao_30day_health')); ?></div>
+            <div class="ao-health-dots">
+                <?php foreach ($health_dots as $dot): ?>
+                    <div class="dot <?php echo $dot['status']; ?>" title="<?php echo htmlspecialchars($dot['label'] . ' — ' . $dot['status']); ?>"></div>
                 <?php endforeach; ?>
             </div>
+        </div>
         <?php endif; ?>
-        <?php if ($has_top_procs): ?>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                <?php if (!empty($details['top_cpu_processes'])): ?>
-                    <div>
-                        <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.3rem;">TOP CPU</div>
-                        <?php foreach ($details['top_cpu_processes'] as $tp): ?>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.72rem; padding: 0.15rem 0;"><span style="color: var(--text-secondary);"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span><strong style="color: var(--text-primary);"><?php echo htmlspecialchars((string)($tp['cpu'] ?? 0)); ?>%</strong></div>
+    </div>
+
+    <!-- EXECUTIVE SUMMARY -->
+    <?php if ($exec_summary): ?>
+    <div class="ao-summary-card">
+        <i class="fas fa-lightbulb" style="color: var(--color-yellow); margin-right: 0.4rem;"></i><?php echo htmlspecialchars($exec_summary); ?>
+    </div>
+    <?php endif; ?>
+
+    <!-- LAYOUT: Main + Sidebar -->
+    <div class="ao-layout">
+        <div class="ao-main">
+
+            <!-- HEALTH CARDS -->
+            <?php if (!empty($cards_data)): ?>
+            <div class="ao-section">
+                <div class="ao-cards-grid">
+                    <?php foreach ($cards_data as $card):
+                        $trend_class = 'stable';
+                        $trend_label = t('ao_trend_stable');
+                        $ctx_line = '';
+                        if ($card['ctx']) {
+                            $trend_class = $card['ctx']['trend'];
+                            $trend_label = t('ao_trend_' . $card['ctx']['trend']);
+                            if ($card['ctx']['avg'] !== null && $card['ctx']['min'] !== null) {
+                                $ctx_line = sprintf(t('ao_normal_range'), $card['ctx']['min'] . ($card['cfg']['unit'] ?? ''), $card['ctx']['max'] . ($card['cfg']['unit'] ?? ''));
+                            }
+                            if ($card['ctx']['trend'] === 'up') $ctx_line = t('ao_higher_than_usual') . ($ctx_line ? ' · ' . $ctx_line : '');
+                            elseif ($card['ctx']['trend'] === 'down') $ctx_line = t('ao_lower_than_usual') . ($ctx_line ? ' · ' . $ctx_line : '');
+                        }
+                        // Format display value
+                        $display_val = $card['value'];
+                        if ($card['cfg']['unit'] === 's' && is_numeric($display_val)) {
+                            $display_val = format_uptime_cz((int)$display_val);
+                        } elseif (is_numeric($display_val) && $card['cfg']['unit'] !== '') {
+                            $display_val = $display_val . $card['cfg']['unit'];
+                        }
+                    ?>
+                    <div class="ao-card" onclick="location.href='index.php?view=metric&monitor=<?php echo (int)$monitor_id; ?>&metric=<?php echo htmlspecialchars($card['key']); ?>'">
+                        <div class="ao-card-icon"><i class="fas <?php echo $card['cfg']['icon']; ?>"></i></div>
+                        <div class="ao-card-val"><?php echo htmlspecialchars((string)$display_val); ?></div>
+                        <div class="ao-card-label"><?php echo htmlspecialchars($card['cfg']['label']); ?></div>
+                        <?php if ($card['ctx']): ?>
+                            <div class="ao-card-trend <?php echo $trend_class; ?>"><i class="fas fa-arrow-<?php echo $trend_class === 'up' ? 'up' : ($trend_class === 'down' ? 'down' : 'right'); ?>"></i> <?php echo htmlspecialchars($trend_label); ?></div>
+                            <?php if ($ctx_line): ?><div class="ao-card-ctx"><?php echo htmlspecialchars($ctx_line); ?></div><?php endif; ?>
+                        <?php endif; ?>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <!-- TIMELINE -->
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-timeline"></i> <?php echo htmlspecialchars(t('ao_timeline')); ?></div>
+                <?php if (empty($timeline_grouped)): ?>
+                    <p style="font-size: 0.82rem; color: var(--text-muted);"><?php echo htmlspecialchars(t('ao_no_events')); ?></p>
+                <?php else: ?>
+                    <?php
+                    $today = date('Y-m-d');
+                    $yesterday = date('Y-m-d', strtotime('-1 day'));
+                    foreach (array_slice($timeline_grouped, 0, 7, true) as $day => $events):
+                        if ($day === $today) $day_label = t('ao_today');
+                        elseif ($day === $yesterday) $day_label = t('ao_yesterday');
+                        else $day_label = sprintf(t('ao_days_ago'), (int)((strtotime($today) - strtotime($day)) / 86400));
+                    ?>
+                    <div class="ao-timeline-group">
+                        <div class="ao-timeline-date"><?php echo htmlspecialchars($day_label); ?> <span style="font-weight: 400; opacity: 0.6;">(<?php echo date('j.n.', strtotime($day)); ?>)</span></div>
+                        <?php foreach ($events as $ev):
+                            $ev_label_key = 'timeline_event_' . $ev['event_type'];
+                            $ev_label = t($ev_label_key);
+                            if ($ev_label === $ev_label_key) $ev_label = $ev['description'] ?: $ev['event_type'];
+                            $ev_icons = ['status_up' => 'fa-circle-check', 'status_down' => 'fa-circle-xmark', 'agent_connected' => 'fa-plug-circle-check', 'agent_disconnected' => 'fa-plug-circle-xmark', 'scheme_upgraded' => 'fa-arrow-up', 'cert_renewed' => 'fa-certificate', 'service_discovered' => 'fa-cube', 'service_lost' => 'fa-cube', 'maintenance_start' => 'fa-tools', 'maintenance_end' => 'fa-check-double', 'cpu_spike' => 'fa-fire', 'wan_reconnect' => 'fa-rotate'];
+                            $ev_icon = $ev_icons[$ev['event_type']] ?? 'fa-circle-info';
+                            $ev_color = str_contains($ev['event_type'], 'down') || str_contains($ev['event_type'], 'lost') || str_contains($ev['event_type'], 'disconnected') || str_contains($ev['event_type'], 'spike') ? 'var(--color-red)' : (str_contains($ev['event_type'], 'up') || str_contains($ev['event_type'], 'connected') || str_contains($ev['event_type'], 'discovered') ? 'var(--color-green)' : 'var(--text-muted)');
+                        ?>
+                        <div class="ao-timeline-item">
+                            <span class="time"><?php echo date('H:i', strtotime($ev['ts'])); ?></span>
+                            <i class="fas <?php echo $ev_icon; ?>" style="color: <?php echo $ev_color; ?>; margin-top: 0.15rem;"></i>
+                            <span class="desc"><?php echo htmlspecialchars($ev_label); ?><?php if (!empty($ev['description']) && $ev_label !== $ev['description']): ?> <span style="color: var(--text-muted); font-size: 0.72rem;">— <?php echo htmlspecialchars($ev['description']); ?></span><?php endif; ?></span>
+                        </div>
                         <?php endforeach; ?>
                     </div>
-                <?php endif; ?>
-                <?php if (!empty($details['top_ram_processes'])): ?>
-                    <div>
-                        <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.3rem;">TOP RAM</div>
-                        <?php foreach ($details['top_ram_processes'] as $tp): ?>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.72rem; padding: 0.15rem 0;"><span style="color: var(--text-secondary);"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span><strong style="color: var(--text-primary);"><?php echo htmlspecialchars((string)($tp['ram_mb'] ?? 0)); ?> MB</strong></div>
-                        <?php endforeach; ?>
-                    </div>
+                    <?php endforeach; ?>
                 <?php endif; ?>
             </div>
-        <?php endif; ?>
-    </div>
-    <?php endif; ?>
 
-    <!-- Active ports -->
-    <?php if (!empty($details['ports'])):
-        $ports_arr = is_array($details['ports']) ? $details['ports'] : array_filter(array_map('trim', explode(',', $details['ports'])));
-    ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-plug"></i> <?php echo htmlspecialchars(t('mp_ports')); ?></div>
-        <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
-            <?php foreach ($ports_arr as $p): ?>
-                <span style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 0.72rem; font-family: monospace; font-weight: bold;"><?php echo htmlspecialchars($p); ?></span>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Events timeline -->
-    <?php if (!empty($timeline)): ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-timeline"></i> <?php echo htmlspecialchars(t('mp_timeline')); ?></div>
-        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-            <?php foreach (array_slice($timeline, 0, 15) as $ev):
-                $ev_label_key = 'timeline_event_' . $ev['event_type'];
-                $ev_label = t($ev_label_key);
-                if ($ev_label === $ev_label_key) $ev_label = $ev['description'] ?: $ev['event_type'];
-                $ev_icons = ['status_up' => 'fa-circle-check', 'status_down' => 'fa-circle-xmark', 'agent_connected' => 'fa-plug-circle-check', 'agent_disconnected' => 'fa-plug-circle-xmark', 'scheme_upgraded' => 'fa-arrow-up', 'cert_renewed' => 'fa-certificate', 'service_discovered' => 'fa-cube', 'service_lost' => 'fa-cube'];
-                $ev_icon = $ev_icons[$ev['event_type']] ?? 'fa-circle-info';
-                $ev_color = str_contains($ev['event_type'], 'down') || str_contains($ev['event_type'], 'lost') || str_contains($ev['event_type'], 'disconnected') ? 'var(--color-red)' : (str_contains($ev['event_type'], 'up') || str_contains($ev['event_type'], 'connected') || str_contains($ev['event_type'], 'discovered') ? 'var(--color-green)' : 'var(--text-muted)');
-            ?>
-                <div style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.78rem;">
-                    <i class="fas <?php echo $ev_icon; ?>" style="color: <?php echo $ev_color; ?>; width: 16px; text-align: center;"></i>
-                    <span style="color: var(--text-secondary); flex: 1;"><?php echo htmlspecialchars($ev_label); ?></span>
-                    <span style="color: var(--text-muted); font-size: 0.7rem; white-space: nowrap;"><?php echo htmlspecialchars(bk_relative_time_label($ev['ts'])); ?></span>
+            <!-- TRENDS (Charts) -->
+            <?php if (!empty($chart_configs)): ?>
+            <div class="ao-section">
+                <div class="ao-section-title" style="justify-content: space-between;">
+                    <span><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('ao_trends')); ?></span>
+                    <div style="display: flex; gap: 0.25rem;" id="mpPeriodSwitch">
+                        <?php foreach (['24h', '7d', '30d'] as $p): ?>
+                            <button type="button" data-period="<?php echo $p; ?>" class="btn btn-secondary btn-sm <?php echo $p === '24h' ? 'active' : ''; ?>" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_' . $p)); ?></button>
+                        <?php endforeach; ?>
+                    </div>
                 </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Asset Timeline (multi-member assets only) -->
-    <?php if (!empty($asset_timeline)): ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-layer-group"></i> <?php echo htmlspecialchars(t('mp_asset_timeline')); ?> <span style="font-weight: 400; font-size: 0.72rem; color: var(--text-muted);">(<?php echo htmlspecialchars($monitor['asset_name']); ?>)</span></div>
-        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-            <?php foreach (array_slice($asset_timeline, 0, 20) as $ev):
-                $ev_label_key = 'timeline_event_' . $ev['event_type'];
-                $ev_label = t($ev_label_key);
-                if ($ev_label === $ev_label_key) $ev_label = $ev['description'] ?: $ev['event_type'];
-                $ev_icons = ['status_up' => 'fa-circle-check', 'status_down' => 'fa-circle-xmark', 'agent_connected' => 'fa-plug-circle-check', 'agent_disconnected' => 'fa-plug-circle-xmark', 'service_discovered' => 'fa-cube', 'service_lost' => 'fa-cube', 'remote_action' => 'fa-terminal'];
-                $ev_icon = $ev_icons[$ev['event_type']] ?? 'fa-circle-info';
-                $ev_color = str_contains($ev['event_type'], 'down') || str_contains($ev['event_type'], 'lost') || str_contains($ev['event_type'], 'disconnected') ? 'var(--color-red)' : (str_contains($ev['event_type'], 'up') || str_contains($ev['event_type'], 'connected') || str_contains($ev['event_type'], 'discovered') ? 'var(--color-green)' : 'var(--text-muted)');
-            ?>
-                <div style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.78rem;">
-                    <i class="fas <?php echo $ev_icon; ?>" style="color: <?php echo $ev_color; ?>; width: 16px; text-align: center;"></i>
-                    <span style="color: var(--text-secondary); flex: 1;"><?php echo htmlspecialchars($ev_label); ?>
-                        <span style="color: var(--text-muted); font-size: 0.68rem; margin-left: 0.3rem;"><?php echo htmlspecialchars($ev['monitor_name'] ?? ''); ?></span>
-                    </span>
-                    <span style="color: var(--text-muted); font-size: 0.7rem; white-space: nowrap;"><?php echo htmlspecialchars(bk_relative_time_label($ev['ts'])); ?></span>
+                <div class="mp-grid" id="mpChartsGrid">
+                    <?php foreach ($chart_configs as $cc): ?>
+                        <div class="mp-chart-card">
+                            <h3><?php echo htmlspecialchars($cc['title']); ?></h3>
+                            <div class="mp-chart-box" id="<?php echo $cc['id']; ?>"></div>
+                        </div>
+                    <?php endforeach; ?>
                 </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
+            </div>
+            <?php endif; ?>
 
-    <!-- Sibling monitors in same asset -->
-    <?php if (!empty($asset_siblings)): ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-object-group"></i> <?php echo htmlspecialchars(t('mp_asset_siblings')); ?></div>
-        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+            <!-- DIAGNOSTICS / INSIGHTS -->
+            <?php if (!empty($monitor_insights)): ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-stethoscope"></i> <?php echo htmlspecialchars(t('ao_diagnostics')); ?></div>
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 1rem 1.25rem;">
+                    <?php foreach ($monitor_insights as $ins):
+                        $sev = $ins['severity'] ?? 'info';
+                        $icon_cls = $sev === 'critical' ? 'icon-crit' : ($sev === 'warn' ? 'icon-warn' : 'icon-ok');
+                        $icon_fa = $sev === 'critical' ? 'fa-circle-exclamation' : ($sev === 'warn' ? 'fa-triangle-exclamation' : 'fa-circle-check');
+                    ?>
+                    <div class="ao-insight-item">
+                        <i class="fas <?php echo $icon_fa; ?> <?php echo $icon_cls; ?>"></i>
+                        <span><?php echo htmlspecialchars($ins['text'] ?? ''); ?></span>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <!-- CONFIGURATION -->
+            <?php if (!empty($details['os']) || !empty($details['hostname']) || !empty($details['kernel'])): ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-gear"></i> <?php echo htmlspecialchars(t('ao_configuration')); ?></div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 2rem; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 1rem 1.25rem;">
+                    <?php if (!empty($details['hostname'])): ?><div class="ao-sidebar-row"><span class="k">Hostname</span><span class="v"><?php echo htmlspecialchars($details['hostname']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['os'])): ?><div class="ao-sidebar-row"><span class="k">OS</span><span class="v"><?php echo htmlspecialchars($details['os']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['kernel'])): ?><div class="ao-sidebar-row"><span class="k">Kernel</span><span class="v"><?php echo htmlspecialchars($details['kernel']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['model'])): ?><div class="ao-sidebar-row"><span class="k">Model</span><span class="v"><?php echo htmlspecialchars($details['model']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['architecture'])): ?><div class="ao-sidebar-row"><span class="k">Arch</span><span class="v"><?php echo htmlspecialchars($details['architecture']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?><div class="ao-sidebar-row"><span class="k">Provider</span><span class="v"><?php echo htmlspecialchars(($details['cloud_provider'] ?? '') . (!empty($details['virtualization']) ? ' (' . $details['virtualization'] . ')' : '')); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['timezone'])): ?><div class="ao-sidebar-row"><span class="k">TZ</span><span class="v"><?php echo htmlspecialchars($details['timezone']); ?></span></div><?php endif; ?>
+                    <?php if (isset($details['temperature'])): ?><div class="ao-sidebar-row"><span class="k">Temp</span><span class="v" style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo $details['temperature']; ?>°C</span></div><?php endif; ?>
+                    <?php if (!empty($details['smart']) && strpos($details['smart'], 'chybí') === false && $details['smart'] !== 'N/A'): ?><div class="ao-sidebar-row"><span class="k">SMART</span><span class="v" style="color: <?php echo strpos($details['smart'], 'WARNING') !== false ? 'var(--color-red)' : 'var(--color-green)'; ?>;"><?php echo htmlspecialchars($details['smart']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['reboot_required'])): ?><div class="ao-sidebar-row"><span class="k">Reboot</span><span class="v" style="color: var(--color-yellow);"><i class="fas fa-power-off"></i> Required</span></div><?php endif; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <!-- RELATED SERVICES -->
+            <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-cubes"></i> <?php echo htmlspecialchars(t('ao_related_services')); ?></div>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                    <?php foreach ($details['discovered_services'] as $svc):
+                        $conf = (int)($svc['confidence'] ?? 0);
+                        $sc = $conf >= 70 ? 'var(--color-green)' : ($conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
+                    ?>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); padding: 0.4rem 0.7rem; border-radius: 6px; font-size: 0.75rem; display: flex; align-items: center; gap: 0.4rem;">
+                        <i class="fas fa-cube" style="color: <?php echo $sc; ?>;"></i>
+                        <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($svc['name'] ?? '?'); ?></strong>
+                        <?php if (!empty($svc['port'])): ?><span style="font-family: monospace; color: var(--text-muted); font-size: 0.68rem;">:<?php echo (int)$svc['port']; ?></span><?php endif; ?>
+                        <span style="color: <?php echo $sc; ?>; font-weight: bold; font-size: 0.68rem;"><?php echo $conf; ?>%</span>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
+        </div><!-- /.ao-main -->
+
+        <!-- SIDEBAR -->
+        <div class="ao-sidebar">
+            <!-- Quick Actions -->
+            <div class="ao-sidebar-title"><?php echo htmlspecialchars(t('ao_quick_actions')); ?></div>
+            <?php if ($is_admin): ?>
+                <a href="admin.php?edit=<?php echo (int)$monitor['id']; ?>" class="ao-sidebar-btn"><i class="fas fa-pen"></i> <?php echo htmlspecialchars(t('btn_edit')); ?></a>
+                <a href="admin.php?restart=<?php echo (int)$monitor['id']; ?>" class="ao-sidebar-btn" onclick="return confirm('Restart monitor?')"><i class="fas fa-rotate"></i> <?php echo htmlspecialchars(t('ao_restart_monitor')); ?></a>
+            <?php endif; ?>
+            <a href="api.php?action=export_csv&monitor_id=<?php echo (int)$monitor_id; ?>" class="ao-sidebar-btn"><i class="fas fa-download"></i> <?php echo htmlspecialchars(t('ao_export_csv')); ?></a>
+            <a href="index.php" class="ao-sidebar-btn"><i class="fas fa-arrow-left"></i> <?php echo htmlspecialchars(t('breadcrumb_dashboard')); ?></a>
+
+            <!-- Agent info -->
+            <?php if (!empty($details['version']) || $last_seen_str): ?>
+            <div class="ao-sidebar-title" style="margin-top: 1.25rem;"><?php echo htmlspecialchars(t('ao_agent_info')); ?></div>
+            <?php if (!empty($details['version'])): ?>
+                <?php $latest_v = bk_get_agent_latest_version($details['agent_type'] ?? ''); $has_update = $latest_v !== null && version_compare($details['version'], $latest_v, '<'); ?>
+                <div class="ao-sidebar-row"><span class="k"><?php echo htmlspecialchars(t('ao_version')); ?></span><span class="v"><?php echo htmlspecialchars($details['version']); ?><?php if ($has_update): ?> <span style="color: var(--color-yellow); font-size: 0.65rem;">→ <?php echo htmlspecialchars($latest_v); ?></span><?php endif; ?></span></div>
+            <?php endif; ?>
+            <?php if ($last_seen_str): ?><div class="ao-sidebar-row"><span class="k"><?php echo htmlspecialchars(t('ao_last_seen')); ?></span><span class="v"><?php echo htmlspecialchars($last_seen_str); ?></span></div><?php endif; ?>
+            <?php if (!empty($details['agent_type'])): ?><div class="ao-sidebar-row"><span class="k">Type</span><span class="v"><?php echo htmlspecialchars($details['agent_type']); ?></span></div><?php endif; ?>
+            <?php endif; ?>
+
+            <!-- Asset siblings -->
+            <?php if (!empty($asset_siblings)): ?>
+            <div class="ao-sidebar-title" style="margin-top: 1.25rem;"><?php echo htmlspecialchars(t('mp_asset_siblings')); ?></div>
             <?php foreach ($asset_siblings as $sib):
                 $sib_color = ['up' => 'var(--color-green)', 'down' => 'var(--color-red)', 'maintenance' => 'var(--color-yellow)'][$sib['status']] ?? 'var(--text-muted)';
             ?>
-                <a href="monitor.php?id=<?php echo (int)$sib['id']; ?>" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.35rem 0.65rem; font-size: 0.75rem; color: var(--text-secondary); text-decoration: none; display: flex; align-items: center; gap: 0.35rem;">
+                <a href="monitor.php?id=<?php echo (int)$sib['id']; ?>" class="ao-sidebar-btn" style="text-align: left; display: flex; align-items: center; gap: 0.4rem;">
                     <span style="width:7px;height:7px;border-radius:50%;background:<?php echo $sib_color; ?>;flex-shrink:0;"></span>
                     <?php echo htmlspecialchars($sib['name']); ?>
                 </a>
             <?php endforeach; ?>
+            <?php endif; ?>
         </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Insights -->
-    <?php if (!empty($monitor_insights)): ?>
-    <div class="mp-section">
-        <?php echo render_insights_panel($monitor_insights); ?>
-    </div>
-    <?php endif; ?>
-
-    <!-- Related metrics (links to Level 3) -->
-    <?php if (!empty($available_metrics)): ?>
-    <div class="mp-section">
-        <div class="mp-section-title"><i class="fas fa-diagram-project"></i> <?php echo htmlspecialchars(t('related_metrics_heading')); ?></div>
-        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-            <?php foreach ($available_metrics as $rkey => $rmeta):
-                $rval = $latest_metrics[$rmeta['column']] ?? null;
-            ?>
-                <a href="index.php?view=metric&monitor=<?php echo (int)$monitor['id']; ?>&metric=<?php echo htmlspecialchars($rkey); ?>" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.35rem 0.65rem; font-size: 0.75rem; color: var(--text-secondary); text-decoration: none; display: flex; align-items: center; gap: 0.35rem;">
-                    <?php echo htmlspecialchars(t($rmeta['label_key'])); ?>
-                    <?php if ($rval !== null): ?><strong style="color: var(--text-primary); font-size: 0.72rem;"><?php echo round((float)$rval, 1); ?><?php echo htmlspecialchars($rmeta['unit']); ?></strong><?php endif; ?>
-                </a>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
+    </div><!-- /.ao-layout -->
 
 </div>
 
 <script>
 (function () {
     var monitorId = <?php echo (int)$monitor_id; ?>;
-    var chartConfigs = <?php echo json_encode($chart_configs ?? []); ?>;
+    var chartConfigs = <?php echo json_encode($chart_configs); ?>;
     var charts = {};
     var currentPeriod = '24h';
     var isDark = localStorage.getItem('theme') !== 'light';
@@ -444,11 +513,8 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
             var el = document.getElementById(cfg.id);
             if (el) charts[cfg.id] = echarts.init(el, isDark ? 'dark' : null);
         });
-        // Synchronized crosshairs - all charts show same timestamp on hover
         var chartInstances = Object.values(charts);
-        if (chartInstances.length > 1) {
-            echarts.connect(chartInstances);
-        }
+        if (chartInstances.length > 1) echarts.connect(chartInstances);
     }
 
     function loadChart(cfg, period) {
@@ -511,24 +577,6 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
         chartConfigs.forEach(function (cfg) { loadChart(cfg, period); });
     }
 
-    function loadUptimeBar() {
-        fetch('api.php?action=status_history&monitor_id=' + monitorId + '&days=30')
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                var bar = document.getElementById('mpUptimeBar');
-                if (!bar || !data.days) return;
-                bar.innerHTML = '';
-                data.days.forEach(function (d) {
-                    var el = document.createElement('div');
-                    el.className = 'day';
-                    var pct = d.uptime_pct;
-                    el.style.background = pct >= 99 ? 'var(--color-green)' : (pct >= 90 ? 'var(--color-yellow)' : 'var(--color-red)');
-                    el.title = d.date + ' — ' + pct.toFixed(1) + '% uptime' + (d.avg_response ? ' — ' + d.avg_response + ' ms' : '');
-                    bar.appendChild(el);
-                });
-            }).catch(function () {});
-    }
-
     // Period switcher
     var switcher = document.getElementById('mpPeriodSwitch');
     if (switcher) {
@@ -545,7 +593,6 @@ if ($monitor['last_status_change'] && $monitor['status'] === 'up') {
 
     initCharts();
     loadAllCharts('24h');
-    loadUptimeBar();
 
     // Auto-refresh every 60s
     setInterval(function () { loadAllCharts(currentPeriod); }, 60000);

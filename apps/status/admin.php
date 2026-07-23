@@ -230,8 +230,16 @@ if (!$is_logged_in) {
                 <div class="alert alert-danger"><?php echo $login_error; ?></div>
             <?php endif; ?>
             <?php if (!empty($_SESSION['pending_2fa_user_id'])): ?>
+                <?php
+                    // Username pro password managery (1Password, iCloud Keychain, Bitwarden)
+                    // aby věděly, ke kterému účtu TOTP kód patří a mohly ho auto-fillnout.
+                    $stmt_2fa_u = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+                    $stmt_2fa_u->execute([$_SESSION['pending_2fa_user_id']]);
+                    $pending_username = $stmt_2fa_u->fetchColumn() ?: '';
+                ?>
                 <form action="admin.php" method="POST">
                     <?php echo bk_csrf_field(); ?>
+                    <input type="hidden" name="username" value="<?php echo htmlspecialchars($pending_username); ?>" autocomplete="username">
                     <div class="form-group">
                         <label for="totp_code">6místný kód z autentikační aplikace</label>
                         <input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autofocus autocomplete="one-time-code">

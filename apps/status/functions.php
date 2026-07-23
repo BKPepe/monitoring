@@ -3927,6 +3927,175 @@ function bk_infra_score($availability, $avg_latency_ms, $incident_count, $expiri
 }
 
 /**
+ * Asset Overview - univerzální health score (0-100) pro libovolný typ monitoru.
+ * Váhy: uptime 30%, thresholdy 30%, konektivita 20%, čerstvost dat 20%.
+ */
+function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_metrics) {
+    $score = 0.0;
+
+    // 1. Uptime (30%) - z posledních 30 dní
+    try {
+        $stmt = $pdo->prepare("SELECT SUM(status='up') as up_cnt, COUNT(*) as total FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status != 'maintenance'");
+        $stmt->execute([$monitor['id']]);
+        $row = $stmt->fetch();
+        $uptime_pct = ($row && $row['total'] > 0) ? ($row['up_cnt'] / $row['total']) * 100 : 100;
+    } catch (PDOException $e) { $uptime_pct = 100; }
+    $score += min(100, $uptime_pct) * 0.30;
+
+    // 2. Thresholdy (30%) - CPU/RAM/HDD pod limity
+    $threshold_score = 100;
+    $cpu_thresh = (float)($monitor['cpu_threshold'] ?? 90);
+    $ram_thresh = (float)($monitor['ram_threshold'] ?? 90);
+    $hdd_thresh = (float)($monitor['hdd_threshold'] ?? 95);
+    $cpu_val = $details['cpu'] ?? null;
+    $ram_val = $details['ram'] ?? null;
+    $hdd_val = $details['hdd'] ?? null;
+    $violations = 0;
+    if ($cpu_val !== null && $cpu_val > $cpu_thresh) $violations++;
+    if ($ram_val !== null && $ram_val > $ram_thresh) $violations++;
+    if ($hdd_val !== null && $hdd_val > $hdd_thresh) $violations++;
+    $threshold_score = max(0, 100 - $violations * 33);
+    $score += $threshold_score * 0.30;
+
+    // 3. Konektivita (20%) - aktuální status
+    $status_score = match($monitor['status']) {
+        'up' => 100,
+        'maintenance' => 80,
+        'unknown' => 50,
+        default => 0,
+    };
+    $score += $status_score * 0.20;
+
+    // 4. Čerstvost (20%) - jak dávno agent/check reportoval
+    $freshness = 100;
+    $last_seen = $details['agent_last_seen'] ?? null;
+    if ($last_seen) {
+        $age_min = (time() - (int)$last_seen) / 60;
+        if ($age_min > 30) $freshness = 30;
+        elseif ($age_min > 10) $freshness = 60;
+        elseif ($age_min > 5) $freshness = 80;
+    } elseif ($monitor['last_checked']) {
+        $age_min = (time() - strtotime($monitor['last_checked'])) / 60;
+        if ($age_min > 30) $freshness = 30;
+        elseif ($age_min > 10) $freshness = 60;
+    }
+    $score += $freshness * 0.20;
+
+    return (int)round(min(100, max(0, $score)));
+}
+
+/**
+ * Asset Overview - kontext metriky (průměr/min/max za 24h, trend, top proces).
+ */
+function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
+    $ctx = ['avg' => null, 'min' => null, 'max' => null, 'trend' => 'stable', 'top_process' => null];
+    try {
+        $stmt = $pdo->prepare("SELECT AVG($metric_column) as avg_v, MIN($metric_column) as min_v, MAX($metric_column) as max_v FROM vps_metrics WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND $metric_column IS NOT NULL");
+        $stmt->execute([$monitor_id]);
+        $row = $stmt->fetch();
+        if ($row && $row['avg_v'] !== null) {
+            $ctx['avg'] = round((float)$row['avg_v'], 1);
+            $ctx['min'] = round((float)$row['min_v'], 1);
+            $ctx['max'] = round((float)$row['max_v'], 1);
+            // Trend: current vs avg
+            if ($current_value !== null && $ctx['avg'] > 0) {
+                $ratio = $current_value / $ctx['avg'];
+                if ($ratio > 1.3) $ctx['trend'] = 'up';
+                elseif ($ratio < 0.7) $ctx['trend'] = 'down';
+            }
+        }
+    } catch (PDOException $e) { /* best-effort */ }
+    return $ctx;
+}
+
+/**
+ * Asset Overview - 30 denních teček zdraví (zelená/žlutá/červená).
+ */
+function bk_get_30day_health_dots($pdo, $monitor_id) {
+    $dots = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT DATE(checked_at) as d,
+                   SUM(status = 'down') as down_cnt,
+                   SUM(status = 'maintenance') as maint_cnt,
+                   COUNT(*) as total
+            FROM monitor_logs
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY DATE(checked_at) ORDER BY d ASC
+        ");
+        $stmt->execute([$monitor_id]);
+        $by_date = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $by_date[$row['d']] = $row;
+        }
+        for ($i = 29; $i >= 0; $i--) {
+            $date = date('Y-m-d', strtotime("-$i days"));
+            $label = date('j.n.', strtotime($date));
+            if (isset($by_date[$date])) {
+                $r = $by_date[$date];
+                if ($r['down_cnt'] > 0) $status = 'down';
+                elseif ($r['maint_cnt'] > 0 && $r['maint_cnt'] >= $r['total'] * 0.5) $status = 'maintenance';
+                else $status = 'up';
+            } else {
+                $status = 'none';
+            }
+            $dots[] = ['date' => $date, 'label' => $label, 'status' => $status];
+        }
+    } catch (PDOException $e) { /* best-effort */ }
+    return $dots;
+}
+
+/**
+ * Asset Overview - profil karet pro daný typ monitoru.
+ * Vrací pole ['key' => ['icon'=>, 'label_key'=>, 'source'=>]]
+ */
+function bk_get_type_card_profile($type) {
+    $profiles = [
+        'openwrt' => [
+            'cpu' => ['icon' => 'fa-microchip', 'label' => 'CPU', 'source' => 'details.cpu', 'unit' => '%'],
+            'ram' => ['icon' => 'fa-memory', 'label' => 'RAM', 'source' => 'details.ram', 'unit' => '%'],
+            'hdd' => ['icon' => 'fa-hard-drive', 'label' => 'Flash', 'source' => 'details.hdd', 'unit' => '%'],
+            'temperature' => ['icon' => 'fa-temperature-half', 'label' => 'Teplota', 'source' => 'details.temperature', 'unit' => '°C'],
+            'wan' => ['icon' => 'fa-earth-europe', 'label' => 'WAN', 'source' => 'special.wan', 'unit' => ''],
+            'wireguard' => ['icon' => 'fa-shield-halved', 'label' => 'WireGuard', 'source' => 'special.wireguard', 'unit' => ''],
+            'wifi_clients' => ['icon' => 'fa-wifi', 'label' => 'Wi-Fi', 'source' => 'special.wifi', 'unit' => ''],
+            'conntrack' => ['icon' => 'fa-table-list', 'label' => 'Conntrack', 'source' => 'details.conntrack_pct', 'unit' => '%'],
+        ],
+        'vps' => [
+            'cpu' => ['icon' => 'fa-microchip', 'label' => 'CPU', 'source' => 'details.cpu', 'unit' => '%'],
+            'ram' => ['icon' => 'fa-memory', 'label' => 'RAM', 'source' => 'details.ram', 'unit' => '%'],
+            'hdd' => ['icon' => 'fa-hard-drive', 'label' => 'Disk', 'source' => 'details.hdd', 'unit' => '%'],
+            'load' => ['icon' => 'fa-gauge-high', 'label' => 'Load', 'source' => 'details.load1', 'unit' => ''],
+            'net' => ['icon' => 'fa-network-wired', 'label' => 'Síť', 'source' => 'details.net', 'unit' => ' KB/s'],
+            'temperature' => ['icon' => 'fa-temperature-half', 'label' => 'Teplota', 'source' => 'details.temperature', 'unit' => '°C'],
+            'swap' => ['icon' => 'fa-arrows-rotate', 'label' => 'Swap', 'source' => 'details.swap', 'unit' => '%'],
+            'uptime' => ['icon' => 'fa-clock', 'label' => 'Uptime', 'source' => 'details.uptime', 'unit' => 's'],
+        ],
+        'teamspeak' => [
+            'clients' => ['icon' => 'fa-users', 'label' => 'Klienti', 'source' => 'special.ts_clients', 'unit' => ''],
+            'voice' => ['icon' => 'fa-volume-high', 'label' => 'Voice', 'source' => 'special.ts_voice', 'unit' => ''],
+            'ping' => ['icon' => 'fa-signal', 'label' => 'Ping', 'source' => 'special.ts_ping', 'unit' => ' ms'],
+            'process_cpu' => ['icon' => 'fa-microchip', 'label' => 'CPU TS3', 'source' => 'details.ts3_process.cpu', 'unit' => '%'],
+            'process_ram' => ['icon' => 'fa-memory', 'label' => 'RAM TS3', 'source' => 'details.ts3_process.ram_mb', 'unit' => ' MB'],
+            'uptime' => ['icon' => 'fa-clock', 'label' => 'Uptime', 'source' => 'details.uptime', 'unit' => 's'],
+        ],
+        'minecraft' => [
+            'players' => ['icon' => 'fa-users', 'label' => 'Hráči', 'source' => 'special.mc_players', 'unit' => ''],
+            'version' => ['icon' => 'fa-code-branch', 'label' => 'Verze', 'source' => 'details.version', 'unit' => ''],
+            'tps' => ['icon' => 'fa-gauge-high', 'label' => 'TPS', 'source' => 'details.tps', 'unit' => ''],
+            'uptime' => ['icon' => 'fa-clock', 'label' => 'Uptime', 'source' => 'details.uptime', 'unit' => 's'],
+        ],
+        'web' => [
+            'response' => ['icon' => 'fa-stopwatch', 'label' => 'Odezva', 'source' => 'special.response_time', 'unit' => ' ms'],
+            'http' => ['icon' => 'fa-globe', 'label' => 'HTTP', 'source' => 'details.http_code', 'unit' => ''],
+            'ssl' => ['icon' => 'fa-lock', 'label' => 'SSL', 'source' => 'special.ssl_days', 'unit' => ' dní'],
+            'uptime' => ['icon' => 'fa-clock', 'label' => 'Uptime', 'source' => 'special.uptime_pct', 'unit' => '%'],
+        ],
+    ];
+    return $profiles[$type] ?? $profiles['vps'];
+}
+
+/**
  * Sestaví veškerá data pro infrastructure report (weekly/monthly). Čistě
  * výpočetní funkce bez vedlejších efektů, kromě zápisu trend-snapshotu do
  * settings na konci (potřebný pro příští report, retence logů to jinak
