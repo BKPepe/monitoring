@@ -549,31 +549,55 @@ if command -v top >/dev/null 2>&1; then
     if [ -n "$top_out" ]; then
         top_cpu_json=$(echo "$top_out" | awk '
         BEGIN { printf "["; count=0 }
-        NR > 7 && count < 5 {
-            if ($1 ~ /^[0-9]+$/) {
-                if (count > 0) printf ", ";
-                gsub(/%/, "", $7);
-                name=$8; if (!name) name=$7;
-                printf "{\"pid\":%s,\"name\":\"%s\",\"cpu\":%s}", $1, name, ($7 ~ /^[0-9.]+/ ? $7 : "0");
-                count++;
+        $1 ~ /^[0-9]+$/ && count < 5 {
+            pid = $1 + 0;
+            name = $NF;
+            if (!name || name ~ /^[0-9]/) name = "proc";
+            gsub(/["\\]/, "", name);
+            
+            cpu = 0;
+            for (i = 2; i < NF; i++) {
+                val = $i;
+                gsub(/%/, "", val);
+                if (val ~ /^[0-9]+(\.[0-9]+)?$/) {
+                    num = val + 0;
+                    if (num <= 100 && num > cpu) cpu = num;
+                }
             }
+            if (count > 0) printf ", ";
+            printf "{\"pid\":%d,\"name\":\"%s\",\"cpu\":%.1f}", pid, name, cpu;
+            count++;
         }
-        END { printf "]" }')
+        END { printf "]" }' 2>/dev/null)
 
         top_ram_json=$(echo "$top_out" | awk '
         BEGIN { printf "["; count=0 }
-        NR > 7 && count < 5 {
-            if ($1 ~ /^[0-9]+$/) {
-                if (count > 0) printf ", ";
-                vsz=int($5/1024); if (vsz<=0) vsz=int($3/1024);
-                name=$8; if (!name) name=$7;
-                printf "{\"pid\":%s,\"name\":\"%s\",\"ram_mb\":%d}", $1, name, vsz;
-                count++;
+        $1 ~ /^[0-9]+$/ && count < 5 {
+            pid = $1 + 0;
+            name = $NF;
+            if (!name || name ~ /^[0-9]/) name = "proc";
+            gsub(/["\\]/, "", name);
+
+            vsz = 0;
+            for (i = 2; i < NF; i++) {
+                val = $i;
+                gsub(/[kK]/, "", val);
+                if (val ~ /^[0-9]+$/ && val + 0 > vsz) {
+                    vsz = val + 0;
+                }
             }
+            ram_mb = int(vsz / 1024);
+            if (ram_mb < 0) ram_mb = 0;
+
+            if (count > 0) printf ", ";
+            printf "{\"pid\":%d,\"name\":\"%s\",\"ram_mb\":%d}", pid, name, ram_mb;
+            count++;
         }
-        END { printf "]" }')
+        END { printf "]" }' 2>/dev/null)
     fi
 fi
+[ -z "$top_cpu_json" ] && top_cpu_json="[]"
+[ -z "$top_ram_json" ] && top_ram_json="[]"
 
 # --- mwan3 (multi-WAN) ---
 mwan3_policies_json="[]"
@@ -772,7 +796,36 @@ detect_svc "AdGuard Home" "port" "AdGuardHome" "0BB8" "/usr/bin/AdGuardHome" 300
 detect_svc "WireGuard" "wireguard" "" "" "/etc/config/wireguard" 51820
 detect_svc "Mosquitto MQTT" "port" "mosquitto" "075B" "/etc/mosquitto/mosquitto.conf" 1883
 
-discovered_services_json="[$disc_list]"
+[ -n "$disc_list" ] && discovered_services_json="[$disc_list]" || discovered_services_json="[]"
+
+[ -z "$top_cpu_json" ] && top_cpu_json="[]"
+[ -z "$top_ram_json" ] && top_ram_json="[]"
+[ -z "$wifi_radios_json" ] && wifi_radios_json="[]"
+[ -z "$interfaces_json" ] && interfaces_json="[]"
+[ -z "$wireguard_peers_json" ] && wireguard_peers_json="[]"
+[ -z "$mwan3_policies_json" ] && mwan3_policies_json="[]"
+[ -z "$service_restarts_json" ] && service_restarts_json="[]"
+[ -z "$mwan3_active_gw" ] && mwan3_active_gw="null"
+[ -z "$installed_packages" ] && installed_packages="null"
+[ -z "$net_ipv4_kbps" ] && net_ipv4_kbps="null"
+[ -z "$net_ipv6_kbps" ] && net_ipv6_kbps="null"
+[ -z "$ram_total_mb" ] && ram_total_mb="0"
+[ -z "$ram_used_mb" ] && ram_used_mb="0"
+[ -z "$ram_available_mb" ] && ram_available_mb="0"
+[ -z "$ram_free_mb" ] && ram_free_mb="0"
+[ -z "$wan_up_json" ] && wan_up_json="false"
+[ -z "$wan_uptime" ] && wan_uptime="null"
+[ -z "$sqm_enabled" ] && sqm_enabled="false"
+[ -z "$sqm_download_kbps" ] && sqm_download_kbps="null"
+[ -z "$sqm_upload_kbps" ] && sqm_upload_kbps="null"
+[ -z "$sqm_dropped" ] && sqm_dropped="null"
+[ -z "$sqm_ecn" ] && sqm_ecn="null"
+[ -z "$lte_rsrp" ] && lte_rsrp="null"
+[ -z "$lte_rsrq" ] && lte_rsrq="null"
+[ -z "$lte_sinr" ] && lte_sinr="null"
+[ -z "$btrfs_errors" ] && btrfs_errors="null"
+[ -z "$disk_io_write" ] && disk_io_write="null"
+[ -z "$temperature" ] && temperature="null"
 
 payload=$(cat <<EOF
 {
