@@ -78,7 +78,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.3.2"
+AGENT_VERSION="1.3.3"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -89,6 +89,10 @@ for old_log in "$ScriptPath/agent_openwrt.log" "$ScriptPath/agent.log" /root/age
         rm -f "$old_log" 2>/dev/null || true
     fi
 done
+
+json_str() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | tr '\n' ' '
+}
 
 log_message() {
     ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -812,41 +816,31 @@ detect_svc "Mosquitto MQTT" "port" "mosquitto" "075B" "/etc/mosquitto/mosquitto.
 
 [ -n "$disc_list" ] && discovered_services_json="[$disc_list]" || discovered_services_json="[]"
 
-[ -z "$top_cpu_json" ] && top_cpu_json="[]"
-[ -z "$top_ram_json" ] && top_ram_json="[]"
-[ -z "$wifi_radios_json" ] && wifi_radios_json="[]"
-[ -z "$interfaces_json" ] && interfaces_json="[]"
-[ -z "$wireguard_peers_json" ] && wireguard_peers_json="[]"
-[ -z "$mwan3_policies_json" ] && mwan3_policies_json="[]"
-[ -z "$service_restarts_json" ] && service_restarts_json="[]"
-[ -z "$mwan3_active_gw" ] && mwan3_active_gw="null"
-[ -z "$installed_packages" ] && installed_packages="null"
-[ -z "$net_ipv4_kbps" ] && net_ipv4_kbps="null"
-[ -z "$net_ipv6_kbps" ] && net_ipv6_kbps="null"
-[ -z "$ram_total_mb" ] && ram_total_mb="0"
-[ -z "$ram_used_mb" ] && ram_used_mb="0"
-[ -z "$ram_available_mb" ] && ram_available_mb="0"
-[ -z "$ram_free_mb" ] && ram_free_mb="0"
-[ -z "$wan_up_json" ] && wan_up_json="false"
-[ -z "$wan_uptime" ] && wan_uptime="null"
-[ -z "$sqm_enabled" ] && sqm_enabled="false"
-[ -z "$sqm_download_kbps" ] && sqm_download_kbps="null"
-[ -z "$sqm_upload_kbps" ] && sqm_upload_kbps="null"
-[ -z "$sqm_dropped" ] && sqm_dropped="null"
-[ -z "$sqm_ecn" ] && sqm_ecn="null"
-[ -z "$lte_rsrp" ] && lte_rsrp="null"
-[ -z "$lte_rsrq" ] && lte_rsrq="null"
-[ -z "$lte_sinr" ] && lte_sinr="null"
-[ -z "$btrfs_errors" ] && btrfs_errors="null"
-[ -z "$disk_io_write" ] && disk_io_write="null"
-[ -z "$temperature" ] && temperature="null"
+[ -z "$top_cpu_json" ] || [ "$top_cpu_json" = "" ] && top_cpu_json="[]"
+[ -z "$top_ram_json" ] || [ "$top_ram_json" = "" ] && top_ram_json="[]"
+[ -z "$wifi_radios_json" ] || [ "$wifi_radios_json" = "" ] && wifi_radios_json="[]"
+[ -z "$interfaces_json" ] || [ "$interfaces_json" = "" ] && interfaces_json="[]"
+[ -z "$wireguard_peers_json" ] || [ "$wireguard_peers_json" = "" ] && wireguard_peers_json="[]"
+[ -z "$mwan3_policies_json" ] || [ "$mwan3_policies_json" = "" ] && mwan3_policies_json="[]"
+[ -z "$service_restarts_json" ] || [ "$service_restarts_json" = "" ] && service_restarts_json="[]"
+[ -z "$mwan3_active_gw" ] || [ "$mwan3_active_gw" = "" ] && mwan3_active_gw="null"
+
+# Sanitace všech numerických proměnných
+for var in cpu ram ram_total_mb ram_used_mb ram_available_mb ram_free_mb swap_pct entropy conntrack_pct upgradable_packages wifi_clients_count dhcp_leases_count dhcp_reservations_count dns_queries dns_cache_hits dns_cache_misses fw_accepted fw_dropped fw_rejected net net_ipv4_kbps net_ipv6_kbps hdd disk_io_write btrfs_errors load1 load5 load15 uptime_sec temperature wan_uptime sqm_download_kbps sqm_upload_kbps sqm_dropped sqm_ecn lte_rsrp lte_rsrq lte_sinr wan_reconnect_count wan_last_reconnect installed_packages log_errors_24h log_warnings_24h; do
+    eval "val=\$$var"
+    if [ -z "$val" ] || [ "$val" = "" ]; then
+        eval "$var=\"null\""
+    elif ! echo "$val" | grep -q '^-\?[0-9.]\+$'; then
+        eval "$var=\"null\""
+    fi
+done
 
 payload=$(cat <<EOF
 {
-  "agent_key": "$AGENT_KEY",
+  "agent_key": "$(json_str "$AGENT_KEY")",
   "agent_type": "openwrt",
   "version": "$AGENT_VERSION",
-  "os": "$os_combined",
+  "os": "$(json_str "$os_combined")",
   "cpu": $cpu,
   "ram": $ram,
   "ram_total_mb": $ram_total_mb,
@@ -861,7 +855,7 @@ payload=$(cat <<EOF
   "wifi_radios": $wifi_radios_json,
   "interfaces": $interfaces_json,
   "discovered_services": $discovered_services_json,
-  "lan_subnet": "$lan_subnet",
+  "lan_subnet": "$(json_str "$lan_subnet")",
   "dhcp_leases_count": $dhcp_leases_count,
   "dhcp_reservations_count": $dhcp_reservations_count,
   "dns_queries": $dns_queries,
@@ -884,16 +878,16 @@ payload=$(cat <<EOF
   "load15": $load15,
   "uptime": $uptime_sec,
   "temperature": $temperature,
-  "hostname": "$ow_hostname",
-  "kernel": "$ow_kernel",
-  "model": "$ow_model",
-  "board_name": "$ow_board_name",
+  "hostname": "$(json_str "$ow_hostname")",
+  "kernel": "$(json_str "$ow_kernel")",
+  "model": "$(json_str "$ow_model")",
+  "board_name": "$(json_str "$ow_board_name")",
   "wan_up": $wan_up_json,
-  "wan_proto": "$wan_proto",
-  "wan_ipv4": "$wan_ipv4",
-  "wan_ipv6": "$wan_ipv6",
-  "wan_gateway": "$wan_gateway",
-  "wan_dns": "$wan_dns",
+  "wan_proto": "$(json_str "$wan_proto")",
+  "wan_ipv4": "$(json_str "$wan_ipv4")",
+  "wan_ipv6": "$(json_str "$wan_ipv6")",
+  "wan_gateway": "$(json_str "$wan_gateway")",
+  "wan_dns": "$(json_str "$wan_dns")",
   "wan_uptime": $wan_uptime,
   "mwan3_policies": $mwan3_policies_json,
   "mwan3_active_gw": $mwan3_active_gw,
@@ -905,8 +899,8 @@ payload=$(cat <<EOF
   "lte_rsrp": $lte_rsrp,
   "lte_rsrq": $lte_rsrq,
   "lte_sinr": $lte_sinr,
-  "lte_band": $lte_band,
-  "lte_carrier": $lte_carrier,
+  "lte_band": "$(json_str "$lte_band")",
+  "lte_carrier": "$(json_str "$lte_carrier")",
   "service_restarts": $service_restarts_json,
   "wan_reconnect_count": $wan_reconnect_count,
   "wan_last_reconnect": $wan_last_reconnect,
@@ -916,6 +910,8 @@ payload=$(cat <<EOF
 }
 EOF
 )
+
+echo "$payload" > /tmp/status-agent-openwrt-last-payload.json 2>/dev/null || true
 
 log_message "Odesilam data na $API_URL..."
 

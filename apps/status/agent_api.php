@@ -20,7 +20,8 @@ $data = json_decode($raw_data, true);
 
 if (!$data) {
     http_response_code(400);
-    echo json_encode(['success' => false, 'message' => 'Neplatný JSON formát.']);
+    $json_err = json_last_error_msg();
+    echo json_encode(['success' => false, 'message' => 'Neplatný JSON formát: ' . $json_err]);
     exit;
 }
 
