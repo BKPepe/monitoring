@@ -1126,6 +1126,41 @@ function bk_get_anomaly_insights($pdo, $monitor) {
 }
 
 /**
+ * Spočíta plovoucí průměr (mu) a směrodatnou odchylku (sigma) po hodinách pro ECharts predikční pás.
+ */
+function bk_get_metric_prediction_band($pdo, $monitor_id, $metric_key, $days = 7) {
+    $allowed_map = [
+        'cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage',
+        'net' => 'net_usage', 'load1' => 'load_avg_1', 'temperature' => 'temperature_c',
+        'conntrack' => 'conntrack_pct', 'disk_io_write' => 'disk_io_write_kbps'
+    ];
+    if (!isset($allowed_map[$metric_key])) return [];
+    $col = $allowed_map[$metric_key];
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT HOUR(checked_at) as hr, AVG($col) as avg_v, STDDEV($col) as std_v
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND $col IS NOT NULL
+            GROUP BY HOUR(checked_at)
+        ");
+        $stmt->execute([$monitor_id, $days]);
+        $rows = $stmt->fetchAll();
+        $band = [];
+        foreach ($rows as $r) {
+            $avg = (float)$r['avg_v'];
+            $std = (float)($r['std_v'] ?? 0);
+            $band[(int)$r['hr']] = [
+                'low' => max(0, round($avg - 2 * $std, 1)),
+                'avg' => round($avg, 1),
+                'high' => round($avg + 2 * $std, 1),
+            ];
+        }
+        return $band;
+    } catch (PDOException $e) { return []; }
+}
+
+/**
  * Sloučí monitor_events (přidání/odebrání, DNS/cert/schéma, agent
  * connect/disconnect, limity, config změny...), agent_actions (Remote
  * Actions historie) a stavové přechody odvozené z monitor_logs do jednoho

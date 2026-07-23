@@ -784,7 +784,67 @@ fi
 
 if [ "$http_code" = "200" ]; then
     log_message "OK: Statistiky úspěšně odeslány."
-    log_message "Odpověď: $body"
+
+    # --- Remote Actions (Opt-in přes REMOTE_ACTIONS_ENABLED=1) ---
+    REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
+    ALLOWED_ACTIONS="${ALLOWED_ACTIONS:-restart_service,reboot_server}"
+
+    if [ "$REMOTE_ACTIONS_ENABLED" = "1" ] && [ -n "$body" ]; then
+        act_id=$(echo "$body" | awk -F'"action_id":' '{print $2}' | awk -F'[,}]' '{print $1}' | tr -d '[:space:]')
+        act_type=$(echo "$body" | awk -F'"action":' '{print $2}' | awk -F'[,"]' '{print $2}' | tr -d '[:space:]')
+        act_ts=$(echo "$body" | awk -F'"timestamp":' '{print $2}' | awk -F'[,}]' '{print $1}' | tr -d '[:space:]')
+        act_sig=$(echo "$body" | awk -F'"signature":' '{print $2}' | awk -F'[,"]' '{print $2}' | tr -d '[:space:]')
+        act_nonce=$(echo "$body" | awk -F'"nonce":' '{print $2}' | awk -F'[,"]' '{print $2}' | tr -d '[:space:]')
+
+        if [ -n "$act_id" ] && [ -n "$act_type" ] && [ -n "$act_ts" ] && [ -n "$act_sig" ]; then
+            now_ts=$(date +%s 2>/dev/null || echo 0)
+            time_diff=$((now_ts - act_ts))
+            [ $time_diff -lt 0 ] && time_diff=$(( -time_diff ))
+
+            if [ $time_diff -le 30 ]; then
+                case ",$ALLOWED_ACTIONS," in
+                    *",$act_type,"*)
+                        calc_str="action=${act_type}|ts=${act_ts}|nonce=${act_nonce}"
+                        calc_sig=""
+                        if command -v openssl >/dev/null 2>&1; then
+                            calc_sig=$(echo -n "$calc_str" | openssl dgst -sha256 -hmac "$AGENT_KEY" 2>/dev/null | awk '{print $NF}')
+                        elif command -v python3 >/dev/null 2>&1; then
+                            calc_sig=$(python3 -c "import hmac, hashlib; print(hmac.new(b'$AGENT_KEY', b'$calc_str', hashlib.sha256).hexdigest())" 2>/dev/null)
+                        fi
+
+                        if [ -n "$calc_sig" ] && [ "$calc_sig" = "$act_sig" ]; then
+                            log_message "Aktivována bezpečná vzdálená akce: $act_type (ID: $act_id)"
+                            case "$act_type" in
+                                restart_service)
+                                    svc_name=$(echo "$body" | sed -n 's/.*"service_name":"\([^"]*\)".*/\1/p')
+                                    if [ -n "$svc_name" ]; then
+                                        if command -v systemctl >/dev/null 2>&1; then
+                                            systemctl restart "$svc_name" >/dev/null 2>&1 || true
+                                            log_message "Restartována služba přes systemctl: $svc_name"
+                                        elif [ -x "/etc/init.d/$svc_name" ]; then
+                                            /etc/init.d/"$svc_name" restart >/dev/null 2>&1 || true
+                                            log_message "Restartována služba přes init.d: $svc_name"
+                                        fi
+                                    fi
+                                    ;;
+                                reboot_server)
+                                    log_message "PROVÁDÍM REBOOT SERVERU DLE PODEPSANÉHO POKYNU..."
+                                    /sbin/reboot >/dev/null 2>&1 || systemctl reboot >/dev/null 2>&1 || true
+                                    ;;
+                            esac
+                        else
+                            log_message "VAROVÁNÍ: Odmítnuta vzdálená akce - neplatný HMAC podpis!"
+                        fi
+                        ;;
+                    *)
+                        log_message "VAROVÁNÍ: Odmítnuta vzdálená akce '$act_type' - není na seznamu ALLOWED_ACTIONS!"
+                        ;;
+                esac
+            else
+                log_message "VAROVÁNÍ: Odmítnuta vzdálená akce - vypršená platnost (časové okno > 30s)"
+            fi
+        fi
+    fi
 else
     log_message "CHYBA: Server odpověděl kódem $http_code."
     log_message "Odpověď: $body"
