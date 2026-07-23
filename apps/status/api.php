@@ -122,8 +122,10 @@ if (($_GET['action'] ?? '') === 'metric_series') {
         exit;
     }
     $column = $registry[$metric_key]['column'];
+    $unit = $registry[$metric_key]['unit'] ?? '';
+    $label = t($registry[$metric_key]['label_key'] ?? $metric_key);
 
-    $result = ['points' => [], 'events' => []];
+    $result = ['points' => [], 'events' => [], 'unit' => $unit, 'label' => $label];
 
     // Dynamic downsampling - bucket size per period
     $bucket_secs = ['15m' => 0, '1h' => 0, '6h' => 300, '24h' => 300, '7d' => 1800, '30d' => 7200][$period] ?? 0;
