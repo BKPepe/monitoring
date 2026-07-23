@@ -208,7 +208,7 @@ foreach ($timeline as $ev) {
         .mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 1rem; }
         .mp-chart-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 0.75rem; }
         .mp-chart-card h3 { font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 0.5rem 0; font-weight: 600; }
-        .mp-chart-box { height: 220px; width: 100%; }
+        .mp-chart-box { height: 280px; width: 100%; }
         @media (max-width: 900px) { .mp-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
@@ -515,8 +515,22 @@ foreach ($timeline as $ev) {
             var el = document.getElementById(cfg.id);
             if (el) charts[cfg.id] = echarts.init(el, isDark ? 'dark' : null);
         });
-        var chartInstances = Object.values(charts);
-        if (chartInstances.length > 1) echarts.connect(chartInstances);
+        // Synchronized crosshairs via tooltip events (NOT echarts.connect,
+        // which also syncs dataZoom and makes independent zoom impossible).
+        var chartIds = Object.keys(charts);
+        if (chartIds.length > 1) {
+            chartIds.forEach(function (id) {
+                charts[id].on('updateAxisPointer', function (event) {
+                    var xAxisInfo = event.axesInfo && event.axesInfo[0];
+                    if (!xAxisInfo) return;
+                    var time = xAxisInfo.value;
+                    chartIds.forEach(function (otherId) {
+                        if (otherId === id) return;
+                        charts[otherId].dispatchAction({ type: 'showTip', xAxisIndex: 0, dataIndex: 0, position: [xAxisInfo.value, 0] });
+                    });
+                });
+            });
+        }
     }
 
     function loadChart(cfg, period) {
