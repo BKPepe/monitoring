@@ -740,13 +740,132 @@ if command -v logread >/dev/null 2>&1; then
     [ -z "$log_warnings_24h" ] && log_warnings_24h=0
 fi
 
+# --- WiFi per-radio detail (iwinfo) ---
+wifi_radios_json="[]"
+if command -v iwinfo >/dev/null 2>&1; then
+    wifi_radios_json=$(for radio in $(iwinfo 2>/dev/null | awk '/^[a-z0-9]/ {print $1}'); do
+        info=$(iwinfo "$radio" info 2>/dev/null)
+        ssid=$(echo "$info" | grep -i "essid" | sed 's/.*ESSID: "\([^"]*\)".*/\1/' | sed 's/["\\]//g')
+        [ -z "$ssid" ] || [ "$ssid" = "unknown" ] && ssid=$(echo "$info" | grep -i "essid" | awk '{print $NF}' | sed 's/["\\]//g')
+
+        channel=$(echo "$info" | grep -i "channel" | sed -n 's/.*Channel: \([0-9]*\).*/\1/p')
+        [ -z "$channel" ] && channel=$(echo "$info" | grep -i "channel" | tr -cd '0-9')
+
+        freq_ghz=$(echo "$info" | grep -i "channel" | sed -n 's/.*(\([0-9.]*\) GHz).*/\1/p')
+        band="2.4GHz"
+        if echo "$freq_ghz" | grep -q '^5'; then band="5GHz"; fi
+        if echo "$freq_ghz" | grep -q '^6'; then band="6GHz"; fi
+        if [ "$channel" -gt 14 ] 2>/dev/null; then band="5GHz"; fi
+
+        tx_power=$(echo "$info" | grep -i "tx-power" | sed -n 's/.*Tx-Power: \([0-9-]*\).*/\1/p')
+        [ -z "$tx_power" ] && tx_power="0"
+        noise=$(echo "$info" | grep -i "noise" | sed -n 's/.*Noise: \([0-9-]*\).*/\1/p')
+        [ -z "$noise" ] && noise="0"
+
+        # Count MAC addresses of connected stations
+        clients=$(iwinfo "$radio" assoclist 2>/dev/null | grep -iE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | wc -l | tr -cd '0-9')
+        if [ -z "$clients" ] || [ "$clients" -eq 0 ] 2>/dev/null; then
+            if command -v hostapd_cli >/dev/null 2>&1; then
+                clients=$(hostapd_cli -i "$radio" all_sta 2>/dev/null | grep -c "^dot11RSNAStatsSTAAddress=" | tr -cd '0-9')
+            fi
+        fi
+
+        [ -n "$ssid" ] || ssid="unknown"
+        [ -n "$channel" ] || channel="0"
+        [ -n "$clients" ] || clients="0"
+
+        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%d,\"tx_power\":%d,\"noise\":%d,\"clients\":%d}, " \
+            "$radio" "$ssid" "$band" "$channel" "$tx_power" "$noise" "$clients"
+    done | sed 's/, $//')
+    [ -n "$wifi_radios_json" ] && wifi_radios_json="[$wifi_radios_json]" || wifi_radios_json="[]"
+fi
+
+# --- LAN / DHCP ---
+lan_subnet=""
+lan_json=$(ubus call network.interface.lan status 2>/dev/null)
+if [ -n "$lan_json" ]; then
+    json_load "$lan_json"
+    json_get_keys lan_v4_keys "ipv4-address"
+    for k in $lan_v4_keys; do
+        json_select "ipv4-address"
+        json_select "$k"
+        lan_addr=""; lan_mask=""
+        json_get_var lan_addr address
+        json_get_var lan_mask mask
+        if [ -n "$lan_addr" ] && [ -n "$lan_mask" ]; then
+            lan_subnet="$lan_addr/$lan_mask"
+        fi
+        json_select ..
+        json_select ..
+        break
+    done
+fi
+dhcp_leases_count=0
+if [ -f /tmp/dhcp.leases ]; then
+    dhcp_leases_count=$(wc -l < /tmp/dhcp.leases 2>/dev/null | xargs)
+fi
+dhcp_reservations_count=0
+if command -v uci >/dev/null 2>&1; then
+    dhcp_reservations_count=$(uci show dhcp 2>/dev/null | grep -c "=host$")
+fi
+
+# --- DNS Engine, Upstream Servers & DoT/DoH Encryption ---
+dns_engine="Dnsmasq"
+dns_encryption="Nešifrované DNS (UDP/53)"
+dns_servers="$wan_dns"
+
+if pidof kresd >/dev/null 2>&1 || [ -f /etc/config/resolver ]; then
+    dns_engine="Knot Resolver (kresd)"
+    if grep -qi -E '853|tls|pin' /etc/config/resolver 2>/dev/null || (netstat -tunlp 2>/dev/null | grep -q ':853'); then
+        dns_encryption="DoT (DNS-over-TLS / port 853)"
+    else
+        dns_encryption="DoT (Knot Resolver TLS Upstream)"
+    fi
+elif pidof AdGuardHome >/dev/null 2>&1; then
+    dns_engine="AdGuard Home"
+    if grep -qi -E 'tls|doh|dot' /etc/AdGuardHome/AdGuardHome.yaml 2>/dev/null; then
+        dns_encryption="DoT / DoH (AdGuard Encrypted DNS)"
+    fi
+elif pidof unbound >/dev/null 2>&1; then
+    dns_engine="Unbound"
+    if grep -qi -E '853|tls' /etc/unbound/unbound.conf 2>/dev/null; then
+        dns_encryption="DoT (DNS-over-TLS)"
+    fi
+elif pidof stubby >/dev/null 2>&1; then
+    dns_engine="Stubby"
+    dns_encryption="DoT (DNS-over-TLS)"
+fi
+
+if [ -f /tmp/resolv.conf.auto ]; then
+    extra_dns=$(grep -i "nameserver" /tmp/resolv.conf.auto | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
+    if [ -n "$extra_dns" ]; then
+        if [ -n "$dns_servers" ]; then
+            dns_servers="$dns_servers, $extra_dns"
+        else
+            dns_servers="$extra_dns"
+        fi
+    fi
+fi
+[ -z "$dns_servers" ] && dns_servers="Výchozí poskytovatel (WAN)"
+
+# --- DNS Stats ---
+dns_queries="null"
+dns_cache_hits="null"
+dns_cache_misses="null"
+if [ -f /tmp/dnsmasq.stats ] || (pidof dnsmasq >/dev/null 2>&1 && kill -USR1 $(pidof dnsmasq) 2>/dev/null && sleep 1); then
+    if [ -f /tmp/dnsmasq.stats ]; then
+        dns_queries=$(awk '/queries received/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+        dns_cache_hits=$(awk '/cache hits/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+        dns_cache_misses=$(awk '/cache misses/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+    fi
+fi
+
 # --- Service Discovery Scanner (structured detectors with confidence scoring) ---
 disc_list=""
 
-# Detector helper: process + port + config + active_verify -> confidence
-# Usage: detect_svc "Name" "type" "process" "port_hex" "config_path" "port_dec"
+# Detector helper: process + port + config + active_verify + description -> confidence
 detect_svc() {
-    _name="$1"; _type="$2"; _proc="$3"; _porthex="$4"; _config="$5"; _portdec="$6"
+    _name="$1"; _type="$2"; _proc="$3"; _porthex="$4"; _config="$5"; _portdec="$6"; _desc="$7"
     _conf=0; _evidence=""; _missing=""
     # 1. Process detection
     if pidof "$_proc" >/dev/null 2>&1; then
@@ -799,20 +918,31 @@ detect_svc() {
     if [ $_conf -ge 50 ]; then
         _evidence=$(echo "$_evidence" | sed 's/,$//')
         _missing=$(echo "$_missing" | sed 's/,$//')
+        _desc_esc=$(json_str "$_desc")
         [ -n "$disc_list" ] && disc_list="$disc_list, "
-        disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"evidence\":[$_evidence],\"missing\":[$_missing]}"
+        disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"description\":\"$_desc_esc\",\"evidence\":[$_evidence],\"missing\":[$_missing]}"
     fi
 }
 
 # Run detectors
-detect_svc "TeamSpeak 3 Server" "teamspeak" "ts3server" "271B" "/etc/ts3server.ini" 10011
-detect_svc "Minecraft Server" "minecraft" "java" "63DD" "" 25565
-detect_svc "Nginx" "web" "nginx" "0050" "/etc/nginx/nginx.conf" 80
-detect_svc "Docker" "docker" "dockerd" "" "/var/run/docker.sock" 2375
-detect_svc "PostgreSQL" "port" "postgres" "1538" "/etc/postgresql/postgresql.conf" 5432
-detect_svc "AdGuard Home" "port" "AdGuardHome" "0BB8" "/usr/bin/AdGuardHome" 3000
-detect_svc "WireGuard" "wireguard" "" "" "/etc/config/wireguard" 51820
-detect_svc "Mosquitto MQTT" "port" "mosquitto" "075B" "/etc/mosquitto/mosquitto.conf" 1883
+detect_svc "Knot Resolver (kresd)" "dns" "kresd" "0035" "/etc/config/resolver" 53 "Moderní DNS resolver CZ.NIC s podporou DNS-over-TLS (DoT)"
+detect_svc "Dnsmasq" "dns" "dnsmasq" "0035" "/etc/config/dhcp" 53 "DHCP server a lokální DNS keš pro domácí síť"
+detect_svc "Hostapd Wi-Fi AP" "wifi" "hostapd" "" "/etc/config/wireless" 0 "Démon pro správu bezdrátových Wi-Fi sítí (802.11)"
+detect_svc "Dropbear SSH" "ssh" "dropbear" "0016" "/etc/config/dropbear" 22 "Zabezpečený SSH přístup pro vzdálenou správu routeru"
+detect_svc "OpenSSH Server" "ssh" "sshd" "0016" "/etc/ssh/sshd_config" 22 "Plnohodnotný OpenSSH server"
+detect_svc "uHTTPd Web UI" "web" "uhttpd" "0050" "/etc/config/uhttpd" 80 "Webový server pro administraci LuCI / Rebuilt"
+detect_svc "Lighttpd Web" "web" "lighttpd" "0050" "/etc/lighttpd/lighttpd.conf" 80 "Lehký webový server pro administraci TurrisOS"
+detect_svc "Mosquitto MQTT" "mqtt" "mosquitto" "075B" "/etc/mosquitto/mosquitto.conf" 1883 "MQTT Message Broker pro IoT zařízení a chytrou domácnost (Home Assistant, senzory)"
+detect_svc "WireGuard VPN" "vpn" "wireguard" "" "/etc/config/wireguard" 51820 "Šifrovaný VPN tunel pro bezpečné připojení odkudkoliv"
+detect_svc "OpenVPN" "vpn" "openvpn" "0476" "/etc/config/openvpn" 1194 "SSL/TLS VPN server"
+detect_svc "AdGuard Home" "dns" "AdGuardHome" "0BB8" "/usr/bin/AdGuardHome" 3000 "Blokování reklam a sledování na úrovni celé sítě"
+detect_svc "Turris Sentinel / Pakon" "security" "sentinel" "" "/etc/config/sentinel" 0 "Systém detekce kybernetických hrozeb a sběru dat CZ.NIC"
+detect_svc "Samba SMB File Share" "storage" "smbd" "01BD" "/etc/samba/smb.conf" 445 "Sdílení souborů v lokální síti (NAS / Windows Share)"
+detect_svc "Nginx Web Server" "web" "nginx" "0050" "/etc/nginx/nginx.conf" 80 "Vysoce výkonný webový server a reverzní proxy"
+detect_svc "Docker Engine" "container" "dockerd" "" "/var/run/docker.sock" 2375 "Kontejnerová platforma pro spouštění aplikací"
+detect_svc "PostgreSQL DB" "database" "postgres" "1538" "/etc/postgresql/postgresql.conf" 5432 "Relační databázový systém"
+detect_svc "TeamSpeak 3 Server" "teamspeak" "ts3server" "271B" "/etc/ts3server.ini" 10011 "TeamSpeak 3 hlasový komunikační server"
+detect_svc "Minecraft Server" "minecraft" "java" "63DD" "" 25565 "Minecraft herní server"
 
 [ -n "$disc_list" ] && discovered_services_json="[$disc_list]" || discovered_services_json="[]"
 
@@ -861,6 +991,9 @@ payload=$(cat <<EOF
   "dns_queries": $dns_queries,
   "dns_cache_hits": $dns_cache_hits,
   "dns_cache_misses": $dns_cache_misses,
+  "dns_engine": "$(json_str "$dns_engine")",
+  "dns_encryption": "$(json_str "$dns_encryption")",
+  "dns_servers": "$(json_str "$dns_servers")",
   "fw_accepted": $fw_accepted,
   "fw_dropped": $fw_dropped,
   "fw_rejected": $fw_rejected,

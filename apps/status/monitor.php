@@ -35,6 +35,32 @@ if (!$monitor) {
 $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
 if (!is_array($details)) $details = [];
 
+// Cross-link: Pokud monitor nemá vlastní agent_details, ale sdílí Asset s VPS/OpenWrt agentem, přetáhni jeho details
+if (!empty($monitor['asset_id'])) {
+    try {
+        $stmt_agent_sib = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL LIMIT 1");
+        $stmt_agent_sib->execute([$monitor['asset_id'], $monitor_id]);
+        $sib_details_raw = $stmt_agent_sib->fetchColumn();
+        if ($sib_details_raw) {
+            $sib_det = json_decode($sib_details_raw, true);
+            if (is_array($sib_det)) {
+                if (empty($details['ts3_process']) && !empty($sib_det['ts3_process'])) $details['ts3_process'] = $sib_det['ts3_process'];
+                if (empty($details['discovered_services']) && !empty($sib_det['discovered_services'])) $details['discovered_services'] = $sib_det['discovered_services'];
+                if (empty($details['top_cpu_processes']) && !empty($sib_det['top_cpu_processes'])) $details['top_cpu_processes'] = $sib_det['top_cpu_processes'];
+                if (empty($details['top_ram_processes']) && !empty($sib_det['top_ram_processes'])) $details['top_ram_processes'] = $sib_det['top_ram_processes'];
+                if (empty($details['interfaces']) && !empty($sib_det['interfaces'])) $details['interfaces'] = $sib_det['interfaces'];
+                if (empty($details['wifi_radios']) && !empty($sib_det['wifi_radios'])) $details['wifi_radios'] = $sib_det['wifi_radios'];
+                if (empty($details['dns_engine']) && !empty($sib_det['dns_engine'])) $details['dns_engine'] = $sib_det['dns_engine'];
+                if (empty($details['dns_encryption']) && !empty($sib_det['dns_encryption'])) $details['dns_encryption'] = $sib_det['dns_encryption'];
+                if (empty($details['dns_servers']) && !empty($sib_det['dns_servers'])) $details['dns_servers'] = $sib_det['dns_servers'];
+                if (!isset($details['ram_total_mb']) && isset($sib_det['ram_total_mb'])) $details['ram_total_mb'] = $sib_det['ram_total_mb'];
+                if (!isset($details['ram_used_mb']) && isset($sib_det['ram_used_mb'])) $details['ram_used_mb'] = $sib_det['ram_used_mb'];
+                if (!isset($details['ram_available_mb']) && isset($sib_det['ram_available_mb'])) $details['ram_available_mb'] = $sib_det['ram_available_mb'];
+            }
+        }
+    } catch (PDOException $e) { /* best-effort */ }
+}
+
 // Latest metrics row
 $registry = bk_get_metric_registry();
 $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
@@ -558,20 +584,88 @@ foreach ($timeline as $ev) {
             </div>
             <?php endif; ?>
 
+            <!-- DNS & RESOLVER SECTION -->
+            <?php if (!empty($details['dns_engine']) || !empty($details['dns_servers'])): ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-server"></i> DNS Resolver &amp; Šifrování (DoT / DoH)</div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.75rem;">
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                        <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">DNS Engine / Resolver</div>
+                        <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem; margin-top: 0.2rem;"><i class="fas fa-network-wired" style="color: var(--color-blue, #58a6ff);"></i> <?php echo htmlspecialchars($details['dns_engine'] ?? 'Dnsmasq'); ?></div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                        <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Protokol / Šifrování</div>
+                        <div style="font-weight: 700; color: <?php echo strpos(($details['dns_encryption'] ?? ''), 'DoT') !== false ? 'var(--color-green)' : 'var(--text-primary)'; ?>; font-size: 0.95rem; margin-top: 0.2rem;"><i class="fas fa-shield-alt"></i> <?php echo htmlspecialchars($details['dns_encryption'] ?? 'UDP/53'); ?></div>
+                    </div>
+                    <?php if (!empty($details['dns_servers'])): ?>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                        <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Upstream DNS Servery</div>
+                        <div style="font-weight: 600; color: var(--text-primary); font-size: 0.8rem; margin-top: 0.2rem; font-family: monospace; word-break: break-all;"><?php echo htmlspecialchars($details['dns_servers']); ?></div>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <!-- TEAMSPEAK PROCESS & VOICE QUALITY SECTION -->
+            <?php if (!empty($details['ts3_process']) || $monitor['type'] === 'teamspeak'): ?>
+            <?php $ts3_vq = bk_ts3_voice_quality($pdo, $monitor_id); ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-headset"></i> TeamSpeak 3 Služba &amp; Kvalita Hlasu</div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem;">
+                    <?php if (!empty($details['ts3_process'])): ?>
+                    <?php $p = $details['ts3_process']; ?>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                        <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-green); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-check-circle"></i> Proces ts3server běží</div>
+                        <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.25rem;">
+                            <span><strong>PID:</strong> <?php echo (int)($p['pid'] ?? 0); ?></span>
+                            <span><strong>CPU:</strong> <?php echo (float)($p['cpu'] ?? 0); ?>%</span>
+                            <span><strong>RAM:</strong> <?php echo (float)($p['ram_mb'] ?? 0); ?> MB</span>
+                            <span><strong>Vlákna:</strong> <?php echo (int)($p['threads'] ?? 0); ?></span>
+                        </div>
+                    </div>
+                    <?php else: ?>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                        <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-info-circle"></i> Proces ts3server nepropojen</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4;"><?php echo htmlspecialchars(t('ts3_process_not_found')); ?></div>
+                    </div>
+                    <?php endif; ?>
+
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                        <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-wave-square"></i> Odhad kvality hlasu (Jitter)</div>
+                        <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.25rem;">
+                            <?php if ($ts3_vq['band'] !== null): ?>
+                                <span><strong>Kvalita:</strong> <strong style="color: var(--color-green);"><?php echo htmlspecialchars($ts3_vq['band']); ?></strong></span>
+                                <span><strong>Jitter:</strong> <?php echo $ts3_vq['jitter_ms']; ?> ms</span>
+                                <span><strong>Vzorků:</strong> <?php echo $ts3_vq['sample_count']; ?> měření za hodinu</span>
+                            <?php else: ?>
+                                <span style="color: var(--text-muted);"><i class="fas fa-info-circle"></i> Nedostatek dat pro výpočet jitteru (nyní <?php echo $ts3_vq['sample_count']; ?>/3 měření za poslední hodinu)</span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- RELATED SERVICES -->
             <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
             <div class="ao-section">
                 <div class="ao-section-title"><i class="fas fa-cubes"></i> <?php echo htmlspecialchars(t('ao_related_services')); ?></div>
-                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.65rem;">
                     <?php foreach ($details['discovered_services'] as $svc):
                         $conf = (int)($svc['confidence'] ?? 0);
                         $sc = $conf >= 70 ? 'var(--color-green)' : ($conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
+                        $svc_desc = $svc['description'] ?? '';
                     ?>
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); padding: 0.4rem 0.7rem; border-radius: 6px; font-size: 0.75rem; display: flex; align-items: center; gap: 0.4rem;">
-                        <i class="fas fa-cube" style="color: <?php echo $sc; ?>;"></i>
-                        <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($svc['name'] ?? '?'); ?></strong>
-                        <?php if (!empty($svc['port'])): ?><span style="font-family: monospace; color: var(--text-muted); font-size: 0.68rem;">:<?php echo (int)$svc['port']; ?></span><?php endif; ?>
-                        <span style="color: <?php echo $sc; ?>; font-weight: bold; font-size: 0.68rem;"><?php echo $conf; ?>%</span>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <span><i class="fas fa-cube" style="color: <?php echo $sc; ?>;"></i> <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($svc['name'] ?? '?'); ?></strong></span>
+                            <span style="color: <?php echo $sc; ?>; font-weight: bold; font-size: 0.7rem; background: rgba(255,255,255,0.04); padding: 0.1rem 0.4rem; border-radius: 4px;"><?php echo $conf; ?>%</span>
+                        </div>
+                        <?php if (!empty($svc['port'])): ?><div style="font-family: monospace; color: var(--text-muted); font-size: 0.7rem;">Port: :<?php echo (int)$svc['port']; ?></div><?php endif; ?>
+                        <?php if ($svc_desc): ?>
+                            <div style="font-size: 0.72rem; color: var(--text-secondary); line-height: 1.35; margin-top: 0.1rem;"><?php echo htmlspecialchars($svc_desc); ?></div>
+                        <?php endif; ?>
                     </div>
                     <?php endforeach; ?>
                 </div>
