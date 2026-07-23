@@ -425,8 +425,111 @@ foreach ($timeline as $ev) {
             </div>
             <?php endif; ?>
 
+            <!-- OPENWRT WIFI & NETWORK SECTION -->
+            <?php if (!empty($details['wifi_radios']) || !empty($details['interfaces']) || !empty($details['wan_ipv4']) || isset($details['net_ipv4_kbps'])): ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-wifi"></i> Wi-Fi &amp; Síťová rozhraní (LAN / WAN)</div>
+                
+                <?php if (!empty($details['wifi_radios'])): ?>
+                    <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">Wi-Fi sítě (<?php echo count($details['wifi_radios']); ?> radios, celkem <?php echo (int)($details['wifi_clients_count'] ?? 0); ?> klientů)</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem;">
+                        <?php foreach ($details['wifi_radios'] as $radio): ?>
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                                <div style="font-weight: 600; margin-bottom: 0.4rem; display: flex; align-items: center; justify-content: space-between;">
+                                    <span><i class="fas fa-broadcast-tower" style="color: var(--color-green);"></i> <?php echo htmlspecialchars($radio['ssid'] ?? $radio['radio']); ?></span>
+                                    <span style="background: rgba(255,255,255,0.06); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.68rem; color: var(--color-blue, #58a6ff);"><?php echo htmlspecialchars($radio['band'] ?? '2.4GHz'); ?></span>
+                                </div>
+                                <div style="font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.2rem;">
+                                    <span><strong>Radio / Kanál:</strong> <?php echo htmlspecialchars($radio['radio']); ?> (Ch <?php echo htmlspecialchars($radio['channel'] ?? '0'); ?>)</span>
+                                    <span><strong>Připojení klienti:</strong> <strong style="color: #fff;"><?php echo htmlspecialchars($radio['clients'] ?? 0); ?></strong></span>
+                                    <?php if (!empty($radio['noise'])): ?><span><strong>Šum (Noise):</strong> <?php echo htmlspecialchars($radio['noise']); ?> dBm</span><?php endif; ?>
+                                    <?php if (!empty($radio['tx_power'])): ?><span><strong>Vysílací výkon:</strong> <?php echo htmlspecialchars($radio['tx_power']); ?> dBm</span><?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if (isset($details['net_ipv4_kbps']) || isset($details['net_ipv6_kbps'])): ?>
+                    <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">IPv4 vs IPv6 Provoz (aktuální rychlost)</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem;">
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                            <div style="font-size: 1.2rem; font-weight: 700; color: var(--color-blue, #58a6ff);"><?php echo (float)($details['net_ipv4_kbps'] ?? 0); ?> KB/s</div>
+                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.2rem;"><i class="fas fa-network-wired"></i> IPv4 Provoz</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                            <div style="font-size: 1.2rem; font-weight: 700; color: #8b5cf6;"><?php echo (float)($details['net_ipv6_kbps'] ?? 0); ?> KB/s</div>
+                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.2rem;"><i class="fas fa-globe"></i> IPv6 Provoz</div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+                <?php if (!empty($details['interfaces'])): ?>
+                    <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">Síťová rozhraní (LAN / WAN / Wi-Fi)</div>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
+                                    <th style="padding: 0.4rem;">Rozhraní</th>
+                                    <th style="padding: 0.4rem;">Přijato (RX)</th>
+                                    <th style="padding: 0.4rem;">Odesláno (TX)</th>
+                                    <th style="padding: 0.4rem;">Chyby (RX/TX)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($details['interfaces'] as $iface): ?>
+                                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                        <td style="padding: 0.4rem; font-family: monospace; font-weight: 600; color: var(--text-primary);"><?php echo htmlspecialchars($iface['iface']); ?></td>
+                                        <td style="padding: 0.4rem;"><?php echo round(($iface['rx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
+                                        <td style="padding: 0.4rem;"><?php echo round(($iface['tx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
+                                        <td style="padding: 0.4rem; color: <?php echo (($iface['rx_errors'] ?? 0) + ($iface['tx_errors'] ?? 0)) > 0 ? 'var(--color-red)' : 'var(--text-muted)'; ?>;"><?php echo ($iface['rx_errors'] ?? 0) . ' / ' . ($iface['tx_errors'] ?? 0); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
+
+            <!-- TOP PROCESSES SECTION -->
+            <?php if (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes'])): ?>
+            <div class="ao-section">
+                <div class="ao-section-title"><i class="fas fa-microchip"></i> Nejvytíženější procesy (CPU &amp; RAM)</div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem;">
+                    <?php if (!empty($details['top_cpu_processes'])): ?>
+                        <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem;">
+                            <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem;"><i class="fas fa-fire" style="color: var(--color-red);"></i> Top CPU Procesy</div>
+                            <div style="display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.78rem;">
+                                <?php foreach ($details['top_cpu_processes'] as $tp): ?>
+                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.2rem;">
+                                        <span style="font-family: monospace; color: var(--text-primary);"><?php echo htmlspecialchars($tp['name']); ?></span>
+                                        <strong style="color: var(--color-red);"><?php echo $tp['cpu']; ?>%</strong>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if (!empty($details['top_ram_processes'])): ?>
+                        <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem;">
+                            <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem;"><i class="fas fa-memory" style="color: var(--color-green);"></i> Top RAM Procesy</div>
+                            <div style="display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.78rem;">
+                                <?php foreach ($details['top_ram_processes'] as $rp): ?>
+                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.2rem;">
+                                        <span style="font-family: monospace; color: var(--text-primary);"><?php echo htmlspecialchars($rp['name']); ?></span>
+                                        <strong style="color: var(--color-green);"><?php echo $rp['ram_mb']; ?> MB</strong>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- CONFIGURATION -->
-            <?php if (!empty($details['os']) || !empty($details['hostname']) || !empty($details['kernel'])): ?>
+            <?php if (!empty($details['os']) || !empty($details['hostname']) || !empty($details['kernel']) || !empty($details['ram_total_mb'])): ?>
             <div class="ao-section">
                 <div class="ao-section-title"><i class="fas fa-gear"></i> <?php echo htmlspecialchars(t('ao_configuration')); ?></div>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 2rem; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 1rem 1.25rem;">
@@ -435,6 +538,17 @@ foreach ($timeline as $ev) {
                     <?php if (!empty($details['kernel'])): ?><div class="ao-sidebar-row"><span class="k">Kernel</span><span class="v"><?php echo htmlspecialchars($details['kernel']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['model'])): ?><div class="ao-sidebar-row"><span class="k">Model</span><span class="v"><?php echo htmlspecialchars($details['model']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['architecture'])): ?><div class="ao-sidebar-row"><span class="k">Arch</span><span class="v"><?php echo htmlspecialchars($details['architecture']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['ram_total_mb'])): ?>
+                        <?php
+                        $r_tot = (int)$details['ram_total_mb'];
+                        $r_used = (int)($details['ram_used_mb'] ?? 0);
+                        $r_avail = (int)($details['ram_available_mb'] ?? max(0, $r_tot - $r_used));
+                        $r_str = ($r_tot >= 1024)
+                            ? round($r_used / 1024, 1) . ' GB / ' . round($r_tot / 1024, 1) . ' GB (volné: ' . round($r_avail / 1024, 1) . ' GB)'
+                            : $r_used . ' MB / ' . $r_tot . ' MB (volné: ' . $r_avail . ' MB)';
+                        ?>
+                        <div class="ao-sidebar-row"><span class="k">RAM Paměť</span><span class="v"><?php echo htmlspecialchars($r_str); ?></span></div>
+                    <?php endif; ?>
                     <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?><div class="ao-sidebar-row"><span class="k">Provider</span><span class="v"><?php echo htmlspecialchars(($details['cloud_provider'] ?? '') . (!empty($details['virtualization']) ? ' (' . $details['virtualization'] . ')' : '')); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['timezone'])): ?><div class="ao-sidebar-row"><span class="k">TZ</span><span class="v"><?php echo htmlspecialchars($details['timezone']); ?></span></div><?php endif; ?>
                     <?php if (isset($details['temperature'])): ?><div class="ao-sidebar-row"><span class="k">Temp</span><span class="v" style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo $details['temperature']; ?>°C</span></div><?php endif; ?>

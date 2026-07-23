@@ -134,24 +134,25 @@ cpu=$(echo "$cpu_steal_out" | awk '{print $1}')
 cpu_steal=$(echo "$cpu_steal_out" | awk '{print $2}')
 iowait=$(echo "$cpu_steal_out" | awk '{print $3}')
 
-# 2. RAM Usage (%)
-ram=$(awk '
-/^MemTotal:/ { total=$2 }
-/^MemFree:/ { free=$2 }
-/^Buffers:/ { buffers=$2 }
-/^Cached:/ { cached=$2 }
-/^MemAvailable:/ { avail=$2 }
+# 2. RAM Usage (%) & MB breakdown
+eval $(awk '
+/^MemTotal:/ { total=int($2/1024) }
+/^MemFree:/ { free=int($2/1024) }
+/^Buffers:/ { buffers=int($2/1024) }
+/^Cached:/ { cached=int($2/1024) }
+/^MemAvailable:/ { avail=int($2/1024) }
 END {
-    if (!avail) {
-        avail = free + buffers + cached;
-    }
+    if (!avail) { avail = free + buffers + cached; }
     used = total - avail;
-    if (total == 0) {
-        print 0.0;
-    } else {
-        printf "%.1f", (used / total) * 100;
-    }
-}' /proc/meminfo)
+    if (used < 0) used = 0;
+    pct = (total == 0) ? "0.0" : sprintf("%.1f", (used / total) * 100);
+    print "ram=" pct "; ram_total_mb=" total "; ram_used_mb=" used "; ram_available_mb=" avail "; ram_free_mb=" free;
+}' /proc/meminfo 2>/dev/null)
+[ -z "$ram" ] && ram="0.0"
+[ -z "$ram_total_mb" ] && ram_total_mb=0
+[ -z "$ram_used_mb" ] && ram_used_mb=0
+[ -z "$ram_available_mb" ] && ram_available_mb=0
+[ -z "$ram_free_mb" ] && ram_free_mb=0
 
 # 2.5 Swap Usage (%)
 swap=$(awk '
@@ -726,6 +727,10 @@ payload=$(cat <<EOF
   "cpu_steal": $cpu_steal,
   "iowait": $iowait,
   "ram": $ram,
+  "ram_total_mb": $ram_total_mb,
+  "ram_used_mb": $ram_used_mb,
+  "ram_available_mb": $ram_available_mb,
+  "ram_free_mb": $ram_free_mb,
   "swap": $swap,
   "hdd": $hdd,
   "inode_usage": $inode_usage_json,

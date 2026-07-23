@@ -495,6 +495,8 @@ return [
     'timeline_event_remote_action' => 'Remote action',
     'timeline_event_status_changed_down' => 'Went down',
     'timeline_event_status_changed_up' => 'Came back up',
+    'timeline_event_status_changed_warning' => 'Entered warning state',
+    'timeline_event_status_changed_maintenance' => 'Entered maintenance mode',
 
     // Infrastructure report (email digest) - language controlled by the email_lang
     // setting, not the browser cookie/GET param (see bk_with_email_lang() in functions.php).

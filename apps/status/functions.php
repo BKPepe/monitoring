@@ -280,9 +280,27 @@ function render_vps_agent_details($details, $monitor = null) {
             </div>
         </div>
         <div>
+            <?php
+            $ram_detail_str = '';
+            if (!empty($details['ram_total_mb'])) {
+                $tot_mb = (int)$details['ram_total_mb'];
+                $used_mb = (int)($details['ram_used_mb'] ?? 0);
+                $avail_mb = (int)($details['ram_available_mb'] ?? max(0, $tot_mb - $used_mb));
+                if ($tot_mb >= 1024) {
+                    $tot_fmt = round($tot_mb / 1024, 1) . ' GB';
+                    $used_fmt = round($used_mb / 1024, 1) . ' GB';
+                    $avail_fmt = round($avail_mb / 1024, 1) . ' GB';
+                } else {
+                    $tot_fmt = $tot_mb . ' MB';
+                    $used_fmt = $used_mb . ' MB';
+                    $avail_fmt = $avail_mb . ' MB';
+                }
+                $ram_detail_str = " ({$used_fmt} / {$tot_fmt} — volné: {$avail_fmt})";
+            }
+            ?>
             <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.25rem;">
                 <span style="color: var(--text-secondary);">Physical Memory Usage</span>
-                <strong style="color: var(--text-primary);" class="stat-val"><?php echo $ram; ?>%</strong>
+                <strong style="color: var(--text-primary);" class="stat-val"><?php echo $ram; ?>%<?php echo htmlspecialchars($ram_detail_str); ?></strong>
             </div>
             <div class="chart-bar-container" style="height: 6px;">
                 <div class="chart-bar-fill <?php echo $ram_color; ?>" style="width: <?php echo $ram; ?>%"></div>
@@ -1213,8 +1231,14 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
                 if ($row['status'] === 'down' && !empty($row['error_message'])) {
                     $desc = mb_substr($row['error_message'], 0, 120);
                 }
+                $event_type = match($row['status']) {
+                    'down' => 'status_changed_down',
+                    'warning' => 'status_changed_warning',
+                    'maintenance' => 'status_changed_maintenance',
+                    default => 'status_changed_up',
+                };
                 $timeline[] = [
-                    'event_type' => $row['status'] === 'down' ? 'status_changed_down' : 'status_changed_up',
+                    'event_type' => $event_type,
                     'description' => $desc,
                     'ts' => $row['checked_at'],
                 ];
@@ -1296,8 +1320,14 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
         foreach ($stmt->fetchAll() as $row) {
             $mid = $row['monitor_id'];
             if (isset($prev_status[$mid]) && $row['status'] !== $prev_status[$mid]) {
+                $event_type = match($row['status']) {
+                    'down' => 'status_changed_down',
+                    'warning' => 'status_changed_warning',
+                    'maintenance' => 'status_changed_maintenance',
+                    default => 'status_changed_up',
+                };
                 $timeline[] = [
-                    'event_type' => $row['status'] === 'down' ? 'status_changed_down' : 'status_changed_up',
+                    'event_type' => $event_type,
                     'description' => null,
                     'ts' => $row['checked_at'],
                     'monitor_name' => $monitor_names[$mid] ?? '?',

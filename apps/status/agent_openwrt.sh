@@ -83,6 +83,13 @@ LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
 
+# Automatické vyčištění starých logů z flash paměti (/root) pro prevenci opotřebení disku
+for old_log in "$ScriptPath/agent_openwrt.log" "$ScriptPath/agent.log" /root/agent_openwrt.log /root/agent.log /root/status-agent-openwrt.log; do
+    if [ -f "$old_log" ] && [ "$old_log" != "$LOG_FILE" ]; then
+        rm -f "$old_log" 2>/dev/null || true
+    fi
+done
+
 log_message() {
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$ts - $1"
@@ -135,19 +142,26 @@ if [ -f "$CPU_STATE_FILE" ]; then
 fi
 echo "${now_ts}|${stat_now}" > "$CPU_STATE_FILE" 2>/dev/null || true
 
-# RAM % - MemAvailable stejne jako moderni "free" (used = total - available),
+# RAM % and MB breakdown - MemAvailable stejne jako moderni "free" (used = total - available),
 # se zalohou na free+buffers+cached na starsich jadrech bez MemAvailable.
-ram=$(awk '
-/^MemTotal:/ { total=$2 }
-/^MemFree:/ { free=$2 }
-/^Buffers:/ { buffers=$2 }
-/^Cached:/ { cached=$2 }
-/^MemAvailable:/ { avail=$2 }
+eval $(awk '
+/^MemTotal:/ { total=int($2/1024) }
+/^MemFree:/ { free=int($2/1024) }
+/^Buffers:/ { buffers=int($2/1024) }
+/^Cached:/ { cached=int($2/1024) }
+/^MemAvailable:/ { avail=int($2/1024) }
 END {
     if (!avail) { avail = free + buffers + cached; }
-    if (total == 0) { print "0.0"; } else { printf "%.1f", ((total - avail) / total) * 100; }
-}' /proc/meminfo)
+    used = total - avail;
+    if (used < 0) used = 0;
+    pct = (total == 0) ? "0.0" : sprintf("%.1f", (used / total) * 100);
+    print "ram=" pct "; ram_total_mb=" total "; ram_used_mb=" used "; ram_available_mb=" avail "; ram_free_mb=" free;
+}' /proc/meminfo 2>/dev/null)
 [ -z "$ram" ] && ram="0.0"
+[ -z "$ram_total_mb" ] && ram_total_mb=0
+[ -z "$ram_used_mb" ] && ram_used_mb=0
+[ -z "$ram_available_mb" ] && ram_available_mb=0
+[ -z "$ram_free_mb" ] && ram_free_mb=0
 
 # Load average 1/5/15 - primo z /proc/loadavg, ne z ubus "system info" (ktere
 # vraci stejna cisla, jen skalovana x65536 - zbytecna komplikace navic).
@@ -312,6 +326,34 @@ if [ -n "$wan_l3_device" ] && [ -f /proc/net/dev ]; then
         fi
         echo "${now_ts},${net_bytes}" > "$NET_STATE_FILE" 2>/dev/null || true
     fi
+fi
+
+# --- 4a2. IPv4 vs IPv6 traffic counters (KB/s) ---
+net_ipv4_kbps="null"
+net_ipv6_kbps="null"
+NET_IP_STATE_FILE="/tmp/status-agent-openwrt-net-ip.state"
+
+v4_bytes=$(awk '/^IpExt:/ { if (hdr == "") { hdr = $0 } else { split(hdr, keys, " "); for (i = 2; i <= NF; i++) { if (keys[i] == "InOctets") in_b = $i; if (keys[i] == "OutOctets") out_b = $i; } } } END { print (in_b + out_b) + 0 }' /proc/net/netstat 2>/dev/null)
+v6_bytes=$(awk '/^Ip6(In|Out)Octets/ { sum += $2 } END { print sum + 0 }' /proc/net/snmp6 2>/dev/null)
+
+if [ -n "$v4_bytes" ] && [ "$v4_bytes" -gt 0 ]; then
+    if [ -f "$NET_IP_STATE_FILE" ]; then
+        prev_ts=$(cut -d',' -f1 "$NET_IP_STATE_FILE" 2>/dev/null)
+        prev_v4=$(cut -d',' -f2 "$NET_IP_STATE_FILE" 2>/dev/null)
+        prev_v6=$(cut -d',' -f3 "$NET_IP_STATE_FILE" 2>/dev/null)
+        if [ -n "$prev_ts" ] && [ -n "$prev_v4" ] && [ "$now_ts" -gt "$prev_ts" ]; then
+            elapsed=$((now_ts - prev_ts))
+            d_v4=$((v4_bytes - prev_v4))
+            d_v6=$((v6_bytes - prev_v6))
+            if [ "$elapsed" -gt 0 ] && [ "$d_v4" -ge 0 ]; then
+                net_ipv4_kbps=$(awk -v d="$d_v4" -v e="$elapsed" 'BEGIN { printf "%.1f", (d / e) / 1024 }')
+            fi
+            if [ "$elapsed" -gt 0 ] && [ "$d_v6" -ge 0 ]; then
+                net_ipv6_kbps=$(awk -v d="$d_v6" -v e="$elapsed" 'BEGIN { printf "%.1f", (d / e) / 1024 }')
+            fi
+        fi
+    fi
+    echo "${now_ts},${v4_bytes},${v6_bytes}" > "$NET_IP_STATE_FILE" 2>/dev/null || true
 fi
 
 # --- 4b. Realna smerovatelna IPv6 - hleda se na samostatnem logickem rozhrani
@@ -499,18 +541,38 @@ elif [ -d /sys/class/net/wg0 ]; then
     wireguard_peers_json="[{\"interface\":\"wg0\",\"public_key\":\"\",\"endpoint\":\"\",\"latest_handshake\":0,\"rx_bytes\":0,\"tx_bytes\":0}]"
 fi
 
-# --- Top CPU processes (pro Knowledge Tips) ---
+# --- Top CPU & RAM processes ---
 top_cpu_json="[]"
+top_ram_json="[]"
 if command -v top >/dev/null 2>&1; then
-    top_cpu_json=$(top -bn1 2>/dev/null | awk '
-    BEGIN { printf "["; count=0 }
-    NR > 7 && count < 3 {
-        if (count > 0) printf ", ";
-        gsub(/%/, "", $7);
-        printf "{\"pid\":%s,\"name\":\"%s\",\"cpu\":%s}", $1, $8, $7;
-        count++;
-    }
-    END { printf "]" }')
+    top_out=$(top -bn1 2>/dev/null)
+    if [ -n "$top_out" ]; then
+        top_cpu_json=$(echo "$top_out" | awk '
+        BEGIN { printf "["; count=0 }
+        NR > 7 && count < 5 {
+            if ($1 ~ /^[0-9]+$/) {
+                if (count > 0) printf ", ";
+                gsub(/%/, "", $7);
+                name=$8; if (!name) name=$7;
+                printf "{\"pid\":%s,\"name\":\"%s\",\"cpu\":%s}", $1, name, ($7 ~ /^[0-9.]+/ ? $7 : "0");
+                count++;
+            }
+        }
+        END { printf "]" }')
+
+        top_ram_json=$(echo "$top_out" | awk '
+        BEGIN { printf "["; count=0 }
+        NR > 7 && count < 5 {
+            if ($1 ~ /^[0-9]+$/) {
+                if (count > 0) printf ", ";
+                vsz=int($5/1024); if (vsz<=0) vsz=int($3/1024);
+                name=$8; if (!name) name=$7;
+                printf "{\"pid\":%s,\"name\":\"%s\",\"ram_mb\":%d}", $1, name, vsz;
+                count++;
+            }
+        }
+        END { printf "]" }')
+    fi
 fi
 
 # --- mwan3 (multi-WAN) ---
@@ -720,6 +782,10 @@ payload=$(cat <<EOF
   "os": "$os_combined",
   "cpu": $cpu,
   "ram": $ram,
+  "ram_total_mb": $ram_total_mb,
+  "ram_used_mb": $ram_used_mb,
+  "ram_available_mb": $ram_available_mb,
+  "ram_free_mb": $ram_free_mb,
   "swap_pct": $swap_pct,
   "entropy": $entropy,
   "conntrack_pct": $conntrack_pct,
@@ -739,7 +805,10 @@ payload=$(cat <<EOF
   "fw_rejected": $fw_rejected,
   "wireguard_peers": $wireguard_peers_json,
   "top_cpu_processes": $top_cpu_json,
+  "top_ram_processes": $top_ram_json,
   "net": $net,
+  "net_ipv4_kbps": $net_ipv4_kbps,
+  "net_ipv6_kbps": $net_ipv6_kbps,
   "hdd": $hdd,
   "disk_io_write": $disk_io_write,
   "btrfs_errors": $btrfs_errors,

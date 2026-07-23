@@ -496,6 +496,8 @@ return [
     'timeline_event_remote_action' => 'Vzdálená akce',
     'timeline_event_status_changed_down' => 'Přešel do stavu Nedostupný',
     'timeline_event_status_changed_up' => 'Přešel do stavu Dostupný',
+    'timeline_event_status_changed_warning' => 'Přešel do stavu Varování',
+    'timeline_event_status_changed_maintenance' => 'Přepnut do režimu Údržba',
 
     // Infrastructure report (e-mailový digest) - jazyk řízen nastavením email_lang,
     // ne cookie/GET prohlížeče (viz bk_with_email_lang() ve functions.php).
