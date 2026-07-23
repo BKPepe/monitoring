@@ -116,9 +116,9 @@ function ao_resolve_value($source, $details, $latest_metrics, $monitor, $pdo, $m
     if (str_starts_with($source, 'special.')) {
         $key = substr($source, 8);
         return match($key) {
-            'wan' => ($details['wan_status'] ?? null) ? t('ao_online') : null,
-            'wireguard' => isset($details['wireguard_peers']) ? $details['wireguard_peers'] . ' ' . t('ao_peers') : null,
-            'wifi' => isset($details['wifi_clients_total']) ? $details['wifi_clients_total'] . ' ' . t('ao_clients') : null,
+            'wan' => isset($details['wan_up']) ? ($details['wan_up'] ? t('ao_online') : t('ao_offline')) : null,
+            'wireguard' => isset($details['wireguard_peers']) && is_array($details['wireguard_peers']) ? count($details['wireguard_peers']) . ' ' . t('ao_peers') : (isset($details['wireguard_peers']) && is_numeric($details['wireguard_peers']) ? $details['wireguard_peers'] . ' ' . t('ao_peers') : null),
+            'wifi' => isset($details['wifi_clients_count']) ? $details['wifi_clients_count'] . ' ' . t('ao_clients') : (isset($details['wifi_clients_total']) ? $details['wifi_clients_total'] . ' ' . t('ao_clients') : null),
             'ts_clients' => isset($details['clients_online']) ? $details['clients_online'] . '/' . ($details['max_clients'] ?? '?') : null,
             'ts_voice' => $details['voice_quality'] ?? null,
             'ts_ping' => $details['ping'] ?? null,
@@ -471,6 +471,7 @@ foreach ($timeline as $ev) {
                 <a href="admin.php?restart=<?php echo (int)$monitor['id']; ?>" class="ao-sidebar-btn" onclick="return confirm('Restart monitor?')"><i class="fas fa-rotate"></i> <?php echo htmlspecialchars(t('ao_restart_monitor')); ?></a>
             <?php endif; ?>
             <a href="api.php?action=export_csv&monitor_id=<?php echo (int)$monitor_id; ?>" class="ao-sidebar-btn"><i class="fas fa-download"></i> <?php echo htmlspecialchars(t('ao_export_csv')); ?></a>
+            <button type="button" class="ao-sidebar-btn" onclick="navigator.clipboard.writeText(location.href).then(function(){var b=event.target.closest('button');b.innerHTML='<i class=\'fas fa-check\'></i> Zkopírováno!';setTimeout(function(){b.innerHTML='<i class=\'fas fa-link\'></i> Sdílet odkaz'},1500)})"><i class="fas fa-link"></i> Sdílet odkaz</button>
             <a href="index.php" class="ao-sidebar-btn"><i class="fas fa-arrow-left"></i> <?php echo htmlspecialchars(t('breadcrumb_dashboard')); ?></a>
 
             <!-- Agent info -->

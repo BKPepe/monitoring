@@ -4078,6 +4078,7 @@ function bk_get_type_card_profile($type) {
             'cpu' => ['icon' => 'fa-microchip', 'label' => 'CPU', 'source' => 'details.cpu', 'unit' => '%'],
             'ram' => ['icon' => 'fa-memory', 'label' => 'RAM', 'source' => 'details.ram', 'unit' => '%'],
             'hdd' => ['icon' => 'fa-hard-drive', 'label' => 'Flash', 'source' => 'details.hdd', 'unit' => '%'],
+            'net' => ['icon' => 'fa-network-wired', 'label' => 'Síť', 'source' => 'details.net', 'unit' => ' KB/s'],
             'temperature' => ['icon' => 'fa-temperature-half', 'label' => 'Teplota', 'source' => 'details.temperature', 'unit' => '°C'],
             'wan' => ['icon' => 'fa-earth-europe', 'label' => 'WAN', 'source' => 'special.wan', 'unit' => ''],
             'wireguard' => ['icon' => 'fa-shield-halved', 'label' => 'WireGuard', 'source' => 'special.wireguard', 'unit' => ''],

@@ -1,23 +1,38 @@
 version: 2
 updates:
-  # Workspace root - covers apps/site (Astro) and apps/worker (Cloudflare Worker),
-  # both listed in the root package.json "workspaces" array.
+  # NPM dependencies (root workspace covers apps/site + apps/worker)
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
 
-  # apps/status has no build step (plain PHP, deployed via FTP) - its package.json
-  # exists only to give Dependabot something to track for the pinned CDN <script>
-  # URLs in the PHP templates. See apps/status/package.json for details; a bump
-  # PR here still requires manually updating the matching CDN URL in the PHP file.
+  # apps/status CDN libs (ECharts, FontAwesome, QRCode) - bump PR requires
+  # updating the matching BK_CDN_* constant in functions.php
   - package-ecosystem: "npm"
     directory: "/apps/status"
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(status)"
 
-  # GitHub Actions used by the deploy/release workflows.
+  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "ci"
+    commit-message:
+      prefix: "ci"

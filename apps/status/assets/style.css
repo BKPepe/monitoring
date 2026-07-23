@@ -1953,6 +1953,7 @@ select.form-control {
   text-align: center; text-decoration: none; cursor: pointer; transition: background 0.15s;
 }
 .ao-sidebar-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+button.ao-sidebar-btn { font-family: inherit; }
 
 .ao-insight-item {
   display: flex; align-items: flex-start; gap: 0.6rem;
