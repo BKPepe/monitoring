@@ -457,9 +457,17 @@ try {
     }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
+        // OpenWrt: ping na WAN IP pro reálnou odezvu (agent posílá wan_ipv4)
+        $ping_ms = 0;
+        if ($monitor['type'] === 'openwrt') {
+            $ping_target = $ow_wan_ipv4 ?: ($monitor['target'] ?: null);
+            if ($ping_target) {
+                $ping_ms = bk_ping_host($ping_target) ?? 0;
+            }
+        }
         // Zapsat běžný log kontroly
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");
-        $stmt_log->execute([$monitor_id, $new_status, 0, $error_msg]);
+        $stmt_log->execute([$monitor_id, $new_status, $ping_ms, $error_msg]);
         
         // Kontrola změny stavu
         if ($old_status !== $new_status) {

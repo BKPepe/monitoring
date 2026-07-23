@@ -2291,6 +2291,25 @@ function detect_config_changes($pdo, $monitor, $check_result) {
 }
 
 /**
+ * ICMP ping - vrátí odezvu v ms nebo null při selhání.
+ * Používá systémový `ping` s 1 paketem a 2s timeoutem.
+ */
+function bk_ping_host($host, $timeout_ms = 2000) {
+    if (empty($host)) return null;
+    $host = escapeshellarg($host);
+    $timeout_s = max(1, (int)ceil($timeout_ms / 1000));
+    // Linux ping: -c 1 paket, -W timeout ve sekundách
+    $cmd = "ping -c 1 -W $timeout_s $host 2>/dev/null";
+    $output = @shell_exec($cmd);
+    if ($output === null) return null;
+    // Parsování "time=1.23 ms" nebo "time=1 ms"
+    if (preg_match('/time[=<]\s*([0-9.]+)\s*ms/i', $output, $m)) {
+        return round((float)$m[1], 1);
+    }
+    return null;
+}
+
+/**
  * Kontrola přes TCP Socket (port check / TCP ping)
  */
 function check_socket($host, $port, $timeout = 5) {
