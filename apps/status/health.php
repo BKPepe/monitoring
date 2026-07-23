@@ -16,7 +16,6 @@ if (!$is_cli) {
         echo json_encode(['success' => false, 'message' => 'Admin access required']);
         exit;
     }
-    header('Content-Type: application/json; charset=utf-8');
 }
 
 $checks = [];
@@ -116,6 +115,7 @@ if ($is_cli) {
 
 // JSON API mode (?format=json)
 if (($_GET['format'] ?? '') === 'json') {
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     exit;
 }

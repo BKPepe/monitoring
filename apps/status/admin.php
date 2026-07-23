@@ -734,29 +734,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                 $stmt_old->execute([$u_id]);
                 $old_row = $stmt_old->fetch();
 
-                if (!empty($u_password)) {
-                    if (strlen($u_password) < 8) {
-                        $error_msg = 'Heslo musí mít alespoň 8 znaků.';
-                    } else {
-                    $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
-                    $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?");
-                    $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $new_pass_hash, $u_id]);
-                    }
+                // Krátké heslo musí zastavit celou úpravu (ne jen samotný UPDATE
+                // s heslem) - jinak by se tiše zahodily i ostatní změny (e-mail,
+                // telefon, role) zadané ve stejném submitu, a přesto by se dole
+                // nepodmíněně zalogoval "user_updated" a ukázal lživý success_msg.
+                if (!empty($u_password) && strlen($u_password) < 8) {
+                    $error_msg = 'Heslo musí mít alespoň 8 znaků.';
                 } else {
-                    $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?");
-                    $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $u_id]);
-                }
+                    if (!empty($u_password)) {
+                        $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);
+                        $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?");
+                        $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $new_pass_hash, $u_id]);
+                    } else {
+                        $stmt_up = $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?");
+                        $stmt_up->execute([$u_username, $u_email, $u_phone, $u_role, $u_id]);
+                    }
 
-                $changes = [];
-                if ($old_row) {
-                    if ($old_row['username'] !== $u_username) $changes[] = "jméno {$old_row['username']} -> {$u_username}";
-                    if ($old_row['email'] !== $u_email) $changes[] = "e-mail {$old_row['email']} -> {$u_email}";
-                    if ($old_row['phone'] !== $u_phone) $changes[] = "telefon změněn";
-                    if ($old_row['role'] !== $u_role) $changes[] = "role {$old_row['role']} -> {$u_role}";
+                    $changes = [];
+                    if ($old_row) {
+                        if ($old_row['username'] !== $u_username) $changes[] = "jméno {$old_row['username']} -> {$u_username}";
+                        if ($old_row['email'] !== $u_email) $changes[] = "e-mail {$old_row['email']} -> {$u_email}";
+                        if ($old_row['phone'] !== $u_phone) $changes[] = "telefon změněn";
+                        if ($old_row['role'] !== $u_role) $changes[] = "role {$old_row['role']} -> {$u_role}";
+                    }
+                    if (!empty($u_password)) $changes[] = 'heslo nastaveno adminem';
+                    bk_audit_log($pdo, 'user_updated', $u_username . (!empty($changes) ? ' (' . implode(', ', $changes) . ')' : ' (beze změny)'), 'user', $u_id);
+                    $success_msg = 'Uživatel byl úspěšně upraven.';
                 }
-                if (!empty($u_password)) $changes[] = 'heslo nastaveno adminem';
-                bk_audit_log($pdo, 'user_updated', $u_username . (!empty($changes) ? ' (' . implode(', ', $changes) . ')' : ' (beze změny)'), 'user', $u_id);
-                $success_msg = 'Uživatel byl úspěšně upraven.';
             } else {
                 if (!empty($u_password)) {
                     // Admin heslo zadal ručně - uloží se rovnou, žádný pozvánkový e-mail.
