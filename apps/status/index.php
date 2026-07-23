@@ -936,13 +936,15 @@ $portal_url = trim(get_setting('portal_url'));
                                                     <?php if (!empty($pipeline['tls']['cert']) && ($enabled_metrics === null || in_array('ssl_card', $enabled_metrics))): ?><button type="button" data-tab="ssl_card"><?php echo htmlspecialchars(t('mtab_ssl_card')); ?></button><?php endif; ?>
                                                     <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?><button type="button" data-tab="headers"><?php echo htmlspecialchars(t('mtab_headers')); ?></button><?php endif; ?>
                                                 <?php endif; ?>
+                                                <?php
+                                                $has_proc_data = !empty($details['ts3_process']) || !empty($details['top_cpu_processes']) || !empty($details['top_ram_processes']) || !empty($monitor['monitored_processes']) || !empty($details['processes']);
+                                                $has_svc_data = ($check_stages_shared !== null && !empty($check_stages_shared['service'])) || !empty($details['discovered_services']);
+                                                ?>
+                                                <?php if ($has_proc_data && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?><button type="button" data-tab="process"><?php echo htmlspecialchars(t('mtab_process')); ?></button><?php endif; ?>
+                                                <?php if ($has_svc_data && ($enabled_metrics === null || in_array('service', $enabled_metrics))): ?><button type="button" data-tab="service"><?php echo htmlspecialchars(t('mtab_service')); ?></button><?php endif; ?>
                                                 <?php if ($mtabs_teamspeak): ?>
                                                     <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?><button type="button" data-tab="health_score"><?php echo htmlspecialchars(t('mtab_health_score')); ?></button><?php endif; ?>
-                                                    <?php if (is_array($details['ts3_process'] ?? null) && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?><button type="button" data-tab="process"><?php echo htmlspecialchars(t('mtab_process')); ?></button><?php endif; ?>
-                                                    <?php if ($check_stages_shared !== null): ?>
-                                                        <?php if ($enabled_metrics === null || in_array('service', $enabled_metrics)): ?><button type="button" data-tab="service"><?php echo htmlspecialchars(t('mtab_service')); ?></button><?php endif; ?>
-                                                        <?php if ($enabled_metrics === null || in_array('quality', $enabled_metrics)): ?><button type="button" data-tab="quality"><?php echo htmlspecialchars(t('mtab_quality')); ?></button><?php endif; ?>
-                                                    <?php endif; ?>
+                                                    <?php if ($check_stages_shared !== null && ($enabled_metrics === null || in_array('quality', $enabled_metrics))): ?><button type="button" data-tab="quality"><?php echo htmlspecialchars(t('mtab_quality')); ?></button><?php endif; ?>
                                                     <?php if (($check_stages_shared !== null || !empty($details['ports'])) && ($enabled_metrics === null || in_array('ports', $enabled_metrics))): ?><button type="button" data-tab="ports"><?php echo htmlspecialchars(t('mtab_ports')); ?></button><?php endif; ?>
                                                     <?php if ($check_stages_shared !== null && ($enabled_metrics === null || in_array('license_version', $enabled_metrics))): ?><button type="button" data-tab="license_version"><?php echo htmlspecialchars(t('mtab_license_version')); ?></button><?php endif; ?>
                                                     <?php if (count($ts3_clients_data) > 1 && ($enabled_metrics === null || in_array('clients_chart', $enabled_metrics))): ?><button type="button" data-tab="clients_chart"><?php echo htmlspecialchars(t('mtab_clients_chart')); ?></button><?php endif; ?>
@@ -1364,68 +1366,6 @@ $portal_url = trim(get_setting('portal_url'));
                                                          </table>
                                                      </div>
                                                  </div>
-                                                 <?php endif; ?>
-
-                                                 <?php if (is_array($details['ts3_process'] ?? null) && ($enabled_metrics === null || in_array('process', $enabled_metrics))): $tsp = $details['ts3_process']; ?>
-                                                         <div class="monitor-tab-panel" data-tab="process">
-                                                         <div class="ts3-process-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
-                                                             <div class="detail-section-title"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('ts3_process_heading')); ?></div>
-                                                             <?php if (empty($tsp['pid'])): ?>
-                                                                 <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.6rem;"><?php echo htmlspecialchars(t('ts3_process_not_found')); ?></p>
-                                                             <?php else: ?>
-                                                             <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_status')); ?>:</span> <strong style="color: var(--color-green); margin-left: 0.25rem;"><?php echo htmlspecialchars(t('ts3_process_running')); ?></strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_uptime')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(format_uptime_cz((int)($tsp['uptime_sec'] ?? 0))); ?></strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_cpu')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars((string)($tsp['cpu'] ?? 0)); ?>%</strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_ram')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars((string)($tsp['ram_mb'] ?? 0)); ?> MB</strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_threads')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['threads'] ?? 0); ?></strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_process_fds')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($tsp['open_fds'] ?? 0); ?></strong></div>
-                                                             </div>
-                                                             <?php endif; ?>
-                                                         </div>
-                                                         </div>
-                                                     <?php endif; ?>
-
-                                                     <?php if ($ts3_check_stages !== null): ?>
-                                                     <?php if ($enabled_metrics === null || in_array('service', $enabled_metrics)): ?>
-                                                     <div class="monitor-tab-panel" data-tab="service">
-                                                     <div class="ts3-service-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
-                                                         <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('ts3_service_heading')); ?></div>
-                                                         <?php
-                                                         $ts3_svc = $ts3_check_stages['service'] ?? [];
-                                                         $ts3_svc_has_data = isset($ts3_svc['slot_usage_pct']) || $ts3_svc['channel_count'] !== null || $ts3_svc['active_channel_count'] !== null || $ts3_svc['query_client_count'] !== null || $ts3_svc['server_group_count'] !== null;
-                                                         ?>
-                                                         <?php if (!$ts3_svc_has_data): ?>
-                                                             <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.6rem;"><?php echo htmlspecialchars(t('ts3_service_no_data')); ?></p>
-                                                         <?php else: ?>
-                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
-                                                             <?php if (isset($ts3_svc['slot_usage_pct'])): ?>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_slots')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo $ts3_svc['slot_usage_pct']; ?>%</strong></div>
-                                                             <?php endif; ?>
-                                                             <?php if ($ts3_svc['channel_count'] !== null): ?>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_channels')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['channel_count']; ?></strong></div>
-                                                             <?php endif; ?>
-                                                             <?php if ($ts3_svc['active_channel_count'] !== null): ?>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_active_channels')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['active_channel_count']; ?></strong></div>
-                                                             <?php endif; ?>
-                                                             <?php if ($ts3_svc['query_client_count'] !== null): ?>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_query_clients')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['query_client_count']; ?></strong></div>
-                                                             <?php endif; ?>
-                                                             <?php if ($ts3_svc['server_group_count'] !== null): ?>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_service_groups')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$ts3_svc['server_group_count']; ?></strong></div>
-                                                             <?php endif; ?>
-                                                         </div>
-                                                         <?php endif; ?>
-                                                         <?php if (!empty($ts3_svc['voice_activity'])): $va = $ts3_svc['voice_activity']; ?>
-                                                             <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-comment" style="color: var(--color-green);"></i> <?php echo htmlspecialchars(t('ts3_voice_talking')); ?>: <strong style="color: #fff;"><?php echo (int)$va['talking']; ?></strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-moon" style="color: var(--text-muted);"></i> <?php echo htmlspecialchars(t('ts3_voice_away')); ?>: <strong style="color: #fff;"><?php echo (int)$va['away']; ?></strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-microphone-slash" style="color: var(--color-yellow);"></i> <?php echo htmlspecialchars(t('ts3_voice_muted')); ?>: <strong style="color: #fff;"><?php echo (int)$va['muted']; ?></strong></div>
-                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><i class="fas fa-circle" style="color: var(--color-red);"></i> <?php echo htmlspecialchars(t('ts3_voice_recording')); ?>: <strong style="color: #fff;"><?php echo (int)$va['recording']; ?></strong></div>
-                                                             </div>
-                                                         <?php endif; ?>
-                                                     </div>
-                                                     </div>
                                                      <?php endif; ?>
 
                                                      <?php if ($enabled_metrics === null || in_array('quality', $enabled_metrics)): ?>
