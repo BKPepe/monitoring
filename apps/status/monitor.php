@@ -5,6 +5,10 @@
  * Access: monitor.php?id=X
  */
 
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @session_start();
+}
+
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
@@ -153,7 +157,7 @@ foreach ($card_profile as $key => $cfg) {
     if ($val === null) continue;
     $ctx = null;
     // Get context for numeric metrics from vps_metrics
-    $metric_col_map = ['cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage', 'temperature' => 'temperature', 'load' => 'load1', 'net' => 'net_io', 'swap' => 'swap_usage', 'conntrack' => 'conntrack_pct'];
+    $metric_col_map = ['cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage', 'temperature' => 'temperature_c', 'load' => 'load_avg_1', 'net' => 'net_usage', 'swap' => 'swap_usage', 'conntrack' => 'conntrack_pct'];
     if (isset($metric_col_map[$key]) && is_numeric($val)) {
         $ctx = bk_metric_context($pdo, $monitor_id, $metric_col_map[$key], (float)$val);
     }

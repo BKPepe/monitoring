@@ -137,7 +137,7 @@ try {
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <title>Health Check — <?php echo htmlspecialchars($site_title); ?></title>
     <link rel="stylesheet" href="assets/style.css?v=<?php echo @filemtime(__DIR__ . '/assets/style.css'); ?>">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
     <script>if (localStorage.getItem('theme') === 'light') { document.documentElement.classList.add('light-theme'); }</script>
 </head>
 <body>

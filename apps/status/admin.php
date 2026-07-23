@@ -191,19 +191,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_login_code'])) {
         $stmt->execute([$pending_user_id]);
         $user = $stmt->fetch();
 
-        if ($user && bk_totp_verify_code($user['totp_secret'], $totp_input)) {
-            session_regenerate_id(true);
-            $_SESSION['admin_logged_in'] = true;
-            $_SESSION['admin_username'] = $user['username'];
-            $_SESSION['admin_id'] = $user['id'];
-            $_SESSION['admin_role'] = $user['role'];
-            unset($_SESSION['pending_2fa_user_id']);
-            bk_audit_log($pdo, 'login_success', 'Jméno a heslo + 2FA', 'user', $user['id'], $user['id'], $user['username']);
-            header('Location: admin.php');
-            exit;
+        if ($user) {
+            $lockout_secs = bk_login_lockout_seconds($pdo, $user['username']);
+            if ($lockout_secs > 0) {
+                $login_error = 'Příliš mnoho neúspěšných pokusů. Zkuste to znovu za ' . ceil($lockout_secs / 60) . ' min.';
+            } else if (bk_totp_verify_code($user['totp_secret'], $totp_input)) {
+                session_regenerate_id(true);
+                $_SESSION['admin_logged_in'] = true;
+                $_SESSION['admin_username'] = $user['username'];
+                $_SESSION['admin_id'] = $user['id'];
+                $_SESSION['admin_role'] = $user['role'];
+                unset($_SESSION['pending_2fa_user_id']);
+                bk_audit_log($pdo, 'login_success', 'Jméno a heslo + 2FA', 'user', $user['id'], $user['id'], $user['username']);
+                header('Location: admin.php');
+                exit;
+            } else {
+                bk_audit_log($pdo, 'login_failed', 'Neplatný 2FA kód', null, null, $pending_user_id, $user['username'] ?? null);
+                $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
+            }
         } else {
-            bk_audit_log($pdo, 'login_failed', 'Neplatný 2FA kód', null, null, $pending_user_id, $user['username'] ?? null);
-            $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
+            $login_error = 'Uživatel nenalezen.';
         }
     }
 }

@@ -53,7 +53,7 @@ function bk_oauth_providers() {
             'scope' => 'openid profile',
             'user_url' => 'https://www.googleapis.com/oauth2/v3/userinfo',
             'id_field' => 'sub',
-            'extra_headers' => [],
+            'extra_headers' => ['User-Agent: BloodKingsStatus/1.3.0'],
         ],
         'discord' => [
             'label' => 'Discord',
@@ -64,7 +64,7 @@ function bk_oauth_providers() {
             'scope' => 'identify',
             'user_url' => 'https://discord.com/api/users/@me',
             'id_field' => 'id',
-            'extra_headers' => [],
+            'extra_headers' => ['User-Agent: BloodKingsStatus/1.3.0'],
         ],
         'gitlab' => [
             'label' => 'GitLab',
@@ -75,7 +75,7 @@ function bk_oauth_providers() {
             'scope' => 'read_user',
             'user_url' => 'https://gitlab.com/api/v4/user',
             'id_field' => 'id',
-            'extra_headers' => [],
+            'extra_headers' => ['User-Agent: BloodKingsStatus/1.3.0'],
         ],
     ];
 }
@@ -97,6 +97,7 @@ function bk_oauth_fetch_identity($provider_key, $code, $redirect_uri) {
     $ch = curl_init($cfg['token_url']);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'BloodKingsStatus/1.3.0');
     curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
         'client_id' => $client_id,
         'client_secret' => $client_secret,
@@ -4015,6 +4016,16 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
  */
 function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
     $ctx = ['avg' => null, 'min' => null, 'max' => null, 'trend' => 'stable', 'top_process' => null];
+    $allowed_cols = [
+        'cpu_usage', 'ram_usage', 'hdd_usage', 'net_usage',
+        'load_avg_1', 'load_avg_5', 'load_avg_15', 'cpu_steal', 'swap_usage',
+        'disk_io_read_kbps', 'disk_io_write_kbps', 'net_errors',
+        'iowait_pct', 'inode_usage_pct', 'zombie_count', 'fork_rate', 'temperature_c',
+        'wifi_clients_total', 'conntrack_pct'
+    ];
+    if (!in_array($metric_column, $allowed_cols, true)) {
+        return $ctx;
+    }
     try {
         $stmt = $pdo->prepare("SELECT AVG($metric_column) as avg_v, MIN($metric_column) as min_v, MAX($metric_column) as max_v FROM vps_metrics WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND $metric_column IS NOT NULL");
         $stmt->execute([$monitor_id]);

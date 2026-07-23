@@ -79,7 +79,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
 fi
 
 AGENT_VERSION="1.3.0"
-LOG_FILE="$ScriptPath/agent_openwrt.log"
+LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
 
@@ -190,6 +190,29 @@ if command -v btrfs >/dev/null 2>&1; then
     btrfs_out=$(btrfs device stats "$df_target" 2>/dev/null)
     if [ -n "$btrfs_out" ]; then
         btrfs_errors=$(echo "$btrfs_out" | awk '{sum += $NF} END {print sum+0}')
+    fi
+fi
+
+# --- 2c. Flash Wear / Disk Write Rate (čte zapsané sektory z /proc/diskstats) ---
+DISK_STATE_FILE="/tmp/status-agent-openwrt-disk.state"
+disk_io_write="null"
+if [ -f /proc/diskstats ]; then
+    now_ts=$(date +%s)
+    total_written_sectors=$(awk '$3 ~ /^(mtdblock|mmcblk|sd|ubiblock|nvme)/ {sum += $10} END {print sum+0}' /proc/diskstats 2>/dev/null)
+    if [ -n "$total_written_sectors" ] && [ "$total_written_sectors" -gt 0 ]; then
+        if [ -f "$DISK_STATE_FILE" ]; then
+            prev_ts=$(awk '{print $1}' "$DISK_STATE_FILE" 2>/dev/null)
+            prev_sec=$(awk '{print $2}' "$DISK_STATE_FILE" 2>/dev/null)
+            if [ -n "$prev_ts" ] && [ -n "$prev_sec" ] && [ "$now_ts" -gt "$prev_ts" ]; then
+                time_delta=$((now_ts - prev_ts))
+                sec_delta=$((total_written_sectors - prev_sec))
+                if [ "$sec_delta" -ge 0 ] && [ "$time_delta" -gt 0 ]; then
+                    write_kb=$((sec_delta / 2))
+                    disk_io_write=$(awk -v k="$write_kb" -v t="$time_delta" 'BEGIN {printf "%.2f", k / t}')
+                fi
+            fi
+        fi
+        echo "$now_ts $total_written_sectors" > "$DISK_STATE_FILE" 2>/dev/null || true
     fi
 fi
 
@@ -718,6 +741,7 @@ payload=$(cat <<EOF
   "top_cpu_processes": $top_cpu_json,
   "net": $net,
   "hdd": $hdd,
+  "disk_io_write": $disk_io_write,
   "btrfs_errors": $btrfs_errors,
   "load1": $load1,
   "load5": $load5,
