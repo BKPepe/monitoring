@@ -11,5 +11,8 @@
     "build:site": "npm run build -w apps/site",
     "build:worker": "npm run build -w apps/worker",
     "build": "npm run build -w apps/site && npm run build -w apps/worker"
+  },
+  "overrides": {
+    "sharp": "^0.35.0"
   }
 }
