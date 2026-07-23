@@ -36,7 +36,7 @@ $existing_tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
 foreach ($required_tables as $t) {
     $exists = in_array($t, $existing_tables, true);
-    add_check($checks, $all_ok, "Table: $t", $exists, $exists ? '' : 'MISSING - run migrate.php');
+    add_check($checks, $all_ok, "Table: $t", $exists, $exists ? '' : 'MISSING - import schema.sql');
 }
 
 // 3. Critical columns in vps_metrics (ty co agent_api.php INSERTuje)
@@ -76,7 +76,7 @@ try {
     $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'schema_version'");
     $stmt->execute();
     $ver = $stmt->fetchColumn();
-    add_check($checks, $all_ok, 'schema_version', !empty($ver), $ver ?: 'NOT SET - run migrate.php');
+    add_check($checks, $all_ok, 'schema_version', !empty($ver), $ver ?: 'NOT SET - import schema.sql');
 } catch (PDOException $e) {
     add_check($checks, $all_ok, 'schema_version', false, $e->getMessage());
 }
@@ -109,7 +109,7 @@ if ($is_cli) {
         $icon = $c['ok'] ? '✓' : '✗';
         echo "  $icon {$c['name']}" . ($c['detail'] ? " — {$c['detail']}" : '') . "\n";
     }
-    echo "\n" . ($all_ok ? 'ALL OK' : 'ISSUES FOUND - run: php migrate.php') . "\n";
+    echo "\n" . ($all_ok ? 'ALL OK' : 'ISSUES FOUND - import schema.sql') . "\n";
     exit;
 }
 
@@ -152,7 +152,7 @@ try {
             </div>
             <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
                 <?php echo $result['checks_passed']; ?>/<?php echo $result['checks_total']; ?> kontrol prošlo &middot; <?php echo date('j.n.Y H:i'); ?>
-                <?php if (!$all_ok): ?> &middot; <strong style="color: var(--color-red);">Spusťte: <code>php migrate.php</code></strong><?php endif; ?>
+                <?php if (!$all_ok): ?> &middot; <strong style="color: var(--color-red);">Zkontrolujte databázové schéma</strong><?php endif; ?>
             </div>
         </div>
     </div>
@@ -174,7 +174,6 @@ try {
     <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
         <a href="health.php" class="btn btn-secondary btn-sm"><i class="fas fa-rotate"></i> Zkontrolovat znovu</a>
         <a href="health.php?format=json" class="btn btn-secondary btn-sm"><i class="fas fa-code"></i> JSON výstup</a>
-        <?php if (!$all_ok): ?><a href="migrate.php" class="btn btn-sm" style="background: var(--color-red); color: #fff;"><i class="fas fa-database"></i> Spustit migraci</a><?php endif; ?>
         <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-left"></i> Zpět do adminu</a>
     </div>
 

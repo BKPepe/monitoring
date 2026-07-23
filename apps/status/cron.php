@@ -30,7 +30,7 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
         $existing = array_column($stmt_cols->fetchAll(PDO::FETCH_ASSOC), 'Field');
         $missing = array_diff($required_cols, $existing);
         if (!empty($missing)) {
-            $warn = 'SCHEMA DRIFT: vps_metrics missing columns: ' . implode(', ', $missing) . '. Run migrate.php?force=1';
+            $warn = 'SCHEMA DRIFT: vps_metrics missing columns: ' . implode(', ', $missing) . '. Please update schema.sql.';
             error_log('[cron] ' . $warn);
             echo "VAROVÁNÍ: $warn\n";
         }

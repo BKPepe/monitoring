@@ -507,7 +507,7 @@ try {
     
     // Pokud metrics INSERT selhal, informovat agenta (viditelné v jeho logu)
     if (!empty($metrics_error)) {
-        $response_payload['schema_warning'] = 'DB schema out of date - metrics not saved. Run migrate.php?force=1';
+        $response_payload['schema_warning'] = 'DB schema out of date - metrics not saved. Please update database schema.';
     }
 
     // Kontrola nevyřízených akcí ve frontě pro tohoto agenta. Souhlas se

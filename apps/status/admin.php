@@ -1307,7 +1307,6 @@ $site_title = get_setting('site_title', 'Blood Kings');
                 <?php if ($user_role === 'admin'): ?>
                 <a href="admin.php?view=audit_log"><i class="fas fa-clipboard-list"></i> Audit log</a>
                 <a href="health.php" target="_blank"><i class="fas fa-heartbeat"></i> Health</a>
-                <a href="migrate.php" target="_blank"><i class="fas fa-database"></i> Migrace</a>
                 <?php endif; ?>
                 <a href="admin.php?action=logout" class="btn btn-secondary btn-sm"><i class="fas fa-sign-out-alt"></i> Odhlásit (<?php echo htmlspecialchars($_SESSION['admin_username']); ?>)</a>
                 <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
