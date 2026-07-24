@@ -43,15 +43,21 @@ jobs:
           echo "Version file generated: ${DEPLOY_DATE} · ${SHORT_SHA}"
 
       - name: FTP Deploy to cPanel (status/ subfolder)
-        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        uses: nick-fields/retry@v3
         with:
-          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
-          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
-          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
-          local-dir: ./apps/status/
-          server-dir: public_html/status/
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            .github/**
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 10
+          action_for_retry: SamKirkland/FTP-Deploy-Action@v4.4.0
+          with: |
+            server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+            username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+            password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+            local-dir: ./apps/status/
+            server-dir: public_html/status/
+            timeout: 60000
+            exclude: |
+              **/.git*
+              **/.git*/**
+              **/node_modules/**
+              .github/**
