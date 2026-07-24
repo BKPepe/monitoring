@@ -197,6 +197,7 @@ $metric_groups = [
     'ram' => ['metrics' => ['ram', 'swap'], 'title' => 'RAM / Swap'],
     'hdd' => ['metrics' => ['hdd', 'inode_usage'], 'title' => t('metric_label_hdd') . ' / Inode'],
     'net' => ['metrics' => ['net'], 'title' => t('metric_label_net')],
+    'net_ip' => ['metrics' => ['net_ipv4', 'net_ipv6'], 'title' => 'IPv4 vs IPv6 Provoz'],
     'load' => ['metrics' => ['load1', 'load5', 'load15'], 'title' => 'Load Average'],
     'diskio' => ['metrics' => ['disk_io_read', 'disk_io_write'], 'title' => 'Disk I/O'],
     'iowait' => ['metrics' => ['iowait'], 'title' => 'IO Wait'],
@@ -317,8 +318,12 @@ foreach ($timeline as $ev) {
         <div style="margin-top: 1.25rem;">
             <div style="font-size: 0.68rem; color: var(--text-muted); margin-bottom: 0.4rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('ao_30day_health')); ?></div>
             <div class="ao-health-dots">
-                <?php foreach ($health_dots as $dot): ?>
-                    <div class="dot <?php echo $dot['status']; ?>" title="<?php echo htmlspecialchars($dot['label'] . ' — ' . $dot['status']); ?>"></div>
+                <?php foreach ($health_dots as $dot):
+                    $st_map = ['up' => t('history_tooltip_up'), 'down' => 'Detekován výpadek', 'maintenance' => t('history_tooltip_maintenance'), 'none' => t('history_tooltip_nodata')];
+                    $st_lbl = $st_map[$dot['status']] ?? $dot['status'];
+                    $dot_tooltip = $dot['label'] . ': ' . $st_lbl;
+                ?>
+                    <div class="dot <?php echo $dot['status']; ?>" data-tooltip="<?php echo htmlspecialchars($dot_tooltip); ?>"></div>
                 <?php endforeach; ?>
             </div>
         </div>
@@ -378,6 +383,12 @@ foreach ($timeline as $ev) {
             <!-- TIMELINE -->
             <div class="ao-section">
                 <div class="ao-section-title"><i class="fas fa-timeline"></i> <?php echo htmlspecialchars(t('ao_timeline')); ?></div>
+                <div style="background: rgba(88, 166, 255, 0.05); border: 1px solid rgba(88, 166, 255, 0.15); border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 1rem; font-size: 0.76rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-info-circle" style="color: var(--color-blue, #58a6ff); font-size: 0.9rem; flex-shrink: 0;"></i>
+                    <div>
+                        <strong>Informace k časové ose:</strong> Zobrazují se zde významné události (výpadky, restarty, změny stavu). Pokud systém funguje bez výpadků, časová osa zůstává beze změn. Poslední měření: <strong><?php echo !empty($monitor['last_checked']) ? htmlspecialchars(date('j.n.Y H:i:s', strtotime($monitor['last_checked']))) : '—'; ?></strong>.
+                    </div>
+                </div>
                 <?php if (empty($timeline_grouped)): ?>
                     <p style="font-size: 0.82rem; color: var(--text-muted);"><?php echo htmlspecialchars(t('ao_no_events')); ?></p>
                 <?php else: ?>

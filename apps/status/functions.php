@@ -1472,6 +1472,8 @@ function bk_get_metric_registry() {
         'ts_clients' => ['column' => 'ts_clients_online', 'label_key' => 'metric_label_ts_clients', 'unit' => ''],
         'ts_process_cpu' => ['column' => 'ts_process_cpu', 'label_key' => 'metric_label_ts_process_cpu', 'unit' => '%'],
         'ts_process_ram' => ['column' => 'ts_process_ram', 'label_key' => 'metric_label_ts_process_ram', 'unit' => 'MB'],
+        'net_ipv4' => ['column' => 'net_ipv4_kbps', 'label' => 'IPv4 Provoz', 'unit' => 'KB/s'],
+        'net_ipv6' => ['column' => 'net_ipv6_kbps', 'label' => 'IPv6 Provoz', 'unit' => 'KB/s'],
     ];
 }
 
@@ -4086,7 +4088,7 @@ function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
         'load_avg_1', 'load_avg_5', 'load_avg_15', 'cpu_steal', 'swap_usage',
         'disk_io_read_kbps', 'disk_io_write_kbps', 'net_errors',
         'iowait_pct', 'inode_usage_pct', 'zombie_count', 'fork_rate', 'temperature_c',
-        'wifi_clients_total', 'conntrack_pct'
+        'wifi_clients_total', 'conntrack_pct', 'net_ipv4_kbps', 'net_ipv6_kbps'
     ];
     if (!in_array($metric_column, $allowed_cols, true)) {
         return $ctx;

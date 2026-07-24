@@ -132,6 +132,8 @@ $ow_swap_pct = (isset($data['swap_pct']) && $data['swap_pct'] !== null) ? floatv
 $ow_entropy = (isset($data['entropy']) && $data['entropy'] !== null) ? intval($data['entropy']) : null;
 $ow_upgradable_packages = (isset($data['upgradable_packages']) && $data['upgradable_packages'] !== null) ? intval($data['upgradable_packages']) : null;
 $ow_wifi_clients_count = (isset($data['wifi_clients_count']) && $data['wifi_clients_count'] !== null) ? intval($data['wifi_clients_count']) : null;
+$ow_net_ipv4_kbps = (isset($data['net_ipv4_kbps']) && $data['net_ipv4_kbps'] !== null) ? floatval($data['net_ipv4_kbps']) : null;
+$ow_net_ipv6_kbps = (isset($data['net_ipv6_kbps']) && $data['net_ipv6_kbps'] !== null) ? floatval($data['net_ipv6_kbps']) : null;
 
 // OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
 $ow_mwan3_policies = (isset($data['mwan3_policies']) && is_array($data['mwan3_policies'])) ? $data['mwan3_policies'] : null;
@@ -436,8 +438,8 @@ try {
                 disk_io_read_kbps, disk_io_write_kbps, net_errors,
                 ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
                 iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c,
-                wifi_clients_total, conntrack_pct
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                wifi_clients_total, conntrack_pct, net_ipv4_kbps, net_ipv6_kbps
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt_metrics->execute([
             $monitor_id, $cpu, $ram, $hdd, $net,
@@ -445,7 +447,7 @@ try {
             $disk_io_read, $disk_io_write, $net_errors,
             $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
             $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
-            $ow_wifi_clients_count, $ow_conntrack_pct,
+            $ow_wifi_clients_count, $ow_conntrack_pct, $ow_net_ipv4_kbps, $ow_net_ipv6_kbps,
         ]);
     } catch (PDOException $e) {
         $metrics_error = $e->getMessage();

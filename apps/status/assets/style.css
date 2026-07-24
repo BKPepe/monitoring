@@ -1861,9 +1861,31 @@ select.form-control {
 }
 .ao-health-dots .dot {
   width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
-  transition: transform 0.1s;
+  transition: transform 0.1s; position: relative;
 }
 .ao-health-dots .dot:hover { transform: scale(1.4); }
+.ao-health-dots .dot[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 150%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #161b22;
+  color: #f0f6fc;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 100;
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+}
+.ao-health-dots .dot:hover[data-tooltip]::after {
+  opacity: 1;
+}
 .ao-health-dots .dot.up { background: var(--color-green); }
 .ao-health-dots .dot.down { background: var(--color-red); }
 .ao-health-dots .dot.maintenance { background: var(--color-yellow); }

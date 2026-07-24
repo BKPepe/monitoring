@@ -555,8 +555,6 @@ if command -v wg >/dev/null 2>&1; then
         }
         END { printf "]" }')
     fi
-elif [ -d /sys/class/net/wg0 ]; then
-    wireguard_peers_json="[{\"interface\":\"wg0\",\"public_key\":\"\",\"endpoint\":\"\",\"latest_handshake\":0,\"rx_bytes\":0,\"tx_bytes\":0}]"
 fi
 
 # --- Top CPU & RAM processes ---
@@ -572,6 +570,7 @@ if command -v top >/dev/null 2>&1; then
             name = $NF;
             if (!name || name ~ /^[0-9]/) name = "proc";
             gsub(/["\\]/, "", name);
+            gsub(/\+$/, "", name);
             
             cpu = 0;
             for (i = 2; i < NF; i++) {
@@ -595,6 +594,7 @@ if command -v top >/dev/null 2>&1; then
             name = $NF;
             if (!name || name ~ /^[0-9]/) name = "proc";
             gsub(/["\\]/, "", name);
+            gsub(/\+$/, "", name);
 
             vsz = 0;
             for (i = 2; i < NF; i++) {
@@ -903,7 +903,7 @@ detect_svc() {
             if [ -S /var/run/docker.sock ]; then _active_ok=1; fi
             ;;
         wireguard)
-            if [ -d /sys/class/net/wg0 ]; then _active_ok=1; fi
+            if command -v wg >/dev/null 2>&1 && [ -n "$(wg show all dump 2>/dev/null)" ]; then _active_ok=1; fi
             ;;
         *)
             # Generic: if process + port both found, count as active

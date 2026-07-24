@@ -314,6 +314,8 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN temperature_c FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_total INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN conntrack_pct FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN net_ipv4_kbps FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN net_ipv6_kbps FLOAT DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

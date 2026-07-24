@@ -46,7 +46,7 @@ $required_metrics_cols = [
     'disk_io_read_kbps', 'disk_io_write_kbps', 'net_errors',
     'ts_clients_online', 'ts_clients_max', 'ts_process_cpu', 'ts_process_ram',
     'iowait_pct', 'inode_usage_pct', 'zombie_count', 'fork_rate', 'temperature_c',
-    'wifi_clients_total', 'conntrack_pct',
+    'wifi_clients_total', 'conntrack_pct', 'net_ipv4_kbps', 'net_ipv6_kbps',
 ];
 
 try {

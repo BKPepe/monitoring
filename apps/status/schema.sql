@@ -142,6 +142,8 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `temperature_c` FLOAT DEFAULT NULL, -- Teplota CPU/desky ve °C (NULL, pokud hostitel/VM nevystavuje thermal zóny)
   `wifi_clients_total` INT DEFAULT NULL, -- Celkový počet Wi-Fi klientů (OpenWrt)
   `conntrack_pct` FLOAT DEFAULT NULL, -- Využití conntrack tabulky v % (OpenWrt/firewall)
+  `net_ipv4_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv4 provozu v KB/s
+  `net_ipv6_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv6 provozu v KB/s
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
