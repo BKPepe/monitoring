@@ -101,11 +101,24 @@ json_str() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | tr '\n' ' '
 }
 
+VERBOSE="0"
+for arg in "$@"; do
+    if [ "$arg" = "--verbose" ] || [ "$arg" = "-v" ]; then
+        VERBOSE="1"
+    fi
+done
+
 log_message() {
     ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$ts - $1"
     if ! echo "$ts - $1" >> "$LOG_FILE" 2>/dev/null; then
         echo "$ts - $1" >> /tmp/status-agent-openwrt.log 2>/dev/null || true
+    fi
+}
+
+log_debug() {
+    if [ "$VERBOSE" = "1" ]; then
+        log_message "$1"
     fi
 }
 
@@ -126,7 +139,7 @@ if [ ! -f "$JSHN" ]; then
 fi
 . "$JSHN"
 
-log_message "Ziskavam statistiky routeru (OpenWrt agent v$AGENT_VERSION)..."
+log_debug "Ziskavam statistiky routeru (OpenWrt agent v$AGENT_VERSION)..."
 
 # --- 1. Board metriky - stejne /proc/techniky jako agent.sh ---
 
@@ -241,23 +254,32 @@ if [ -f /proc/diskstats ]; then
     fi
 fi
 
-# --- 3. Identita routeru (ubus system board) ---
-ow_hostname=""; ow_kernel=""; ow_model=""; ow_board_name=""; ow_distribution=""; ow_os_version=""
-board_json=$(ubus call system board 2>/dev/null)
-if [ -n "$board_json" ]; then
-    json_load "$board_json"
-    json_get_var ow_hostname hostname
-    json_get_var ow_kernel kernel
-    json_get_var ow_model model
-    json_get_var ow_board_name board_name
-    json_select release
-    json_get_var ow_distribution distribution
-    json_get_var ow_os_version version
-    json_select ..
+# --- 3. Identita routeru (kešovaná v RAM pro eliminaci ubus volání a log spamu) ---
+ID_CACHE_FILE="/tmp/status-agent-openwrt-identity.cache"
+ow_hostname=""; ow_kernel=""; ow_model=""; ow_board_name=""; ow_distribution=""; ow_os_version=""; os_combined=""
+
+if [ -f "$ID_CACHE_FILE" ]; then
+    eval $(cat "$ID_CACHE_FILE" 2>/dev/null)
+else
+    board_json=$(ubus call system board 2>/dev/null)
+    if [ -n "$board_json" ]; then
+        json_load "$board_json"
+        json_get_var ow_hostname hostname
+        json_get_var ow_kernel kernel
+        json_get_var ow_model model
+        json_get_var ow_board_name board_name
+        json_select release
+        json_get_var ow_distribution distribution
+        json_get_var ow_os_version version
+        json_select ..
+    fi
+    os_combined="$ow_distribution $ow_os_version"
+    printf "ow_hostname='%s'\now_kernel='%s'\now_model='%s'\now_board_name='%s'\now_distribution='%s'\now_os_version='%s'\nos_combined='%s'\n" \
+        "$ow_hostname" "$ow_kernel" "$ow_model" "$ow_board_name" "$ow_distribution" "$ow_os_version" "$os_combined" > "$ID_CACHE_FILE" 2>/dev/null || true
+    log_message "Nacstena identita routeru: hostname=$ow_hostname model=$ow_model os=$os_combined kernel=$ow_kernel"
 fi
-os_combined="$ow_distribution $ow_os_version"
-log_message "Identita: hostname=$ow_hostname model=$ow_model board=$ow_board_name os=$os_combined kernel=$ow_kernel"
-log_message "Uloziste: hdd=${hdd}% (${df_target}) btrfs_errors=$btrfs_errors"
+log_debug "Identita: hostname=$ow_hostname model=$ow_model board=$ow_board_name os=$os_combined kernel=$ow_kernel"
+log_debug "Uloziste: hdd=${hdd}% (${df_target}) btrfs_errors=$btrfs_errors"
 
 # --- 4. WAN stav (ubus network.interface.wan status) ---
 wan_up="false"; wan_proto=""; wan_uptime="null"; wan_ipv4=""; wan_gateway=""; wan_dns=""; wan_l3_device=""
@@ -399,7 +421,7 @@ if [ -n "$dump_json" ]; then
     done
     json_select ..
 fi
-log_message "WAN: up=$wan_up proto=$wan_proto ipv4=$wan_ipv4 gateway=$wan_gateway dns=$wan_dns ipv6=$wan_ipv6 net=${net}KB/s (l3_device=$wan_l3_device)"
+log_debug "WAN: up=$wan_up proto=$wan_proto ipv4=$wan_ipv4 gateway=$wan_gateway dns=$wan_dns ipv6=$wan_ipv6 net=${net}KB/s (l3_device=$wan_l3_device)"
 
 # --- 5. Sestaveni JSON payloadu ---
 # jshn muze vracet bool jako "1"/"0" nebo "true"/"false" v zavislosti na
@@ -1075,7 +1097,7 @@ EOF
 
 echo "$payload" > /tmp/status-agent-openwrt-last-payload.json 2>/dev/null || true
 
-log_message "Odesilam data na $API_URL..."
+log_debug "Odesilam data na $API_URL..."
 
 http_code=""
 body=""
@@ -1100,7 +1122,7 @@ else
 fi
 
 if [ "$http_code" = "200" ]; then
-    log_message "OK: Statistiky uspesne odeslany."
+    log_debug "OK: Statistiky uspesne odeslany."
     
     # --- Spracovani vzdalenych akci (Remote Actions) ---
     REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
@@ -1227,7 +1249,7 @@ if [ "$http_code" = "200" ]; then
         fi
     fi
 
-    log_message "Hotovo."
+    log_debug "Hotovo."
 else
     log_message "CHYBA: Odeslani selhalo (HTTP $http_code). Odpoved: $body"
     exit 1

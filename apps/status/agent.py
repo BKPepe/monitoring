@@ -71,20 +71,23 @@ LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
 # soubor pro výpočet síťové propustnosti ukládá vždy do /tmp.
 NET_STATE_FILE = '/tmp/status-agent-net.state' if DOCKER_MODE else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_net.state')
 
+VERBOSE = '--verbose' in sys.argv or '-v' in sys.argv or os.environ.get('STATUS_VERBOSE') == '1'
+
 def log_message(msg):
-    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_line = f"{ts} - {msg}\n"
-    sys.stdout.write(log_line)
-    try:
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(log_line)
-    except Exception:
-        # Fallback to /tmp
+    print(log_line.strip())
+    
+    if not DOCKER_MODE:
         try:
-            with open('/tmp/status-agent.log', 'a', encoding='utf-8') as f:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(log_line)
         except Exception:
             pass
+
+def log_debug(msg):
+    if VERBOSE:
+        log_message(msg)
 
 def get_cpu_usage():
     """
@@ -365,14 +368,21 @@ def get_temperature():
     return round(max_temp, 1) if max_temp is not None else None
 
 def get_system_identity():
-    """
-    Statická identita hostitele (mění se zřídka, na rozdíl od CPU/RAM/disk čísel):
-    hostname, kernel, timezone, reboot-required, cloud provider (best-effort dle
-    DMI řetězců), virtualizace. Vrací dict, chybějící/nedetekovatelné hodnoty None.
-    """
+    """Statická identita hostitele kešovaná v RAM."""
+    cache_file = '/tmp/vps_agent_identity.json'
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                res = json.load(f)
+                res['reboot_required'] = os.path.exists('/var/run/reboot-required')
+                return res
+        except Exception:
+            pass
+
     identity = {
         'hostname': None, 'kernel': None, 'timezone': None,
-        'reboot_required': None, 'cloud_provider': None, 'virtualization': None,
+        'reboot_required': os.path.exists('/var/run/reboot-required'),
+        'cloud_provider': None, 'virtualization': None,
     }
 
     try:
@@ -428,6 +438,13 @@ def get_system_identity():
             if hint in dmi_text:
                 identity['cloud_provider'] = name
                 break
+    except Exception:
+        pass
+
+    try:
+        with open(cache_file, 'w') as f:
+            json.dump(identity, f)
+        log_message(f"Načtena identita VPS: hostname={identity['hostname']} kernel={identity['kernel']}")
     except Exception:
         pass
 
@@ -1012,7 +1029,7 @@ def main():
         log_message("CHYBA: Nebyl nastaven AGENT_KEY. Upravte skript nebo 'agent.cfg'.")
         sys.exit(1)
 
-    log_message("Získávám systémové statistiky...")
+    log_debug("Získávám systémové statistiky...")
     cpu, cpu_steal, iowait = get_cpu_usage()
     ram = get_ram_usage()
     swap = get_swap_usage()
@@ -1075,7 +1092,7 @@ def main():
     }
 
     net_log = f"{net} KB/s" if net is not None else "N/A (první běh)"
-    log_message(f"Metriky - OS: {os_ver}, CPU: {cpu}% (steal {cpu_steal}%, iowait {iowait}%), RAM: {ram}% (swap {swap}%), HDD: {hdd}% (inode {inode_usage}%), Load: {load1}/{load5}/{load15}, Síť: {net_log}, Zombie: {zombie_count}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
+    log_debug(f"Metriky - OS: {os_ver}, CPU: {cpu}% (steal {cpu_steal}%, iowait {iowait}%), RAM: {ram}% (swap {swap}%), HDD: {hdd}% (inode {inode_usage}%), Load: {load1}/{load5}/{load15}, Síť: {net_log}, Zombie: {zombie_count}, Uptime: {uptime}s, SMART: {smart}, Porty: {ports}")
     
     req = urllib.request.Request(
         API_URL,
@@ -1084,14 +1101,14 @@ def main():
     )
     
     try:
-        log_message(f"Odesílám data na {API_URL}...")
+        log_debug(f"Odesílám data na {API_URL}...")
         with urllib.request.urlopen(req, timeout=10) as response:
             res_code = response.getcode()
             res_body = response.read().decode('utf-8')
             
             if res_code == 200:
-                log_message("OK: Statistiky úspěšně odeslány.")
-                log_message("Odpověď: " + res_body.strip())
+                log_debug("OK: Statistiky úspěšně odeslány.")
+                log_debug("Odpověď: " + res_body.strip())
 
                 # Automatická aktualizace agenta (opt-in přes AUTO_UPDATE=1).
                 # V Docker režimu je skript připojen read-only z hostitele, tam se neaktualizuje.

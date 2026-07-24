@@ -72,6 +72,13 @@ NET_STATE_FILE="$ScriptPath/agent_net.state"
 DISKIO_STATE_FILE="$ScriptPath/agent_diskio.state"
 FORKRATE_STATE_FILE="$ScriptPath/agent_forkrate.state"
 
+VERBOSE="0"
+for arg in "$@"; do
+    if [ "$arg" = "--verbose" ] || [ "$arg" = "-v" ]; then
+        VERBOSE="1"
+    fi
+done
+
 log_message() {
     local msg="$1"
     local ts
@@ -85,12 +92,18 @@ log_message() {
     fi
 }
 
+log_debug() {
+    if [ "$VERBOSE" = "1" ]; then
+        log_message "$1"
+    fi
+}
+
 if [ "$AGENT_KEY" = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE" ]; then
     log_message "CHYBA: Nebyl nastaven AGENT_KEY. Upravte skript nebo 'agent.cfg'."
     exit 1
 fi
 
-log_message "Získávám systémové statistiky (BASH)..."
+log_debug "Získávám systémové statistiky (BASH)..."
 
 # 1. CPU Usage (math from /proc/stat over state file delta)
 CPU_STATE_FILE="/tmp/status-agent-vps-cpu.state"
@@ -299,37 +312,45 @@ if [ -d /sys/class/thermal ]; then
     fi
 fi
 
-# 3.8 Systémová identita (hostname/kernel/timezone/reboot-required/virtualizace/cloud)
-sys_hostname=$(hostname 2>/dev/null || echo "")
-sys_kernel=$(uname -r 2>/dev/null || echo "")
-sys_timezone=""
-if [ -f /etc/timezone ]; then
-    sys_timezone=$(cat /etc/timezone 2>/dev/null)
-elif [ -L /etc/localtime ]; then
-    sys_timezone=$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')
+# 3.8 Systémová identita (kešovaná v RAM pro eliminaci zbytečných procesů)
+ID_CACHE_FILE="/tmp/status-agent-vps-identity.cache"
+if [ -f "$ID_CACHE_FILE" ]; then
+    eval $(cat "$ID_CACHE_FILE" 2>/dev/null)
+else
+    sys_hostname=$(hostname 2>/dev/null || echo "")
+    sys_kernel=$(uname -r 2>/dev/null || echo "")
+    sys_timezone=""
+    if [ -f /etc/timezone ]; then
+        sys_timezone=$(cat /etc/timezone 2>/dev/null)
+    elif [ -L /etc/localtime ]; then
+        sys_timezone=$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')
+    fi
+    virtualization_json="null"
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        virt=$(systemd-detect-virt 2>/dev/null)
+        [ -n "$virt" ] && [ "$virt" != "none" ] && virtualization_json="\"$virt\""
+    fi
+    cloud_provider_json="null"
+    dmi_text=""
+    for dmi_file in /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/bios_vendor; do
+        [ -r "$dmi_file" ] && dmi_text="$dmi_text $(cat "$dmi_file" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+    done
+    case "$dmi_text" in
+        *amazon*) cloud_provider_json="\"AWS\"" ;;
+        *google*) cloud_provider_json="\"Google Cloud\"" ;;
+        *microsoft*) cloud_provider_json="\"Azure\"" ;;
+        *digitalocean*) cloud_provider_json="\"DigitalOcean\"" ;;
+        *hetzner*) cloud_provider_json="\"Hetzner\"" ;;
+        *vultr*) cloud_provider_json="\"Vultr\"" ;;
+        *linode*) cloud_provider_json="\"Linode\"" ;;
+        *scaleway*) cloud_provider_json="\"Scaleway\"" ;;
+    esac
+    printf "sys_hostname='%s'\nsys_kernel='%s'\nsys_timezone='%s'\nvirtualization_json='%s'\ncloud_provider_json='%s'\n" \
+        "$sys_hostname" "$sys_kernel" "$sys_timezone" "$virtualization_json" "$cloud_provider_json" > "$ID_CACHE_FILE" 2>/dev/null || true
+    log_message "Načtena identita VPS: hostname=$sys_hostname kernel=$sys_kernel"
 fi
 reboot_required_json="false"
 [ -f /var/run/reboot-required ] && reboot_required_json="true"
-virtualization_json="null"
-if command -v systemd-detect-virt >/dev/null 2>&1; then
-    virt=$(systemd-detect-virt 2>/dev/null)
-    [ -n "$virt" ] && [ "$virt" != "none" ] && virtualization_json="\"$virt\""
-fi
-cloud_provider_json="null"
-dmi_text=""
-for dmi_file in /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/bios_vendor; do
-    [ -r "$dmi_file" ] && dmi_text="$dmi_text $(cat "$dmi_file" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-done
-case "$dmi_text" in
-    *amazon*) cloud_provider_json="\"AWS\"" ;;
-    *google*) cloud_provider_json="\"Google Cloud\"" ;;
-    *microsoft*) cloud_provider_json="\"Azure\"" ;;
-    *digitalocean*) cloud_provider_json="\"DigitalOcean\"" ;;
-    *hetzner*) cloud_provider_json="\"Hetzner\"" ;;
-    *vultr*) cloud_provider_json="\"Vultr\"" ;;
-    *linode*) cloud_provider_json="\"Linode\"" ;;
-    *scaleway*) cloud_provider_json="\"Scaleway\"" ;;
-esac
 
 # 4. Uptime (sekundy)
 uptime=0
@@ -761,8 +782,8 @@ net_log="N/A (první běh)"
 if [ -n "$net" ]; then
     net_log="${net} KB/s"
 fi
-log_message "Metriky - OS: $os_version, CPU: $cpu% (steal $cpu_steal%), RAM: $ram% (swap $swap%), HDD: $hdd%, Load: $load1/$load5/$load15, Síť: $net_log, Uptime: ${uptime}s, SMART: $smart, Porty: [$ports_json]"
-log_message "Odesílám data na $API_URL..."
+log_debug "Metriky - OS: $os_version, CPU: $cpu% (steal $cpu_steal%), RAM: $ram% (swap $swap%), HDD: $hdd%, Load: $load1/$load5/$load15, Síť: $net_log, Uptime: ${uptime}s, SMART: $smart, Porty: [$ports_json]"
+log_debug "Odesílám data na $API_URL..."
 
 http_code=""
 body=""
@@ -782,7 +803,7 @@ else
 fi
 
 if [ "$http_code" = "200" ]; then
-    log_message "OK: Statistiky úspěšně odeslány."
+    log_debug "OK: Statistiky úspěšně odeslány."
 
     # --- Remote Actions (Opt-in přes REMOTE_ACTIONS_ENABLED=1) ---
     REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
