@@ -65,13 +65,13 @@ if os.path.exists(cfg_path):
     except Exception:
         pass
 
-AGENT_VERSION = "1.8.0"
+AGENT_VERSION = "1.7.1"
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
 # V Docker režimu je adresář se skriptem připojený read-only, proto se stavový
 # soubor pro výpočet síťové propustnosti ukládá vždy do /tmp.
 NET_STATE_FILE = '/tmp/status-agent-net.state' if DOCKER_MODE else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_net.state')
 
-VERBOSE = '--verbose' in sys.argv or '-v' in sys.argv or os.environ.get('STATUS_VERBOSE') == '1'
+VERBOSE = '--verbose' in sys.argv or '-v' in sys.argv or os.environ.get('STATUS_VERBOSE') == '1' or sys.stdout.isatty()
 
 def log_message(msg):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

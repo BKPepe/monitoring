@@ -66,13 +66,14 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.8.0"
+AGENT_VERSION="1.7.1"
 LOG_FILE="$ScriptPath/agent.log"
 NET_STATE_FILE="$ScriptPath/agent_net.state"
 DISKIO_STATE_FILE="$ScriptPath/agent_diskio.state"
 FORKRATE_STATE_FILE="$ScriptPath/agent_forkrate.state"
 
 VERBOSE="0"
+[ -t 1 ] && VERBOSE="1"
 for arg in "$@"; do
     case "$arg" in
         --help|-h)

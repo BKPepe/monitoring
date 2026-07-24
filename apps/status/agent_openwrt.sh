@@ -85,12 +85,13 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.0"
+AGENT_VERSION="1.4.2"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
 
 VERBOSE="0"
+[ -t 1 ] && VERBOSE="1"
 for arg in "$@"; do
     case "$arg" in
         --help|-h)
@@ -287,6 +288,8 @@ if [ -f /proc/diskstats ]; then
     fi
 fi
 
+log_debug "Získávám statistiky routeru (OpenWrt agent v$AGENT_VERSION)..."
+
 # --- 3. Identita routeru (kešovaná v RAM pro eliminaci ubus volání a log spamu) ---
 ID_CACHE_FILE="/tmp/status-agent-openwrt-identity.cache"
 ow_hostname=""; ow_kernel=""; ow_model=""; ow_board_name=""; ow_distribution=""; ow_os_version=""; os_combined=""
@@ -309,7 +312,7 @@ else
     os_combined="$ow_distribution $ow_os_version"
     printf "ow_hostname='%s'\now_kernel='%s'\now_model='%s'\now_board_name='%s'\now_distribution='%s'\now_os_version='%s'\nos_combined='%s'\n" \
         "$ow_hostname" "$ow_kernel" "$ow_model" "$ow_board_name" "$ow_distribution" "$ow_os_version" "$os_combined" > "$ID_CACHE_FILE" 2>/dev/null || true
-    log_message "Nacstena identita routeru: hostname=$ow_hostname model=$ow_model os=$os_combined kernel=$ow_kernel"
+    log_message "Načtena identita routeru: hostname=$ow_hostname model=$ow_model os=$os_combined kernel=$ow_kernel"
 fi
 log_debug "Identita: hostname=$ow_hostname model=$ow_model board=$ow_board_name os=$os_combined kernel=$ow_kernel"
 log_debug "Uloziste: hdd=${hdd}% (${df_target}) btrfs_errors=$btrfs_errors"
