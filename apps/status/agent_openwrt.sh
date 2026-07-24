@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.1"
+AGENT_VERSION="1.5.2"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -135,16 +135,11 @@ json_str() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | tr '\n' ' '
 }
 
-VERBOSE="0"
-for arg in "$@"; do
-    if [ "$arg" = "--verbose" ] || [ "$arg" = "-v" ]; then
-        VERBOSE="1"
-    fi
-done
-
 log_message() {
     ts=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "$ts - $1"
+    if [ "$VERBOSE" = "1" ]; then
+        echo "$ts - $1"
+    fi
     if ! echo "$ts - $1" >> "$LOG_FILE" 2>/dev/null; then
         echo "$ts - $1" >> /tmp/status-agent-openwrt.log 2>/dev/null || true
     fi
@@ -287,8 +282,6 @@ if [ -f /proc/diskstats ]; then
         echo "$now_ts $total_written_sectors" > "$DISK_STATE_FILE" 2>/dev/null || true
     fi
 fi
-
-log_debug "Získávám statistiky routeru (OpenWrt agent v$AGENT_VERSION)..."
 
 # --- 3. Identita routeru (kešovaná v RAM pro eliminaci ubus volání a log spamu) ---
 ID_CACHE_FILE="/tmp/status-agent-openwrt-identity.cache"
