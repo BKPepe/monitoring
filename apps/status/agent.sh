@@ -110,19 +110,14 @@ log_message() {
     local msg="$1"
     local ts
     ts=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "$ts - $msg"
-    # Log do souboru
-    if echo "$ts - $msg" >> "$LOG_FILE" 2>/dev/null; then
-        :
-    else
-        echo "$ts - $msg" >> /tmp/status-agent.log 2>/dev/null || true
+    if [ "$VERBOSE" = "1" ]; then
+        echo "$ts - $msg"
     fi
+    echo "$ts - $msg" >> "$LOG_FILE" 2>/dev/null || echo "$ts - $msg" >> /tmp/status-agent.log 2>/dev/null || true
 }
 
 log_debug() {
-    if [ "$VERBOSE" = "1" ]; then
-        log_message "$1"
-    fi
+    log_message "$1"
 }
 
 if [ "$AGENT_KEY" = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE" ]; then

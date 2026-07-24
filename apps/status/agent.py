@@ -76,7 +76,8 @@ VERBOSE = '--verbose' in sys.argv or '-v' in sys.argv or os.environ.get('STATUS_
 def log_message(msg):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_line = f"{ts} - {msg}\n"
-    print(log_line.strip())
+    if VERBOSE:
+        print(log_line.strip())
     
     if not DOCKER_MODE:
         try:
@@ -86,8 +87,7 @@ def log_message(msg):
             pass
 
 def log_debug(msg):
-    if VERBOSE:
-        log_message(msg)
+    log_message(msg)
 
 def get_cpu_usage():
     """

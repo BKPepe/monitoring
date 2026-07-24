@@ -140,15 +140,11 @@ log_message() {
     if [ "$VERBOSE" = "1" ]; then
         echo "$ts - $1"
     fi
-    if ! echo "$ts - $1" >> "$LOG_FILE" 2>/dev/null; then
-        echo "$ts - $1" >> /tmp/status-agent-openwrt.log 2>/dev/null || true
-    fi
+    echo "$ts - $1" >> "$LOG_FILE" 2>/dev/null || echo "$ts - $1" >> /tmp/status-agent-openwrt.log 2>/dev/null || true
 }
 
 log_debug() {
-    if [ "$VERBOSE" = "1" ]; then
-        log_message "$1"
-    fi
+    log_message "$1"
 }
 
 if [ "$AGENT_KEY" = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE" ]; then
