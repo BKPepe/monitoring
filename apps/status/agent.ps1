@@ -1,10 +1,31 @@
-# Blood Kings Status Monitoring - VPS Agent (Windows PowerShell Version)
-#
-# Tento skript spouštějte na Windows serveru pomocí Naplánovaných úloh
-# (Task Scheduler), např. každých 5 minut:
-#   powershell.exe -ExecutionPolicy Bypass -File C:\bloodkings\agent.ps1
-#
-# Vyžaduje PowerShell 5.1+ (součást Windows Server 2016+ / Windows 10+).
+param(
+    [alias("h")][switch]$Help,
+    [alias("v")][switch]$Version,
+    [switch]$Update
+)
+
+$AGENT_VERSION = "1.7.0"
+
+if ($Help) {
+    Write-Host "Windows PowerShell Status Agent v$AGENT_VERSION"
+    Write-Host "Použití: .\agent.ps1 [MOŽNOSTI]"
+    Write-Host ""
+    Write-Host "Možnosti:"
+    Write-Host "  -Help, -h      Zobrazí tuto nápovědu"
+    Write-Host "  -Version, -v   Zobrazí verzi agenta"
+    Write-Host "  -Update        Vynutí kontrolu a aktualizaci agenta ze serveru"
+    Write-Host "  -Verbose       Zobrazí podrobný průběh sběru dat"
+    Write-Host ""
+    Write-Host "Konfigurace:"
+    Write-Host "  Čte nastavení ze souboru agent.cfg nebo z proměnných prostředí:"
+    Write-Host "  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE"
+    exit 0
+}
+
+if ($Version) {
+    Write-Host "Windows PowerShell Status Agent v$AGENT_VERSION"
+    exit 0
+}
 
 # === VÝCHOZÍ KONFIGURACE ===
 # Hodnoty můžete nechat zde, nebo vytvořit soubor 'agent.cfg' ve stejné složce
@@ -13,7 +34,7 @@ $AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 $AUTO_UPDATE = "0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
 # ===========================
 
-$AGENT_VERSION = "1.7.0"
+if ($Update) { $AUTO_UPDATE = "1" }
 
 # Načtení z Environment proměnných
 if ($env:STATUS_API_URL) { $API_URL = $env:STATUS_API_URL }

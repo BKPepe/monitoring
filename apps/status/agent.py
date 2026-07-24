@@ -1025,6 +1025,31 @@ def get_discovered_services(ports, processes):
 
 
 def main():
+    global AUTO_UPDATE, VERBOSE
+
+    for arg in sys.argv[1:]:
+        if arg in ('--help', '-h'):
+            print(f"Python VPS Status Agent v{AGENT_VERSION}")
+            print(f"Použití: {sys.argv[0]} [MOŽNOSTI]")
+            print("\nMožnosti:")
+            print("  --register TOKEN [API_URL]   Zaregistruje agenta na zadaný monitoring server")
+            print("  --update, --auto-update      Vynutí kontrolu a aktualizaci agenta ze serveru")
+            print("  --verbose, -v                Zobrazí podrobný průbeh sběru dat a odesílání")
+            print("  --version, -V                Zobrazí verzi agenta")
+            print("  --help, -h                   Zobrazí tuto nápovědu")
+            print("\nKonfigurace:")
+            print("  Čte nastavení ze souboru agent.cfg nebo proměnných prostředí:")
+            print("  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE, STATUS_HEAVY_OP_INTERVAL_HOURS")
+            sys.exit(0)
+        elif arg in ('--version', '-V'):
+            print(f"Python VPS Status Agent v{AGENT_VERSION}")
+            sys.exit(0)
+        elif arg in ('--update', '--auto-update'):
+            AUTO_UPDATE = True
+            VERBOSE = True
+        elif arg in ('--verbose', '-v'):
+            VERBOSE = True
+
     if AGENT_KEY == "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE":
         log_message("CHYBA: Nebyl nastaven AGENT_KEY. Upravte skript nebo 'agent.cfg'.")
         sys.exit(1)

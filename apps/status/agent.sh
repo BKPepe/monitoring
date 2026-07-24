@@ -74,9 +74,35 @@ FORKRATE_STATE_FILE="$ScriptPath/agent_forkrate.state"
 
 VERBOSE="0"
 for arg in "$@"; do
-    if [ "$arg" = "--verbose" ] || [ "$arg" = "-v" ]; then
-        VERBOSE="1"
-    fi
+    case "$arg" in
+        --help|-h)
+            echo "Linux BASH Status Agent v$AGENT_VERSION"
+            echo "Pouziti: $0 [MOZNOSTI]"
+            echo ""
+            echo "Moznosti:"
+            echo "  --register TOKEN [API_URL]   Zaregistruje agenta na zadany monitoring server"
+            echo "  --update, --auto-update      Vynuti kontrolu a aktualizaci agenta ze serveru"
+            echo "  --verbose, -v                Zobrazi podrobny prubeh sberu dat a odesilani"
+            echo "  --version, -V                Zobrazi verzi agenta"
+            echo "  --help, -h                   Zobrazi tuto napovedu"
+            echo ""
+            echo "Konfigurace:"
+            echo "  Cte nastaveni ze souboru agent.cfg nebo z promendych prostredi:"
+            echo "  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE, STATUS_HEAVY_OP_INTERVAL_HOURS"
+            exit 0
+            ;;
+        --version|-V)
+            echo "Linux BASH Status Agent v$AGENT_VERSION"
+            exit 0
+            ;;
+        --update|--auto-update)
+            AUTO_UPDATE="1"
+            VERBOSE="1"
+            ;;
+        --verbose|-v)
+            VERBOSE="1"
+            ;;
+    esac
 done
 
 log_message() {
