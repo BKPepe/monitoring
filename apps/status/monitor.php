@@ -35,31 +35,8 @@ if (!$monitor) {
 $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
 if (!is_array($details)) $details = [];
 
-// Cross-link: Pokud monitor nemá vlastní agent_details, ale sdílí Asset s VPS/OpenWrt agentem, přetáhni jeho details
-if (!empty($monitor['asset_id'])) {
-    try {
-        $stmt_agent_sib = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL LIMIT 1");
-        $stmt_agent_sib->execute([$monitor['asset_id'], $monitor_id]);
-        $sib_details_raw = $stmt_agent_sib->fetchColumn();
-        if ($sib_details_raw) {
-            $sib_det = json_decode($sib_details_raw, true);
-            if (is_array($sib_det)) {
-                if (empty($details['ts3_process']) && !empty($sib_det['ts3_process'])) $details['ts3_process'] = $sib_det['ts3_process'];
-                if (empty($details['discovered_services']) && !empty($sib_det['discovered_services'])) $details['discovered_services'] = $sib_det['discovered_services'];
-                if (empty($details['top_cpu_processes']) && !empty($sib_det['top_cpu_processes'])) $details['top_cpu_processes'] = $sib_det['top_cpu_processes'];
-                if (empty($details['top_ram_processes']) && !empty($sib_det['top_ram_processes'])) $details['top_ram_processes'] = $sib_det['top_ram_processes'];
-                if (empty($details['interfaces']) && !empty($sib_det['interfaces'])) $details['interfaces'] = $sib_det['interfaces'];
-                if (empty($details['wifi_radios']) && !empty($sib_det['wifi_radios'])) $details['wifi_radios'] = $sib_det['wifi_radios'];
-                if (empty($details['dns_engine']) && !empty($sib_det['dns_engine'])) $details['dns_engine'] = $sib_det['dns_engine'];
-                if (empty($details['dns_encryption']) && !empty($sib_det['dns_encryption'])) $details['dns_encryption'] = $sib_det['dns_encryption'];
-                if (empty($details['dns_servers']) && !empty($sib_det['dns_servers'])) $details['dns_servers'] = $sib_det['dns_servers'];
-                if (!isset($details['ram_total_mb']) && isset($sib_det['ram_total_mb'])) $details['ram_total_mb'] = $sib_det['ram_total_mb'];
-                if (!isset($details['ram_used_mb']) && isset($sib_det['ram_used_mb'])) $details['ram_used_mb'] = $sib_det['ram_used_mb'];
-                if (!isset($details['ram_available_mb']) && isset($sib_det['ram_available_mb'])) $details['ram_available_mb'] = $sib_det['ram_available_mb'];
-            }
-        }
-    } catch (PDOException $e) { /* best-effort */ }
-}
+// Cross-link: Automaticky propojí detaily z VPS/OpenWrt agenta (ts3_process, discovered_services, top_cpu atd.)
+bk_enrich_monitor_details($pdo, $monitor, $details);
 
 // Latest metrics row
 $registry = bk_get_metric_registry();

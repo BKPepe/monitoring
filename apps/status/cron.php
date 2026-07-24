@@ -321,9 +321,9 @@ foreach ($monitors as $monitor) {
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
 
-            // Uložit klienty (a proces/host zátěž, pokud je na stejném VPS propojený
-            // agent) do vps_metrics - podklad pro graf historie klientů/procesu.
             $ts3_agent_details = json_decode($monitor['last_details'] ?? '', true);
+            if (!is_array($ts3_agent_details)) $ts3_agent_details = [];
+            bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details);
             $ts3_process_cpu = null;
             $ts3_process_ram = null;
             $ts3_host_cpu = 0;

@@ -785,27 +785,8 @@ $portal_url = trim(get_setting('portal_url'));
                                             $ts3_clients_labels = [];
                                             $ts3_clients_data = [];
                                             if ($m_type === 'teamspeak') {
-                                                // Cross-link: pokud TS monitor sdílí asset s VPS agentem, který hlásí
-                                                // ts3_process / discovered_services, přetáhni ta data sem (agent
-                                                // reportuje na VPS monitor, ne na TS monitor přímo).
-                                                if (empty($details['ts3_process']) && !empty($monitor['asset_id'])) {
-                                                    try {
-                                                        $stmt_agent_sib = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND agent_key IS NOT NULL AND agent_key != '' LIMIT 1");
-                                                        $stmt_agent_sib->execute([$monitor['asset_id'], $mid]);
-                                                        $sib_details_raw = $stmt_agent_sib->fetchColumn();
-                                                        if ($sib_details_raw) {
-                                                            $sib_det = json_decode($sib_details_raw, true);
-                                                            if (is_array($sib_det)) {
-                                                                if (!empty($sib_det['ts3_process'])) $details['ts3_process'] = $sib_det['ts3_process'];
-                                                                if (!empty($sib_det['discovered_services']) && empty($details['discovered_services'])) $details['discovered_services'] = $sib_det['discovered_services'];
-                                                                if (!empty($sib_det['top_cpu_processes']) && empty($details['top_cpu_processes'])) $details['top_cpu_processes'] = $sib_det['top_cpu_processes'];
-                                                                if (!empty($sib_det['top_ram_processes']) && empty($details['top_ram_processes'])) $details['top_ram_processes'] = $sib_det['top_ram_processes'];
-                                                                if (isset($sib_det['cpu']) && !isset($details['cpu'])) $details['cpu'] = $sib_det['cpu'];
-                                                                if (isset($sib_det['ram']) && !isset($details['ram'])) $details['ram'] = $sib_det['ram'];
-                                                            }
-                                                        }
-                                                    } catch (PDOException $e) { /* best-effort */ }
-                                                }
+                                                // Cross-link: Automaticky propojí detaily z VPS agenta (ts3_process, discovered_services atd.)
+                                                bk_enrich_monitor_details($pdo, $monitor, $details);
                                                 $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details);
                                                 $health_score = bk_compute_health_score($health_areas);
 

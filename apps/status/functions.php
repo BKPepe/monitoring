@@ -5926,4 +5926,81 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
     return $result;
 }
 
+/**
+ * Propojí a sloučí detaily z agenta (ts3_process, discovered_services, top_cpu_processes, interfaces atd.)
+ * pro libovolný monitor (např. TeamSpeak, Minecraft, Web), i když uživatel ručně nenastavil asset_id.
+ */
+function bk_enrich_monitor_details($pdo, $monitor, array &$details) {
+    if (!$pdo || empty($monitor) || !is_array($monitor)) return;
+
+    $mid = (int)($monitor['id'] ?? 0);
+    $asset_id = $monitor['asset_id'] ?? null;
+    $target = trim($monitor['target'] ?? '');
+    $sib_details_raw = null;
+
+    // 1. Zkusit párování přes asset_id (pokud je nastaven)
+    if (!empty($asset_id)) {
+        try {
+            $stmt = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL AND agent_key IS NOT NULL AND agent_key != '' LIMIT 1");
+            $stmt->execute([$asset_id, $mid]);
+            $sib_details_raw = $stmt->fetchColumn();
+        } catch (Exception $e) {}
+    }
+
+    // 2. Zkusit párování přes Target IP / Hostname
+    if (!$sib_details_raw && !empty($target)) {
+        try {
+            $host_or_ip = parse_url($target, PHP_URL_HOST) ?: $target;
+            $resolved_ip = gethostbyname($host_or_ip);
+            
+            $stmt = $pdo->prepare("
+                SELECT last_details FROM monitors 
+                WHERE id != ? AND agent_key IS NOT NULL AND agent_key != '' AND last_details IS NOT NULL
+                  AND (target = ? OR target = ? OR last_details LIKE ?)
+                ORDER BY updated_at DESC LIMIT 1
+            ");
+            $stmt->execute([$mid, $target, $resolved_ip, '%' . $resolved_ip . '%']);
+            $sib_details_raw = $stmt->fetchColumn();
+        } catch (Exception $e) {}
+    }
+
+    // 3. Pro TeamSpeak: Pokud stále nemáme ts3_process, najít LIBOVOLNÉHO agenta, který hlásí aktivní ts3_process
+    if (!$sib_details_raw && ($monitor['type'] ?? '') === 'teamspeak') {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT last_details FROM monitors 
+                WHERE agent_key IS NOT NULL AND agent_key != '' 
+                  AND last_details LIKE '%\"ts3_process\"%' 
+                  AND last_details NOT LIKE '%\"ts3_process\":null%' 
+                ORDER BY updated_at DESC LIMIT 1
+            ");
+            $stmt->execute();
+            $sib_details_raw = $stmt->fetchColumn();
+        } catch (Exception $e) {}
+    }
+
+    // 4. Pokud jsme našli detaily agenta, doplníme chybějící položky do $details
+    if ($sib_details_raw) {
+        $sib_det = json_decode($sib_details_raw, true);
+        if (is_array($sib_det)) {
+            $fields = [
+                'ts3_process', 'discovered_services', 'top_cpu_processes', 'top_ram_processes',
+                'interfaces', 'wifi_radios', 'dns_engine', 'dns_encryption', 'dns_servers',
+                'heavy_op_interval_hours', 'conntrack_pct', 'swap_pct', 'entropy',
+                'upgradable_packages', 'installed_packages', 'log_errors_24h', 'log_warnings_24h'
+            ];
+            foreach ($fields as $field) {
+                if (empty($details[$field]) && !empty($sib_det[$field])) {
+                    $details[$field] = $sib_det[$field];
+                }
+            }
+            if (!isset($details['cpu']) && isset($sib_det['cpu'])) $details['cpu'] = $sib_det['cpu'];
+            if (!isset($details['ram']) && isset($sib_det['ram'])) $details['ram'] = $sib_det['ram'];
+            if (!isset($details['ram_total_mb']) && isset($sib_det['ram_total_mb'])) $details['ram_total_mb'] = $sib_det['ram_total_mb'];
+            if (!isset($details['ram_used_mb']) && isset($sib_det['ram_used_mb'])) $details['ram_used_mb'] = $sib_det['ram_used_mb'];
+            if (!isset($details['ram_available_mb']) && isset($sib_det['ram_available_mb'])) $details['ram_available_mb'] = $sib_det['ram_available_mb'];
+        }
+    }
+}
+
 
