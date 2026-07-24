@@ -17,6 +17,7 @@
 API_URL="http://localhost/status/agent_api.php"
 AGENT_KEY="ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 AUTO_UPDATE="0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
+HEAVY_OP_INTERVAL_HOURS="24" # Interval pro náročné operace (opkg, detekce služeb) v hodinách (výchozí 24h)
 # ===========================
 
 if [ -n "$STATUS_API_URL" ]; then
@@ -27,6 +28,9 @@ if [ -n "$STATUS_AGENT_KEY" ]; then
 fi
 if [ -n "$STATUS_AUTO_UPDATE" ]; then
     AUTO_UPDATE="$STATUS_AUTO_UPDATE"
+fi
+if [ -n "$STATUS_HEAVY_OP_INTERVAL_HOURS" ]; then
+    HEAVY_OP_INTERVAL_HOURS="$STATUS_HEAVY_OP_INTERVAL_HOURS"
 fi
 
 ScriptPath=$(dirname "$0")
@@ -45,6 +49,7 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
                     API_URL) API_URL="$val" ;;
                     AGENT_KEY) AGENT_KEY="$val" ;;
                     AUTO_UPDATE) AUTO_UPDATE="$val" ;;
+                    HEAVY_OP_INTERVAL_HOURS) HEAVY_OP_INTERVAL_HOURS="$val" ;;
                     REMOTE_ACTIONS_ENABLED) REMOTE_ACTIONS_ENABLED="$val" ;;
                     ALLOWED_ACTIONS) ALLOWED_ACTIONS="$val" ;;
                 esac
@@ -52,6 +57,8 @@ if [ -f "$ScriptPath/agent_openwrt.cfg" ]; then
         esac
     done < "$ScriptPath/agent_openwrt.cfg"
 fi
+
+HEAVY_OP_INTERVAL_SEC=$(( ${HEAVY_OP_INTERVAL_HOURS:-24} * 3600 ))
 
 if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     REG_TOKEN="$2"
@@ -414,9 +421,26 @@ if [ -f /proc/net/nf_conntrack_count ] && [ -f /proc/sys/net/netfilter/nf_conntr
     conntrack_pct=$(awk 'NR==1 {cnt=$1} END {if (getline < "/proc/sys/net/netfilter/nf_conntrack_max") {max=$1; if (max>0) printf "%.1f", (cnt/max)*100; else print "0.0"}}' /proc/net/nf_conntrack_count 2>/dev/null)
 fi
 
+# --- Upgradable & Installed Packages (cached for HEAVY_OP_INTERVAL_HOURS to avoid CPU/IO spikes) ---
 upgradable_packages="null"
-if command -v opkg >/dev/null 2>&1; then
-    upgradable_packages=$(opkg list-upgradable 2>/dev/null | wc -l | xargs)
+installed_packages="null"
+OPKG_CACHE_FILE="/tmp/status-agent-openwrt-opkg.cache"
+now_sec=$(date +%s)
+opkg_cache_age=999999
+if [ -f "$OPKG_CACHE_FILE" ]; then
+    opkg_mtime=$(date -r "$OPKG_CACHE_FILE" +%s 2>/dev/null || echo 0)
+    opkg_cache_age=$((now_sec - opkg_mtime))
+fi
+
+if [ $opkg_cache_age -lt $HEAVY_OP_INTERVAL_SEC ] && [ -f "$OPKG_CACHE_FILE" ]; then
+    upgradable_packages=$(cut -d'|' -f1 "$OPKG_CACHE_FILE" 2>/dev/null)
+    installed_packages=$(cut -d'|' -f2 "$OPKG_CACHE_FILE" 2>/dev/null)
+else
+    if command -v opkg >/dev/null 2>&1; then
+        upgradable_packages=$(opkg list-upgradable 2>/dev/null | wc -l | xargs)
+        installed_packages=$(opkg list-installed 2>/dev/null | wc -l | xargs)
+        echo "${upgradable_packages}|${installed_packages}" > "$OPKG_CACHE_FILE" 2>/dev/null || true
+    fi
 fi
 
 wifi_clients_count=0
@@ -512,12 +536,12 @@ fi
 dns_queries="null"
 dns_cache_hits="null"
 dns_cache_misses="null"
-if [ -f /tmp/dnsmasq.stats ] || (pidof dnsmasq >/dev/null 2>&1 && kill -USR1 $(pidof dnsmasq) 2>/dev/null && sleep 1); then
-    if [ -f /tmp/dnsmasq.stats ]; then
-        dns_queries=$(awk '/queries received/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
-        dns_cache_hits=$(awk '/cache hits/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
-        dns_cache_misses=$(awk '/cache misses/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
-    fi
+if [ -f /tmp/dnsmasq.stats ]; then
+    dns_queries=$(awk '/queries received/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+    dns_cache_hits=$(awk '/cache hits/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+    dns_cache_misses=$(awk '/cache misses/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
+elif pidof dnsmasq >/dev/null 2>&1; then
+    kill -USR1 $(pidof dnsmasq) 2>/dev/null &
 fi
 [ -z "$dns_queries" ] && dns_queries="null"
 [ -z "$dns_cache_hits" ] && dns_cache_hits="null"
@@ -728,11 +752,7 @@ if [ -n "$wan_uptime" ] && [ "$wan_uptime" != "null" ] && [ "$wan_uptime" -gt 0 
     printf "uptime=%s\ncount=%s\nreconnect=%s\n" "$wan_uptime" "$wan_reconnect_count" "$wan_last_reconnect" > "$bk_state_file" 2>/dev/null
 fi
 
-# --- Packages + Logs stats ---
-installed_packages="null"
-if command -v opkg >/dev/null 2>&1; then
-    installed_packages=$(opkg list-installed 2>/dev/null | wc -l | xargs)
-fi
+# --- Logs stats ---
 log_errors_24h="null"
 log_warnings_24h="null"
 if command -v logread >/dev/null 2>&1; then
@@ -853,103 +873,106 @@ if [ -f /tmp/resolv.conf.auto ]; then
 fi
 [ -z "$dns_servers" ] && dns_servers="Výchozí poskytovatel (WAN)"
 
-# --- DNS Stats ---
-dns_queries="null"
-dns_cache_hits="null"
-dns_cache_misses="null"
-if [ -f /tmp/dnsmasq.stats ] || (pidof dnsmasq >/dev/null 2>&1 && kill -USR1 $(pidof dnsmasq) 2>/dev/null && sleep 1); then
-    if [ -f /tmp/dnsmasq.stats ]; then
-        dns_queries=$(awk '/queries received/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
-        dns_cache_hits=$(awk '/cache hits/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
-        dns_cache_misses=$(awk '/cache misses/ {print $1}' /tmp/dnsmasq.stats 2>/dev/null)
-    fi
+
+
+# --- Service Discovery Scanner (cached for HEAVY_OP_INTERVAL_HOURS) ---
+discovered_services_json="[]"
+SVC_CACHE_FILE="/tmp/status-agent-openwrt-services.cache"
+svc_cache_age=999999
+if [ -f "$SVC_CACHE_FILE" ]; then
+    svc_mtime=$(date -r "$SVC_CACHE_FILE" +%s 2>/dev/null || echo 0)
+    svc_cache_age=$((now_sec - svc_mtime))
 fi
 
-# --- Service Discovery Scanner (structured detectors with confidence scoring) ---
-disc_list=""
+if [ $svc_cache_age -lt $HEAVY_OP_INTERVAL_SEC ] && [ -f "$SVC_CACHE_FILE" ]; then
+    discovered_services_json=$(cat "$SVC_CACHE_FILE" 2>/dev/null)
+else
+    disc_list=""
 
-# Detector helper: process + port + config + active_verify + description -> confidence
-detect_svc() {
-    _name="$1"; _type="$2"; _proc="$3"; _porthex="$4"; _config="$5"; _portdec="$6"; _desc="$7"
-    _conf=0; _evidence=""; _missing=""
-    # 1. Process detection
-    if pidof "$_proc" >/dev/null 2>&1; then
-        _conf=$((_conf + 30)); _evidence="${_evidence}\"process\","
-    else
-        _missing="${_missing}\"process\","
-    fi
-    # 2. Port detection
-    if [ -f /proc/net/tcp ] && grep -qi "$_porthex" /proc/net/tcp 2>/dev/null; then
-        _conf=$((_conf + 25)); _evidence="${_evidence}\"port\","
-    elif [ -f /proc/net/tcp6 ] && grep -qi "$_porthex" /proc/net/tcp6 2>/dev/null; then
-        _conf=$((_conf + 25)); _evidence="${_evidence}\"port\","
-    else
-        _missing="${_missing}\"port\","
-    fi
-    # 3. Config file
-    if [ -n "$_config" ] && [ -f "$_config" ]; then
-        _conf=$((_conf + 25)); _evidence="${_evidence}\"config\","
-    elif [ -n "$_config" ]; then
-        _missing="${_missing}\"config\","
-    fi
-    # 4. Active verification (service-specific, adds up to 19)
-    _active_ok=0
-    case "$_type" in
-        teamspeak)
-            if command -v nc >/dev/null 2>&1 && echo "version" | nc -w2 127.0.0.1 ${_portdec:-10011} 2>/dev/null | grep -qi "TS3"; then _active_ok=1; fi
-            ;;
-        minecraft)
-            if [ -f /proc/net/tcp ] && grep -qi "63DD" /proc/net/tcp 2>/dev/null; then _active_ok=1; fi
-            ;;
-        docker)
-            if [ -S /var/run/docker.sock ]; then _active_ok=1; fi
-            ;;
-        wireguard)
-            if command -v wg >/dev/null 2>&1 && [ -n "$(wg show all dump 2>/dev/null)" ]; then _active_ok=1; fi
-            ;;
-        *)
-            # Generic: if process + port both found, count as active
-            if [ $_conf -ge 55 ]; then _active_ok=1; fi
-            ;;
-    esac
-    if [ $_active_ok -eq 1 ]; then
-        _conf=$((_conf + 19)); _evidence="${_evidence}\"active_verify\","
-    else
-        _missing="${_missing}\"active_verify\","
-    fi
-    # Cap at 99
-    [ $_conf -gt 99 ] && _conf=99
-    # Only report if confidence >= 50
-    if [ $_conf -ge 50 ]; then
-        _evidence=$(echo "$_evidence" | sed 's/,$//')
-        _missing=$(echo "$_missing" | sed 's/,$//')
-        _desc_esc=$(json_str "$_desc")
-        [ -n "$disc_list" ] && disc_list="$disc_list, "
-        disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"description\":\"$_desc_esc\",\"evidence\":[$_evidence],\"missing\":[$_missing]}"
-    fi
-}
+    # Detector helper: process + port + config + active_verify + description -> confidence
+    detect_svc() {
+        _name="$1"; _type="$2"; _proc="$3"; _porthex="$4"; _config="$5"; _portdec="$6"; _desc="$7"
+        _conf=0; _evidence=""; _missing=""
+        # 1. Process detection
+        if pidof "$_proc" >/dev/null 2>&1; then
+            _conf=$((_conf + 30)); _evidence="${_evidence}\"process\","
+        else
+            _missing="${_missing}\"process\","
+        fi
+        # 2. Port detection
+        if [ -f /proc/net/tcp ] && grep -qi "$_porthex" /proc/net/tcp 2>/dev/null; then
+            _conf=$((_conf + 25)); _evidence="${_evidence}\"port\","
+        elif [ -f /proc/net/tcp6 ] && grep -qi "$_porthex" /proc/net/tcp6 2>/dev/null; then
+            _conf=$((_conf + 25)); _evidence="${_evidence}\"port\","
+        else
+            _missing="${_missing}\"port\","
+        fi
+        # 3. Config file
+        if [ -n "$_config" ] && [ -f "$_config" ]; then
+            _conf=$((_conf + 25)); _evidence="${_evidence}\"config\","
+        elif [ -n "$_config" ]; then
+            _missing="${_missing}\"config\","
+        fi
+        # 4. Active verification (service-specific, adds up to 19)
+        _active_ok=0
+        case "$_type" in
+            teamspeak)
+                if command -v nc >/dev/null 2>&1 && echo "version" | nc -w2 127.0.0.1 ${_portdec:-10011} 2>/dev/null | grep -qi "TS3"; then _active_ok=1; fi
+                ;;
+            minecraft)
+                if [ -f /proc/net/tcp ] && grep -qi "63DD" /proc/net/tcp 2>/dev/null; then _active_ok=1; fi
+                ;;
+            docker)
+                if [ -S /var/run/docker.sock ]; then _active_ok=1; fi
+                ;;
+            wireguard)
+                if command -v wg >/dev/null 2>&1 && [ -n "$(wg show all dump 2>/dev/null)" ]; then _active_ok=1; fi
+                ;;
+            *)
+                # Generic: if process + port both found, count as active
+                if [ $_conf -ge 55 ]; then _active_ok=1; fi
+                ;;
+        esac
+        if [ $_active_ok -eq 1 ]; then
+            _conf=$((_conf + 19)); _evidence="${_evidence}\"active_verify\","
+        else
+            _missing="${_missing}\"active_verify\","
+        fi
+        # Cap at 99
+        [ $_conf -gt 99 ] && _conf=99
+        # Only report if confidence >= 50
+        if [ $_conf -ge 50 ]; then
+            _evidence=$(echo "$_evidence" | sed 's/,$//')
+            _missing=$(echo "$_missing" | sed 's/,$//')
+            _desc_esc=$(json_str "$_desc")
+            [ -n "$disc_list" ] && disc_list="$disc_list, "
+            disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"description\":\"$_desc_esc\",\"evidence\":[$_evidence],\"missing\":[$_missing]}"
+        fi
+    }
 
-# Run detectors
-detect_svc "Knot Resolver (kresd)" "dns" "kresd" "0035" "/etc/config/resolver" 53 "Moderní DNS resolver CZ.NIC s podporou DNS-over-TLS (DoT)"
-detect_svc "Dnsmasq" "dns" "dnsmasq" "0035" "/etc/config/dhcp" 53 "DHCP server a lokální DNS keš pro domácí síť"
-detect_svc "Hostapd Wi-Fi AP" "wifi" "hostapd" "" "/etc/config/wireless" 0 "Démon pro správu bezdrátových Wi-Fi sítí (802.11)"
-detect_svc "Dropbear SSH" "ssh" "dropbear" "0016" "/etc/config/dropbear" 22 "Zabezpečený SSH přístup pro vzdálenou správu routeru"
-detect_svc "OpenSSH Server" "ssh" "sshd" "0016" "/etc/ssh/sshd_config" 22 "Plnohodnotný OpenSSH server"
-detect_svc "uHTTPd Web UI" "web" "uhttpd" "0050" "/etc/config/uhttpd" 80 "Webový server pro administraci LuCI / Rebuilt"
-detect_svc "Lighttpd Web" "web" "lighttpd" "0050" "/etc/lighttpd/lighttpd.conf" 80 "Lehký webový server pro administraci TurrisOS"
-detect_svc "Mosquitto MQTT" "mqtt" "mosquitto" "075B" "/etc/mosquitto/mosquitto.conf" 1883 "MQTT Message Broker pro IoT zařízení a chytrou domácnost (Home Assistant, senzory)"
-detect_svc "WireGuard VPN" "vpn" "wireguard" "" "/etc/config/wireguard" 51820 "Šifrovaný VPN tunel pro bezpečné připojení odkudkoliv"
-detect_svc "OpenVPN" "vpn" "openvpn" "0476" "/etc/config/openvpn" 1194 "SSL/TLS VPN server"
-detect_svc "AdGuard Home" "dns" "AdGuardHome" "0BB8" "/usr/bin/AdGuardHome" 3000 "Blokování reklam a sledování na úrovni celé sítě"
-detect_svc "Turris Sentinel / Pakon" "security" "sentinel" "" "/etc/config/sentinel" 0 "Systém detekce kybernetických hrozeb a sběru dat CZ.NIC"
-detect_svc "Samba SMB File Share" "storage" "smbd" "01BD" "/etc/samba/smb.conf" 445 "Sdílení souborů v lokální síti (NAS / Windows Share)"
-detect_svc "Nginx Web Server" "web" "nginx" "0050" "/etc/nginx/nginx.conf" 80 "Vysoce výkonný webový server a reverzní proxy"
-detect_svc "Docker Engine" "container" "dockerd" "" "/var/run/docker.sock" 2375 "Kontejnerová platforma pro spouštění aplikací"
-detect_svc "PostgreSQL DB" "database" "postgres" "1538" "/etc/postgresql/postgresql.conf" 5432 "Relační databázový systém"
-detect_svc "TeamSpeak 3 Server" "teamspeak" "ts3server" "271B" "/etc/ts3server.ini" 10011 "TeamSpeak 3 hlasový komunikační server"
-detect_svc "Minecraft Server" "minecraft" "java" "63DD" "" 25565 "Minecraft herní server"
+    # Run detectors
+    detect_svc "Knot Resolver (kresd)" "dns" "kresd" "0035" "/etc/config/resolver" 53 "Moderní DNS resolver CZ.NIC s podporou DNS-over-TLS (DoT)"
+    detect_svc "Dnsmasq" "dns" "dnsmasq" "0035" "/etc/config/dhcp" 53 "DHCP server a lokální DNS keš pro domácí síť"
+    detect_svc "Hostapd Wi-Fi AP" "wifi" "hostapd" "" "/etc/config/wireless" 0 "Démon pro správu bezdrátových Wi-Fi sítí (802.11)"
+    detect_svc "Dropbear SSH" "ssh" "dropbear" "0016" "/etc/config/dropbear" 22 "Zabezpečený SSH přístup pro vzdálenou správu routeru"
+    detect_svc "OpenSSH Server" "ssh" "sshd" "0016" "/etc/ssh/sshd_config" 22 "Plnohodnotný OpenSSH server"
+    detect_svc "uHTTPd Web UI" "web" "uhttpd" "0050" "/etc/config/uhttpd" 80 "Webový server pro administraci LuCI / Rebuilt"
+    detect_svc "Lighttpd Web" "web" "lighttpd" "0050" "/etc/lighttpd/lighttpd.conf" 80 "Lehký webový server pro administraci TurrisOS"
+    detect_svc "Mosquitto MQTT" "mqtt" "mosquitto" "075B" "/etc/mosquitto/mosquitto.conf" 1883 "MQTT Message Broker pro IoT zařízení a chytrou domácnost (Home Assistant, senzory)"
+    detect_svc "WireGuard VPN" "vpn" "wireguard" "" "/etc/config/wireguard" 51820 "Šifrovaný VPN tunel pro bezpečné připojení odkudkoliv"
+    detect_svc "OpenVPN" "vpn" "openvpn" "0476" "/etc/config/openvpn" 1194 "SSL/TLS VPN server"
+    detect_svc "AdGuard Home" "dns" "AdGuardHome" "0BB8" "/usr/bin/AdGuardHome" 3000 "Blokování reklam a sledování na úrovni celé sítě"
+    detect_svc "Turris Sentinel / Pakon" "security" "sentinel" "" "/etc/config/sentinel" 0 "Systém detekce kybernetických hrozeb a sběru dat CZ.NIC"
+    detect_svc "Samba SMB File Share" "storage" "smbd" "01BD" "/etc/samba/smb.conf" 445 "Sdílení souborů v lokální síti (NAS / Windows Share)"
+    detect_svc "Nginx Web Server" "web" "nginx" "0050" "/etc/nginx/nginx.conf" 80 "Vysoce výkonný webový server a reverzní proxy"
+    detect_svc "Docker Engine" "container" "dockerd" "" "/var/run/docker.sock" 2375 "Kontejnerová platforma pro spouštění aplikací"
+    detect_svc "PostgreSQL DB" "database" "postgres" "1538" "/etc/postgresql/postgresql.conf" 5432 "Relační databázový systém"
+    detect_svc "TeamSpeak 3 Server" "teamspeak" "ts3server" "271B" "/etc/ts3server.ini" 10011 "TeamSpeak 3 hlasový komunikační server"
+    detect_svc "Minecraft Server" "minecraft" "java" "63DD" "" 25565 "Minecraft herní server"
 
-[ -n "$disc_list" ] && discovered_services_json="[$disc_list]" || discovered_services_json="[]"
+    [ -n "$disc_list" ] && discovered_services_json="[$disc_list]" || discovered_services_json="[]"
+    echo "$discovered_services_json" > "$SVC_CACHE_FILE" 2>/dev/null || true
+fi
 
 [ -z "$top_cpu_json" ] && top_cpu_json="[]"
 [ -z "$top_ram_json" ] && top_ram_json="[]"
