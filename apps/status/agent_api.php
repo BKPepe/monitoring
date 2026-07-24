@@ -626,7 +626,7 @@ try {
             $base_url = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/');
 
             $response_payload['latest_version'] = $latest_version;
-            $response_payload['update_available'] = version_compare($client_version, $latest_version, '<');
+            $response_payload['update_available'] = ($client_version !== $latest_version);
             if ($response_payload['update_available']) {
                 $response_payload['update_url'] = $base_url . '/' . $agent_files[$agent_type];
                 $response_payload['update_sha256'] = hash('sha256', $agent_source);
