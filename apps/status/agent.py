@@ -18,6 +18,7 @@ import subprocess
 API_URL = "http://localhost/status/agent_api.php"
 AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 AUTO_UPDATE = False  # Povolení automatických aktualizací agenta ze serveru
+HEAVY_OP_INTERVAL_HOURS = 24  # Interval pro náročné operace v hodinách (výchozí 24h)
 # ===========================
 
 # Načtení z Environment proměnných
@@ -27,6 +28,11 @@ if os.environ.get("STATUS_AGENT_KEY"):
     AGENT_KEY = os.environ.get("STATUS_AGENT_KEY")
 if os.environ.get("STATUS_AUTO_UPDATE"):
     AUTO_UPDATE = os.environ.get("STATUS_AUTO_UPDATE") == "1"
+if os.environ.get("STATUS_HEAVY_OP_INTERVAL_HOURS"):
+    try:
+        HEAVY_OP_INTERVAL_HOURS = int(os.environ.get("STATUS_HEAVY_OP_INTERVAL_HOURS"))
+    except ValueError:
+        pass
 
 # Režim pro běh v Docker kontejneru (docker-compose.agent.yml):
 # kontejner běží s pid: host (=> /proc patří hostiteli) a kořenový FS hostitele
@@ -51,6 +57,11 @@ if os.path.exists(cfg_path):
                         AGENT_KEY = v
                     elif k == "AUTO_UPDATE":
                         AUTO_UPDATE = v == "1"
+                    elif k == 'HEAVY_OP_INTERVAL_HOURS':
+                        try:
+                            HEAVY_OP_INTERVAL_HOURS = int(v)
+                        except ValueError:
+                            pass
     except Exception:
         pass
 
@@ -84,6 +95,9 @@ def get_cpu_usage():
     vysoký iowait ukazuje na pomalý/přetížený disk, ne na volnou CPU.
     Vrací (cpu_pct, steal_pct, iowait_pct).
     """
+    state_file = '/tmp/vps_agent_cpu_state.json'
+    now_ts = time.time()
+
     def read_stat():
         try:
             with open('/proc/stat', 'r') as f:
@@ -98,21 +112,36 @@ def get_cpu_usage():
                     return idle, steal, iowait, total
         except IOError:
             pass
-        return 0, 0, 0, 0
-
-    idle1, steal1, iowait1, total1 = read_stat()
-    if total1 == 0:
-        return 0.0, 0.0, 0.0
-
-    time.sleep(1)
+        return 0.0, 0.0, 0.0, 0.0
 
     idle2, steal2, iowait2, total2 = read_stat()
+    if total2 == 0:
+        return 0.0, 0.0, 0.0
+
+    prev_state = None
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                prev_state = json.load(f)
+        except Exception:
+            pass
+
+    try:
+        with open(state_file, 'w') as f:
+            json.dump({'ts': now_ts, 'stat': [idle2, steal2, iowait2, total2]}, f)
+    except Exception:
+        pass
+
+    if not prev_state or 'stat' not in prev_state:
+        return 0.0, 0.0, 0.0
+
+    idle1, steal1, iowait1, total1 = prev_state['stat']
     idle_delta = idle2 - idle1
     steal_delta = steal2 - steal1
     iowait_delta = iowait2 - iowait1
     total_delta = total2 - total1
 
-    if total_delta == 0:
+    if total_delta <= 0:
         return 0.0, 0.0, 0.0
 
     cpu_pct = round((1.0 - idle_delta / total_delta) * 100, 1)
@@ -435,25 +464,43 @@ def get_process_snapshot(limit=5):
             pass
         return stats
 
-    stats1 = read_all_stats()
-    time.sleep(1)
+    state_file = '/tmp/vps_agent_proc_state.json'
+    now_ts = time.time()
     stats2 = read_all_stats()
-
     zombie_count = sum(1 for state, _ in stats2.values() if state == 'Z')
 
-    cpu_deltas = []
+    prev_state = None
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                raw = json.load(f)
+                prev_state = {int(k): v for k, v in raw.get('stats', {}).items()}
+                prev_ts = raw.get('ts', now_ts)
+        except Exception:
+            pass
+
     try:
-        clk_tck = os.sysconf('SC_CLK_TCK')
+        serializable_stats = {str(k): list(v) for k, v in stats2.items()}
+        with open(state_file, 'w') as f:
+            json.dump({'ts': now_ts, 'stats': serializable_stats}, f)
     except Exception:
-        clk_tck = 100
-    for pid, (state, ticks2) in stats2.items():
-        if pid not in stats1 or state == 'Z':
-            continue
-        ticks1 = stats1[pid][1]
-        delta_ticks = ticks2 - ticks1
-        if delta_ticks <= 0:
-            continue
-        cpu_pct = round((delta_ticks / clk_tck) * 100, 1)
+        pass
+
+    cpu_deltas = []
+    if prev_state:
+        try:
+            clk_tck = os.sysconf('SC_CLK_TCK')
+        except Exception:
+            clk_tck = 100
+        elapsed = max(0.1, now_ts - prev_ts)
+        for pid, (state, ticks2) in stats2.items():
+            if pid not in prev_state or state == 'Z':
+                continue
+            ticks1 = prev_state[pid][1]
+            delta_ticks = ticks2 - ticks1
+            if delta_ticks <= 0:
+                continue
+            cpu_pct = round(((delta_ticks / clk_tck) / elapsed) * 100, 1)
         try:
             with open(f'/proc/{pid}/comm', 'r') as f:
                 name = f.read().strip()
@@ -688,13 +735,29 @@ def get_ts3_process_info():
         except Exception:
             return None
 
-    stat1 = read_proc_stat(pid)
-    time.sleep(1)
     stat2 = read_proc_stat(pid)
+    state_file = f'/tmp/vps_agent_ts3_{pid}_state.json'
+    now_ts = time.time()
+    prev_state = None
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                prev_state = json.load(f)
+        except Exception:
+            pass
 
-    if stat1 and stat2:
+    try:
+        if stat2:
+            with open(state_file, 'w') as f:
+                json.dump({'ts': now_ts, 'stat': stat2}, f)
+    except Exception:
+        pass
+
+    if stat2 and prev_state and 'stat' in prev_state:
+        stat1 = prev_state['stat']
+        elapsed = max(0.1, now_ts - prev_state.get('ts', now_ts))
         cpu_ticks_delta = (stat2[0] + stat2[1]) - (stat1[0] + stat1[1])
-        result["cpu"] = round((cpu_ticks_delta / clk_tck) * 100, 1)
+        result["cpu"] = round(((cpu_ticks_delta / clk_tck) / elapsed) * 100, 1)
         try:
             with open('/proc/uptime', 'r') as f:
                 host_uptime = float(f.readline().split()[0])
@@ -829,6 +892,19 @@ def get_discovered_services(ports, processes):
     """Detekce běžících služeb podle portů/procesů/konfiguračních souborů.
     Vrací seznam dictů: {name, type, port, confidence, evidence, missing}.
     Confidence je součet bodů (process=30, port=25, config=25, active=19), max 99."""
+    cache_file = '/tmp/vps_agent_services_cache.json'
+    now_ts = time.time()
+    cache_ttl = HEAVY_OP_INTERVAL_HOURS * 3600
+
+    if os.path.exists(cache_file):
+        try:
+            mtime = os.path.getmtime(cache_file)
+            if (now_ts - mtime) < cache_ttl:
+                with open(cache_file, 'r') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
     detectors = [
         # (name, type, port, process_pattern, config_paths)
         ("TeamSpeak", "teamspeak", 10011, "ts3server", ["/etc/ts3server.ini", "/opt/teamspeak3/ts3server.ini"]),
@@ -922,6 +998,12 @@ def get_discovered_services(ports, processes):
                 "missing": missing,
             })
 
+    try:
+        with open(cache_file, 'w') as f:
+            json.dump(results, f)
+    except Exception:
+        pass
+
     return results
 
 
@@ -956,6 +1038,7 @@ def main():
         "agent_key": AGENT_KEY,
         "agent_type": "python",
         "version": AGENT_VERSION,
+        "heavy_op_interval_hours": HEAVY_OP_INTERVAL_HOURS,
         "os": os_ver,
         "cpu": cpu,
         "cpu_steal": cpu_steal,

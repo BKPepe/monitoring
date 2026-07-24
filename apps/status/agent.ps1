@@ -205,27 +205,46 @@ try {
 } catch {}
 
 # --- TOP procesy dle CPU a RAM ---
-# CPU% je dopočítáno ze stejné dvouvzorkové techniky jako u ts3server níže
-# (TotalProcessorTime před/po 1s), ne z kumulativního $proc.CPU od startu procesu.
 $topCpuProcesses = @()
 $topRamProcesses = @()
 try {
     $cpuCores = [Environment]::ProcessorCount
-    $procSample1 = Get-Process -ErrorAction Stop | Select-Object Id, ProcessName, TotalProcessorTime, WorkingSet64
-    Start-Sleep -Seconds 1
     $procSample2 = Get-Process -ErrorAction Stop | Select-Object Id, ProcessName, TotalProcessorTime, WorkingSet64
-    $sample1ById = @{}
-    foreach ($p in $procSample1) { $sample1ById[$p.Id] = $p.TotalProcessorTime }
+    $stateFile = Join-Path $env:TEMP "status_agent_win_proc.json"
+    $nowTicks = (Get-Date).Ticks
 
-    $cpuRanked = foreach ($p in $procSample2) {
-        if ($sample1ById.ContainsKey($p.Id)) {
-            $deltaMs = ($p.TotalProcessorTime - $sample1ById[$p.Id]).TotalMilliseconds
-            if ($deltaMs -gt 0 -and $cpuCores -gt 0) {
-                [PSCustomObject]@{ name = $p.ProcessName; cpu = [math]::Round(($deltaMs / 1000.0 / $cpuCores) * 100, 1) }
-            }
+    $prevProcMap = @{}
+    $prevTicks = 0
+    if (Test-Path $stateFile) {
+        try {
+            $json = Get-Content $stateFile -Raw | ConvertFrom-Json
+            $prevTicks = $json.ticks
+            foreach ($p in $json.procs) { $prevProcMap[$p.id] = $p.cpuMs }
+        } catch {}
+    }
+
+    $saveList = @()
+    foreach ($p in $procSample2) {
+        if ($p.TotalProcessorTime) {
+            $saveList += @{ id = $p.Id; cpuMs = $p.TotalProcessorTime.TotalMilliseconds }
         }
     }
-    $topCpuProcesses = $cpuRanked | Sort-Object -Property cpu -Descending | Select-Object -First 5
+    @{ ticks = $nowTicks; procs = $saveList } | ConvertTo-Json -Depth 3 | Set-Content $stateFile -ErrorAction SilentlyContinue
+
+    if ($prevProcMap.Count -gt 0 -and $prevTicks -gt 0) {
+        $elapsedSec = ($nowTicks - $prevTicks) / 10000000.0
+        if ($elapsedSec -gt 0.1) {
+            $cpuRanked = foreach ($p in $procSample2) {
+                if ($p.TotalProcessorTime -and $prevProcMap.ContainsKey($p.Id)) {
+                    $deltaMs = $p.TotalProcessorTime.TotalMilliseconds - $prevProcMap[$p.Id]
+                    if ($deltaMs -gt 0 -and $cpuCores -gt 0) {
+                        [PSCustomObject]@{ name = $p.ProcessName; cpu = [math]::Round(($deltaMs / 1000.0 / $elapsedSec / $cpuCores) * 100, 1) }
+                    }
+                }
+            }
+            $topCpuProcesses = $cpuRanked | Sort-Object -Property cpu -Descending | Select-Object -First 5
+        }
+    }
 
     $topRamProcesses = $procSample2 | Sort-Object -Property WorkingSet64 -Descending | Select-Object -First 5 |
         ForEach-Object { [PSCustomObject]@{ name = $_.ProcessName; ram_mb = [math]::Round($_.WorkingSet64 / 1MB, 1) } }
@@ -270,14 +289,25 @@ $ts3Process = $null
 try {
     $proc = Get-Process -Name "ts3server" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($proc) {
-        $cpuTime1 = $proc.TotalProcessorTime
-        Start-Sleep -Seconds 1
-        $proc.Refresh()
-        $cpuTime2 = $proc.TotalProcessorTime
-        $cpuCores = [Environment]::ProcessorCount
-        $cpuDeltaMs = ($cpuTime2 - $cpuTime1).TotalMilliseconds
+        $stateFileTs = Join-Path $env:TEMP "status_agent_win_ts3.json"
+        $nowTicks = (Get-Date).Ticks
+        $cpuMsNow = $proc.TotalProcessorTime.TotalMilliseconds
         $ts3Cpu = 0.0
-        if ($cpuCores -gt 0) { $ts3Cpu = [math]::Round(($cpuDeltaMs / 1000.0 / $cpuCores) * 100, 1) }
+
+        if (Test-Path $stateFileTs) {
+            try {
+                $json = Get-Content $stateFileTs -Raw | ConvertFrom-Json
+                $elapsedSec = ($nowTicks - $json.ticks) / 10000000.0
+                if ($elapsedSec -gt 0.1) {
+                    $cpuDeltaMs = $cpuMsNow - $json.cpuMs
+                    $cpuCores = [Environment]::ProcessorCount
+                    if ($cpuDeltaMs -gt 0 -and $cpuCores -gt 0) {
+                        $ts3Cpu = [math]::Round(($cpuDeltaMs / 1000.0 / $elapsedSec / $cpuCores) * 100, 1)
+                    }
+                }
+            } catch {}
+        }
+        @{ ticks = $nowTicks; cpuMs = $cpuMsNow } | ConvertTo-Json | Set-Content $stateFileTs -ErrorAction SilentlyContinue
 
         $ts3Process = @{
             pid = $proc.Id
@@ -319,6 +349,7 @@ $payload = @{
     agent_key = $AGENT_KEY
     agent_type = "powershell"
     version = $AGENT_VERSION
+    heavy_op_interval_hours = 24
     os = $os_version
     cpu = $cpu
     cpu_steal = $cpuSteal

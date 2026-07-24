@@ -134,6 +134,7 @@ $ow_upgradable_packages = (isset($data['upgradable_packages']) && $data['upgrada
 $ow_wifi_clients_count = (isset($data['wifi_clients_count']) && $data['wifi_clients_count'] !== null) ? intval($data['wifi_clients_count']) : null;
 $ow_net_ipv4_kbps = (isset($data['net_ipv4_kbps']) && $data['net_ipv4_kbps'] !== null) ? floatval($data['net_ipv4_kbps']) : null;
 $ow_net_ipv6_kbps = (isset($data['net_ipv6_kbps']) && $data['net_ipv6_kbps'] !== null) ? floatval($data['net_ipv6_kbps']) : null;
+$heavy_op_interval_hours = isset($data['heavy_op_interval_hours']) ? intval($data['heavy_op_interval_hours']) : 24;
 
 // OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
 $ow_mwan3_policies = (isset($data['mwan3_policies']) && is_array($data['mwan3_policies'])) ? $data['mwan3_policies'] : null;
@@ -358,6 +359,7 @@ try {
         'wan_last_reconnect' => $ow_wan_last_reconnect,
         'installed_packages' => $ow_installed_packages,
         'log_errors_24h' => $ow_log_errors_24h,
+        'heavy_op_interval_hours' => $heavy_op_interval_hours,
         'log_warnings_24h' => $ow_log_warnings_24h,
         'cpu_alert_sent' => $cpu_alert_sent,
         'ram_alert_sent' => $ram_alert_sent,

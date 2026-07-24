@@ -998,6 +998,7 @@ payload=$(cat <<EOF
   "agent_key": "$(json_str "$AGENT_KEY")",
   "agent_type": "openwrt",
   "version": "$AGENT_VERSION",
+  "heavy_op_interval_hours": ${HEAVY_OP_INTERVAL_HOURS:-24},
   "os": "$(json_str "$os_combined")",
   "cpu": $cpu,
   "ram": $ram,

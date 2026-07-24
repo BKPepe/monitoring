@@ -628,6 +628,17 @@ foreach ($timeline as $ev) {
                         <div class="ao-sidebar-row"><span class="k">RAM Paměť</span><span class="v"><?php echo htmlspecialchars($r_str); ?></span></div>
                     <?php endif; ?>
                     <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?><div class="ao-sidebar-row"><span class="k">Provider</span><span class="v"><?php echo htmlspecialchars(($details['cloud_provider'] ?? '') . (!empty($details['virtualization']) ? ' (' . $details['virtualization'] . ')' : '')); ?></span></div><?php endif; ?>
+                    <?php if (isset($details['upgradable_packages']) || !empty($details['installed_packages'])): ?>
+                        <?php $ho_h = (int)($details['heavy_op_interval_hours'] ?? 24); ?>
+                        <div class="ao-sidebar-row">
+                            <span class="k">Balíčky</span>
+                            <span class="v" data-tooltip="Kontrola balíčků se spouští 1× za <?php echo $ho_h; ?>h pro úsporu CPU a diskového I/O.">
+                                <?php if (!empty($details['installed_packages'])): ?><?php echo (int)$details['installed_packages']; ?> nainstalováno<?php endif; ?>
+                                <?php if (isset($details['upgradable_packages'])): ?> (<?php echo (int)$details['upgradable_packages']; ?> k aktualizaci)<?php endif; ?>
+                                <i class="fas fa-clock" style="color: var(--color-blue, #58a6ff); font-size: 0.72rem; margin-left: 0.25rem;"></i>
+                            </span>
+                        </div>
+                    <?php endif; ?>
                     <?php if (!empty($details['timezone'])): ?><div class="ao-sidebar-row"><span class="k">TZ</span><span class="v"><?php echo htmlspecialchars($details['timezone']); ?></span></div><?php endif; ?>
                     <?php if (isset($details['temperature'])): ?><div class="ao-sidebar-row"><span class="k">Temp</span><span class="v" style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo $details['temperature']; ?>°C</span></div><?php endif; ?>
                     <?php if (!empty($details['smart']) && strpos($details['smart'], 'chybí') === false && $details['smart'] !== 'N/A'): ?><div class="ao-sidebar-row"><span class="k">SMART</span><span class="v" style="color: <?php echo strpos($details['smart'], 'WARNING') !== false ? 'var(--color-red)' : 'var(--color-green)'; ?>;"><?php echo htmlspecialchars($details['smart']); ?></span></div><?php endif; ?>
@@ -701,8 +712,14 @@ foreach ($timeline as $ev) {
 
             <!-- RELATED SERVICES -->
             <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
+            <?php $heavy_op_hours = (int)($details['heavy_op_interval_hours'] ?? 24); ?>
             <div class="ao-section">
-                <div class="ao-section-title"><i class="fas fa-cubes"></i> <?php echo htmlspecialchars(t('ao_related_services')); ?></div>
+                <div class="ao-section-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                    <span><i class="fas fa-cubes"></i> <?php echo htmlspecialchars(t('ao_related_services')); ?></span>
+                    <span style="font-size: 0.68rem; font-weight: 500; text-transform: none; color: var(--text-muted); background: rgba(255,255,255,0.05); padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.08);" data-tooltip="Detekce služeb se spouští 1× za <?php echo $heavy_op_hours; ?>h pro úsporu CPU a paměti.">
+                        <i class="fas fa-clock" style="color: var(--color-blue, #58a6ff); margin-right: 0.2rem;"></i> Kontrola 1× za <?php echo $heavy_op_hours; ?>h
+                    </span>
+                </div>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.65rem;">
                     <?php foreach ($details['discovered_services'] as $svc):
                         $conf = (int)($svc['confidence'] ?? 0);

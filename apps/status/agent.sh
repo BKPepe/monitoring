@@ -92,47 +92,41 @@ fi
 
 log_message "Získávám systémové statistiky (BASH)..."
 
-# 1. CPU Usage (math from /proc/stat over 1 second sleep)
-read_cpu_stat() {
-    grep '^cpu ' /proc/stat
-}
+# 1. CPU Usage (math from /proc/stat over state file delta)
+CPU_STATE_FILE="/tmp/status-agent-vps-cpu.state"
+now_ts=$(date +%s)
+stat_now=$(grep '^cpu ' /proc/stat)
+cpu="0.0"; cpu_steal="0.0"; iowait="0.0"
+if [ -f "$CPU_STATE_FILE" ]; then
+    prev_stat=$(cut -d'|' -f2- "$CPU_STATE_FILE" 2>/dev/null)
+    if [ -n "$prev_stat" ]; then
+        cpu_steal_out=$(awk -v s1="$prev_stat" -v s2="$stat_now" '
+        BEGIN {
+            split(s1, a1); split(s2, a2);
+            iowait1 = a1[6] + 0; idle1 = a1[5] + a1[6];
+            total1 = a1[2]+a1[3]+a1[4]+a1[5]+a1[6]+a1[7]+a1[8];
+            steal1 = a1[9] + 0;
 
-stat1=$(read_cpu_stat)
-sleep 1
-stat2=$(read_cpu_stat)
+            iowait2 = a2[6] + 0; idle2 = a2[5] + a2[6];
+            total2 = a2[2]+a2[3]+a2[4]+a2[5]+a2[6]+a2[7]+a2[8];
+            steal2 = a2[9] + 0;
 
-cpu_steal_out=$(awk -v s1="$stat1" -v s2="$stat2" '
-BEGIN {
-    split(s1, a1);
-    split(s2, a2);
+            idle_delta = idle2 - idle1; total_delta = total2 - total1;
+            steal_delta = steal2 - steal1; iowait_delta = iowait2 - iowait1;
 
-    iowait1 = a1[6] + 0;
-    idle1 = a1[5] + a1[6];
-    total1 = a1[2]+a1[3]+a1[4]+a1[5]+a1[6]+a1[7]+a1[8];
-    steal1 = a1[9] + 0;
-
-    iowait2 = a2[6] + 0;
-    idle2 = a2[5] + a2[6];
-    total2 = a2[2]+a2[3]+a2[4]+a2[5]+a2[6]+a2[7]+a2[8];
-    steal2 = a2[9] + 0;
-
-    idle_delta = idle2 - idle1;
-    total_delta = total2 - total1;
-    steal_delta = steal2 - steal1;
-    iowait_delta = iowait2 - iowait1;
-
-    if (total_delta == 0) {
-        print "0.0 0.0 0.0";
-    } else {
-        cpu_pct = (1.0 - idle_delta / total_delta) * 100;
-        steal_pct = (steal_delta / total_delta) * 100;
-        iowait_pct = (iowait_delta / total_delta) * 100;
-        printf "%.1f %.1f %.1f", cpu_pct, steal_pct, iowait_pct;
-    }
-}')
-cpu=$(echo "$cpu_steal_out" | awk '{print $1}')
-cpu_steal=$(echo "$cpu_steal_out" | awk '{print $2}')
-iowait=$(echo "$cpu_steal_out" | awk '{print $3}')
+            if (total_delta <= 0) { print "0.0 0.0 0.0"; } else {
+                cpu_pct = (1.0 - idle_delta / total_delta) * 100;
+                steal_pct = (steal_delta / total_delta) * 100;
+                iowait_pct = (iowait_delta / total_delta) * 100;
+                printf "%.1f %.1f %.1f", cpu_pct, steal_pct, iowait_pct;
+            }
+        }')
+        cpu=$(echo "$cpu_steal_out" | awk '{print $1}')
+        cpu_steal=$(echo "$cpu_steal_out" | awk '{print $2}')
+        iowait=$(echo "$cpu_steal_out" | awk '{print $3}')
+    fi
+fi
+echo "${now_ts}|${stat_now}" > "$CPU_STATE_FILE" 2>/dev/null || true
 
 # 2. RAM Usage (%) & MB breakdown
 eval $(awk '
