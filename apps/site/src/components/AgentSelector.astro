@@ -43,6 +43,9 @@ const t = isCs ? {
       <button class="tab-btn active" data-platform="linux">
         <span>🐧</span> Linux / VPS
       </button>
+      <button class="tab-btn" data-platform="openwrt">
+        <span>📡</span> OpenWrt / Turris
+      </button>
       <button class="tab-btn" data-platform="windows">
         <span>🪟</span> Windows
       </button>
@@ -61,13 +64,31 @@ const t = isCs ? {
         <div class="panel-meta">
           <div class="meta-row">
             <span class="meta-label">{t.versionLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-version">v0.1.0-alpha</span>
+            <span class="meta-val badge badge-accent current-agent-version">v1.7.1</span>
           </div>
           <p>{t.linuxDesc}</p>
         </div>
         <div class="code-block-wrapper">
-          <pre><code class="language-bash" id="code-linux">curl -fsSL https://monitoring.bloodkings.eu/install.sh | sh -s -- --token YOUR_SECRET_TOKEN</code></pre>
+          <pre><code class="language-bash" id="code-linux">curl -fsSL https://bloodkings.eu/status/agent.sh -o agent.sh && chmod +x agent.sh && ./agent.sh --register YOUR_SECRET_TOKEN</code></pre>
           <button class="copy-code-btn" data-target="code-linux" aria-label="Copy code">
+            <span class="copy-txt">{t.copy}</span>
+            <span class="copied-txt">{t.copied}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- OpenWrt Panel -->
+      <div class="tab-panel" id="panel-openwrt">
+        <div class="panel-meta">
+          <div class="meta-row">
+            <span class="meta-label">{t.versionLabel}</span>
+            <span class="meta-val badge badge-accent current-agent-version">v1.5.2</span>
+          </div>
+          <p>{isCs ? 'Mimořádně úsporný Ash skript pro OpenWrt a Turris routery. Sleduje WAN/LAN rozhraní, Wi-Fi rádio, DHCP a SQM.' : 'Ultra-lightweight Ash script for OpenWrt & Turris routers. Tracks WAN/LAN interfaces, Wi-Fi radios, DHCP, and SQM.'}</p>
+        </div>
+        <div class="code-block-wrapper">
+          <pre><code class="language-bash" id="code-openwrt">wget -O agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x agent_openwrt.sh && ./agent_openwrt.sh --register YOUR_SECRET_TOKEN</code></pre>
+          <button class="copy-code-btn" data-target="code-openwrt" aria-label="Copy code">
             <span class="copy-txt">{t.copy}</span>
             <span class="copied-txt">{t.copied}</span>
           </button>
@@ -79,12 +100,12 @@ const t = isCs ? {
         <div class="panel-meta">
           <div class="meta-row">
             <span class="meta-label">{t.versionLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-version">v0.1.0-alpha</span>
+            <span class="meta-val badge badge-accent current-agent-version">v1.7.1</span>
           </div>
           <p>{t.windowsDesc}</p>
         </div>
         <div class="code-block-wrapper">
-          <pre><code class="language-powershell" id="code-windows">irm https://monitoring.bloodkings.eu/install.ps1 | iex; install-agent -Token "YOUR_SECRET_TOKEN"</code></pre>
+          <pre><code class="language-powershell" id="code-windows">irm https://bloodkings.eu/status/agent.ps1 | iex; install-agent -Token "YOUR_SECRET_TOKEN"</code></pre>
           <button class="copy-code-btn" data-target="code-windows" aria-label="Copy code">
             <span class="copy-txt">{t.copy}</span>
             <span class="copied-txt">{t.copied}</span>

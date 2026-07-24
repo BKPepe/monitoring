@@ -34,23 +34,13 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
       </defs>
 
       <!-- Connection Lines with Animated Pulses -->
-      <!-- Center is at (400, 250) -->
-      <!-- Nodes: 
-           Docker: (200, 100)
-           Linux VPS: (600, 100)
-           Windows: (150, 250)
-           Raspberry Pi: (650, 250)
-           macOS: (220, 400)
-           Cloud VPS: (580, 400)
-      -->
       <g class="connections">
-        <!-- Back connection lines -->
-        <line x1="200" y1="100" x2="400" y2="250" class="connection-line c-docker" />
-        <line x1="600" y1="100" x2="400" y2="250" class="connection-line c-linux" />
-        <line x1="150" y1="250" x2="400" y2="250" class="connection-line c-windows" />
-        <line x1="650" y1="250" x2="400" y2="250" class="connection-line c-raspberry" />
-        <line x1="220" y1="400" x2="400" y2="250" class="connection-line c-macos" />
-        <line x1="580" y1="400" x2="400" y2="250" class="connection-line c-vps" />
+        <line x1="200" y1="90" x2="400" y2="250" class="connection-line c-openwrt" />
+        <line x1="600" y1="90" x2="400" y2="250" class="connection-line c-linux" />
+        <line x1="140" y1="250" x2="400" y2="250" class="connection-line c-windows" />
+        <line x1="660" y1="250" x2="400" y2="250" class="connection-line c-docker" />
+        <line x1="220" y1="410" x2="400" y2="250" class="connection-line c-raspberry" />
+        <line x1="580" y1="410" x2="400" y2="250" class="connection-line c-vps" />
       </g>
 
       <!-- Glowing Server Backing -->
@@ -60,67 +50,83 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
       <g class="node server-node" id="server-center">
         <circle cx="400" cy="250" r="48" class="node-bg server-bg" />
         <circle cx="400" cy="250" r="40" class="node-border server-border" />
-        <!-- Crown Core Icon -->
         <text x="400" y="259" class="node-icon server-icon">👑</text>
-        <text x="400" y="325" class="node-title server-title">CENTRAL SERVER</text>
-        <text x="400" y="342" class="node-subtitle">bloodkings.eu</text>
+        <text x="400" y="325" class="node-title server-title">{isCs ? 'CENTRÁLNÍ SERVER' : 'CENTRAL SERVER'}</text>
+        <text x="400" y="342" class="node-subtitle">bloodkings.eu/status</text>
       </g>
 
       <!-- Surrounding Agent Nodes -->
-      <!-- Agent 1: Docker (top left) -->
-      <g class="node agent-node online" transform="translate(200, 100)">
+      <!-- Agent 1: OpenWrt Router (top left) -->
+      <g class="node agent-node online" transform="translate(200, 90)">
         <circle cx="0" cy="0" r="32" class="node-bg" />
         <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">🐳</text>
-        <text x="0" y="-45" class="node-title">Docker Container</text>
-        <text x="0" y="50" class="node-ping">12 ms</text>
+        <text x="0" y="8" class="node-icon">📡</text>
+        <text x="0" y="-45" class="node-title">OpenWrt / Turris Router</text>
+        <text x="0" y="50" class="node-ping">4 ms</text>
       </g>
 
       <!-- Agent 2: Linux (top right) -->
-      <g class="node agent-node online" transform="translate(600, 100)">
+      <g class="node agent-node online" transform="translate(600, 90)">
         <circle cx="0" cy="0" r="32" class="node-bg" />
         <circle cx="0" cy="0" r="28" class="node-border" />
         <text x="0" y="8" class="node-icon">🐧</text>
-        <text x="0" y="-45" class="node-title">Linux VPS</text>
+        <text x="0" y="-45" class="node-title">Linux VPS (BASH)</text>
         <text x="0" y="50" class="node-ping">8 ms</text>
       </g>
 
       <!-- Agent 3: Windows Server (mid left) -->
-      <g class="node agent-node online" transform="translate(150, 250)">
+      <g class="node agent-node online" transform="translate(140, 250)">
         <circle cx="0" cy="0" r="32" class="node-bg" />
         <circle cx="0" cy="0" r="28" class="node-border" />
         <text x="0" y="8" class="node-icon">🪟</text>
-        <text x="0" y="-45" class="node-title">Windows Server</text>
+        <text x="0" y="-45" class="node-title">Windows (PowerShell)</text>
         <text x="0" y="50" class="node-ping">18 ms</text>
       </g>
 
-      <!-- Agent 4: Raspberry Pi (mid right) -->
-      <g class="node agent-node online" transform="translate(650, 250)">
+      <!-- Agent 4: Docker Container (mid right) -->
+      <g class="node agent-node online" transform="translate(660, 250)">
+        <circle cx="0" cy="0" r="32" class="node-bg" />
+        <circle cx="0" cy="0" r="28" class="node-border" />
+        <text x="0" y="8" class="node-icon">🐳</text>
+        <text x="0" y="-45" class="node-title">Docker Agent</text>
+        <text x="0" y="50" class="node-ping">12 ms</text>
+      </g>
+
+      <!-- Agent 5: Raspberry Pi (bottom left) -->
+      <g class="node agent-node online" transform="translate(220, 410)">
         <circle cx="0" cy="0" r="32" class="node-bg" />
         <circle cx="0" cy="0" r="28" class="node-border" />
         <text x="0" y="8" class="node-icon">🍓</text>
-        <text x="0" y="-45" class="node-title">Raspberry Pi 5</text>
-        <text x="0" y="50" class="node-ping">32 ms</text>
-      </g>
-
-      <!-- Agent 5: macOS Agent (bottom left) -->
-      <g class="node agent-node online" transform="translate(220, 400)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">🍏</text>
-        <text x="0" y="-45" class="node-title">Mac Mini M2</text>
-        <text x="0" y="50" class="node-ping">15 ms</text>
+        <text x="0" y="-45" class="node-title">Raspberry Pi (Python)</text>
+        <text x="0" y="50" class="node-ping">25 ms</text>
       </g>
 
       <!-- Agent 6: Cloud VPS (bottom right) -->
-      <g class="node agent-node online" transform="translate(580, 400)">
+      <g class="node agent-node online" transform="translate(580, 410)">
         <circle cx="0" cy="0" r="32" class="node-bg" />
         <circle cx="0" cy="0" r="28" class="node-border" />
         <text x="0" y="8" class="node-icon">☁️</text>
-        <text x="0" y="-45" class="node-title">AWS EC2</text>
-        <text x="0" y="50" class="node-ping">65 ms</text>
+        <text x="0" y="-45" class="node-title">Cloud Host (AWS/Hetzner)</text>
+        <text x="0" y="50" class="node-ping">45 ms</text>
       </g>
     </svg>
+  </div>
+
+  <div class="network-legend-grid">
+    <div class="legend-card">
+      <span class="legend-icon">👑</span>
+      <div>
+        <strong>{isCs ? 'Centrální Server (Status App)' : 'Central Server (Status App)'}</strong>
+        <p>{isCs ? 'Přijímá metriky od agentů, vyhodnocuje výpadky a odesílá notifikace (SMTP, Discord, Telegram, Webhooky).' : 'Receives metrics from agents, detects outages, and dispatches alerts (SMTP, Discord, Telegram, Webhooks).'}</p>
+      </div>
+    </div>
+    <div class="legend-card">
+      <span class="legend-icon">📡</span>
+      <div>
+        <strong>{isCs ? 'Vzdálení Agenti' : 'Remote Agents'}</strong>
+        <p>{isCs ? 'Lehké skripty pro OpenWrt, Linux BASH, Python 3 a PowerShell odesílající systémová data bez nároků na paměť.' : 'Ultra-light scripts for OpenWrt, Linux BASH, Python 3, and PowerShell reporting health data without overhead.'}</p>
+      </div>
+    </div>
   </div>
 </div>
 
