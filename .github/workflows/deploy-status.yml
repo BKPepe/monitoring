@@ -43,7 +43,7 @@ jobs:
           echo "Version file generated: ${DEPLOY_DATE} · ${SHORT_SHA}"
 
       - name: FTP Deploy to cPanel (status/ subfolder)
-        uses: Wrunner/retry-action@v1.3.0
+        uses: wretry/retry-action@v1.3.0
         with:
           action: SamKirkland/FTP-Deploy-Action@v4.4.0
           attempt_limit: 3
