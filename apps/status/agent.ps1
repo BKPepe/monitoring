@@ -4,7 +4,7 @@ param(
     [switch]$Update
 )
 
-$AGENT_VERSION = "1.7.0"
+$AGENT_VERSION = "1.8.0"
 
 if ($Help) {
     Write-Host "Windows PowerShell Status Agent v$AGENT_VERSION"

@@ -279,3 +279,5 @@ CREATE TABLE IF NOT EXISTS `monitor_interface_traffic` (
   INDEX `idx_date` (`date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+INSERT INTO settings (key_name, key_value) VALUES ('schema_version', '20260731') ON DUPLICATE KEY UPDATE key_value = '20260731';
+

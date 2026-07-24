@@ -25,7 +25,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260730');
+    define('BK_SCHEMA_VERSION', '20260731');
 
     $bk_current_schema = false;
     try {
