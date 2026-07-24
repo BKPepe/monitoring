@@ -780,13 +780,15 @@ $portal_url = trim(get_setting('portal_url'));
                                             // Insights panelu / TS3 Health Score sekce), aby to mohl použít i Executive
                                             // Summary a aby se stejné SQL dotazy neopakovaly dvakrát na jednom requestu.
                                             $monitor_insights = array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor), bk_get_network_insights($pdo, $monitor, $details));
+                                            
+                                            // Cross-link: Automaticky propojí detaily z VPS agenta (ts3_process, discovered_services atd.)
+                                            bk_enrich_monitor_details($pdo, $monitor, $details);
+                                            
                                             $health_areas = null;
                                             $health_score = null;
                                             $ts3_clients_labels = [];
                                             $ts3_clients_data = [];
                                             if ($m_type === 'teamspeak') {
-                                                // Cross-link: Automaticky propojí detaily z VPS agenta (ts3_process, discovered_services atd.)
-                                                bk_enrich_monitor_details($pdo, $monitor, $details);
                                                 $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details);
                                                 $health_score = bk_compute_health_score($health_areas);
 
@@ -1843,6 +1845,87 @@ $portal_url = trim(get_setting('portal_url'));
                                                  </div>
                                                  </div>
                                             <?php endif; ?>
+
+                                            <?php // Process tab panel ?>
+                                            <?php if ($has_proc_data && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?>
+                                            <div class="monitor-tab-panel" data-tab="process">
+                                                <?php if (!empty($details['ts3_process'])): ?>
+                                                    <?php $p = $details['ts3_process']; ?>
+                                                    <div class="detail-section-title"><i class="fas fa-headset"></i> TeamSpeak 3 Proces</div>
+                                                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem;">
+                                                        <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-green); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-check-circle"></i> Proces ts3server běží</div>
+                                                        <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.25rem;">
+                                                            <span><strong>PID:</strong> <?php echo (int)($p['pid'] ?? 0); ?></span>
+                                                            <span><strong>CPU:</strong> <?php echo (float)($p['cpu'] ?? 0); ?>%</span>
+                                                            <span><strong>RAM:</strong> <?php echo (float)($p['ram_mb'] ?? 0); ?> MB</span>
+                                                            <span><strong>Vlákna:</strong> <?php echo (int)($p['threads'] ?? 0); ?></span>
+                                                            <?php if (isset($p['open_fds'])): ?><span><strong>Otevřené FD:</strong> <?php echo (int)$p['open_fds']; ?></span><?php endif; ?>
+                                                            <?php if (isset($p['uptime_sec'])): ?><span><strong>Uptime procesu:</strong> <?php echo round($p['uptime_sec'] / 3600, 1); ?> h</span><?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes'])): ?>
+                                                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                                                        <?php if (!empty($details['top_cpu_processes'])): ?>
+                                                        <div>
+                                                            <div class="detail-section-title"><i class="fas fa-microchip"></i> TOP CPU Procesy</div>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem;">
+                                                                <?php foreach ($details['top_cpu_processes'] as $tp): ?>
+                                                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                                                        <span style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                                                        <span style="color: var(--color-green); font-weight: bold; font-family: monospace;"><?php echo (float)($tp['cpu'] ?? 0); ?>%</span>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </div>
+                                                        <?php endif; ?>
+
+                                                        <?php if (!empty($details['top_ram_processes'])): ?>
+                                                        <div>
+                                                            <div class="detail-section-title"><i class="fas fa-memory"></i> TOP RAM Procesy</div>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem;">
+                                                                <?php foreach ($details['top_ram_processes'] as $tp): ?>
+                                                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                                                        <span style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                                                        <span style="color: #60a5fa; font-weight: bold; font-family: monospace;"><?php echo (float)($tp['ram_mb'] ?? 0); ?> MB</span>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php endif; ?>
+
+                                            <?php // Service tab panel ?>
+                                            <?php if ($has_svc_data && ($enabled_metrics === null || in_array('service', $enabled_metrics))): ?>
+                                            <div class="monitor-tab-panel" data-tab="service">
+                                                <?php if (!empty($details['discovered_services'])): ?>
+                                                    <div class="detail-section-title"><i class="fas fa-cubes"></i> Detekované Služby (Service Discovery)</div>
+                                                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.65rem;">
+                                                        <?php foreach ($details['discovered_services'] as $svc):
+                                                            $conf = (int)($svc['confidence'] ?? 0);
+                                                            $sc = $conf >= 70 ? 'var(--color-green)' : ($conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
+                                                            $svc_desc = $svc['description'] ?? '';
+                                                        ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                                                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                                                <span><i class="fas fa-cube" style="color: <?php echo $sc; ?>;"></i> <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($svc['name'] ?? '?'); ?></strong></span>
+                                                                <span style="color: <?php echo $sc; ?>; font-weight: bold; font-size: 0.7rem; background: rgba(255,255,255,0.04); padding: 0.1rem 0.4rem; border-radius: 4px;"><?php echo $conf; ?>%</span>
+                                                            </div>
+                                                            <?php if (!empty($svc['port'])): ?><div style="font-family: monospace; color: var(--text-muted); font-size: 0.7rem;">Port: :<?php echo (int)$svc['port']; ?></div><?php endif; ?>
+                                                            <?php if ($svc_desc): ?>
+                                                                <div style="font-size: 0.72rem; color: var(--text-secondary); line-height: 1.35; margin-top: 0.1rem;"><?php echo htmlspecialchars($svc_desc); ?></div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php endif; ?>
+
                                             <?php // OpenWrt WiFi tab ?>
                                             <?php if ($mtabs_openwrt && !empty($details['wifi_radios'])): ?>
                                             <div class="monitor-tab-panel" data-tab="wifi">
