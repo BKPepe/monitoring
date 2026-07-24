@@ -260,3 +260,22 @@ CREATE TABLE IF NOT EXISTS `agent_actions` (
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `monitor_interface_traffic` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+  `monitor_id` INT NOT NULL,
+  `iface` VARCHAR(64) NOT NULL,
+  `date` DATE NOT NULL,
+  `rx_bytes_total` DOUBLE DEFAULT 0,
+  `tx_bytes_total` DOUBLE DEFAULT 0,
+  `rx_packets_total` BIGINT DEFAULT 0,
+  `tx_packets_total` BIGINT DEFAULT 0,
+  `last_rx_bytes` DOUBLE DEFAULT 0,
+  `last_tx_bytes` DOUBLE DEFAULT 0,
+  `last_rx_packets` BIGINT DEFAULT 0,
+  `last_tx_packets` BIGINT DEFAULT 0,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
+  UNIQUE INDEX `idx_monitor_iface_date` (`monitor_id`, `iface`, `date`),
+  INDEX `idx_date` (`date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

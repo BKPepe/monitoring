@@ -5838,4 +5838,92 @@ function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Bl
     return send_webhook_post($url, json_encode($payload));
 }
 
+/**
+ * Převede počet bajtů na lidsky čitelný formát (např. 188.22 GB, 3.62 TB).
+ */
+function bk_format_bytes_cz($bytes) {
+    $bytes = (float)$bytes;
+    if ($bytes >= 1099511627776) return round($bytes / 1099511627776, 2) . ' TB';
+    if ($bytes >= 1073741824) return round($bytes / 1073741824, 2) . ' GB';
+    if ($bytes >= 1048576) return round($bytes / 1048576, 1) . ' MB';
+    if ($bytes >= 1024) return round($bytes / 1024, 0) . ' KB';
+    return number_format($bytes, 0, ',', ' ') . ' B';
+}
+
+/**
+ * Převede počet paketů na lidsky čitelný formát (např. 707M Pkts, 2.57B Pkts).
+ */
+function bk_format_packets_cz($cnt) {
+    $cnt = (float)$cnt;
+    if ($cnt >= 1000000000) return round($cnt / 1000000000, 2) . ' B Pkts.';
+    if ($cnt >= 1000000) return round($cnt / 1000000, 2) . ' M Pkts.';
+    if ($cnt >= 1000) return round($cnt / 1000, 1) . ' k Pkts.';
+    return number_format($cnt, 0, ',', ' ') . ' Pkts.';
+}
+
+/**
+ * Získá kumulativní přenesená data (RX/TX bajty a pakety) pro všechna rozhraní daného monitoru pro různá období.
+ */
+function bk_get_interface_traffic_stats($pdo, $monitor_id) {
+    $result = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT iface,
+                   SUM(CASE WHEN date = CURDATE() THEN rx_bytes_total ELSE 0 END) as rx_today,
+                   SUM(CASE WHEN date = CURDATE() THEN tx_bytes_total ELSE 0 END) as tx_today,
+                   SUM(CASE WHEN date = CURDATE() THEN rx_packets_total ELSE 0 END) as rx_pkts_today,
+                   SUM(CASE WHEN date = CURDATE() THEN tx_packets_total ELSE 0 END) as tx_pkts_today,
+
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN rx_bytes_total ELSE 0 END) as rx_7d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN tx_bytes_total ELSE 0 END) as tx_7d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_7d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_7d,
+
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_bytes_total ELSE 0 END) as rx_30d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_bytes_total ELSE 0 END) as tx_30d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_30d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_30d,
+
+                   SUM(rx_bytes_total) as rx_total,
+                   SUM(tx_bytes_total) as tx_total,
+                   SUM(rx_packets_total) as rx_pkts_total,
+                   SUM(tx_packets_total) as tx_pkts_total
+            FROM monitor_interface_traffic
+            WHERE monitor_id = ?
+            GROUP BY iface
+            ORDER BY iface ASC
+        ");
+        $stmt->execute([$monitor_id]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $result[$r['iface']] = [
+                'today' => [
+                    'rx_bytes' => (float)$r['rx_today'],
+                    'tx_bytes' => (float)$r['tx_today'],
+                    'rx_pkts' => (int)$r['rx_pkts_today'],
+                    'tx_pkts' => (int)$r['tx_pkts_today'],
+                ],
+                '7d' => [
+                    'rx_bytes' => (float)$r['rx_7d'],
+                    'tx_bytes' => (float)$r['tx_7d'],
+                    'rx_pkts' => (int)$r['rx_pkts_7d'],
+                    'tx_pkts' => (int)$r['tx_pkts_7d'],
+                ],
+                '30d' => [
+                    'rx_bytes' => (float)$r['rx_30d'],
+                    'tx_bytes' => (float)$r['tx_30d'],
+                    'rx_pkts' => (int)$r['rx_pkts_30d'],
+                    'tx_pkts' => (int)$r['tx_pkts_30d'],
+                ],
+                'all' => [
+                    'rx_bytes' => (float)$r['rx_total'],
+                    'tx_bytes' => (float)$r['tx_total'],
+                    'rx_pkts' => (int)$r['rx_pkts_total'],
+                    'tx_pkts' => (int)$r['tx_pkts_total'],
+                ],
+            ];
+        }
+    } catch (PDOException $e) { /* best-effort */ }
+    return $result;
+}
+
 

@@ -436,11 +436,13 @@ if [ -f /proc/net/dev ]; then
             if (ifname !~ /^(lo|ifb)/) {
                 split(substr(line, colon + 1), f, " ");
                 rx_b = f[1] + 0;
+                rx_p = f[2] + 0;
                 rx_e = f[3] + 0;
                 tx_b = f[9] + 0;
+                tx_p = f[10] + 0;
                 tx_e = f[11] + 0;
                 if (count > 0) printf ", ";
-                printf "{\"iface\":\"%s\",\"rx_bytes\":%.0f,\"tx_bytes\":%.0f,\"rx_errors\":%.0f,\"tx_errors\":%.0f}", ifname, rx_b, tx_b, rx_e, tx_e;
+                printf "{\"iface\":\"%s\",\"rx_bytes\":%.0f,\"tx_bytes\":%.0f,\"rx_packets\":%.0f,\"tx_packets\":%.0f,\"rx_errors\":%.0f,\"tx_errors\":%.0f}", ifname, rx_b, tx_b, rx_p, tx_p, rx_e, tx_e;
                 count++;
             }
         }

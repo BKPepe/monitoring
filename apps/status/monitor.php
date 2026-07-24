@@ -86,6 +86,7 @@ $health_score = bk_compute_asset_health_score($pdo, $monitor, $details, $latest_
 $health_dots = bk_get_30day_health_dots($pdo, $monitor_id);
 $card_profile = bk_get_type_card_profile($monitor['type']);
 $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
+$iface_traffic_stats = bk_get_interface_traffic_stats($pdo, $monitor_id);
 
 // Asset siblings
 $asset_siblings = [];
@@ -520,6 +521,46 @@ foreach ($timeline as $ev) {
                                         <td style="padding: 0.4rem;"><?php echo round(($iface['rx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
                                         <td style="padding: 0.4rem;"><?php echo round(($iface['tx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
                                         <td style="padding: 0.4rem; color: <?php echo (($iface['rx_errors'] ?? 0) + ($iface['tx_errors'] ?? 0)) > 0 ? 'var(--color-red)' : 'var(--text-muted)'; ?>;"><?php echo ($iface['rx_errors'] ?? 0) . ' / ' . ($iface['tx_errors'] ?? 0); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+
+                <?php if (!empty($iface_traffic_stats)): ?>
+                    <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-top: 1.5rem; margin-bottom: 0.5rem; letter-spacing: 0.05em;">Kumulativní přenesená data rozhraní (Archivováno v čase)</div>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
+                                    <th style="padding: 0.4rem;">Rozhraní</th>
+                                    <th style="padding: 0.4rem;">Dnes (RX / TX)</th>
+                                    <th style="padding: 0.4rem;">7 dní (RX / TX)</th>
+                                    <th style="padding: 0.4rem;">30 dní (RX / TX)</th>
+                                    <th style="padding: 0.4rem;">Celkově (RX / TX)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($iface_traffic_stats as $ifname => $st): ?>
+                                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                        <td style="padding: 0.4rem; font-family: monospace; font-weight: 700; color: var(--color-blue, #58a6ff);"><?php echo htmlspecialchars($ifname); ?></td>
+                                        <td style="padding: 0.4rem;">
+                                            <div><strong style="color:var(--color-green);"><?php echo bk_format_bytes_cz($st['today']['rx_bytes']); ?></strong> / <strong style="color:#8b5cf6;"><?php echo bk_format_bytes_cz($st['today']['tx_bytes']); ?></strong></div>
+                                            <div style="font-size: 0.68rem; color: var(--text-muted);"><?php echo bk_format_packets_cz($st['today']['rx_pkts']); ?> / <?php echo bk_format_packets_cz($st['today']['tx_pkts']); ?></div>
+                                        </td>
+                                        <td style="padding: 0.4rem;">
+                                            <div><strong style="color:var(--color-green);"><?php echo bk_format_bytes_cz($st['7d']['rx_bytes']); ?></strong> / <strong style="color:#8b5cf6;"><?php echo bk_format_bytes_cz($st['7d']['tx_bytes']); ?></strong></div>
+                                            <div style="font-size: 0.68rem; color: var(--text-muted);"><?php echo bk_format_packets_cz($st['7d']['rx_pkts']); ?> / <?php echo bk_format_packets_cz($st['7d']['tx_pkts']); ?></div>
+                                        </td>
+                                        <td style="padding: 0.4rem;">
+                                            <div><strong style="color:var(--color-green);"><?php echo bk_format_bytes_cz($st['30d']['rx_bytes']); ?></strong> / <strong style="color:#8b5cf6;"><?php echo bk_format_bytes_cz($st['30d']['tx_bytes']); ?></strong></div>
+                                            <div style="font-size: 0.68rem; color: var(--text-muted);"><?php echo bk_format_packets_cz($st['30d']['rx_pkts']); ?> / <?php echo bk_format_packets_cz($st['30d']['tx_pkts']); ?></div>
+                                        </td>
+                                        <td style="padding: 0.4rem;">
+                                            <div><strong style="color:var(--color-green);"><?php echo bk_format_bytes_cz($st['all']['rx_bytes']); ?></strong> / <strong style="color:#8b5cf6;"><?php echo bk_format_bytes_cz($st['all']['tx_bytes']); ?></strong></div>
+                                            <div style="font-size: 0.68rem; color: var(--text-muted);"><?php echo bk_format_packets_cz($st['all']['rx_pkts']); ?> / <?php echo bk_format_packets_cz($st['all']['tx_pkts']); ?></div>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>

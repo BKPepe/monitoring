@@ -454,6 +454,83 @@ try {
         error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $metrics_error);
     }
 
+    // Sběr kumulativního provozu rozhraní (LAN, WAN, pppoe-wan apod.) s ochranou proti rebootu
+    $interfaces_payload = (isset($data['interfaces']) && is_array($data['interfaces'])) ? $data['interfaces'] : null;
+    if (!empty($interfaces_payload)) {
+        $today_str = date('Y-m-d');
+        foreach ($interfaces_payload as $ifitem) {
+            $ifname = trim($ifitem['iface'] ?? '');
+            if (!$ifname || in_array($ifname, ['lo', 'ifb0', 'ifb1'], true)) continue;
+
+            $cur_rx_b = (float)($ifitem['rx_bytes'] ?? 0);
+            $cur_tx_b = (float)($ifitem['tx_bytes'] ?? 0);
+            $cur_rx_p = (int)($ifitem['rx_packets'] ?? 0);
+            $cur_tx_p = (int)($ifitem['tx_packets'] ?? 0);
+
+            try {
+                $stmt_if = $pdo->prepare("SELECT * FROM monitor_interface_traffic WHERE monitor_id = ? AND iface = ? AND date = ?");
+                $stmt_if->execute([$monitor_id, $ifname, $today_str]);
+                $ifrow = $stmt_if->fetch();
+
+                if ($ifrow) {
+                    $last_rx_b = (float)$ifrow['last_rx_bytes'];
+                    $last_tx_b = (float)$ifrow['last_tx_bytes'];
+                    $last_rx_p = (int)$ifrow['last_rx_packets'];
+                    $last_tx_p = (int)$ifrow['last_tx_packets'];
+
+                    $d_rx_b = ($cur_rx_b >= $last_rx_b) ? ($cur_rx_b - $last_rx_b) : $cur_rx_b;
+                    $d_tx_b = ($cur_tx_b >= $last_tx_b) ? ($cur_tx_b - $last_tx_b) : $cur_tx_b;
+                    $d_rx_p = ($cur_rx_p >= $last_rx_p) ? ($cur_rx_p - $last_rx_p) : $cur_rx_p;
+                    $d_tx_p = ($cur_tx_p >= $last_tx_p) ? ($cur_tx_p - $last_tx_p) : $cur_tx_p;
+
+                    $stmt_upd = $pdo->prepare("
+                        UPDATE monitor_interface_traffic
+                        SET rx_bytes_total = rx_bytes_total + ?,
+                            tx_bytes_total = tx_bytes_total + ?,
+                            rx_packets_total = rx_packets_total + ?,
+                            tx_packets_total = tx_packets_total + ?,
+                            last_rx_bytes = ?,
+                            last_tx_bytes = ?,
+                            last_rx_packets = ?,
+                            last_tx_packets = ?
+                        WHERE id = ?
+                    ");
+                    $stmt_upd->execute([$d_rx_b, $d_tx_b, $d_rx_p, $d_tx_p, $cur_rx_b, $cur_tx_b, $cur_rx_p, $cur_tx_p, $ifrow['id']]);
+                } else {
+                    $stmt_prev = $pdo->prepare("SELECT last_rx_bytes, last_tx_bytes, last_rx_packets, last_tx_packets FROM monitor_interface_traffic WHERE monitor_id = ? AND iface = ? ORDER BY date DESC LIMIT 1");
+                    $stmt_prev->execute([$monitor_id, $ifname]);
+                    $prevrow = $stmt_prev->fetch();
+
+                    $init_rx_b = 0; $init_tx_b = 0; $init_rx_p = 0; $init_tx_p = 0;
+                    if ($prevrow) {
+                        $p_rx_b = (float)$prevrow['last_rx_bytes'];
+                        $p_tx_b = (float)$prevrow['last_tx_bytes'];
+                        $p_rx_p = (int)$prevrow['last_rx_packets'];
+                        $p_tx_p = (int)$prevrow['last_tx_packets'];
+
+                        $init_rx_b = ($cur_rx_b >= $p_rx_b) ? ($cur_rx_b - $p_rx_b) : $cur_rx_b;
+                        $init_tx_b = ($cur_tx_b >= $p_tx_b) ? ($cur_tx_b - $p_tx_b) : $cur_tx_b;
+                        $init_rx_p = ($cur_rx_p >= $p_rx_p) ? ($cur_rx_p - $p_rx_p) : $cur_rx_p;
+                        $init_tx_p = ($cur_tx_p >= $p_tx_p) ? ($cur_tx_p - $p_tx_p) : $cur_tx_p;
+                    }
+
+                    $stmt_ins = $pdo->prepare("
+                        INSERT INTO monitor_interface_traffic (
+                            monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total,
+                            last_rx_bytes, last_tx_bytes, last_rx_packets, last_tx_packets
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ");
+                    $stmt_ins->execute([
+                        $monitor_id, $ifname, $today_str, $init_rx_b, $init_tx_b, $init_rx_p, $init_tx_p,
+                        $cur_rx_b, $cur_tx_b, $cur_rx_p, $cur_tx_p
+                    ]);
+                }
+            } catch (PDOException $e) {
+                error_log('[agent_api] Interface traffic update failed: ' . $e->getMessage());
+            }
+        }
+    }
+
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
         // OpenWrt: ping na WAN IP pro reálnou odezvu (agent posílá wan_ipv4)
         $ping_ms = 0;
