@@ -37,11 +37,13 @@ if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
 }
 
 // --- DATABASE CONFIGURATION ---
-// Update these values according to your MySQL database
+// Podporuje 'mysql' (MariaDB/MySQL) i 'pgsql' (PostgreSQL).
+define('DB_DRIVER', 'pgsql'); // 'pgsql' nebo 'mysql'
 define('DB_HOST', '127.0.0.1');
-define('DB_NAME', 'database_name');
-define('DB_USER', 'database_user');
-define('DB_PASS', 'database_password');
+define('DB_PORT', 5432); // 5432 pro PostgreSQL, 3306 pro MySQL
+define('DB_NAME', 'bloodkings_status');
+define('DB_USER', 'bloodkings');
+define('DB_PASS', 'heslo_databaze');
 
 // --- SMTP CONFIGURATION (OPTIONAL) ---
 // If uncommented, these values take precedence over database settings.

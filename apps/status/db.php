@@ -15,7 +15,13 @@ if (file_exists(__DIR__ . '/config.php')) {
 }
 
 try {
-    $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+    $db_driver = defined('DB_DRIVER') ? strtolower(DB_DRIVER) : (defined('BK_DATABASE_URL') && strpos(BK_DATABASE_URL, 'postgres') !== false ? 'pgsql' : 'mysql');
+    if ($db_driver === 'pgsql' || $db_driver === 'postgres') {
+        $db_port = defined('DB_PORT') ? DB_PORT : 5432;
+        $dsn = "pgsql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME;
+    } else {
+        $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+    }
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
