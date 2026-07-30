@@ -15,7 +15,7 @@ ErrorDocument 500 /status/error.php?code=500
     RewriteCond %{REQUEST_URI} ^/app/ [NC]
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteRule ^app/(.*)$ /app/index.html [QSA,L]
+    RewriteRule ^ /app/index.html [QSA,L]
 </IfModule>
 
 # Komprese textových odpovědí (HTML/CSS/JS/JSON) - platí i pro dynamický výstup
