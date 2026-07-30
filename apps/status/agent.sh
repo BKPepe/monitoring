@@ -504,6 +504,21 @@ zombie_count_json="null"
 zc=$(ps -eo stat= 2>/dev/null | grep -c '^Z')
 [ -n "$zc" ] && zombie_count_json="$zc"
 
+top_cpu_json=""
+while read -r cline; do
+    [ -z "$cline" ] && continue
+    cname=$(echo "$cline" | awk '{print $1}')
+    ccpu=$(echo "$cline" | awk '{print $2}')
+    [ -z "$ccpu" ] && continue
+    cname_clean=$(echo -n "$cname" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    if [ -n "$top_cpu_json" ]; then
+        top_cpu_json="$top_cpu_json, "
+    fi
+    top_cpu_json="$top_cpu_json{\"name\": \"$cname_clean\", \"cpu\": $ccpu}"
+done <<EOF
+$(ps -eo comm,%cpu --sort=-%cpu 2>/dev/null | tail -n +2 | head -n 5)
+EOF
+
 top_ram_json=""
 while read -r rline; do
     [ -z "$rline" ] && continue
@@ -800,7 +815,7 @@ payload=$(cat <<EOF
   "teamspeak_servers": [$ts3_json_list],
   "ts3_process": $ts3_process_json,
   "zombie_count": $zombie_count_json,
-  "top_cpu_processes": null,
+  "top_cpu_processes": [$top_cpu_json],
   "top_ram_processes": [$top_ram_json],
   "hostname": "$sys_hostname",
   "kernel": "$sys_kernel",
