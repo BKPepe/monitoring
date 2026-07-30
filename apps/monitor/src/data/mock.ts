@@ -87,13 +87,13 @@ export const monitors: MonitorRow[] = [
     id: 4,
     name: 'Minecraft',
     kind: 'MINECRAFT',
-    target: 'khaki-viper-48887.zap.cloud:25565',
-    status: 'down',
-    responseMs: null,
-    cpu: null,
-    ram: null,
-    hdd: null,
-    uptimeSeconds: 0,
+    target: 'mc.bloodkings.eu:25565',
+    status: 'up',
+    responseMs: 24,
+    cpu: 12.4,
+    ram: 54.2,
+    hdd: 28.1,
+    uptimeSeconds: 90 * 86400,
     lastCheck: ago(10),
     group: 'Production',
   },
@@ -140,12 +140,12 @@ export interface OverviewMetrics {
 
 export const overview: OverviewMetrics = {
   totalMonitors: 6,
-  healthyCount: 5,
+  healthyCount: 6,
   warningCount: 0,
-  downCount: 1,
-  avgUptimePct: 98.27,
-  uptime30d: 98.27,
-  avgLatencyMs: 12,
+  downCount: 0,
+  avgUptimePct: 100.0,
+  uptime30d: 100.0,
+  avgLatencyMs: 14,
   lastUpdated: new Date().toISOString(),
 };
 
@@ -163,9 +163,9 @@ export const insights: Insight[] = [
   {
     id: 1,
     kind: 'anomaly',
-    title: 'Výpadek služby Minecraft',
-    body: 'Minecraft server khaki-viper-48887.zap.cloud:25565 je podle API vypnutý.',
-    highlight: 'OFFLINE',
+    title: 'Stav služby Minecraft',
+    body: 'Minecraft server mc.bloodkings.eu:25565 odpovídá v pořádku (100% OK).',
+    highlight: 'ONLINE',
     source: 'Minecraft',
     at: ago(60),
   },
@@ -215,11 +215,10 @@ export const uptimeHistory: UptimeHistoryRow[] = monitors.map((m) => {
   for (let i = 29; i >= 0; i--) {
     const d = new Date(now - i * 86400 * 1000);
     const dateStr = d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
-    const isTodayDown = m.status === 'down' && i === 0;
     days.push({
       date: dateStr,
-      status: isTodayDown ? 'down' : 'up',
-      uptimePct: isTodayDown ? 92.21 : 100.0,
+      status: m.status === 'down' ? 'down' : 'up',
+      uptimePct: m.status === 'down' ? 92.21 : 100.0,
     });
   }
   return { monitorId: m.id, name: m.name, days };
@@ -239,11 +238,11 @@ export interface TimelineEvent {
 export const incidentHistory: TimelineEvent[] = [
   {
     id: 1,
-    title: 'Minecraft server vypnut',
-    detail: 'Minecraft server na khaki-viper-48887.zap.cloud:25565 neodpovídá na portu 25565.',
+    title: 'Minecraft server v pořádku',
+    detail: 'Minecraft server na mc.bloodkings.eu:25565 odpovídá na portu 25565.',
     at: 'Dnes 20:13',
-    severity: 'down',
-    resolution: 'Open',
+    severity: 'info',
+    resolution: 'Info',
   },
   {
     id: 2,
@@ -267,7 +266,7 @@ export const searchIndex: SearchResult[] = [
   { id: 'm-1', label: 'BloodKings.eu', group: 'Monitory', hint: 'https://bloodkings.eu' },
   { id: 'm-2', label: 'BloodKings.eu discord', group: 'Monitory', hint: 'Discord bot' },
   { id: 'm-3', label: 'Donald', group: 'Monitory', hint: 'donald.bloodkings.eu:8200' },
-  { id: 'm-4', label: 'Minecraft', group: 'Monitory', hint: 'khaki-viper-48887.zap.cloud:25565' },
+  { id: 'm-4', label: 'Minecraft', group: 'Monitory', hint: 'mc.bloodkings.eu:25565' },
   { id: 'm-5', label: 'Router - Praha', group: 'Monitory', hint: 'Turris - domov' },
   { id: 'm-6', label: 'Schlehofer.eu', group: 'Monitory', hint: 'https://schlehofer.eu' },
   { id: 'p-incidents', label: 'Incidenty a výpadky', group: 'Stránky', hint: '/incidents' },

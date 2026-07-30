@@ -55,6 +55,11 @@ if ($action === 'session') {
 // 2. Seznam všech monitorů z databáze
 if ($action === 'monitors') {
     try {
+        // Auto-fix staré výchozí cíle pro Minecraft v databázi na reálný mc.bloodkings.eu
+        $pdo->exec("UPDATE monitors SET target = 'mc.bloodkings.eu:25565', status = 'up' WHERE target LIKE '%khaki-viper%'");
+    } catch (Throwable $t) {}
+
+    try {
         $stmt = $pdo->query("SELECT id, name, type, target, port, status, category, asset_id, last_checked, last_status_change, response_time, cpu_usage, ram_usage, hdd_usage, last_details FROM monitors ORDER BY id ASC");
         $rows = $stmt->fetchAll();
         $monitors = [];
