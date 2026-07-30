@@ -1,4 +1,4 @@
-import { AlertTriangle, Database } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useSource } from '@/api/use-asset-charts';
 
 /**
@@ -14,12 +14,12 @@ export function DataSourceBanner() {
 
   if (!state.isMock) {
     return (
-      <div className="flex items-center justify-between flex-wrap gap-2 px-3.5 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-semibold">
+      <div className="flex items-center justify-between flex-wrap gap-2 px-4 py-2.5 rounded-lg bg-slate-900 border border-emerald-500/60 text-white text-xs font-bold shadow-sm">
         <div className="flex items-center gap-2">
-          <Database className="size-4 shrink-0 text-emerald-400" />
-          <span>🟢 Všechny monitorované uzly a systémoví agenti fungují bez závad</span>
+          <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-slate-100 font-semibold">Všechny monitorované uzly a systémoví agenti fungují bez závad</span>
         </div>
-        <span className="font-mono text-[11px] text-emerald-400/80">Živá synchronizace z MySQL /status</span>
+        <span className="font-mono text-[11px] text-emerald-400 font-semibold">Živá data z /status API</span>
       </div>
     );
   }
