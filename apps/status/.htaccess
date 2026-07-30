@@ -9,6 +9,15 @@ ErrorDocument 500 /status/error.php?code=500
     Header set X-XSS-Protection "1; mode=block"
 </IfModule>
 
+# LiteSpeed / Apache SPA fallback rule pro React aplikaci v /app/
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} ^/app/ [NC]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^app/(.*)$ /app/index.html [QSA,L]
+</IfModule>
+
 # Komprese textových odpovědí (HTML/CSS/JS/JSON) - platí i pro dynamický výstup
 # PHP skriptů (index.php, api.php...), ne jen statické soubory, protože mod_deflate
 # komprimuje podle Content-Type odpovědi, ne podle zdroje.
