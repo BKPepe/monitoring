@@ -161,24 +161,31 @@ export function InfrastructurePage() {
       if (t === 'web' || rawT.startsWith('http')) {
         setMonitorTarget(rawT);
         setMonitorPort(mon.port ? String(mon.port) : '');
-      } else if (rawT.includes(':')) {
-        const parts = rawT.split(':');
-        setMonitorTarget(parts[0]);
-        setMonitorPort(mon.port ? String(mon.port) : parts[1] || '');
+      } else if (rawT.includes(':') && !rawT.startsWith('http')) {
+        const lastColon = rawT.lastIndexOf(':');
+        setMonitorTarget(rawT.slice(0, lastColon));
+        setMonitorPort(mon.port ? String(mon.port) : rawT.slice(lastColon + 1));
       } else {
         setMonitorTarget(rawT);
         setMonitorPort(mon.port ? String(mon.port) : '');
       }
     } else if (selectedAsset) {
       setMonitorName(selectedAsset.name);
+      const k = (selectedAsset.kind || '').toLowerCase();
+      if (k.includes('discord')) setMonitorType('discord');
+      else if (k.includes('game') || k.includes('minecraft')) setMonitorType('minecraft');
+      else if (k.includes('voice') || k.includes('teamspeak')) setMonitorType('teamspeak');
+      else if (k.includes('router') || k.includes('openwrt')) setMonitorType('openwrt');
+      else setMonitorType('web');
+
       const h = selectedAsset.hostname || '';
       if (h.startsWith('http')) {
         setMonitorTarget(h);
         setMonitorPort('');
-      } else if (h.includes(':')) {
-        const parts = h.split(':');
-        setMonitorTarget(parts[0]);
-        setMonitorPort(parts[1] || '');
+      } else if (h.includes(':') && !h.startsWith('http')) {
+        const lastColon = h.lastIndexOf(':');
+        setMonitorTarget(h.slice(0, lastColon));
+        setMonitorPort(h.slice(lastColon + 1));
       } else {
         setMonitorTarget(h);
         setMonitorPort('');
@@ -201,7 +208,7 @@ export function InfrastructurePage() {
         assets: [
           { id: 3, monitorId: 3, name: 'Donald', kind: 'Voice', icon: 'mic', status: 'up', monitorCount: 1, hostname: 'donald.bloodkings.eu:8200', hasAgent: true },
           { id: 2, monitorId: 2, name: 'BloodKings.eu discord', kind: 'Discord', icon: 'message-square', status: 'up', monitorCount: 1, hostname: 'Guild ID: 3412270785...', hasAgent: false },
-          { id: 4, monitorId: 4, name: 'Minecraft', kind: 'Game', icon: 'gamepad', status: 'down', monitorCount: 1, hostname: 'khaki-viper-48887.zap.cloud:25565', hasAgent: false },
+          { id: 4, monitorId: 4, name: 'Minecraft', kind: 'Game', icon: 'gamepad', status: 'up', monitorCount: 1, hostname: 'mc.bloodkings.eu:25565', hasAgent: false },
         ]
       },
       {

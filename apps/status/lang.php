@@ -13,6 +13,11 @@ if (isset($_GET['lang']) && in_array($_GET['lang'], $bk_supported_langs, true)) 
     if (!headers_sent()) {
         setcookie('bk_lang', $bk_lang, time() + 60 * 60 * 24 * 365, '/');
     }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['bk_lang'] = $bk_lang;
+    }
+} elseif (isset($_SESSION['bk_lang']) && in_array($_SESSION['bk_lang'], $bk_supported_langs, true)) {
+    $bk_lang = $_SESSION['bk_lang'];
 } elseif (isset($_COOKIE['bk_lang']) && in_array($_COOKIE['bk_lang'], $bk_supported_langs, true)) {
     $bk_lang = $_COOKIE['bk_lang'];
 }
