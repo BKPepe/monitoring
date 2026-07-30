@@ -29,39 +29,43 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
             Denní dostupnost monitorů za posledních {dayCount} dní
           </caption>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.monitorId} className="overflow-visible">
-                <th
-                  scope="row"
-                  className="text-muted-foreground w-48 pr-3 text-left text-xs font-normal whitespace-nowrap"
-                >
-                  <Link to={`/infrastructure/${row.monitorId}`} className="hover:underline text-foreground font-semibold text-xs">
-                    {row.name}
-                  </Link>
-                </th>
-                <td className="overflow-visible">
-                  <div className="flex gap-[4px] overflow-visible">
-                    {row.days.map((day, idx) => {
-                      const isNearRight = idx > row.days.length - 5;
-                      const isNearLeft = idx < 4;
+            {rows.map((row, rowIdx) => {
+              const isTopRow = rowIdx <= 1;
 
-                      return (
-                        <div key={day.date} className="group relative flex-1">
-                          <Link
-                            to={`/infrastructure/${row.monitorId}`}
-                            className={cn(
-                              'block h-8 min-w-[14px] rounded-[4px] transition-all hover:scale-125 hover:z-30 cursor-pointer shadow-sm',
-                              cellClass[day.status]
-                            )}
-                          />
+              return (
+                <tr key={row.monitorId} className="overflow-visible">
+                  <th
+                    scope="row"
+                    className="text-muted-foreground w-48 pr-3 text-left text-xs font-normal whitespace-nowrap"
+                  >
+                    <Link to={`/infrastructure/${row.monitorId}`} className="hover:underline text-foreground font-semibold text-xs">
+                      {row.name}
+                    </Link>
+                  </th>
+                  <td className="overflow-visible">
+                    <div className="flex gap-[4px] overflow-visible">
+                      {row.days.map((day, idx) => {
+                        const isNearRight = idx > row.days.length - 5;
+                        const isNearLeft = idx < 4;
 
-                          {/* Velký a jasný Tooltip s nulovým ořezáním */}
-                          <div
-                            className={cn(
-                              "absolute bottom-full mb-2.5 hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-slate-950/98 border border-slate-700 text-slate-100 text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl ring-1 ring-white/10",
-                              isNearRight ? "right-0" : isNearLeft ? "left-0" : "left-1/2 -translate-x-1/2"
-                            )}
-                          >
+                        return (
+                          <div key={day.date} className="group relative flex-1">
+                            <Link
+                              to={`/infrastructure/${row.monitorId}`}
+                              className={cn(
+                                'block h-8 min-w-[14px] rounded-[4px] transition-all hover:scale-125 hover:z-30 cursor-pointer shadow-sm',
+                                cellClass[day.status]
+                              )}
+                            />
+
+                            {/* Velký a jasný Tooltip s inteligentním směřováním dolů/nahoru */}
+                            <div
+                              className={cn(
+                                "absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-slate-950/98 border border-slate-700 text-slate-100 text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl ring-1 ring-white/10",
+                                isTopRow ? "top-full mt-2.5" : "bottom-full mb-2.5",
+                                isNearRight ? "right-0" : isNearLeft ? "left-0" : "left-1/2 -translate-x-1/2"
+                              )}
+                            >
                             <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
                               <span className="font-bold text-xs text-slate-200">{day.date}</span>
                               <span className={cn("font-extrabold text-xs px-2 py-0.5 rounded-md", day.uptimePct >= 99.5 ? 'bg-emerald-500/20 text-emerald-300' : day.uptimePct >= 95 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300')}>
@@ -92,7 +96,8 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                   </div>
                 </td>
               </tr>
-            ))}
+            );
+            })}
           </tbody>
         </table>
       </div>

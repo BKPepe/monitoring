@@ -371,17 +371,17 @@ export function DashboardPage() {
       </Card>
 
       {/* Historie dostupnosti */}
-      <Card>
-        <CardHeader>
+      <Card className="overflow-visible relative z-20">
+        <CardHeader className="flex-row items-center justify-between">
           <div>
             <CardTitle>Historie dostupnosti sledovaných služeb</CardTitle>
-            <CardDescription>Posledních 30 dní</CardDescription>
+            <CardDescription>Sledovaná dostupnost v čase (posledních 30 dní)</CardDescription>
           </div>
           <Button variant="outline" size="sm" asChild>
             <Link to="/reports">Celý report</Link>
           </Button>
         </CardHeader>
-        <CardContent className="overflow-x-auto">
+        <CardContent className="overflow-visible">
           <UptimeHeatmap rows={liveUptimeHistory} />
         </CardContent>
       </Card>

@@ -1,15 +1,19 @@
-ErrorDocument 404 /app/index.html
-FallbackResource /app/index.html
-
-# cPanel / Apache Routing for React SPA under /app/
+# Apache SPA fallback configuration for Blood Kings SPA under /app/
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /app/
-  RewriteRule ^index\.html$ - [L]
-  RewriteCond %{REQUEST_FILENAME} !-f
-  RewriteCond %{REQUEST_FILENAME} !-d
+  
+  # Serve existing physical files and directories
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Redirect all SPA subpath routes to /app/index.html
   RewriteRule ^.*$ /app/index.html [QSA,L]
 </IfModule>
+
+FallbackResource /app/index.html
+ErrorDocument 404 /app/index.html
 
 # Fix PHP session.gc_divisor warning
 <IfModule mod_php7.c>
