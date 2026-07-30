@@ -485,18 +485,40 @@ if ($action === 'sla_report') {
                 }
             } catch (Throwable $t) {}
 
+            // Výpočet percentilů latence (p50, p95, p99)
+            $p50 = null; $p95 = null; $p99 = null;
+            try {
+                $stmt_lat = $pdo->prepare("
+                    SELECT response_time
+                    FROM monitor_logs
+                    WHERE monitor_id = ? AND response_time IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                    ORDER BY response_time ASC
+                ");
+                $stmt_lat->execute([$mid, $days]);
+                $latencies = $stmt_lat->fetchAll(PDO::FETCH_COLUMN);
+                $lat_count = count($latencies);
+                if ($lat_count > 0) {
+                    $p50 = (int)$latencies[max(0, (int)floor($lat_count * 0.50) - 1)];
+                    $p95 = (int)$latencies[max(0, (int)floor($lat_count * 0.95) - 1)];
+                    $p99 = (int)$latencies[max(0, (int)floor($lat_count * 0.99) - 1)];
+                }
+            } catch (Throwable $t) {}
+
             $report[] = [
                 'id' => $mid,
                 'name' => $m['name'],
                 'target' => $m['target'],
                 'type' => strtoupper($m['type']),
-                'currentStatus' => $m['current_status'],
+                'currentStatus' => strtolower($m['current_status'] ?? 'up'),
                 'uptimePct' => $uptimePct,
                 'outageMinutes' => $outageMinutes,
                 'totalChecks' => (int)$m['total_checks'],
                 'lastOutage' => $last_outage,
                 'mttrSec' => $mttr,
-                'lastStatusChange' => $m['last_status_change'] ? date('d.m.Y H:i:s', strtotime($m['last_status_change'])) : null,
+                'p50Ms' => $p50,
+                'p95Ms' => $p95,
+                'p99Ms' => $p99,
+                'lastStatusChange' => $m['last_status_change'] ? date('c', strtotime($m['last_status_change'])) : null,
             ];
         }
 

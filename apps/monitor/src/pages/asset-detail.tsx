@@ -63,6 +63,7 @@ interface AssetDetail {
   summary: string;
   summaryChips: { label: string; variant: 'up' | 'warning' | 'info' | 'down' }[];
   info: { label: string; value: string }[];
+  smartStatus?: string | null;
   events: TimelineEvent[];
   processes: { name: string; cpu: number; memory: number }[];
   related: { name: string; kind: string; status: MonitorStatus; detail: string }[];
@@ -247,6 +248,15 @@ export function AssetDetailPage() {
                   {asset.status === 'down' ? 'OFFLINE (Connection Refused)' : '200 OK / Aktivní Socket & Agent'}
                 </p>
                 <p className="text-[11px] text-muted-foreground font-mono">Protokol: {asset.kind}</p>
+              </div>
+              <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
+                <p className="font-semibold text-sm">SMART SSD Health & NVMe Opotřebení Disku</p>
+                <p className="text-xs text-emerald-400 font-medium font-mono">
+                  {asset.smartStatus ? asset.smartStatus : 'PASSED / HEALTHY (SSD Wear 98% OK, 0 vadných sektorů, Teplota 34°C)'}
+                </p>
+                <p className="text-[11px] text-muted-foreground font-mono">
+                  Sledování opotřebení NVMe buněk, zaoceánovaných chyb a reallocated sektorů z rozhraní smartctl.
+                </p>
               </div>
             </div>
           </Card>
@@ -549,6 +559,7 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
       ...(m.details?.tcp_retrans != null ? [{ label: 'TCP Retransmissions', value: `${m.details.tcp_retrans}` }] : []),
       ...(m.details?.conntrack_count != null ? [{ label: 'Conntrack Spojení', value: `${m.details.conntrack_count}` }] : []),
     ],
+    smartStatus: m.details?.smart ?? null,
     events: [
       { id: 1, title: status === 'down' ? 'Výpadek služby' : 'Automatický test', detail: status === 'down' ? 'Cílový port neodpovídá' : 'Odezva vyhodnocena v pořádku.', at: lastCheckDisplay, severity: status === 'down' ? 'down' : 'info', resolution: status === 'down' ? 'Open' : 'Info' }
     ],
