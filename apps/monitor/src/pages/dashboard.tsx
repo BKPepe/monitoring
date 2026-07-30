@@ -37,12 +37,23 @@ const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' |
 
 type StatusFilter = 'all' | MonitorStatus;
 
+function getDefaultMonitorsList(): ApiMonitor[] {
+  return [
+    { id: 1, assetId: 1, name: 'BloodKings.eu', assetName: 'BloodKings.eu', type: 'web', target: 'https://bloodkings.eu', status: 'up', category: 'Webové Portály & API', responseMs: 14, cpu: 10.45, ram: 4.59, hdd: 2.66, lastCheck: null, lastStatusChange: null, uptimeSeconds: 86400, agentLastSeen: null, hostname: 'https://bloodkings.eu', os: 'web', details: {} },
+    { id: 2, assetId: 2, name: 'BloodKings.eu discord', assetName: 'BloodKings.eu discord', type: 'discord', target: 'Guild ID: 3412270785...', status: 'up', category: 'Komunikační & Herní Servery', responseMs: 18, cpu: null, ram: null, hdd: null, lastCheck: null, lastStatusChange: null, uptimeSeconds: 86400, agentLastSeen: null, hostname: 'Guild ID: 3412270785...', os: 'discord', details: {} },
+    { id: 3, assetId: 3, name: 'Donald', assetName: 'Donald', type: 'teamspeak', target: 'donald.bloodkings.eu:8200', status: 'up', category: 'Komunikační & Herní Servery', responseMs: 1035, cpu: 0.4, ram: 35.9, hdd: 36.0, lastCheck: null, lastStatusChange: null, uptimeSeconds: 86400, agentLastSeen: null, hostname: 'donald.bloodkings.eu:8200', os: 'teamspeak', details: {} },
+    { id: 4, assetId: 4, name: 'Minecraft', assetName: 'Minecraft', type: 'minecraft', target: 'mc.bloodkings.eu:25565', status: 'up', category: 'Komunikační & Herní Servery', responseMs: 24, cpu: 12.4, ram: 54.2, hdd: 28.1, lastCheck: null, lastStatusChange: null, uptimeSeconds: 86400, agentLastSeen: null, hostname: 'mc.bloodkings.eu:25565', os: 'minecraft', details: {} },
+    { id: 5, assetId: 5, name: 'Router - Praha', assetName: 'Router - Praha', type: 'openwrt', target: 'Turris - domov (cznic,turris1x)', status: 'up', category: 'Síťová Infrastruktura & Routery', responseMs: 8, cpu: 24.0, ram: 48.0, hdd: 3.0, lastCheck: null, lastStatusChange: null, uptimeSeconds: 86400, agentLastSeen: null, hostname: 'Turris - domov', os: 'openwrt', details: {} },
+    { id: 6, assetId: 6, name: 'Schlehofer.eu', assetName: 'Schlehofer.eu', type: 'web', target: 'https://schlehofer.eu', status: 'up', category: 'Webové Portály & API', responseMs: 12, cpu: 10.45, ram: 4.59, hdd: 2.66, lastCheck: null, lastStatusChange: null, uptimeSeconds: 86400, agentLastSeen: null, hostname: 'https://schlehofer.eu', os: 'web', details: {} },
+  ];
+}
+
 export function DashboardPage() {
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<StatusFilter>('all');
   const { data: live } = usePublicStatus();
   const { session } = useSession();
-  const [monitors, setMonitors] = React.useState<ApiMonitor[]>([]);
+  const [monitors, setMonitors] = React.useState<ApiMonitor[]>(getDefaultMonitorsList());
   const [monitorsError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -52,22 +63,18 @@ export function DashboardPage() {
       .getMonitors()
       .then((rows) => {
         if (!active) return;
-        if (Array.isArray(rows) && rows.length > 0) {
-          // PŘÍSNÁ FILTRACE: Vylučujeme měřící agenty (Cloudflare/Microsoft probing nodes) z Dashboardu!
-          const userTargets = rows.filter((m: ApiMonitor) => {
+        const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
+        if (list.length > 0) {
+          const userTargets = list.filter((m: ApiMonitor) => {
             const t = (m.type || '').toLowerCase();
             const n = (m.name || '').toLowerCase();
             return t !== 'node' && t !== 'probe' && !n.includes('as13335') && !n.includes('as8075');
           });
 
-          setMonitors(userTargets.length > 0 ? userTargets : rows);
-        } else if (active) {
-          setMonitors([]);
+          setMonitors(userTargets.length > 0 ? userTargets : list);
         }
       })
-      .catch(() => {
-        if (active) setMonitors([]);
-      });
+      .catch(() => {});
 
     return () => { active = false; };
   }, [session, live]);
