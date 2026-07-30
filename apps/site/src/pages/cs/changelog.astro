@@ -1,0 +1,318 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="Changelog | Blood Kings Monitoring" description="Historie vydání, novinky a aktualizace monitorovacího systému Blood Kings. Sledujte vývoj a nové funkce v0.1 a novějších.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Aktualizace</span>
+      <h1>Changelog</h1>
+      <p class="section-subtitle">Sledujte vývoj a novinky v reálném čase. Všechna data jsou stahována přímo z GitHub Releases.</p>
+    </div>
+  </section>
+
+  <!-- Changelog Timeline Section -->
+  <section class="section bg-dim">
+    <div class="container timeline-container">
+      <!-- Loading Spinner -->
+      <div id="changelog-loading" class="changelog-loading">
+        <svg class="spinner" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3"></circle></svg>
+        <p>Načítání aktualizací z GitHubu...</p>
+      </div>
+
+      <!-- Timeline List -->
+      <div id="changelog-timeline" class="changelog-timeline-list is-hidden">
+        <!-- Filled dynamically by JavaScript -->
+      </div>
+    </div>
+  </section>
+
+  <script>
+    import { fetchReleases, escapeHtml, renderReleaseBody, initials, type Release } from '../../lib/github';
+
+    // Releasy jdou přes worker (token + cache), ne přímo z api.github.com.
+    async function loadChangelog() {
+      const loader = document.getElementById('changelog-loading');
+      const timeline = document.getElementById('changelog-timeline');
+
+      try {
+        const releases = await fetchReleases();
+        if (releases.length === 0) {
+          showFallback();
+        } else {
+          renderTimeline(releases);
+        }
+      } catch (e) {
+        console.warn('Changelog se nepodařilo načíst, používám statická data.', e);
+        showFallback();
+      } finally {
+        loader?.classList.add('is-hidden');
+        timeline?.classList.remove('is-hidden');
+      }
+    }
+
+    function renderTimeline(releases: Release[]) {
+      const timeline = document.getElementById('changelog-timeline');
+      if (!timeline) return;
+
+      timeline.innerHTML = '';
+
+      releases.forEach((release, index) => {
+        const releaseCard = document.createElement('div');
+        releaseCard.className = 'timeline-item';
+
+        // Každé pole z API se escapuje. Tělo releasu je Markdown psaný člověkem
+        // a může obsahovat HTML — renderReleaseBody escapuje dřív, než přidá
+        // vlastní značky.
+        releaseCard.innerHTML = `
+          <div class="timeline-badge" aria-hidden="true">${index === 0 ? '🔥' : '📦'}</div>
+          <div class="timeline-card card">
+            <div class="release-header">
+              <span class="badge badge-accent">${escapeHtml(release.tag)}</span>
+              <h2>${escapeHtml(release.title)}</h2>
+              <span class="release-date">${escapeHtml(release.date)}</span>
+            </div>
+
+            <div class="release-body">
+              ${renderReleaseBody(release.body, 'K této verzi není popis.')}
+            </div>
+
+            <div class="release-footer">
+              <div class="author-info">
+                <span class="author-avatar" aria-hidden="true">${escapeHtml(initials(release.author.name))}</span>
+                <span>Vydal <strong><a href="${escapeHtml(release.author.url)}" target="_blank" rel="noopener">${escapeHtml(release.author.name)}</a></strong></span>
+              </div>
+              <a href="${escapeHtml(release.url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
+                Zobrazit na GitHubu
+              </a>
+            </div>
+          </div>
+        `;
+        timeline.appendChild(releaseCard);
+      });
+    }
+
+    function showFallback() {
+      const timeline = document.getElementById('changelog-timeline');
+      if (!timeline) return;
+
+      timeline.innerHTML = `
+        <div class="timeline-item">
+          <div class="timeline-badge" aria-hidden="true">🔥</div>
+          <div class="timeline-card card">
+            <div class="release-header">
+              <span class="badge badge-accent">v0.1.0-alpha</span>
+              <h2>První alpha verze</h2>
+              <span class="release-date">16. července 2026</span>
+            </div>
+            <div class="release-body">
+              <p>První veřejná verze Blood Kings Monitoring.</p>
+              <ul>
+                <li>Self-hosted monitorovací server s rychlou instalací.</li>
+                <li>Vzdálení agenti pro Linux, Windows a Docker.</li>
+                <li>Veřejné status stránky s cachováním.</li>
+                <li>Notifikace přes SMTP e-mail a Discord webhooky.</li>
+                <li>Plná podpora IPv4 i IPv6.</li>
+              </ul>
+            </div>
+            <div class="release-footer">
+              <div class="author-info">
+                <span class="author-avatar" aria-hidden="true">BK</span>
+                <span>Vydal <strong>BKPepe</strong></span>
+              </div>
+              <a href="https://github.com/BKPepe/monitoring" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
+                Zobrazit na GitHubu
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    loadChangelog();
+  </script>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--surface-1) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  .timeline-container {
+    max-width: 800px;
+    position: relative;
+    padding-left: 2.5rem;
+  }
+
+  /* Vertical timeline line */
+  .timeline-container::before {
+    content: '';
+    position: absolute;
+    top: 2rem;
+    left: 25px;
+    bottom: 2rem;
+    width: 2px;
+    background: var(--border);
+  }
+
+  /* Spinner loader styles */
+  .changelog-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 4rem 0;
+    color: var(--text-mid);
+  }
+
+  .spinner {
+    animation: spin 0.8s linear infinite;
+    width: 32px;
+    height: 32px;
+    color: var(--brand-500);
+  }
+
+  .spinner circle {
+    stroke-dasharray: 42, 38;
+    stroke-linecap: round;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .changelog-timeline-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+  }
+
+  .timeline-item {
+    position: relative;
+  }
+
+  /* Timeline badge circle */
+  .timeline-badge {
+    position: absolute;
+    left: -2.5rem;
+    top: 1.5rem;
+    background: var(--surface-1);
+    border: 2px solid var(--border);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    transform: translateX(-50%);
+    z-index: 10;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .timeline-card {
+    background: var(--surface-1);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .release-header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .release-header h2 {
+    font-size: 1.6rem;
+    font-weight: 800;
+  }
+
+  .release-date {
+    font-size: 0.85rem;
+    color: var(--text-low);
+  }
+
+  /* Markdown body parsing display styles */
+  .release-body {
+    font-size: 0.95rem;
+    color: var(--text-mid);
+    line-height: 1.7;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .release-body :global(ul) {
+    padding-left: 1.5rem;
+    margin: 0.5rem 0;
+  }
+
+  .release-body :global(li) {
+    margin-bottom: 0.4rem;
+  }
+
+  .release-body :global(h3) {
+    font-size: 1.1rem;
+    color: var(--text-hi);
+    margin-top: 1rem;
+  }
+
+  /* Card footer author and links */
+  .release-footer {
+    border-top: 1px solid var(--border);
+    padding-top: 1.2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .author-info {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.85rem;
+    color: var(--text-mid);
+  }
+
+  /* Monogram místo avataru z GitHubu — žádný externí obrázek. */
+  .author-avatar {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-mid);
+  }
+
+  .author-info strong a {
+    color: var(--text-hi);
+  }
+
+  @media (max-width: 600px) {
+    .timeline-container {
+      padding-left: 0;
+    }
+    .timeline-container::before {
+      display: none;
+    }
+    .timeline-badge {
+      display: none;
+    }
+  }
+</style>

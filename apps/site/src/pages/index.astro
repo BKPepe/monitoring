@@ -1,0 +1,653 @@
+---
+import Layout from '../layouts/Layout.astro';
+import AgentNetwork from '../components/AgentNetwork.astro';
+import Playground from '../components/Playground.astro';
+import Dashboard from '../components/Dashboard.astro';
+import Map from '../components/Map.astro';
+import AgentSelector from '../components/AgentSelector.astro';
+import HeroGlobe from '../components/HeroGlobe.astro';
+import FeatureStrip from '../components/FeatureStrip.astro';
+import { GITHUB_REPO_URL } from '../config';
+
+const strip = [
+  {
+    icon: 'agents' as const,
+    tone: 'brand' as const,
+    title: 'Remote Agents',
+    desc: 'Deploy agents anywhere. They push metrics out — no inbound port needs opening.',
+  },
+  {
+    icon: 'protocols' as const,
+    tone: 'info' as const,
+    title: 'Multi Protocol',
+    desc: 'HTTP, HTTPS, ICMP, TCP, UDP, DNS and SSL certificate expiry in one place.',
+  },
+  {
+    icon: 'ip' as const,
+    tone: 'up' as const,
+    title: 'IPv4 & IPv6',
+    desc: 'Native dual-stack probing. Test reachability on both protocols independently.',
+  },
+  {
+    icon: 'status' as const,
+    tone: 'info' as const,
+    title: 'Status Pages',
+    desc: 'Public status pages on your own domain, with incident history and subscribers.',
+  },
+  {
+    icon: 'bell' as const,
+    tone: 'warning' as const,
+    title: 'Notifications',
+    desc: 'Telegram, Discord, Slack, e-mail, webhooks — triggered the second a check fails.',
+  },
+  {
+    icon: 'api' as const,
+    tone: 'brand' as const,
+    title: 'Open API',
+    desc: 'REST API, Prometheus exporter and embeddable SVG badges for your README.',
+  },
+];
+---
+
+<Layout title="Blood Kings Monitoring | Self-Hosted Monitoring Without Limits">
+  <!-- Hero Section -->
+  <section class="hero-section">
+    <div class="container hero-grid-layout">
+      <div class="hero-content">
+        <div class="badge badge-accent">v0.1.0-alpha Out Now</div>
+        <h1 class="hero-title">
+          Distributed <span class="text-brand">Monitoring</span><br />
+          Platform
+        </h1>
+        <p class="hero-desc">
+          Self-hosted monitoring with remote agents. No limits, full control,
+          built for performance — your infrastructure, your agents, your data.
+        </p>
+
+        <div class="hero-buttons">
+          <a href="/docs" class="btn btn-primary btn-lg">Get Started</a>
+          <a href={GITHUB_REPO_URL} target="_blank" rel="noopener" class="btn btn-ghost btn-lg">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z"></path>
+            </svg>
+            View on GitHub
+          </a>
+        </div>
+
+        <ul class="hero-trust">
+          <li><span class="trust-dot" aria-hidden="true"></span>Self Hosted</li>
+          <li><span class="trust-dot" aria-hidden="true"></span>Open Source</li>
+          <li><span class="trust-dot" aria-hidden="true"></span>MIT License</li>
+        </ul>
+
+        <!-- Repo stats. Data jdou přes worker (cache 1 h), ne přímo z api.github.com. -->
+        <div class="git-stats-banner">
+          <span class="git-stat"><strong id="git-stars" class="tabular">–</strong> Stars</span>
+          <span class="git-divider" aria-hidden="true"></span>
+          <span class="git-stat"><strong id="git-forks" class="tabular">–</strong> Forks</span>
+          <span class="git-divider" aria-hidden="true"></span>
+          <span class="git-stat"><strong id="git-contributors" class="tabular">–</strong> Contributors</span>
+        </div>
+      </div>
+
+      <div class="hero-visual">
+        <HeroGlobe
+          labels={{
+            agents: 'Agents',
+            online: 'Online',
+            monitors: 'Monitors',
+            up: 'Up',
+            visualDescription:
+              'Illustration of a globe with monitoring agents in several locations connected to a central server.',
+          }}
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- Key capabilities strip -->
+  <section class="strip-section">
+    <div class="container">
+      <FeatureStrip items={strip} />
+    </div>
+  </section>
+
+  <!-- Live Playground Section -->
+  <section class="section bg-dim">
+    <div class="container">
+      <Playground />
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-accent">Why Blood Kings?</span>
+        <h2>Complete Monitoring Ecosystem</h2>
+        <p class="section-subtitle">SaaS services restrict you with monitor counts, check intervals, and pricey add-ons for remote nodes. We break those barriers.</p>
+      </div>
+
+      <div class="grid-3 features-grid">
+        <div class="card card-glow">
+          <div class="feature-icon">🏠</div>
+          <h3>100% Self-Hosted</h3>
+          <p>Keep your logs and overall infrastructure under absolute personal control. No third-party servers.</p>
+        </div>
+        
+        <div class="card card-glow">
+          <div class="feature-icon">🤖</div>
+          <h3>Remote Agents</h3>
+          <p>Native, lightweight agents for Linux, Windows, macOS, and Docker containers sending system data.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🌐</div>
+          <h3>Public Status Pages</h3>
+          <p>Share uptime status and current incident logs with customers on modern, fast public status pages.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🔒</div>
+          <h3>SSL Monitoring</h3>
+          <p>Monitor validity and details of SSL/TLS certificates. Get notified long before they expire.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🏷️</div>
+          <h3>IPv4 & IPv6</h3>
+          <p>Full support for both IP protocols. Test availability without any network limitations.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">⏱️</div>
+          <h3>Response Time</h3>
+          <p>Measure responses in milliseconds from multiple global locations and isolate bottleneck paths.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">📣</div>
+          <h3>Incident Management</h3>
+          <p>Log outages, generate incident timelines, and report progress to your service subscribers.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">🔔</div>
+          <h3>Instant Notifications</h3>
+          <p>Receive alert triggers on Discord, Telegram, Slack, Webhooks, or SMTP email in the second of failure.</p>
+        </div>
+
+        <div class="card card-glow">
+          <div class="feature-icon">👥</div>
+          <h3>Multi-user Support</h3>
+          <p>Manage team permissions securely. Roles include Administrator, Editor, and Read-only views.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- Architecture -->
+  <section class="section section-deferred">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-info">Architecture</span>
+        <h2>How the Pieces Fit Together</h2>
+        <p class="section-subtitle">Agents push metrics outward to a central server. Nothing needs an inbound port open on the monitored machine.</p>
+      </div>
+      <AgentNetwork />
+    </div>
+  </section>
+
+  <!-- Live Dashboard Showcase -->
+  <section class="section bg-dim">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-success">Admin Interface</span>
+        <h2>Designed for Complete Clarity</h2>
+        <p class="section-subtitle">The intuitive dashboard provides an aggregated, real-time look into monitor status, latency waveforms, and agent metrics.</p>
+      </div>
+      <Dashboard />
+    </div>
+  </section>
+
+  <!-- Global Agent Map Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-accent">Global Coverage</span>
+        <h2>Multi-location Probing</h2>
+        <p class="section-subtitle">Distributed monitoring eliminates false alarms. If a path fails in USA, agents in Europe confirm the actual status.</p>
+      </div>
+      <Map />
+    </div>
+  </section>
+
+  <!-- Comparison Section -->
+  <section class="section bg-dim">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-accent">Comparison</span>
+        <h2>Blood Kings vs Traditional Services</h2>
+        <p class="section-subtitle">See how we compare to established cloud-based uptime monitoring solutions.</p>
+      </div>
+
+      <div class="table-wrapper card">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th class="highlight">Blood Kings</th>
+              <th>HetrixTools</th>
+              <th>UptimeRobot</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="feature-name">Self Hosted</td>
+              <td class="highlight-val">✅ Yes</td>
+              <td>❌ No</td>
+              <td>❌ No</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Remote Probing Agents</td>
+              <td class="highlight-val">✅ Unlimited & Free</td>
+              <td>⚠️ Restricted / Paid</td>
+              <td>❌ No</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Unlimited Monitors</td>
+              <td class="highlight-val">✅ Yes</td>
+              <td>❌ Paid Limits</td>
+              <td>❌ Paid Limits</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Public Status Pages</td>
+              <td class="highlight-val">✅ Unlimited</td>
+              <td>✅ Yes</td>
+              <td>✅ Yes</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Open Source (MIT)</td>
+              <td class="highlight-val">✅ Yes</td>
+              <td>❌ No</td>
+              <td>❌ No</td>
+            </tr>
+            <tr>
+              <td class="feature-name">IPv4 / IPv6 Dual Stack</td>
+              <td class="highlight-val">✅ Yes</td>
+              <td>✅ Yes</td>
+              <td>⚠️ Limited IPv6</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation Steps Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <span class="badge badge-success">Server Setup</span>
+        <h2>Spin Up Server in 60 Seconds</h2>
+        <p class="section-subtitle">Deploying the central Blood Kings server is quick and simple thanks to Docker containerization.</p>
+      </div>
+      
+      <div class="docker-steps-grid">
+        <div class="step-card card">
+          <div class="step-num">1</div>
+          <h4>Clone Repository</h4>
+          <p>Clone the status application repository directly onto your host VPS server.</p>
+          <div class="code-block-wrapper-sm">
+            <pre><code id="docker-server-yml">git clone https://github.com/BKPepe/monitoring.git status
+cd status</code></pre>
+          </div>
+        </div>
+
+        <div class="step-card card">
+          <div class="step-num">2</div>
+          <h4>Configure Database</h4>
+          <p>Copy the sample configuration file and set your MySQL database credentials.</p>
+          <div class="code-block-wrapper-sm">
+            <pre><code id="docker-run-cmd">cp status/config.sample.php status/config.php
+nano status/config.php</code></pre>
+          </div>
+        </div>
+
+        <div class="step-card card">
+          <div class="step-num">3</div>
+          <h4>Complete Setup</h4>
+          <p>Open browser to <code>http://your-server-ip/status/admin.php</code> and proceed with the initial admin account setup.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation Panel for Agents -->
+  <section class="section bg-dim">
+    <div class="container">
+      <AgentSelector />
+    </div>
+  </section>
+
+  <script>
+    import { API_ORIGIN } from '../config';
+
+    // Statistiky repozitáře čteme z workeru, ne přímo z api.github.com:
+    // worker drží token a hodinovou cache, takže se nenaráží na limit
+    // 60 req/h na IP a IP návštěvníka neodchází třetí straně.
+    async function loadRepoStats() {
+      const set = (id: string, value: string) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+      };
+
+      try {
+        const res = await fetch(`${API_ORIGIN}/api/stats`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        set('git-stars', String(data.stars ?? '–'));
+        set('git-forks', String(data.forks ?? '–'));
+        set('git-contributors', String(data.contributors ?? '–'));
+      } catch {
+        // Statistiky jsou dekorace, ne obsah — při výpadku API zůstane pomlčka.
+        set('git-stars', '–');
+        set('git-forks', '–');
+        set('git-contributors', '–');
+      }
+    }
+
+    loadRepoStats();
+  </script>
+</Layout>
+
+<style>
+  /* --- Hero ------------------------------------------------------------ */
+  .hero-section {
+    position: relative;
+    padding-block: clamp(3rem, 1rem + 8vw, 6.5rem) clamp(3rem, 1rem + 6vw, 5rem);
+    overflow: hidden;
+  }
+
+  /* Jemné radiální podsvícení za hero sekcí — nahrazuje dřívější glow spam
+     na jednotlivých prvcích jedním klidným světlem v pozadí. */
+  .hero-section::before {
+    content: '';
+    position: absolute;
+    inset: -30% -10% auto auto;
+    width: min(70vw, 720px);
+    aspect-ratio: 1;
+    background: radial-gradient(circle, var(--brand-glow), transparent 65%);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .hero-grid-layout {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: clamp(2rem, 1rem + 4vw, 4rem);
+    align-items: center;
+  }
+
+  .hero-title {
+    margin-block: 1.25rem;
+  }
+
+  .hero-desc {
+    font-size: var(--text-lg);
+    max-width: 46ch;
+    margin-bottom: 2rem;
+  }
+
+  .hero-buttons {
+    display: flex;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.75rem;
+  }
+
+  /* --- Trust řádek ----------------------------------------------------- */
+  .hero-trust {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+    list-style: none;
+    padding: 0;
+    margin-bottom: 2rem;
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .hero-trust li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .trust-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--up);
+  }
+
+  /* --- Repo statistiky -------------------------------------------------- */
+  .git-stats-banner {
+    display: inline-flex;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 0.7rem 1.25rem;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    color: var(--text-low);
+  }
+
+  .git-stat strong {
+    color: var(--text-hi);
+    margin-right: 0.3rem;
+  }
+
+  .git-divider {
+    width: 1px;
+    height: 1rem;
+    background: var(--border);
+  }
+
+  .hero-visual {
+    width: 100%;
+  }
+
+  /* Pás schopností navazuje přímo na hero — proto menší vertikální rytmus. */
+  .strip-section {
+    padding-bottom: var(--space-section);
+  }
+
+  /* Section headers */
+  .section-header {
+    margin-bottom: 4rem;
+  }
+
+  .section-header.text-center {
+    text-align: center;
+  }
+
+  .section-header h2 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    margin-top: 0.8rem;
+  }
+
+  .section-subtitle {
+    font-size: 1.1rem;
+    color: var(--text-mid);
+    margin-top: 0.6rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Features Grid icons */
+  .features-grid .card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .feature-icon {
+    font-size: 2.5rem;
+    background: var(--surface-2);
+    width: 60px;
+    height: 60px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+  }
+
+  /* Comparison Table styling */
+  .table-wrapper {
+    overflow-x: auto;
+    padding: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+
+  .comparison-table th, 
+  .comparison-table td {
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 1rem;
+  }
+
+  .comparison-table th {
+    background: var(--surface-2);
+    font-family: var(--font-heading);
+    font-weight: 700;
+    color: var(--text-hi);
+  }
+
+  .comparison-table th.highlight {
+    background: rgba(176, 0, 32, 0.05);
+    color: var(--brand-500);
+    border-bottom: 2px solid var(--brand-500);
+  }
+
+  .comparison-table td.highlight-val {
+    background: rgba(176, 0, 32, 0.02);
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+
+  .feature-name {
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+
+  /* Docker steps installation styling */
+  .docker-steps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2rem;
+  }
+
+  .step-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    position: relative;
+    padding: 2.5rem 2rem 2rem 2rem;
+    overflow: visible !important;
+    z-index: 1;
+  }
+
+  .step-num {
+    position: absolute;
+    top: -1.2rem;
+    left: 1.5rem;
+    background: var(--brand-500);
+    color: #ffffff;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-heading);
+    font-weight: 800;
+    font-size: 1.15rem;
+    box-shadow: 0 4px 12px rgba(176, 0, 32, 0.4);
+    z-index: 10;
+  }
+
+  .step-card h4 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin-top: 0.5rem;
+  }
+
+  .code-block-wrapper-sm {
+    background: #09090b;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1rem;
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+  }
+
+  .code-block-wrapper-sm code {
+    color: #f4f4f5;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  /* Velikosti písma řeší fluidní clamp() v tokenech — breakpointy tady
+     mění už jen rozvržení. */
+  @media (max-width: 992px) {
+    .hero-grid-layout {
+      grid-template-columns: 1fr;
+    }
+    .hero-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .hero-desc {
+      margin-inline: auto;
+    }
+    .hero-visual {
+      order: -1;
+      max-width: 460px;
+      margin-inline: auto;
+    }
+    .docker-steps-grid {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .step-card {
+      padding: 2rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .git-stats-banner {
+      gap: 0.9rem;
+      padding-inline: 0.9rem;
+    }
+    .comparison-table th,
+    .comparison-table td {
+      padding: 1rem;
+      font-size: var(--text-sm);
+    }
+  }
+</style>

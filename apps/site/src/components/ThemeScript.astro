@@ -1,0 +1,39 @@
+---
+// ThemeScript.astro - Prevents theme-flicker on load
+---
+<script is:inline>
+  (function () {
+    const getThemePreference = () => {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('theme')) {
+        return localStorage.getItem('theme');
+      }
+      return 'auto';
+    };
+
+    const resolveTheme = (theme) => {
+      if (theme === 'dark') return true;
+      if (theme === 'light') return false;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    };
+
+    const setTheme = (theme) => {
+      const isDark = resolveTheme(theme);
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      document.documentElement.setAttribute('data-theme-resolved', isDark ? 'dark' : 'light');
+    };
+
+    const theme = getThemePreference();
+    setTheme(theme);
+
+    // Watch for system preference changes if auto
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (getThemePreference() === 'auto') {
+        setTheme('auto');
+      }
+    });
+  })();
+</script>

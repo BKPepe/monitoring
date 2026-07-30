@@ -1,0 +1,21 @@
+{
+  "name": "bloodkings-monitoring-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/site",
+    "apps/worker",
+    "apps/monitor"
+  ],
+  "scripts": {
+    "dev:site": "npm run dev -w apps/site",
+    "dev:worker": "npm run dev -w apps/worker",
+    "dev:monitor": "npm run dev -w apps/monitor",
+    "build:site": "npm run build -w apps/site",
+    "build:worker": "npm run build -w apps/worker",
+    "build:monitor": "npm run build -w apps/monitor",
+    "build": "npm run build -w apps/site && npm run build -w apps/worker && npm run build -w apps/monitor"
+  },
+  "overrides": {
+    "sharp": "^0.35.0"
+  }
+}

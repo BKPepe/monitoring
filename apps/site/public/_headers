@@ -1,0 +1,30 @@
+# Bezpečnostní a cache hlavičky pro Cloudflare Pages.
+# Soubor se kopíruje do dist/ a Pages ho aplikuje na odpovídající cesty.
+#
+# Content-Security-Policy generuje Astro do <meta> (viz astro.config.mjs).
+# Tady jsou jen hlavičky, které v <meta> tagu prohlížeč ignoruje, a ty,
+# které s CSP nesouvisí.
+
+/*
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  X-Robots-Tag: index, follow
+
+# Astro hashuje názvy buildovaných assetů, takže je lze cachovat natrvalo.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+
+# Fonty jsou také hashované a musí přežít revalidaci beze změny.
+/_astro/*.woff2
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: font/woff2
+
+# HTML se musí revalidovat, jinak by nasazení nebylo vidět.
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate

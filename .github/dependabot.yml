@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # NPM dependencies (root workspace covers apps/site + apps/worker)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
+
+  # apps/status CDN libs (ECharts, FontAwesome, QRCode) - bump PR requires
+  # updating the matching BK_CDN_* constant in functions.php
+  - package-ecosystem: "npm"
+    directory: "/apps/status"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(status)"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "ci"
+    commit-message:
+      prefix: "ci"

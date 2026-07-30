@@ -1,0 +1,554 @@
+/* ==========================================================================
+   Blood Kings Monitoring — design system
+   Specifikace a zdůvodnění: apps/site/DESIGN.md
+   ========================================================================== */
+
+/* Self-hostované variabilní fonty. Nahrazují @import z fonts.googleapis.com —
+   žádný third-party request, žádný únik IP návštěvníka, čistší CSP. */
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/outfit';
+@import '@fontsource-variable/jetbrains-mono';
+
+@layer reset, tokens, base, components, utilities;
+
+/* ==========================================================================
+   TOKENS
+   ========================================================================== */
+@layer tokens {
+  /* color-scheme řídí light-dark() níž. Dark je default (dark-first design),
+     ThemeScript.astro přepíná .dark na <html> podle volby / systému. */
+  :root {
+    color-scheme: dark;
+  }
+
+  :root:not(.dark) {
+    color-scheme: light;
+  }
+
+  :root {
+    /* --- Plochy -------------------------------------------------------- */
+    --surface-0: light-dark(#ffffff, #0b0d10); /* pozadí stránky */
+    --surface-1: light-dark(#f7f8fa, #111317); /* karty, header */
+    --surface-2: light-dark(#eef0f3, #1f2329); /* elevated, borders, code */
+    --surface-inset: light-dark(#0b0d10, #08090c); /* code bloky - vždy tmavé */
+
+    --border: light-dark(rgb(0 0 0 / 0.1), rgb(255 255 255 / 0.08));
+    --border-strong: light-dark(rgb(0 0 0 / 0.18), rgb(255 255 255 / 0.16));
+
+    /* --- Text ---------------------------------------------------------- */
+    --text-hi: light-dark(#0b0d10, #e5e7eb);
+    --text-mid: light-dark(#4a4a52, #a1a1aa);
+    --text-low: light-dark(#6b7280, #71717a);
+    --text-on-brand: #ffffff;
+
+    /* --- Brand --------------------------------------------------------- */
+    /* brand-500 = akcentní text na tmavém pozadí (4.6:1).
+       brand-600 = plochy pod bílým textem (4.9:1) — #E5383B by dalo jen 4.2:1. */
+    --brand-500: light-dark(#c1121f, #e5383b);
+    --brand-600: light-dark(#a30d18, #d62b30);
+    --brand-400: light-dark(#e5383b, #ff6b6b);
+
+    /* --- Stavy (semantika sdílená s dashboardem) ------------------------ */
+    --up: light-dark(#15803d, #22c55e);
+    --down: light-dark(#b91c1c, #e5383b);
+    --warning: light-dark(#a16207, #facc15);
+    --info: light-dark(#1d4ed8, #60a5fa);
+    --paused: light-dark(#6b7280, #71717a);
+
+    /* Tónovaná pozadí stavů. color-mix místo hardcoded rgba() — jedna
+       definice platí pro obě témata a drží se barvy, ze které vychází. */
+    --up-bg: color-mix(in oklab, var(--up) 12%, transparent);
+    --down-bg: color-mix(in oklab, var(--down) 12%, transparent);
+    --warning-bg: color-mix(in oklab, var(--warning) 14%, transparent);
+    --info-bg: color-mix(in oklab, var(--info) 12%, transparent);
+    --brand-glow: color-mix(in oklab, var(--brand-500) 22%, transparent);
+
+    /* --- Typografie ---------------------------------------------------- */
+    --font-sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-heading: 'Outfit Variable', var(--font-sans);
+    --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    /* Fluidní škála — nahrazuje breakpoint overrides. */
+    --text-4xl: clamp(2.25rem, 1.5rem + 3.2vw, 3.75rem);
+    --text-3xl: clamp(1.75rem, 1.3rem + 1.9vw, 2.5rem);
+    --text-2xl: clamp(1.4rem, 1.2rem + 0.9vw, 1.85rem);
+    --text-xl: clamp(1.15rem, 1.05rem + 0.5vw, 1.35rem);
+    --text-lg: 1.125rem;
+    --text-base: 1rem;
+    --text-sm: 0.875rem;
+    --text-xs: 0.78rem;
+
+    /* --- Prostor a tvar ------------------------------------------------ */
+    --space-section: clamp(4rem, 2rem + 7vw, 7rem);
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px light-dark(rgb(0 0 0 / 0.06), rgb(0 0 0 / 0.4));
+    --shadow-md: 0 8px 24px -8px light-dark(rgb(0 0 0 / 0.14), rgb(0 0 0 / 0.6));
+    --shadow-lg: 0 24px 48px -16px light-dark(rgb(0 0 0 / 0.18), rgb(0 0 0 / 0.7));
+
+    --ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --duration-fast: 0.15s;
+    --duration: 0.25s;
+
+    /* Zkratky "trvání + křivka" pro shorthand `transition: <prop> var(--transition-*)`. */
+    --transition-fast: var(--duration-fast) var(--ease);
+    --transition-normal: var(--duration) var(--ease);
+    --transition-slow: 0.5s var(--ease);
+
+    --shadow-glow: 0 0 24px var(--brand-glow);
+
+    --header-height: 68px;
+    --max-width: 1200px;
+  }
+}
+
+/* ==========================================================================
+   RESET
+   ========================================================================== */
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Motion respektuje systémové nastavení. Dřív se animace pouštěly vždy. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  img,
+  svg,
+  video {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+/* ==========================================================================
+   BASE
+   ========================================================================== */
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    background-color: var(--surface-0);
+    color: var(--text-hi);
+    scroll-behavior: smooth;
+    scroll-padding-top: calc(var(--header-height) + 1rem);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.025em;
+    color: var(--text-hi);
+    text-wrap: balance;
+  }
+
+  h1 { font-size: var(--text-4xl); font-weight: 800; }
+  h2 { font-size: var(--text-3xl); font-weight: 800; }
+  h3 { font-size: var(--text-xl); }
+  h4 { font-size: var(--text-lg); }
+
+  p {
+    color: var(--text-mid);
+    text-wrap: pretty;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+    transition: color var(--duration-fast) var(--ease);
+  }
+
+  /* Viditelný focus je požadavek WCAG 2.4.7 — v původním CSS chyběl úplně. */
+  :focus-visible {
+    outline: 2px solid var(--brand-500);
+    outline-offset: 3px;
+    border-radius: var(--radius-sm);
+  }
+
+  code,
+  pre {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+  }
+
+  pre {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* Čísla metrik nesmí při live updatu poskakovat. */
+  th,
+  td,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--brand-500) 30%, transparent);
+    color: var(--text-hi);
+  }
+}
+
+/* ==========================================================================
+   COMPONENTS
+   ========================================================================== */
+@layer components {
+  .container {
+    width: 100%;
+    max-width: var(--max-width);
+    margin-inline: auto;
+    padding-inline: 1.5rem;
+  }
+
+  .section {
+    padding-block: var(--space-section);
+  }
+
+  /* Sekce pod foldem se nerenderují dokud nejsou potřeba. */
+  .section-deferred {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 600px;
+  }
+
+  .bg-dim {
+    background-color: var(--surface-1);
+  }
+
+  /* Skip link — klávesnicová navigace přeskočí header. */
+  .skip-link {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    translate: -50% -120%;
+    z-index: 2000;
+    padding: 0.75rem 1.25rem;
+    background: var(--brand-600);
+    color: var(--text-on-brand);
+    font-weight: 600;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    transition: translate var(--duration) var(--ease);
+  }
+
+  .skip-link:focus-visible {
+    translate: -50% 0;
+  }
+
+  /* --- Karty ---------------------------------------------------------- */
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.75rem;
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+    transition:
+      transform var(--duration) var(--ease),
+      border-color var(--duration) var(--ease),
+      box-shadow var(--duration) var(--ease);
+  }
+
+  /* Hover jen na zařízeních, která ho umí — na dotyku vzniká sticky stav. */
+  @media (hover: hover) {
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-md);
+    }
+
+    .card-glow::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--brand-500), transparent);
+      opacity: 0;
+      transition: opacity var(--duration) var(--ease);
+    }
+
+    .card-glow:hover::before {
+      opacity: 1;
+    }
+  }
+
+  /* --- Tlačítka -------------------------------------------------------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.7rem 1.35rem;
+    font-family: var(--font-heading);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    line-height: 1;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background-color var(--duration-fast) var(--ease),
+      border-color var(--duration-fast) var(--ease),
+      color var(--duration-fast) var(--ease),
+      transform var(--duration-fast) var(--ease);
+  }
+
+  .btn-lg {
+    padding: 0.9rem 1.75rem;
+    font-size: var(--text-base);
+  }
+
+  .btn-sm {
+    padding: 0.5rem 1rem;
+    font-size: var(--text-xs);
+  }
+
+  .btn-full {
+    width: 100%;
+  }
+
+  .btn-primary {
+    background: var(--brand-600);
+    color: var(--text-on-brand);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .btn-secondary {
+    background: var(--surface-2);
+    color: var(--text-hi);
+    border-color: var(--border);
+  }
+
+  /* .btn-outline je historický alias .btn-ghost — stejný vzhled, ať se
+     staré stránky nemusí přepisovat kvůli jménu třídy. */
+  .btn-ghost,
+  .btn-outline {
+    background: transparent;
+    color: var(--text-hi);
+    border-color: var(--border-strong);
+  }
+
+  @media (hover: hover) {
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary:hover { background: var(--brand-500); }
+    .btn-secondary:hover { border-color: var(--border-strong); }
+    .btn-ghost:hover,
+    .btn-outline:hover { border-color: var(--brand-500); color: var(--brand-500); }
+  }
+
+  .btn:active { transform: translateY(0); }
+
+  /* --- Odznaky --------------------------------------------------------- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.28rem 0.7rem;
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+  }
+
+  /* Stavové odznaky. Barva nikdy nenese význam sama — text je vždy součástí. */
+  .badge-up,
+  .badge-down,
+  .badge-warning,
+  .badge-info,
+  .badge-paused,
+  .badge-accent {
+    background: color-mix(in oklab, var(--badge-color) 14%, transparent);
+    border-color: color-mix(in oklab, var(--badge-color) 30%, transparent);
+    color: var(--badge-color);
+  }
+
+  .badge-up { --badge-color: var(--up); }
+  .badge-down { --badge-color: var(--down); }
+  .badge-warning { --badge-color: var(--warning); }
+  .badge-info { --badge-color: var(--info); }
+  .badge-paused { --badge-color: var(--paused); }
+  .badge-accent { --badge-color: var(--brand-500); }
+  .badge-success { --badge-color: var(--up); }
+
+  /* Tečka stavu doplňuje odznak i samostatné indikátory. */
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+
+  .status-dot-live {
+    box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 60%, transparent);
+    animation: ping 2s var(--ease) infinite;
+  }
+
+  /* --- Sekční hlavičky -------------------------------------------------- */
+  .section-header {
+    margin-bottom: 3.5rem;
+  }
+
+  .section-header.text-center {
+    text-align: center;
+  }
+
+  .section-header h2 {
+    margin-top: 0.9rem;
+  }
+
+  .section-subtitle {
+    font-size: var(--text-lg);
+    color: var(--text-mid);
+    margin-top: 0.75rem;
+    max-width: 60ch;
+    margin-inline: auto;
+  }
+
+  /* --- Statistické dlaždice --------------------------------------------- */
+  .stat-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 1.1rem 1.35rem;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  .stat-value {
+    font-family: var(--font-heading);
+    font-size: var(--text-2xl);
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-hi);
+  }
+
+  .stat-label {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-low);
+  }
+
+  /* --- Code bloky ------------------------------------------------------- */
+  .code-block {
+    background: var(--surface-inset);
+    border: 1px solid light-dark(rgb(0 0 0 / 0.2), rgb(255 255 255 / 0.06));
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+    overflow-x: auto;
+  }
+
+  .code-block code {
+    color: #e5e7eb;
+    font-size: var(--text-xs);
+    line-height: 1.7;
+  }
+}
+
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+@layer utilities {
+  .grid-2,
+  .grid-3,
+  .grid-4 {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  /* auto-fit místo pevných sloupců + media queries: mřížka se přizpůsobí sama. */
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
+  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); }
+  .grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
+
+  .text-center { text-align: center; }
+  .text-gradient {
+    background: linear-gradient(135deg, var(--text-hi) 25%, var(--brand-500) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+
+  .text-brand { color: var(--brand-500); }
+
+  /* Skrývání přes třídu, ne přes style="display:none" — inline styl by
+     strict CSP (style-src bez 'unsafe-inline') zablokovala. */
+  .is-hidden { display: none; }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* ==========================================================================
+   KEYFRAMES
+   ========================================================================== */
+@keyframes ping {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 60%, transparent); }
+  70% { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.float { animation: float 6s var(--ease) infinite; }
+.pulse { animation: ping 2s var(--ease) infinite; }

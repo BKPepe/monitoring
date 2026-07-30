@@ -1,0 +1,100 @@
+name: Deploy Go Backend & Monitor SPA to cPanel
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/server/**'
+      - 'apps/monitor/**'
+      - '.github/workflows/deploy-go.yml'
+
+jobs:
+  build-and-deploy:
+    name: Build Go Server & React SPA, Deploy via FTP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: 'apps/server/go.sum'
+
+      - name: Build Go Server & CLI Binaries (Linux amd64)
+        run: |
+          mkdir -p bin
+          cd apps/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../bin/server ./cmd/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../bin/bkctl ./cmd/bkctl
+          cp ../../bin/server ../../server
+          cp ../../bin/bkctl ../../bkctl
+          echo "Go server and bkctl CLI binaries built successfully into bin/ directory."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+
+      - name: Build React Monitor Frontend & Astro Main Portal
+        run: |
+          npm ci
+          npm run build --workspace=apps/monitor
+          npm run build --workspace=apps/site
+          echo "Frontends built successfully."
+
+      - name: Generate .env Configuration File
+        env:
+          BK_DB_URL: ${{ secrets.BK_DATABASE_URL || secrets.POSTGRES_DB_URL }}
+          BK_SEC_KEY: ${{ secrets.BK_SECRET_KEY }}
+        run: |
+          if [ -n "$BK_DB_URL" ]; then
+            echo "Generating .env file from GitHub Secrets..."
+            echo "BK_DATABASE_URL=$BK_DB_URL" > .env
+            if [ -n "$BK_SEC_KEY" ]; then
+              echo "BK_SECRET_KEY=$BK_SEC_KEY" >> .env
+            else
+              echo "BK_SECRET_KEY=$(openssl rand -hex 32)" >> .env
+            fi
+            echo "BK_ENV=production" >> .env
+            echo "BK_ADDR=:8090" >> .env
+            cp .env bin/.env
+          else
+            echo "No BK_DATABASE_URL secret set in GitHub. Skipping .env generation."
+          fi
+
+      - name: FTP Deploy Go Backend Subdirectory (bin/) for cPanel Application Manager
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./bin/
+          server-dir: bin/
+          protocol: ftps
+          timeout: 60000
+          security: loose
+
+
+
+
+
+      - name: FTP Deploy React Dashboard to public_html/app/
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./apps/monitor/dist/
+          server-dir: public_html/app/
+          protocol: ftps
+          timeout: 60000
+          security: loose
+          exclude: |
+            **/.git*
+            status/**

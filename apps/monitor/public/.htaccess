@@ -1,0 +1,20 @@
+ErrorDocument 404 /app/index.html
+FallbackResource /app/index.html
+
+# cPanel / Apache Routing for React SPA under /app/
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /app/
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^.*$ /app/index.html [QSA,L]
+</IfModule>
+
+# Fix PHP session.gc_divisor warning
+<IfModule mod_php7.c>
+  php_value session.gc_divisor 100
+</IfModule>
+<IfModule mod_php.c>
+  php_value session.gc_divisor 100
+</IfModule>
