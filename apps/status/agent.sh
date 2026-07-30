@@ -322,6 +322,19 @@ if [ -n "$total_forks" ]; then
     echo "$total_forks" > "$FORKRATE_STATE_FILE" 2>/dev/null || true
 fi
 
+# 3.65 TCP Retransmissions & Conntrack Count
+tcp_retrans_json="null"
+if [ -f /proc/net/snmp ]; then
+    tcp_retrans=$(awk '/^Tcp:/ {if (NR==4) print $13}' /proc/net/snmp 2>/dev/null)
+    [ -n "$tcp_retrans" ] && tcp_retrans_json="$tcp_retrans"
+fi
+
+conntrack_count_json="null"
+if [ -f /proc/sys/net/netfilter/nf_conntrack_count ]; then
+    cnt=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null)
+    [ -n "$cnt" ] && conntrack_count_json="$cnt"
+fi
+
 # 3.7 Teplota (°C) - nejvyšší mezi dostupnými thermal zónami. Na většině VPS null,
 # tepelné senzory hostitele se přes virtualizaci obvykle nevystavují.
 temperature_json="null"
@@ -794,6 +807,8 @@ payload=$(cat <<EOF
   "timezone": "$sys_timezone",
   "reboot_required": $reboot_required_json,
   "cloud_provider": $cloud_provider_json,
+  "tcp_retrans": $tcp_retrans_json,
+  "conntrack_count": $conntrack_count_json,
   "virtualization": $virtualization_json,
   "discovered_services": [$discovered_json]
 }

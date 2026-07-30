@@ -544,6 +544,10 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
       { label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : '—' },
       { label: 'Operační systém', value: m.os ?? '—' },
       { label: 'Typ protokolu', value: m.type.toUpperCase() },
+      ...(m.details?.net != null ? [{ label: 'Síťový průtok', value: `${Number(m.details.net).toFixed(1)} KB/s` }] : []),
+      ...(m.details?.swap != null ? [{ label: 'Využití Swapu', value: `${Number(m.details.swap).toFixed(1)} %` }] : []),
+      ...(m.details?.tcp_retrans != null ? [{ label: 'TCP Retransmissions', value: `${m.details.tcp_retrans}` }] : []),
+      ...(m.details?.conntrack_count != null ? [{ label: 'Conntrack Spojení', value: `${m.details.conntrack_count}` }] : []),
     ],
     events: [
       { id: 1, title: status === 'down' ? 'Výpadek služby' : 'Automatický test', detail: status === 'down' ? 'Cílový port neodpovídá' : 'Odezva vyhodnocena v pořádku.', at: lastCheckDisplay, severity: status === 'down' ? 'down' : 'info', resolution: status === 'down' ? 'Open' : 'Info' }

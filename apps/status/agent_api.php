@@ -101,6 +101,8 @@ $sys_timezone = (isset($data['timezone']) && $data['timezone'] !== null && $data
 $reboot_required = isset($data['reboot_required']) ? $data['reboot_required'] : null;
 $cloud_provider = (isset($data['cloud_provider']) && $data['cloud_provider'] !== null) ? trim($data['cloud_provider']) : null;
 $virtualization = (isset($data['virtualization']) && $data['virtualization'] !== null) ? trim($data['virtualization']) : null;
+$tcp_retrans = (isset($data['tcp_retrans']) && $data['tcp_retrans'] !== null) ? intval($data['tcp_retrans']) : null;
+$conntrack_count = (isset($data['conntrack_count']) && $data['conntrack_count'] !== null) ? intval($data['conntrack_count']) : null;
 
 // OpenWrt profil - identita routeru + stav WAN rozhraní (viz agent_openwrt.sh).
 // hostname/kernel/os výše jsou generické a router je vyplňuje beze změny zde.
@@ -296,6 +298,8 @@ try {
         'fork_rate' => $fork_rate,
         'temperature' => $temperature,
         'zombie_count' => $zombie_count,
+        'tcp_retrans' => $tcp_retrans,
+        'conntrack_count' => $conntrack_count,
         'top_cpu_processes' => $top_cpu_processes,
         'top_ram_processes' => $top_ram_processes,
         'hostname' => $sys_hostname,
