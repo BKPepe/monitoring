@@ -141,6 +141,19 @@ export function InfrastructurePage() {
     return () => { active = false; };
   }, [session]);
 
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const editIdStr = params.get('edit');
+    if (editIdStr) {
+      const editId = parseInt(editIdStr, 10);
+      if (!isNaN(editId)) {
+        setTimeout(() => {
+          handleStartEdit(editId);
+        }, 200);
+      }
+    }
+  }, [rawMonitors]);
+
   const existingCategories = React.useMemo(() => {
     const defaultCats = ['Webové Portály & API', 'Komunikační & Herní Servery', 'Síťová Infrastruktura & Routery'];
     const loadedCats = rawMonitors.map(m => m.category).filter(Boolean) as string[];

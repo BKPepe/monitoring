@@ -24,7 +24,6 @@ import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/mock';
 import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
-import { useSession } from '@/api/use-session';
 import { cn, formatPercent } from '@/lib/utils';
 
 type MonitorStatus = ApiMonitor['status'];
@@ -72,8 +71,6 @@ interface AssetDetail {
 export function AssetDetailPage() {
   const { assetId } = useParams<{ assetId: string }>();
   const idNum = Number(assetId) || 1;
-  const { session } = useSession();
-  const isAuthenticated = Boolean(session?.authenticated);
 
   const [asset, setAsset] = React.useState<AssetDetail | null>(null);
   const [range, setRange] = React.useState<TimeRange>('24h');
@@ -93,7 +90,8 @@ export function AssetDetailPage() {
       .getMonitors()
       .then((rows) => {
         if (!active) return;
-        const match = Array.isArray(rows) ? rows.find((m) => m.id === idNum || m.assetId === idNum) : null;
+        const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
+        const match = list.find((m: ApiMonitor) => Number(m.id) === idNum || Number(m.assetId) === idNum);
         if (match) {
           setAsset(buildDynamicAsset(match));
         } else {
@@ -141,7 +139,6 @@ export function AssetDetailPage() {
   }
 
   const upperKind = (asset.kind || '').toUpperCase();
-  const isNoSslProtocol = ['ROUTER', 'VOICE', 'MINECRAFT', 'GAME', 'AGENT', 'VPS', 'NODE', 'ICMP', 'TCP', 'TEAMSPEAK'].includes(upperKind);
 
   return (
     <div className="space-y-6">
@@ -149,7 +146,7 @@ export function AssetDetailPage() {
         <Link to="/infrastructure" className="hover:text-foreground font-semibold flex items-center gap-1 transition-colors">
           <ArrowLeft className="size-3.5" /> Infrastruktura
         </Link>
-        {asset.breadcrumb.map((crumb) => (
+        {asset.breadcrumb.filter(c => c !== 'Infrastructure' && c !== 'Infrastruktura').map((crumb) => (
           <React.Fragment key={crumb}>
             <span>/</span>
             <span>{crumb}</span>
@@ -159,7 +156,7 @@ export function AssetDetailPage() {
         <span className="text-foreground font-medium">{asset.name}</span>
       </div>
 
-      <Hero asset={asset} isAuthenticated={isAuthenticated} />
+      <Hero asset={asset} />
 
       <Tabs defaultValue="overview" className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-3">
@@ -222,26 +219,29 @@ export function AssetDetailPage() {
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
-                <p className="font-semibold text-sm">TLS/SSL Certifikát</p>
-                {isNoSslProtocol ? (
-                  <p className="text-xs text-muted-foreground font-medium">N/A ({upperKind === 'ROUTER' ? 'OpenWrt ubus Telemetrie' : upperKind === 'MINECRAFT' ? 'Minecraft Java Socket' : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE' ? 'TeamSpeak UDP Voice' : 'Ne-šifrovaný protokol'})</p>
-                ) : (
-                  <p className="text-xs text-emerald-400 font-medium">Platný (Zbývá 64 dnů)</p>
-                )}
-                <p className="text-[11px] text-muted-foreground font-mono">
-                  {isNoSslProtocol 
-                    ? (upperKind === 'ROUTER' 
-                        ? 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)' 
-                        : upperKind === 'MINECRAFT' 
-                        ? 'Minecraft Java socket (port 25565 bez TLS vrstvy)' 
-                        : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE' 
-                        ? 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy' 
-                        : 'Služba bez šifrovací TLS vrstvy')
-                    : "Vydavatel: Let's Encrypt Authority X3"}
-                </p>
-              </div>
+            {(() => {
+              const isNoSsl = ['ROUTER', 'VOICE', 'MINECRAFT', 'GAME', 'AGENT', 'VPS', 'NODE', 'ICMP', 'TCP', 'TEAMSPEAK'].includes(upperKind);
+              return (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
+                    <p className="font-semibold text-sm">TLS/SSL Certifikát</p>
+                    {isNoSsl ? (
+                      <p className="text-xs text-muted-foreground font-medium">N/A ({upperKind === 'ROUTER' ? 'OpenWrt ubus Telemetrie' : upperKind === 'MINECRAFT' ? 'Minecraft Java Socket' : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE' ? 'TeamSpeak UDP Voice' : 'Ne-šifrovaný protokol'})</p>
+                    ) : (
+                      <p className="text-xs text-emerald-400 font-medium">Platný (Zbývá 64 dnů)</p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground font-mono">
+                      {isNoSsl 
+                        ? (upperKind === 'ROUTER' 
+                            ? 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)' 
+                            : upperKind === 'MINECRAFT' 
+                            ? 'Minecraft Java socket (port 25565 bez TLS vrstvy)' 
+                            : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE' 
+                            ? 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy' 
+                            : 'Protokol nepoužívá SSL/TLS vrstvu')
+                        : 'Let\'s Encrypt Authority X3 — TLS 1.3 / HTTP/2 OK'}
+                    </p>
+                  </div>
               <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
                 <p className="font-semibold text-sm">Stav Služby</p>
                 <p className={cn("text-xs font-medium", asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400')}>
@@ -259,6 +259,8 @@ export function AssetDetailPage() {
                 </p>
               </div>
             </div>
+              );
+            })()}
           </Card>
         </TabsContent>
 
@@ -279,7 +281,7 @@ export function AssetDetailPage() {
   );
 }
 
-function Hero({ asset, isAuthenticated }: { asset: AssetDetail; isAuthenticated: boolean }) {
+function Hero({ asset }: { asset: AssetDetail }) {
   const upperKind = (asset.kind || '').toUpperCase();
   const Icon = upperKind === 'ROUTER' || asset.id === 5 ? RouterIcon : upperKind === 'MINECRAFT' || asset.id === 4 ? Gamepad2 : upperKind === 'VOICE' || upperKind === 'TEAMSPEAK' || asset.id === 3 ? Mic : upperKind === 'DISCORD' || asset.id === 2 ? MessageSquare : upperKind === 'HTTPS' || upperKind === 'HTTP' || upperKind === 'WEB' ? Globe : Server;
 
@@ -304,16 +306,20 @@ function Hero({ asset, isAuthenticated }: { asset: AssetDetail; isAuthenticated:
         <Button
           variant="outline"
           size="sm"
-          disabled={!isAuthenticated}
-          title={!isAuthenticated ? "Pro úpravu monitoru se prosím přihlaste" : "Správa akcí"}
+          onClick={() => {
+            window.location.href = `/app/infrastructure`;
+          }}
+          title="Správa akcí a přehled"
         >
           <Settings2 className="size-4" /> Akce
         </Button>
         <Button
           variant="outline"
           size="sm"
-          disabled={!isAuthenticated}
-          title={!isAuthenticated ? "Pro úpravu monitoru se prosím přihlaste" : "Upravit nastavení monitoru"}
+          onClick={() => {
+            window.location.href = `/app/infrastructure?edit=${asset.id}`;
+          }}
+          title="Upravit nastavení monitoru"
         >
           <Pencil className="size-4" /> Upravit monitor
         </Button>

@@ -20,7 +20,7 @@ export function SetupPage() {
   useEffect(() => {
     let active = true;
 
-    fetch('/api/v1/setup/status')
+    fetch('/status/api.php?action=session', { credentials: 'include' })
       .then((res) => res.json().catch(() => ({})))
       .then((data) => {
         if (active && data && typeof data.installed === 'boolean') {
@@ -68,7 +68,7 @@ export function SetupPage() {
     setForgotMsg('');
 
     try {
-      const res = await fetch('/api/v1/auth/forgot_password', {
+      const res = await fetch('/status/api.php?action=forgot_password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail }),
@@ -88,7 +88,7 @@ export function SetupPage() {
 
   async function tryLogin(u: string, p: string, totp?: string) {
     try {
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await fetch('/status/api.php?action=login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -181,7 +181,7 @@ export function SetupPage() {
   }
 
   async function tryInstall(u: string, e: string, p: string) {
-    const res = await fetch('/api/v1/setup/install', {
+    const res = await fetch('/status/api.php?action=setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: u, email: e, password: p }),
@@ -266,6 +266,7 @@ export function SetupPage() {
             <input
               type="password"
               required
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"

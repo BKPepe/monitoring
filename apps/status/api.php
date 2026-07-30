@@ -553,9 +553,10 @@ if ($action === 'audit_logs') {
     try {
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
         $stmt = $pdo->prepare("
-            SELECT id, checked_at as time, monitor_id, status, response_time, error_message
-            FROM monitor_logs
-            ORDER BY id DESC
+            SELECT l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, m.name as monitor_name, m.type as monitor_type
+            FROM monitor_logs l
+            LEFT JOIN monitors m ON m.id = l.monitor_id
+            ORDER BY l.id DESC
             LIMIT ?
         ");
         $stmt->bindValue(1, $limit, PDO::PARAM_INT);
@@ -564,12 +565,15 @@ if ($action === 'audit_logs') {
 
         $logs = [];
         foreach ($rows as $r) {
-            $isDown = strtolower($r['status']) === 'down';
+            $isDown = strtolower($r['status'] ?? '') === 'down';
+            $mName = $r['monitor_name'] ?: "Monitor #{$r['monitor_id']}";
+            $mType = strtoupper($r['monitor_type'] ?: 'HTTP');
+
             $logs[] = [
                 'id' => (int)$r['id'],
                 'time' => date('d.m.Y H:i:s', strtotime($r['time'])),
-                'action' => $isDown ? 'KONTROLA SELHALA' : 'KONTROLA ÚSPĚŠNÁ',
-                'details' => $r['error_message'] ?: ($isDown ? 'Monitor neodpovídá na ping/HTTP' : "Odezva {$r['response_time']} ms OK"),
+                'action' => $isDown ? "VÝPADEK: {$mName}" : "KONTROLA OK: {$mName}",
+                'details' => $r['error_message'] ?: ($isDown ? "[{$mName}] {$mType} neodpovídá na test" : "[{$mName}] {$mType} test OK (Odezva {$r['response_time']} ms)"),
                 'status' => $isDown ? 'down' : 'up',
                 'user' => 'Systémový Agent (Cron)',
             ];

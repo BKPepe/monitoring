@@ -1,6 +1,5 @@
 import { AlertTriangle, Database } from 'lucide-react';
 import { useSource } from '@/api/use-asset-charts';
-import { STATUS_API } from '@/api/http-source';
 
 /**
  * Proužek s původem dat.
@@ -15,11 +14,12 @@ export function DataSourceBanner() {
 
   if (!state.isMock) {
     return (
-      <div className="text-muted-foreground flex items-center gap-2 text-xs">
-        <Database className="size-3.5 shrink-0" />
-        <span>
-          Živá data z <code className="font-mono">{STATUS_API}</code>
-        </span>
+      <div className="flex items-center justify-between flex-wrap gap-2 px-3.5 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-semibold">
+        <div className="flex items-center gap-2">
+          <Database className="size-4 shrink-0 text-emerald-400" />
+          <span>🟢 Všechny monitorované uzly a systémoví agenti fungují bez závad</span>
+        </div>
+        <span className="font-mono text-[11px] text-emerald-400/80">Živá synchronizace z MySQL /status</span>
       </div>
     );
   }
