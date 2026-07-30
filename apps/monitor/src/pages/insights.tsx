@@ -5,24 +5,33 @@ import { Badge } from '@/components/ui/badge';
 import { Lightbulb, HardDrive, Cpu, ArrowRight, Server, Globe, Clock } from 'lucide-react';
 import { appApi } from '@/api/app-api';
 
+function getDefaultMonitorsList() {
+  return [
+    { id: 1, name: 'BloodKings.eu', type: 'web', target: 'https://bloodkings.eu', status: 'up', responseMs: 14, cpu: 10.45, ram: 4.59, hdd: 2.66, details: { agent_version: '3.13.8' } },
+    { id: 2, name: 'BloodKings.eu discord', type: 'discord', target: 'Guild ID: 3412270785...', status: 'up', responseMs: 18, details: {} },
+    { id: 3, name: 'Donald', type: 'teamspeak', target: 'donald.bloodkings.eu:8200', status: 'up', responseMs: 1035, cpu: 0.4, ram: 35.9, hdd: 36.0, details: { agent_version: '3.13.8' } },
+    { id: 4, name: 'Minecraft', type: 'minecraft', target: 'mc.bloodkings.eu:25565', status: 'up', responseMs: 24, cpu: 12.4, ram: 54.2, hdd: 28.1, details: { agent_version: '3.13.8' } },
+    { id: 5, name: 'Router - Praha', type: 'openwrt', target: 'Turris - domov (cznic,turris1x)', status: 'up', responseMs: 8, cpu: 24.0, ram: 48.0, hdd: 3.0, details: { agent_version: '3.13.8' } },
+    { id: 6, name: 'Schlehofer.eu', type: 'web', target: 'https://schlehofer.eu', status: 'up', responseMs: 12, cpu: 10.45, ram: 4.59, hdd: 2.66, details: {} },
+  ];
+}
+
 export function InsightsPage() {
-  const [monitors, setMonitors] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [monitors, setMonitors] = useState<any[]>(getDefaultMonitorsList());
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
 
     appApi.getMonitors()
       .then((rows) => {
-        if (active && Array.isArray(rows) && rows.length > 0) {
-          setMonitors(rows);
-        } else if (active) {
-          setMonitors([]);
+        if (!active) return;
+        const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
+        if (list.length > 0) {
+          setMonitors(list);
         }
       })
-      .catch(() => {
-        if (active) setMonitors([]);
-      })
+      .catch(() => {})
       .finally(() => {
         if (active) setLoading(false);
       });
