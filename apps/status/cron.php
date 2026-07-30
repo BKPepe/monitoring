@@ -365,6 +365,19 @@ foreach ($monitors as $monitor) {
                 'http_version' => $check_result['http_version'] ?? 'HTTP/1.1',
                 'api_fallback' => false
             ];
+
+            if (isset($check_result['ssl_days_remaining'])) {
+                $days = (int)$check_result['ssl_days_remaining'];
+                $details_arr['ssl_days_remaining'] = $days;
+                if ($days <= 14) {
+                    $last_ssl_warn = $details_arr['last_ssl_warn'] ?? 0;
+                    if (time() - $last_ssl_warn > 86400) {
+                        $details_arr['last_ssl_warn'] = time();
+                        trigger_notifications($pdo, $monitor, 'ssl_expiring', "SSL certifikát pro '{$name}' vyprší za {$days} dní!");
+                        log_monitor_event($pdo, $id, $name, $type, 'ssl_warning', "SSL certifikát vyprší za {$days} dní");
+                    }
+                }
+            }
             
             if (!empty($monitor['cpanel_stats_url'])) {
                 $cp_res = check_cpanel($monitor['cpanel_stats_url'], $timeout);

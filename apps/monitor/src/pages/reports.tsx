@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   BarChart3, Download, FileText, Calendar, CheckCircle2, ShieldCheck,
   Clock, TrendingUp, ArrowRight, Server, ChevronDown, ChevronUp, AlertTriangle, RefreshCw
@@ -92,12 +93,52 @@ export function ReportsPage() {
     );
   }
 
+  const handleExportCSV = () => {
+    const headers = ['ID', 'Název', 'Cíl', 'Typ', 'Stav', 'Uptime SLA (%)', 'Celkový výpadek (min)', 'Celkem kontrol', 'MTTR (s)', 'p50 (ms)', 'p95 (ms)', 'p99 (ms)'];
+    const rows = monitors.map((m) => [
+      m.id,
+      `"${m.name.replace(/"/g, '""')}"`,
+      `"${m.target.replace(/"/g, '""')}"`,
+      m.type,
+      m.currentStatus,
+      m.uptimePct.toFixed(3),
+      m.outageMinutes,
+      m.totalChecks,
+      m.mttrSec ?? 0,
+      m.p50Ms ?? 0,
+      m.p95Ms ?? 0,
+      m.p99Ms ?? 0,
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `SLA_Report_BloodKings_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handlePrintPDF = () => {
+    window.print();
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">SLA Výkazy & Statistika Dle Serverů</h1>
           <p className="text-muted-foreground text-sm">Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.</p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2 font-semibold">
+            <Download className="size-4 text-emerald-400" /> Exportovat CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={handlePrintPDF} className="gap-2 font-semibold">
+            <FileText className="size-4 text-sky-400" /> Stáhnout PDF / Tisk
+          </Button>
         </div>
       </div>
 
