@@ -292,6 +292,8 @@ try {
         'load15' => $load15,
         'disk_io_read' => $disk_io_read,
         'disk_io_write' => $disk_io_write,
+        'disk_read_kb' => isset($data['disk_read_kb']) ? floatval($data['disk_read_kb']) : $disk_io_read,
+        'disk_write_kb' => isset($data['disk_write_kb']) ? floatval($data['disk_write_kb']) : $disk_io_write,
         'net_errors' => $net_errors,
         'iowait' => $iowait,
         'inode_usage' => $inode_usage,

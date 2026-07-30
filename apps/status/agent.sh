@@ -809,6 +809,8 @@ payload=$(cat <<EOF
   "cloud_provider": $cloud_provider_json,
   "tcp_retrans": $tcp_retrans_json,
   "conntrack_count": $conntrack_count_json,
+  "disk_read_kb": $disk_io_read,
+  "disk_write_kb": $disk_io_write,
   "virtualization": $virtualization_json,
   "discovered_services": [$discovered_json]
 }

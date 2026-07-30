@@ -1040,6 +1040,28 @@ for var in cpu ram ram_total_mb ram_used_mb ram_available_mb ram_free_mb swap_pc
     fi
 done
 
+# TCP Retransmissions & Conntrack Count & Inode Usage for OpenWrt
+tcp_retrans_json="null"
+if [ -f /proc/net/snmp ]; then
+    tcp_retrans=$(awk '/^Tcp:/ {if (NR==4) print $13}' /proc/net/snmp 2>/dev/null)
+    [ -n "$tcp_retrans" ] && tcp_retrans_json="$tcp_retrans"
+fi
+
+conntrack_count_json="null"
+if [ -f /proc/sys/net/netfilter/nf_conntrack_count ]; then
+    cnt=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null)
+    [ -n "$cnt" ] && conntrack_count_json="$cnt"
+elif [ -f /proc/net/nf_conntrack ]; then
+    cnt=$(wc -l < /proc/net/nf_conntrack 2>/dev/null)
+    [ -n "$cnt" ] && conntrack_count_json="$cnt"
+fi
+
+inode_usage_json="null"
+inode_usage=$(df -i / 2>/dev/null | tail -n 1 | awk '{print $5}' | tr -d '%')
+if [ -n "$inode_usage" ] && [ "$inode_usage" -eq "$inode_usage" ] 2>/dev/null; then
+    inode_usage_json="$inode_usage"
+fi
+
 payload=$(cat <<EOF
 {
   "agent_key": "$(json_str "$AGENT_KEY")",
@@ -1056,6 +1078,9 @@ payload=$(cat <<EOF
   "swap_pct": $swap_pct,
   "entropy": $entropy,
   "conntrack_pct": $conntrack_pct,
+  "tcp_retrans": $tcp_retrans_json,
+  "conntrack_count": $conntrack_count_json,
+  "inode_usage": $inode_usage_json,
   "upgradable_packages": $upgradable_packages,
   "wifi_clients_count": $wifi_clients_count,
   "wifi_radios": $wifi_radios_json,
