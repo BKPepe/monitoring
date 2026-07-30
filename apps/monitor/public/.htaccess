@@ -5,10 +5,12 @@
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule ^ /app/index.html [L]
+  RewriteRule . /app/index.html [L]
 </IfModule>
 
-FallbackResource /app/index.html
+<IfModule !mod_rewrite.c>
+  FallbackResource /app/index.html
+</IfModule>
 
 # Fix PHP session.gc_divisor warning
 <IfModule mod_php7.c>
