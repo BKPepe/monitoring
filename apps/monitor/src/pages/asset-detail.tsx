@@ -535,13 +535,41 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
   const status: MonitorStatus = m.status === 'up' ? 'up' : m.status === 'down' ? 'down' : m.status === 'warning' ? 'warning' : 'paused';
   const lastCheckDisplay = m.lastCheck ? `${timeAgo(m.lastCheck)} (${new Date(m.lastCheck).toLocaleString('cs-CZ')})` : 'Před chvílí';
   const lastChangeDisplay = m.lastStatusChange ? `${timeAgo(m.lastStatusChange)} (${new Date(m.lastStatusChange).toLocaleString('cs-CZ')})` : '—';
+
+  const parsedProcesses: { name: string; cpu: number; memory: number }[] = [];
+
+  if (Array.isArray(m.details?.top_cpu_processes)) {
+    for (const p of m.details.top_cpu_processes) {
+      if (p && (p.name || p.command)) {
+        parsedProcesses.push({
+          name: String(p.name || p.command || 'proc'),
+          cpu: parseFloat(p.cpu ?? p.cpu_pct ?? 0),
+          memory: parseFloat(p.memory ?? p.ram_mb ?? p.memory_pct ?? 0),
+        });
+      }
+    }
+  }
+
+  if (Array.isArray(m.details?.top_ram_processes)) {
+    for (const p of m.details.top_ram_processes) {
+      const name = String(p.name || p.command || 'proc');
+      if (p && !parsedProcesses.some(existing => existing.name === name)) {
+        parsedProcesses.push({
+          name,
+          cpu: parseFloat(p.cpu ?? p.cpu_pct ?? 0),
+          memory: parseFloat(p.memory ?? p.ram_mb ?? p.memory_pct ?? 0),
+        });
+      }
+    }
+  }
+
   return {
     id: m.id,
     name: m.name,
     kind: m.type.toUpperCase(),
-    subtitle: `${m.type.toUpperCase()} · ${m.target}`,
+    subtitle: `${m.target} · ${m.category ?? 'Monitory'}`,
     status,
-    breadcrumb: ['Infrastructure', m.category ?? 'Monitory'],
+    breadcrumb: [m.category ?? 'Monitory'],
     health: [
       { key: 'status', label: 'Stav', value: status === 'up' ? 'Online' : 'Offline' },
       { key: 'latency', label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : (status === 'down' ? '—' : '—'), tone: 'latency' },
@@ -572,7 +600,7 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
     events: [
       { id: 1, title: status === 'down' ? 'Výpadek služby' : 'Automatický test', detail: status === 'down' ? 'Cílový port neodpovídá' : 'Odezva vyhodnocena v pořádku.', at: lastCheckDisplay, severity: status === 'down' ? 'down' : 'info', resolution: status === 'down' ? 'Open' : 'Info' }
     ],
-    processes: [],
+    processes: parsedProcesses,
     related: [],
   };
 }
@@ -602,6 +630,11 @@ function buildGenericAsset(id: number): AssetDetail {
         { label: 'TLS/SSL Certifikát', value: "Let's Encrypt Authority X3 — Platný (64 dní)" },
       ],
       smartStatus: 'PASSED / HEALTHY (NVMe Wear 98% OK, 0 bad sectors, 34°C)',
+      processes: [
+        { name: 'litespeed (HTTP/2)', cpu: 1.8, memory: 240 },
+        { name: 'php-fpm: pool bloodkings', cpu: 0.9, memory: 110 },
+        { name: 'mariadbd', cpu: 0.4, memory: 310 },
+      ],
     },
     2: {
       name: 'BloodKings.eu discord',
@@ -619,6 +652,9 @@ function buildGenericAsset(id: number): AssetDetail {
         { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
         { label: 'Odezva', value: '18 ms' },
         { label: 'Typ protokolu', value: 'DISCORD API BOT' },
+      ],
+      processes: [
+        { name: 'discord-bot.js', cpu: 0.2, memory: 64 },
       ],
     },
     3: {
@@ -645,6 +681,13 @@ function buildGenericAsset(id: number): AssetDetail {
         { label: 'Conntrack Spojení', value: '42' },
       ],
       smartStatus: 'PASSED / HEALTHY (NVMe SSD Wear 99% OK)',
+      processes: [
+        { name: 'ts3server', cpu: 0.4, memory: 320 },
+        { name: 'mariadbd', cpu: 0.2, memory: 180 },
+        { name: 'status-agent.sh', cpu: 0.1, memory: 24 },
+        { name: 'sshd', cpu: 0.0, memory: 12 },
+        { name: 'systemd-journald', cpu: 0.0, memory: 16 },
+      ],
     },
     4: {
       name: 'Minecraft',
@@ -666,6 +709,10 @@ function buildGenericAsset(id: number): AssetDetail {
         { label: 'Odezva', value: '24 ms' },
         { label: 'Port', value: '25565' },
         { label: 'Typ protokolu', value: 'MINECRAFT SLP' },
+      ],
+      processes: [
+        { name: 'java (PaperSpigot 1.20.4)', cpu: 12.4, memory: 2048 },
+        { name: 'status-agent.sh', cpu: 0.1, memory: 24 },
       ],
     },
     5: {
@@ -690,6 +737,13 @@ function buildGenericAsset(id: number): AssetDetail {
         { label: 'Verze agenta', value: 'v3.13.8 (ubus ash)' },
         { label: 'Conntrack Spojení', value: '128' },
       ],
+      processes: [
+        { name: 'hostapd (WiFi 5GHz AP)', cpu: 1.2, memory: 18 },
+        { name: 'dnsmasq (DNS/DHCP)', cpu: 0.5, memory: 8 },
+        { name: 'kresd (Knot Resolver DoT)', cpu: 0.3, memory: 22 },
+        { name: 'ubus / netifd', cpu: 0.1, memory: 6 },
+        { name: 'status-agent_openwrt.sh', cpu: 0.2, memory: 4 },
+      ],
     },
     6: {
       name: 'Schlehofer.eu',
@@ -711,6 +765,9 @@ function buildGenericAsset(id: number): AssetDetail {
         { label: 'Odezva', value: '12 ms' },
         { label: 'Operační systém', value: 'HTTPS Server' },
         { label: 'TLS/SSL Certifikát', value: "Let's Encrypt — Platný (64 dní)" },
+      ],
+      processes: [
+        { name: 'nginx / php-fpm', cpu: 0.8, memory: 85 },
       ],
     },
   };
@@ -735,7 +792,7 @@ function buildGenericAsset(id: number): AssetDetail {
     events: [
       { id: 1, title: 'Automatický test', detail: 'Odezva a stav protokolu vyhodnoceny v pořádku.', at: new Date().toLocaleTimeString('cs-CZ'), severity: 'info', resolution: 'Info' }
     ],
-    processes: [],
+    processes: item.processes || [],
     related: [],
   };
 }
