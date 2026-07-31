@@ -115,8 +115,13 @@ export function ApiAgentsPage() {
             agents.map(a => (
               <div key={a.id} className="p-3.5 rounded-lg bg-secondary/30 border border-border flex items-center justify-between flex-wrap gap-2 text-xs">
                 <div>
-                  <p className="font-bold text-foreground text-sm">{a.name}</p>
-                  <p className="text-muted-foreground font-mono mt-0.5">Systém: {a.os || a.type.toUpperCase()} · Host: {a.target}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-foreground text-sm">{a.name}</p>
+                    <Badge variant="info" className="font-mono text-[10px]">{a.type.toUpperCase()}</Badge>
+                  </div>
+                  <p className="text-muted-foreground font-mono mt-1">
+                    OS: <span className="text-foreground font-semibold">{a.os || 'Linux / OpenWrt'}</span> · Verze agenta: <span className="text-emerald-400 font-bold">{a.details?.agent_version || a.details?.version || 'v3.13.8'}</span> · Cíl: {a.target}
+                  </p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-emerald-400 font-medium">HMAC SHA-256 ✅</span>

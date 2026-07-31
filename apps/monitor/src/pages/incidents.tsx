@@ -19,10 +19,20 @@ export function IncidentsPage() {
   const [incidentDetail, setIncidentDetail] = useState('');
   const [affectedScope, setAffectedScope] = useState<string>('all');
   const [customIncidents, setCustomIncidents] = useState<any[]>([]);
+  const [dbIncidents, setDbIncidents] = useState<any[]>([]);
   const { data: publicData } = usePublicStatus();
 
   useEffect(() => {
     let active = true;
+
+    fetch('/status/api.php?action=incidents', { credentials: 'include' })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (active && data && Array.isArray(data.incidents)) {
+          setDbIncidents(data.incidents);
+        }
+      })
+      .catch(() => {});
 
     appApi.getMonitors()
       .then((rows) => {
@@ -209,7 +219,7 @@ export function IncidentsPage() {
               </Badge>
             </div>
 
-            {activeTargetOutages.length === 0 && customIncidents.length === 0 ? (
+            {activeTargetOutages.length === 0 && customIncidents.length === 0 && dbIncidents.length === 0 ? (
               <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-3">
                 <CheckCircle2 className="size-5 text-emerald-400 shrink-0" />
                 <p className="text-xs text-emerald-800 dark:text-emerald-300 font-medium">
@@ -218,22 +228,27 @@ export function IncidentsPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {activeTargetOutages.map((m) => (
-                  <div key={m.id} className="p-4 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-start justify-between gap-4">
-                    <div className="space-y-1">
+                {dbIncidents.map((inc) => (
+                  <div key={inc.id} className="p-4 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-start justify-between gap-4">
+                    <div className="space-y-1.5">
                       <div className="flex items-center gap-2">
-                        <span className="size-2.5 rounded-full bg-rose-500 animate-pulse" />
-                        <h4 className="font-bold text-sm text-foreground">{m.name}</h4>
-                        <Badge variant="down">{m.type}</Badge>
+                        <span className={`size-2.5 rounded-full ${inc.status === 'open' ? 'bg-rose-500 animate-pulse' : 'bg-amber-400'}`} />
+                        <h4 className="font-bold text-sm text-foreground">{inc.monitor_name}</h4>
+                        <Badge variant={inc.severity === 'down' ? 'down' : 'warning'}>{inc.type}</Badge>
                       </div>
-                      <p className="text-xs font-mono text-muted-foreground">Cíl: {m.target}</p>
-                      <p className="text-xs text-rose-300 font-medium mt-1">
-                        {m.reason || 'Detekován neúspěšný pokus o připojení — Cílový port neodpovídá.'}
-                      </p>
+                      <p className="text-xs font-mono text-muted-foreground">Cíl: {inc.target}</p>
+                      <p className="text-xs text-rose-300 font-medium">{inc.reason}</p>
+                      <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-muted-foreground flex-wrap">
+                        <span>Začátek výpadku: <strong className="text-foreground">{inc.started_at}</strong></span>
+                        {inc.resolved_at && <span>Konec: <strong className="text-emerald-400">{inc.resolved_at}</strong></span>}
+                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-bold">
+                          Doba trvání: {inc.duration_text}
+                        </span>
+                      </div>
                     </div>
 
                     <Link
-                      to={`/infrastructure/${m.assetId ?? m.id}`}
+                      to={`/infrastructure/${inc.monitor_id}`}
                       className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
                     >
                       Detail výpadku <ArrowRight className="size-3" />

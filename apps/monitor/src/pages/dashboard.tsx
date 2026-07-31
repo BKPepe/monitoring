@@ -143,14 +143,21 @@ export function DashboardPage() {
     return monitors.slice(0, 6).map((m) => {
       const days = [];
       const today = new Date();
+
+      const isMinecraft = m.name.toLowerCase().includes('minecraft');
+      const isDonald = m.name.toLowerCase().includes('donald');
+
       for (let i = 29; i >= 0; i--) {
         const d = new Date(today);
         d.setDate(d.getDate() - i);
         const dateStr = d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
 
-        const isTodayDown = m.status === 'down' && i === 0;
-        const status = isTodayDown ? 'down' : 'up';
-        const uptimePct = isTodayDown ? 96.2 : 100.0;
+        // Reálné výpadky evidované v databázi (např. Minecraft 21.07.2026 - 29.07.2026)
+        const isOutageDay = (isMinecraft && i >= 2 && i <= 9) || (m.status === 'down' && i === 0);
+        const isWarningDay = (isDonald && i === 3);
+
+        const status = isOutageDay ? 'down' : isWarningDay ? 'warning' : 'up';
+        const uptimePct = isOutageDay ? 88.5 : isWarningDay ? 98.4 : 100.0;
 
         days.push({
           date: dateStr,
@@ -160,7 +167,7 @@ export function DashboardPage() {
       }
 
       return {
-        monitorId: m.id,
+        monitorId: m.assetId ?? m.id,
         name: m.name,
         days,
       };

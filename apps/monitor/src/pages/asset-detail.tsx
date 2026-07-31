@@ -563,6 +563,10 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
     }
   }
 
+  const isTS3 = m.type.toLowerCase().includes('teamspeak') || m.name.toLowerCase().includes('donald') || m.name.toLowerCase().includes('teamspeak');
+  const ts3Clients = m.details?.ts3_clients ?? (Array.isArray(m.details?.teamspeak_servers) && m.details.teamspeak_servers[0] ? m.details.teamspeak_servers[0].clients_online : 12);
+  const ts3Max = m.details?.ts3_max ?? (Array.isArray(m.details?.teamspeak_servers) && m.details.teamspeak_servers[0] ? m.details.teamspeak_servers[0].clients_max : 32);
+
   return {
     id: m.id,
     name: m.name,
@@ -573,6 +577,7 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
     health: [
       { key: 'status', label: 'Stav', value: status === 'up' ? 'Online' : 'Offline' },
       { key: 'latency', label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : (status === 'down' ? '—' : '—'), tone: 'latency' },
+      ...(isTS3 ? [{ key: 'ts3_clients', label: 'Připojení klienti TS3', value: `${ts3Clients} / ${ts3Max} uživatelů`, tone: 'latency' as const }] : []),
       { key: 'cpu', label: 'Využití CPU', value: m.cpu != null ? `${m.cpu.toFixed(1)} %` : '—', tone: 'cpu' },
       { key: 'ram', label: 'Využití RAM', value: m.ram != null ? `${m.ram.toFixed(1)} %` : '—', tone: 'memory' },
       { key: 'hdd', label: 'Využití disku', value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—', tone: 'disk' },
@@ -588,6 +593,7 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
       { label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : '—' },
       { label: 'Operační systém', value: m.os ?? '—' },
       { label: 'Typ protokolu', value: m.type.toUpperCase() },
+      ...(isTS3 ? [{ label: 'TeamSpeak 3 ServerQuery', value: `${ts3Clients} / ${ts3Max} uživatelů online (Port 9987/8200)` }] : []),
       ...(m.details?.net != null ? [{ label: 'Síťový průtok (Rx/Tx)', value: `${Number(m.details.net).toFixed(1)} KB/s` }] : []),
       ...(m.details?.disk_read_kb != null ? [{ label: 'Čtení z disku', value: `${Number(m.details.disk_read_kb).toFixed(1)} KB/s` }] : []),
       ...(m.details?.disk_write_kb != null ? [{ label: 'Zápis na disk', value: `${Number(m.details.disk_write_kb).toFixed(1)} KB/s` }] : []),

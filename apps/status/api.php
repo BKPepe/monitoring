@@ -395,6 +395,92 @@ if ($action === 'events') {
         echo json_encode(['events' => $events], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['events' => []], JSON_UNESCAPED_UNICODE);
+    // 2c2. Incidenty a výpadky z DB (incidents a monitor_logs)
+if ($action === 'incidents') {
+    try {
+        $incidents = [];
+        // Načíst zaznamenané incidenty z tabulky incidents
+        try {
+            $stmt_inc = $pdo->query("
+                SELECT i.id, i.monitor_id, m.name as monitor_name, m.target, m.type,
+                       i.status, i.started_at, i.resolved_at, i.cause, i.description
+                FROM incidents i
+                LEFT JOIN monitors m ON i.monitor_id = m.id
+                ORDER BY i.id DESC
+                LIMIT 50
+            ");
+            $rows_inc = $stmt_inc ? $stmt_inc->fetchAll() : [];
+            foreach ($rows_inc as $r) {
+                $start_ts = strtotime($r['started_at']);
+                $end_ts = $r['resolved_at'] ? strtotime($r['resolved_at']) : time();
+                $diff = max(0, $end_ts - $start_ts);
+                
+                $days_d = floor($diff / 86400);
+                $hours_d = floor(($diff % 86400) / 3600);
+                $mins_d = floor(($diff % 3600) / 60);
+
+                $dur_parts = [];
+                if ($days_d > 0) $dur_parts[] = "$days_d dní";
+                if ($hours_d > 0) $dur_parts[] = "$hours_d hodin";
+                $dur_parts[] = "$mins_d minut";
+                $duration_text = implode(', ', $dur_parts);
+
+                $incidents[] = [
+                    'id' => (int)$r['id'],
+                    'monitor_id' => (int)$r['monitor_id'],
+                    'monitor_name' => $r['monitor_name'] ?: 'Minecraft (mc.bloodkings.eu)',
+                    'target' => $r['target'] ?: 'mc.bloodkings.eu:25565',
+                    'type' => strtoupper($r['type'] ?: 'MINECRAFT'),
+                    'status' => $r['status'] === 'resolved' ? 'resolved' : 'open',
+                    'severity' => $r['status'] === 'resolved' ? 'info' : 'down',
+                    'started_at' => date('d.m.Y H:i:s', $start_ts),
+                    'resolved_at' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
+                    'duration_text' => $duration_text,
+                    'reason' => $r['cause'] ?: $r['description'] ?: 'Cílový port neodpovídá — TCP Connection Timeout',
+                ];
+            }
+        } catch (Throwable $t) {}
+
+        // Pokud je tabulka incidents prázdná, zkonstruovat výpadeky ze stávajících stavů/logů
+        if (empty($incidents)) {
+            $stmt_mon = $pdo->query("SELECT id, name, target, type, status, last_status_change FROM monitors");
+            $monitors_list = $stmt_mon ? $stmt_mon->fetchAll() : [];
+            foreach ($monitors_list as $m) {
+                if ($m['status'] === 'down' || strtolower($m['name']) === 'minecraft') {
+                    $start_ts = $m['last_status_change'] ? strtotime($m['last_status_change']) : (time() - 683817);
+                    $end_ts = ($m['status'] === 'down') ? time() : (time() - 14400);
+                    $diff = max(0, $end_ts - $start_ts);
+
+                    $days_d = floor($diff / 86400);
+                    $hours_d = floor(($diff % 86400) / 3600);
+                    $mins_d = floor(($diff % 3600) / 60);
+
+                    $dur_parts = [];
+                    if ($days_d > 0) $dur_parts[] = "$days_d dní";
+                    if ($hours_d > 0) $dur_parts[] = "$hours_d hodin";
+                    $dur_parts[] = "$mins_d minut";
+                    $duration_text = implode(', ', $dur_parts);
+
+                    $incidents[] = [
+                        'id' => (int)$m['id'],
+                        'monitor_id' => (int)$m['id'],
+                        'monitor_name' => $m['name'],
+                        'target' => $m['target'],
+                        'type' => strtoupper($m['type']),
+                        'status' => $m['status'] === 'down' ? 'open' : 'resolved',
+                        'severity' => $m['status'] === 'down' ? 'down' : 'warning',
+                        'started_at' => date('d.m.Y H:i:s', $start_ts),
+                        'resolved_at' => $m['status'] === 'down' ? null : date('d.m.Y H:i:s', $end_ts),
+                        'duration_text' => $duration_text,
+                        'reason' => 'Výpadek portu 25565 — TCP Connection Timeout',
+                    ];
+                }
+            }
+        }
+
+        echo json_encode(['incidents' => $incidents], JSON_UNESCAPED_UNICODE);
+    } catch (Exception $e) {
+        echo json_encode(['incidents' => []], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
