@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { MetricTile } from '@/components/metric-tile';
 import { HealthDonut } from '@/components/health-donut';
 import { UptimeHeatmap } from '@/components/uptime-heatmap';
-import { overview, uptimeHistory } from '@/data/mock';
+import { overview } from '@/data/mock';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { DataSourceBanner } from '@/components/data-source-banner';
@@ -138,26 +138,22 @@ export function DashboardPage() {
   }, [monitors]);
 
   const liveUptimeHistory = React.useMemo(() => {
-    if (monitors.length === 0) return uptimeHistory;
+    if (monitors.length === 0) return [];
 
     return monitors.slice(0, 6).map((m) => {
       const days = [];
       const today = new Date();
-
-      const isMinecraft = m.name.toLowerCase().includes('minecraft');
-      const isDonald = m.name.toLowerCase().includes('donald');
 
       for (let i = 29; i >= 0; i--) {
         const d = new Date(today);
         d.setDate(d.getDate() - i);
         const dateStr = d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
 
-        // Reálné výpadky evidované v databázi (např. Minecraft 21.07.2026 - 29.07.2026)
-        const isOutageDay = (isMinecraft && i >= 2 && i <= 9) || (m.status === 'down' && i === 0);
-        const isWarningDay = (isDonald && i === 3);
+        const isOutageDay = m.status === 'down' && i === 0;
+        const isWarningDay = m.status === 'warning' && i === 0;
 
         const status = isOutageDay ? 'down' : isWarningDay ? 'warning' : 'up';
-        const uptimePct = isOutageDay ? 88.5 : isWarningDay ? 98.4 : 100.0;
+        const uptimePct = isOutageDay ? 0.0 : isWarningDay ? 95.0 : 100.0;
 
         days.push({
           date: dateStr,
