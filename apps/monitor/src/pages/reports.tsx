@@ -49,6 +49,14 @@ function formatDuration(seconds: number): string {
   return `${d}d ${rh}h ${rm}min`;
 }
 
+function Crown({ className = "size-5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M3 6.5 6.2 11 12 3.5 17.8 11 21 6.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5Z" />
+    </svg>
+  );
+}
+
 export function ReportsPage() {
   const { t } = useLanguage();
   const [monitors, setMonitors] = useState<MonitorSLA[]>([]);
@@ -133,14 +141,40 @@ export function ReportsPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 print:space-y-4">
+      {/* Oficiální Hlavička pro PDF export a Tisk (Zobrazuje se pouze při tisku) */}
+      <div className="hidden print:flex items-center justify-between border-b-2 border-primary pb-4 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="bg-primary text-primary-foreground p-3 rounded-xl flex items-center justify-center shadow-sm">
+            <Crown className="size-7 text-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-2xl tracking-tight text-foreground">Blood Kings</span>
+              <span className="text-xs font-bold tracking-widest uppercase text-primary bg-primary/10 px-2.5 py-0.5 rounded-md border border-primary/20">
+                MONITORING
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground font-medium mt-0.5">
+              Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz
+            </p>
+          </div>
+        </div>
+
+        <div className="text-right text-xs text-muted-foreground space-y-1">
+          <p className="font-semibold text-foreground text-sm">SLA Audit Report</p>
+          <p className="font-mono text-[11px]">Vygenerováno: {new Date().toLocaleString('cs-CZ')}</p>
+          <p className="text-[10px] text-muted-foreground">Zdroj: bloodkings.eu / status API</p>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('reports.title', 'SLA Výkazy & Statistika Dle Serverů')}</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('reports.title', 'SLA Výkaz & Statistika Dle Serverů')}</h1>
           <p className="text-muted-foreground text-sm">{t('reports.subtitle', 'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.')}</p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 print:hidden">
           <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2 font-semibold">
             <Download className="size-4 text-emerald-400" /> {t('reports.export_csv', 'Exportovat CSV')}
           </Button>
@@ -250,7 +284,7 @@ export function ReportsPage() {
                       <Badge variant={isOk ? 'up' : 'down'} className="text-[10px]">
                         {item.uptimePercent.toFixed(2)} %
                       </Badge>
-                      {isExpanded ? <ChevronUp className="size-3.5 text-muted-foreground" /> : <ChevronDown className="size-3.5 text-muted-foreground" />}
+                      {isExpanded ? <ChevronUp className="size-3.5 text-muted-foreground print:hidden" /> : <ChevronDown className="size-3.5 text-muted-foreground print:hidden" />}
                     </div>
                   </button>
 
@@ -264,87 +298,85 @@ export function ReportsPage() {
                     </div>
                   </div>
 
-                  {/* Expanded detail */}
-                  {isExpanded && (
-                    <div className="px-3.5 pb-3.5 pt-1 border-t border-border/50 space-y-3 animate-in fade-in-50 slide-in-from-top-1 duration-200">
-                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
-                        <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                          <p className="text-muted-foreground text-[10px]">{t('common.type', 'Typ')}</p>
-                          <p className="font-semibold">{item.type}</p>
-                        </div>
-                        <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                          <p className="text-muted-foreground text-[10px]">{t('reports.total_checks_30d', 'Celkem kontrol (30d)')}</p>
-                          <p className="font-semibold">{item.totalChecks.toLocaleString('cs-CZ')}</p>
-                        </div>
-                        <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                          <p className="text-muted-foreground text-[10px]">{t('reports.mttr_label', 'MTTR (doba obnovení)')}</p>
-                          <p className="font-semibold">{item.mttrSec !== null ? formatDuration(item.mttrSec) : t('reports.no_outage', 'Bez výpadku')}</p>
-                        </div>
-                        <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                          <p className="text-muted-foreground text-[10px]">{t('reports.current_status', 'Aktuální stav')}</p>
-                          <p className={`font-semibold ${item.currentStatus === 'up' ? 'text-emerald-400' : item.currentStatus === 'down' ? 'text-rose-400' : 'text-amber-400'}`}>
-                            {item.currentStatus === 'up' ? `🟢 ${t('common.online', 'Online')}` : item.currentStatus === 'down' ? `🔴 ${t('common.offline', 'Offline')}` : '⚠️ ' + item.currentStatus}
-                          </p>
-                        </div>
+                  {/* Expanded detail (Visible on click on screen, always printed in PDF) */}
+                  <div className={`px-3.5 pb-3.5 pt-1 border-t border-border/50 space-y-3 animate-in fade-in-50 slide-in-from-top-1 duration-200 ${isExpanded ? 'block' : 'hidden print:block'}`}>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
+                        <p className="text-muted-foreground text-[10px]">{t('common.type', 'Typ')}</p>
+                        <p className="font-semibold">{item.type}</p>
                       </div>
-
-                      {/* Response latency percentiles (p50 / p95 / p99) */}
-                      <div className="p-3 rounded-md bg-background/60 border border-border/60 space-y-1">
-                        <div className="flex items-center gap-1.5">
-                          <p className="text-muted-foreground text-[11px] font-semibold">{t('reports.percentile_title', 'Percentilové Rozložení Latence (p50 / p95 / p99)')}</p>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button type="button" className="text-muted-foreground hover:text-foreground cursor-help" aria-label={t('reports.percentile_aria', 'Co znamenají percentily odezvy')}>
-                                <HelpCircle className="size-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="font-semibold mb-1">{t('reports.percentile_tooltip_title', 'Co percentily znamenají')}</p>
-                              <p><strong className="text-emerald-400">{t('reports.p50_label', 'p50 (medián):')}</strong> {t('reports.p50_desc', 'polovina kontrol byla rychlejší, polovina pomalejší — nejlépe vystihuje typickou odezvu.')}</p>
-                              <p className="mt-1"><strong className="text-amber-400">{t('reports.p95_label', 'p95:')}</strong> {t('reports.p95_desc', '95 % kontrol bylo rychlejších; zbylých 5 % jsou špičky (dočasné zpomalení, zátěž).')}</p>
-                              <p className="mt-1"><strong className="text-rose-400">{t('reports.p99_label', 'p99:')}</strong> {t('reports.p99_desc', 'jen 1 % kontrol bylo pomalejších — ojedinělé extrémní špičky, často síťový problém nebo přetížený server.')}</p>
-                              <p className="mt-1.5 pt-1.5 border-t border-border/60 text-muted-foreground">{t('reports.percentile_hint', 'Vysoké p95/p99 při nízkém p50 = nekonzistentní výkon. Hledejte příčinu v době těch špiček (log serveru, zátěž), ne v průměru.')}</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-4 font-mono text-xs pt-0.5">
-                          <span className="bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">{t('reports.p50_value_label', 'p50 (Medián):')} <strong className="text-emerald-400">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong></span>
-                          <span className="bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">{t('reports.p95_value_label', 'p95 (Špičky):')} <strong className="text-amber-400">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong></span>
-                          <span className="bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded">{t('reports.p99_value_label', 'p99 (Kritické špičky):')} <strong className="text-rose-400">{item.p99Ms != null ? `${item.p99Ms} ms` : '—'}</strong></span>
-                        </div>
+                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
+                        <p className="text-muted-foreground text-[10px]">{t('reports.total_checks_30d', 'Celkem kontrol (30d)')}</p>
+                        <p className="font-semibold">{item.totalChecks.toLocaleString('cs-CZ')}</p>
                       </div>
-
-                      {/* Last outage detail */}
-                      {item.lastOutage ? (
-                        <div className="p-3 rounded-lg bg-rose-500/5 border border-rose-500/20 space-y-1.5 text-xs">
-                          <p className="font-bold text-destructive text-[11px]">📋 {t('reports.last_outage_title', 'Poslední výpadek')}</p>
-                          <div className="grid gap-1 sm:grid-cols-2">
-                            <p><span className="text-muted-foreground">{t('reports.outage_field_start', 'Začátek:')}</span> <span className="font-mono">{item.lastOutage.start}</span></p>
-                            <p><span className="text-muted-foreground">{t('reports.outage_field_end', 'Konec:')}</span> <span className="font-mono">{item.lastOutage.end ?? t('reports.outage_ongoing', 'Stále probíhá ⚠️')}</span></p>
-                            <p><span className="text-muted-foreground">{t('reports.outage_field_duration', 'Trvání:')}</span> <span className="font-bold">{formatDuration(item.lastOutage.durationSec)}</span></p>
-                            <p><span className="text-muted-foreground">{t('reports.outage_field_status', 'Stav:')}</span> <Badge variant={item.lastOutage.resolved ? 'up' : 'down'} className="text-[9px] ml-1">{item.lastOutage.resolved ? t('reports.resolved_badge', 'Vyřešeno') : t('reports.ongoing_badge', 'Probíhá')}</Badge></p>
-                          </div>
-                          <p className="pt-1 border-t border-rose-500/10">
-                            <span className="text-muted-foreground">{t('reports.reason_label', 'Důvod:')}</span>{' '}
-                            <span className="font-mono text-destructive">{item.lastOutage.reason}</span>
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-xs text-emerald-400">
-                          ✅ {t('reports.no_outage_30d', 'Žádný výpadek za posledních 30 dní.')}
-                        </div>
-                      )}
-
-                      <div className="flex justify-end">
-                        <Link
-                          to={`/infrastructure/${item.id}`}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                        >
-                          {t('reports.view_detail', 'Otevřít detail')} <ArrowRight className="size-3" />
-                        </Link>
+                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
+                        <p className="text-muted-foreground text-[10px]">{t('reports.mttr_label', 'MTTR (doba obnovení)')}</p>
+                        <p className="font-semibold">{item.mttrSec !== null ? formatDuration(item.mttrSec) : t('reports.no_outage', 'Bez výpadku')}</p>
+                      </div>
+                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
+                        <p className="text-muted-foreground text-[10px]">{t('reports.current_status', 'Aktuální stav')}</p>
+                        <p className={`font-semibold ${item.currentStatus === 'up' ? 'text-emerald-400' : item.currentStatus === 'down' ? 'text-rose-400' : 'text-amber-400'}`}>
+                          {item.currentStatus === 'up' ? `🟢 ${t('common.online', 'Online')}` : item.currentStatus === 'down' ? `🔴 ${t('common.offline', 'Offline')}` : '⚠️ ' + item.currentStatus}
+                        </p>
                       </div>
                     </div>
-                  )}
+
+                    {/* Response latency percentiles (p50 / p95 / p99) */}
+                    <div className="p-3 rounded-md bg-background/60 border border-border/60 space-y-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-muted-foreground text-[11px] font-semibold">{t('reports.percentile_title', 'Percentilové Rozložení Latence (p50 / p95 / p99)')}</p>
+                        <Tooltip>
+                          <TooltipTrigger asChild className="print:hidden">
+                            <button type="button" className="text-muted-foreground hover:text-foreground cursor-help print:hidden" aria-label={t('reports.percentile_aria', 'Co znamenají percentily odezvy')}>
+                              <HelpCircle className="size-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="font-semibold mb-1">{t('reports.percentile_tooltip_title', 'Co percentily znamenají')}</p>
+                            <p><strong className="text-emerald-400">{t('reports.p50_label', 'p50 (medián):')}</strong> {t('reports.p50_desc', 'polovina kontrol byla rychlejší, polovina pomalejší — nejlépe vystihuje typickou odezvu.')}</p>
+                            <p className="mt-1"><strong className="text-amber-400">{t('reports.p95_label', 'p95:')}</strong> {t('reports.p95_desc', '95 % kontrol bylo rychlejších; zbylých 5 % jsou špičky (dočasné zpomalení, zátěž).')}</p>
+                            <p className="mt-1"><strong className="text-rose-400">{t('reports.p99_label', 'p99:')}</strong> {t('reports.p99_desc', 'jen 1 % kontrol bylo pomalejších — ojedinělé extrémní špičky, často síťový problém nebo přetížený server.')}</p>
+                            <p className="mt-1.5 pt-1.5 border-t border-border/60 text-muted-foreground">{t('reports.percentile_hint', 'Vysoké p95/p99 při nízkém p50 = nekonzistentní výkon. Hledejte příčinu v době těch špiček (log serveru, zátěž), ne v průměru.')}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4 font-mono text-xs pt-0.5">
+                        <span className="bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">{t('reports.p50_value_label', 'p50 (Medián):')} <strong className="text-emerald-400">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong></span>
+                        <span className="bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">{t('reports.p95_value_label', 'p95 (Špičky):')} <strong className="text-amber-400">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong></span>
+                        <span className="bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded">{t('reports.p99_value_label', 'p99 (Kritické špičky):')} <strong className="text-rose-400">{item.p99Ms != null ? `${item.p99Ms} ms` : '—'}</strong></span>
+                      </div>
+                    </div>
+
+                    {/* Last outage detail */}
+                    {item.lastOutage ? (
+                      <div className="p-3 rounded-lg bg-rose-500/5 border border-rose-500/20 space-y-1.5 text-xs">
+                        <p className="font-bold text-destructive text-[11px]">📋 {t('reports.last_outage_title', 'Poslední výpadek')}</p>
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          <p><span className="text-muted-foreground">{t('reports.outage_field_start', 'Začátek:')}</span> <span className="font-mono">{item.lastOutage.start}</span></p>
+                          <p><span className="text-muted-foreground">{t('reports.outage_field_end', 'Konec:')}</span> <span className="font-mono">{item.lastOutage.end ?? t('reports.outage_ongoing', 'Stále probíhá ⚠️')}</span></p>
+                          <p><span className="text-muted-foreground">{t('reports.outage_field_duration', 'Trvání:')}</span> <span className="font-bold">{formatDuration(item.lastOutage.durationSec)}</span></p>
+                          <p><span className="text-muted-foreground">{t('reports.outage_field_status', 'Stav:')}</span> <Badge variant={item.lastOutage.resolved ? 'up' : 'down'} className="text-[9px] ml-1">{item.lastOutage.resolved ? t('reports.resolved_badge', 'Vyřešeno') : t('reports.ongoing_badge', 'Probíhá')}</Badge></p>
+                        </div>
+                        <p className="pt-1 border-t border-rose-500/10">
+                          <span className="text-muted-foreground">{t('reports.reason_label', 'Důvod:')}</span>{' '}
+                          <span className="font-mono text-destructive">{item.lastOutage.reason}</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-xs text-emerald-400">
+                        ✅ {t('reports.no_outage_30d', 'Žádný výpadek za posledních 30 dní.')}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end print:hidden">
+                      <Link
+                        to={`/infrastructure/${item.id}`}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline print:hidden"
+                      >
+                        {t('reports.view_detail', 'Otevřít detail')} <ArrowRight className="size-3" />
+                      </Link>
+                    </div>
+                  </div>
                 </div>
               );
             })}
@@ -353,7 +385,7 @@ export function ReportsPage() {
       </Card>
 
       {/* Exports */}
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 print:hidden">
         <Card className="p-6 space-y-4">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-primary/10 text-primary">

@@ -39,9 +39,9 @@ export function AppShell() {
   }, [mobileNavOpen]);
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div className="flex h-dvh overflow-hidden print:h-auto print:overflow-visible print:block">
       {/* Desktop sidebar */}
-      <div className="hidden lg:flex">
+      <div className="hidden lg:flex print:hidden">
         <div className="flex h-full flex-col">
           <Sidebar collapsed={collapsed} incidentCount={realAlertCount} onToggle={() => setCollapsed((v) => !v)} />
           <div className={cn('bg-sidebar', collapsed ? 'w-16' : 'w-60')}>
@@ -52,7 +52,7 @@ export function AppShell() {
 
       {/* Mobilní překryv */}
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="fixed inset-0 z-50 lg:hidden print:hidden">
           <button
             type="button"
             className="absolute inset-0 bg-black/60"
@@ -68,17 +68,17 @@ export function AppShell() {
         </div>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col print:block print:w-full">
         <Header
           searchResults={searchIndex}
           alertCount={realAlertCount}
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto print:overflow-visible print:h-auto">
           {/* 12sloupcová mřížka je k dispozici stránkám uvnitř; shell jen
               drží maximální šířku a odsazení. */}
-          <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6">
+          <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:px-0 print:py-0 print:max-w-none">
             <Outlet />
           </div>
         </main>

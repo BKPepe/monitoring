@@ -47,7 +47,7 @@ export function Header({
   const alertCount = activeAlerts.length > 0 ? activeAlerts.length : (propAlertCount ?? 0);
 
   return (
-    <header className="bg-background/80 sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 border-b border-border px-4 backdrop-blur-md">
+    <header className="bg-background/80 sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 border-b border-border px-4 backdrop-blur-md print:hidden">
       <Button
         variant="ghost"
         size="icon"

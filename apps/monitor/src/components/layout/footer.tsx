@@ -9,7 +9,7 @@ export function Footer({ version }: { version: string }) {
 
   return (
     <>
-      <footer className="text-muted-foreground flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border px-6 py-3 text-xs">
+      <footer className="text-muted-foreground flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border px-6 py-3 text-xs print:hidden">
         <span>Blood Kings Monitoring v{version}</span>
 
         <div className="ml-auto flex flex-wrap items-center gap-x-6 gap-y-2">
