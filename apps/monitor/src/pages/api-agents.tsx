@@ -1,6 +1,6 @@
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Terminal, Copy, Check, ShieldCheck, Lock, Cpu, Server, Router, Globe, Container } from 'lucide-react';
+import { Terminal, Copy, Check, ShieldCheck, Lock, Cpu, Server, Router, Globe, Container, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
@@ -9,6 +9,8 @@ import { Link } from 'react-router';
 import { cn } from '@/lib/utils';
 
 type PlatformId = 'linux' | 'openwrt' | 'windows' | 'cpanel' | 'docker';
+
+const LATEST_AGENT_VERSION = '3.13.8';
 
 interface PlatformInstaller {
   id: PlatformId;
@@ -124,6 +126,16 @@ export function ApiAgentsPage() {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  const hasOutdatedAgent = agents.some((a) => {
+    const v = a.details?.agent_version || a.details?.version;
+    return v && v < LATEST_AGENT_VERSION;
+  });
+
+  const hasDisabledAutoUpdate = agents.some((a) => {
+    const au = a.details?.auto_update ?? a.details?.AUTO_UPDATE;
+    return au !== 1 && au !== '1' && au !== true && au !== 'true';
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -145,7 +157,6 @@ export function ApiAgentsPage() {
           </div>
         </div>
 
-        {/* Výběr platformy (Tabs) */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           {platforms.map((p) => {
             const Icon = p.icon;
@@ -172,7 +183,6 @@ export function ApiAgentsPage() {
           })}
         </div>
 
-        {/* Instalační instrukce pro vybranou platformu */}
         <div className="p-4 rounded-xl bg-slate-900 border border-slate-700/80 space-y-3 text-slate-200">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
@@ -204,15 +214,22 @@ export function ApiAgentsPage() {
         </div>
       </Card>
 
-      {/* Status verzí nainstalovaných agentů */}
+      {/* Status verzí a automatických aktualizací agentů */}
       <Card className="p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-border pb-3">
+        <div className="flex items-center justify-between border-b border-border pb-3 flex-wrap gap-2">
           <div className="flex items-center gap-2.5">
             <Cpu className="size-5 text-primary" />
-            <h3 className="font-bold text-base">Stav verzí a aktualizací spuštěných agentů ({agents.length})</h3>
+            <div>
+              <h3 className="font-bold text-base">Stav verzí & Automatické aktualizace agentů ({agents.length})</h3>
+              <p className="text-xs text-muted-foreground">Aktuální doporučená verze systému: <span className="font-mono font-bold text-foreground">v{LATEST_AGENT_VERSION}</span></p>
+            </div>
           </div>
-          <Badge variant={agents.every(a => a.status === 'up') ? "up" : "warning"}>
-            {agents.every(a => a.status === 'up') ? "Všichni agenti OK ✅" : "Některý agent vyžaduje pozornost"}
+          <Badge variant={hasOutdatedAgent ? "down" : hasDisabledAutoUpdate ? "warning" : "up"}>
+            {hasOutdatedAgent
+              ? "🔴 Zjištěna neaktuální verze agenta!"
+              : hasDisabledAutoUpdate
+              ? "⚠️ U některých agentů vypnuty auto-updates"
+              : "Všichni agenti aktuální & auto-updates OK ✅"}
           </Badge>
         </div>
 
@@ -222,24 +239,86 @@ export function ApiAgentsPage() {
           ) : agents.length === 0 ? (
             <p className="text-xs text-muted-foreground py-4 text-center">Žádní registrovaní agenti v databázi.</p>
           ) : (
-            agents.map(a => (
-              <div key={a.id} className="p-3.5 rounded-lg bg-secondary/30 border border-border flex items-center justify-between flex-wrap gap-2 text-xs">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="font-bold text-foreground text-sm">{a.name}</p>
-                    <Badge variant="info" className="font-mono text-[10px]">{a.type.toUpperCase()}</Badge>
+            agents.map((a) => {
+              const version = a.details?.agent_version || a.details?.version || (a.agentLastSeen ? LATEST_AGENT_VERSION : null);
+              const isOutdated = version && version < LATEST_AGENT_VERSION;
+              const autoUpdateRaw = a.details?.auto_update ?? a.details?.AUTO_UPDATE;
+              const autoUpdateEnabled = autoUpdateRaw === 1 || autoUpdateRaw === '1' || autoUpdateRaw === true || autoUpdateRaw === 'true';
+
+              return (
+                <div key={a.id} className={cn(
+                  'p-4 rounded-xl border transition-colors space-y-2 text-xs',
+                  isOutdated
+                    ? 'bg-rose-500/10 border-rose-500/40'
+                    : !autoUpdateEnabled
+                    ? 'bg-amber-500/10 border-amber-500/30'
+                    : 'bg-secondary/30 border-border'
+                )}>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-foreground text-sm">{a.name}</p>
+                      <Badge variant="info" className="font-mono text-[10px]">{a.type.toUpperCase()}</Badge>
+                      <Badge variant={a.status === 'up' ? 'up' : 'down'}>
+                        {a.status === 'up' ? 'Aktivní' : 'Neaktivní'}
+                      </Badge>
+                    </div>
+
+                    {/* Zvýrazněný badge verze s vysokým kontrastem */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {version ? (
+                        isOutdated ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-sm animate-pulse">
+                            🔴 v{version} (Neaktuální — Doporučeno v{LATEST_AGENT_VERSION})
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-sm">
+                            🟢 v{version} (Aktuální verze)
+                          </span>
+                        )
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-muted-foreground text-xs bg-secondary">
+                          Verze nehlášena
+                        </span>
+                      )}
+
+                      {/* Indikátor stavu automatických aktualizací */}
+                      {autoUpdateEnabled ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                          <RefreshCw className="size-3" /> Auto-updates: Zapnuto
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                          <AlertTriangle className="size-3 text-amber-400" /> Auto-updates: VYPNUTO
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-muted-foreground font-mono mt-1">
-                    OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> · Verze agenta: <span className="text-emerald-400 font-bold">{a.details?.agent_version || a.details?.version || '—'}</span> · Cíl: {a.target}
+
+                  <p className="text-muted-foreground font-mono text-[11px]">
+                    OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> · Cíl: <span className="text-foreground">{a.target}</span>
                   </p>
+
+                  {/* Varovná zpráva při neaktuální verzi nebo vypnutých auto-aktualizacích */}
+                  {isOutdated && (
+                    <div className="p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2">
+                      <AlertTriangle className="size-4 text-rose-400 shrink-0" />
+                      <span>
+                        <strong>Agent je neaktuální!</strong> Používá verzi v{version}, doporučená verze je v{LATEST_AGENT_VERSION}. Při neaktuální verzi systém zařazuje varovný incident a zasílá notifikaci administrátorům.
+                      </span>
+                    </div>
+                  )}
+
+                  {!autoUpdateEnabled && (
+                    <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-200 text-[11px] flex items-center gap-2">
+                      <AlertTriangle className="size-3.5 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>Automatické aktualizace jsou vypnuty:</strong> Doporučujeme v konfiguraci agenta (`agent.cfg` nebo `agent_openwrt.cfg`) nastavit <code>AUTO_UPDATE="1"</code>, aby se bezpečnostní záplaty a opravy instalovaly automaticky bez nutnosti ručního zásahu.
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={a.status === 'up' ? 'up' : 'down'}>
-                    {a.status === 'up' ? 'Aktivní' : 'Neaktivní'}
-                  </Badge>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </Card>
@@ -263,12 +342,12 @@ export function ApiAgentsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <ShieldCheck className="size-5 text-primary" />
-              <h4 className="font-semibold text-sm">Autentizace agentů</h4>
+              <h4 className="font-semibold text-sm">Autentizace agentů & Notifikace verze</h4>
             </div>
-            <Badge variant="up">Klíč + TLS</Badge>
+            <Badge variant="up">Klíč + HMAC-SHA256</Badge>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Běžný telemetrický report agent posílá s unikátním klíčem monitoru přes TLS. Vzdálené příkazy pro OpenWrt routery (Remote Actions) jsou navíc podepsané HMAC-SHA256 s časovým razítkem.
+            Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.
           </p>
         </Card>
       </div>
