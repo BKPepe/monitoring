@@ -5,8 +5,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import {
-  BarChart3, Download, FileText, Calendar, CheckCircle2, ShieldCheck,
-  Clock, TrendingUp, ArrowRight, Server, ChevronDown, ChevronUp, AlertTriangle, RefreshCw, HelpCircle
+  BarChart3, Download, FileText, CheckCircle2, ShieldCheck,
+  Clock, TrendingUp, ArrowRight, Server, ChevronDown, ChevronUp, AlertTriangle, RefreshCw, HelpCircle,
+  ExternalLink, Copy, Check, Key, Settings
 } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 
@@ -67,6 +68,9 @@ export function ReportsPage() {
   const [overallMttr, setOverallMttr] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [metricsToken, setMetricsToken] = useState<string>('');
+  const [generatingToken, setGeneratingToken] = useState<boolean>(false);
+  const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
 
   useEffect(() => {
     let active = true;
@@ -81,6 +85,7 @@ export function ReportsPage() {
           setOverallUptime(data.overallUptime ?? 100);
           setTotalOutage(data.totalOutageMinutes ?? 0);
           setOverallMttr(data.overallMttrSec ?? null);
+          setMetricsToken(data.metricsToken ?? '');
         } else {
           setError(t('reports.no_api_data', 'Žádná data z API. Zkontrolujte, že cron.php běží a monitor_logs obsahuje záznamy.'));
         }
@@ -94,6 +99,30 @@ export function ReportsPage() {
 
     return () => { active = false; };
   }, [t]);
+
+  const handleGenerateMetricsToken = async () => {
+    setGeneratingToken(true);
+    try {
+      const res = await fetch(`${API_BASE}?action=generate_metrics_token`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (data.metricsToken) {
+        setMetricsToken(data.metricsToken);
+      }
+    } catch {
+    } finally {
+      setGeneratingToken(false);
+    }
+  };
+
+  const handleCopyMetricsUrl = () => {
+    const fullUrl = `${window.location.origin}/status/metrics.php?token=${metricsToken}`;
+    navigator.clipboard.writeText(fullUrl);
+    setCopiedUrl(true);
+    setTimeout(() => setCopiedUrl(false), 3000);
+  };
 
   if (loading) {
     return (
@@ -404,23 +433,85 @@ export function ReportsPage() {
           </a>
         </Card>
 
-        <Card className="p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-primary/10 text-primary">
-              <BarChart3 className="size-6" />
+        {metricsToken ? (
+          <Card className="p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400">
+                  <BarChart3 className="size-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-base">{t('reports.prometheus_title', 'Prometheus Exportér Metrik')}</h3>
+                    <Badge variant="up" className="text-[10px]">🟢 {t('reports.prometheus_active', 'Aktivní')}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono truncate max-w-[260px] sm:max-w-none">
+                    /status/metrics.php?token={metricsToken.slice(0, 6)}••••
+                  </p>
+                </div>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-base">{t('reports.prometheus_title', 'Prometheus Exportér Metrik')}</h3>
-              <p className="text-xs text-muted-foreground font-mono">/status/metrics.php</p>
+            <p className="text-sm text-muted-foreground">
+              {t('reports.prometheus_desc', 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru s vaším přístupovým tokenem.')}
+            </p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <a
+                href={`/status/metrics.php?token=${encodeURIComponent(metricsToken)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors shadow-sm"
+              >
+                <ExternalLink className="size-4" /> {t('reports.prometheus_btn', 'Otevřít Prometheus výstup')}
+              </a>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCopyMetricsUrl}
+                className="gap-2 text-xs"
+              >
+                {copiedUrl ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
+                {copiedUrl ? t('common.copied', 'Zkopírováno!') : t('reports.copy_url', 'Kopírovat URL metrik')}
+              </Button>
             </div>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {t('reports.prometheus_desc', 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru.')}
-          </p>
-          <a href="/status/metrics.php" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground hover:bg-secondary/80 transition-colors">
-            <Calendar className="size-4" /> {t('reports.prometheus_btn', 'Otevřít Prometheus výstup')}
-          </a>
-        </Card>
+          </Card>
+        ) : (
+          <Card className="p-6 space-y-4 border-amber-500/30 bg-amber-500/5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400">
+                  <BarChart3 className="size-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-base">{t('reports.prometheus_title', 'Prometheus Exportér Metrik')}</h3>
+                    <Badge variant="down" className="text-[10px] bg-amber-500/20 text-amber-400 border-amber-500/30">⚠️ {t('reports.prometheus_inactive', 'Vyžaduje token')}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono">/status/metrics.php</p>
+                </div>
+              </div>
+            </div>
+            <p className="text-sm text-amber-300/90">
+              {t('reports.prometheus_inactive_desc', 'Metriky jsou chráněny proti neautorizovanému přístupu. Vygenerujte přístupový token pro aktivaci endpointu.')}
+            </p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button
+                onClick={handleGenerateMetricsToken}
+                disabled={generatingToken}
+                className="gap-2 font-semibold bg-amber-600 hover:bg-amber-500 text-white shadow-sm"
+              >
+                {generatingToken ? <RefreshCw className="size-4 animate-spin" /> : <Key className="size-4" />}
+                {t('reports.generate_token_btn', 'Aktivovat Prometheus token (1-klik)')}
+              </Button>
+              <Link
+                to="/settings"
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/80 px-3 py-2 text-xs font-semibold text-foreground hover:bg-secondary transition-colors"
+              >
+                <Settings className="size-3.5" />
+                {t('reports.manage_in_settings', 'Spravovat v Nastavení')}
+              </Link>
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );

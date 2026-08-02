@@ -480,6 +480,27 @@ if ($action === 'save_settings') {
     exit;
 }
 
+// 2b5. Vygenerování a aktivace Prometheus tokenu (admin-only)
+if ($action === 'generate_metrics_token') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $new_token = bin2hex(random_bytes(16));
+        $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE setting_value = ?");
+        $stmt->execute([$new_token, $new_token]);
+
+        echo json_encode(['success' => true, 'metricsToken' => $new_token], JSON_UNESCAPED_UNICODE);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Chyba při generování tokenu.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // 2c. Historie posledních událostí z DB (monitor_logs)
 if ($action === 'events') {
     try {
@@ -877,15 +898,18 @@ if ($action === 'sla_report') {
         $mttr_values = array_filter(array_column($report, 'mttrSec'), fn($v) => $v !== null);
         $overall_mttr = !empty($mttr_values) ? round(array_sum($mttr_values) / count($mttr_values)) : null;
 
+        $metrics_token = trim((string)get_setting('metrics_token'));
+
         echo json_encode([
             'slaGoal' => $sla_goal,
             'overallUptime' => $overall_uptime,
             'totalOutageMinutes' => $total_outage,
             'overallMttrSec' => $overall_mttr,
             'monitors' => $report,
+            'metricsToken' => $metrics_token,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['slaGoal' => 99.95, 'overallUptime' => 100, 'totalOutageMinutes' => 0, 'overallMttrSec' => null, 'monitors' => []], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['slaGoal' => 99.95, 'overallUptime' => 100, 'totalOutageMinutes' => 0, 'overallMttrSec' => null, 'monitors' => [], 'metricsToken' => ''], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
