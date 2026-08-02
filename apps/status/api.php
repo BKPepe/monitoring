@@ -57,15 +57,30 @@ if ($action === 'monitors') {
     $is_admin = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
     $monitors = [];
 
-    // Základní seznam - stejné sloupce, co endpoint vracel vždy. Tohle NESMÍ
-    // selhat kvůli rozšířeným polím níže (na produkci se přesně tohle stalo:
-    // jeden dotaz na 20+ sloupců naráz, jedna neshoda schématu = celý seznam
-    // monitorů zmizel a s ním celá appka).
+    // Základní seznam. response_time/cpu_usage/ram_usage/hdd_usage NEJSOU
+    // sloupce tabulky monitors (nikdy nebyly - potvrzeno živě: "Unknown column
+    // 'response_time'") - to jsou poslední naměřené hodnoty z monitor_logs
+    // (kontroly dostupnosti) a vps_metrics (hlášení agenta), doplněné
+    // poddotazem/joinem. Tohle NESMÍ selhat kvůli rozšířeným polím níže
+    // (na produkci se přesně tohle stalo: jeden dotaz na 20+ sloupců naráz,
+    // jedna neshoda schématu = celý seznam monitorů zmizel a s ním celá appka).
     try {
         $stmt = $pdo->query("
-            SELECT id, name, type, target, port, status, category, asset_id, last_checked, last_status_change,
-                   response_time, cpu_usage, ram_usage, hdd_usage, last_details
-            FROM monitors ORDER BY id ASC
+            SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
+                   m.last_checked, m.last_status_change, m.last_details,
+                   (SELECT l.response_time FROM monitor_logs l
+                    WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL
+                    ORDER BY l.id DESC LIMIT 1) AS response_time,
+                   vm.cpu_usage, vm.ram_usage, vm.hdd_usage
+            FROM monitors m
+            LEFT JOIN (
+                SELECT vm1.monitor_id, vm1.cpu_usage, vm1.ram_usage, vm1.hdd_usage
+                FROM vps_metrics vm1
+                INNER JOIN (
+                    SELECT monitor_id, MAX(id) AS max_id FROM vps_metrics GROUP BY monitor_id
+                ) latest ON latest.monitor_id = vm1.monitor_id AND latest.max_id = vm1.id
+            ) vm ON vm.monitor_id = m.id
+            ORDER BY m.id ASC
         ");
         foreach ($stmt->fetchAll() as $r) {
             $details = json_decode($r['last_details'] ?? '', true) ?: [];
@@ -95,12 +110,8 @@ if ($action === 'monitors') {
             ];
         }
     } catch (Exception $e) {
-        // DOČASNÁ DIAGNOSTIKA - odstranit hned po zjištění příčiny na produkci.
-        if (($_GET['debug'] ?? '') === 'bk1') {
-            echo json_encode(['monitors' => [], 'debug_error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
-        } else {
-            echo json_encode(['monitors' => []], JSON_UNESCAPED_UNICODE);
-        }
+        error_log('[api.php action=monitors] Base query failed: ' . $e->getMessage());
+        echo json_encode(['monitors' => []], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -1124,9 +1135,15 @@ if ($action === 'metrics_history') {
     ];
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT cpu_usage, ram_usage, hdd_usage, response_time FROM monitors WHERE id = ? LIMIT 1");
-        $stmt_mon->execute([$monitor_id]);
-        $mon_data = $stmt_mon->fetch() ?: ['cpu_usage' => 24.0, 'ram_usage' => 48.0, 'hdd_usage' => 3.0, 'response_time' => 8];
+        // cpu_usage/ram_usage/hdd_usage/response_time nejsou sloupce monitors -
+        // poslední hodnoty se berou z vps_metrics (agent) a monitor_logs (kontrola).
+        $stmt_mon = $pdo->prepare("
+            SELECT vm.cpu_usage, vm.ram_usage, vm.hdd_usage,
+                   (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = ? AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
+            FROM vps_metrics vm WHERE vm.monitor_id = ? ORDER BY vm.id DESC LIMIT 1
+        ");
+        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        $mon_data = $stmt_mon->fetch() ?: ['cpu_usage' => null, 'ram_usage' => null, 'hdd_usage' => null, 'response_time' => null];
 
         if ($period === '7d') {
             $stmt = $pdo->prepare("
@@ -1277,28 +1294,25 @@ if ($action === 'public_status') {
             }
         } catch (Throwable $t) {}
 
+        // response_time není sloupec monitors - bere se poslední hodnota z
+        // monitor_logs. Beze jména/výpadku fallbacku: chybí-li reálné uzly,
+        // vrací se prázdný seznam, ne natvrdo napsané "Donald"/"Router - Praha".
         $nodes = [];
         try {
-            $stmt_nodes = $pdo->query("SELECT name, status, response_time, last_details FROM monitors WHERE LOWER(type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router') OR last_details IS NOT NULL");
-            if ($stmt_nodes) {
-                while ($nd = $stmt_nodes->fetch()) {
-                    if ($nd) {
-                        $nodes[] = [
-                            'name' => $nd['name'],
-                            'status' => $nd['status'] === 'up' ? 'online' : ($nd['status'] === 'warning' ? 'warning' : 'offline'),
-                            'latencyMs' => $nd['response_time'] !== null ? (int)$nd['response_time'] : 10,
-                        ];
-                    }
-                }
+            $stmt_nodes = $pdo->query("
+                SELECT m.name, m.status,
+                       (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
+                FROM monitors m
+                WHERE LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router') OR m.last_details IS NOT NULL
+            ");
+            while ($nd = $stmt_nodes->fetch()) {
+                $nodes[] = [
+                    'name' => $nd['name'],
+                    'status' => $nd['status'] === 'up' ? 'online' : ($nd['status'] === 'warning' ? 'warning' : 'offline'),
+                    'latencyMs' => $nd['response_time'] !== null ? (int)$nd['response_time'] : null,
+                ];
             }
         } catch (Throwable $t) {}
-
-        if (empty($nodes)) {
-            $nodes = [
-                ['name' => 'Donald (TeamSpeak Agent)', 'status' => 'online', 'latencyMs' => 1035],
-                ['name' => 'Router - Praha (OpenWrt Agent)', 'status' => 'online', 'latencyMs' => 8],
-            ];
-        }
 
         $avg_latency = 10;
         try {
