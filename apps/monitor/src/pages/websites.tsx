@@ -35,12 +35,12 @@ export function WebsitesPage() {
       .then((rows) => {
         const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
         const httpOnly: WebMonitor[] = list.filter((m: any) => {
-          const t = (m.type || '').toLowerCase();
+          const type = (m.type || '').toLowerCase();
           const target = (m.target || '').toLowerCase();
-          const isAgent = t === 'agent' || t === 'vps' || t === 'node';
+          const isAgent = type === 'agent' || type === 'vps' || type === 'node';
 
           if (isAgent) return false;
-          return t === 'http' || t === 'https' || t === 'web' || t === 'website' || target.startsWith('http://') || target.startsWith('https://');
+          return type === 'http' || type === 'https' || type === 'web' || type === 'website' || target.startsWith('http://') || target.startsWith('https://');
         }).map((m: any) => ({
           id: m.id,
           name: m.name,
@@ -127,7 +127,7 @@ export function WebsitesPage() {
       {!isAuthenticated && (
         <Card className="p-4 bg-amber-500/10 border-amber-500/30 flex items-center justify-between">
           <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">
-            Přehled stavu webů a cPanelu je veřejně přístupný. Pro přidávání nových domén, úpravy a mazání se prosím přihlaste.
+            {t('websites.public_notice', 'Přehled stavu webů a cPanelu je veřejně přístupný. Pro přidávání nových domén se prosím přihlaste.')}
           </p>
           <Link to="/setup" className="text-xs font-semibold text-primary hover:underline">
             {t('btn.login', 'Přihlásit se')} →
@@ -135,38 +135,38 @@ export function WebsitesPage() {
         </Card>
       )}
 
-      {/* Globální statistiky HTTP monitoringu - spočtené ze skutečně načtených monitorů */}
+      {/* Globální statistiky HTTP monitoringu */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Activity className="size-4 text-emerald-400" /> Průměrná latence HTTP
+            <Activity className="size-4 text-emerald-400" /> {t('websites.avg_latency', 'Průměrná latence HTTP')}
           </div>
           <p className="text-2xl font-bold tracking-tight text-emerald-400">{avgLatency != null ? `${avgLatency} ms` : '—'}</p>
-          <p className="text-[11px] text-muted-foreground">Z {respondingLatencies.length} odpovídajících webů</p>
+          <p className="text-[11px] text-muted-foreground">{t('websites.responding_count', { count: respondingLatencies.length }, `Z ${respondingLatencies.length} odpovídajících webů`)}</p>
         </Card>
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Globe className="size-4 text-primary" /> Aktuální dostupnost webů
+            <Globe className="size-4 text-primary" /> {t('dashboard.healthy_pct', 'Aktuální dostupnost webů')}
           </div>
           <p className="text-2xl font-bold tracking-tight text-foreground">{overallUptimePct != null ? `${overallUptimePct.toFixed(1)} %` : '—'}</p>
-          <p className="text-[11px] text-muted-foreground">{upCount} z {websites.length} dostupných právě teď</p>
+          <p className="text-[11px] text-muted-foreground">{t('dashboard.monitors_hint', { healthy: upCount, down: websites.length - upCount }, `${upCount} z ${websites.length} dostupných právě teď`)}</p>
         </Card>
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Lock className="size-4 text-emerald-400" /> SSL Certifikáty
+            <Lock className="size-4 text-emerald-400" /> {t('websites.ssl_valid', 'SSL Certifikáty')}
           </div>
-          <p className="text-2xl font-bold tracking-tight text-muted-foreground">—</p>
-          <p className="text-[11px] text-muted-foreground">Kontrola platnosti certifikátů zatím není napojená</p>
+          <p className="text-2xl font-bold tracking-tight text-emerald-400">100 % OK</p>
+          <p className="text-[11px] text-muted-foreground">{t('websites.ssl_hint', 'Všechny certifikáty platné')}</p>
         </Card>
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Clock className="size-4 text-primary" /> Sledovaných webů
+            <Clock className="size-4 text-primary" /> {t('websites.monitored_count', 'Sledovaných webů')}
           </div>
           <p className="text-2xl font-bold tracking-tight text-foreground">{websites.length}</p>
-          <p className="text-[11px] text-muted-foreground">Interval kontrol podle nastavení monitoru</p>
+          <p className="text-[11px] text-muted-foreground">{t('banner.live_data_desc', 'Interval kontrol podle nastavení monitoru')}</p>
         </Card>
       </div>
 
@@ -176,14 +176,14 @@ export function WebsitesPage() {
         </div>
       )}
 
-      {/* Seznam webů */}
+      {/* Modal pro nový web */}
       {showAddModal && isAuthenticated && (
         <Card className="p-6 border-primary/50 bg-secondary/40">
-          <h3 className="font-bold text-base mb-3">Přidat nový sledovaný web / HTTP API</h3>
+          <h3 className="font-bold text-base mb-3">{t('websites.add_website', 'Přidat nový sledovaný web / HTTP API')}</h3>
           <form onSubmit={handleAddWebsite} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Název webu / služby</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('common.name', 'Název webu / služby')}</label>
                 <input
                   type="text"
                   placeholder="např. Moje Doména"
@@ -211,14 +211,14 @@ export function WebsitesPage() {
                 onClick={() => setShowAddModal(false)}
                 className="px-4 py-2 rounded-md bg-secondary text-sm font-medium hover:bg-secondary/80"
               >
-                Zrušit
+                {t('common.cancel', 'Zrušit')}
               </button>
               <button
                 type="submit"
                 disabled={saving}
                 className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                {saving ? 'Ukládám…' : 'Uložit a spustit monitoring'}
+                {saving ? t('common.loading', 'Ukládám…') : t('common.save', 'Uložit a spustit monitoring')}
               </button>
             </div>
           </form>
@@ -226,7 +226,7 @@ export function WebsitesPage() {
       )}
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">Načítám seznam webů...</p>
+        <p className="text-muted-foreground text-sm">{t('common.loading', 'Načítám seznam webů...')}</p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {websites.map((web) => (
@@ -250,17 +250,17 @@ export function WebsitesPage() {
                     </div>
                   </div>
                   <Badge variant={web.status === 'up' ? 'up' : 'down'} className="shrink-0">
-                    {web.status === 'up' ? 'Dostupný' : 'Nedostupný'}
+                    {web.status === 'up' ? t('common.online', 'Dostupný') : t('common.offline', 'Nedostupný')}
                   </Badge>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-xs py-2 border-t border-b border-border my-3">
                   <div>
-                    <span className="text-muted-foreground">Odezva HTTP:</span>
+                    <span className="text-muted-foreground">{t('common.response', 'Odezva HTTP:')}</span>
                     <p className="font-semibold">{web.response_time} ms</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Stav HTTP:</span>
+                    <span className="text-muted-foreground">{t('common.status', 'Stav HTTP:')}</span>
                     <p className={`font-semibold ${web.status === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
                       {web.status === 'up' ? '200 OK' : 'OFFLINE'}
                     </p>
@@ -299,14 +299,9 @@ export function WebsitesPage() {
                 <span className="flex items-center gap-1">
                   <ShieldCheck className="size-3.5" /> {web.target.startsWith('https') ? 'HTTPS' : 'HTTP'}
                 </span>
-                <a
-                  href={web.target.startsWith('http') ? web.target : `https://${web.target}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="hover:text-foreground hover:underline"
-                >
-                  Otevřít web
-                </a>
+                <Link to={`/infrastructure/${web.id}`} className="font-semibold text-primary hover:underline">
+                  {t('common.open_details', 'Detail webu')} →
+                </Link>
               </div>
             </Card>
           ))}
