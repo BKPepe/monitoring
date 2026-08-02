@@ -8,11 +8,11 @@ import {
   BellRing, ExternalLink
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 import { Link } from 'react-router';
 
 const API_BASE = '/status/api.php';
 
-// Helper: CSS class for tab buttons
 const tabClass = (active: boolean) =>
   `px-4 py-2.5 text-xs font-bold rounded-t-lg border-b-2 transition-all duration-200 cursor-pointer select-none ${
     active
@@ -20,14 +20,12 @@ const tabClass = (active: boolean) =>
       : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
   }`;
 
-// Helper: input class
 const inputCls = 'w-full rounded-md bg-background border border-border px-3 py-2 text-xs focus:ring-1 focus:ring-primary/40 focus:border-primary transition-colors';
 const selectCls = inputCls;
 const labelCls = 'block text-[11px] font-medium text-muted-foreground mb-1';
 const hintCls = 'text-[10px] text-muted-foreground/70 mt-0.5';
 const sectionTitle = 'text-xs font-bold uppercase tracking-wider text-rose-400 mb-3';
 
-// OAuth provider definitions matching bk_oauth_providers() in functions.php
 const OAUTH_PROVIDERS = [
   { key: 'github', label: 'GitHub', color: 'text-[#f0f6fc]', bg: 'bg-[#24292e]' },
   { key: 'google', label: 'Google', color: 'text-[#4285f4]', bg: 'bg-[#4285f4]/10' },
@@ -38,6 +36,7 @@ const OAUTH_PROVIDERS = [
 type SettingsMap = Record<string, string>;
 
 export function SettingsPage() {
+  const { t } = useLanguage();
   const { session } = useSession();
   const [activeTab, setActiveTab] = useState<'obecne' | 'notifikace' | 'integrace' | 'vzhled'>('obecne');
   const [saved, setSaved] = useState(false);
@@ -49,17 +48,14 @@ export function SettingsPage() {
   const [envLocked, setEnvLocked] = useState<string[]>([]);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
 
-  // Digest state
   const [digestSending, setDigestSending] = useState<string | null>(null);
   const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  // Notification subscriptions (per-user)
   interface SubEntry { id: number; name: string; type: string; email: number; sms: number; whatsapp: number; }
   const [subs, setSubs] = useState<SubEntry[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);
   const [subsSaved, setSubsSaved] = useState(false);
 
-  // Fetch settings from API
   const fetchSettings = useCallback(async () => {
     try {
       setLoading(true);
@@ -69,11 +65,11 @@ export function SettingsPage() {
       setSettings(data.settings ?? {});
       setEnvLocked(data.envLocked ?? []);
     } catch {
-      setError('Nepodařilo se načíst nastavení z API.');
+      setError(t('common.error', 'Nepodařilo se načíst nastavení z API.'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (session?.authenticated && session.user?.role === 'admin') {

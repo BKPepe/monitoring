@@ -15,18 +15,12 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { appApi, ApiError, type ApiUser } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
 import { AuditLogTable } from '@/components/audit-log-table';
 
-/**
- * Správa uživatelů.
- *
- * Pravidla (role, minimální délka hesla, pozvánka místo hesla, zákaz smazání
- * sebe sama a posledního admina) vynucuje **server** v `app_api.php`. Tady
- * se jen zrcadlí, aby uživatel dostal zpětnou vazbu dřív než po odeslání —
- * validace v prohlížeči není bezpečnostní opatření.
- */
 export function UsersPage() {
+  const { t } = useLanguage();
   const { session, loading: sessionLoading, isAdmin } = useSession();
   const [users, setUsers] = React.useState<ApiUser[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -39,16 +33,16 @@ export function UsersPage() {
       .getUsers()
       .then(setUsers)
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : 'Načtení uživatelů selhalo')
+        setError(err instanceof Error ? err.message : t('common.error', 'Načtení uživatelů selhalo'))
       );
-  }, []);
+  }, [t]);
 
   React.useEffect(() => {
     if (isAdmin) reload();
   }, [isAdmin, reload]);
 
   if (sessionLoading) {
-    return <p className="text-muted-foreground py-16 text-center text-sm">Načítám…</p>;
+    return <p className="text-muted-foreground py-16 text-center text-sm">{t('common.loading', 'Načítám…')}</p>;
   }
 
   if (!session?.authenticated) return <LoginRequired loginUrl={session?.loginUrl ?? 'admin.php'} />;
@@ -58,14 +52,14 @@ export function UsersPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Uživatelé</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{t('users.title', 'Uživatelé')}</h1>
           <p className="text-muted-foreground text-sm">
-            Účty, role a přístup do administrace.
+            {t('users.subtitle', 'Účty, role a přístup do administrace.')}
           </p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
           <UserPlus />
-          Nový uživatel
+          {t('users.add_user', 'Nový uživatel')}
         </Button>
       </div>
 

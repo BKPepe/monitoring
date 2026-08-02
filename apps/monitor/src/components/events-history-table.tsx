@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { History, ChevronLeft, ChevronRight, MapPin, RefreshCw } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
 
 export interface EventLogRow {
   id: number;
@@ -19,6 +20,7 @@ export interface EventLogRow {
 }
 
 export function EventsHistoryTable() {
+  const { t } = useLanguage();
   const [events, setEvents] = useState<EventLogRow[]>([]);
   const [filter, setFilter] = useState<'all' | 'up' | 'down'>('all');
   const [pageSize, setPageSize] = useState<number>(20);
@@ -71,20 +73,19 @@ export function EventsHistoryTable() {
         <div className="flex items-center gap-3">
           <History className="size-5 text-rose-500" />
           <div>
-            <h3 className="font-bold text-base">Historie posledních událostí & Auditní Protokol</h3>
-            <p className="text-xs text-muted-foreground">Reálné záznamy kontrol z databáze (monitor_logs)</p>
+            <h3 className="font-bold text-base">{t('incidents.title', 'Historie posledních událostí & Auditní Protokol')}</h3>
+            <p className="text-xs text-muted-foreground">{t('banner.live_data_desc', 'Reálné záznamy kontrol z databáze (monitor_logs)')}</p>
           </div>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {/* Filter tabs */}
           <div role="group" aria-label="Filtr stavu" className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5 text-xs font-semibold">
             <button
               type="button"
               onClick={() => { setFilter('all'); setPage(1); }}
               className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
-              Vše ({events.length})
+              {t('common.all', 'Vše')} ({events.length})
             </button>
             <button
               type="button"
@@ -102,9 +103,8 @@ export function EventsHistoryTable() {
             </button>
           </div>
 
-          {/* Page size selector */}
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
-            <span>Zobrazit:</span>
+            <span>{t('dashboard.col_monitor', 'Zobrazit')}:</span>
             <select
               value={pageSize}
               onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
@@ -118,18 +118,18 @@ export function EventsHistoryTable() {
           </div>
 
           <Badge variant="up" dot pulse className="text-[10px]">
-            Živá obnova 10s
+            {t('banner.live_data', 'Živá obnova 10s')}
           </Badge>
           <button
             type="button"
             onClick={fetchEvents}
             disabled={isRefreshing}
             className="p-1.5 rounded bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-            title="Obnovit data nyní"
+            title={t('common.refresh', 'Obnovit data nyní')}
           >
             <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
-          {lastUpdated && <span className="text-[10px] text-muted-foreground font-mono">Aktualizováno: {lastUpdated}</span>}
+          {lastUpdated && <span className="text-[10px] text-muted-foreground font-mono">{t('common.last_check', 'Aktualizováno')}: {lastUpdated}</span>}
         </div>
       </div>
 
@@ -149,7 +149,7 @@ export function EventsHistoryTable() {
             {paginatedEvents.length === 0 ? (
               <tr>
                 <td colSpan={6} className="py-8 text-center text-muted-foreground text-xs">
-                  {events.length === 0 ? 'V databázi monitor_logs nebyly nalezeny žádné události.' : 'Žádné události neodpovídají zvolenému filtru.'}
+                  {events.length === 0 ? t('common.error', 'V databázi monitor_logs nebyly nalezeny žádné události.') : t('dashboard.no_monitors', 'Žádné události neodpovídají zvolenému filtru.')}
                 </td>
               </tr>
             ) : (
@@ -185,10 +185,9 @@ export function EventsHistoryTable() {
         </table>
       </div>
 
-      {/* Paginace */}
       <div className="flex items-center justify-between border-t border-border pt-4 text-xs">
         <span className="text-muted-foreground">
-          Zobrazeno {paginatedEvents.length} z {filteredEvents.length} událostí
+          {t('dashboard.showing', `Zobrazeno ${paginatedEvents.length} z ${filteredEvents.length} událostí`)}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -197,7 +196,7 @@ export function EventsHistoryTable() {
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             className="inline-flex items-center gap-1 rounded bg-secondary px-3 py-1.5 font-medium hover:bg-secondary/80 disabled:opacity-50 transition-colors cursor-pointer"
           >
-            <ChevronLeft className="size-3.5" /> Předchozí
+            <ChevronLeft className="size-3.5" /> {t('common.back', 'Předchozí')}
           </button>
           <span className="text-muted-foreground font-medium font-mono px-2">Strana {currentPage} / {totalPages}</span>
           <button

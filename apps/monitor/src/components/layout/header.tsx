@@ -17,7 +17,7 @@ export function Header({
   onOpenMobileNav?: () => void;
 }) {
   const { theme, toggle } = useTheme();
-  const { lang, setLang } = useLanguage();
+  const { lang, setLang, t } = useLanguage();
   const [showNotifications, setShowNotifications] = useState(false);
   const [activeAlerts, setActiveAlerts] = useState<any[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -124,10 +124,10 @@ export function Header({
               <div className="flex items-center justify-between border-b border-border pb-3 mb-3">
                 <div className="flex items-center gap-2">
                   <Bell className="size-4 text-primary" />
-                  <h4 className="font-bold text-sm">Notifikace & Upozornění</h4>
+                  <h4 className="font-bold text-sm">{t('settings.notifications', 'Notifikace & Upozornění')}</h4>
                 </div>
                 <span className="text-[11px] text-muted-foreground font-mono">
-                  {alertCount > 0 ? `${alertCount} aktivní` : 'Vše OK'}
+                  {alertCount > 0 ? `${alertCount} ${t('common.warning', 'aktivní')}` : t('dashboard.all_healthy_desc', 'Vše OK')}
                 </span>
               </div>
 
@@ -137,7 +137,7 @@ export function Header({
                     <div key={evt.id} className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-start gap-3 text-xs">
                       <AlertTriangle className="size-4 text-rose-400 shrink-0 mt-0.5" />
                       <div>
-                        <p className="font-semibold text-rose-400">🔴 Výpadek: {evt.monitorName}</p>
+                        <p className="font-semibold text-rose-400">🔴 {t('status.down', 'Výpadek')}: {evt.monitorName}</p>
                         <p className="text-muted-foreground mt-0.5">
                           {evt.errorMsg || `${evt.target} neodpovídá.`}
                         </p>
@@ -148,7 +148,7 @@ export function Header({
                 ) : (
                   <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 text-xs text-emerald-400">
                     <CheckCircle2 className="size-4 shrink-0" />
-                    <span>Všechny monitorované uzly fungují bez závad.</span>
+                    <span>{t('status.healthy', 'Všechny monitorované uzly fungují bez závad.')}</span>
                   </div>
                 )}
               </div>
@@ -159,7 +159,7 @@ export function Header({
                   onClick={() => setShowNotifications(false)}
                   className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
                 >
-                  Zobrazit všechny incidenty <ArrowRight className="size-3" />
+                  {t('common.open_details', 'Zobrazit všechny incidenty')} <ArrowRight className="size-3" />
                 </Link>
               </div>
             </div>

@@ -3,10 +3,12 @@ import { Badge } from '@/components/ui/badge';
 import { Terminal, Copy, Check, ShieldCheck, Lock, Cpu } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 import { appApi } from '@/api/app-api';
 import { Link } from 'react-router';
 
 export function ApiAgentsPage() {
+  const { t } = useLanguage();
   const { session } = useSession();
   const [copied, setCopied] = useState(false);
   const [agents, setAgents] = useState<any[]>([]);
@@ -40,13 +42,13 @@ export function ApiAgentsPage() {
     return (
       <Card className="grid place-items-center gap-4 p-16 text-center">
         <div className="space-y-1">
-          <p className="font-semibold text-lg">Přihlášení vyžadováno</p>
+          <p className="font-semibold text-lg">{t('common.login_required', 'Přihlášení vyžadováno')}</p>
           <p className="text-muted-foreground text-sm max-w-md">
-            Správa API klíčů a instalačních skriptů je přístupná pouze přihlášeným administrátorům.
+            {t('api_agents.login_required_desc', 'Správa API klíčů a instalačních skriptů je přístupná pouze přihlášeným administrátorům.')}
           </p>
         </div>
         <Link to="/setup" className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors">
-          Přejít na přihlášení
+          {t('btn.login', 'Přejít na přihlášení')}
         </Link>
       </Card>
     );
@@ -64,8 +66,8 @@ export function ApiAgentsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">API Klíče, Bezpečnost & Správa Agentů</h1>
-          <p className="text-muted-foreground text-sm">Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('api_agents.title', 'API Klíče, Bezpečnost & Správa Agentů')}</h1>
+          <p className="text-muted-foreground text-sm">{t('api_agents.subtitle', 'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.')}</p>
         </div>
       </div>
 

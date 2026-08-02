@@ -8,6 +8,7 @@ import {
   BarChart3, Download, FileText, Calendar, CheckCircle2, ShieldCheck,
   Clock, TrendingUp, ArrowRight, Server, ChevronDown, ChevronUp, AlertTriangle, RefreshCw, HelpCircle
 } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
 
 const API_BASE = '/status/api.php';
 
@@ -49,6 +50,7 @@ function formatDuration(seconds: number): string {
 }
 
 export function ReportsPage() {
+  const { t } = useLanguage();
   const [monitors, setMonitors] = useState<MonitorSLA[]>([]);
   const [loading, setLoading] = useState(true);
   const [slaGoal, setSlaGoal] = useState(99.95);
@@ -72,24 +74,24 @@ export function ReportsPage() {
           setTotalOutage(data.totalOutageMinutes ?? 0);
           setOverallMttr(data.overallMttrSec ?? null);
         } else {
-          setError('Žádná data z API. Zkontrolujte, že cron.php běží a monitor_logs obsahuje záznamy.');
+          setError(t('common.error', 'Žádná data z API. Zkontrolujte, že cron.php běží a monitor_logs obsahuje záznamy.'));
         }
       })
       .catch(() => {
-        if (active) setError('Nepodařilo se načíst SLA data.');
+        if (active) setError(t('common.error', 'Nepodařilo se načíst SLA data.'));
       })
       .finally(() => {
         if (active) setLoading(false);
       });
 
     return () => { active = false; };
-  }, []);
+  }, [t]);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20 gap-3">
         <RefreshCw className="size-5 animate-spin text-primary" />
-        <span className="text-sm text-muted-foreground">Načítám SLA metriky z databáze…</span>
+        <span className="text-sm text-muted-foreground">{t('common.loading', 'Načítám SLA metriky z databáze…')}</span>
       </div>
     );
   }
@@ -129,8 +131,8 @@ export function ReportsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">SLA Výkazy & Statistika Dle Serverů</h1>
-          <p className="text-muted-foreground text-sm">Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('reports.title', 'SLA Výkazy & Statistika Dle Serverů')}</h1>
+          <p className="text-muted-foreground text-sm">{t('reports.subtitle', 'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.')}</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -138,7 +140,7 @@ export function ReportsPage() {
             <Download className="size-4 text-emerald-400" /> Exportovat CSV
           </Button>
           <Button variant="outline" size="sm" onClick={handlePrintPDF} className="gap-2 font-semibold">
-            <FileText className="size-4 text-sky-400" /> Stáhnout PDF / Tisk
+            <FileText className="size-4 text-sky-400" /> {t('reports.export_pdf', 'Tisknout / PDF')}
           </Button>
         </div>
       </div>

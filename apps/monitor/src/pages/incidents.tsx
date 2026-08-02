@@ -6,9 +6,11 @@ import { Plus, CheckCircle2, AlertTriangle, ArrowRight, Radio } from 'lucide-rea
 import { appApi } from '@/api/app-api';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 import { EventsHistoryTable } from '@/components/events-history-table';
 
 export function IncidentsPage() {
+  const { t } = useLanguage();
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
   const [targetMonitors, setTargetMonitors] = useState<any[]>([]);
@@ -79,7 +81,6 @@ export function IncidentsPage() {
     return () => { active = false; };
   }, [publicData]);
 
-  // Výpadky CÍLOVÝCH sledovaných webů a serverů (nikoli měřících lokací!)
   const activeTargetOutages = targetMonitors.filter((m) => m.status === 'down' || m.status === 'warning');
 
   const handleCreateIncident = async (e: React.FormEvent) => {
@@ -112,7 +113,7 @@ export function IncidentsPage() {
       setAffectedScope('all');
       setShowNewIncidentModal(false);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Incident se nepodařilo uložit.');
+      setCreateError(err instanceof Error ? err.message : t('common.error', 'Incident se nepodařilo uložit.'));
     } finally {
       setCreating(false);
     }
@@ -122,8 +123,8 @@ export function IncidentsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Správa Incidentů a Výpadků</h1>
-          <p className="text-muted-foreground text-sm">Oddělený přehled výpadků cílových služeb a stavu měřících agentů/lokací.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('incidents.title', 'Správa Incidentů a Výpadků')}</h1>
+          <p className="text-muted-foreground text-sm">{t('incidents.subtitle', 'Oddělený přehled výpadků cílových služeb a stavu měřících agentů/lokací.')}</p>
         </div>
         {isAuthenticated ? (
           <button
@@ -131,16 +132,16 @@ export function IncidentsPage() {
             onClick={() => setShowNewIncidentModal(true)}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors cursor-pointer"
           >
-            <Plus className="size-4" /> Nahlásit nový incident
+            <Plus className="size-4" /> {t('incidents.create', 'Nahlásit nový incident')}
           </button>
         ) : (
           <button
             type="button"
             disabled
-            title="Pro zakládání incidentů se musíte přihlásit jako administrátor"
+            title={t('common.login_required', 'Pro zakládání incidentů se musíte přihlásit jako administrátor')}
             className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
           >
-            <Plus className="size-4" /> Nahlásit nový incident (Vyžaduje přihlášení)
+            <Plus className="size-4" /> {t('incidents.create', 'Nahlásit nový incident')} ({t('common.login_required', 'Vyžaduje přihlášení')})
           </button>
         )}
       </div>

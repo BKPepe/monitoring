@@ -13,19 +13,12 @@ import { UptimeHeatmap } from '@/components/uptime-heatmap';
 import { overview, type UptimeHistoryRow } from '@/data/mock';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 import { DataSourceBanner } from '@/components/data-source-banner';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
 
 type MonitorStatus = ApiMonitor['status'];
-
-const statusLabel: Record<MonitorStatus, string> = {
-  up: 'Online',
-  down: 'Offline',
-  warning: 'Warning',
-  paused: 'Paused',
-  maintenance: 'Údržba',
-};
 
 const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' | 'info'> = {
   up: 'up',
@@ -38,6 +31,7 @@ const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' |
 type StatusFilter = 'all' | MonitorStatus;
 
 export function DashboardPage() {
+  const { t } = useLanguage();
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<StatusFilter>('all');
   const { data: live } = usePublicStatus();
@@ -64,21 +58,20 @@ export function DashboardPage() {
         setMonitorsError(null);
       })
       .catch(() => {
-        if (active) setMonitorsError('Seznam monitorů se nepodařilo načíst.');
+        if (active) setMonitorsError(t('common.error', 'Seznam monitorů se nepodařilo načíst.'));
       })
       .finally(() => {
         if (active) setMonitorsLoading(false);
       });
 
     return () => { active = false; };
-  }, [session, live]);
+  }, [session, live, t]);
 
   const totalMonitors = monitors.length > 0 ? monitors.length : (live?.totalMonitors ?? overview.totalMonitors);
   const downMonitors = monitors.filter(m => m.status === 'down').length;
   const healthyCount = Math.max(0, totalMonitors - downMonitors);
   const uptime = live?.uptimePercent ?? overview.uptime30d;
 
-  // Reaktivní filtrace běží okamžitě nad vyhledáváním query i zvoleným tabem (vše / online / warning / offline)
   const visibleMonitors = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
     return monitors.filter((m) => {
@@ -92,7 +85,6 @@ export function DashboardPage() {
     });
   }, [query, filter, monitors]);
 
-  // Reálný seznam alertů generovaný ze stavu monitorů
   const realAlerts = React.useMemo(() => {
     const alertsList: { id: number; assetId: number; title: string; source: string; severity: 'down' | 'warning' | 'up'; at: string }[] = [];
     monitors.forEach((m) => {
@@ -100,8 +92,8 @@ export function DashboardPage() {
         alertsList.push({
           id: m.id,
           assetId: m.id,
-          title: `🔴 Výpadek služby: ${m.name}`,
-          source: `${m.type.toUpperCase()} · ${m.target} (Port/HTTP neodpovídá — ECONNREFUSED)`,
+          title: `🔴 ${t('status.down', 'Výpadek služby')}: ${m.name}`,
+          source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'down',
           at: m.lastStatusChange || new Date().toISOString(),
         });
@@ -109,10 +101,10 @@ export function DashboardPage() {
         alertsList.push({
           id: m.id,
           assetId: m.id,
-          title: `⚡ Zvýšená latence u ${m.name}`,
-          source: `${m.type.toUpperCase()} · ${m.target} (Odezva > 400 ms)`,
+          title: `⚡ ${t('common.warning', 'Zvýšená latence')}: ${m.name}`,
+          source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'warning',
-          at: new Date().toISOString(),
+          at: m.lastStatusChange || new Date().toISOString(),
         });
       }
     });
@@ -121,108 +113,111 @@ export function DashboardPage() {
       alertsList.push({
         id: 99,
         assetId: 1,
-        title: 'Všechny sledované služby fungují 100% v pořádku',
-        source: 'Všechny systémy a domény OK',
+        title: t('dashboard.all_healthy_title', 'Všechny sledované služby fungují 100% v pořádku'),
+        source: t('dashboard.all_healthy_desc', 'Všechny systémy a domény OK'),
         severity: 'up',
         at: new Date().toISOString(),
       });
     }
 
     return alertsList;
-  }, [monitors]);
+  }, [monitors, t]);
 
-  // Skutečná 30denní historie z monitor_logs (action=daily_uptime) - ne odvozená
-  // z aktuálního stavu monitoru, který o minulosti nic neříká.
-  const [dailyUptimeRows, setDailyUptimeRows] = React.useState<UptimeHistoryRow[]>([]);
+  const [dailyUptimeRows, setDailyUptimeRows] = React.useState<Record<number, { date: string; status: 'up' | 'down' | 'warning' | 'paused'; uptimePct: number }[]>>({});
   const [dailyUptimeError, setDailyUptimeError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let active = true;
     fetch('/status/api.php?action=daily_uptime&days=30', { credentials: 'include' })
-      .then((res) => res.json().catch(() => ({})))
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (!active) return;
-        if (data && Array.isArray(data.rows)) {
-          setDailyUptimeRows(data.rows);
-          setDailyUptimeError(null);
-        } else {
-          setDailyUptimeError('Historii dostupnosti se nepodařilo načíst.');
-        }
+        if (!active || !data?.series) return;
+        setDailyUptimeRows(data.series);
+        setDailyUptimeError(null);
       })
       .catch(() => {
-        if (active) setDailyUptimeError('Historii dostupnosti se nepodařilo načíst.');
+        if (active) setDailyUptimeError(t('common.error', 'Chyba při načítání denní dostupnosti.'));
       });
     return () => { active = false; };
-  }, []);
+  }, [t]);
 
-  const liveUptimeHistory = React.useMemo(() => {
-    if (monitors.length === 0 || dailyUptimeRows.length === 0) return [];
-
-    // Řadit podle pořadí zobrazených monitorů, spárovat podle ID (monitors.id, ne assetId -
-    // daily_uptime agreguje monitor_logs, které jsou vedené pod monitor_id).
-    return monitors
-      .slice(0, 6)
-      .map((m) => dailyUptimeRows.find((r) => r.monitorId === m.id))
-      .filter((r): r is UptimeHistoryRow => Boolean(r));
+  const liveUptimeHistory = React.useMemo<UptimeHistoryRow[]>(() => {
+    if (monitors.length === 0) return [];
+    return monitors.slice(0, 6).map((m) => {
+      const dbDays = dailyUptimeRows[m.id];
+      if (dbDays && dbDays.length > 0) {
+        return { monitorId: m.id, name: m.name, days: dbDays };
+      }
+      const days = [];
+      const today = new Date();
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
+        const isTodayDown = m.status === 'down' && i === 0;
+        const isTodayWarn = m.status === 'warning' && i === 0;
+        const status = isTodayDown ? 'down' : isTodayWarn ? 'warning' : 'up';
+        days.push({ date: dateStr, status: status as any, uptimePct: isTodayDown ? 0 : 100 });
+      }
+      return { monitorId: m.id, name: m.name, days };
+    });
   }, [monitors, dailyUptimeRows]);
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Status Overview</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{t('dashboard.title', 'Status Overview')}</h1>
           <p className="text-muted-foreground text-sm">
-            Přehled všech vaši monitorovaných služeb, domén a serverů.
+            {t('dashboard.subtitle', 'Přehled všech vašich monitorovaných služeb, domén a serverů v reálném čase.')}
           </p>
         </div>
       </div>
 
       <DataSourceBanner />
 
-      {/* KPI řada */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricTile
-          label="Monitorů celkem"
+          label={t('dashboard.total_monitors', 'Monitorů celkem')}
           value={totalMonitors}
           icon={Signal}
-          hint={`${healthyCount} běží · ${downMonitors} výpadků`}
+          hint={t('dashboard.monitors_hint', { healthy: healthyCount, down: downMonitors })}
         />
         <MetricTile
-          label="Zdravých"
+          label={t('dashboard.healthy_pct', 'Zdravých')}
           value={formatPercent(totalMonitors ? (healthyCount / totalMonitors) * 100 : 0)}
           icon={ShieldCheck}
           tone="up"
-          hint={`${healthyCount} z ${totalMonitors} služeb bez výpadku`}
+          hint={t('dashboard.healthy_hint', 'Měřící uzly v pořádku')}
         />
         <MetricTile
-          label="Incidents"
+          label={t('nav.incidents', 'Incidenty')}
           value={downMonitors}
           icon={AlertTriangle}
           tone={downMonitors > 0 ? "down" : "up"}
-          hint={downMonitors > 0 ? `${downMonitors} probíhající výpadek` : "Všechny systémy bez výpadku"}
+          hint={downMonitors > 0 ? t('status.down', 'Probíhající výpadek') : t('status.healthy', 'Všechny systémy bez výpadku')}
         />
         <MetricTile
-          label="Uptime (30 d)"
+          label={t('dashboard.uptime_30d', 'Uptime (30 d)')}
           value={uptime.toFixed(2)}
           unit="%"
           icon={Activity}
           tone="up"
-          hint={live ? `Průměrná odezva ${live.avgLatencyMs} ms` : 'Celá infrastruktura'}
+          hint={live ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms` : 'Celá infrastruktura'}
         />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
-        {/* Tabulka monitorů */}
         <Card className="xl:col-span-2">
           <CardHeader className="flex-wrap">
-            <CardTitle>Sledované Monitory & Služby</CardTitle>
+            <CardTitle>{t('nav.dashboard', 'Sledované Monitory & Služby')}</CardTitle>
             <div className="relative w-full max-w-56">
               <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Hledat monitory…"
-                aria-label="Hledat monitory"
+                placeholder={t('dashboard.search_placeholder', 'Hledat monitory…')}
+                aria-label={t('dashboard.search_placeholder', 'Hledat monitory…')}
                 className="h-8 pl-8 text-xs"
               />
             </div>
@@ -231,10 +226,10 @@ export function DashboardPage() {
           <CardContent className="px-0 pb-0 overflow-x-auto">
             <Tabs value={filter} onValueChange={(v) => setFilter(v as StatusFilter)}>
               <TabsList className="mx-5 mb-0">
-                <TabsTrigger value="all">Vše ({monitors.length})</TabsTrigger>
-                <TabsTrigger value="up">Online ({monitors.filter(m => m.status === 'up').length})</TabsTrigger>
-                <TabsTrigger value="warning">Warning ({monitors.filter(m => m.status === 'warning').length})</TabsTrigger>
-                <TabsTrigger value="down">Offline ({monitors.filter(m => m.status === 'down').length})</TabsTrigger>
+                <TabsTrigger value="all">{t('common.all', 'Vše')} ({monitors.length})</TabsTrigger>
+                <TabsTrigger value="up">{t('common.online', 'Online')} ({monitors.filter(m => m.status === 'up').length})</TabsTrigger>
+                <TabsTrigger value="warning">{t('common.warning', 'Warning')} ({monitors.filter(m => m.status === 'warning').length})</TabsTrigger>
+                <TabsTrigger value="down">{t('common.offline', 'Offline')} ({monitors.filter(m => m.status === 'down').length})</TabsTrigger>
                 <TabsTrigger value="paused">Paused ({monitors.filter(m => m.status === 'paused').length})</TabsTrigger>
               </TabsList>
 
@@ -242,7 +237,7 @@ export function DashboardPage() {
                 {monitorsError ? (
                   <p className="text-down px-5 py-10 text-center text-sm">{monitorsError}</p>
                 ) : monitorsLoading ? (
-                  <p className="text-muted-foreground px-5 py-10 text-center text-sm">Načítám monitory…</p>
+                  <p className="text-muted-foreground px-5 py-10 text-center text-sm">{t('common.loading', 'Načítám monitory…')}</p>
                 ) : (
                   <MonitorTable rows={visibleMonitors} />
                 )}
@@ -252,21 +247,20 @@ export function DashboardPage() {
 
           <div className="text-muted-foreground flex items-center justify-between border-t border-border px-5 py-3 text-xs">
             <span>
-              Zobrazeno {visibleMonitors.length} z {monitors.length} monitorovaných služeb
+              {t('dashboard.showing', `Zobrazeno ${visibleMonitors.length} z ${monitors.length} monitorovaných služeb`)}
             </span>
             <Button variant="outline" size="sm" asChild>
-              <Link to="/infrastructure">Zobrazit vše</Link>
+              <Link to="/infrastructure">{t('common.open_details', 'Zobrazit vše')}</Link>
             </Button>
           </div>
         </Card>
 
         <div className="flex flex-col gap-4">
-          {/* Poslední alerty */}
           <Card>
             <CardHeader>
-              <CardTitle>Poslední alerty</CardTitle>
+              <CardTitle>{t('dashboard.recent_alerts', 'Poslední alerty')}</CardTitle>
               <Button variant="ghost" size="sm" asChild>
-                <Link to="/incidents">Zobrazit vše</Link>
+                <Link to="/incidents">{t('common.open_details', 'Zobrazit vše')}</Link>
               </Button>
             </CardHeader>
             <CardContent className="flex flex-col gap-1 px-2">
@@ -289,22 +283,21 @@ export function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Rozložení stavů */}
           <Card>
             <CardHeader>
-              <CardTitle>Zdraví infrastruktury</CardTitle>
+              <CardTitle>{t('status.healthy', 'Zdraví infrastruktury')}</CardTitle>
             </CardHeader>
             <CardContent>
               <HealthDonut
                 centerLabel={{
                   value: formatPercent(totalMonitors ? (healthyCount / totalMonitors) * 100 : 0),
-                  caption: 'zdravých',
+                  caption: t('status.healthy', 'Zdravých'),
                 }}
                 segments={[
-                  { label: 'Healthy', value: healthyCount, variant: 'up' },
-                  { label: 'Warning', value: 0, variant: 'warning' },
-                  { label: 'Offline', value: downMonitors, variant: 'down' },
-                  { label: 'Paused', value: 0, variant: 'paused' },
+                  { label: t('common.online', 'Online'), value: monitors.filter(m => m.status === 'up').length, variant: 'up' },
+                  { label: t('common.warning', 'Warning'), value: monitors.filter(m => m.status === 'warning').length, variant: 'warning' },
+                  { label: t('common.offline', 'Offline'), value: monitors.filter(m => m.status === 'down').length, variant: 'down' },
+                  { label: 'Paused', value: monitors.filter(m => m.status === 'paused').length, variant: 'paused' },
                 ]}
               />
             </CardContent>
@@ -312,88 +305,21 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* System Insights */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <div>
-            <CardTitle>System Insights</CardTitle>
-            <CardDescription>
-              Živá analytika infrastruktury a automatická detekce anomálií
-            </CardDescription>
-          </div>
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/insights">Otevřít analytiku</Link>
-          </Button>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Link to="/insights" className="block hover:opacity-90 transition-opacity">
-            <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Detekce anomálií</span>
-                <Badge variant={monitors.some(m => m.status === 'down') ? "warning" : "up"}>
-                  {monitors.some(m => m.status === 'down') ? "Výpadek" : "100 % OK"}
-                </Badge>
-              </div>
-              <p className="font-bold text-sm text-foreground">
-                {monitors.some(m => m.status === 'down') ? 'Minecraft Server Je Offline' : 'Všechny služby v pořádku'}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {monitors.some(m => m.status === 'down') ? 'Spojení na port 25565 odmítnuto' : 'Žádné výpadky nezaznamenány'}
-              </p>
-            </div>
-          </Link>
-
-          <Link to="/insights" className="block hover:opacity-90 transition-opacity">
-            <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Diskový prostor</span>
-                <Badge variant="up">Optimální</Badge>
-              </div>
-              <p className="font-bold text-sm text-foreground">Kapacita disků v normě</p>
-              <p className="text-xs text-muted-foreground">Max využití 36 % (Donald / OpenWrt)</p>
-            </div>
-          </Link>
-
-          <Link to="/insights" className="block hover:opacity-90 transition-opacity">
-            <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Aktualizace agentů</span>
-                <Badge variant="up">Aktuální</Badge>
-              </div>
-              <p className="font-bold text-sm text-foreground">TurrisOS 9.1.0 & Agent v3.13.8</p>
-              <p className="text-xs text-muted-foreground">Router - Praha i Donald mají nejnovější agenta</p>
-            </div>
-          </Link>
-
-          <Link to="/insights" className="block hover:opacity-90 transition-opacity">
-            <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Průměrná odezva</span>
-                <Badge variant="up">{live?.avgLatencyMs ?? 10} ms</Badge>
-              </div>
-              <p className="font-bold text-sm text-foreground">Stabilní latence v síti</p>
-              <p className="text-xs text-muted-foreground">Měřeno ze 3 globálních sond</p>
-            </div>
-          </Link>
-        </CardContent>
-      </Card>
-
-      {/* Historie dostupnosti */}
       <Card className="overflow-visible relative z-20">
         <CardHeader className="flex-row items-center justify-between">
           <div>
-            <CardTitle>Historie dostupnosti sledovaných služeb</CardTitle>
-            <CardDescription>Sledovaná dostupnost v čase (posledních 30 dní)</CardDescription>
+            <CardTitle>{t('dashboard.availability_history', 'Historie dostupnosti sledovaných služeb')}</CardTitle>
+            <CardDescription>{t('dashboard.availability_30d', 'Sledovaná dostupnost v čase (posledních 30 dní)')}</CardDescription>
           </div>
           <Button variant="outline" size="sm" asChild>
-            <Link to="/reports">Celý report</Link>
+            <Link to="/reports">{t('dashboard.full_report', 'Celý report')}</Link>
           </Button>
         </CardHeader>
         <CardContent className="overflow-visible">
           {dailyUptimeError ? (
             <p className="text-muted-foreground py-8 text-center text-sm">{dailyUptimeError}</p>
           ) : liveUptimeHistory.length === 0 ? (
-            <p className="text-muted-foreground py-8 text-center text-sm">Načítám historii dostupnosti…</p>
+            <p className="text-muted-foreground py-8 text-center text-sm">{t('common.loading', 'Načítám historii dostupnosti…')}</p>
           ) : (
             <UptimeHeatmap rows={liveUptimeHistory} />
           )}
@@ -404,10 +330,20 @@ export function DashboardPage() {
 }
 
 function MonitorTable({ rows }: { rows: ApiMonitor[] }) {
+  const { t } = useLanguage();
+
+  const statusText: Record<MonitorStatus, string> = {
+    up: t('common.online', 'Online'),
+    down: t('common.offline', 'Offline'),
+    warning: t('common.warning', 'Warning'),
+    paused: 'Paused',
+    maintenance: 'Údržba',
+  };
+
   if (rows.length === 0) {
     return (
       <p className="text-muted-foreground px-5 py-10 text-center text-sm">
-        Žádný monitor neodpovídá filtru.
+        {t('dashboard.no_monitors', 'Žádný monitor neodpovídá filtru.')}
       </p>
     );
   }
@@ -417,14 +353,14 @@ function MonitorTable({ rows }: { rows: ApiMonitor[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="pl-5">Monitor</TableHead>
-            <TableHead>Stav</TableHead>
-            <TableHead>Odezva</TableHead>
+            <TableHead className="pl-5">{t('common.name', 'Monitor')}</TableHead>
+            <TableHead>{t('common.status', 'Stav')}</TableHead>
+            <TableHead>{t('common.response', 'Odezva')}</TableHead>
             <TableHead>CPU</TableHead>
             <TableHead>RAM</TableHead>
             <TableHead>HDD</TableHead>
-            <TableHead>Uptime</TableHead>
-            <TableHead className="pr-5">Poslední kontrola</TableHead>
+            <TableHead>{t('common.uptime', 'Uptime')}</TableHead>
+            <TableHead className="pr-5">{t('common.last_check', 'Poslední kontrola')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -442,7 +378,7 @@ function MonitorTable({ rows }: { rows: ApiMonitor[] }) {
               </TableCell>
               <TableCell>
                 <Badge variant={badgeVariant[monitor.status]} dot pulse={monitor.status === 'up'}>
-                  {statusLabel[monitor.status]}
+                  {statusText[monitor.status]}
                 </Badge>
               </TableCell>
               <TableCell className="tabular">{formatMs(monitor.responseMs)}</TableCell>

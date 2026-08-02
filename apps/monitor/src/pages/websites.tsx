@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Globe, Plus, ExternalLink, ShieldCheck, Activity, Clock, Lock, Server } from 'lucide-react';
 import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 
 interface WebMonitor {
   id: number;
@@ -17,6 +18,7 @@ interface WebMonitor {
 }
 
 export function WebsitesPage() {
+  const { t } = useLanguage();
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
   const [websites, setWebsites] = useState<WebMonitor[]>([]);
@@ -52,7 +54,7 @@ export function WebsitesPage() {
         setWebsites(httpOnly);
         setLoadError(null);
       })
-      .catch(() => setLoadError('Seznam webů se nepodařilo načíst.'))
+      .catch(() => setLoadError(t('common.error', 'Seznam webů se nepodařilo načíst.')))
       .finally(() => setLoading(false));
   };
 
@@ -81,14 +83,12 @@ export function WebsitesPage() {
       setShowAddModal(false);
       loadWebsites();
     } catch {
-      setLoadError('Web se nepodařilo uložit.');
+      setLoadError(t('common.error', 'Web se nepodařilo uložit.'));
     } finally {
       setSaving(false);
     }
   };
 
-  // Reálné statistiky spočtené z toho, co bylo skutečně načteno - žádné natvrdo
-  // napsané "99.98 %" nebo "100 % platné", které s daty nemají nic společného.
   const upCount = websites.filter((w) => w.status === 'up').length;
   const overallUptimePct = websites.length > 0 ? (upCount / websites.length) * 100 : null;
   const respondingLatencies = websites.filter((w) => w.response_time > 0).map((w) => w.response_time);
@@ -100,8 +100,8 @@ export function WebsitesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Sledované weby, cPanel & HTTP API</h1>
-          <p className="text-muted-foreground text-sm">Výhradně přehled dostupnosti webových stránek, cPanel statistik, SSL certifikátů a HTTP/HTTPS API.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('websites.title', 'Sledované weby, cPanel & HTTP API')}</h1>
+          <p className="text-muted-foreground text-sm">{t('websites.subtitle', 'Výhradně přehled dostupnosti webových stránek, cPanel statistik, SSL certifikátů a HTTP/HTTPS API.')}</p>
         </div>
 
         {isAuthenticated ? (
@@ -110,16 +110,16 @@ export function WebsitesPage() {
             onClick={() => setShowAddModal(true)}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors cursor-pointer"
           >
-            <Plus className="size-4" /> Přidat nový web
+            <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')}
           </button>
         ) : (
           <button
             type="button"
             disabled
-            title="Pro přidávání a úpravu monitorů se prosím přihlaste"
+            title={t('common.login_required', 'Pro přidávání a úpravu monitorů se prosím přihlaste')}
             className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
           >
-            <Plus className="size-4" /> Přidat nový web (Vyžaduje přihlášení)
+            <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')} ({t('common.login_required', 'Vyžaduje přihlášení')})
           </button>
         )}
       </div>
@@ -130,7 +130,7 @@ export function WebsitesPage() {
             Přehled stavu webů a cPanelu je veřejně přístupný. Pro přidávání nových domén, úpravy a mazání se prosím přihlaste.
           </p>
           <Link to="/setup" className="text-xs font-semibold text-primary hover:underline">
-            Přihlásit se →
+            {t('btn.login', 'Přihlásit se')} →
           </Link>
         </Card>
       )}

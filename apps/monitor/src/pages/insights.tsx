@@ -4,8 +4,10 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Lightbulb, HardDrive, Cpu, ArrowRight, Server, Globe } from 'lucide-react';
 import { appApi } from '@/api/app-api';
+import { useLanguage } from '@/context/language-context';
 
 export function InsightsPage() {
+  const { t } = useLanguage();
   const [monitors, setMonitors] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -60,13 +62,13 @@ export function InsightsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">AI & Inteligentní Analýza (Insights)</h1>
-          <p className="text-muted-foreground text-sm">Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('insights.title', 'AI & Inteligentní Analýza (Insights)')}</h1>
+          <p className="text-muted-foreground text-sm">{t('insights.subtitle', 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.')}</p>
         </div>
       </div>
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">Analytický engine vyhodnocuje metriky infrastruktury...</p>
+        <p className="text-muted-foreground text-sm">{t('common.loading', 'Analytický engine vyhodnocuje metriky infrastruktury...')}</p>
       ) : (
         <>
           {/* Analytické karty */}
@@ -80,12 +82,12 @@ export function InsightsPage() {
                       <HardDrive className="size-6" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-sm">Predikce Disku (Servery & VPS)</h3>
-                      <p className="text-xs text-muted-foreground">Lineární regrese (7 dnů)</p>
+                      <h3 className="font-bold text-sm">{t('insights.disk_pred', 'Predikce Disku (Servery & VPS)')}</h3>
+                      <p className="text-xs text-muted-foreground">{t('insights.disk_pred_desc', 'Lineární regrese (7 dnů)')}</p>
                     </div>
                   </div>
                   <Badge variant={highDiskMonitor && highDiskMonitor.hdd >= 75 ? "warning" : "up"}>
-                    {highDiskMonitor && highDiskMonitor.hdd >= 75 ? "Varování" : "V pořádku"}
+                    {highDiskMonitor && highDiskMonitor.hdd >= 75 ? t('common.warning', 'Varování') : t('common.healthy', 'V pořádku')}
                   </Badge>
                 </div>
 
