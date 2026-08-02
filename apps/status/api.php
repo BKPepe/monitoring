@@ -899,6 +899,8 @@ if ($action === 'sla_report') {
         $overall_mttr = !empty($mttr_values) ? round(array_sum($mttr_values) / count($mttr_values)) : null;
 
         $metrics_token = trim((string)get_setting('metrics_token'));
+        $site_title = trim((string)get_setting('site_title', 'Blood Kings Monitoring'));
+        $custom_logo_url = trim((string)get_setting('custom_logo_url', ''));
 
         echo json_encode([
             'slaGoal' => $sla_goal,
@@ -907,9 +909,11 @@ if ($action === 'sla_report') {
             'overallMttrSec' => $overall_mttr,
             'monitors' => $report,
             'metricsToken' => $metrics_token,
+            'siteTitle' => $site_title,
+            'customLogoUrl' => $custom_logo_url,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['slaGoal' => 99.95, 'overallUptime' => 100, 'totalOutageMinutes' => 0, 'overallMttrSec' => null, 'monitors' => [], 'metricsToken' => ''], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['slaGoal' => 99.95, 'overallUptime' => 100, 'totalOutageMinutes' => 0, 'overallMttrSec' => null, 'monitors' => [], 'metricsToken' => '', 'siteTitle' => 'Blood Kings Monitoring', 'customLogoUrl' => ''], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

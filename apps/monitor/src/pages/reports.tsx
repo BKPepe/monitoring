@@ -69,6 +69,8 @@ export function ReportsPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [metricsToken, setMetricsToken] = useState<string>('');
+  const [siteTitle, setSiteTitle] = useState<string>('Blood Kings Monitoring');
+  const [customLogoUrl, setCustomLogoUrl] = useState<string>('');
   const [generatingToken, setGeneratingToken] = useState<boolean>(false);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
 
@@ -86,6 +88,8 @@ export function ReportsPage() {
           setTotalOutage(data.totalOutageMinutes ?? 0);
           setOverallMttr(data.overallMttrSec ?? null);
           setMetricsToken(data.metricsToken ?? '');
+          setSiteTitle(data.siteTitle || 'Blood Kings Monitoring');
+          setCustomLogoUrl(data.customLogoUrl || '');
         } else {
           setError(t('reports.no_api_data', 'Žádná data z API. Zkontrolujte, že cron.php běží a monitor_logs obsahuje záznamy.'));
         }
@@ -174,15 +178,21 @@ export function ReportsPage() {
       {/* Oficiální Hlavička pro PDF export a Tisk (Zobrazuje se pouze při tisku) */}
       <div className="hidden print:flex items-center justify-between border-b-2 border-primary pb-4 mb-4">
         <div className="flex items-center gap-3">
-          <div className="bg-primary text-primary-foreground p-3 rounded-xl flex items-center justify-center shadow-sm">
-            <Crown className="size-7 text-white" />
-          </div>
+          {customLogoUrl ? (
+            <img src={customLogoUrl} alt={siteTitle} className="h-10 max-w-[200px] object-contain" />
+          ) : (
+            <div className="bg-primary text-primary-foreground p-3 rounded-xl flex items-center justify-center shadow-sm">
+              <Crown className="size-7 text-white" />
+            </div>
+          )}
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-2xl tracking-tight text-foreground">Blood Kings</span>
-              <span className="text-xs font-bold tracking-widest uppercase text-primary bg-primary/10 px-2.5 py-0.5 rounded-md border border-primary/20">
-                MONITORING
-              </span>
+              <span className="font-extrabold text-2xl tracking-tight text-foreground">{siteTitle}</span>
+              {!customLogoUrl && (
+                <span className="text-xs font-bold tracking-widest uppercase text-primary bg-primary/10 px-2.5 py-0.5 rounded-md border border-primary/20">
+                  MONITORING
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground font-medium mt-0.5">
               Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz

@@ -57,7 +57,7 @@ export function SearchCommand({
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          'bg-secondary/60 text-muted-foreground flex h-9 w-full items-center gap-2 rounded-md border border-input px-3 text-sm',
+          'bg-secondary/60 text-muted-foreground flex h-9 w-full items-center gap-2 rounded-md border border-input px-3 text-sm print:hidden',
           'hover:border-border-strong transition-colors'
         )}
       >
