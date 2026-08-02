@@ -6,6 +6,7 @@ import '@fontsource-variable/jetbrains-mono';
 import './styles/theme.css';
 import { router } from './routes';
 import { LanguageProvider } from './context/language-context';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Chybí #root — zkontroluj index.html.');
@@ -13,7 +14,9 @@ if (!rootElement) throw new Error('Chybí #root — zkontroluj index.html.');
 createRoot(rootElement).render(
   <StrictMode>
     <LanguageProvider>
-      <RouterProvider router={router} />
+      <TooltipProvider delayDuration={200}>
+        <RouterProvider router={router} />
+      </TooltipProvider>
     </LanguageProvider>
   </StrictMode>
 );

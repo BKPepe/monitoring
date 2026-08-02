@@ -3,9 +3,10 @@ import { Link } from 'react-router';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import {
   BarChart3, Download, FileText, Calendar, CheckCircle2, ShieldCheck,
-  Clock, TrendingUp, ArrowRight, Server, ChevronDown, ChevronUp, AlertTriangle, RefreshCw
+  Clock, TrendingUp, ArrowRight, Server, ChevronDown, ChevronUp, AlertTriangle, RefreshCw, HelpCircle
 } from 'lucide-react';
 
 const API_BASE = '/status/api.php';
@@ -282,7 +283,23 @@ export function ReportsPage() {
 
                       {/* Percentily Odezvy (p50 / p95 / p99) */}
                       <div className="p-3 rounded-md bg-background/60 border border-border/60 space-y-1">
-                        <p className="text-muted-foreground text-[11px] font-semibold">Percentilové Rozložení Latence (p50 / p95 / p99)</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-muted-foreground text-[11px] font-semibold">Percentilové Rozložení Latence (p50 / p95 / p99)</p>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button type="button" className="text-muted-foreground hover:text-foreground cursor-help" aria-label="Co znamenají percentily odezvy">
+                                <HelpCircle className="size-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="font-semibold mb-1">Co percentily znamenají</p>
+                              <p><strong className="text-emerald-400">p50 (medián):</strong> polovina kontrol byla rychlejší, polovina pomalejší — nejlépe vystihuje typickou odezvu.</p>
+                              <p className="mt-1"><strong className="text-amber-400">p95:</strong> 95 % kontrol bylo rychlejších; zbylých 5 % jsou špičky (dočasné zpomalení, zátěž).</p>
+                              <p className="mt-1"><strong className="text-rose-400">p99:</strong> jen 1 % kontrol bylo pomalejších — ojedinělé extrémní špičky, často síťový problém nebo přetížený server.</p>
+                              <p className="mt-1.5 pt-1.5 border-t border-border/60 text-muted-foreground">Vysoké p95/p99 při nízkém p50 = nekonzistentní výkon. Hledejte příčinu v době těch špiček (log serveru, zátěž), ne v průměru.</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                         <div className="flex flex-wrap items-center gap-4 font-mono text-xs pt-0.5">
                           <span className="bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">p50 (Medián): <strong className="text-emerald-400">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong></span>
                           <span className="bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">p95 (Špičky): <strong className="text-amber-400">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong></span>
@@ -293,7 +310,7 @@ export function ReportsPage() {
                       {/* Last outage detail */}
                       {item.lastOutage ? (
                         <div className="p-3 rounded-lg bg-rose-500/5 border border-rose-500/20 space-y-1.5 text-xs">
-                          <p className="font-bold text-rose-400 text-[11px]">📋 Poslední výpadek</p>
+                          <p className="font-bold text-destructive text-[11px]">📋 Poslední výpadek</p>
                           <div className="grid gap-1 sm:grid-cols-2">
                             <p><span className="text-muted-foreground">Začátek:</span> <span className="font-mono">{item.lastOutage.start}</span></p>
                             <p><span className="text-muted-foreground">Konec:</span> <span className="font-mono">{item.lastOutage.end ?? 'Stále probíhá ⚠️'}</span></p>
@@ -302,7 +319,7 @@ export function ReportsPage() {
                           </div>
                           <p className="pt-1 border-t border-rose-500/10">
                             <span className="text-muted-foreground">Důvod:</span>{' '}
-                            <span className="font-mono text-rose-300">{item.lastOutage.reason}</span>
+                            <span className="font-mono text-destructive">{item.lastOutage.reason}</span>
                           </p>
                         </div>
                       ) : (

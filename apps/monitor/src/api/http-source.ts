@@ -27,6 +27,12 @@ const CHART_METRICS: {
   tone: MetricTone;
   yMax: number | null;
 }[] = [
+  // Jediná metrika, kterou má i monitor bez agenta (web/port/discord/...) -
+  // response_time se měří při každé kontrole dostupnosti (monitor_logs), ne
+  // jen u agentů. Bez tohohle záznamu neměl monitor bez agenta na záložce
+  // "Přehled & Výkon" nikdy žádný graf, i když jeho historie odezvy reálně
+  // existuje (stejná data používá i SLA report a tabulka událostí).
+  { key: 'response_time', title: 'Doba odezvy (Latency)', tone: 'latency', yMax: null },
   { key: 'cpu', title: 'Využití CPU', tone: 'cpu', yMax: 100 },
   { key: 'ram', title: 'Využití paměti', tone: 'memory', yMax: 100 },
   { key: 'hdd', title: 'Zaplnění disku', tone: 'disk', yMax: 100 },

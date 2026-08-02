@@ -66,6 +66,7 @@ interface AssetDetail {
   events: TimelineEvent[];
   processes: { name: string; cpu: number; memory: number }[];
   related: { name: string; kind: string; status: MonitorStatus; detail: string }[];
+  cpanelStats?: Record<string, { formatted?: string }> | null;
 }
 
 export function AssetDetailPage() {
@@ -75,6 +76,7 @@ export function AssetDetailPage() {
   const [asset, setAsset] = React.useState<AssetDetail | null>(null);
   const [range, setRange] = React.useState<TimeRange>('24h');
   const [loading, setLoading] = React.useState(true);
+  const [events, setEvents] = React.useState<TimelineEvent[]>([]);
 
   React.useEffect(() => {
     let active = true;
@@ -108,6 +110,37 @@ export function AssetDetailPage() {
       active = false;
     };
   }, [idNum]);
+
+  // Skutečná historie kontrol z monitor_logs - dřív se tu vždy zobrazovala
+  // jedna vymyšlená položka ("Automatický test / Odezva vyhodnocena v pořádku"),
+  // nezávisle na tom, co se s monitorem doopravdy dělo.
+  React.useEffect(() => {
+    if (!asset) return;
+    let active = true;
+
+    fetch(`/status/api.php?action=events&monitor_id=${asset.id}&limit=30`, { credentials: 'include' })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (!active || !data || !Array.isArray(data.events)) return;
+        setEvents(
+          data.events.map((e: any) => ({
+            id: e.id,
+            title: e.isDown ? 'Výpadek služby' : e.rawStatus === 'warning' ? 'Zhoršená odezva' : 'Kontrola proběhla v pořádku',
+            detail: e.errorMsg + (e.outageDurationSec ? ` (trvání ${Math.round(e.outageDurationSec / 60)} min)` : ''),
+            at: e.time,
+            severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : 'info',
+            resolution: e.isDown ? 'Open' : 'Info',
+            location: e.location,
+            method: e.type,
+          }))
+        );
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [asset?.id]);
 
   if (loading) {
     return (
@@ -161,13 +194,13 @@ export function AssetDetailPage() {
             <TabsTrigger value="overview">Přehled & Výkon</TabsTrigger>
             <TabsTrigger value="processes">Procesy ({asset.processes.length})</TabsTrigger>
             <TabsTrigger value="services">Služby & Certifikáty</TabsTrigger>
-            <TabsTrigger value="events">Události ({asset.events.length})</TabsTrigger>
+            <TabsTrigger value="events">Události ({events.length})</TabsTrigger>
           </TabsList>
           <RangePicker value={range} onChange={setRange} />
         </div>
 
         <TabsContent value="overview">
-          <OverviewTab asset={asset} range={range} />
+          <OverviewTab asset={asset} range={range} events={events} />
         </TabsContent>
 
         <TabsContent value="processes">
@@ -180,9 +213,25 @@ export function AssetDetailPage() {
               </div>
             </div>
             {asset.processes.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-6 text-center">
-                Pro tento uzel nejsou v databázi evidovány žádné samostatné podprocesy.
-              </p>
+              asset.cpanelStats ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Tenhle monitor nemá VPS agenta pro výpis jednotlivých procesů - hostuje se na cPanelu, kde je k dispozici jen souhrnné využití zdrojů:
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    {Object.entries(asset.cpanelStats).map(([key, val]) => (
+                      <div key={key} className="p-2.5 rounded-lg bg-secondary/40 border border-border">
+                        <p className="text-muted-foreground capitalize">{key}</p>
+                        <p className="font-mono font-semibold">{val?.formatted ?? '—'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground py-6 text-center">
+                  Pro tento uzel nejsou v databázi evidovány žádné samostatné podprocesy.
+                </p>
+              )
             ) : (
               <Table>
                 <TableHeader>
@@ -268,7 +317,7 @@ export function AssetDetailPage() {
                 <p className="text-xs text-muted-foreground">Záznamy kontrol, detekovaných služeb a změny stavu v čase.</p>
               </div>
             </div>
-            <Timeline events={asset.events} />
+            <Timeline events={events} />
           </Card>
         </TabsContent>
       </Tabs>
@@ -345,7 +394,7 @@ function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: 
   );
 }
 
-function OverviewTab({ asset, range }: { asset: AssetDetail; range: TimeRange }) {
+function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: TimeRange; events: TimelineEvent[] }) {
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:col-span-12 xl:grid-cols-7">
@@ -398,7 +447,7 @@ function OverviewTab({ asset, range }: { asset: AssetDetail; range: TimeRange })
           <CardTitle>Poslední události</CardTitle>
         </CardHeader>
         <CardContent>
-          <Timeline events={asset.events} />
+          <Timeline events={events.slice(0, 5)} />
         </CardContent>
       </Card>
 
@@ -409,7 +458,9 @@ function OverviewTab({ asset, range }: { asset: AssetDetail; range: TimeRange })
         <CardContent className="px-0">
           {asset.processes.length === 0 ? (
             <p className="text-xs text-muted-foreground px-5 py-6 text-center">
-              Zatím není připojen agent pro výpis procesů.
+              {asset.cpanelStats
+                ? 'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.'
+                : 'Zatím není připojen agent pro výpis procesů.'}
             </p>
           ) : (
             <Table>
@@ -600,9 +651,12 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
       ...(m.details?.conntrack_count != null ? [{ label: 'Conntrack Spojení (Sockets)', value: `${m.details.conntrack_count}` }] : []),
     ],
     smartStatus: m.details?.smart ?? null,
-    events: [
-      { id: 1, title: status === 'down' ? 'Výpadek služby' : 'Automatický test', detail: status === 'down' ? 'Cílový port neodpovídá' : 'Odezva vyhodnocena v pořádku.', at: lastCheckDisplay, severity: status === 'down' ? 'down' : 'info', resolution: status === 'down' ? 'Open' : 'Info' }
-    ],
+    cpanelStats: m.details?.cpanel_stats ?? null,
+    // Skutečná historie se dotahuje samostatně (viz useEffect v AssetDetailPage,
+    // stav `events`) z action=events - dřív tu byla jediná vymyšlená položka
+    // "Automatický test / Odezva vyhodnocena v pořádku", pořád stejná bez
+    // ohledu na to, co se v monitor_logs skutečně stalo.
+    events: [],
     processes: parsedProcesses,
     related: [],
   };

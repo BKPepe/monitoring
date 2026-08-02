@@ -15,6 +15,7 @@
  * jinak API vrátí `{"error":"Unknown metric"}`.
  */
 export type MetricKey =
+  | 'response_time'
   | 'cpu'
   | 'ram'
   | 'hdd'

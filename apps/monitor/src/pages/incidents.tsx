@@ -259,7 +259,7 @@ export function IncidentsPage() {
                         <Badge variant={inc.severity === 'down' ? 'down' : 'warning'}>{inc.type}</Badge>
                       </div>
                       <p className="text-xs font-mono text-muted-foreground">Cíl: {inc.target}</p>
-                      <p className="text-xs text-rose-300 font-medium">{inc.reason}</p>
+                      <p className="text-xs text-down font-medium">{inc.reason}</p>
                       <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-muted-foreground flex-wrap">
                         <span>Začátek výpadku: <strong className="text-foreground">{inc.started_at}</strong></span>
                         {inc.resolved_at && <span>Konec: <strong className="text-emerald-400">{inc.resolved_at}</strong></span>}
@@ -290,7 +290,7 @@ export function IncidentsPage() {
                       {inc.updates?.[0]?.message && (
                         <p className="text-xs text-muted-foreground">{inc.updates[0].message}</p>
                       )}
-                      <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-amber-300 flex-wrap">
+                      <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-warning flex-wrap">
                         <span>Vytvořeno: {inc.createdAt}</span>
                         {inc.resolvedAt && <span>Vyřešeno: {inc.resolvedAt}</span>}
                         <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-bold">
