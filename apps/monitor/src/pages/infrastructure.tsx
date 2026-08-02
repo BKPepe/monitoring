@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { appApi, type ApiAsset, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
 import { cn, formatRelative, formatUptime } from '@/lib/utils';
 
 type AssetNode = ApiAsset;
@@ -40,14 +41,6 @@ const kindIcon: Record<string, LucideIcon> = {
   'Container host': Container,
 };
 
-const statusLabel: Record<MonitorStatus, string> = {
-  up: 'Online',
-  down: 'Offline',
-  warning: 'Warning',
-  paused: 'Paused',
-  maintenance: 'Údržba',
-};
-
 const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' | 'info'> = {
   up: 'up',
   down: 'down',
@@ -56,7 +49,16 @@ const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' |
   maintenance: 'info',
 };
 
+const statusLabel: Record<MonitorStatus, string> = {
+  up: 'Online',
+  down: 'Offline',
+  warning: 'Warning',
+  paused: 'Paused',
+  maintenance: 'Údržba',
+};
+
 export function InfrastructurePage() {
+  const { t } = useLanguage();
   const { session, isAdmin } = useSession();
   const [query, setQuery] = React.useState('');
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
@@ -364,13 +366,21 @@ export function InfrastructurePage() {
   const selectedAsset = allAssets.find((a) => a.id === selectedId) ?? allAssets[0];
   const selectedMonitor = selectedAsset ? rawMonitors.find((m) => m.id === (selectedAsset.monitorId ?? selectedAsset.id)) : undefined;
 
+  const statusLabel: Record<MonitorStatus, string> = {
+    up: t('common.online', 'Online'),
+    down: t('common.offline', 'Offline'),
+    warning: t('common.warning', 'Warning'),
+    paused: 'Paused',
+    maintenance: 'Údržba',
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Správa Infrastruktury & Zařízení</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('infra.title', 'Správa Infrastruktury & Zařízení')}</h1>
           <p className="text-muted-foreground text-sm">
-            Kompletní přehled sledovaných serverů, routerů (OpenWrt), herních portů (Minecraft), hlasových služeb (TeamSpeak) a webů s nastavením agentů a Remote Actions.
+            {t('infra.subtitle', 'Kompletní přehled sledovaných serverů, routerů (OpenWrt), herních portů (Minecraft), hlasových služeb (TeamSpeak) a webů.')}
           </p>
         </div>
 
@@ -381,7 +391,6 @@ export function InfrastructurePage() {
               setMonitorName('');
               setMonitorTarget('');
               setMonitorPort('');
-              // Nový monitor nesmí zdědit nastavení z toho, co se naposledy editovalo.
               setTimeoutVal('5');
               setEmailNotifications(true);
               setSmsNotifications(false);
@@ -408,7 +417,7 @@ export function InfrastructurePage() {
             }}
             className="gap-2 font-bold text-xs shadow-md"
           >
-            <Plus className="size-4" /> Přidat Nový Monitor (Kompletní možnosti z PHP admin.php)
+            <Plus className="size-4" /> {t('infra.add_agent', 'Přidat nový monitor')}
           </Button>
         )}
       </div>

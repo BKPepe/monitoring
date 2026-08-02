@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Activity, ExternalLink, Link as LinkIcon } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
 
 interface StatusPageItem {
   id: number;
@@ -13,6 +14,7 @@ interface StatusPageItem {
 }
 
 export function StatusPagesPage() {
+  const { t } = useLanguage();
   const [pages, setPages] = useState<StatusPageItem[]>([]);
 
   useEffect(() => {
@@ -50,12 +52,13 @@ export function StatusPagesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Veřejná Status Stránka</h1>
-          <p className="text-muted-foreground text-sm">Platforma zatím spravuje jednu veřejnou status stránku - více samostatných stránek pro jiné projekty/klienty zatím není podporováno.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('nav.status-pages', 'Veřejná Status Stránka')}</h1>
+          <p className="text-muted-foreground text-sm">
+            {t('status_pages.subtitle', 'Zobrazuje veřejnou status stránku dostupnosti všech sledovaných služeb a plánovaných údržeb v reálném čase.')}
+          </p>
         </div>
       </div>
 
-      {/* Seznam vygenerovaných a aktivních Status stránek */}
       <div className="grid gap-4 md:grid-cols-2">
         {pages.map((p) => (
           <Card key={p.id} className="p-6 space-y-4 flex flex-col justify-between">
@@ -70,11 +73,11 @@ export function StatusPagesPage() {
                     <p className="text-xs text-muted-foreground font-mono">{p.url}</p>
                   </div>
                 </div>
-                <Badge variant="up">Aktivní</Badge>
+                <Badge variant="up">{t('common.healthy', 'Aktivní')}</Badge>
               </div>
 
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Zobrazuje stav sledovaných služeb v reálném čase a příchozí plánované údržby.
+                {t('status_pages.desc', 'Zobrazuje stav sledovaných služeb v reálném čase a příchozí plánované údržby.')}
               </p>
             </div>
 
@@ -85,7 +88,7 @@ export function StatusPagesPage() {
                 rel="noreferrer"
                 className="font-medium text-primary hover:underline inline-flex items-center gap-1.5"
               >
-                <LinkIcon className="size-3.5" /> API JSON rozhraní
+                <LinkIcon className="size-3.5" /> API JSON
               </a>
               <a
                 href={p.url}
@@ -93,7 +96,7 @@ export function StatusPagesPage() {
                 rel="noreferrer"
                 className="font-semibold text-emerald-400 hover:underline inline-flex items-center gap-1.5"
               >
-                Otevřít veřejný portál <ExternalLink className="size-3.5" />
+                {t('common.open_details', 'Otevřít veřejný portál')} <ExternalLink className="size-3.5" />
               </a>
             </div>
           </Card>

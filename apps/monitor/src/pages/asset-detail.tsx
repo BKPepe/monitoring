@@ -24,6 +24,7 @@ import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/mock';
 import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
+import { useLanguage } from '@/context/language-context';
 import { cn, formatPercent } from '@/lib/utils';
 
 type MonitorStatus = ApiMonitor['status'];
@@ -37,12 +38,6 @@ const statusLabel: Record<MonitorStatus, string> = {
 };
 
 type TimeRange = '24h' | '7d' | '30d';
-
-const timeRangeLabels: Record<TimeRange, string> = {
-  '24h': 'Posledních 24 hodin',
-  '7d': 'Posledních 7 dní',
-  '30d': 'Posledních 30 dní',
-};
 
 interface HealthMetric {
   key: string;
@@ -70,6 +65,7 @@ interface AssetDetail {
 }
 
 export function AssetDetailPage() {
+  const { t } = useLanguage();
   const { assetId } = useParams<{ assetId: string }>();
   const idNum = Number(assetId) || 1;
 
@@ -82,18 +78,11 @@ export function AssetDetailPage() {
     let active = true;
     setLoading(true);
 
-    // Žádný "safety timer", co po 3.5 s tiše nahradí načítání vymyšleným
-    // profilem zařízení - pomalá odpověď má nechat zobrazený loading stav,
-    // ne fiktivní SSL/SMART/proces data, která vypadají jako reálná.
     appApi
       .getMonitors()
       .then((rows) => {
         if (!active) return;
         const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
-        // Odkazy v appce teď vždy používají monitors.id - assetId se zkouší
-        // jen jako záložní shoda pro staré odkazy, a teprve když přesná shoda
-        // podle id neexistuje (jinak by dva monitory se stejným assetId mohly
-        // ukázat na ten nesprávný).
         const match =
           list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
           list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
@@ -111,9 +100,6 @@ export function AssetDetailPage() {
     };
   }, [idNum]);
 
-  // Skutečná historie kontrol z monitor_logs - dřív se tu vždy zobrazovala
-  // jedna vymyšlená položka ("Automatický test / Odezva vyhodnocena v pořádku"),
-  // nezávisle na tom, co se s monitorem doopravdy dělo.
   React.useEffect(() => {
     if (!asset) return;
     let active = true;
@@ -125,7 +111,7 @@ export function AssetDetailPage() {
         setEvents(
           data.events.map((e: any) => ({
             id: e.id,
-            title: e.isDown ? 'Výpadek služby' : e.rawStatus === 'warning' ? 'Zhoršená odezva' : 'Kontrola proběhla v pořádku',
+            title: e.isDown ? t('status.down', 'Výpadek služby') : e.rawStatus === 'warning' ? t('common.warning', 'Zhoršená odezva') : t('dashboard.all_healthy_desc', 'Kontrola proběhla v pořádku'),
             detail: e.errorMsg + (e.outageDurationSec ? ` (trvání ${Math.round(e.outageDurationSec / 60)} min)` : ''),
             at: e.time,
             severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : 'info',
@@ -140,12 +126,12 @@ export function AssetDetailPage() {
     return () => {
       active = false;
     };
-  }, [asset?.id]);
+  }, [asset?.id, t]);
 
   if (loading) {
     return (
       <div className="text-muted-foreground py-20 text-center text-sm" role="status">
-        Načítám detail zařízení a diagnostické metriky…
+        {t('common.loading', 'Načítám detail zařízení a diagnostické metriky…')}
       </div>
     );
   }
@@ -154,14 +140,14 @@ export function AssetDetailPage() {
     return (
       <Card className="grid place-items-center gap-4 p-12 text-center">
         <div className="space-y-1">
-          <p className="font-semibold text-base">Zařízení nenašeno</p>
+          <p className="font-semibold text-base">{t('common.error', 'Zařízení nenašeno')}</p>
           <p className="text-muted-foreground text-sm">
             Zařízení s ID <code>{assetId}</code> nebylo v monitorovací databázi nalezeno.
           </p>
         </div>
         <Button asChild size="sm" variant="outline">
           <Link to="/infrastructure" className="gap-2 font-semibold">
-            <ArrowLeft className="size-4" /> Zpět na přehled infrastruktury
+            <ArrowLeft className="size-4" /> {t('asset.back', 'Zpět na přehled infrastruktury')}
           </Link>
         </Button>
       </Card>
@@ -174,7 +160,7 @@ export function AssetDetailPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Link to="/infrastructure" className="hover:text-foreground font-semibold flex items-center gap-1 transition-colors">
-          <ArrowLeft className="size-3.5" /> Infrastruktura
+          <ArrowLeft className="size-3.5" /> {t('nav.infrastructure', 'Infrastruktura')}
         </Link>
         {asset.breadcrumb.filter(c => c !== 'Infrastructure' && c !== 'Infrastruktura').map((crumb) => (
           <React.Fragment key={crumb}>
@@ -191,10 +177,10 @@ export function AssetDetailPage() {
       <Tabs defaultValue="overview" className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-3">
           <TabsList className="bg-secondary/40 p-1">
-            <TabsTrigger value="overview">Přehled & Výkon</TabsTrigger>
-            <TabsTrigger value="processes">Procesy ({asset.processes.length})</TabsTrigger>
-            <TabsTrigger value="services">Služby & Certifikáty</TabsTrigger>
-            <TabsTrigger value="events">Události ({events.length})</TabsTrigger>
+            <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled & Výkon')}</TabsTrigger>
+            <TabsTrigger value="processes">{t('asset.tab_processes', 'Procesy')} ({asset.processes.length})</TabsTrigger>
+            <TabsTrigger value="services">{t('asset.tab_services', 'Služby & Certifikáty')}</TabsTrigger>
+            <TabsTrigger value="events">{t('incidents.title', 'Události')} ({events.length})</TabsTrigger>
           </TabsList>
           <RangePicker value={range} onChange={setRange} />
         </div>
@@ -326,8 +312,17 @@ export function AssetDetailPage() {
 }
 
 function Hero({ asset }: { asset: AssetDetail }) {
+  const { t } = useLanguage();
   const upperKind = (asset.kind || '').toUpperCase();
   const Icon = upperKind === 'ROUTER' || asset.id === 5 ? RouterIcon : upperKind === 'MINECRAFT' || asset.id === 4 ? Gamepad2 : upperKind === 'VOICE' || upperKind === 'TEAMSPEAK' || asset.id === 3 ? Mic : upperKind === 'DISCORD' || asset.id === 2 ? MessageSquare : upperKind === 'HTTPS' || upperKind === 'HTTP' || upperKind === 'WEB' ? Globe : Server;
+
+  const statusText: Record<MonitorStatus, string> = {
+    up: t('common.online', 'Online'),
+    down: t('common.offline', 'Offline'),
+    warning: t('common.warning', 'Warning'),
+    paused: 'Paused',
+    maintenance: 'Údržba',
+  };
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
@@ -339,7 +334,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold tracking-tight">{asset.name}</h1>
             <Badge variant={asset.status === 'maintenance' ? 'info' : asset.status} dot pulse={asset.status === 'up'}>
-              {statusLabel[asset.status]}
+              {statusText[asset.status]}
             </Badge>
           </div>
           <p className="text-muted-foreground mt-0.5 text-sm">{asset.subtitle}</p>
@@ -353,9 +348,9 @@ function Hero({ asset }: { asset: AssetDetail }) {
           onClick={() => {
             window.location.href = `/app/infrastructure`;
           }}
-          title="Správa akcí a přehled"
+          title={t('common.actions', 'Správa akcí a přehled')}
         >
-          <Settings2 className="size-4" /> Akce
+          <Settings2 className="size-4" /> {t('common.actions', 'Akce')}
         </Button>
         <Button
           variant="outline"
@@ -363,9 +358,9 @@ function Hero({ asset }: { asset: AssetDetail }) {
           onClick={() => {
             window.location.href = `/app/infrastructure?edit=${asset.id}`;
           }}
-          title="Upravit nastavení monitoru"
+          title={t('asset.edit_monitor', 'Upravit nastavení monitoru')}
         >
-          <Pencil className="size-4" /> Upravit monitor
+          <Pencil className="size-4" /> {t('asset.edit_monitor', 'Upravit monitor')}
         </Button>
       </div>
     </div>
@@ -373,8 +368,15 @@ function Hero({ asset }: { asset: AssetDetail }) {
 }
 
 function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: TimeRange) => void }) {
+  const { t } = useLanguage();
+  const timeRangeLabels: Record<TimeRange, string> = {
+    '24h': t('reports.period_30d', 'Posledních 24 hodin'),
+    '7d': 'Posledních 7 dní',
+    '30d': t('reports.period_30d', 'Posledních 30 dní'),
+  };
+
   return (
-    <div role="group" aria-label="Časový rozsah" className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5">
+    <div role="group" aria-label={t('common.search', 'Časový rozsah')} className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5">
       {(Object.keys(timeRangeLabels) as TimeRange[]).map((range) => (
         <button
           key={range}
@@ -395,6 +397,7 @@ function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: 
 }
 
 function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: TimeRange; events: TimelineEvent[] }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:col-span-12 xl:grid-cols-7">
@@ -406,8 +409,8 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
       <Card className="xl:col-span-8">
         <CardHeader>
           <div>
-            <CardTitle>Souhrn & Diagnostika</CardTitle>
-            <CardDescription>Živý stav měření z databáze a ServerQuery testu</CardDescription>
+            <CardTitle>{t('common.details', 'Souhrn & Diagnostika')}</CardTitle>
+            <CardDescription>{t('banner.live_data_desc', 'Živý stav měření z databáze')}</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -424,7 +427,7 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
 
       <Card className="xl:col-span-4">
         <CardHeader>
-          <CardTitle>Parametry monitoru / serveru</CardTitle>
+          <CardTitle>{t('common.details', 'Parametry monitoru / serveru')}</CardTitle>
         </CardHeader>
         <CardContent>
           <dl className="flex flex-col gap-2.5 text-sm">
@@ -444,7 +447,7 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
 
       <Card className="xl:col-span-5">
         <CardHeader>
-          <CardTitle>Poslední události</CardTitle>
+          <CardTitle>{t('dashboard.recent_alerts', 'Poslední události')}</CardTitle>
         </CardHeader>
         <CardContent>
           <Timeline events={events.slice(0, 5)} />
@@ -453,7 +456,7 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
 
       <Card className="xl:col-span-3">
         <CardHeader>
-          <CardTitle>Procesy serveru</CardTitle>
+          <CardTitle>{t('asset.tab_processes', 'Procesy serveru')}</CardTitle>
         </CardHeader>
         <CardContent className="px-0">
           {asset.processes.length === 0 ? (

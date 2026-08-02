@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useLanguage } from '@/context/language-context';
 
 export function SetupPage() {
+  const { t } = useLanguage();
   const [installed, setInstalled] = useState<boolean>(true);
   const [username, setUsername] = useState('admin');
   const [email, setEmail] = useState('');
@@ -126,7 +128,7 @@ export function SetupPage() {
       <div style={{ width: '100%', maxWidth: '440px', padding: '2rem', background: '#1e293b', borderRadius: '1rem', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)', border: '1px solid #334155' }}>
         <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem', color: '#38bdf8' }}>Blood Kings Monitoring</h1>
         <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-          {installed ? 'Přihlášení správce do monitorovacího systému' : 'Vítejte v instalaci monitorovacího rozhraní. Vytvořte první administrátorský účet.'}
+          {installed ? t('api_agents.login_required_desc', 'Přihlášení správce do monitorovacího systému') : 'Vítejte v instalaci monitorovacího rozhraní. Vytvořte první administrátorský účet.'}
         </p>
 
         {error && (
@@ -144,7 +146,7 @@ export function SetupPage() {
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div>
             <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#cbd5e1', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Uživatelské jméno
+              {t('common.name', 'Uživatelské jméno')}
             </label>
             <input
               type="text"
@@ -223,7 +225,7 @@ export function SetupPage() {
             disabled={loading}
             style={{ width: '100%', padding: '0.75rem', background: loading ? '#0284c7' : '#0284c7', color: '#ffffff', border: 'none', borderRadius: '0.375rem', fontWeight: 600, fontSize: '0.875rem', cursor: loading ? 'wait' : 'pointer', marginTop: '0.5rem', transition: 'background 0.2s' }}
           >
-            {loading ? 'Ověřuji údaje...' : installed ? (require2FA ? 'Potvrdit 2FA kód a přihlásit se' : 'Přihlásit se') : 'Dokončit instalaci a přihlásit se'}
+            {loading ? t('common.loading', 'Ověřuji údaje...') : installed ? (require2FA ? 'Potvrdit 2FA kód a přihlásit se' : t('btn.login', 'Přihlásit se')) : 'Dokončit instalaci a přihlásit se'}
           </button>
         </form>
 
