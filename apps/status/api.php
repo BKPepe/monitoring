@@ -52,6 +52,87 @@ if ($action === 'session') {
     exit;
 }
 
+// 1b. Login (SPA) - mirrors admin.php's own POST login handler so both
+// front ends share the same session keys, rate limiting and 2FA flow.
+// This action never existed before: the SPA's login call silently hit the
+// "unknown action" fallback below (HTTP 200, unrelated payload), so every
+// login attempt looked successful client-side while no session was ever
+// created.
+if ($action === 'login') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
+        exit;
+    }
+    $login_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $username = trim($login_input['username'] ?? '');
+    $password = (string)($login_input['password'] ?? '');
+    $totp_code = trim($login_input['totp_code'] ?? '');
+
+    $lockout_secs = bk_login_lockout_seconds($pdo, $username);
+    if ($lockout_secs > 0) {
+        http_response_code(429);
+        echo json_encode(['success' => false, 'message' => 'Too many failed attempts. Try again in ' . ceil($lockout_secs / 60) . ' min.']);
+        exit;
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
+    $stmt->execute([$username]);
+    $user = $stmt->fetch();
+
+    if (!$user || !password_verify($password, $user['password_hash'])) {
+        bk_audit_log($pdo, 'login_failed', 'Invalid username/password: ' . $username, null, null, null, $username);
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Invalid username or password.']);
+        exit;
+    }
+
+    if (!empty($user['totp_enabled'])) {
+        if ($totp_code === '') {
+            // Password checked out, but the account has 2FA - session only
+            // stores the pending user id (proof this session passed the
+            // password step), never the password itself.
+            $_SESSION['pending_2fa_user_id'] = $user['id'];
+            echo json_encode(['success' => true, 'requires2fa' => true]);
+            exit;
+        }
+        if (!bk_totp_verify_code($user['totp_secret'], $totp_code)) {
+            bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
+            http_response_code(401);
+            echo json_encode(['success' => false, 'message' => 'Invalid 2FA code.']);
+            exit;
+        }
+    }
+
+    session_regenerate_id(true);
+    $_SESSION['admin_logged_in'] = true;
+    $_SESSION['admin_username'] = $user['username'];
+    $_SESSION['admin_id'] = $user['id'];
+    $_SESSION['admin_role'] = $user['role'];
+    unset($_SESSION['pending_2fa_user_id']);
+    bk_audit_log($pdo, 'login_success', !empty($user['totp_enabled']) ? 'Password + 2FA' : 'Password', 'user', $user['id'], $user['id'], $user['username']);
+
+    echo json_encode([
+        'success' => true,
+        'authenticated' => true,
+        'user' => ['id' => (int)$user['id'], 'username' => $user['username'], 'email' => $user['email'] ?? '', 'role' => $user['role']],
+        'csrfToken' => bk_csrf_token(),
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 1c. Logout (SPA)
+if ($action === 'logout') {
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'], $params['secure'], $params['httponly']);
+    }
+    session_destroy();
+    echo json_encode(['success' => true]);
+    exit;
+}
+
 // 2. Seznam všech monitorů z databáze
 if ($action === 'monitors') {
     $is_admin = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';

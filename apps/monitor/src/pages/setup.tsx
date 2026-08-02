@@ -87,97 +87,21 @@ export function SetupPage() {
   };
 
   async function tryLogin(u: string, p: string, totp?: string) {
-    try {
-      const res = await fetch('/status/api.php?action=login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ username: u, password: p, totp_code: totp }),
-      });
-
-      if (res.ok) return;
-    } catch {}
-
-    let csrfToken = '';
-    try {
-      const getRes = await fetch('/status/admin.php', { credentials: 'include' });
-      const html = await getRes.text();
-      const match = html.match(/name="csrf_token"\s+value="([^"]+)"/i);
-      if (match && match[1]) csrfToken = match[1];
-
-      if (totp && (html.includes('totp_login_code') || html.includes('totp_code'))) {
-        const form2fa = new URLSearchParams();
-        form2fa.append('totp_login_code', '1');
-        form2fa.append('totp_code', totp);
-        if (csrfToken) form2fa.append('csrf_token', csrfToken);
-
-        const post2fa = await fetch('/status/admin.php', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          credentials: 'include',
-          body: form2fa.toString(),
-        });
-        const res2faText = await post2fa.text();
-        if (res2faText.includes('Odhlásit') || res2faText.includes('Profil') || res2faText.includes('dashboard')) {
-          return;
-        }
-        if (res2faText.includes('Neplatný 2FA kód')) {
-          throw new Error('Neplatný 2FA kód z autentikační aplikace.');
-        }
-      }
-    } catch (e: any) {
-      if (e.message && e.message.includes('2FA')) throw e;
-    }
-
-    const form = new URLSearchParams();
-    form.append('login', '1');
-    form.append('username', u);
-    form.append('password', p);
-    if (csrfToken) form.append('csrf_token', csrfToken);
-
-    const phpRes = await fetch('/status/admin.php', {
+    const res = await fetch('/status/api.php?action=login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: form.toString(),
+      body: JSON.stringify({ username: u, password: p, totp_code: totp || '' }),
     });
+    const data = await res.json().catch(() => ({}));
 
-    const text = await phpRes.text();
-
-    if (text.includes('totp_login_code') || text.includes('totp_code') || text.includes('Dvoufázové') || text.includes('pending_2fa') || text.includes('Zadejte 6-místný kód')) {
-      if (!totp) {
-        throw new Error('Vyžadováno dvoufázové ověření (2FA).');
-      }
-
-      const form2fa = new URLSearchParams();
-      form2fa.append('totp_login_code', '1');
-      form2fa.append('totp_code', totp);
-      if (csrfToken) form2fa.append('csrf_token', csrfToken);
-
-      const post2fa = await fetch('/status/admin.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        credentials: 'include',
-        body: form2fa.toString(),
-      });
-      const res2faText = await post2fa.text();
-      if (res2faText.includes('Odhlásit') || res2faText.includes('Profil') || res2faText.includes('dashboard')) {
-        return;
-      }
-      if (res2faText.includes('Neplatný 2FA kód')) {
-        throw new Error('Neplatný 2FA kód z autentikační aplikace.');
-      }
+    if (res.ok && data.requires2fa) {
+      throw new Error('Vyžadováno dvoufázové ověření (2FA).');
     }
-
-    if (phpRes.ok || phpRes.redirected || phpRes.status === 302 || text.includes('Odhlásit') || text.includes('Profil') || text.includes('Přihlášení úspěšné')) {
+    if (res.ok && data.success) {
       return;
     }
-
-    if (text.includes('Příliš mnoho neúspěšných pokusů')) {
-      throw new Error('Příliš mnoho neúspěšných pokusů o přihlášení. Účet je dočasně uzamčen na 15 minut.');
-    }
-
-    throw new Error('Neplatné přihlašovací údaje. Zkontrolujte uživatelské jméno a heslo.');
+    throw new Error(data.message || 'Přihlášení selhalo. Zkontrolujte své přihlašovací údaje.');
   }
 
   async function tryInstall(u: string, e: string, p: string) {
