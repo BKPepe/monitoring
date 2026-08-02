@@ -54,7 +54,7 @@ export function WebsitesPage() {
         setWebsites(httpOnly);
         setLoadError(null);
       })
-      .catch(() => setLoadError(t('common.error', 'Seznam webů se nepodařilo načíst.')))
+      .catch(() => setLoadError(t('websites.load_error', 'Seznam webů se nepodařilo načíst.')))
       .finally(() => setLoading(false));
   };
 
@@ -83,7 +83,7 @@ export function WebsitesPage() {
       setShowAddModal(false);
       loadWebsites();
     } catch {
-      setLoadError(t('common.error', 'Web se nepodařilo uložit.'));
+      setLoadError(t('websites.save_error', 'Web se nepodařilo uložit.'));
     } finally {
       setSaving(false);
     }
@@ -116,7 +116,7 @@ export function WebsitesPage() {
           <button
             type="button"
             disabled
-            title={t('common.login_required', 'Pro přidávání a úpravu monitorů se prosím přihlaste')}
+            title={t('websites.login_required_hint', 'Pro přidávání a úpravu monitorů se prosím přihlaste')}
             className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
           >
             <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')} ({t('common.login_required', 'Vyžaduje přihlášení')})
@@ -135,7 +135,7 @@ export function WebsitesPage() {
         </Card>
       )}
 
-      {/* Globální statistiky HTTP monitoringu */}
+      {/* Global HTTP monitoring statistics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
@@ -147,10 +147,10 @@ export function WebsitesPage() {
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Globe className="size-4 text-primary" /> {t('dashboard.healthy_pct', 'Aktuální dostupnost webů')}
+            <Globe className="size-4 text-primary" /> {t('websites.current_uptime', 'Aktuální dostupnost webů')}
           </div>
           <p className="text-2xl font-bold tracking-tight text-foreground">{overallUptimePct != null ? `${overallUptimePct.toFixed(1)} %` : '—'}</p>
-          <p className="text-[11px] text-muted-foreground">{t('dashboard.monitors_hint', { healthy: upCount, down: websites.length - upCount }, `${upCount} z ${websites.length} dostupných právě teď`)}</p>
+          <p className="text-[11px] text-muted-foreground">{t('websites.uptime_hint', { up: upCount, total: websites.length }, `${upCount} z ${websites.length} dostupných právě teď`)}</p>
         </Card>
 
         <Card className="p-4 space-y-1">
@@ -166,7 +166,7 @@ export function WebsitesPage() {
             <Clock className="size-4 text-primary" /> {t('websites.monitored_count', 'Sledovaných webů')}
           </div>
           <p className="text-2xl font-bold tracking-tight text-foreground">{websites.length}</p>
-          <p className="text-[11px] text-muted-foreground">{t('banner.live_data_desc', 'Interval kontrol podle nastavení monitoru')}</p>
+          <p className="text-[11px] text-muted-foreground">{t('websites.check_interval', 'Interval kontrol podle nastavení monitoru')}</p>
         </Card>
       </div>
 
@@ -176,17 +176,17 @@ export function WebsitesPage() {
         </div>
       )}
 
-      {/* Modal pro nový web */}
+      {/* New website modal */}
       {showAddModal && isAuthenticated && (
         <Card className="p-6 border-primary/50 bg-secondary/40">
-          <h3 className="font-bold text-base mb-3">{t('websites.add_website', 'Přidat nový sledovaný web / HTTP API')}</h3>
+          <h3 className="font-bold text-base mb-3">{t('websites.add_website_modal_title', 'Přidat nový sledovaný web / HTTP API')}</h3>
           <form onSubmit={handleAddWebsite} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('common.name', 'Název webu / služby')}</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('websites.name_label', 'Název webu / služby')}</label>
                 <input
                   type="text"
-                  placeholder="např. Moje Doména"
+                  placeholder={t('websites.name_placeholder', 'např. Moje Doména')}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   required
@@ -194,7 +194,7 @@ export function WebsitesPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">URL Adresa (HTTP/HTTPS)</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('websites.url_label', 'URL Adresa (HTTP/HTTPS)')}</label>
                 <input
                   type="text"
                   placeholder="https://example.com"
@@ -256,11 +256,11 @@ export function WebsitesPage() {
 
                 <div className="grid grid-cols-2 gap-2 text-xs py-2 border-t border-b border-border my-3">
                   <div>
-                    <span className="text-muted-foreground">{t('common.response', 'Odezva HTTP:')}</span>
+                    <span className="text-muted-foreground">{t('websites.http_response', 'Odezva HTTP:')}</span>
                     <p className="font-semibold">{web.response_time} ms</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">{t('common.status', 'Stav HTTP:')}</span>
+                    <span className="text-muted-foreground">{t('websites.http_status', 'Stav HTTP:')}</span>
                     <p className={`font-semibold ${web.status === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
                       {web.status === 'up' ? '200 OK' : 'OFFLINE'}
                     </p>
@@ -270,24 +270,24 @@ export function WebsitesPage() {
                 {web.details?.cpanel_stats && (
                   <div className="p-2.5 rounded-lg bg-secondary/40 border border-border/70 my-2 space-y-1.5 text-[11px]">
                     <div className="flex items-center justify-between text-muted-foreground font-semibold border-b border-border/50 pb-1">
-                      <span className="flex items-center gap-1"><Server className="size-3 text-primary" /> cPanel Zdroje:</span>
+                      <span className="flex items-center gap-1"><Server className="size-3 text-primary" /> {t('websites.cpanel_resources', 'cPanel Zdroje:')}</span>
                       <span className="text-emerald-400">UAPI OK</span>
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       <div>
-                        <span className="text-muted-foreground">Disk: </span>
+                        <span className="text-muted-foreground">{t('websites.disk_label', 'Disk:')} </span>
                         <span className="font-mono font-semibold">{web.details.cpanel_stats.disk?.formatted ?? '—'}</span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">RAM: </span>
+                        <span className="text-muted-foreground">{t('websites.ram_label', 'RAM:')} </span>
                         <span className="font-mono font-semibold">{web.details.cpanel_stats.memory?.formatted ?? '—'}</span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">MySQL: </span>
+                        <span className="text-muted-foreground">{t('websites.mysql_label', 'MySQL:')} </span>
                         <span className="font-mono font-semibold">{web.details.cpanel_stats.database?.formatted ?? '—'}</span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">Bandwidth: </span>
+                        <span className="text-muted-foreground">{t('websites.bandwidth_label', 'Bandwidth:')} </span>
                         <span className="font-mono font-semibold">{web.details.cpanel_stats.bandwidth?.formatted ?? '—'}</span>
                       </div>
                     </div>
@@ -300,7 +300,7 @@ export function WebsitesPage() {
                   <ShieldCheck className="size-3.5" /> {web.target.startsWith('https') ? 'HTTPS' : 'HTTP'}
                 </span>
                 <Link to={`/infrastructure/${web.id}`} className="font-semibold text-primary hover:underline">
-                  {t('common.open_details', 'Detail webu')} →
+                  {t('websites.view_detail', 'Detail webu')} →
                 </Link>
               </div>
             </Card>
