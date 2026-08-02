@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { Card } from '@/components/ui/card';
 import { FileQuestion, Home, ArrowLeft } from 'lucide-react';
 

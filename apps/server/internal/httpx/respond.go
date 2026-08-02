@@ -68,7 +68,7 @@ func Internal(w http.ResponseWriter, r *http.Request, err error) {
 	slog.Error("neošetřená chyba",
 		"err", err,
 		"method", r.Method,
-		"path", r.URL.Path,
+		"path", sanitizeForLog(r.URL.Path),
 		"request_id", RequestID(r.Context()),
 	)
 	Fail(w, http.StatusInternalServerError, "internal_error", "Došlo k neočekávané chybě.")

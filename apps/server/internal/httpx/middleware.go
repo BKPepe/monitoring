@@ -20,6 +20,19 @@ const (
 	ctxClientIP
 )
 
+// sanitizeForLog odstraní řídicí znaky (CR/LF a další) z hodnot, které
+// pocházejí přímo od klienta (URL cesta apod.), než se dostanou do logu.
+// Bez tohohle by šlo do jednořádkového logu vložit vlastní řádek předstíráním
+// nové položky (CRLF injection / log forging).
+func sanitizeForLog(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || (r < 0x20 && r != '\t') {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // RequestID vrátí identifikátor požadavku pro korelaci logů.
 func RequestID(ctx context.Context) string {
 	id, _ := ctx.Value(ctxRequestID).(string)
@@ -159,7 +172,7 @@ func WithLogging(next http.Handler) http.Handler {
 
 		slog.Info("request",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", sanitizeForLog(r.URL.Path),
 			"status", rec.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"request_id", RequestID(r.Context()),
@@ -174,7 +187,7 @@ func WithRecovery(next http.Handler) http.Handler {
 			if rec := recover(); rec != nil {
 				slog.Error("panika v handleru",
 					"panic", rec,
-					"path", r.URL.Path,
+					"path", sanitizeForLog(r.URL.Path),
 					"request_id", RequestID(r.Context()),
 				)
 				Fail(w, http.StatusInternalServerError, "internal_error", "Došlo k neočekávané chybě.")

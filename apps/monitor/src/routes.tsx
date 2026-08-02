@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter } from 'react-router';
 import { AppShell } from '@/components/layout/app-shell';
 import { DashboardPage } from '@/pages/dashboard';
 import { InfrastructurePage } from '@/pages/infrastructure';
@@ -19,15 +19,15 @@ import { Button } from '@/components/ui/button';
 
 class GlobalErrorBoundary extends React.Component<
   { children: React.ReactNode },
-  { hasError: boolean; error: Error | null }
+  { hasError: boolean }
 > {
   constructor(props: { children: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
+  static getDerivedStateFromError() {
+    return { hasError: true };
   }
 
   componentDidCatch(error: Error) {

@@ -4,7 +4,7 @@ import { Terminal, Copy, Check, ShieldCheck, Lock, Cpu } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/api/use-session';
 import { appApi } from '@/api/app-api';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 export function ApiAgentsPage() {
   const { session } = useSession();

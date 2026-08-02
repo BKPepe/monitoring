@@ -8,7 +8,7 @@ import {
   BellRing, ExternalLink
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 const API_BASE = '/status/api.php';
 
