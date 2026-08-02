@@ -89,7 +89,7 @@ export function IncidentsPage() {
 
     const affectedName = affectedScope === 'all'
       ? t('incidents.all_scope', 'Všechny služby (Globální incident)')
-      : targetMonitors.find(m => String(m.id) === affectedScope)?.name || 'Vybraný monitor';
+      : targetMonitors.find(m => String(m.id) === affectedScope)?.name || t('incidents.selected_monitor', 'Vybraný monitor');
 
     setCreating(true);
     setCreateError(null);
@@ -100,7 +100,7 @@ export function IncidentsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: incidentTitle,
-          message: `${incidentDetail || 'Ručně nahlášený incident.'} [Rozsah: ${affectedName}]`,
+          message: `${incidentDetail || t('incidents.default_detail', 'Ručně nahlášený incident.')} [${t('incidents.scope_prefix', 'Rozsah')}: ${affectedName}]`,
           impact: 'minor',
         }),
       });
@@ -113,7 +113,7 @@ export function IncidentsPage() {
       setAffectedScope('all');
       setShowNewIncidentModal(false);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : t('common.error', 'Incident se nepodařilo uložit.'));
+      setCreateError(err instanceof Error ? err.message : t('incidents.save_error', 'Incident se nepodařilo uložit.'));
     } finally {
       setCreating(false);
     }
@@ -138,7 +138,7 @@ export function IncidentsPage() {
           <button
             type="button"
             disabled
-            title={t('common.login_required', 'Pro zakládání incidentů se musíte přihlásit jako administrátor')}
+            title={t('incidents.login_required_hint', 'Pro zakládání incidentů se musíte přihlásit jako administrátor')}
             className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
           >
             <Plus className="size-4" /> {t('incidents.create', 'Nahlásit nový incident')} ({t('common.login_required', 'Vyžaduje přihlášení')})
@@ -159,14 +159,14 @@ export function IncidentsPage() {
 
       {showNewIncidentModal && isAuthenticated && (
         <Card className="p-6 border-primary/50 bg-secondary/40">
-          <h3 className="font-bold text-base mb-3">{t('incidents.create', 'Nahlásit nový incident / Plánovanou údržbu')}</h3>
+          <h3 className="font-bold text-base mb-3">{t('incidents.create_modal_title', 'Nahlásit nový incident / Plánovanou údržbu')}</h3>
           <form onSubmit={handleCreateIncident} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('common.name', 'Název incidentu')}</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('incidents.name_label', 'Název incidentu')}</label>
                 <input
                   type="text"
-                  placeholder="např. Neplánovaná údržba databáze"
+                  placeholder={t('incidents.name_placeholder', 'např. Neplánovaná údržba databáze')}
                   value={incidentTitle}
                   onChange={(e) => setIncidentTitle(e.target.value)}
                   required
@@ -175,13 +175,13 @@ export function IncidentsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('common.category', 'Zasažená služba / Rozsah')}</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('incidents.scope_label', 'Zasažená služba / Rozsah')}</label>
                 <select
                   value={affectedScope}
                   onChange={(e) => setAffectedScope(e.target.value)}
                   className="w-full rounded-md bg-background border border-border px-3 py-2 text-sm cursor-pointer"
                 >
-                  <option value="all">🌐 {t('common.all', 'Všechny služby (Globální výpadek)')}</option>
+                  <option value="all">🌐 {t('incidents.scope_all_option', 'Všechny služby (Globální výpadek)')}</option>
                   {targetMonitors.map(m => (
                     <option key={m.id} value={m.id}>
                       {m.name} ({m.type} - {m.target})
@@ -192,9 +192,9 @@ export function IncidentsPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">{t('common.details', 'Detailní popis')}</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">{t('incidents.detail_label', 'Detailní popis')}</label>
               <textarea
-                placeholder="Popis problému, předpokládaná doba vyřešení..."
+                placeholder={t('incidents.detail_placeholder', 'Popis problému, předpokládaná doba vyřešení...')}
                 value={incidentDetail}
                 onChange={(e) => setIncidentDetail(e.target.value)}
                 rows={3}
@@ -230,7 +230,7 @@ export function IncidentsPage() {
         <p className="text-muted-foreground text-sm">{t('incidents.loading', 'Načítám stav incidentů...')}</p>
       ) : (
         <div className="space-y-6">
-          {/* Sekce 1: Probíhající výpadky cílových služeb */}
+          {/* Section 1: Active target service outages */}
           <Card className="p-6 space-y-4 border-rose-500/40">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center gap-2.5">
@@ -238,7 +238,7 @@ export function IncidentsPage() {
                 <h3 className="font-bold text-base">{t('incidents.active_outages', 'Probíhající výpadky cílových služeb')} ({activeTargetOutages.length})</h3>
               </div>
               <Badge variant={activeTargetOutages.length > 0 ? 'down' : 'up'}>
-                {activeTargetOutages.length > 0 ? `${activeTargetOutages.length} ${t('common.offline', 'Aktivní výpadek')}` : t('status.healthy', 'Všechny služby OK')}
+                {activeTargetOutages.length > 0 ? `${activeTargetOutages.length} ${t('incidents.active_badge', 'Aktivní výpadek')}` : t('status.healthy', 'Všechny služby OK')}
               </Badge>
             </div>
 
@@ -274,7 +274,7 @@ export function IncidentsPage() {
                       to={`/infrastructure/${inc.monitor_id}`}
                       className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
                     >
-                      {t('common.open_details', 'Detail výpadku')} <ArrowRight className="size-3" />
+                      {t('incidents.view_outage', 'Detail výpadku')} <ArrowRight className="size-3" />
                     </Link>
                   </div>
                 ))}
@@ -285,15 +285,15 @@ export function IncidentsPage() {
                       <div className="flex items-center gap-2">
                         <span className={`size-2.5 rounded-full ${inc.status === 'resolved' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
                         <h4 className="font-bold text-sm text-foreground">{inc.title}</h4>
-                        <Badge variant="warning">{t('common.warning', 'Ručně nahlášeno')}</Badge>
+                        <Badge variant="warning">{t('incidents.manual_badge', 'Ručně nahlášeno')}</Badge>
                         <Badge variant={inc.status === 'resolved' ? 'up' : 'warning'}>{inc.status}</Badge>
                       </div>
                       {inc.updates?.[0]?.message && (
                         <p className="text-xs text-muted-foreground">{inc.updates[0].message}</p>
                       )}
                       <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-warning flex-wrap">
-                        <span>{t('incidents.outage_start', 'Vytvořeno')}: {inc.createdAt}</span>
-                        {inc.resolvedAt && <span>{t('incidents.outage_end', 'Vyřešeno')}: {inc.resolvedAt}</span>}
+                        <span>{t('incidents.created_label', 'Vytvořeno')}: {inc.createdAt}</span>
+                        {inc.resolvedAt && <span>{t('incidents.resolved_label', 'Vyřešeno')}: {inc.resolvedAt}</span>}
                         <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-bold">
                           {t('incidents.duration', 'Doba trvání')}: {inc.durationText}
                         </span>
@@ -305,7 +305,7 @@ export function IncidentsPage() {
             )}
           </Card>
 
-          {/* Sekce 2: Měřící uzly a probíhající agenty */}
+          {/* Section 2: Probing nodes and running agents */}
           <Card className="p-6 space-y-4">
             <div className="flex items-center gap-2.5 border-b border-border pb-3">
               <Radio className="size-5 text-primary" />
@@ -325,10 +325,10 @@ export function IncidentsPage() {
                   <div key={node.id} className="p-3.5 rounded-lg bg-secondary/40 border border-border flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-xs">{node.name}</p>
-                      <p className="text-[11px] text-muted-foreground font-mono">{t('common.response', 'Latence sondy')}: {node.latencyMs ?? 12} ms</p>
+                      <p className="text-[11px] text-muted-foreground font-mono">{t('incidents.probe_latency', 'Latence sondy')}: {node.latencyMs ?? 12} ms</p>
                     </div>
                     <Badge variant={node.status === 'up' ? 'up' : 'down'}>
-                      {node.status === 'up' ? 'Sonda OK' : 'Sonda OFFLINE'}
+                      {node.status === 'up' ? t('incidents.probe_ok', 'Sonda OK') : t('incidents.probe_offline', 'Sonda OFFLINE')}
                     </Badge>
                   </div>
                 ))
