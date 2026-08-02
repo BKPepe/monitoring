@@ -92,7 +92,7 @@ export function DashboardPage() {
         alertsList.push({
           id: m.id,
           assetId: m.id,
-          title: `🔴 ${t('status.down', 'Výpadek služby')}: ${m.name}`,
+          title: `🔴 ${t('dashboard.outage_title', 'Výpadek služby')}: ${m.name}`,
           source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'down',
           at: m.lastStatusChange || new Date().toISOString(),
@@ -101,7 +101,7 @@ export function DashboardPage() {
         alertsList.push({
           id: m.id,
           assetId: m.id,
-          title: `⚡ ${t('common.warning', 'Zvýšená latence')}: ${m.name}`,
+          title: `⚡ ${t('dashboard.high_latency', 'Zvýšená latence')}: ${m.name}`,
           source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'warning',
           at: m.lastStatusChange || new Date().toISOString(),
@@ -195,7 +195,7 @@ export function DashboardPage() {
           value={downMonitors}
           icon={AlertTriangle}
           tone={downMonitors > 0 ? "down" : "up"}
-          hint={downMonitors > 0 ? t('status.down', 'Probíhající výpadek') : t('status.healthy', 'Všechny systémy bez výpadku')}
+          hint={downMonitors > 0 ? t('dashboard.ongoing_outage', 'Probíhající výpadek') : t('dashboard.no_outages', 'Všechny systémy bez výpadku')}
         />
         <MetricTile
           label={t('dashboard.uptime_30d', 'Uptime (30 d)')}
@@ -203,14 +203,14 @@ export function DashboardPage() {
           unit="%"
           icon={Activity}
           tone="up"
-          hint={live ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms` : 'Celá infrastruktura'}
+          hint={live ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms` : t('dashboard.whole_infra', 'Celá infrastruktura')}
         />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader className="flex-wrap">
-            <CardTitle>{t('nav.dashboard', 'Sledované Monitory & Služby')}</CardTitle>
+            <CardTitle>{t('dashboard.monitors_card_title', 'Sledované Monitory & Služby')}</CardTitle>
             <div className="relative w-full max-w-56">
               <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
               <Input
@@ -230,7 +230,7 @@ export function DashboardPage() {
                 <TabsTrigger value="up">{t('common.online', 'Online')} ({monitors.filter(m => m.status === 'up').length})</TabsTrigger>
                 <TabsTrigger value="warning">{t('common.warning', 'Warning')} ({monitors.filter(m => m.status === 'warning').length})</TabsTrigger>
                 <TabsTrigger value="down">{t('common.offline', 'Offline')} ({monitors.filter(m => m.status === 'down').length})</TabsTrigger>
-                <TabsTrigger value="paused">Paused ({monitors.filter(m => m.status === 'paused').length})</TabsTrigger>
+                <TabsTrigger value="paused">{t('common.paused', 'Paused')} ({monitors.filter(m => m.status === 'paused').length})</TabsTrigger>
               </TabsList>
 
               <TabsContent value={filter} className="mt-0">
@@ -247,7 +247,7 @@ export function DashboardPage() {
 
           <div className="text-muted-foreground flex items-center justify-between border-t border-border px-5 py-3 text-xs">
             <span>
-              {t('dashboard.showing', `Zobrazeno ${visibleMonitors.length} z ${monitors.length} monitorovaných služeb`)}
+              {t('dashboard.showing', { shown: visibleMonitors.length, total: monitors.length })}
             </span>
             <Button variant="outline" size="sm" asChild>
               <Link to="/infrastructure">{t('common.open_details', 'Zobrazit vše')}</Link>
@@ -285,13 +285,13 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>{t('status.healthy', 'Zdraví infrastruktury')}</CardTitle>
+              <CardTitle>{t('dashboard.infra_health', 'Zdraví infrastruktury')}</CardTitle>
             </CardHeader>
             <CardContent>
               <HealthDonut
                 centerLabel={{
                   value: formatPercent(totalMonitors ? (healthyCount / totalMonitors) * 100 : 0),
-                  caption: t('status.healthy', 'Zdravých'),
+                  caption: t('dashboard.healthy_pct', 'Zdravých'),
                 }}
                 segments={[
                   { label: t('common.online', 'Online'), value: monitors.filter(m => m.status === 'up').length, variant: 'up' },
@@ -336,8 +336,8 @@ function MonitorTable({ rows }: { rows: ApiMonitor[] }) {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Warning'),
-    paused: 'Paused',
-    maintenance: 'Údržba',
+    paused: t('common.paused', 'Paused'),
+    maintenance: t('common.maintenance', 'Údržba'),
   };
 
   if (rows.length === 0) {

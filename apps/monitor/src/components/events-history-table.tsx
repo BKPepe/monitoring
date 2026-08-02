@@ -187,7 +187,7 @@ export function EventsHistoryTable() {
 
       <div className="flex items-center justify-between border-t border-border pt-4 text-xs">
         <span className="text-muted-foreground">
-          {t('dashboard.showing', `Zobrazeno ${paginatedEvents.length} z ${filteredEvents.length} událostí`)}
+          {t('events.showing', { shown: paginatedEvents.length, total: filteredEvents.length })}
         </span>
         <div className="flex items-center gap-2">
           <button
