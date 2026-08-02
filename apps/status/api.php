@@ -55,25 +55,22 @@ if ($action === 'session') {
 // 2. Seznam všech monitorů z databáze
 if ($action === 'monitors') {
     $is_admin = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
+    $monitors = [];
 
+    // Základní seznam - stejné sloupce, co endpoint vracel vždy. Tohle NESMÍ
+    // selhat kvůli rozšířeným polím níže (na produkci se přesně tohle stalo:
+    // jeden dotaz na 20+ sloupců naráz, jedna neshoda schématu = celý seznam
+    // monitorů zmizel a s ním celá appka).
     try {
         $stmt = $pdo->query("
             SELECT id, name, type, target, port, status, category, asset_id, last_checked, last_status_change,
-                   response_time, cpu_usage, ram_usage, hdd_usage, last_details, last_status_change AS status_since,
-                   timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
-                   maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
-                   body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
-                   (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
-                   (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
-                   enabled_metrics, remote_actions_enabled, allowed_actions
+                   response_time, cpu_usage, ram_usage, hdd_usage, last_details
             FROM monitors ORDER BY id ASC
         ");
-        $rows = $stmt->fetchAll();
-        $monitors = [];
-        foreach ($rows as $r) {
+        foreach ($stmt->fetchAll() as $r) {
             $details = json_decode($r['last_details'] ?? '', true) ?: [];
             $last_change_ts = $r['last_status_change'] ? strtotime($r['last_status_change']) : null;
-            $monitors[] = [
+            $monitors[(int)$r['id']] = [
                 'id' => (int)$r['id'],
                 'name' => $r['name'],
                 'type' => strtolower($r['type'] ?? 'web'),
@@ -96,41 +93,59 @@ if ($action === 'monitors') {
                 'os' => $details['os'] ?? $r['type'],
                 'details' => $details,
             ];
-
-            // Konfigurační pole (mohou obsahovat interní údaje typu ServerQuery uživatel,
-            // webhook URL apod.) se vrací jen přihlášenému administrátorovi - veřejný
-            // dashboard je nepotřebuje a nemá je vidět.
-            if ($is_admin) {
-                $end = &$monitors[count($monitors) - 1];
-                $end['timeout'] = (int)($r['timeout'] ?? 5);
-                $end['emailNotifications'] = (bool)$r['email_notifications'];
-                $end['smsNotifications'] = (bool)$r['sms_notifications'];
-                $end['notes'] = $r['notes'];
-                $end['maintenance'] = (bool)$r['maintenance'];
-                $end['maintenanceDescription'] = $r['maintenance_description'];
-                $end['maintenanceStart'] = $r['maintenance_start'];
-                $end['maintenanceEnd'] = $r['maintenance_end'];
-                $end['monitoredProcesses'] = $r['monitored_processes'];
-                $end['cpuThreshold'] = (int)($r['cpu_threshold'] ?? 90);
-                $end['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
-                $end['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
-                $end['bodyKeyword'] = $r['body_keyword'];
-                $end['cpanelStatsUrl'] = $r['cpanel_stats_url'];
-                $end['sqUsername'] = $r['sq_username'];
-                $end['sqPasswordSet'] = (bool)$r['sq_password_set'];
-                $end['ts3FiletransferPort'] = $r['ts3_filetransfer_port'] ? (int)$r['ts3_filetransfer_port'] : null;
-                $end['rconPort'] = $r['rcon_port'] ? (int)$r['rcon_port'] : null;
-                $end['rconPasswordSet'] = (bool)$r['rcon_password_set'];
-                $end['enabledMetrics'] = $r['enabled_metrics'] ? (json_decode($r['enabled_metrics'], true) ?: []) : [];
-                $end['remoteActionsEnabled'] = (bool)$r['remote_actions_enabled'];
-                $end['allowedActions'] = $r['allowed_actions'] ? explode(',', $r['allowed_actions']) : [];
-                unset($end);
-            }
         }
-        echo json_encode(['monitors' => $monitors], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['monitors' => []], JSON_UNESCAPED_UNICODE);
+        exit;
     }
+
+    // Konfigurační pole (mohou obsahovat interní údaje typu ServerQuery uživatel,
+    // webhook URL apod.) se vrací jen přihlášenému administrátorovi. Samostatný
+    // dotaz a samostatný try/catch - chybějící/nekompatibilní sloupec tady smí
+    // připravit admina jen o tahle rozšířená pole, nikdy o základní seznam.
+    if ($is_admin && !empty($monitors)) {
+        try {
+            $stmt2 = $pdo->query("
+                SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
+                       maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
+                       body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
+                       (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
+                       (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
+                       enabled_metrics, remote_actions_enabled, allowed_actions
+                FROM monitors
+            ");
+            foreach ($stmt2->fetchAll() as $r) {
+                $mid = (int)$r['id'];
+                if (!isset($monitors[$mid])) continue;
+                $monitors[$mid]['timeout'] = (int)($r['timeout'] ?? 5);
+                $monitors[$mid]['emailNotifications'] = (bool)$r['email_notifications'];
+                $monitors[$mid]['smsNotifications'] = (bool)$r['sms_notifications'];
+                $monitors[$mid]['notes'] = $r['notes'];
+                $monitors[$mid]['maintenance'] = (bool)$r['maintenance'];
+                $monitors[$mid]['maintenanceDescription'] = $r['maintenance_description'];
+                $monitors[$mid]['maintenanceStart'] = $r['maintenance_start'];
+                $monitors[$mid]['maintenanceEnd'] = $r['maintenance_end'];
+                $monitors[$mid]['monitoredProcesses'] = $r['monitored_processes'];
+                $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? 90);
+                $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
+                $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
+                $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
+                $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
+                $monitors[$mid]['sqUsername'] = $r['sq_username'];
+                $monitors[$mid]['sqPasswordSet'] = (bool)$r['sq_password_set'];
+                $monitors[$mid]['ts3FiletransferPort'] = $r['ts3_filetransfer_port'] ? (int)$r['ts3_filetransfer_port'] : null;
+                $monitors[$mid]['rconPort'] = $r['rcon_port'] ? (int)$r['rcon_port'] : null;
+                $monitors[$mid]['rconPasswordSet'] = (bool)$r['rcon_password_set'];
+                $monitors[$mid]['enabledMetrics'] = $r['enabled_metrics'] ? (json_decode($r['enabled_metrics'], true) ?: []) : [];
+                $monitors[$mid]['remoteActionsEnabled'] = (bool)$r['remote_actions_enabled'];
+                $monitors[$mid]['allowedActions'] = $r['allowed_actions'] ? explode(',', $r['allowed_actions']) : [];
+            }
+        } catch (Throwable $t) {
+            error_log('[api.php action=monitors] Extended fields query failed: ' . $t->getMessage());
+        }
+    }
+
+    echo json_encode(['monitors' => array_values($monitors)], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
