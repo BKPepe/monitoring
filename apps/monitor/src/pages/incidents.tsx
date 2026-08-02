@@ -18,21 +18,26 @@ export function IncidentsPage() {
   const [incidentTitle, setIncidentTitle] = useState('');
   const [incidentDetail, setIncidentDetail] = useState('');
   const [affectedScope, setAffectedScope] = useState<string>('all');
-  const [customIncidents, setCustomIncidents] = useState<any[]>([]);
+  const [manualIncidents, setManualIncidents] = useState<any[]>([]);
   const [dbIncidents, setDbIncidents] = useState<any[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const { data: publicData } = usePublicStatus();
+
+  const loadIncidents = () => {
+    fetch('/status/api.php?action=incidents', { credentials: 'include' })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (data && Array.isArray(data.incidents)) setDbIncidents(data.incidents);
+        if (data && Array.isArray(data.manualIncidents)) setManualIncidents(data.manualIncidents);
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
     let active = true;
 
-    fetch('/status/api.php?action=incidents', { credentials: 'include' })
-      .then((res) => res.json().catch(() => ({})))
-      .then((data) => {
-        if (active && data && Array.isArray(data.incidents)) {
-          setDbIncidents(data.incidents);
-        }
-      })
-      .catch(() => {});
+    loadIncidents();
 
     appApi.getMonitors()
       .then((rows) => {
@@ -77,7 +82,7 @@ export function IncidentsPage() {
   // Výpadky CÍLOVÝCH sledovaných webů a serverů (nikoli měřících lokací!)
   const activeTargetOutages = targetMonitors.filter((m) => m.status === 'down' || m.status === 'warning');
 
-  const handleCreateIncident = (e: React.FormEvent) => {
+  const handleCreateIncident = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAuthenticated || !incidentTitle) return;
 
@@ -85,20 +90,32 @@ export function IncidentsPage() {
       ? 'Všechny služby (Globální incident)'
       : targetMonitors.find(m => String(m.id) === affectedScope)?.name || 'Vybraný monitor';
 
-    const newInc = {
-      id: Date.now(),
-      title: incidentTitle,
-      detail: `${incidentDetail || 'Ručně nahlášený incident.'} [Rozsah: ${affectedName}]`,
-      status: 'open',
-      scope: affectedName,
-      createdAt: new Date().toLocaleString('cs-CZ'),
-    };
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const res = await fetch('/status/api.php?action=create_incident', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: incidentTitle,
+          message: `${incidentDetail || 'Ručně nahlášený incident.'} [Rozsah: ${affectedName}]`,
+          impact: 'minor',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
 
-    setCustomIncidents((prev) => [newInc, ...prev]);
-    setIncidentTitle('');
-    setIncidentDetail('');
-    setAffectedScope('all');
-    setShowNewIncidentModal(false);
+      loadIncidents();
+      setIncidentTitle('');
+      setIncidentDetail('');
+      setAffectedScope('all');
+      setShowNewIncidentModal(false);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Incident se nepodařilo uložit.');
+    } finally {
+      setCreating(false);
+    }
   };
 
   return (
@@ -184,6 +201,10 @@ export function IncidentsPage() {
               />
             </div>
 
+            {createError && (
+              <p className="text-xs font-semibold text-destructive">{createError}</p>
+            )}
+
             <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
@@ -194,9 +215,10 @@ export function IncidentsPage() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 cursor-pointer"
+                disabled={creating}
+                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 cursor-pointer disabled:opacity-50"
               >
-                Uložit incident
+                {creating ? 'Ukládám…' : 'Uložit incident'}
               </button>
             </div>
           </form>
@@ -219,7 +241,7 @@ export function IncidentsPage() {
               </Badge>
             </div>
 
-            {activeTargetOutages.length === 0 && customIncidents.length === 0 && dbIncidents.length === 0 ? (
+            {activeTargetOutages.length === 0 && manualIncidents.length === 0 && dbIncidents.length === 0 ? (
               <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-3">
                 <CheckCircle2 className="size-5 text-emerald-400 shrink-0" />
                 <p className="text-xs text-emerald-800 dark:text-emerald-300 font-medium">
@@ -256,16 +278,25 @@ export function IncidentsPage() {
                   </div>
                 ))}
 
-                {customIncidents.map((inc) => (
+                {manualIncidents.map((inc) => (
                   <div key={inc.id} className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start justify-between gap-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="size-2.5 rounded-full bg-amber-500" />
+                        <span className={`size-2.5 rounded-full ${inc.status === 'resolved' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
                         <h4 className="font-bold text-sm text-foreground">{inc.title}</h4>
                         <Badge variant="warning">Ručně nahlášeno</Badge>
+                        <Badge variant={inc.status === 'resolved' ? 'up' : 'warning'}>{inc.status}</Badge>
                       </div>
-                      <p className="text-xs text-muted-foreground">{inc.detail}</p>
-                      <p className="text-[11px] text-amber-300">Vytvořeno: {inc.createdAt}</p>
+                      {inc.updates?.[0]?.message && (
+                        <p className="text-xs text-muted-foreground">{inc.updates[0].message}</p>
+                      )}
+                      <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-amber-300 flex-wrap">
+                        <span>Vytvořeno: {inc.createdAt}</span>
+                        {inc.resolvedAt && <span>Vyřešeno: {inc.resolvedAt}</span>}
+                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-bold">
+                          Doba trvání: {inc.durationText}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}

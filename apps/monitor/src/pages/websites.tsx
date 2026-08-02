@@ -16,98 +16,85 @@ interface WebMonitor {
   details?: Record<string, any>;
 }
 
-function getDefaultWebsitesList(): WebMonitor[] {
-  return [
-    {
-      id: 1,
-      name: 'BloodKings.eu',
-      target: 'https://bloodkings.eu',
-      type: 'HTTPS',
-      status: 'up',
-      response_time: 14,
-      details: { agent_version: '3.13.8' },
-    },
-    {
-      id: 6,
-      name: 'Schlehofer.eu',
-      target: 'https://schlehofer.eu',
-      type: 'HTTPS',
-      status: 'up',
-      response_time: 12,
-      details: {},
-    },
-  ];
-}
-
 export function WebsitesPage() {
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
-  const [websites, setWebsites] = useState<WebMonitor[]>(getDefaultWebsitesList());
-  const [loading, setLoading] = useState(false);
+  const [websites, setWebsites] = useState<WebMonitor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-
+  const loadWebsites = () => {
+    setLoading(true);
     appApi.getMonitors()
       .then((rows) => {
-        if (!active) return;
         const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
-        if (list.length > 0) {
-          const httpOnly: WebMonitor[] = list.filter((m: any) => {
-            const t = (m.type || '').toLowerCase();
-            const target = (m.target || '').toLowerCase();
-            const isAgent = t === 'agent' || t === 'vps' || t === 'node';
+        const httpOnly: WebMonitor[] = list.filter((m: any) => {
+          const t = (m.type || '').toLowerCase();
+          const target = (m.target || '').toLowerCase();
+          const isAgent = t === 'agent' || t === 'vps' || t === 'node';
 
-            if (isAgent) return false;
-            return t === 'http' || t === 'https' || t === 'web' || t === 'website' || target.startsWith('http://') || target.startsWith('https://');
-          }).map((m: any) => ({
-            id: m.id,
-            name: m.name,
-            target: m.target,
-            type: (m.type || 'HTTPS').toUpperCase(),
-            status: (m.status === 'down' ? 'down' : m.status === 'warning' ? 'warning' : m.status === 'paused' ? 'paused' : 'up') as any,
-            response_time: (m.responseMs && m.responseMs > 0) ? m.responseMs : (m.response_time && m.response_time > 0) ? m.response_time : (m.name.includes('Schlehofer') ? 12 : 14),
-            details: m.details,
-          }));
+          if (isAgent) return false;
+          return t === 'http' || t === 'https' || t === 'web' || t === 'website' || target.startsWith('http://') || target.startsWith('https://');
+        }).map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          target: m.target,
+          type: (m.type || 'HTTPS').toUpperCase(),
+          status: (m.status === 'down' ? 'down' : m.status === 'warning' ? 'warning' : m.status === 'paused' ? 'paused' : 'up') as any,
+          response_time: m.responseMs ?? m.response_time ?? 0,
+          details: m.details,
+        }));
 
-          setWebsites(httpOnly.length > 0 ? httpOnly : getDefaultWebsitesList());
-        }
+        setWebsites(httpOnly);
+        setLoadError(null);
       })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+      .catch(() => setLoadError('Seznam webů se nepodařilo načíst.'))
+      .finally(() => setLoading(false));
+  };
 
-    return () => { active = false; };
+  useEffect(() => {
+    loadWebsites();
   }, []);
 
-  const handleAddWebsite = (e: React.FormEvent) => {
+  const handleAddWebsite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAuthenticated || !newName || !newUrl) return;
 
     const formattedUrl = newUrl.startsWith('http://') || newUrl.startsWith('https://') ? newUrl : `https://${newUrl}`;
 
-    const newSite: WebMonitor = {
-      id: Date.now(),
-      name: newName,
-      target: formattedUrl,
-      type: 'HTTPS',
-      status: 'up',
-      response_time: 0,
-    };
-
-    setWebsites((prev) => [newSite, ...prev]);
-    setNewName('');
-    setNewUrl('');
-    setShowAddModal(false);
+    setSaving(true);
+    try {
+      const res = await fetch('/status/api.php?action=save_monitor', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 0, name: newName, type: 'web', target: formattedUrl }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      setNewName('');
+      setNewUrl('');
+      setShowAddModal(false);
+      loadWebsites();
+    } catch {
+      setLoadError('Web se nepodařilo uložit.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const avgLatency = websites.length > 0
-    ? Math.round(websites.reduce((acc, w) => acc + w.response_time, 0) / websites.length)
-    : 0;
+  // Reálné statistiky spočtené z toho, co bylo skutečně načteno - žádné natvrdo
+  // napsané "99.98 %" nebo "100 % platné", které s daty nemají nic společného.
+  const upCount = websites.filter((w) => w.status === 'up').length;
+  const overallUptimePct = websites.length > 0 ? (upCount / websites.length) * 100 : null;
+  const respondingLatencies = websites.filter((w) => w.response_time > 0).map((w) => w.response_time);
+  const avgLatency = respondingLatencies.length > 0
+    ? Math.round(respondingLatencies.reduce((acc, v) => acc + v, 0) / respondingLatencies.length)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -148,40 +135,46 @@ export function WebsitesPage() {
         </Card>
       )}
 
-      {/* Globální statistiky HTTP monitoringu */}
+      {/* Globální statistiky HTTP monitoringu - spočtené ze skutečně načtených monitorů */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
             <Activity className="size-4 text-emerald-400" /> Průměrná latence HTTP
           </div>
-          <p className="text-2xl font-bold tracking-tight text-emerald-400">{avgLatency} ms</p>
-          <p className="text-[11px] text-muted-foreground">HTTP/2 TLS 1.3 handshake OK</p>
+          <p className="text-2xl font-bold tracking-tight text-emerald-400">{avgLatency != null ? `${avgLatency} ms` : '—'}</p>
+          <p className="text-[11px] text-muted-foreground">Z {respondingLatencies.length} odpovídajících webů</p>
         </Card>
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Globe className="size-4 text-primary" /> Celkový Uptime webů
+            <Globe className="size-4 text-primary" /> Aktuální dostupnost webů
           </div>
-          <p className="text-2xl font-bold tracking-tight text-foreground">99.98 %</p>
-          <p className="text-[11px] text-muted-foreground">Sledováno {websites.length} domén 24/7</p>
+          <p className="text-2xl font-bold tracking-tight text-foreground">{overallUptimePct != null ? `${overallUptimePct.toFixed(1)} %` : '—'}</p>
+          <p className="text-[11px] text-muted-foreground">{upCount} z {websites.length} dostupných právě teď</p>
         </Card>
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
             <Lock className="size-4 text-emerald-400" /> SSL Certifikáty
           </div>
-          <p className="text-2xl font-bold tracking-tight text-emerald-400">100 % Platné</p>
-          <p className="text-[11px] text-muted-foreground">0 certifikátů vyprší &lt; 30 dnů</p>
+          <p className="text-2xl font-bold tracking-tight text-muted-foreground">—</p>
+          <p className="text-[11px] text-muted-foreground">Kontrola platnosti certifikátů zatím není napojená</p>
         </Card>
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Clock className="size-4 text-primary" /> Testovací Frekvence
+            <Clock className="size-4 text-primary" /> Sledovaných webů
           </div>
-          <p className="text-2xl font-bold tracking-tight text-foreground">60 s</p>
-          <p className="text-[11px] text-muted-foreground">Kontroly ze 3 nezávislých uzlů</p>
+          <p className="text-2xl font-bold tracking-tight text-foreground">{websites.length}</p>
+          <p className="text-[11px] text-muted-foreground">Interval kontrol podle nastavení monitoru</p>
         </Card>
       </div>
+
+      {loadError && (
+        <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold">
+          {loadError}
+        </div>
+      )}
 
       {/* Seznam webů */}
       {showAddModal && isAuthenticated && (
@@ -222,9 +215,10 @@ export function WebsitesPage() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90"
+                disabled={saving}
+                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                Uložit a spustit monitoring
+                {saving ? 'Ukládám…' : 'Uložit a spustit monitoring'}
               </button>
             </div>
           </form>
@@ -302,10 +296,17 @@ export function WebsitesPage() {
               </div>
 
               <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t border-border/50">
-                <span className="flex items-center gap-1 text-emerald-400 font-medium">
-                  <ShieldCheck className="size-3.5" /> SSL Platný (TLS 1.3)
+                <span className="flex items-center gap-1">
+                  <ShieldCheck className="size-3.5" /> {web.target.startsWith('https') ? 'HTTPS' : 'HTTP'}
                 </span>
-                <span>Port 443</span>
+                <a
+                  href={web.target.startsWith('http') ? web.target : `https://${web.target}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-foreground hover:underline"
+                >
+                  Otevřít web
+                </a>
               </div>
             </Card>
           ))}

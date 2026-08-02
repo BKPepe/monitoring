@@ -78,37 +78,34 @@ export function AssetDetailPage() {
 
   React.useEffect(() => {
     let active = true;
+    setLoading(true);
 
-    const safetyTimer = setTimeout(() => {
-      if (active && loading) {
-        setAsset(buildGenericAsset(idNum));
-        setLoading(false);
-      }
-    }, 3500);
-
+    // Žádný "safety timer", co po 3.5 s tiše nahradí načítání vymyšleným
+    // profilem zařízení - pomalá odpověď má nechat zobrazený loading stav,
+    // ne fiktivní SSL/SMART/proces data, která vypadají jako reálná.
     appApi
       .getMonitors()
       .then((rows) => {
         if (!active) return;
         const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
-        const match = list.find((m: ApiMonitor) => Number(m.id) === idNum || Number(m.assetId) === idNum);
-        if (match) {
-          setAsset(buildDynamicAsset(match));
-        } else {
-          setAsset(buildGenericAsset(idNum));
-        }
+        // Odkazy v appce teď vždy používají monitors.id - assetId se zkouší
+        // jen jako záložní shoda pro staré odkazy, a teprve když přesná shoda
+        // podle id neexistuje (jinak by dva monitory se stejným assetId mohly
+        // ukázat na ten nesprávný).
+        const match =
+          list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
+          list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
+        setAsset(match ? buildDynamicAsset(match) : null);
       })
       .catch(() => {
-        if (active) setAsset(buildGenericAsset(idNum));
+        if (active) setAsset(null);
       })
       .finally(() => {
-        clearTimeout(safetyTimer);
         if (active) setLoading(false);
       });
 
     return () => {
       active = false;
-      clearTimeout(safetyTimer);
     };
   }, [idNum]);
 
@@ -225,34 +222,32 @@ export function AssetDetailPage() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
                     <p className="font-semibold text-sm">TLS/SSL Certifikát</p>
-                    {isNoSsl ? (
-                      <p className="text-xs text-muted-foreground font-medium">N/A ({upperKind === 'ROUTER' ? 'OpenWrt ubus Telemetrie' : upperKind === 'MINECRAFT' ? 'Minecraft Java Socket' : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE' ? 'TeamSpeak UDP Voice' : 'Ne-šifrovaný protokol'})</p>
-                    ) : (
-                      <p className="text-xs text-emerald-400 font-medium">Platný (Zbývá 64 dnů)</p>
-                    )}
+                    <p className="text-xs text-muted-foreground font-medium">
+                      {isNoSsl ? 'N/A' : 'Kontrola certifikátu zatím není napojená'}
+                    </p>
                     <p className="text-[11px] text-muted-foreground font-mono">
-                      {isNoSsl 
-                        ? (upperKind === 'ROUTER' 
-                            ? 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)' 
-                            : upperKind === 'MINECRAFT' 
-                            ? 'Minecraft Java socket (port 25565 bez TLS vrstvy)' 
-                            : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE' 
-                            ? 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy' 
+                      {isNoSsl
+                        ? (upperKind === 'ROUTER'
+                            ? 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)'
+                            : upperKind === 'MINECRAFT'
+                            ? 'Minecraft Java socket (port 25565 bez TLS vrstvy)'
+                            : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE'
+                            ? 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy'
                             : 'Protokol nepoužívá SSL/TLS vrstvu')
-                        : 'Let\'s Encrypt Authority X3 — TLS 1.3 / HTTP/2 OK'}
+                        : 'Datum expirace certifikátu se zatím z monitoru nečte.'}
                     </p>
                   </div>
               <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
                 <p className="font-semibold text-sm">Stav Služby</p>
                 <p className={cn("text-xs font-medium", asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400')}>
-                  {asset.status === 'down' ? 'OFFLINE (Connection Refused)' : '200 OK / Aktivní Socket & Agent'}
+                  {asset.status === 'down' ? 'OFFLINE' : 'Aktivní'}
                 </p>
                 <p className="text-[11px] text-muted-foreground font-mono">Protokol: {asset.kind}</p>
               </div>
               <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
                 <p className="font-semibold text-sm">SMART SSD Health & NVMe Opotřebení Disku</p>
-                <p className="text-xs text-emerald-400 font-medium font-mono">
-                  {asset.smartStatus ? asset.smartStatus : 'PASSED / HEALTHY (SSD Wear 98% OK, 0 vadných sektorů, Teplota 34°C)'}
+                <p className={cn("text-xs font-medium font-mono", asset.smartStatus ? 'text-emerald-400' : 'text-muted-foreground')}>
+                  {asset.smartStatus ?? 'Nejsou dostupná data (agent SMART nehlásí).'}
                 </p>
                 <p className="text-[11px] text-muted-foreground font-mono">
                   Sledování opotřebení NVMe buněk, zaoceánovaných chyb a reallocated sektorů z rozhraní smartctl.
@@ -564,8 +559,10 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
   }
 
   const isTS3 = m.type.toLowerCase().includes('teamspeak') || m.name.toLowerCase().includes('donald') || m.name.toLowerCase().includes('teamspeak');
-  const ts3Clients = m.details?.ts3_clients ?? (Array.isArray(m.details?.teamspeak_servers) && m.details.teamspeak_servers[0] ? m.details.teamspeak_servers[0].clients_online : 12);
-  const ts3Max = m.details?.ts3_max ?? (Array.isArray(m.details?.teamspeak_servers) && m.details.teamspeak_servers[0] ? m.details.teamspeak_servers[0].clients_max : 32);
+  const ts3Servers = Array.isArray(m.details?.teamspeak_servers) ? m.details.teamspeak_servers[0] : null;
+  const ts3Clients: number | null = m.details?.ts3_clients ?? ts3Servers?.clients_online ?? null;
+  const ts3Max: number | null = m.details?.ts3_max ?? ts3Servers?.clients_max ?? null;
+  const hasTs3Counts = ts3Clients != null && ts3Max != null;
 
   return {
     id: m.id,
@@ -577,7 +574,7 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
     health: [
       { key: 'status', label: 'Stav', value: status === 'up' ? 'Online' : 'Offline' },
       { key: 'latency', label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : (status === 'down' ? '—' : '—'), tone: 'latency' },
-      ...(isTS3 ? [{ key: 'ts3_clients', label: 'Připojení klienti TS3', value: `${ts3Clients} / ${ts3Max} uživatelů`, tone: 'latency' as const }] : []),
+      ...(isTS3 && hasTs3Counts ? [{ key: 'ts3_clients', label: 'Připojení klienti TS3', value: `${ts3Clients} / ${ts3Max} uživatelů`, tone: 'latency' as const }] : []),
       { key: 'cpu', label: 'Využití CPU', value: m.cpu != null ? `${m.cpu.toFixed(1)} %` : '—', tone: 'cpu' },
       { key: 'ram', label: 'Využití RAM', value: m.ram != null ? `${m.ram.toFixed(1)} %` : '—', tone: 'memory' },
       { key: 'hdd', label: 'Využití disku', value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—', tone: 'disk' },
@@ -593,7 +590,7 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
       { label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : '—' },
       { label: 'Operační systém', value: m.os ?? '—' },
       { label: 'Typ protokolu', value: m.type.toUpperCase() },
-      ...(isTS3 ? [{ label: 'TeamSpeak 3 ServerQuery', value: `${ts3Clients} / ${ts3Max} uživatelů online (Port 9987/8200)` }] : []),
+      ...(isTS3 && hasTs3Counts ? [{ label: 'TeamSpeak 3 ServerQuery', value: `${ts3Clients} / ${ts3Max} uživatelů online (Port 9987/8200)` }] : []),
       ...(m.details?.net != null ? [{ label: 'Síťový průtok (Rx/Tx)', value: `${Number(m.details.net).toFixed(1)} KB/s` }] : []),
       ...(m.details?.disk_read_kb != null ? [{ label: 'Čtení z disku', value: `${Number(m.details.disk_read_kb).toFixed(1)} KB/s` }] : []),
       ...(m.details?.disk_write_kb != null ? [{ label: 'Zápis na disk', value: `${Number(m.details.disk_write_kb).toFixed(1)} KB/s` }] : []),
@@ -607,198 +604,6 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
       { id: 1, title: status === 'down' ? 'Výpadek služby' : 'Automatický test', detail: status === 'down' ? 'Cílový port neodpovídá' : 'Odezva vyhodnocena v pořádku.', at: lastCheckDisplay, severity: status === 'down' ? 'down' : 'info', resolution: status === 'down' ? 'Open' : 'Info' }
     ],
     processes: parsedProcesses,
-    related: [],
-  };
-}
-
-function buildGenericAsset(id: number): AssetDetail {
-  const defaultAssets: Record<number, Partial<AssetDetail>> = {
-    1: {
-      name: 'BloodKings.eu',
-      kind: 'WEB',
-      subtitle: 'https://bloodkings.eu · Webové Portály & API',
-      status: 'up',
-      breadcrumb: ['Webové Portály & API'],
-      health: [
-        { key: 'status', label: 'Stav', value: 'Online' },
-        { key: 'latency', label: 'Odezva', value: '14 ms', tone: 'latency' },
-        { key: 'cpu', label: 'Využití CPU', value: '10.5 %', tone: 'cpu' },
-        { key: 'ram', label: 'Využití RAM', value: '4.6 %', tone: 'memory' },
-        { key: 'hdd', label: 'Využití disku', value: '2.7 %', tone: 'disk' },
-      ],
-      summary: 'Hlavní webový portál BloodKings.eu a backend API rozhraní.',
-      summaryChips: [{ label: 'Všechny testy OK', variant: 'up' }, { label: 'Typ: HTTPS', variant: 'info' }],
-      info: [
-        { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
-        { label: 'Odezva', value: '14 ms' },
-        { label: 'Operační systém', value: 'Debian 12 (cPanel / LiteSpeed)' },
-        { label: 'Typ protokolu', value: 'HTTPS / HTTP/2' },
-        { label: 'TLS/SSL Certifikát', value: "Let's Encrypt Authority X3 — Platný (64 dní)" },
-      ],
-      smartStatus: 'PASSED / HEALTHY (NVMe Wear 98% OK, 0 bad sectors, 34°C)',
-      processes: [
-        { name: 'litespeed (HTTP/2)', cpu: 1.8, memory: 240 },
-        { name: 'php-fpm: pool bloodkings', cpu: 0.9, memory: 110 },
-        { name: 'mariadbd', cpu: 0.4, memory: 310 },
-      ],
-    },
-    2: {
-      name: 'BloodKings.eu discord',
-      kind: 'DISCORD',
-      subtitle: 'Guild ID: 3412270785... · Komunikační & Herní Servery',
-      status: 'up',
-      breadcrumb: ['Komunikační & Herní Servery'],
-      health: [
-        { key: 'status', label: 'Stav', value: 'Online' },
-        { key: 'latency', label: 'Odezva', value: '18 ms', tone: 'latency' },
-      ],
-      summary: 'Discord komunitní bot a sledování stavu cechovního serveru.',
-      summaryChips: [{ label: 'Všechny testy OK', variant: 'up' }, { label: 'Typ: DISCORD BOT', variant: 'info' }],
-      info: [
-        { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
-        { label: 'Odezva', value: '18 ms' },
-        { label: 'Typ protokolu', value: 'DISCORD API BOT' },
-      ],
-      processes: [
-        { name: 'discord-bot.js', cpu: 0.2, memory: 64 },
-      ],
-    },
-    3: {
-      name: 'Donald',
-      kind: 'TEAMSPEAK',
-      subtitle: 'donald.bloodkings.eu:8200 · Komunikační & Herní Servery',
-      status: 'up',
-      breadcrumb: ['Komunikační & Herní Servery'],
-      health: [
-        { key: 'status', label: 'Stav', value: 'Online' },
-        { key: 'latency', label: 'Odezva', value: '1035 ms', tone: 'latency' },
-        { key: 'cpu', label: 'Využití CPU', value: '0.4 %', tone: 'cpu' },
-        { key: 'ram', label: 'Využití RAM', value: '35.9 %', tone: 'memory' },
-        { key: 'hdd', label: 'Využití disku', value: '36.0 %', tone: 'disk' },
-      ],
-      summary: 'TeamSpeak 3 Hlasový Server a Linuxový uzel Donald (Debian 12).',
-      summaryChips: [{ label: 'Všechny testy OK', variant: 'up' }, { label: 'Typ: TEAMSPEAK 3', variant: 'info' }],
-      info: [
-        { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
-        { label: 'Odezva', value: '1035 ms' },
-        { label: 'Operační systém', value: 'Debian 12 (bookworm)' },
-        { label: 'Verze agenta', value: 'v3.13.8' },
-        { label: 'TCP Retransmissions', value: '0' },
-        { label: 'Conntrack Spojení', value: '42' },
-      ],
-      smartStatus: 'PASSED / HEALTHY (NVMe SSD Wear 99% OK)',
-      processes: [
-        { name: 'ts3server', cpu: 0.4, memory: 320 },
-        { name: 'mariadbd', cpu: 0.2, memory: 180 },
-        { name: 'status-agent.sh', cpu: 0.1, memory: 24 },
-        { name: 'sshd', cpu: 0.0, memory: 12 },
-        { name: 'systemd-journald', cpu: 0.0, memory: 16 },
-      ],
-    },
-    4: {
-      name: 'Minecraft',
-      kind: 'MINECRAFT',
-      subtitle: 'mc.bloodkings.eu:25565 · Komunikační & Herní Servery',
-      status: 'up',
-      breadcrumb: ['Komunikační & Herní Servery'],
-      health: [
-        { key: 'status', label: 'Stav', value: 'Online' },
-        { key: 'latency', label: 'Odezva', value: '24 ms', tone: 'latency' },
-        { key: 'cpu', label: 'Využití CPU', value: '12.4 %', tone: 'cpu' },
-        { key: 'ram', label: 'Využití RAM', value: '54.2 %', tone: 'memory' },
-        { key: 'hdd', label: 'Využití disku', value: '28.1 %', tone: 'disk' },
-      ],
-      summary: 'Minecraft Java Edition herní server (mc.bloodkings.eu:25565).',
-      summaryChips: [{ label: 'Všechny testy OK', variant: 'up' }, { label: 'Typ: MINECRAFT JAVA', variant: 'info' }],
-      info: [
-        { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
-        { label: 'Odezva', value: '24 ms' },
-        { label: 'Port', value: '25565' },
-        { label: 'Typ protokolu', value: 'MINECRAFT SLP' },
-      ],
-      processes: [
-        { name: 'java (PaperSpigot 1.20.4)', cpu: 12.4, memory: 2048 },
-        { name: 'status-agent.sh', cpu: 0.1, memory: 24 },
-      ],
-    },
-    5: {
-      name: 'Router - Praha',
-      kind: 'ROUTER',
-      subtitle: 'Turris - domov (cznic,turris1x) · Síťová Infrastruktura & Routery',
-      status: 'up',
-      breadcrumb: ['Síťová Infrastruktura & Routery'],
-      health: [
-        { key: 'status', label: 'Stav', value: 'Online' },
-        { key: 'latency', label: 'Odezva', value: '8 ms', tone: 'latency' },
-        { key: 'cpu', label: 'Využití CPU', value: '24.0 %', tone: 'cpu' },
-        { key: 'ram', label: 'Využití RAM', value: '48.0 %', tone: 'memory' },
-        { key: 'hdd', label: 'Využití disku', value: '3.0 %', tone: 'disk' },
-      ],
-      summary: 'Hlavní router Turris 1.x v Praze s TurrisOS 9.1.0 a ubus telemetrií.',
-      summaryChips: [{ label: 'Všechny testy OK', variant: 'up' }, { label: 'Typ: OPENWRT / TURRIS', variant: 'info' }],
-      info: [
-        { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
-        { label: 'Odezva', value: '8 ms' },
-        { label: 'Operační systém', value: 'TurrisOS 9.1.0 (OpenWrt)' },
-        { label: 'Verze agenta', value: 'v3.13.8 (ubus ash)' },
-        { label: 'Conntrack Spojení', value: '128' },
-      ],
-      processes: [
-        { name: 'hostapd (WiFi 5GHz AP)', cpu: 1.2, memory: 18 },
-        { name: 'dnsmasq (DNS/DHCP)', cpu: 0.5, memory: 8 },
-        { name: 'kresd (Knot Resolver DoT)', cpu: 0.3, memory: 22 },
-        { name: 'ubus / netifd', cpu: 0.1, memory: 6 },
-        { name: 'status-agent_openwrt.sh', cpu: 0.2, memory: 4 },
-      ],
-    },
-    6: {
-      name: 'Schlehofer.eu',
-      kind: 'WEB',
-      subtitle: 'https://schlehofer.eu · Webové Portály & API',
-      status: 'up',
-      breadcrumb: ['Webové Portály & API'],
-      health: [
-        { key: 'status', label: 'Stav', value: 'Online' },
-        { key: 'latency', label: 'Odezva', value: '12 ms', tone: 'latency' },
-        { key: 'cpu', label: 'Využití CPU', value: '10.5 %', tone: 'cpu' },
-        { key: 'ram', label: 'Využití RAM', value: '4.6 %', tone: 'memory' },
-        { key: 'hdd', label: 'Využití disku', value: '2.7 %', tone: 'disk' },
-      ],
-      summary: 'Webový server a doména Schlehofer.eu.',
-      summaryChips: [{ label: 'Všechny testy OK', variant: 'up' }, { label: 'Typ: HTTPS', variant: 'info' }],
-      info: [
-        { label: 'Poslední kontrola', value: new Date().toLocaleTimeString('cs-CZ') },
-        { label: 'Odezva', value: '12 ms' },
-        { label: 'Operační systém', value: 'HTTPS Server' },
-        { label: 'TLS/SSL Certifikát', value: "Let's Encrypt — Platný (64 dní)" },
-      ],
-      processes: [
-        { name: 'nginx / php-fpm', cpu: 0.8, memory: 85 },
-      ],
-    },
-  };
-
-  const item = defaultAssets[id] || {};
-
-  return {
-    id,
-    name: item.name || `Zařízení #${id}`,
-    kind: item.kind || 'MONITOR',
-    subtitle: item.subtitle || `Zařízení #${id} · Načítám z databáze...`,
-    status: item.status || 'up',
-    breadcrumb: item.breadcrumb || ['Monitory'],
-    health: item.health || [
-      { key: 'status', label: 'Stav', value: 'Online' },
-      { key: 'latency', label: 'Odezva', value: '14 ms', tone: 'latency' },
-    ],
-    summary: item.summary || `Diagnostické metriky zařízení #${id} načtené z databáze.`,
-    summaryChips: item.summaryChips || [{ label: 'Všechny testy OK', variant: 'up' }],
-    info: item.info || [{ label: 'ID Monitoru', value: String(id) }],
-    smartStatus: item.smartStatus || null,
-    events: [
-      { id: 1, title: 'Automatický test', detail: 'Odezva a stav protokolu vyhodnoceny v pořádku.', at: new Date().toLocaleTimeString('cs-CZ'), severity: 'info', resolution: 'Info' }
-    ],
-    processes: item.processes || [],
     related: [],
   };
 }

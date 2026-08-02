@@ -77,6 +77,8 @@ export interface DayUptime {
   date: string;
   status: DayStatus;
   uptimePct: number;
+  /** Skutečný popis dne z monitor_logs (počet selhaných kontrol, doba výpadku). */
+  detail?: string;
 }
 
 export interface UptimeHistoryRow {

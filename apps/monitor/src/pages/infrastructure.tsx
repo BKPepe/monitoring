@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { appApi, type ApiAsset, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
-import { cn } from '@/lib/utils';
+import { cn, formatRelative, formatUptime } from '@/lib/utils';
 
 type AssetNode = ApiAsset;
 type MonitorStatus = ApiAsset['status'];
@@ -59,8 +59,7 @@ const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' |
 export function InfrastructurePage() {
   const { session, isAdmin } = useSession();
   const [query, setQuery] = React.useState('');
-  const [selectedId, setSelectedId] = React.useState<number | null>(1);
-  const [tree, setTree] = React.useState<{ name: string; assets: AssetNode[] }[] | null>(null);
+  const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
   // Modal pro přidání / úpravu monitoru s plným rozsahem nastavení jako v PHP admin.php
   const [showAddModal, setShowAddModal] = React.useState(false);
@@ -87,14 +86,16 @@ export function InfrastructurePage() {
   // TeamSpeak
   const [sqUsername, setSqUsername] = React.useState('serveradmin');
   const [sqPassword, setSqPassword] = React.useState('');
+  const [sqPasswordPlaceholder, setSqPasswordPlaceholder] = React.useState('••••••••');
   const [ts3FiletransferPort, setTs3FiletransferPort] = React.useState('30033');
 
   // Minecraft
   const [rconPort, setRconPort] = React.useState('25575');
   const [rconPassword, setRconPassword] = React.useState('');
+  const [rconPasswordPlaceholder, setRconPasswordPlaceholder] = React.useState('••••••••');
 
   // VPS & OpenWrt Agent
-  const [monitoredProcesses, setMonitoredProcesses] = React.useState('ts3server, nginx, mysql');
+  const [monitoredProcesses, setMonitoredProcesses] = React.useState('');
   const [cpuThreshold, setCpuThreshold] = React.useState('90');
   const [ramThreshold, setRamThreshold] = React.useState('95');
   const [hddThreshold, setHddThreshold] = React.useState('90');
@@ -111,34 +112,25 @@ export function InfrastructurePage() {
 
   const [addedSuccess, setAddedSuccess] = React.useState(false);
   const [rawMonitors, setRawMonitors] = React.useState<ApiMonitor[]>([]);
+  const [monitorsError, setMonitorsError] = React.useState<string | null>(null);
+
+  const loadMonitors = React.useCallback(() => {
+    let active = true;
+    appApi.getMonitors()
+      .then((rows) => {
+        if (!active) return;
+        setRawMonitors(Array.isArray(rows) ? rows : []);
+        setMonitorsError(null);
+      })
+      .catch(() => {
+        if (active) setMonitorsError('Seznam zařízení se nepodařilo načíst.');
+      });
+    return () => { active = false; };
+  }, []);
 
   React.useEffect(() => {
-    let active = true;
-
-    appApi.getMonitors().then(rows => {
-      if (active && Array.isArray(rows)) setRawMonitors(rows);
-    }).catch(() => {});
-
-    if (session?.authenticated) {
-      appApi
-        .getAssetGroups()
-        .then((groups) => {
-          if (!active) return;
-          if (Array.isArray(groups) && groups.length > 0) {
-            setTree(groups);
-            setSelectedId((current) => current ?? groups[0]?.assets[0]?.id ?? 1);
-          } else {
-            setTree(getDefaultAssetGroups());
-          }
-        })
-        .catch(() => {
-          if (active) setTree(getDefaultAssetGroups());
-        });
-    } else {
-      setTree(getDefaultAssetGroups());
-    }
-
-    return () => { active = false; };
+    const cancel = loadMonitors();
+    return cancel;
   }, [session]);
 
   React.useEffect(() => {
@@ -182,6 +174,33 @@ export function InfrastructurePage() {
         setMonitorTarget(rawT);
         setMonitorPort(mon.port ? String(mon.port) : '');
       }
+
+      // Zbytek nastavení chodí jen přihlášenému administrátorovi (viz api.php
+      // action=monitors) - pole necháváme na uložené hodnotě monitoru, ne na
+      // pevném výchozím textu, jinak by uložení formuláře přepsalo skutečné
+      // nastavení (hlídané procesy, limity, Remote Actions...) tím výchozím.
+      setTimeoutVal(mon.timeout != null ? String(mon.timeout) : '5');
+      setEmailNotifications(mon.emailNotifications ?? true);
+      setSmsNotifications(mon.smsNotifications ?? false);
+      setNotes(mon.notes ?? '');
+      setMaintenance(mon.maintenance ?? false);
+      setMaintenanceDescription(mon.maintenanceDescription ?? '');
+      setCpanelStatsUrl(mon.cpanelStatsUrl ?? '');
+      setBodyKeyword(mon.bodyKeyword ?? '');
+      setSqUsername(mon.sqUsername ?? 'serveradmin');
+      setSqPassword('');
+      setSqPasswordPlaceholder(mon.sqPasswordSet ? '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)' : '');
+      setTs3FiletransferPort(mon.ts3FiletransferPort != null ? String(mon.ts3FiletransferPort) : '30033');
+      setRconPort(mon.rconPort != null ? String(mon.rconPort) : '25575');
+      setRconPassword('');
+      setRconPasswordPlaceholder(mon.rconPasswordSet ? '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)' : '');
+      setMonitoredProcesses(mon.monitoredProcesses ?? '');
+      setCpuThreshold(mon.cpuThreshold != null ? String(mon.cpuThreshold) : '90');
+      setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
+      setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
+      setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
+      setAllowedActions(mon.allowedActions ?? []);
+      setEnabledMetrics(mon.enabledMetrics ?? []);
     } else if (selectedAsset) {
       setMonitorName(selectedAsset.name);
       const k = (selectedAsset.kind || '').toLowerCase();
@@ -207,31 +226,53 @@ export function InfrastructurePage() {
     setShowAddModal(true);
   };
 
-  function getDefaultAssetGroups(): { name: string; assets: AssetNode[] }[] {
-    return [
-      {
-        name: 'Webové Portály & API',
-        assets: [
-          { id: 1, monitorId: 1, name: 'BloodKings.eu', kind: 'Web', icon: 'globe', status: 'up', monitorCount: 1, hostname: 'https://bloodkings.eu', hasAgent: false },
-          { id: 6, monitorId: 6, name: 'Schlehofer.eu', kind: 'Web', icon: 'globe', status: 'up', monitorCount: 1, hostname: 'https://schlehofer.eu', hasAgent: false },
-        ]
-      },
-      {
-        name: 'Komunikační & Herní Servery',
-        assets: [
-          { id: 3, monitorId: 3, name: 'Donald', kind: 'Voice', icon: 'mic', status: 'up', monitorCount: 1, hostname: 'donald.bloodkings.eu:8200', hasAgent: true },
-          { id: 2, monitorId: 2, name: 'BloodKings.eu discord', kind: 'Discord', icon: 'message-square', status: 'up', monitorCount: 1, hostname: 'Guild ID: 3412270785...', hasAgent: false },
-          { id: 4, monitorId: 4, name: 'Minecraft', kind: 'Game', icon: 'gamepad', status: 'up', monitorCount: 1, hostname: 'mc.bloodkings.eu:25565', hasAgent: false },
-        ]
-      },
-      {
-        name: 'Síťová Infrastruktura & Routery',
-        assets: [
-          { id: 5, monitorId: 5, name: 'Router - Praha', kind: 'Router', icon: 'router', status: 'up', monitorCount: 1, hostname: 'Turris - domov (TurrisOS 9.1.0)', hasAgent: true },
-        ]
-      }
-    ];
+  // Strom zařízení se odvozuje ze skutečných monitorů (rawMonitors), ne z
+  // action=assets - ten endpoint na backendu vůbec neexistuje, takže dřívější
+  // getAssetGroups()/getDefaultAssetGroups() vždy skončily na natvrdo napsaném
+  // seznamu, úplně nezávisle na tom, kdo je přihlášený a co je v databázi.
+  function kindFromType(type: string): string {
+    const t = (type || '').toLowerCase();
+    if (t === 'discord') return 'Discord';
+    if (t === 'minecraft') return 'Game';
+    if (t === 'teamspeak') return 'Voice';
+    if (t === 'openwrt' || t === 'router') return 'Router';
+    if (t === 'web' || t === 'http' || t === 'https') return 'Web';
+    return 'Server';
   }
+
+  const tree = React.useMemo((): { name: string; assets: AssetNode[] }[] | null => {
+    if (rawMonitors.length === 0) return null;
+
+    const groupOrder: string[] = [];
+    const groups = new Map<string, AssetNode[]>();
+    for (const m of rawMonitors) {
+      const catName = m.category || 'Ostatní';
+      const node: AssetNode = {
+        id: m.assetId ?? m.id,
+        monitorId: m.id,
+        name: m.name,
+        kind: kindFromType(m.type),
+        icon: null,
+        status: m.status,
+        monitorCount: 1,
+        hostname: m.hostname ?? m.target,
+        hasAgent: m.agentLastSeen != null || ['openwrt', 'vps', 'teamspeak'].includes((m.type || '').toLowerCase()),
+      };
+      if (!groups.has(catName)) {
+        groups.set(catName, []);
+        groupOrder.push(catName);
+      }
+      groups.get(catName)!.push(node);
+    }
+
+    return groupOrder.map((name) => ({ name, assets: groups.get(name)! }));
+  }, [rawMonitors]);
+
+  React.useEffect(() => {
+    if (selectedId === null && tree && tree.length > 0 && tree[0].assets.length > 0) {
+      setSelectedId(tree[0].assets[0].id);
+    }
+  }, [tree, selectedId]);
 
   const toggleMetric = (key: string) => {
     setEnabledMetrics((prev) =>
@@ -256,9 +297,12 @@ export function InfrastructurePage() {
       return;
     }
 
+    const existingAssetId = editingId != null ? rawMonitors.find((m) => m.id === editingId)?.assetId ?? null : null;
+
     try {
-      await fetch('/status/api.php?action=save_monitor', {
+      const res = await fetch('/status/api.php?action=save_monitor', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: editingId ?? 0,
@@ -267,6 +311,7 @@ export function InfrastructurePage() {
           target: monitorTarget,
           port: monitorPort ? parseInt(monitorPort, 10) : null,
           category: category,
+          asset_id: existingAssetId,
           timeout: parseInt(timeoutVal, 10) || 5,
           email_notifications: emailNotifications ? 1 : 0,
           sms_notifications: smsNotifications ? 1 : 0,
@@ -289,26 +334,19 @@ export function InfrastructurePage() {
           enabled_metrics: enabledMetrics,
         }),
       });
-    } catch {}
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        alert(data.error || `Uložení selhalo (HTTP ${res.status}).`);
+        return;
+      }
+    } catch {
+      alert('Uložení selhalo - zkontrolujte připojení.');
+      return;
+    }
 
-    const newAsset: AssetNode = {
-      id: editingId ?? Date.now(),
-      monitorId: editingId ?? Date.now(),
-      name: monitorName,
-      kind: monitorType === 'minecraft' ? 'Game' : monitorType === 'teamspeak' ? 'Voice' : monitorType === 'openwrt' ? 'Router' : monitorType === 'vps' ? 'Server' : 'Web',
-      icon: monitorType === 'minecraft' ? 'gamepad' : monitorType === 'teamspeak' ? 'mic' : monitorType === 'openwrt' ? 'router' : 'globe',
-      status: 'up',
-      monitorCount: 1,
-      hostname: monitorTarget ? `${monitorTarget}${monitorPort ? ':' + monitorPort : ''}` : 'Agent',
-      hasAgent: monitorType === 'openwrt' || monitorType === 'vps' || monitorType === 'teamspeak',
-    };
-
-    setTree((prev) => {
-      const copy = prev ? [...prev] : getDefaultAssetGroups();
-      const targetGroupIndex = monitorType === 'openwrt' || monitorType === 'vps' ? 2 : monitorType === 'minecraft' || monitorType === 'teamspeak' ? 1 : 0;
-      copy[targetGroupIndex].assets.unshift(newAsset);
-      return copy;
-    });
+    // Žádná lokální fabrikace nového řádku - strom se odvozuje z rawMonitors,
+    // tak ho po úspěšném uložení jen znovu načteme ze serveru.
+    loadMonitors();
 
     setAddedSuccess(true);
     setTimeout(() => {
@@ -324,6 +362,7 @@ export function InfrastructurePage() {
     : null;
 
   const selectedAsset = allAssets.find((a) => a.id === selectedId) ?? allAssets[0];
+  const selectedMonitor = selectedAsset ? rawMonitors.find((m) => m.id === (selectedAsset.monitorId ?? selectedAsset.id)) : undefined;
 
   return (
     <div className="space-y-6">
@@ -342,6 +381,29 @@ export function InfrastructurePage() {
               setMonitorName('');
               setMonitorTarget('');
               setMonitorPort('');
+              // Nový monitor nesmí zdědit nastavení z toho, co se naposledy editovalo.
+              setTimeoutVal('5');
+              setEmailNotifications(true);
+              setSmsNotifications(false);
+              setNotes('');
+              setMaintenance(false);
+              setMaintenanceDescription('');
+              setCpanelStatsUrl('');
+              setBodyKeyword('');
+              setSqUsername('serveradmin');
+              setSqPassword('');
+              setSqPasswordPlaceholder('••••••••');
+              setTs3FiletransferPort('30033');
+              setRconPort('25575');
+              setRconPassword('');
+              setRconPasswordPlaceholder('••••••••');
+              setMonitoredProcesses('');
+              setCpuThreshold('90');
+              setRamThreshold('95');
+              setHddThreshold('90');
+              setRemoteActionsEnabled(false);
+              setAllowedActions(['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe']);
+              setEnabledMetrics(['check_pipeline', 'response_breakdown', 'ssl_card', 'headers', 'health_score', 'process', 'service', 'clients_chart', 'quality', 'ports', 'license_version']);
               setShowAddModal(true);
             }}
             className="gap-2 font-bold text-xs shadow-md"
@@ -590,7 +652,7 @@ export function InfrastructurePage() {
                           </div>
                           <div>
                             <label className="block text-xs font-medium text-muted-foreground mb-1">ServerQuery Heslo</label>
-                            <Input type="password" value={sqPassword} onChange={(e) => setSqPassword(e.target.value)} placeholder="••••••••" />
+                            <Input type="password" value={sqPassword} onChange={(e) => setSqPassword(e.target.value)} placeholder={sqPasswordPlaceholder || '••••••••'} />
                           </div>
                         </div>
                         <div>
@@ -610,7 +672,7 @@ export function InfrastructurePage() {
                           </div>
                           <div>
                             <label className="block text-xs font-medium text-muted-foreground mb-1">RCON Heslo</label>
-                            <Input type="password" value={rconPassword} onChange={(e) => setRconPassword(e.target.value)} placeholder="••••••••" />
+                            <Input type="password" value={rconPassword} onChange={(e) => setRconPassword(e.target.value)} placeholder={rconPasswordPlaceholder || '••••••••'} />
                           </div>
                         </div>
                         <p className="text-[11px] text-muted-foreground">RCON umožňuje dotazovat příkaz "tps" na serveru Spigot/Paper/BungeeCord pro přesný výpočet lagů (TPS).</p>
@@ -801,14 +863,18 @@ export function InfrastructurePage() {
           </div>
 
           <div className="space-y-4">
-            {filteredAssets ? (
+            {monitorsError ? (
+              <p className="text-muted-foreground text-xs text-center py-6">{monitorsError}</p>
+            ) : !tree ? (
+              <p className="text-muted-foreground text-xs text-center py-6">Načítám zařízení…</p>
+            ) : filteredAssets ? (
               <div className="space-y-1">
                 {filteredAssets.map((asset) => (
                   <AssetRow key={asset.id} asset={asset} isSelected={selectedId === asset.id} onSelect={() => setSelectedId(asset.id)} />
                 ))}
               </div>
             ) : (
-              (tree ?? getDefaultAssetGroups()).map((group) => (
+              tree.map((group) => (
                 <div key={group.name} className="space-y-1.5">
                   <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider px-2">{group.name}</h3>
                   <div className="space-y-1">
@@ -864,24 +930,26 @@ export function InfrastructurePage() {
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
                   <p className="text-xs text-muted-foreground">Telemetrický Agent & Verze</p>
                   <p className="font-bold text-sm text-foreground mt-0.5">
-                    {selectedAsset.id === 3 ? 'v3.13.8 [Build: 1779874471]' : selectedAsset.id === 5 ? 'v1.5.2' : (selectedAsset.hasAgent ? 'Nainstalován a aktivní' : 'Bez agenta (Aktivní Ping)')}
+                    {selectedAsset.hasAgent
+                      ? (selectedMonitor?.details?.agent_version ? `v${selectedMonitor.details.agent_version}` : 'Nainstalován a aktivní')
+                      : 'Bez agenta (Aktivní Ping)'}
                   </p>
-                  {selectedAsset.hasAgent && (
+                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && (
                     <p className="text-[10px] text-emerald-400 mt-0.5">
-                      {selectedAsset.id === 3 ? '🟢 Aktivní před 64 min' : selectedAsset.id === 5 ? '🟢 Aktivní před 4 min' : '🟢 Aktivní'}
+                      🟢 Aktivní {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
                     </p>
                   )}
                 </div>
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
                   <p className="text-xs text-muted-foreground">Operační systém</p>
                   <p className="font-bold text-sm text-foreground mt-0.5 font-mono">
-                    {selectedAsset.id === 3 ? 'Debian 12 (bookworm)' : selectedAsset.id === 5 ? 'TurrisOS 9.1.0' : selectedAsset.kind === 'Web' ? 'Linux Web Server' : 'N/A'}
+                    {selectedMonitor?.os ?? '—'}
                   </p>
                 </div>
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
-                  <p className="text-xs text-muted-foreground">Uptime Serveru / HW</p>
+                  <p className="text-xs text-muted-foreground">Doba od poslední změny stavu</p>
                   <p className="font-bold text-sm text-foreground mt-0.5">
-                    {selectedAsset.id === 3 ? '12 dní, 6 hodin, 40 minut' : selectedAsset.id === 5 ? '59 dní, 7 hodin, 31 minut' : '99.99 %'}
+                    {selectedMonitor?.uptimeSeconds != null ? formatUptime(selectedMonitor.uptimeSeconds) : '—'}
                   </p>
                 </div>
               </div>

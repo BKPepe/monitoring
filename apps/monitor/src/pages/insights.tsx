@@ -2,23 +2,12 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Lightbulb, HardDrive, Cpu, ArrowRight, Server, Globe, Clock } from 'lucide-react';
+import { Lightbulb, HardDrive, Cpu, ArrowRight, Server, Globe } from 'lucide-react';
 import { appApi } from '@/api/app-api';
 
-function getDefaultMonitorsList() {
-  return [
-    { id: 1, name: 'BloodKings.eu', type: 'web', target: 'https://bloodkings.eu', status: 'up', responseMs: 14, cpu: 10.45, ram: 4.59, hdd: 2.66, details: { agent_version: '3.13.8' } },
-    { id: 2, name: 'BloodKings.eu discord', type: 'discord', target: 'Guild ID: 3412270785...', status: 'up', responseMs: 18, details: {} },
-    { id: 3, name: 'Donald', type: 'teamspeak', target: 'donald.bloodkings.eu:8200', status: 'up', responseMs: 1035, cpu: 0.4, ram: 35.9, hdd: 36.0, details: { agent_version: '3.13.8' } },
-    { id: 4, name: 'Minecraft', type: 'minecraft', target: 'mc.bloodkings.eu:25565', status: 'up', responseMs: 24, cpu: 12.4, ram: 54.2, hdd: 28.1, details: { agent_version: '3.13.8' } },
-    { id: 5, name: 'Router - Praha', type: 'openwrt', target: 'Turris - domov (cznic,turris1x)', status: 'up', responseMs: 8, cpu: 24.0, ram: 48.0, hdd: 3.0, details: { agent_version: '3.13.8' } },
-    { id: 6, name: 'Schlehofer.eu', type: 'web', target: 'https://schlehofer.eu', status: 'up', responseMs: 12, cpu: 10.45, ram: 4.59, hdd: 2.66, details: {} },
-  ];
-}
-
 export function InsightsPage() {
-  const [monitors, setMonitors] = useState<any[]>(getDefaultMonitorsList());
-  const [loading, setLoading] = useState(false);
+  const [monitors, setMonitors] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -27,9 +16,7 @@ export function InsightsPage() {
       .then((rows) => {
         if (!active) return;
         const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
-        if (list.length > 0) {
-          setMonitors(list);
-        }
+        setMonitors(list);
       })
       .catch(() => {})
       .finally(() => {
@@ -260,52 +247,6 @@ export function InsightsPage() {
             </div>
           </Card>
 
-          {/* Hodinová Matice Špiček Vytížení (Hourly Peak Heatmap) */}
-          <Card className="p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-              <div className="flex items-center gap-2.5">
-                <Clock className="size-5 text-amber-400" />
-                <div>
-                  <h3 className="font-bold text-base">Hodinová Matice Špiček Vytížení (Hourly Peak Heatmap)</h3>
-                  <p className="text-xs text-muted-foreground">Přehled hodin v týdnu s nejvyšší zátěží procesorů a síťového provozu</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground">
-                <span className="inline-block size-3 rounded bg-emerald-500/20 border border-emerald-500/40" /> Nízká (0-45%)
-                <span className="inline-block size-3 rounded bg-amber-500/40 border border-amber-500/60" /> Střední (45-70%)
-                <span className="inline-block size-3 rounded bg-rose-500/70 border border-rose-500/90 text-white" /> Špička (70%+)
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <div className="min-w-[640px] space-y-1.5 text-xs">
-                <div className="grid gap-1 font-mono text-[10px] text-muted-foreground text-center font-bold pb-1" style={{ gridTemplateColumns: '2.5rem repeat(24, minmax(0, 1fr))' }}>
-                  <span>Den</span>
-                  {Array.from({ length: 24 }).map((_, h) => (
-                    <span key={h}>{h.toString().padStart(2, '0')}h</span>
-                  ))}
-                </div>
-                {['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'].map((day, dIdx) => (
-                  <div key={day} className="grid gap-1 items-center font-mono" style={{ gridTemplateColumns: '2.5rem repeat(24, minmax(0, 1fr))' }}>
-                    <span className="text-[11px] font-bold text-muted-foreground">{day}</span>
-                    {Array.from({ length: 24 }).map((_, hIdx) => {
-                      const peakVal = Math.sin((hIdx + dIdx * 2) * 0.4) * 45 + 40;
-                      const intensityClass = peakVal > 70 ? 'bg-rose-500/70 border-rose-500/90 text-white font-bold' : peakVal > 45 ? 'bg-amber-500/40 border-amber-500/60 text-foreground font-semibold' : 'bg-emerald-500/20 border-emerald-500/40 text-muted-foreground';
-                      return (
-                        <div
-                          key={hIdx}
-                          title={`${day} ${hIdx}:00 — Zátěž cca ${Math.round(peakVal)} %`}
-                          className={`h-6 rounded border text-[9px] flex items-center justify-center transition-transform hover:scale-110 cursor-pointer ${intensityClass}`}
-                        >
-                          {Math.round(peakVal)}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Card>
         </>
       )}
     </div>

@@ -81,13 +81,17 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                             </div>
 
                             <div className="text-xs text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed font-sans">
-                              {day.status === 'down'
-                                ? '🔴 Detekován výpadek: Cílový port neodpovídal (trvání 2 min 14 s). Automatický test zopakoval ověření ze 3 uzlů.'
-                                : day.status === 'warning'
-                                ? '⚡ Zhoršená odezva: Průměrná latence > 420 ms'
-                                : day.status === 'maintenance'
-                                ? '🔧 Plánovaná údržba databáze a restart skriptů (03:00 - 03:25)'
-                                : '🟢 Všechny testy dostupnosti v tento den proběhly bez chyb (100% OK).'}
+                              {day.detail ?? (
+                                day.status === 'down'
+                                  ? '🔴 Detekován výpadek.'
+                                  : day.status === 'warning'
+                                  ? '⚡ Zhoršená odezva zaznamenána.'
+                                  : day.status === 'maintenance'
+                                  ? '🔧 Plánovaná údržba.'
+                                  : day.status === 'paused'
+                                  ? '⏸️ Bez naměřených dat pro tento den.'
+                                  : '🟢 Všechny testy dostupnosti proběhly bez chyb.'
+                              )}
                             </div>
                           </div>
                         </div>

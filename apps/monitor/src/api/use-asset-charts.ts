@@ -53,6 +53,28 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
   return { data, error, loading: data === null && error === null };
 }
 
+/**
+ * `action=public_status` se renderuje na jedné stránce nezávisle z několika
+ * komponent najednou (AppShell, DataSourceBanner, Dashboard) - bez sdílení by
+ * to byly 3 samostatné požadavky na server a DB pro tatáž data. Krátká TTL
+ * cache na úrovni modulu je sdílí, aniž by se muselo tahat přes React Context.
+ */
+let publicStatusCache: { promise: Promise<PublicStatus>; timestamp: number } | null = null;
+const PUBLIC_STATUS_CACHE_MS = 10000;
+
+function fetchPublicStatusShared(): Promise<PublicStatus> {
+  if (publicStatusCache && Date.now() - publicStatusCache.timestamp < PUBLIC_STATUS_CACHE_MS) {
+    return publicStatusCache.promise;
+  }
+  const promise = resolveSource().then(({ source }) => source.getPublicStatus());
+  publicStatusCache = { promise, timestamp: Date.now() };
+  promise.catch(() => {
+    // Chybu necachujeme - další volání ať to zkusí znovu, ne ať opakuje stejné selhání.
+    publicStatusCache = null;
+  });
+  return promise;
+}
+
 /** Souhrnný stav pro dashboard (`action=public_status`). */
 export function usePublicStatus() {
   const [data, setData] = React.useState<PublicStatus | null>(null);
@@ -61,8 +83,7 @@ export function usePublicStatus() {
   React.useEffect(() => {
     let active = true;
 
-    resolveSource()
-      .then(({ source }) => source.getPublicStatus())
+    fetchPublicStatusShared()
       .then((result) => {
         if (active) setData(result);
       })

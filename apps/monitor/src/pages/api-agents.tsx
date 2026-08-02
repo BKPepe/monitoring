@@ -6,42 +6,34 @@ import { useSession } from '@/api/use-session';
 import { appApi } from '@/api/app-api';
 import { Link } from 'react-router-dom';
 
-function getDefaultAgentsList() {
-  return [
-    { id: 3, name: 'Donald', type: 'teamspeak', target: 'donald.bloodkings.eu:8200', status: 'up', os: 'Debian 12 (bookworm)', details: { agent_version: '3.13.8' } },
-    { id: 5, name: 'Router - Praha', type: 'openwrt', target: 'Turris - domov (cznic,turris1x)', status: 'up', os: 'TurrisOS 9.1.0', details: { agent_version: '3.13.8' } },
-  ];
-}
-
 export function ApiAgentsPage() {
   const { session } = useSession();
   const [copied, setCopied] = useState(false);
-  const [agents, setAgents] = useState<any[]>(getDefaultAgentsList());
+  const [agents, setAgents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     appApi.getMonitors().then((rows) => {
       const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
-      if (list.length > 0) {
-        const agentMonitors = list.filter((m: any) => {
-          const t = (m.type || '').toLowerCase();
-          const n = (m.name || '').toLowerCase();
-          return (
-            t === 'openwrt' ||
-            t === 'vps' ||
-            t === 'agent' ||
-            t === 'router' ||
-            t === 'teamspeak' ||
-            t === 'minecraft' ||
-            n.includes('donald') ||
-            n.includes('router') ||
-            m.agentLastSeen != null ||
-            Boolean(m.details?.agent_version) ||
-            Boolean(m.details?.cpanel_stats)
-          );
-        });
-        setAgents(agentMonitors.length > 0 ? agentMonitors : getDefaultAgentsList());
-      }
-    }).catch(() => {});
+      const agentMonitors = list.filter((m: any) => {
+        const t = (m.type || '').toLowerCase();
+        const n = (m.name || '').toLowerCase();
+        return (
+          t === 'openwrt' ||
+          t === 'vps' ||
+          t === 'agent' ||
+          t === 'router' ||
+          t === 'teamspeak' ||
+          t === 'minecraft' ||
+          n.includes('donald') ||
+          n.includes('router') ||
+          m.agentLastSeen != null ||
+          Boolean(m.details?.agent_version) ||
+          Boolean(m.details?.cpanel_stats)
+        );
+      });
+      setAgents(agentMonitors);
+    }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   if (!session?.authenticated) {
@@ -109,7 +101,9 @@ export function ApiAgentsPage() {
         </div>
 
         <div className="space-y-3">
-          {agents.length === 0 ? (
+          {loading ? (
+            <p className="text-xs text-muted-foreground py-4 text-center">Načítám agenty…</p>
+          ) : agents.length === 0 ? (
             <p className="text-xs text-muted-foreground py-4 text-center">Žádní registrovaní agenti v databázi.</p>
           ) : (
             agents.map(a => (
@@ -120,11 +114,10 @@ export function ApiAgentsPage() {
                     <Badge variant="info" className="font-mono text-[10px]">{a.type.toUpperCase()}</Badge>
                   </div>
                   <p className="text-muted-foreground font-mono mt-1">
-                    OS: <span className="text-foreground font-semibold">{a.os || 'Linux / OpenWrt'}</span> · Verze agenta: <span className="text-emerald-400 font-bold">{a.details?.agent_version || a.details?.version || 'v3.13.8'}</span> · Cíl: {a.target}
+                    OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> · Verze agenta: <span className="text-emerald-400 font-bold">{a.details?.agent_version || a.details?.version || '—'}</span> · Cíl: {a.target}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-emerald-400 font-medium">HMAC SHA-256 ✅</span>
                   <Badge variant={a.status === 'up' ? 'up' : 'down'}>
                     {a.status === 'up' ? 'Aktivní' : 'Neaktivní'}
                   </Badge>
@@ -146,7 +139,7 @@ export function ApiAgentsPage() {
             <Badge variant="up">100% Private</Badge>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně v PostgreSQL databázi pod vaší plnou kontrolou.
+            0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně ve vaší MySQL/PostgreSQL databázi pod vaší plnou kontrolou.
           </p>
         </Card>
 
@@ -154,12 +147,12 @@ export function ApiAgentsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <ShieldCheck className="size-5 text-primary" />
-              <h4 className="font-semibold text-sm">HMAC Authorization & Encryption</h4>
+              <h4 className="font-semibold text-sm">Autentizace agentů</h4>
             </div>
-            <Badge variant="up">HMAC Podepsáno</Badge>
+            <Badge variant="up">Klíč + TLS</Badge>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Každá komunikace agenta se serverem je šifrována pres TLS 1.3 a podepsána unikátním HMAC-SHA256 tokenem s hodinovým timestampem.
+            Běžný telemetrický report agent posílá s unikátním klíčem monitoru přes TLS. Vzdálené příkazy pro OpenWrt routery (Remote Actions) jsou navíc podepsané HMAC-SHA256 s časovým razítkem.
           </p>
         </Card>
       </div>

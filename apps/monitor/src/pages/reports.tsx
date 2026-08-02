@@ -24,7 +24,7 @@ interface MonitorSLA {
   target: string;
   type: string;
   currentStatus: string;
-  uptimePct: number;
+  uptimePercent: number;
   outageMinutes: number;
   totalChecks: number;
   lastOutage: OutageDetail | null;
@@ -101,7 +101,7 @@ export function ReportsPage() {
       `"${m.target.replace(/"/g, '""')}"`,
       m.type,
       m.currentStatus,
-      m.uptimePct.toFixed(3),
+      m.uptimePercent.toFixed(3),
       m.outageMinutes,
       m.totalChecks,
       m.mttrSec ?? 0,
@@ -171,8 +171,8 @@ export function ReportsPage() {
           <div>
             <p className="text-xs text-muted-foreground">Sledované servery/weby</p>
             <p className="font-bold text-xl">{monitors.length} celkem</p>
-            <p className={`text-[10px] font-medium ${monitors.every(m => m.uptimePct >= slaGoal) ? 'text-emerald-400' : 'text-amber-400'}`}>
-              {monitors.filter(m => m.uptimePct >= slaGoal).length} / {monitors.length} splňuje SLA
+            <p className={`text-[10px] font-medium ${monitors.every(m => m.uptimePercent >= slaGoal) ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {monitors.filter(m => m.uptimePercent >= slaGoal).length} / {monitors.length} splňuje SLA
             </p>
           </div>
         </Card>
@@ -217,8 +217,8 @@ export function ReportsPage() {
         ) : (
           <div className="space-y-3 pt-2">
             {monitors.map((item) => {
-              const isOk = item.uptimePct >= slaGoal;
-              const fillPct = Math.max(5, Math.min(100, (item.uptimePct - 90.0) * 10));
+              const isOk = item.uptimePercent >= slaGoal;
+              const fillPct = Math.max(5, Math.min(100, (item.uptimePercent - 90.0) * 10));
               const isExpanded = expandedId === item.id;
 
               return (
@@ -240,7 +240,7 @@ export function ReportsPage() {
                         <span className="text-[10px] text-muted-foreground font-mono">Výpadek: {item.outageMinutes} min</span>
                       )}
                       <Badge variant={isOk ? 'up' : 'down'} className="text-[10px]">
-                        {item.uptimePct.toFixed(2)} %
+                        {item.uptimePercent.toFixed(2)} %
                       </Badge>
                       {isExpanded ? <ChevronUp className="size-3.5 text-muted-foreground" /> : <ChevronDown className="size-3.5 text-muted-foreground" />}
                     </div>
@@ -284,9 +284,9 @@ export function ReportsPage() {
                       <div className="p-3 rounded-md bg-background/60 border border-border/60 space-y-1">
                         <p className="text-muted-foreground text-[11px] font-semibold">Percentilové Rozložení Latence (p50 / p95 / p99)</p>
                         <div className="flex flex-wrap items-center gap-4 font-mono text-xs pt-0.5">
-                          <span className="bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">p50 (Medián): <strong className="text-emerald-400">{item.p50Ms != null ? `${item.p50Ms} ms` : '14 ms'}</strong></span>
-                          <span className="bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">p95 (Špičky): <strong className="text-amber-400">{item.p95Ms != null ? `${item.p95Ms} ms` : '28 ms'}</strong></span>
-                          <span className="bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded">p99 (Kritické špičky): <strong className="text-rose-400">{item.p99Ms != null ? `${item.p99Ms} ms` : '45 ms'}</strong></span>
+                          <span className="bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">p50 (Medián): <strong className="text-emerald-400">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong></span>
+                          <span className="bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">p95 (Špičky): <strong className="text-amber-400">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong></span>
+                          <span className="bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded">p99 (Kritické špičky): <strong className="text-rose-400">{item.p99Ms != null ? `${item.p99Ms} ms` : '—'}</strong></span>
                         </div>
                       </div>
 

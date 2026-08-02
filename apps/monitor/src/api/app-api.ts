@@ -36,6 +36,31 @@ export interface ApiMonitor {
   hostname: string | null;
   os: string | null;
   details?: Record<string, any>;
+  // Konfigurační pole - přítomná jen v odpovědi pro přihlášeného administrátora
+  // (viz api.php action=monitors, $is_admin blok). Hesla se nikdy neposílají zpátky,
+  // jen příznak, že jsou nastavená.
+  timeout?: number;
+  emailNotifications?: boolean;
+  smsNotifications?: boolean;
+  notes?: string | null;
+  maintenance?: boolean;
+  maintenanceDescription?: string | null;
+  maintenanceStart?: string | null;
+  maintenanceEnd?: string | null;
+  monitoredProcesses?: string | null;
+  cpuThreshold?: number;
+  ramThreshold?: number;
+  hddThreshold?: number;
+  bodyKeyword?: string | null;
+  cpanelStatsUrl?: string | null;
+  sqUsername?: string | null;
+  sqPasswordSet?: boolean;
+  ts3FiletransferPort?: number | null;
+  rconPort?: number | null;
+  rconPasswordSet?: boolean;
+  enabledMetrics?: string[];
+  remoteActionsEnabled?: boolean;
+  allowedActions?: string[];
 }
 
 export interface ApiAsset {
@@ -124,9 +149,6 @@ export const appApi = {
   },
 
   getMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors').then((r) => r.monitors),
-
-  getAssetGroups: () =>
-    request<{ groups: { name: string; assets: ApiAsset[] }[] }>('assets').then((r) => r.groups),
 
   getUsers: () => request<{ users: ApiUser[] }>('users').then((r) => r.users),
 
