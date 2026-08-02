@@ -95,7 +95,12 @@ if ($action === 'monitors') {
             ];
         }
     } catch (Exception $e) {
-        echo json_encode(['monitors' => []], JSON_UNESCAPED_UNICODE);
+        // DOČASNÁ DIAGNOSTIKA - odstranit hned po zjištění příčiny na produkci.
+        if (($_GET['debug'] ?? '') === 'bk1') {
+            echo json_encode(['monitors' => [], 'debug_error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        } else {
+            echo json_encode(['monitors' => []], JSON_UNESCAPED_UNICODE);
+        }
         exit;
     }
 
