@@ -464,6 +464,12 @@ export function SettingsPage() {
                 className="max-w-xs" />
 
               <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-2.5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer font-medium text-foreground">
+                  <input type="checkbox" checked={settings.agent_outdated_email_enabled !== '0'}
+                    onChange={e => set('agent_outdated_email_enabled', e.target.checked ? '1' : '0')}
+                    className="rounded border-border text-primary" />
+                  <span>Zasílat e-mailová varování při detekci neaktuální verze agenta (Outdated Agent Alert)</span>
+                </label>
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
                   <input type="checkbox" checked={settings.agent_notifications_enabled === '1'}
                     onChange={e => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
@@ -476,7 +482,7 @@ export function SettingsPage() {
                     className="rounded border-border" />
                   <span>Upozornění VPS agenta doručovat pouze administrátorům</span>
                 </label>
-                <p className={hintCls}>Druhá volba se týká obou interních událostí agenta (neaktivní agent i překročené limity).</p>
+                <p className={hintCls}>Při zjištění zastaralé verze agenta systém odesílá e-mailovou výstrahu a eviduje varovný incident.</p>
               </div>
 
               <FieldInput k="agent_registration_token" label="Token pro auto-registraci agentů" type="password" placeholder="TajnyRegistracniToken123" className="max-w-md" />

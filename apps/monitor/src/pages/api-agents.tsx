@@ -29,8 +29,18 @@ export function ApiAgentsPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [notifyOutdatedEmail, setNotifyOutdatedEmail] = useState(true);
 
   useEffect(() => {
+    fetch('/status/api.php?action=get_settings', { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.settings?.agent_outdated_email_enabled != null) {
+          setNotifyOutdatedEmail(data.settings.agent_outdated_email_enabled !== '0');
+        }
+      })
+      .catch(() => {});
+
     appApi.getMonitors().then((rows) => {
       const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
       const agentMonitors = list.filter((m: any) => {
@@ -230,6 +240,31 @@ export function ApiAgentsPage() {
               : hasDisabledAutoUpdate
               ? "⚠️ U některých agentů vypnuty auto-updates"
               : "Všichni agenti aktuální & auto-updates OK ✅"}
+          </Badge>
+        </div>
+
+        {/* Nastavení e-mailových výstrah pro zastaralé agenty */}
+        <div className="p-3.5 rounded-xl bg-secondary/40 border border-border flex items-center justify-between flex-wrap gap-2 text-xs">
+          <label className="flex items-center gap-2.5 cursor-pointer font-semibold text-foreground">
+            <input
+              type="checkbox"
+              checked={notifyOutdatedEmail}
+              onChange={(e) => {
+                const nextVal = e.target.checked;
+                setNotifyOutdatedEmail(nextVal);
+                fetch('/status/api.php?action=save_settings', {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ agent_outdated_email_enabled: nextVal ? '1' : '0' }),
+                }).catch(() => {});
+              }}
+              className="rounded border-border size-4 text-primary cursor-pointer"
+            />
+            <span>Zasílat e-mailové výstrahy administrátorům při zjištění neaktuální verze agenta (Outdated Agent Alert)</span>
+          </label>
+          <Badge variant={notifyOutdatedEmail ? "up" : "warning"} className="text-[10px]">
+            {notifyOutdatedEmail ? "E-mail výstrahy zapnuty 📧" : "E-mail výstrahy vypnuty 🔕"}
           </Badge>
         </div>
 

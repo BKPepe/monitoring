@@ -15,6 +15,7 @@ import {
   Plus,
   Terminal,
   CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -689,73 +690,105 @@ export function InfrastructurePage() {
                     )}
 
                     {/* OpenWrt Remote Actions */}
-                    {monitorType === 'openwrt' && (
-                      <div className="space-y-3 p-4 rounded-xl bg-slate-900 border border-slate-700/80 text-xs text-slate-300">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-bold text-slate-100 text-sm">📶 OpenWrt Remote Actions</h4>
-                          <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-amber-400">
-                            <input
-                              type="checkbox"
-                              checked={remoteActionsEnabled}
-                              onChange={(e) => setRemoteActionsEnabled(e.target.checked)}
-                              className="rounded border-amber-400 text-amber-500"
-                            />
-                            Povolit Remote Actions pro tento router
-                          </label>
-                        </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Ve výchozím stavu VYPNUTO. Bez zaškrtnutí server nikdy nezařadí žádnou vzdálenou akci do fronty pro tento konkrétní monitor, bez ohledu na požadavky.
-                        </p>
+                    {monitorType === 'openwrt' && (() => {
+                      const mon = editingId ? rawMonitors.find(m => m.id === editingId) : selectedMonitor;
+                      const hasActiveAgent = mon?.agentLastSeen != null || Boolean(mon?.details?.agent_version) || mon?.status === 'up';
+                      const agentVer = mon?.details?.agent_version || mon?.details?.version || '3.13.8';
+                      const lastSeenText = mon?.agentLastSeen ? formatRelative(new Date(mon.agentLastSeen * 1000).toISOString()) : null;
 
-                        {remoteActionsEnabled && (
-                          <div className="space-y-2 pt-2 border-t border-slate-800">
-                            <p className="font-semibold text-slate-200">Povolené vzdálené akce (OBĚ strany musí souhlasit):</p>
-                            <div className="grid grid-cols-2 gap-2">
-                              {[
-                                { key: 'restart_wan', label: '🔄 Restartovat WAN' },
-                                { key: 'restart_wireguard', label: '🔒 Restartovat WireGuard (wg0)' },
-                                { key: 'reboot_router', label: '⚡ Restartovat celý router' },
-                                { key: 'renew_dhcp', label: '🌐 Obnovit DHCP nájem na WAN' },
-                                { key: 'reconnect_pppoe', label: '🔌 Znovu připojit PPPoE' },
-                                { key: 'restart_service', label: '🛠️ Restartovat službu' },
-                              ].map((act) => (
-                                <label key={act.key} className="flex items-center gap-2 p-2 rounded bg-slate-950 border border-slate-800 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={allowedActions.includes(act.key)}
-                                    onChange={() => toggleAction(act.key)}
-                                    className="rounded border-emerald-500 text-emerald-400"
-                                  />
-                                  <span>{act.label}</span>
-                                </label>
-                              ))}
+                      return (
+                        <div className="space-y-4 p-4 rounded-xl bg-secondary/40 border border-border text-xs text-foreground">
+                          {/* Indikátor stavu detekce agenta */}
+                          {hasActiveAgent ? (
+                            <div className="p-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
+                              <span className="flex items-center gap-2">
+                                <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                                <span>Agent rozpoznán a aktivní na routeru (Verze: <strong className="font-mono font-bold text-emerald-400">v{agentVer}</strong>{lastSeenText ? ` · Poslední report: ${lastSeenText}` : ''})</span>
+                              </span>
+                              <Badge variant="up" className="text-[10px]">Agent Připojen ✅</Badge>
                             </div>
-                          </div>
-                        )}
+                          ) : (
+                            <div className="p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
+                              <span className="flex items-center gap-2">
+                                <AlertTriangle className="size-4 text-amber-500 shrink-0" />
+                                <span>Zatím nebyl detekován žádný aktivní OpenWrt agent na cílové IP/doméně.</span>
+                              </span>
+                              <Badge variant="warning" className="text-[10px]">Vyžaduje instalaci ⚠️</Badge>
+                            </div>
+                          )}
 
-                        <div className="pt-3 border-t border-slate-800 space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <p className="font-bold text-slate-100 flex items-center gap-1.5">
-                              <Terminal className="size-3.5 text-emerald-400" /> Instalace OpenWrt agenta (<code>agent_openwrt.sh</code>):
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const cmd = 'wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh';
-                                navigator.clipboard.writeText(cmd);
-                                alert('Příkaz zkopírován do schránky!');
-                              }}
-                              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-700/50"
-                            >
-                              Kopírovat příkaz
-                            </button>
+                          <div className="flex items-center justify-between border-b border-border pb-3">
+                            <div>
+                              <h4 className="font-bold text-foreground text-sm">📶 OpenWrt Remote Actions</h4>
+                              <p className="text-[11px] text-muted-foreground">Potvrzovací příkazy (reboot routeru, restart WAN, WireGuard) chráněné HMAC-SHA256</p>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-amber-500 dark:text-amber-400">
+                              <input
+                                type="checkbox"
+                                checked={remoteActionsEnabled}
+                                onChange={(e) => setRemoteActionsEnabled(e.target.checked)}
+                                className="rounded border-amber-400 text-amber-500"
+                              />
+                              Povolit Remote Actions pro tento router
+                            </label>
                           </div>
-                          <code className="block bg-slate-950 p-2.5 rounded text-[11px] font-mono text-emerald-400 border border-slate-800 break-all whitespace-pre-wrap select-all">
-                            wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh
-                          </code>
+
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            Ve výchozím stavu VYPNUTO. Bez zaškrtnutí server nikdy nezařadí žádnou vzdálenou akci do fronty pro tento konkrétní monitor, bez ohledu na požadavky.
+                          </p>
+
+                          {remoteActionsEnabled && (
+                            <div className="space-y-2 pt-2 border-t border-border">
+                              <p className="font-semibold text-foreground">Povolené vzdálené akce (OBĚ strany musí souhlasit):</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                {[
+                                  { key: 'restart_wan', label: '🔄 Restartovat WAN' },
+                                  { key: 'restart_wireguard', label: '🔒 Restartovat WireGuard (wg0)' },
+                                  { key: 'reboot_router', label: '⚡ Restartovat celý router' },
+                                  { key: 'renew_dhcp', label: '🌐 Obnovit DHCP nájem na WAN' },
+                                  { key: 'reconnect_pppoe', label: '🔌 Znovu připojit PPPoE' },
+                                  { key: 'restart_service', label: '🛠️ Restartovat službu' },
+                                ].map((act) => (
+                                  <label key={act.key} className="flex items-center gap-2 p-2.5 rounded-lg bg-background border border-border hover:bg-secondary/60 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={allowedActions.includes(act.key)}
+                                      onChange={() => toggleAction(act.key)}
+                                      className="rounded border-emerald-500 text-emerald-500"
+                                    />
+                                    <span className="font-medium">{act.label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {!hasActiveAgent && (
+                            <div className="pt-3 border-t border-border space-y-2">
+                              <div className="flex items-center justify-between">
+                                <p className="font-bold text-foreground flex items-center gap-1.5">
+                                  <Terminal className="size-3.5 text-emerald-500" /> Jednorázová instalace OpenWrt agenta (<code>agent_openwrt.sh</code>):
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const cmd = 'wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh';
+                                    navigator.clipboard.writeText(cmd);
+                                    alert('Příkaz zkopírován do schránky!');
+                                  }}
+                                  className="text-[11px] font-semibold text-primary hover:underline bg-primary/10 px-2 py-0.5 rounded border border-primary/30 cursor-pointer"
+                                >
+                                  Kopírovat příkaz
+                                </button>
+                              </div>
+                              <code className="block bg-slate-950 p-2.5 rounded-lg text-[11px] font-mono text-emerald-400 border border-slate-800 break-all whitespace-pre-wrap select-all">
+                                wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh
+                              </code>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* VPS & TeamSpeak monitored processes */}
                     {(monitorType === 'vps' || monitorType === 'teamspeak') && (
