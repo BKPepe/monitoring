@@ -1173,7 +1173,23 @@ fi
 
 if [ "$http_code" = "200" ]; then
     log_debug "OK: Statistiky uspesne odeslany."
-    
+
+    # Potvrzeni provedeni akce zpet na server - bez tohohle by agent_actions.status
+    # zustal navzdy na 'sent' ("odeslano, ceka na potvrzeni") v administraci, i kdyz
+    # se akce ve skutecnosti provedla. Samostatny lehky POST, protoze hlavni
+    # telemetrie uz pro tento cyklus odesla.
+    send_action_result() {
+        ar_id="$1"; ar_status="$2"; ar_msg="$3"
+        ar_payload="{\"agent_key\":\"$(json_str "$AGENT_KEY")\",\"action_result\":{\"action_id\":${ar_id},\"status\":\"$(json_str "$ar_status")\",\"message\":\"$(json_str "$ar_msg")\"}}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -s -m 10 -X POST -H "Content-Type: application/json" -d "$ar_payload" "$API_URL" >/dev/null 2>&1
+        elif command -v uclient-fetch >/dev/null 2>&1; then
+            uclient-fetch -q -T 10 -O /dev/null --post-data="$ar_payload" --header="Content-Type: application/json" "$API_URL" >/dev/null 2>&1
+        elif command -v wget >/dev/null 2>&1; then
+            wget -T 10 --post-data="$ar_payload" --header="Content-Type: application/json" -q -O /dev/null "$API_URL" >/dev/null 2>&1
+        fi
+    }
+
     # --- Spracovani vzdalenych akci (Remote Actions) ---
     REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
     ALLOWED_ACTIONS="${ALLOWED_ACTIONS:-restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe}"
@@ -1204,19 +1220,23 @@ if [ "$http_code" = "200" ]; then
                             /sbin/ifdown wan >/dev/null 2>&1 || true
                             sleep 2
                             /sbin/ifup wan >/dev/null 2>&1 || true
+                            send_action_result "$act_id" "executed" "WAN restartovano"
                             ;;
                         restart_wireguard)
                             /sbin/ifdown wg0 >/dev/null 2>&1 || true
                             sleep 1
                             /sbin/ifup wg0 >/dev/null 2>&1 || true
+                            send_action_result "$act_id" "executed" "WireGuard (wg0) restartovan"
                             ;;
                         renew_dhcp)
                             ubus call network.interface.wan renew >/dev/null 2>&1 || true
+                            send_action_result "$act_id" "executed" "DHCP najem na WAN obnoven"
                             ;;
                         reconnect_pppoe)
                             /sbin/ifdown wan >/dev/null 2>&1 || true
                             sleep 3
                             /sbin/ifup wan >/dev/null 2>&1 || true
+                            send_action_result "$act_id" "executed" "PPPoE znovu pripojeno"
                             ;;
                         restart_service)
                             # Service name je v poli "service_name" v payloadu akce
@@ -1224,20 +1244,27 @@ if [ "$http_code" = "200" ]; then
                             if [ -n "$svc_name" ] && [ -x "/etc/init.d/$svc_name" ]; then
                                 /etc/init.d/"$svc_name" restart >/dev/null 2>&1 || true
                                 log_message "Restartovana sluzba: $svc_name"
+                                send_action_result "$act_id" "executed" "Sluzba '$svc_name' restartovana"
                             else
                                 log_message "VAROVANI: Sluzba '$svc_name' nenalezena nebo neni spustitelna."
+                                send_action_result "$act_id" "failed" "Sluzba '$svc_name' nenalezena nebo neni spustitelna"
                             fi
                             ;;
                         reboot_router)
                             log_message "PROVADIM REBOOT ROUTERU DLE PODEPSANEHO POKYNU..."
+                            # Potvrzeni musi odejit PRED rebootem - jakmile /sbin/reboot
+                            # ukonci proces, uz se nic dalsiho neprovede.
+                            send_action_result "$act_id" "executed" "Router se restartuje"
                             /sbin/reboot >/dev/null 2>&1 || true
                             ;;
                     esac
                 else
                     log_message "VAROVANI: Odmitnuta vzdalena akce - neplatny HMAC podpis!"
+                    send_action_result "$act_id" "failed" "Neplatny HMAC podpis"
                 fi
             else
                 log_message "VAROVANI: Odmitnuta vzdalena akce - vyprsena platnost (casove okno > 30s)"
+                send_action_result "$act_id" "failed" "Vyprsela platnost podpisu (>30s)"
             fi
         fi
     fi

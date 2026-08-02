@@ -25,6 +25,41 @@ if (!$data) {
     exit;
 }
 
+// --- Samostatné potvrzení výsledku Remote Action ---
+// Agent (agent_openwrt.sh) tohle posílá jako lehký follow-up POST hned po
+// provedení akce, odděleně od hlavní telemetrie (ta už pro tenhle cyklus
+// odešla). Nemá cpu/ram/hdd, takže musí projít dřív, než na ně narazí
+// běžná validace povinných telemetrických polí níže.
+if (isset($data['action_result']) && is_array($data['action_result']) && !isset($data['cpu'])) {
+    $ar_agent_key = trim($data['agent_key'] ?? '');
+    if (empty($ar_agent_key)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
+        exit;
+    }
+    $stmt_ar_mon = $pdo->prepare("SELECT id FROM monitors WHERE agent_key = ? LIMIT 1");
+    $stmt_ar_mon->execute([$ar_agent_key]);
+    $ar_monitor_id = $stmt_ar_mon->fetchColumn();
+    if (!$ar_monitor_id) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
+        exit;
+    }
+
+    $act_res = $data['action_result'];
+    $act_id = intval($act_res['action_id'] ?? 0);
+    $act_status = in_array($act_res['status'] ?? '', ['executed', 'failed'], true) ? $act_res['status'] : 'failed';
+    $act_msg = trim((string)($act_res['message'] ?? ''));
+
+    if ($act_id > 0) {
+        $stmt_act = $pdo->prepare("UPDATE agent_actions SET status = ?, result_message = ?, executed_at = NOW() WHERE id = ? AND monitor_id = ?");
+        $stmt_act->execute([$act_status, $act_msg, $act_id, $ar_monitor_id]);
+    }
+
+    echo json_encode(['success' => true]);
+    exit;
+}
+
 // --- Zpracování automatické registrace agenta ---
 if (isset($data['action']) && $data['action'] === 'register') {
     $token = trim($data['token'] ?? '');
