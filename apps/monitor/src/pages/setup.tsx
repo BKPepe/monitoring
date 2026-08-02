@@ -225,7 +225,7 @@ export function SetupPage() {
             disabled={loading}
             style={{ width: '100%', padding: '0.75rem', background: loading ? '#0284c7' : '#0284c7', color: '#ffffff', border: 'none', borderRadius: '0.375rem', fontWeight: 600, fontSize: '0.875rem', cursor: loading ? 'wait' : 'pointer', marginTop: '0.5rem', transition: 'background 0.2s' }}
           >
-            {loading ? t('common.loading', 'Ověřuji údaje...') : installed ? (require2FA ? 'Potvrdit 2FA kód a přihlásit se' : t('btn.login', 'Přihlásit se')) : 'Dokončit instalaci a přihlásit se'}
+            {loading ? t('setup.verifying', 'Ověřuji údaje...') : installed ? (require2FA ? t('setup.confirm_2fa', 'Potvrdit 2FA kód a přihlásit se') : t('btn.login', 'Přihlásit se')) : t('setup.finish_install', 'Dokončit instalaci a přihlásit se')}
           </button>
         </form>
 

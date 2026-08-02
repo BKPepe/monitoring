@@ -218,7 +218,7 @@ export function WebsitesPage() {
                 disabled={saving}
                 className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                {saving ? t('common.loading', 'Ukládám…') : t('common.save', 'Uložit a spustit monitoring')}
+                {saving ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit a spustit monitoring')}
               </button>
             </div>
           </form>
@@ -226,7 +226,7 @@ export function WebsitesPage() {
       )}
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">{t('common.loading', 'Načítám seznam webů...')}</p>
+        <p className="text-muted-foreground text-sm">{t('websites.loading', 'Načítám seznam webů...')}</p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {websites.map((web) => (

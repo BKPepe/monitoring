@@ -237,7 +237,7 @@ export function DashboardPage() {
                 {monitorsError ? (
                   <p className="text-down px-5 py-10 text-center text-sm">{monitorsError}</p>
                 ) : monitorsLoading ? (
-                  <p className="text-muted-foreground px-5 py-10 text-center text-sm">{t('common.loading', 'Načítám monitory…')}</p>
+                  <p className="text-muted-foreground px-5 py-10 text-center text-sm">{t('dashboard.loading_monitors', 'Načítám monitory…')}</p>
                 ) : (
                   <MonitorTable rows={visibleMonitors} />
                 )}
@@ -319,7 +319,7 @@ export function DashboardPage() {
           {dailyUptimeError ? (
             <p className="text-muted-foreground py-8 text-center text-sm">{dailyUptimeError}</p>
           ) : liveUptimeHistory.length === 0 ? (
-            <p className="text-muted-foreground py-8 text-center text-sm">{t('common.loading', 'Načítám historii dostupnosti…')}</p>
+            <p className="text-muted-foreground py-8 text-center text-sm">{t('dashboard.loading_uptime', 'Načítám historii dostupnosti…')}</p>
           ) : (
             <UptimeHeatmap rows={liveUptimeHistory} />
           )}

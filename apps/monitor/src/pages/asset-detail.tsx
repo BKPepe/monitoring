@@ -29,14 +29,6 @@ import { cn, formatPercent } from '@/lib/utils';
 
 type MonitorStatus = ApiMonitor['status'];
 
-const statusLabel: Record<MonitorStatus, string> = {
-  up: 'Online',
-  down: 'Offline',
-  warning: 'Warning',
-  paused: 'Paused',
-  maintenance: 'Údržba',
-};
-
 type TimeRange = '24h' | '7d' | '30d';
 
 interface HealthMetric {
@@ -86,7 +78,7 @@ export function AssetDetailPage() {
         const match =
           list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
           list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
-        setAsset(match ? buildDynamicAsset(match) : null);
+        setAsset(match ? buildDynamicAsset(match, t) : null);
       })
       .catch(() => {
         if (active) setAsset(null);
@@ -111,8 +103,8 @@ export function AssetDetailPage() {
         setEvents(
           data.events.map((e: any) => ({
             id: e.id,
-            title: e.isDown ? t('status.down', 'Výpadek služby') : e.rawStatus === 'warning' ? t('common.warning', 'Zhoršená odezva') : t('dashboard.all_healthy_desc', 'Kontrola proběhla v pořádku'),
-            detail: e.errorMsg + (e.outageDurationSec ? ` (trvání ${Math.round(e.outageDurationSec / 60)} min)` : ''),
+            title: e.isDown ? t('asset.event_outage', 'Výpadek služby') : e.rawStatus === 'warning' ? t('asset.event_degraded', 'Zhoršená odezva') : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
+            detail: e.errorMsg + (e.outageDurationSec ? t('asset.event_duration', { min: Math.round(e.outageDurationSec / 60) }, ` (trvání ${Math.round(e.outageDurationSec / 60)} min)`) : ''),
             at: e.time,
             severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : 'info',
             resolution: e.isDown ? 'Open' : 'Info',
@@ -131,7 +123,7 @@ export function AssetDetailPage() {
   if (loading) {
     return (
       <div className="text-muted-foreground py-20 text-center text-sm" role="status">
-        {t('common.loading', 'Načítám detail zařízení a diagnostické metriky…')}
+        {t('asset.loading', 'Načítám detail zařízení a diagnostické metriky…')}
       </div>
     );
   }
@@ -140,9 +132,9 @@ export function AssetDetailPage() {
     return (
       <Card className="grid place-items-center gap-4 p-12 text-center">
         <div className="space-y-1">
-          <p className="font-semibold text-base">{t('common.error', 'Zařízení nenašeno')}</p>
+          <p className="font-semibold text-base">{t('asset.not_found', 'Zařízení nenašeno')}</p>
           <p className="text-muted-foreground text-sm">
-            Zařízení s ID <code>{assetId}</code> nebylo v monitorovací databázi nalezeno.
+            {t('asset.not_found_desc', { id: assetId ?? '' }, 'Zařízení s ID {id} nebylo v monitorovací databázi nalezeno.')}
           </p>
         </div>
         <Button asChild size="sm" variant="outline">
@@ -178,9 +170,9 @@ export function AssetDetailPage() {
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-3">
           <TabsList className="bg-secondary/40 p-1">
             <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled & Výkon')}</TabsTrigger>
-            <TabsTrigger value="processes">{t('asset.tab_processes', 'Procesy')} ({asset.processes.length})</TabsTrigger>
+            <TabsTrigger value="processes">{t('asset.tab_processes_short', 'Procesy')} ({asset.processes.length})</TabsTrigger>
             <TabsTrigger value="services">{t('asset.tab_services', 'Služby & Certifikáty')}</TabsTrigger>
-            <TabsTrigger value="events">{t('incidents.title', 'Události')} ({events.length})</TabsTrigger>
+            <TabsTrigger value="events">{t('asset.tab_events', 'Události')} ({events.length})</TabsTrigger>
           </TabsList>
           <RangePicker value={range} onChange={setRange} />
         </div>
@@ -194,15 +186,15 @@ export function AssetDetailPage() {
             <div className="flex items-center gap-3 border-b border-border pb-3">
               <Cpu className="size-5 text-primary" />
               <div>
-                <h3 className="font-bold text-base">Zátěž procesů serveru ({asset.name})</h3>
-                <p className="text-xs text-muted-foreground">Aktuálně spotřebovávaná paměť RAM a zátěž procesoru.</p>
+                <h3 className="font-bold text-base">{t('asset.process_load', { name: asset.name }, `Zátěž procesů serveru (${asset.name})`)}</h3>
+                <p className="text-xs text-muted-foreground">{t('asset.process_load_desc', 'Aktuálně spotřebovávaná paměť RAM a zátěž procesoru.')}</p>
               </div>
             </div>
             {asset.processes.length === 0 ? (
               asset.cpanelStats ? (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Tenhle monitor nemá VPS agenta pro výpis jednotlivých procesů - hostuje se na cPanelu, kde je k dispozici jen souhrnné využití zdrojů:
+                    {t('asset.cpanel_no_agent', 'Tenhle monitor nemá VPS agenta pro výpis jednotlivých procesů - hostuje se na cPanelu, kde je k dispozici jen souhrnné využití zdrojů:')}
                   </p>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                     {Object.entries(asset.cpanelStats).map(([key, val]) => (
@@ -215,16 +207,16 @@ export function AssetDetailPage() {
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground py-6 text-center">
-                  Pro tento uzel nejsou v databázi evidovány žádné samostatné podprocesy.
+                  {t('asset.no_processes_db', 'Pro tento uzel nejsou v databázi evidovány žádné samostatné podprocesy.')}
                 </p>
               )
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Název procesů</TableHead>
-                    <TableHead className="text-right">Využití CPU</TableHead>
-                    <TableHead className="text-right">Spotřeba RAM</TableHead>
+                    <TableHead>{t('asset.proc_name', 'Název procesů')}</TableHead>
+                    <TableHead className="text-right">{t('common.cpu', 'Využití CPU')}</TableHead>
+                    <TableHead className="text-right">{t('asset.mem_usage', 'Spotřeba RAM')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -246,8 +238,8 @@ export function AssetDetailPage() {
             <div className="flex items-center gap-3 border-b border-border pb-3">
               <ShieldCheck className="size-5 text-emerald-400" />
               <div>
-                <h3 className="font-bold text-base">Stav Služeb & Šifrovací Certifikáty</h3>
-                <p className="text-xs text-muted-foreground">Stav protokolů a šifrovacích certifikátů.</p>
+                <h3 className="font-bold text-base">{t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}</h3>
+                <p className="text-xs text-muted-foreground">{t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}</p>
               </div>
             </div>
 
@@ -256,36 +248,36 @@ export function AssetDetailPage() {
               return (
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
-                    <p className="font-semibold text-sm">TLS/SSL Certifikát</p>
+                    <p className="font-semibold text-sm">{t('asset.ssl_cert', 'TLS/SSL Certifikát')}</p>
                     <p className="text-xs text-muted-foreground font-medium">
-                      {isNoSsl ? 'N/A' : 'Kontrola certifikátu zatím není napojená'}
+                      {isNoSsl ? t('common.na', 'N/A') : t('asset.ssl_not_wired', 'Kontrola certifikátu zatím není napojená')}
                     </p>
                     <p className="text-[11px] text-muted-foreground font-mono">
                       {isNoSsl
                         ? (upperKind === 'ROUTER'
-                            ? 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)'
+                            ? t('asset.proto_router', 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)')
                             : upperKind === 'MINECRAFT'
-                            ? 'Minecraft Java socket (port 25565 bez TLS vrstvy)'
+                            ? t('asset.proto_minecraft', 'Minecraft Java socket (port 25565 bez TLS vrstvy)')
                             : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE'
-                            ? 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy'
-                            : 'Protokol nepoužívá SSL/TLS vrstvu')
-                        : 'Datum expirace certifikátu se zatím z monitoru nečte.'}
+                            ? t('asset.proto_teamspeak', 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy')
+                            : t('asset.proto_none', 'Protokol nepoužívá SSL/TLS vrstvu'))
+                        : t('asset.ssl_expiry_unread', 'Datum expirace certifikátu se zatím z monitoru nečte.')}
                     </p>
                   </div>
               <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
-                <p className="font-semibold text-sm">Stav Služby</p>
+                <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
                 <p className={cn("text-xs font-medium", asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400')}>
-                  {asset.status === 'down' ? 'OFFLINE' : 'Aktivní'}
+                  {asset.status === 'down' ? t('common.offline', 'OFFLINE') : t('infra.active_since', 'Aktivní')}
                 </p>
-                <p className="text-[11px] text-muted-foreground font-mono">Protokol: {asset.kind}</p>
+                <p className="text-[11px] text-muted-foreground font-mono">{t('common.protocol', 'Protokol')}: {asset.kind}</p>
               </div>
               <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
-                <p className="font-semibold text-sm">SMART SSD Health & NVMe Opotřebení Disku</p>
+                <p className="font-semibold text-sm">{t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}</p>
                 <p className={cn("text-xs font-medium font-mono", asset.smartStatus ? 'text-emerald-400' : 'text-muted-foreground')}>
-                  {asset.smartStatus ?? 'Nejsou dostupná data (agent SMART nehlásí).'}
+                  {asset.smartStatus ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
                 </p>
                 <p className="text-[11px] text-muted-foreground font-mono">
-                  Sledování opotřebení NVMe buněk, zaoceánovaných chyb a reallocated sektorů z rozhraní smartctl.
+                  {t('asset.smart_desc', 'Sledování opotřebení NVMe buněk, zaoceánovaných chyb a reallocated sektorů z rozhraní smartctl.')}
                 </p>
               </div>
             </div>
@@ -299,8 +291,8 @@ export function AssetDetailPage() {
             <div className="flex items-center gap-3 border-b border-border pb-3">
               <Clock className="size-5 text-primary" />
               <div>
-                <h3 className="font-bold text-base">Historie událostí & Protokol měření ({asset.name})</h3>
-                <p className="text-xs text-muted-foreground">Záznamy kontrol, detekovaných služeb a změny stavu v čase.</p>
+                <h3 className="font-bold text-base">{t('asset.events_history', { name: asset.name }, `Historie událostí & Protokol měření (${asset.name})`)}</h3>
+                <p className="text-xs text-muted-foreground">{t('asset.events_history_desc', 'Záznamy kontrol, detekovaných služeb a změny stavu v čase.')}</p>
               </div>
             </div>
             <Timeline events={events} />
@@ -320,8 +312,8 @@ function Hero({ asset }: { asset: AssetDetail }) {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Warning'),
-    paused: 'Paused',
-    maintenance: 'Údržba',
+    paused: t('common.paused', 'Paused'),
+    maintenance: t('common.maintenance', 'Údržba'),
   };
 
   return (
@@ -348,7 +340,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
           onClick={() => {
             window.location.href = `/app/infrastructure`;
           }}
-          title={t('common.actions', 'Správa akcí a přehled')}
+          title={t('asset.actions_title', 'Správa akcí a přehled')}
         >
           <Settings2 className="size-4" /> {t('common.actions', 'Akce')}
         </Button>
@@ -358,7 +350,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
           onClick={() => {
             window.location.href = `/app/infrastructure?edit=${asset.id}`;
           }}
-          title={t('asset.edit_monitor', 'Upravit nastavení monitoru')}
+          title={t('asset.edit_monitor_title', 'Upravit nastavení monitoru')}
         >
           <Pencil className="size-4" /> {t('asset.edit_monitor', 'Upravit monitor')}
         </Button>
@@ -370,13 +362,13 @@ function Hero({ asset }: { asset: AssetDetail }) {
 function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: TimeRange) => void }) {
   const { t } = useLanguage();
   const timeRangeLabels: Record<TimeRange, string> = {
-    '24h': t('reports.period_30d', 'Posledních 24 hodin'),
-    '7d': 'Posledních 7 dní',
-    '30d': t('reports.period_30d', 'Posledních 30 dní'),
+    '24h': t('asset.range_24h', 'Posledních 24 hodin'),
+    '7d': t('asset.range_7d', 'Posledních 7 dní'),
+    '30d': t('asset.range_30d', 'Posledních 30 dní'),
   };
 
   return (
-    <div role="group" aria-label={t('common.search', 'Časový rozsah')} className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5">
+    <div role="group" aria-label={t('asset.time_range', 'Časový rozsah')} className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5">
       {(Object.keys(timeRangeLabels) as TimeRange[]).map((range) => (
         <button
           key={range}
@@ -409,8 +401,8 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
       <Card className="xl:col-span-8">
         <CardHeader>
           <div>
-            <CardTitle>{t('common.details', 'Souhrn & Diagnostika')}</CardTitle>
-            <CardDescription>{t('banner.live_data_desc', 'Živý stav měření z databáze')}</CardDescription>
+            <CardTitle>{t('asset.summary_title', 'Souhrn & Diagnostika')}</CardTitle>
+            <CardDescription>{t('asset.summary_desc', 'Živý stav měření z databáze')}</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -427,7 +419,7 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
 
       <Card className="xl:col-span-4">
         <CardHeader>
-          <CardTitle>{t('common.details', 'Parametry monitoru / serveru')}</CardTitle>
+          <CardTitle>{t('asset.params_title', 'Parametry monitoru / serveru')}</CardTitle>
         </CardHeader>
         <CardContent>
           <dl className="flex flex-col gap-2.5 text-sm">
@@ -447,7 +439,7 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
 
       <Card className="xl:col-span-5">
         <CardHeader>
-          <CardTitle>{t('dashboard.recent_alerts', 'Poslední události')}</CardTitle>
+          <CardTitle>{t('asset.recent_events', 'Poslední události')}</CardTitle>
         </CardHeader>
         <CardContent>
           <Timeline events={events.slice(0, 5)} />
@@ -462,14 +454,14 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
           {asset.processes.length === 0 ? (
             <p className="text-xs text-muted-foreground px-5 py-6 text-center">
               {asset.cpanelStats
-                ? 'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.'
-                : 'Zatím není připojen agent pro výpis procesů.'}
+                ? t('asset.no_agent_cpanel_hint', 'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.')
+                : t('asset.no_agent_processes', 'Zatím není připojen agent pro výpis procesů.')}
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="pl-5">Proces</TableHead>
+                  <TableHead className="pl-5">{t('asset.process', 'Proces')}</TableHead>
                   <TableHead className="text-right">CPU</TableHead>
                   <TableHead className="pr-5 text-right">RAM</TableHead>
                 </TableRow>
@@ -490,21 +482,30 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
 
       <Card className="xl:col-span-4">
         <CardHeader>
-          <CardTitle>Detekované Služby / Porty</CardTitle>
+          <CardTitle>{t('asset.detected_services', 'Detekované Služby / Porty')}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-1 px-2">
           {asset.related.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-3 py-6 text-center">Žádné navázané podslužby.</p>
+            <p className="text-xs text-muted-foreground px-3 py-6 text-center">{t('asset.no_related_services', 'Žádné navázané podslužby.')}</p>
           ) : (
-            asset.related.map((service) => (
+            asset.related.map((service) => {
+              const relatedStatusLabel: Record<MonitorStatus, string> = {
+                up: t('common.online', 'Online'),
+                down: t('common.offline', 'Offline'),
+                warning: t('common.warning', 'Warning'),
+                paused: t('common.paused', 'Paused'),
+                maintenance: t('common.maintenance', 'Údržba'),
+              };
+              return (
               <div key={service.name} className="hover:bg-muted/40 flex items-center gap-3 rounded-md px-3 py-2 transition-colors">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{service.name}</p>
                   <p className="text-muted-foreground truncate text-xs">{service.kind} · {service.detail}</p>
                 </div>
-                <Badge variant={service.status === 'maintenance' ? 'info' : service.status} dot>{statusLabel[service.status]}</Badge>
+                <Badge variant={service.status === 'maintenance' ? 'info' : service.status} dot>{relatedStatusLabel[service.status]}</Badge>
               </div>
-            ))
+              );
+            })
           )}
         </CardContent>
       </Card>
@@ -524,6 +525,7 @@ function HealthCard({ metric }: { metric: HealthMetric }) {
 }
 
 function PerformanceCharts({ assetId, range }: { assetId: number; range: TimeRange; assetKind?: string }) {
+  const { t } = useLanguage();
   const { data: rawData, error, loading } = useAssetCharts(assetId, range);
 
   const data = React.useMemo(() => {
@@ -536,7 +538,7 @@ function PerformanceCharts({ assetId, range }: { assetId: number; range: TimeRan
   if (error) {
     return (
       <Card className="grid place-items-center gap-1 p-10 text-center">
-        <p className="text-sm font-medium">Grafy se nepodařilo načíst</p>
+        <p className="text-sm font-medium">{t('asset.charts_load_error', 'Grafy se nepodařilo načíst')}</p>
         <p className="text-muted-foreground text-sm">{error.message}</p>
       </Card>
     );
@@ -545,8 +547,8 @@ function PerformanceCharts({ assetId, range }: { assetId: number; range: TimeRan
   if (loading) {
     return (
       <div className="grid gap-4 lg:grid-cols-2">
-        {['Využití CPU', 'Využití paměti', 'Zaplnění disku', 'Odezva (Latence)'].map((title) => (
-          <div key={title} className="p-6 rounded-xl bg-card border border-border h-48 animate-pulse" />
+        {['cpu', 'ram', 'hdd', 'latency'].map((key) => (
+          <div key={key} className="p-6 rounded-xl bg-card border border-border h-48 animate-pulse" />
         ))}
       </div>
     );
@@ -555,8 +557,8 @@ function PerformanceCharts({ assetId, range }: { assetId: number; range: TimeRan
   if (!data || data.length === 0) {
     return (
       <div className="p-8 rounded-lg bg-secondary/30 border border-border text-center text-xs text-muted-foreground space-y-1">
-        <p className="font-semibold text-foreground text-sm">Data pro tento monitor nejsou v databázi k dispozici</p>
-        <p>Nebyla nalezena žádná naměřená historie časových řad pro zadaný rozsah {range}.</p>
+        <p className="font-semibold text-foreground text-sm">{t('asset.no_chart_data', 'Data pro tento monitor nejsou v databázi k dispozici')}</p>
+        <p>{t('asset.no_chart_data_desc', { range }, `Nebyla nalezena žádná naměřená historie časových řad pro zadaný rozsah ${range}.`)}</p>
       </div>
     );
   }
@@ -570,20 +572,20 @@ function PerformanceCharts({ assetId, range }: { assetId: number; range: TimeRan
   );
 }
 
-function timeAgo(isoOrDate: string | null): string {
-  if (!isoOrDate) return 'Neznámo';
+function timeAgo(isoOrDate: string | null, t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string): string {
+  if (!isoOrDate) return t('common.unknown', 'Neznámo');
   const d = new Date(isoOrDate);
   const diff = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (diff < 60) return `Před ${diff} s`;
-  if (diff < 3600) return `Před ${Math.floor(diff / 60)} min`;
-  if (diff < 86400) return `Před ${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}min`;
+  if (diff < 60) return t('asset.ago_seconds', { s: diff }, `Před ${diff} s`);
+  if (diff < 3600) return t('asset.ago_minutes', { m: Math.floor(diff / 60) }, `Před ${Math.floor(diff / 60)} min`);
+  if (diff < 86400) return t('asset.ago_hours', { h: Math.floor(diff / 3600), m: Math.floor((diff % 3600) / 60) }, `Před ${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}min`);
   return d.toLocaleString('cs-CZ');
 }
 
-function buildDynamicAsset(m: ApiMonitor): AssetDetail {
+function buildDynamicAsset(m: ApiMonitor, t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string): AssetDetail {
   const status: MonitorStatus = m.status === 'up' ? 'up' : m.status === 'down' ? 'down' : m.status === 'warning' ? 'warning' : 'paused';
-  const lastCheckDisplay = m.lastCheck ? `${timeAgo(m.lastCheck)} (${new Date(m.lastCheck).toLocaleString('cs-CZ')})` : 'Před chvílí';
-  const lastChangeDisplay = m.lastStatusChange ? `${timeAgo(m.lastStatusChange)} (${new Date(m.lastStatusChange).toLocaleString('cs-CZ')})` : '—';
+  const lastCheckDisplay = m.lastCheck ? `${timeAgo(m.lastCheck, t)} (${new Date(m.lastCheck).toLocaleString('cs-CZ')})` : t('asset.moment_ago', 'Před chvílí');
+  const lastChangeDisplay = m.lastStatusChange ? `${timeAgo(m.lastStatusChange, t)} (${new Date(m.lastStatusChange).toLocaleString('cs-CZ')})` : '—';
 
   const parsedProcesses: { name: string; cpu: number; memory: number }[] = [];
 
@@ -626,39 +628,37 @@ function buildDynamicAsset(m: ApiMonitor): AssetDetail {
     status,
     breadcrumb: [m.category ?? 'Monitory'],
     health: [
-      { key: 'status', label: 'Stav', value: status === 'up' ? 'Online' : 'Offline' },
-      { key: 'latency', label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : (status === 'down' ? '—' : '—'), tone: 'latency' },
-      ...(isTS3 && hasTs3Counts ? [{ key: 'ts3_clients', label: 'Připojení klienti TS3', value: `${ts3Clients} / ${ts3Max} uživatelů`, tone: 'latency' as const }] : []),
-      { key: 'cpu', label: 'Využití CPU', value: m.cpu != null ? `${m.cpu.toFixed(1)} %` : '—', tone: 'cpu' },
-      { key: 'ram', label: 'Využití RAM', value: m.ram != null ? `${m.ram.toFixed(1)} %` : '—', tone: 'memory' },
-      { key: 'hdd', label: 'Využití disku', value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—', tone: 'disk' },
+      { key: 'status', label: t('common.status', 'Stav'), value: status === 'up' ? t('common.online', 'Online') : t('common.offline', 'Offline') },
+      { key: 'latency', label: t('common.response', 'Odezva'), value: m.responseMs != null ? `${m.responseMs} ms` : '—', tone: 'latency' },
+      ...(isTS3 && hasTs3Counts ? [{ key: 'ts3_clients', label: t('asset.ts3_clients', 'Připojení klienti TS3'), value: t('asset.ts3_clients_value', { online: ts3Clients ?? 0, max: ts3Max ?? 0 }, `${ts3Clients} / ${ts3Max} uživatelů`), tone: 'latency' as const }] : []),
+      { key: 'cpu', label: t('common.cpu', 'Využití CPU'), value: m.cpu != null ? `${m.cpu.toFixed(1)} %` : '—', tone: 'cpu' },
+      { key: 'ram', label: t('common.ram', 'Využití RAM'), value: m.ram != null ? `${m.ram.toFixed(1)} %` : '—', tone: 'memory' },
+      { key: 'hdd', label: t('common.hdd', 'Využití disku'), value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—', tone: 'disk' },
     ],
-    summary: `Monitor ${m.name} (${m.type}) běží na cíli ${m.target}. Metriky se pravidelně ukládají a vyhodnocují v databázi.`,
+    summary: t('asset.summary_text', { name: m.name, type: m.type, target: m.target }, `Monitor ${m.name} (${m.type}) běží na cíli ${m.target}. Metriky se pravidelně ukládají a vyhodnocují v databázi.`),
     summaryChips: [
-      { label: status === 'up' ? 'Všechny testy OK' : 'Detekován výpadek', variant: status === 'up' ? 'up' : 'warning' },
-      { label: `Typ: ${m.type.toUpperCase()}`, variant: 'info' },
+      { label: status === 'up' ? t('asset.all_tests_ok', 'Všechny testy OK') : t('asset.outage_detected', 'Detekován výpadek'), variant: status === 'up' ? 'up' : 'warning' },
+      { label: `${t('common.type', 'Typ')}: ${m.type.toUpperCase()}`, variant: 'info' },
     ],
     info: [
-      { label: 'Poslední kontrola', value: lastCheckDisplay },
-      { label: 'Poslední změna stavu', value: lastChangeDisplay },
-      { label: 'Odezva', value: m.responseMs != null ? `${m.responseMs} ms` : '—' },
-      { label: 'Operační systém', value: m.os ?? '—' },
-      { label: 'Typ protokolu', value: m.type.toUpperCase() },
-      ...(isTS3 && hasTs3Counts ? [{ label: 'TeamSpeak 3 ServerQuery', value: `${ts3Clients} / ${ts3Max} uživatelů online (Port 9987/8200)` }] : []),
-      ...(m.details?.net != null ? [{ label: 'Síťový průtok (Rx/Tx)', value: `${Number(m.details.net).toFixed(1)} KB/s` }] : []),
-      ...(m.details?.disk_read_kb != null ? [{ label: 'Čtení z disku', value: `${Number(m.details.disk_read_kb).toFixed(1)} KB/s` }] : []),
-      ...(m.details?.disk_write_kb != null ? [{ label: 'Zápis na disk', value: `${Number(m.details.disk_write_kb).toFixed(1)} KB/s` }] : []),
-      ...(m.details?.inode_usage != null ? [{ label: 'Využití Inodů (fs)', value: `${Number(m.details.inode_usage).toFixed(1)} %` }] : []),
-      ...(m.details?.swap != null ? [{ label: 'Využití Swapu', value: `${Number(m.details.swap).toFixed(1)} %` }] : []),
-      ...(m.details?.tcp_retrans != null ? [{ label: 'TCP Retransmissions (/proc/net/snmp)', value: `${m.details.tcp_retrans}` }] : []),
-      ...(m.details?.conntrack_count != null ? [{ label: 'Conntrack Spojení (Sockets)', value: `${m.details.conntrack_count}` }] : []),
+      { label: t('common.last_check', 'Poslední kontrola'), value: lastCheckDisplay },
+      { label: t('common.last_change', 'Poslední změna stavu'), value: lastChangeDisplay },
+      { label: t('common.response', 'Odezva'), value: m.responseMs != null ? `${m.responseMs} ms` : '—' },
+      { label: t('infra.os', 'Operační systém'), value: m.os ?? '—' },
+      { label: t('asset.protocol_type', 'Typ protokolu'), value: m.type.toUpperCase() },
+      ...(isTS3 && hasTs3Counts ? [{ label: t('asset.ts3_serverquery', 'TeamSpeak 3 ServerQuery'), value: t('asset.ts3_serverquery_value', { online: ts3Clients ?? 0, max: ts3Max ?? 0 }, `${ts3Clients} / ${ts3Max} uživatelů online (Port 9987/8200)`) }] : []),
+      ...(m.details?.net != null ? [{ label: t('asset.net_throughput', 'Síťový průtok (Rx/Tx)'), value: `${Number(m.details.net).toFixed(1)} KB/s` }] : []),
+      ...(m.details?.disk_read_kb != null ? [{ label: t('asset.disk_read', 'Čtení z disku'), value: `${Number(m.details.disk_read_kb).toFixed(1)} KB/s` }] : []),
+      ...(m.details?.disk_write_kb != null ? [{ label: t('asset.disk_write', 'Zápis na disk'), value: `${Number(m.details.disk_write_kb).toFixed(1)} KB/s` }] : []),
+      ...(m.details?.inode_usage != null ? [{ label: t('asset.inode_usage', 'Využití Inodů (fs)'), value: `${Number(m.details.inode_usage).toFixed(1)} %` }] : []),
+      ...(m.details?.swap != null ? [{ label: t('asset.swap_usage', 'Využití Swapu'), value: `${Number(m.details.swap).toFixed(1)} %` }] : []),
+      ...(m.details?.tcp_retrans != null ? [{ label: t('asset.tcp_retrans', 'TCP Retransmissions (/proc/net/snmp)'), value: `${m.details.tcp_retrans}` }] : []),
+      ...(m.details?.conntrack_count != null ? [{ label: t('asset.conntrack', 'Conntrack Spojení (Sockets)'), value: `${m.details.conntrack_count}` }] : []),
     ],
     smartStatus: m.details?.smart ?? null,
     cpanelStats: m.details?.cpanel_stats ?? null,
-    // Skutečná historie se dotahuje samostatně (viz useEffect v AssetDetailPage,
-    // stav `events`) z action=events - dřív tu byla jediná vymyšlená položka
-    // "Automatický test / Odezva vyhodnocena v pořádku", pořád stejná bez
-    // ohledu na to, co se v monitor_logs skutečně stalo.
+    // Real history is fetched separately (see the `events` state and useEffect
+    // in AssetDetailPage) from action=events, instead of a synthetic entry.
     events: [],
     processes: parsedProcesses,
     related: [],

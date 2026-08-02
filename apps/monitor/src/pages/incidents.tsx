@@ -219,7 +219,7 @@ export function IncidentsPage() {
                 disabled={creating}
                 className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 cursor-pointer disabled:opacity-50"
               >
-                {creating ? t('common.loading', 'Ukládám…') : t('common.save', 'Uložit incident')}
+                {creating ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit incident')}
               </button>
             </div>
           </form>
@@ -227,7 +227,7 @@ export function IncidentsPage() {
       )}
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">{t('common.loading', 'Načítám stav incidentů...')}</p>
+        <p className="text-muted-foreground text-sm">{t('incidents.loading', 'Načítám stav incidentů...')}</p>
       ) : (
         <div className="space-y-6">
           {/* Sekce 1: Probíhající výpadky cílových služeb */}

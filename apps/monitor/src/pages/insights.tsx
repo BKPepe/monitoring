@@ -67,7 +67,7 @@ export function InsightsPage() {
       </div>
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">{t('common.loading', 'Analytický engine vyhodnocuje metriky infrastruktury...')}</p>
+        <p className="text-muted-foreground text-sm">{t('insights.loading', 'Analytický engine vyhodnocuje metriky infrastruktury...')}</p>
       ) : (
         <>
           <div className="grid gap-4 md:grid-cols-3">

@@ -91,7 +91,7 @@ export function ReportsPage() {
     return (
       <div className="flex items-center justify-center py-20 gap-3">
         <RefreshCw className="size-5 animate-spin text-primary" />
-        <span className="text-sm text-muted-foreground">{t('common.loading', 'Načítám SLA metriky z databáze…')}</span>
+        <span className="text-sm text-muted-foreground">{t('reports.loading', 'Načítám SLA metriky z databáze…')}</span>
       </div>
     );
   }
