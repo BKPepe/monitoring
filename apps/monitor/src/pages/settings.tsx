@@ -26,11 +26,46 @@ const labelCls = 'block text-[11px] font-medium text-muted-foreground mb-1';
 const hintCls = 'text-[10px] text-muted-foreground/70 mt-0.5';
 const sectionTitle = 'text-xs font-bold uppercase tracking-wider text-rose-400 mb-3';
 
+function GithubIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+    </svg>
+  );
+}
+
+function GoogleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className}>
+      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
+      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
+    </svg>
+  );
+}
+
+function DiscordIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" />
+    </svg>
+  );
+}
+
+function GitlabIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="#fc6d26" className={className}>
+      <path d="M22.65 14.39L12 22.13 1.35 14.39a.84.84 0 01-.3-.94l1.22-3.78 2.44-7.51A.42.42 0 015.48 2a.43.43 0 01.41.27l2.42 7.45h7.36l2.42-7.45a.43.43 0 01.41-.27.42.42 0 01.38.21l2.44 7.51 1.22 3.78a.84.84 0 01-.3.94z" />
+    </svg>
+  );
+}
+
 const OAUTH_PROVIDERS = [
-  { key: 'github', label: 'GitHub', color: 'text-[#f0f6fc]', bg: 'bg-[#24292e]' },
-  { key: 'google', label: 'Google', color: 'text-[#4285f4]', bg: 'bg-[#4285f4]/10' },
-  { key: 'discord', label: 'Discord', color: 'text-[#5865F2]', bg: 'bg-[#5865F2]/10' },
-  { key: 'gitlab', label: 'GitLab', color: 'text-[#fc6d26]', bg: 'bg-[#fc6d26]/10' },
+  { key: 'github', label: 'GitHub', icon: GithubIcon, color: 'text-foreground', bg: 'bg-zinc-800/80 border border-zinc-700' },
+  { key: 'google', label: 'Google', icon: GoogleIcon, color: '', bg: 'bg-slate-800/60 border border-slate-700' },
+  { key: 'discord', label: 'Discord', icon: DiscordIcon, color: 'text-[#5865F2]', bg: 'bg-[#5865F2]/15 border border-[#5865F2]/30' },
+  { key: 'gitlab', label: 'GitLab', icon: GitlabIcon, color: 'text-[#fc6d26]', bg: 'bg-[#fc6d26]/15 border border-[#fc6d26]/30' },
 ];
 
 type SettingsMap = Record<string, string>;
@@ -319,11 +354,9 @@ export function SettingsPage() {
                   hint="Prázdné nebo AUTO = automaticky zjištěno dle IP hostingu." />
               </div>
 
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-2">
                 <FieldInput k="sla_goal_pct" label="Cílová dostupnost SLA (%)" placeholder="99.95"
                   hint="Používá se v měsíčním infrastructure reportu." />
-                <FieldInput k="ts3_latest_version" label="Poslední známá verze TeamSpeak serveru" placeholder="Např. 3.13.7"
-                  hint="Prázdné = kontrola verze se přeskočí." />
                 <FieldInput k="ssl_alert_days" label="Varování před vypršením SSL (dní)" placeholder="14" />
               </div>
             </Card>
@@ -666,20 +699,23 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              {OAUTH_PROVIDERS.map(op => (
-                <div key={op.key} className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className={`size-6 rounded flex items-center justify-center text-[10px] font-black ${op.bg} ${op.color}`}>
-                      {op.label[0]}
+              {OAUTH_PROVIDERS.map(op => {
+                const Icon = op.icon;
+                return (
+                  <div key={op.key} className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`size-7 rounded-lg flex items-center justify-center ${op.bg} p-1.5 shadow-sm`}>
+                        <Icon className={`size-4 ${op.color}`} />
+                      </div>
+                      <span className="font-bold text-xs">{op.label}</span>
                     </div>
-                    <span className="font-bold text-xs">{op.label}</span>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FieldInput k={`oauth_${op.key}_client_id`} label={`${op.label} Client ID`} />
+                      <FieldInput k={`oauth_${op.key}_client_secret`} label={`${op.label} Client Secret`} type="password" />
+                    </div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <FieldInput k={`oauth_${op.key}_client_id`} label={`${op.label} Client ID`} />
-                    <FieldInput k={`oauth_${op.key}_client_secret`} label={`${op.label} Client Secret`} type="password" />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </Card>
           </div>
         )}
@@ -712,23 +748,7 @@ export function SettingsPage() {
                 hint="Zobrazí se v menu jako 'Portál'. Prázdné = odkaz se nezobrazí." />
             </Card>
 
-            {/* Security info */}
-            <Card className="p-6 space-y-4">
-              <div className="flex items-center gap-3 border-b border-border pb-3">
-                <Shield className="size-5 text-primary" />
-                <h3 className="font-semibold text-sm">Bezpečnost a Dvoufaktorové ověření (TOTP 2FA)</h3>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">TOTP 2FA Dvoufaktorová autentizace</p>
-                  <p className="text-xs text-muted-foreground">Vyžadovat 6-místný Google Authenticator kód při přihlášení.</p>
-                </div>
-                <Link to="/users"
-                  className="rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-xs font-semibold hover:bg-primary/90 transition-colors">
-                  Správa účtů & 2FA v aplikaci →
-                </Link>
-              </div>
-            </Card>
+
           </div>
         )}
 
