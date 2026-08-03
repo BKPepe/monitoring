@@ -21,7 +21,7 @@ export function StatusPagesPage() {
     fetch('/status/api.php?action=get_settings', { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
-        const title = data.settings?.site_title || 'Hlavní Status Portál';
+        const title = data.settings?.site_title || t('status_pages.default_title', 'Hlavní Status Portál');
         const url = data.settings?.site_url ? `${data.settings.site_url}/` : `${window.location.origin}/status/`;
         setPages([
           {
@@ -38,7 +38,7 @@ export function StatusPagesPage() {
         setPages([
           {
             id: 1,
-            title: 'Hlavní Status Portál',
+            title: t('status_pages.default_title', 'Hlavní Status Portál'),
             url: `${window.location.origin}/status/`,
             slug: 'default',
             isPublic: true,
@@ -46,13 +46,13 @@ export function StatusPagesPage() {
           }
         ]);
       });
-  }, []);
+  }, [t]);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('nav.status-pages', 'Veřejná Status Stránka')}</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('status_pages.title', 'Veřejná Status Stránka')}</h1>
           <p className="text-muted-foreground text-sm">
             {t('status_pages.subtitle', 'Zobrazuje veřejnou status stránku dostupnosti všech sledovaných služeb a plánovaných údržeb v reálném čase.')}
           </p>
@@ -73,7 +73,7 @@ export function StatusPagesPage() {
                     <p className="text-xs text-muted-foreground font-mono">{p.url}</p>
                   </div>
                 </div>
-                <Badge variant="up">{t('common.healthy', 'Aktivní')}</Badge>
+                <Badge variant="up">{t('infra.active_since', 'Aktivní')}</Badge>
               </div>
 
               <p className="text-xs text-muted-foreground leading-relaxed">
@@ -96,7 +96,7 @@ export function StatusPagesPage() {
                 rel="noreferrer"
                 className="font-semibold text-emerald-400 hover:underline inline-flex items-center gap-1.5"
               >
-                {t('common.open_details', 'Otevřít veřejný portál')} <ExternalLink className="size-3.5" />
+                {t('status_pages.open_portal', 'Otevřít veřejný portál')} <ExternalLink className="size-3.5" />
               </a>
             </div>
           </Card>
