@@ -224,7 +224,7 @@ export function ReportsPage() {
       </div>
 
       {error && (
-        <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold flex items-center gap-2">
+        <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
           <AlertTriangle className="size-4 shrink-0" />
           {error}
         </div>
@@ -485,22 +485,22 @@ export function ReportsPage() {
             </div>
           </Card>
         ) : (
-          <Card className="p-6 space-y-4 border-amber-500/30 bg-amber-500/5">
+          <Card className="p-6 space-y-4 border-amber-500/30 bg-amber-500/10 dark:bg-amber-500/5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400">
+                <div className="p-2.5 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-400">
                   <BarChart3 className="size-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="font-semibold text-base">{t('reports.prometheus_title', 'Prometheus Exportér Metrik')}</h3>
-                    <Badge variant="down" className="text-[10px] bg-amber-500/20 text-amber-400 border-amber-500/30">⚠️ {t('reports.prometheus_inactive', 'Vyžaduje token')}</Badge>
+                    <Badge variant="down" className="text-[10px] bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30">⚠️ {t('reports.prometheus_inactive', 'Vyžaduje token')}</Badge>
                   </div>
                   <p className="text-xs text-muted-foreground font-mono">/status/metrics.php</p>
                 </div>
               </div>
             </div>
-            <p className="text-sm text-amber-300/90">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
               {t('reports.prometheus_inactive_desc', 'Metriky jsou chráněny proti neautorizovanému přístupu. Vygenerujte přístupový token pro aktivaci endpointu.')}
             </p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
