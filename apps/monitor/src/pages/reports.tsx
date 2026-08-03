@@ -176,34 +176,29 @@ export function ReportsPage() {
   return (
     <div className="space-y-6 print:space-y-4">
       {/* Official header for PDF export and print (only shown when printing) */}
-      <div className="hidden print:flex items-center justify-between border-b-2 border-primary pb-4 mb-4">
+      <div className="hidden print:flex items-center justify-between border-b-2 border-primary/80 pb-4 mb-4">
         <div className="flex items-center gap-3">
           {customLogoUrl ? (
-            <img src={customLogoUrl} alt={siteTitle} className="h-10 max-w-[200px] object-contain" />
+            <img src={customLogoUrl} alt={siteTitle} className="h-10 max-w-[220px] object-contain" />
           ) : (
-            <div className="bg-primary text-primary-foreground p-3 rounded-xl flex items-center justify-center shadow-sm">
+            <div className="bg-primary text-primary-foreground p-2.5 rounded-xl flex items-center justify-center shadow-sm shrink-0">
               <Crown className="size-7 text-white" />
             </div>
           )}
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold text-2xl tracking-tight text-foreground">{siteTitle}</span>
-              {!customLogoUrl && (
-                <span className="text-xs font-bold tracking-widest uppercase text-primary bg-primary/10 px-2.5 py-0.5 rounded-md border border-primary/20">
-                  MONITORING
-                </span>
-              )}
-            </div>
+            <h2 className="font-extrabold text-2xl tracking-tight text-foreground">{siteTitle}</h2>
             <p className="text-xs text-muted-foreground font-medium mt-0.5">
               {t('reports.pdf_header_subtitle', 'Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz')}
             </p>
           </div>
         </div>
 
-        <div className="text-right text-xs text-muted-foreground space-y-1">
+        <div className="text-right text-xs text-muted-foreground space-y-0.5 shrink-0 ml-4">
           <p className="font-semibold text-foreground text-sm">{t('reports.pdf_audit_report', 'SLA Audit Report')}</p>
-          <p className="font-mono text-[11px]">{t('reports.pdf_generated_at', { date: new Date().toLocaleString('cs-CZ') }, `Vygenerováno: ${new Date().toLocaleString('cs-CZ')}`)}</p>
-          <p className="text-[10px] text-muted-foreground">{t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}</p>
+          <p className="font-mono text-[11px] whitespace-nowrap">
+            Vygenerováno: {new Date().toLocaleDateString('cs-CZ')} {new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}
+          </p>
+          <p className="text-[10px] text-muted-foreground whitespace-nowrap">{t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}</p>
         </div>
       </div>
 
