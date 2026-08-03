@@ -462,6 +462,18 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.prometheus_title': { cs: 'Prometheus Exportér Metrik', en: 'Prometheus Metrics Exporter' },
   'reports.prometheus_desc': { cs: 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru.', en: 'Integration interface for connecting external systems, Grafana, or a Prometheus server.' },
   'reports.prometheus_btn': { cs: 'Otevřít Prometheus výstup', en: 'Open Prometheus Output' },
+  'reports.prometheus_active': { cs: 'Aktivní', en: 'Active' },
+  'reports.prometheus_desc_active': { cs: 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru s vaším přístupovým tokenem.', en: 'Integration interface for connecting external systems, Grafana, or a Prometheus server with your access token.' },
+  'reports.copy_url': { cs: 'Kopírovat URL metrik', en: 'Copy Metrics URL' },
+  'common.copied': { cs: 'Zkopírováno!', en: 'Copied!' },
+  'reports.prometheus_inactive': { cs: 'Vyžaduje token', en: 'Requires Token' },
+  'reports.prometheus_inactive_desc': { cs: 'Metriky jsou chráněny proti neautorizovanému přístupu. Vygenerujte přístupový token pro aktivaci endpointu.', en: 'Metrics are protected against unauthorized access. Generate an access token to activate the endpoint.' },
+  'reports.generate_token_btn': { cs: 'Aktivovat Prometheus token (1-klik)', en: 'Activate Prometheus Token (1-Click)' },
+  'reports.manage_in_settings': { cs: 'Spravovat v Nastavení', en: 'Manage in Settings' },
+  'reports.pdf_header_subtitle': { cs: 'Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz', en: 'Official Uptime Guarantee, Outages & SLA Audit Report' },
+  'reports.pdf_audit_report': { cs: 'SLA Audit Report', en: 'SLA Audit Report' },
+  'reports.pdf_generated_at': { cs: 'Vygenerováno: {date}', en: 'Generated: {date}' },
+  'reports.pdf_source': { cs: 'Zdroj: bloodkings.eu / status API', en: 'Source: bloodkings.eu / status API' },
 
   // Users
   'users.title': { cs: 'Správa Uživatelů a Oprávnění', en: 'User & Permission Management' },

@@ -175,7 +175,7 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-6 print:space-y-4">
-      {/* Oficiální Hlavička pro PDF export a Tisk (Zobrazuje se pouze při tisku) */}
+      {/* Official header for PDF export and print (only shown when printing) */}
       <div className="hidden print:flex items-center justify-between border-b-2 border-primary pb-4 mb-4">
         <div className="flex items-center gap-3">
           {customLogoUrl ? (
@@ -195,15 +195,15 @@ export function ReportsPage() {
               )}
             </div>
             <p className="text-xs text-muted-foreground font-medium mt-0.5">
-              Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz
+              {t('reports.pdf_header_subtitle', 'Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz')}
             </p>
           </div>
         </div>
 
         <div className="text-right text-xs text-muted-foreground space-y-1">
-          <p className="font-semibold text-foreground text-sm">SLA Audit Report</p>
-          <p className="font-mono text-[11px]">Vygenerováno: {new Date().toLocaleString('cs-CZ')}</p>
-          <p className="text-[10px] text-muted-foreground">Zdroj: bloodkings.eu / status API</p>
+          <p className="font-semibold text-foreground text-sm">{t('reports.pdf_audit_report', 'SLA Audit Report')}</p>
+          <p className="font-mono text-[11px]">{t('reports.pdf_generated_at', { date: new Date().toLocaleString('cs-CZ') }, `Vygenerováno: ${new Date().toLocaleString('cs-CZ')}`)}</p>
+          <p className="text-[10px] text-muted-foreground">{t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}</p>
         </div>
       </div>
 
@@ -462,7 +462,7 @@ export function ReportsPage() {
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
-              {t('reports.prometheus_desc', 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru s vaším přístupovým tokenem.')}
+              {t('reports.prometheus_desc_active', 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru s vaším přístupovým tokenem.')}
             </p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <a
