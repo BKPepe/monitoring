@@ -328,7 +328,7 @@ export function SettingsPage() {
           ))}
         </div>
 
-        {/* TAB: Obecné */}
+        {/* TAB: General */}
         {activeTab === 'obecne' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
             <Card className="p-6 space-y-5">
@@ -488,7 +488,7 @@ export function SettingsPage() {
               <FieldInput k="agent_registration_token" label={t('settings.agent_token_label', 'Token pro auto-registraci agentů')} type="password" placeholder="TajnyRegistracniToken123" className="max-w-md" />
             </Card>
 
-            {/* Webhooky a externí notifikace */}
+            {/* Webhooks and external notifications */}
             <Card className="p-6 space-y-5">
               <div className="flex items-center gap-3 border-b border-border pb-3">
                 <MessageSquare className="size-5 text-indigo-400" />
