@@ -31,7 +31,7 @@ jobs:
           npm run build --workspace=apps/site || true
 
       - name: Create Pull Request for Updates
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: 'chore(deps): weekly npm dependencies update'
