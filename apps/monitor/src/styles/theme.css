@@ -203,12 +203,11 @@
    TISK a PDF REPORTY (@media print)
    ========================================================================== */
 @media print {
-  /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka */
+  /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka bez obsahu */
   aside,
   header,
   footer,
   nav,
-  button,
   input,
   [role="dialog"],
   [role="combobox"],

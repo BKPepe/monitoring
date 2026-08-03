@@ -298,17 +298,24 @@ export function ReportsPage() {
               const isExpanded = expandedId === item.id;
 
               return (
-                <div key={item.id} className="rounded-lg bg-secondary/30 border border-border overflow-hidden">
+                <div key={item.id} className="rounded-lg bg-secondary/30 border border-border overflow-hidden print:border-slate-300 print:bg-white print:break-inside-avoid">
                   {/* Main row */}
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setExpandedId(isExpanded ? null : item.id)}
-                    className="w-full p-3.5 text-left flex items-center justify-between gap-2 hover:bg-secondary/50 transition-colors cursor-pointer"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setExpandedId(isExpanded ? null : item.id);
+                      }
+                    }}
+                    className="w-full p-3.5 text-left flex items-center justify-between gap-2 hover:bg-secondary/50 transition-colors cursor-pointer print:hover:bg-transparent"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <Server className="size-4 text-primary shrink-0" />
-                      <span className="font-semibold text-sm text-foreground truncate">{item.name}</span>
-                      <span className="text-[10px] text-muted-foreground font-mono truncate hidden sm:inline">({item.target})</span>
+                      <Server className="size-4 text-primary shrink-0 print:text-slate-700" />
+                      <span className="font-bold text-sm text-foreground truncate print:text-base print:text-black">{item.name}</span>
+                      <span className="text-xs text-muted-foreground font-mono truncate print:text-xs print:text-slate-600">({item.target})</span>
                     </div>
 
                     <div className="flex items-center gap-3 shrink-0">
@@ -320,7 +327,7 @@ export function ReportsPage() {
                       </Badge>
                       {isExpanded ? <ChevronUp className="size-3.5 text-muted-foreground print:hidden" /> : <ChevronDown className="size-3.5 text-muted-foreground print:hidden" />}
                     </div>
-                  </button>
+                  </div>
 
                   {/* Progress bar */}
                   <div className="px-3.5 pb-2">
