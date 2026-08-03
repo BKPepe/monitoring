@@ -33,7 +33,7 @@ export function UsersPage() {
       .getUsers()
       .then(setUsers)
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : t('common.error', 'Načtení uživatelů selhalo'))
+        setError(err instanceof Error ? err.message : t('users.load_error', 'Načtení uživatelů selhalo'))
       );
   }, [t]);
 
@@ -42,7 +42,7 @@ export function UsersPage() {
   }, [isAdmin, reload]);
 
   if (sessionLoading) {
-    return <p className="text-muted-foreground py-16 text-center text-sm">{t('common.loading', 'Načítám…')}</p>;
+    return <p className="text-muted-foreground py-16 text-center text-sm">{t('users.loading', 'Načítám…')}</p>;
   }
 
   if (!session?.authenticated) return <LoginRequired loginUrl={session?.loginUrl ?? 'admin.php'} />;
@@ -76,21 +76,21 @@ export function UsersPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Seznam účtů</CardTitle>
+          <CardTitle>{t('users.account_list', 'Seznam účtů')}</CardTitle>
         </CardHeader>
         <CardContent className="px-0 pb-0">
           {users === null ? (
-            <p className="text-muted-foreground py-10 text-center text-sm">Načítám…</p>
+            <p className="text-muted-foreground py-10 text-center text-sm">{t('users.loading', 'Načítám…')}</p>
           ) : users.length === 0 ? (
-            <p className="text-muted-foreground py-10 text-center text-sm">Žádní uživatelé.</p>
+            <p className="text-muted-foreground py-10 text-center text-sm">{t('users.none', 'Žádní uživatelé.')}</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="pl-5">Uživatel</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Zabezpečení</TableHead>
-                  <TableHead className="pr-5 text-right">Akce</TableHead>
+                  <TableHead className="pl-5">{t('users.col_user', 'Uživatel')}</TableHead>
+                  <TableHead>{t('users.col_role', 'Role')}</TableHead>
+                  <TableHead>{t('users.col_security', 'Zabezpečení')}</TableHead>
+                  <TableHead className="pr-5 text-right">{t('users.col_actions', 'Akce')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -101,7 +101,7 @@ export function UsersPage() {
                         <p className="font-medium">
                           {user.username}
                           {user.isSelf && (
-                            <span className="text-muted-foreground ml-2 text-xs">(vy)</span>
+                            <span className="text-muted-foreground ml-2 text-xs">{t('users.you_suffix', '(vy)')}</span>
                           )}
                         </p>
                         <p className="text-muted-foreground text-xs">{user.email}</p>
@@ -109,7 +109,7 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={user.role === 'admin' ? 'primary' : 'neutral'}>
-                        {user.role === 'admin' ? 'Administrátor' : 'Uživatel'}
+                        {user.role === 'admin' ? t('users.role_admin', 'Administrátor') : t('users.role_user', 'Uživatel')}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -127,7 +127,7 @@ export function UsersPage() {
                           </Badge>
                         )}
                         {!user.totpEnabled && !user.oauthProvider && (
-                          <span className="text-muted-foreground text-xs">jen heslo</span>
+                          <span className="text-muted-foreground text-xs">{t('users.password_only', 'jen heslo')}</span>
                         )}
                       </div>
                     </TableCell>
@@ -137,18 +137,18 @@ export function UsersPage() {
                           variant="ghost"
                           size="sm"
                           onClick={() => setEditing(user)}
-                          aria-label={`Upravit ${user.username}`}
+                          aria-label={t('users.edit_aria', { name: user.username }, `Upravit ${user.username}`)}
                         >
                           <Pencil />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
-                          // Vlastní účet smazat nelze — server to stejně
-                          // odmítne, tlačítko to jen dá najevo předem.
+                          // A self-account cannot be deleted - the server rejects it
+                          // anyway, this button just signals that upfront.
                           disabled={user.isSelf}
                           onClick={() => setDeleting(user)}
-                          aria-label={`Smazat ${user.username}`}
+                          aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
                         >
                           <Trash2 />
                         </Button>
@@ -180,14 +180,14 @@ export function UsersPage() {
           user={deleting}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
-            setNotice(`Uživatel ${deleting.username} byl smazán.`);
+            setNotice(t('users.deleted_notice', { name: deleting.username }, `Uživatel ${deleting.username} byl smazán.`));
             setDeleting(null);
             reload();
           }}
         />
       )}
 
-      {/* Systémový Auditní Protokol */}
+      {/* System Audit Log */}
       <AuditLogTable />
     </div>
   );
@@ -202,6 +202,7 @@ function UserDialog({
   onClose: () => void;
   onSaved: (message: string) => void;
 }) {
+  const { t } = useLanguage();
   const [username, setUsername] = React.useState(user?.username ?? '');
   const [email, setEmail] = React.useState(user?.email ?? '');
   const [phone, setPhone] = React.useState(user?.phone ?? '');
@@ -226,18 +227,18 @@ function UserDialog({
       });
 
       if (user) {
-        onSaved(`Uživatel ${username} byl upraven.`);
+        onSaved(t('users.save_updated', { name: username }, `Uživatel ${username} byl upraven.`));
       } else if (result.invited) {
-        onSaved(`Účet ${username} byl vytvořen, pozvánka odeslána na ${email}.`);
+        onSaved(t('users.save_invited', { name: username, email }, `Účet ${username} byl vytvořen, pozvánka odeslána na ${email}.`));
       } else if (password) {
-        onSaved(`Účet ${username} byl vytvořen.`);
+        onSaved(t('users.save_created', { name: username }, `Účet ${username} byl vytvořen.`));
       } else {
-        // Účet vznikl, ale e-mail neodešel — admin to musí vědět, jinak
-        // bude uživatel čekat na pozvánku, která nedorazí.
-        onSaved(`Účet ${username} byl vytvořen, ale pozvánku se nepodařilo odeslat.`);
+        // Account was created but the email failed to send - the admin needs
+        // to know, otherwise the user will wait for an invite that never arrives.
+        onSaved(t('users.save_created_no_invite', { name: username }, `Účet ${username} byl vytvořen, ale pozvánku se nepodařilo odeslat.`));
       }
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : 'Uložení selhalo.');
+      setFormError(err instanceof ApiError ? err.message : t('users.save_failed', 'Uložení selhalo.'));
     } finally {
       setSaving(false);
     }
@@ -248,19 +249,19 @@ function UserDialog({
       <DialogContent>
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>{user ? `Upravit ${user.username}` : 'Nový uživatel'}</DialogTitle>
+            <DialogTitle>{user ? t('users.edit_title', { name: user.username }, `Upravit ${user.username}`) : t('users.new_user_title', 'Nový uživatel')}</DialogTitle>
             <DialogDescription>
               {user
-                ? 'Heslo nechte prázdné, pokud ho nechcete měnit.'
-                : 'Bez hesla se odešle pozvánka s odkazem na jeho nastavení.'}
+                ? t('users.edit_desc', 'Heslo nechte prázdné, pokud ho nechcete měnit.')
+                : t('users.new_desc', 'Bez hesla se odešle pozvánka s odkazem na jeho nastavení.')}
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-3 px-5 pb-4">
-            <Field label="Uživatelské jméno" required>
+            <Field label={t('users.field_username', 'Uživatelské jméno')} required>
               <Input value={username} onChange={(e) => setUsername(e.target.value)} required />
             </Field>
-            <Field label="E-mail" required>
+            <Field label={t('users.field_email', 'E-mail')} required>
               <Input
                 type="email"
                 value={email}
@@ -268,27 +269,27 @@ function UserDialog({
                 required
               />
             </Field>
-            <Field label="Telefon">
+            <Field label={t('users.field_phone', 'Telefon')}>
               <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
             </Field>
-            <Field label="Role">
+            <Field label={t('users.field_role', 'Role')}>
               <select
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
                 className="bg-secondary/60 h-9 w-full rounded-md border border-input px-3 text-sm"
               >
-                <option value="user">Uživatel</option>
-                <option value="admin">Administrátor</option>
+                <option value="user">{t('users.role_user', 'Uživatel')}</option>
+                <option value="admin">{t('users.role_admin', 'Administrátor')}</option>
               </select>
             </Field>
-            <Field label={user ? 'Nové heslo' : 'Heslo'}>
+            <Field label={user ? t('users.field_new_password', 'Nové heslo') : t('users.field_password', 'Heslo')}>
               <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={8}
                 autoComplete="new-password"
-                placeholder={user ? 'Beze změny' : 'Prázdné = poslat pozvánku'}
+                placeholder={user ? t('users.password_unchanged', 'Beze změny') : t('users.password_invite', 'Prázdné = poslat pozvánku')}
               />
             </Field>
 
@@ -297,11 +298,11 @@ function UserDialog({
 
           <DialogFooter>
             <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-              Zrušit
+              {t('common.cancel', 'Zrušit')}
             </Button>
             <Button type="submit" variant="primary" size="sm" disabled={saving}>
               <Plus />
-              {saving ? 'Ukládám…' : 'Uložit'}
+              {saving ? t('settings.saving', 'Ukládám…') : t('users.save_btn', 'Uložit')}
             </Button>
           </DialogFooter>
         </form>
@@ -319,6 +320,7 @@ function DeleteDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useLanguage();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -329,7 +331,7 @@ function DeleteDialog({
       await appApi.deleteUser(user.id);
       onDeleted();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Smazání selhalo.');
+      setError(err instanceof ApiError ? err.message : t('users.delete_failed', 'Smazání selhalo.'));
     } finally {
       setBusy(false);
     }
@@ -339,9 +341,9 @@ function DeleteDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Smazat uživatele?</DialogTitle>
+          <DialogTitle>{t('users.delete_confirm_title', 'Smazat uživatele?')}</DialogTitle>
           <DialogDescription>
-            Účet <strong>{user.username}</strong> ({user.email}) bude nenávratně odstraněn.
+            {t('users.delete_confirm_prefix', 'Účet')} <strong>{user.username}</strong> ({user.email}) {t('users.delete_confirm_suffix', 'bude nenávratně odstraněn.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -349,11 +351,11 @@ function DeleteDialog({
 
         <DialogFooter>
           <Button variant="ghost" size="sm" onClick={onClose}>
-            Zrušit
+            {t('common.cancel', 'Zrušit')}
           </Button>
           <Button variant="destructive" size="sm" onClick={confirm} disabled={busy}>
             <Trash2 />
-            {busy ? 'Mažu…' : 'Smazat'}
+            {busy ? t('users.deleting', 'Mažu…') : t('common.delete', 'Smazat')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -382,27 +384,29 @@ function Field({
 }
 
 function LoginRequired({ loginUrl }: { loginUrl: string }) {
+  const { t } = useLanguage();
   return (
     <Card className="grid place-items-center gap-3 p-16 text-center">
       <div>
-        <p className="font-medium">Přihlášení vyžadováno</p>
+        <p className="font-medium">{t('users.login_required_title', 'Přihlášení vyžadováno')}</p>
         <p className="text-muted-foreground text-sm">
-          Správa uživatelů je dostupná jen přihlášeným administrátorům.
+          {t('users.login_required_desc', 'Správa uživatelů je dostupná jen přihlášeným administrátorům.')}
         </p>
       </div>
       <Button variant="primary" size="sm" asChild>
-        <a href={resolveUrl(loginUrl)}>Přejít na přihlášení</a>
+        <a href={resolveUrl(loginUrl)}>{t('settings.go_to_login', 'Přejít na přihlášení')}</a>
       </Button>
     </Card>
   );
 }
 
 function AdminRequired() {
+  const { t } = useLanguage();
   return (
     <Card className="grid place-items-center gap-2 p-16 text-center">
-      <p className="font-medium">Nedostatečná oprávnění</p>
+      <p className="font-medium">{t('users.insufficient_perms_title', 'Nedostatečná oprávnění')}</p>
       <p className="text-muted-foreground text-sm">
-        Správu uživatelů může otevřít jen administrátor.
+        {t('users.insufficient_perms_desc', 'Správu uživatelů může otevřít jen administrátor.')}
       </p>
     </Card>
   );
