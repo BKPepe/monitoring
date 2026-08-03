@@ -53,7 +53,7 @@ export function Header({
         size="icon"
         className="lg:hidden"
         onClick={onOpenMobileNav}
-        aria-label="Otevřít navigaci"
+        aria-label={t('header.open_nav', 'Otevřít navigaci')}
       >
         <Menu />
       </Button>
@@ -63,7 +63,7 @@ export function Header({
       </div>
 
       <div className="ml-auto flex items-center gap-2 relative" ref={dropdownRef}>
-        {/* Přepínač jazyka CS / EN */}
+        {/* CS / EN language switcher */}
         <div className="flex items-center rounded-md border border-border bg-secondary/50 p-0.5 text-xs font-semibold">
           <button
             type="button"
@@ -72,7 +72,7 @@ export function Header({
               "px-2 py-1 rounded transition-colors text-[11px]",
               lang === 'cs' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
-            title="Čeština"
+            title={t('settings.lang_cs', 'Čeština')}
           >
             🇨🇿 CS
           </button>
@@ -93,7 +93,7 @@ export function Header({
           variant="ghost"
           size="icon"
           onClick={toggle}
-          aria-label={theme === 'dark' ? 'Přepnout na světlý motiv' : 'Přepnout na tmavý motiv'}
+          aria-label={theme === 'dark' ? t('header.switch_light', 'Přepnout na světlý motiv') : t('header.switch_dark', 'Přepnout na tmavý motiv')}
         >
           {theme === 'dark' ? <Moon /> : <Sun />}
         </Button>
@@ -104,7 +104,7 @@ export function Header({
             variant="ghost"
             size="icon"
             className="relative cursor-pointer"
-            aria-label="Upozornění"
+            aria-label={t('header.notifications_aria', 'Upozornění')}
             onClick={() => setShowNotifications(!showNotifications)}
           >
             <Bell />
@@ -113,12 +113,12 @@ export function Header({
                 <span className="bg-destructive text-destructive-foreground absolute top-1 right-1 grid size-4 place-items-center rounded-full text-[10px] font-semibold">
                   {alertCount > 9 ? '9+' : alertCount}
                 </span>
-                <span className="sr-only">{alertCount} nepřečtených upozornění</span>
+                <span className="sr-only">{t('header.unread_alerts', { count: alertCount }, `${alertCount} nepřečtených upozornění`)}</span>
               </>
             )}
           </Button>
 
-          {/* Notifikační Popover Menu */}
+          {/* Notification popover menu */}
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl bg-card border border-border shadow-2xl p-4 z-50 animate-in fade-in-50 zoom-in-95">
               <div className="flex items-center justify-between border-b border-border pb-3 mb-3">
@@ -127,7 +127,7 @@ export function Header({
                   <h4 className="font-bold text-sm">{t('settings.notifications', 'Notifikace & Upozornění')}</h4>
                 </div>
                 <span className="text-[11px] text-muted-foreground font-mono">
-                  {alertCount > 0 ? `${alertCount} ${t('common.warning', 'aktivní')}` : t('dashboard.all_healthy_desc', 'Vše OK')}
+                  {alertCount > 0 ? `${alertCount} ${t('header.active_alerts', 'aktivní')}` : t('header.all_ok', 'Vše OK')}
                 </span>
               </div>
 
@@ -137,9 +137,9 @@ export function Header({
                     <div key={evt.id} className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-start gap-3 text-xs">
                       <AlertTriangle className="size-4 text-rose-400 shrink-0 mt-0.5" />
                       <div>
-                        <p className="font-semibold text-rose-400">🔴 {t('status.down', 'Výpadek')}: {evt.monitorName}</p>
+                        <p className="font-semibold text-rose-400">🔴 {t('header.outage_label', 'Výpadek')}: {evt.monitorName}</p>
                         <p className="text-muted-foreground mt-0.5">
-                          {evt.errorMsg || `${evt.target} neodpovídá.`}
+                          {evt.errorMsg || t('header.target_unresponsive', { target: evt.target }, `${evt.target} neodpovídá.`)}
                         </p>
                         <span className="text-[10px] text-muted-foreground block mt-1">{evt.time}</span>
                       </div>
@@ -148,7 +148,7 @@ export function Header({
                 ) : (
                   <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 text-xs text-emerald-400">
                     <CheckCircle2 className="size-4 shrink-0" />
-                    <span>{t('status.healthy', 'Všechny monitorované uzly fungují bez závad.')}</span>
+                    <span>{t('header.all_nodes_ok', 'Všechny monitorované uzly fungují bez závad.')}</span>
                   </div>
                 )}
               </div>
@@ -159,7 +159,7 @@ export function Header({
                   onClick={() => setShowNotifications(false)}
                   className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
                 >
-                  {t('common.open_details', 'Zobrazit všechny incidenty')} <ArrowRight className="size-3" />
+                  {t('header.view_all_incidents', 'Zobrazit všechny incidenty')} <ArrowRight className="size-3" />
                 </Link>
               </div>
             </div>

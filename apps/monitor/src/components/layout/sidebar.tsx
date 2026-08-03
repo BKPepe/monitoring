@@ -92,7 +92,7 @@ export function Sidebar({
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label="Hlavní navigace">
+      <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label={t('sidebar.main_nav_aria', 'Hlavní navigace')}>
         <NavGroup items={dynamicPrimaryNav} collapsed={collapsed} />
         <div className="my-3 border-t border-sidebar-border" />
         <NavGroup items={dynamicSecondaryNav} collapsed={collapsed} />
@@ -103,14 +103,14 @@ export function Sidebar({
           type="button"
           onClick={onToggle}
           className="text-muted-foreground hover:bg-sidebar-accent hover:text-foreground flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors"
-          aria-label={collapsed ? 'Rozbalit navigaci' : 'Sbalit navigaci'}
+          aria-label={collapsed ? t('sidebar.expand_nav', 'Rozbalit navigaci') : t('sidebar.collapse_nav', 'Sbalit navigaci')}
         >
           {collapsed ? (
             <PanelLeftOpen className="size-4 shrink-0" />
           ) : (
             <>
               <PanelLeftClose className="size-4 shrink-0" />
-              <span>Sbalit</span>
+              <span>{t('sidebar.collapse_label', 'Sbalit')}</span>
             </>
           )}
         </button>
@@ -132,8 +132,8 @@ function NavGroup({ items, collapsed }: { items: NavItem[]; collapsed: boolean }
               cn(
                 'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
                 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground',
-                // Aktivní položka nese barvu značky i levý pruh — samotná
-                // barva textu je při rychlém pohledu snadno přehlédnutelná.
+                // The active item carries both the brand color and a left bar - text
+                // color alone is too easy to miss at a glance.
                 isActive &&
                   'bg-primary/12 text-foreground relative before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-full before:bg-primary'
               )
@@ -157,7 +157,7 @@ function NavGroup({ items, collapsed }: { items: NavItem[]; collapsed: boolean }
   );
 }
 
-/** Koruna ze značky. Vlastní SVG — Lucide nic odpovídajícího nemá. */
+/** Brand crown. Custom SVG - Lucide has nothing matching it. */
 function Crown() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className="size-4" aria-hidden="true">

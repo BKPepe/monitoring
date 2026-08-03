@@ -1,5 +1,6 @@
 import { ChevronRight } from 'lucide-react';
 import { Link } from 'react-router';
+import { useLanguage } from '@/context/language-context';
 
 export interface Crumb {
   label: string;
@@ -7,8 +8,9 @@ export interface Crumb {
 }
 
 export function Breadcrumb({ items }: { items: Crumb[] }) {
+  const { t } = useLanguage();
   return (
-    <nav aria-label="Drobečková navigace">
+    <nav aria-label={t('breadcrumb.aria', 'Drobečková navigace')}>
       <ol className="text-muted-foreground flex flex-wrap items-center gap-1 text-xs">
         {items.map((item, index) => {
           const isLast = index === items.length - 1;
@@ -19,7 +21,7 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
                   {item.label}
                 </Link>
               ) : (
-                // Poslední článek je aktuální stránka — není odkaz.
+                // The last crumb is the current page - not a link.
                 <span className={isLast ? 'text-foreground font-medium' : undefined}>
                   {item.label}
                 </span>

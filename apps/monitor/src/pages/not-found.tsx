@@ -1,8 +1,10 @@
 import { Link, useNavigate } from 'react-router';
 import { Card } from '@/components/ui/card';
 import { FileQuestion, Home, ArrowLeft } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
 
 export function NotFoundPage() {
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   return (
@@ -17,10 +19,10 @@ export function NotFoundPage() {
         </div>
 
         <div className="space-y-2">
-          <BadgeText>CHYBA 404 — STRÁNKA NENALEZENA</BadgeText>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Požadovaná stránka neexistuje</h1>
+          <BadgeText>{t('not_found.badge', 'CHYBA 404 — STRÁNKA NENALEZENA')}</BadgeText>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">{t('not_found.title', 'Požadovaná stránka neexistuje')}</h1>
           <p className="text-sm text-muted-foreground leading-relaxed max-w-md mx-auto">
-            Adresa, kterou jste zadali, pravděpodobně nebyla nalezena, byla přejmenována nebo přesunuta.
+            {t('not_found.desc', 'Adresa, kterou jste zadali, pravděpodobně nebyla nalezena, byla přejmenována nebo přesunuta.')}
           </p>
         </div>
 
@@ -30,14 +32,14 @@ export function NotFoundPage() {
             onClick={() => navigate(-1)}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-secondary px-4 py-2.5 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors"
           >
-            <ArrowLeft className="size-4" /> Zpět na předchozí stránku
+            <ArrowLeft className="size-4" /> {t('not_found.go_back', 'Zpět na předchozí stránku')}
           </button>
 
           <Link
             to="/"
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors"
           >
-            <Home className="size-4" /> Hlavní Dashboard
+            <Home className="size-4" /> {t('not_found.go_dashboard', 'Hlavní Dashboard')}
           </Link>
         </div>
       </Card>
