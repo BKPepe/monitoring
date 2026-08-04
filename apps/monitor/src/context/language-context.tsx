@@ -109,6 +109,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.outage_title': { cs: 'Výpadek služby', en: 'Service Outage' },
   'dashboard.high_latency': { cs: 'Zvýšená latence', en: 'Increased Latency' },
   'dashboard.whole_infra': { cs: 'Celá infrastruktura', en: 'Entire infrastructure' },
+  'dashboard.uptime_pending': { cs: 'Zatím žádná data za 30 dní', en: 'No 30-day data yet' },
   'dashboard.monitors_card_title': { cs: 'Sledované Monitory & Služby', en: 'Monitored Services' },
   'dashboard.ongoing_outage': { cs: 'Probíhající výpadek', en: 'Ongoing outage' },
   'dashboard.no_outages': { cs: 'Všechny systémy bez výpadku', en: 'All systems without outage' },

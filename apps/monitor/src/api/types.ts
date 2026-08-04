@@ -100,12 +100,14 @@ export const timeRangeLabels: Record<TimeRange, string> = {
 /** Odpověď `api.php?action=public_status`. */
 export interface PublicStatus {
   status: 'healthy' | 'degraded';
-  uptimePercent: number;
+  /** null = zatím žádná kontrola za posledních 30 dní (nová instalace / mrtvý cron), ne 100 %. */
+  uptimePercent: number | null;
   totalMonitors: number;
   downMonitors: number;
   agentsOnline: number;
   agentsTotal: number;
-  avgLatencyMs: number;
+  /** null = zatím žádné měření odezvy za poslední hodinu. */
+  avgLatencyMs: number | null;
   lastUpdated: string | null;
   nodes: { name: string; status: 'online' | 'warning' | 'offline'; latencyMs: number | null }[];
 }

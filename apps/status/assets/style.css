@@ -299,6 +299,7 @@ header {
 .stat-value.down { color: var(--color-red); }
 .stat-value.warn { color: var(--color-yellow); }
 .stat-value.total { color: var(--text-primary); }
+.stat-value.nodata { color: var(--text-muted); font-size: 1.4rem; }
 
 .stat-label {
   font-size: 0.75rem;
@@ -553,6 +554,7 @@ header {
 .uptime-pct.up { color: var(--color-green); }
 .uptime-pct.warn { color: var(--color-yellow); }
 .uptime-pct.down { color: var(--color-red); }
+.uptime-pct.nodata { color: var(--text-muted); font-size: 0.9rem; font-weight: 600; }
 
 .resp-time {
   font-size: 0.75rem;

@@ -1391,7 +1391,10 @@ if ($action === 'public_status') {
         $total_monitors = (int)($stats['total'] ?? 0);
         $down_monitors = (int)($stats['down_count'] ?? 0);
 
-        $avg_uptime = 100.0;
+        // null (not 100.0) until real data says otherwise - a fresh install
+        // or a dead cron with zero logged checks isn't "100% uptime", it's
+        // unmeasured, and the frontend needs to tell those two apart.
+        $avg_uptime = null;
         try {
             $stmt_upt = $pdo->query("
                 SELECT monitor_id,
@@ -1434,7 +1437,10 @@ if ($action === 'public_status') {
             }
         } catch (Throwable $t) {}
 
-        $avg_latency = 10;
+        // null until a real measurement exists - "10 ms" as a fabricated
+        // default would misrepresent actual latency the same way the old
+        // 100% uptime default misrepresented actual availability.
+        $avg_latency = null;
         try {
             $stmt_latency = $pdo->query("
                 SELECT AVG(response_time) as avg_latency

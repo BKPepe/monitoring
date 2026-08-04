@@ -89,6 +89,7 @@ return [
     'field_last_check' => 'Last checked:',
     'field_last_status_change' => 'Last status change:',
     'field_uptime_30d' => 'Uptime (30 days):',
+    'uptime_no_data' => 'No data yet',
     'unknown' => 'Unknown',
     'no_description' => 'No description',
     'never' => 'Never',

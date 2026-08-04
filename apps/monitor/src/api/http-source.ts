@@ -124,17 +124,21 @@ export const httpMetricsSource: MetricsSource = {
 
   async getPublicStatus(): Promise<PublicStatus> {
     const raw = await getJson<any>('api.php?action=public_status');
-    if (typeof raw?.totalMonitors !== 'number' || typeof raw?.uptimePercent !== 'number') {
+    // totalMonitors is always a real COUNT(*) - if that's missing, the
+    // response itself is broken. uptimePercent/avgLatencyMs are legitimately
+    // null when there's no data yet (new install, dead cron), so they're not
+    // required here - defaulting them to a number would fabricate a reading.
+    if (typeof raw?.totalMonitors !== 'number') {
       throw new Error('Neplatná odpověď z /status API (chybí povinná pole).');
     }
     return {
       status: raw.status === 'degraded' ? 'degraded' : 'healthy',
-      uptimePercent: raw.uptimePercent,
+      uptimePercent: typeof raw.uptimePercent === 'number' ? raw.uptimePercent : null,
       totalMonitors: raw.totalMonitors,
       downMonitors: raw.downMonitors ?? 0,
       agentsOnline: raw.agentsOnline ?? 0,
       agentsTotal: raw.agentsTotal ?? 0,
-      avgLatencyMs: raw.avgLatencyMs ?? 0,
+      avgLatencyMs: typeof raw.avgLatencyMs === 'number' ? raw.avgLatencyMs : null,
       lastUpdated: raw.lastUpdated ?? null,
       nodes: Array.isArray(raw.nodes) ? raw.nodes : [],
     };

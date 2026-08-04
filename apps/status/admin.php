@@ -1349,10 +1349,12 @@ $site_title = get_setting('site_title', 'Blood Kings');
             GROUP BY a.id, a.name ORDER BY member_count DESC, a.name
         ");
         $assets_panel = $stmt_assets_panel->fetchAll();
-        // SLA per asset (30d uptime průměr)
+        // SLA per asset (30d uptime průměr). AVG() přeskakuje NULL, takže
+        // monitory bez záznamů za posledních 30 dní se do průměru nepočítají -
+        // dřív se počítaly jako 100 %, což uměle nafukovalo SLA nových assetů.
         $stmt_asset_sla = $pdo->query("
             SELECT m.asset_id,
-                   ROUND(AVG(CASE WHEN ml.total_count > 0 THEN (ml.up_count / ml.total_count) * 100 ELSE 100 END), 2) AS sla_pct
+                   ROUND(AVG(CASE WHEN ml.total_count > 0 THEN (ml.up_count / ml.total_count) * 100 ELSE NULL END), 2) AS sla_pct
             FROM monitors m
             LEFT JOIN (
                 SELECT monitor_id,
@@ -1366,7 +1368,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
         ");
         $asset_sla_map = [];
         foreach ($stmt_asset_sla->fetchAll() as $_sla_row) {
-            $asset_sla_map[(int)$_sla_row['asset_id']] = (float)$_sla_row['sla_pct'];
+            $asset_sla_map[(int)$_sla_row['asset_id']] = $_sla_row['sla_pct'] !== null ? (float)$_sla_row['sla_pct'] : null;
         }
         ?>
         <div class="admin-card">
@@ -1379,14 +1381,18 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <thead><tr><th>Jméno</th><th>Monitory</th><th>SLA (30d)</th><th>Přejmenovat</th></tr></thead>
                     <tbody>
                         <?php foreach ($assets_panel as $a): ?>
-                            <?php $_sla = $asset_sla_map[(int)$a['id']] ?? 100.00; $_sla_cls = $_sla >= 99 ? 'up' : ($_sla >= 95 ? 'warn' : 'down'); ?>
+                            <?php
+                                $_sla = $asset_sla_map[(int)$a['id']] ?? null;
+                                $_sla_cls = $_sla === null ? 'nodata' : ($_sla >= 99 ? 'up' : ($_sla >= 95 ? 'warn' : 'down'));
+                                $_sla_display = $_sla === null ? 'Bez dat' : number_format($_sla, 2) . '%';
+                            ?>
                             <tr>
                                 <td>
                                     <?php echo htmlspecialchars($a['name']); ?>
                                     <?php if ((int)$a['member_count'] > 1): ?><span style="font-size:0.7rem;color:var(--color-orange);margin-left:0.3rem;"><i class="fas fa-object-group"></i> <?php echo (int)$a['member_count']; ?>×</span><?php endif; ?>
                                 </td>
                                 <td style="font-size:0.78rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?php echo htmlspecialchars($a['monitor_names'] ?? ''); ?>"><?php echo htmlspecialchars($a['monitor_names'] ?? '—'); ?></td>
-                                <td><span class="<?php echo $_sla_cls; ?>" style="font-weight:600;"><?php echo number_format($_sla, 2); ?>%</span></td>
+                                <td><span class="<?php echo $_sla_cls; ?>" style="font-weight:600;"><?php echo htmlspecialchars($_sla_display); ?></span></td>
                                 <td>
                                     <form method="POST" style="display: flex; gap: 0.4rem;">
                                         <?php echo bk_csrf_field(); ?>

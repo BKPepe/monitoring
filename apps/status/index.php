@@ -209,8 +209,12 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     $regions = $bk_agg['regions'];
 }
 
-// Celková průměrná 30denní dostupnost napříč všemi monitory
-$avg_uptime = !empty($uptime_pct) ? round(array_sum($uptime_pct) / count($uptime_pct), 2) : 100.00;
+// Celková průměrná 30denní dostupnost napříč všemi monitory. Prázdné
+// $uptime_pct znamená, že žádný monitor zatím nemá kontrolu za posledních
+// 30 dní (nová instalace nebo mrtvý cron) - fabrikovat "100 %" by to
+// vydávalo za ověřený perfektní stav, který ve skutečnosti nikdo nezměřil.
+$avg_uptime_known = !empty($uptime_pct);
+$avg_uptime = $avg_uptime_known ? round(array_sum($uptime_pct) / count($uptime_pct), 2) : 0.0;
 
 $site_title = get_setting('site_title', 'Blood Kings');
 
@@ -367,7 +371,7 @@ $portal_url = trim(get_setting('portal_url'));
                     <div class="stat-label"><?php echo htmlspecialchars(t('stat_maintenance')); ?></div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value <?php echo $avg_uptime >= 99 ? 'up' : ($avg_uptime >= 95 ? 'warn' : 'down'); ?>"><?php echo number_format($avg_uptime, 2, ',', ' '); ?>%</div>
+                    <div class="stat-value <?php echo !$avg_uptime_known ? 'nodata' : ($avg_uptime >= 99 ? 'up' : ($avg_uptime >= 95 ? 'warn' : 'down')); ?>"><?php echo $avg_uptime_known ? number_format($avg_uptime, 2, ',', ' ') . '%' : t('uptime_no_data'); ?></div>
                     <div class="stat-label"><?php echo htmlspecialchars(t('stat_uptime_30d')); ?></div>
                 </div>
                 <div class="stat-item">
@@ -522,17 +526,21 @@ $portal_url = trim(get_setting('portal_url'));
                                 $open_asset_group_id = null;
                             }
                             if ($is_asset_grouped && $open_asset_group_id === null) {
-                                // SLA by asset: průměrný uptime všech monitorů v assetu
+                                // SLA by asset: průměrný uptime všech monitorů v assetu, které už
+                                // mají alespoň jednu kontrolu za posledních 30 dní - monitory bez dat
+                                // se do průměru nepočítají, aby ho uměle nenatahovaly na 100 %.
                                 $asset_sla_vals = [];
                                 foreach ($monitor_list as $_am) {
-                                    if ((int)$_am['asset_id'] === (int)$monitor['asset_id']) {
-                                        $asset_sla_vals[] = $uptime_pct[$_am['id']] ?? 100.00;
+                                    if ((int)$_am['asset_id'] === (int)$monitor['asset_id'] && isset($uptime_pct[$_am['id']])) {
+                                        $asset_sla_vals[] = $uptime_pct[$_am['id']];
                                     }
                                 }
-                                $asset_sla = !empty($asset_sla_vals) ? round(array_sum($asset_sla_vals) / count($asset_sla_vals), 2) : 100.00;
-                                $asset_sla_class = $asset_sla >= 99 ? 'up' : ($asset_sla >= 95 ? 'warn' : 'down');
+                                $asset_sla_known = !empty($asset_sla_vals);
+                                $asset_sla = $asset_sla_known ? round(array_sum($asset_sla_vals) / count($asset_sla_vals), 2) : 0.0;
+                                $asset_sla_class = !$asset_sla_known ? 'nodata' : ($asset_sla >= 99 ? 'up' : ($asset_sla >= 95 ? 'warn' : 'down'));
+                                $asset_sla_display = $asset_sla_known ? number_format($asset_sla, 2) . '% SLA' : t('uptime_no_data');
                                 echo '<div class="asset-group" style="border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0.6rem; margin-bottom: 0.75rem;">';
-                                echo '<div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); padding: 0 0.25rem 0.5rem; display: flex; align-items: center; justify-content: space-between;"><span><i class="fas fa-layer-group"></i> ' . htmlspecialchars($monitor['asset_name'] ?: $monitor['name']) . '</span><span class="' . $asset_sla_class . '" style="font-weight:600;">' . number_format($asset_sla, 2) . '% SLA</span></div>';
+                                echo '<div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); padding: 0 0.25rem 0.5rem; display: flex; align-items: center; justify-content: space-between;"><span><i class="fas fa-layer-group"></i> ' . htmlspecialchars($monitor['asset_name'] ?: $monitor['name']) . '</span><span class="' . $asset_sla_class . '" style="font-weight:600;">' . htmlspecialchars($asset_sla_display) . '</span></div>';
                                 $open_asset_group_id = $monitor['asset_id'];
                             }
                             $status = $monitor['status'];
@@ -540,7 +548,12 @@ $portal_url = trim(get_setting('portal_url'));
                                 $status = 'unknown';
                             }
                             $m_type = $monitor['type'];
-                            $uptime = $uptime_pct[$mid] ?? 100.00;
+                            // A monitor with no rows in $uptime_pct simply hasn't been
+                            // checked in the last 30 days (e.g. just added) - defaulting
+                            // that to 100.00 would fabricate a perfect SLA it never
+                            // earned. Track whether we actually have data instead.
+                            $uptime_known = isset($uptime_pct[$mid]);
+                            $uptime = $uptime_pct[$mid] ?? 0.0;
                             $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
                             $is_expandable = true;
                             // Service Profiles - null = typ bez checklistu, dashboard zobrazí vše jako dřív
@@ -559,9 +572,14 @@ $portal_url = trim(get_setting('portal_url'));
                             }
 
                             // Třída pro barvu uptime textu
-                            $uptime_class = 'up';
-                            if ($uptime < 95) $uptime_class = 'down';
-                            elseif ($uptime < 99) $uptime_class = 'warn';
+                            if (!$uptime_known) {
+                                $uptime_class = 'nodata';
+                            } else {
+                                $uptime_class = 'up';
+                                if ($uptime < 95) $uptime_class = 'down';
+                                elseif ($uptime < 99) $uptime_class = 'warn';
+                            }
+                            $uptime_display = $uptime_known ? number_format($uptime, 2, ',', ' ') . '%' : t('uptime_no_data');
                         ?>
                             <div class="monitor-item" id="monitor-item-<?php echo $mid; ?>">
                                 <div class="monitor-card" <?php if ($is_expandable): ?>onclick="toggleDetails(<?php echo $mid; ?>)"<?php endif; ?>>
@@ -723,7 +741,7 @@ $portal_url = trim(get_setting('portal_url'));
                                     <!-- Sloupec 4: Uptime, Odezva a Chevron -->
                                     <div class="monitor-meta" style="display: flex; align-items: center; justify-content: flex-end; gap: 1rem;">
                                         <div style="text-align: right;">
-                                            <div class="uptime-pct <?php echo $uptime_class; ?>"><?php echo number_format($uptime, 2, ',', ' '); ?>%</div>
+                                            <div class="uptime-pct <?php echo $uptime_class; ?>"><?php echo $uptime_display; ?></div>
                                             <div class="resp-time">
                                                 <?php 
                                                 if ($status === 'down') {
@@ -1118,7 +1136,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo $uptime_display; ?></span></p>
                                                         <?php 
                                                         $mc_ll = $last_logs[0] ?? null;
                                                         if ($mc_ll && $mc_ll['checked_from']): 
@@ -1222,7 +1240,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo $uptime_display; ?></span></p>
                                                         <?php 
                                                         $ts_ll = $last_logs[0] ?? null;
                                                         if ($ts_ll): 
@@ -1561,7 +1579,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                         <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                         <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo $uptime_display; ?></span></p>
                                                          
                                                          <?php if ($m_type === 'web' && $status === 'up' && $details): ?>
                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('web_network_params_heading')); ?></div>
@@ -1757,7 +1775,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                           <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
                                                           <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
                                                           <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
-                                                          <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo number_format($uptime, 2, ',', ' '); ?>%</span></p>
+                                                          <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo $uptime_display; ?></span></p>
                                                           
                                                           <?php 
                                                           if ($monitor['type'] === 'web'): 

@@ -70,6 +70,10 @@ export function DashboardPage() {
   const totalMonitors = monitors.length > 0 ? monitors.length : (live?.totalMonitors ?? overview.totalMonitors);
   const downMonitors = monitors.filter(m => m.status === 'down').length;
   const healthyCount = Math.max(0, totalMonitors - downMonitors);
+  // null means the backend genuinely has no 30-day history yet (new install,
+  // dead cron) - falling back to the mock's 100.0 would fabricate a perfect
+  // SLA nobody measured, so that state is shown as "no data", not a number.
+  const uptimeKnown = live ? live.uptimePercent != null : true;
   const uptime = live?.uptimePercent ?? overview.uptime30d;
 
   const visibleMonitors = React.useMemo(() => {
@@ -199,11 +203,17 @@ export function DashboardPage() {
         />
         <MetricTile
           label={t('dashboard.uptime_30d', 'Uptime (30 d)')}
-          value={uptime.toFixed(2)}
-          unit="%"
+          value={uptimeKnown ? uptime.toFixed(2) : '—'}
+          unit={uptimeKnown ? '%' : undefined}
           icon={Activity}
-          tone="up"
-          hint={live ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms` : t('dashboard.whole_infra', 'Celá infrastruktura')}
+          tone={uptimeKnown ? 'up' : undefined}
+          hint={
+            !uptimeKnown
+              ? t('dashboard.uptime_pending', 'Zatím žádná data za 30 dní')
+              : live && live.avgLatencyMs != null
+              ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms`
+              : t('dashboard.whole_infra', 'Celá infrastruktura')
+          }
         />
       </div>
 

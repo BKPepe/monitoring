@@ -90,6 +90,7 @@ return [
     'field_last_check' => 'Poslední kontrola:',
     'field_last_status_change' => 'Poslední změna stavu:',
     'field_uptime_30d' => 'Uptime (30 dní):',
+    'uptime_no_data' => 'Zatím bez dat',
     'unknown' => 'Neznámá',
     'no_description' => 'Žádný popis',
     'never' => 'Nikdy',
