@@ -367,6 +367,107 @@ if ($action === 'delete_monitor') {
     exit;
 }
 
+// 2b2b. Seznam objevených, ale zatím nesledovaných služeb (Service Discovery).
+// Agenti tohle ukládají do monitors.last_details.discovered_services už dlouho
+// (agent_api.php), admin.php to i umí importovat, ale žádné z front-end appek
+// (apps/monitor React SPA) to nikdy nečetlo zpátky - proto tenhle endpoint.
+if ($action === 'discovered_services') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt = $pdo->query("SELECT id, name, asset_id, last_details FROM monitors WHERE last_details IS NOT NULL");
+        $services = [];
+        while ($row = $stmt->fetch()) {
+            $details = json_decode($row['last_details'] ?? '', true);
+            if (!is_array($details) || empty($details['discovered_services']) || !is_array($details['discovered_services'])) {
+                continue;
+            }
+            foreach ($details['discovered_services'] as $svc) {
+                if (empty($svc['name'])) continue;
+                $services[] = [
+                    'sourceMonitorId' => (int)$row['id'],
+                    'sourceMonitorName' => $row['name'],
+                    'sourceAssetId' => $row['asset_id'] !== null ? (int)$row['asset_id'] : null,
+                    'name' => (string)$svc['name'],
+                    'type' => (string)($svc['type'] ?? 'web'),
+                    'port' => isset($svc['port']) && $svc['port'] !== '' ? (int)$svc['port'] : null,
+                    'target' => (string)($svc['target'] ?? $row['name']),
+                    'confidence' => (int)($svc['confidence'] ?? 0),
+                    'evidence' => is_array($svc['evidence'] ?? null) ? array_values($svc['evidence']) : [],
+                    'missing' => is_array($svc['missing'] ?? null) ? array_values($svc['missing']) : [],
+                ];
+            }
+        }
+        // Nejjistější návrhy nahoře - admin obvykle chce importovat nejdřív ty.
+        usort($services, fn($a, $b) => $b['confidence'] <=> $a['confidence']);
+        echo json_encode(['services' => $services], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        echo json_encode(['services' => []], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2c. Import jedné objevené služby jako nový monitor (Service Discovery -
+// "propose -> confirm" krok). Zrcadlí admin.php action_import_service,
+// jen jako JSON API pro React SPA.
+if ($action === 'import_discovered_service') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $s_name = trim($input['name'] ?? '');
+    $s_type = trim($input['type'] ?? 'web');
+    $s_port = !empty($input['port']) ? (int)$input['port'] : null;
+    $s_target = trim($input['target'] ?? '127.0.0.1');
+    $source_monitor_id = !empty($input['sourceMonitorId']) ? (int)$input['sourceMonitorId'] : null;
+
+    if ($s_name === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Název služby je povinný.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        // Objevující monitor běží na stejném fyzickém stroji, takže nový
+        // monitor rovnou dostane jeho asset - jediné místo v appce, kde má
+        // smysl assetId odhadovat automaticky (signál je spolehlivý).
+        $discovered_asset_id = null;
+        if ($source_monitor_id) {
+            $stmt_src = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+            $stmt_src->execute([$source_monitor_id]);
+            $src_asset_id = $stmt_src->fetchColumn();
+            if ($src_asset_id) {
+                $discovered_asset_id = (int)$src_asset_id;
+            }
+        }
+        if ($discovered_asset_id === null) {
+            $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
+            $stmt_new_asset->execute([$s_name]);
+            $discovered_asset_id = (int)$pdo->lastInsertId();
+        }
+
+        $agent_key = bin2hex(random_bytes(16));
+        $stmt = $pdo->prepare("
+            INSERT INTO monitors (name, type, target, port, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
+            VALUES (?, ?, ?, ?, 'unknown', ?, 90, 90, 95, ?)
+        ");
+        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key, $discovered_asset_id]);
+        $new_id = (int)$pdo->lastInsertId();
+        log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
+        bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
+        echo json_encode(['success' => true, 'id' => $new_id, 'assetId' => $discovered_asset_id], JSON_UNESCAPED_UNICODE);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // 2b3. Načtení systémových nastavení (admin-only, maskovaná hesla)
 if ($action === 'get_settings') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {

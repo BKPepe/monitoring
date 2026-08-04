@@ -16,6 +16,8 @@ import {
   Terminal,
   CheckCircle2,
   AlertTriangle,
+  Radar,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -885,6 +887,8 @@ export function InfrastructurePage() {
         </div>
       )}
 
+      {isAdmin && <ServiceDiscoveryPanel onImported={loadMonitors} />}
+
       <div className="grid gap-6 lg:grid-cols-12">
         {/* Left asset tree */}
         <Card className="lg:col-span-5 p-4 space-y-4">
@@ -1031,5 +1035,151 @@ function AssetRow({ asset, isSelected, onSelect }: { asset: AssetNode; isSelecte
         {statusLabel[asset.status]}
       </Badge>
     </button>
+  );
+}
+
+interface DiscoveredService {
+  sourceMonitorId: number;
+  sourceMonitorName: string;
+  sourceAssetId: number | null;
+  name: string;
+  type: string;
+  port: number | null;
+  target: string;
+  confidence: number;
+  evidence: string[];
+  missing: string[];
+}
+
+/**
+ * Service Discovery "propose -> confirm" step. Agents have been reporting
+ * discovered-but-unmonitored services into monitors.last_details for a long
+ * time (agent_api.php), and admin.php could already import them one at a
+ * time per monitor - but nothing in this React app ever read that data back,
+ * so agents were doing detection work nobody ever saw here. This panel
+ * surfaces it and lets an admin confirm/import with one click.
+ */
+function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
+  const { t } = useLanguage();
+  const [services, setServices] = React.useState<DiscoveredService[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [dismissed, setDismissed] = React.useState(false);
+  const [importingKey, setImportingKey] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const load = React.useCallback(() => {
+    fetch('/status/api.php?action=discovered_services', { credentials: 'include' })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        setServices(Array.isArray(data.services) ? data.services : []);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleImport = async (svc: DiscoveredService) => {
+    const key = `${svc.sourceMonitorId}:${svc.name}:${svc.port ?? ''}`;
+    setImportingKey(key);
+    setError(null);
+    try {
+      const res = await fetch('/status/api.php?action=import_discovered_service', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: svc.name,
+          type: svc.type,
+          port: svc.port,
+          target: svc.target,
+          sourceMonitorId: svc.sourceMonitorId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      setServices((prev) => prev.filter((s) => `${s.sourceMonitorId}:${s.name}:${s.port ?? ''}` !== key));
+      onImported();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('discovery.import_failed', 'Import se nezdařil.'));
+    } finally {
+      setImportingKey(null);
+    }
+  };
+
+  if (loading || dismissed || services.length === 0) return null;
+
+  return (
+    <Card className="p-5 border-primary/30 bg-primary/5 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
+            <Radar className="size-5" />
+          </div>
+          <div>
+            <h3 className="font-bold text-sm flex items-center gap-2">
+              {t('discovery.title', 'Objevené služby')}
+              <Badge variant="info" className="text-[10px]">{services.length}</Badge>
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t('discovery.subtitle', 'Agenti zjistili tyto běžící služby, které se zatím nesledují. Import vytvoří nový monitor ve stejném assetu.')}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="text-muted-foreground hover:text-foreground shrink-0"
+          aria-label={t('common.close', 'Zavřít')}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      {error && (
+        <div className="p-2.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold">
+          {error}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        {services.map((svc) => {
+          const key = `${svc.sourceMonitorId}:${svc.name}:${svc.port ?? ''}`;
+          const confColor = svc.confidence >= 80 ? 'text-emerald-400' : svc.confidence >= 60 ? 'text-amber-400' : 'text-muted-foreground';
+          return (
+            <div
+              key={key}
+              className="flex flex-wrap items-center gap-3 rounded-lg bg-secondary/40 border border-border px-3 py-2.5"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-sm">{svc.name}</span>
+                  {svc.port != null && <span className="text-xs text-muted-foreground font-mono">:{svc.port}</span>}
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">{svc.type}</span>
+                  <span className={cn('text-xs font-bold', confColor)}>{svc.confidence}%</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {t('discovery.detected_on', { name: svc.sourceMonitorName }, `Zjištěno na: ${svc.sourceMonitorName}`)}
+                  {svc.evidence.length > 0 && ` · ${t('discovery.evidence', 'Důkazy')}: ${svc.evidence.join(', ')}`}
+                  {svc.missing.length > 0 && ` · ${t('discovery.missing', 'Chybí')}: ${svc.missing.join(', ')}`}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={importingKey === key}
+                onClick={() => handleImport(svc)}
+                className="gap-1.5 text-xs font-semibold shrink-0"
+              >
+                <Plus className="size-3.5" />
+                {importingKey === key ? t('discovery.importing', 'Importuji…') : t('discovery.import_btn', 'Sledovat')}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

@@ -768,6 +768,16 @@ const translations: Record<string, { cs: string; en: string }> = {
 
   'breadcrumb.aria': { cs: 'Drobečková navigace', en: 'Breadcrumb' },
 
+  // Service Discovery
+  'discovery.title': { cs: 'Objevené služby', en: 'Discovered Services' },
+  'discovery.subtitle': { cs: 'Agenti zjistili tyto běžící služby, které se zatím nesledují. Import vytvoří nový monitor ve stejném assetu.', en: 'Agents detected these running services that are not monitored yet. Importing creates a new monitor in the same asset.' },
+  'discovery.detected_on': { cs: 'Zjištěno na: {name}', en: 'Detected on: {name}' },
+  'discovery.evidence': { cs: 'Důkazy', en: 'Evidence' },
+  'discovery.missing': { cs: 'Chybí', en: 'Missing' },
+  'discovery.importing': { cs: 'Importuji…', en: 'Importing…' },
+  'discovery.import_btn': { cs: 'Sledovat', en: 'Monitor It' },
+  'discovery.import_failed': { cs: 'Import se nezdařil.', en: 'Import failed.' },
+
   // Placeholder
   'placeholder.not_built': { cs: 'Zatím nepostaveno', en: 'Not built yet' },
   'placeholder.planned_for': { cs: 'Plánováno na {sprint}.', en: 'Planned for {sprint}.' },
