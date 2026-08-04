@@ -196,7 +196,7 @@ export function ReportsPage() {
         <div className="text-right text-xs text-muted-foreground space-y-0.5 shrink-0 ml-4">
           <p className="font-semibold text-foreground text-sm">{t('reports.pdf_audit_report', 'SLA Audit Report')}</p>
           <p className="font-mono text-[11px] whitespace-nowrap">
-            Vygenerováno: {new Date().toLocaleDateString('cs-CZ')} {new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}
+            {t('reports.pdf_generated_at', { date: new Date().toLocaleDateString('cs-CZ'), time: new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }) }, `Vygenerováno: ${new Date().toLocaleDateString('cs-CZ')} ${new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}`)}
           </p>
           <p className="text-[10px] text-muted-foreground whitespace-nowrap">{t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}</p>
         </div>

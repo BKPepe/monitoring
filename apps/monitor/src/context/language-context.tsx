@@ -491,7 +491,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.manage_in_settings': { cs: 'Spravovat v Nastavení', en: 'Manage in Settings' },
   'reports.pdf_header_subtitle': { cs: 'Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz', en: 'Official Uptime Guarantee, Outages & SLA Audit Report' },
   'reports.pdf_audit_report': { cs: 'SLA Audit Report', en: 'SLA Audit Report' },
-  'reports.pdf_generated_at': { cs: 'Vygenerováno: {date}', en: 'Generated: {date}' },
+  'reports.pdf_generated_at': { cs: 'Vygenerováno: {date} {time}', en: 'Generated: {date} {time}' },
   'reports.pdf_source': { cs: 'Zdroj: bloodkings.eu / status API', en: 'Source: bloodkings.eu / status API' },
 
   // Users

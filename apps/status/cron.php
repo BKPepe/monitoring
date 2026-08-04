@@ -366,15 +366,29 @@ foreach ($monitors as $monitor) {
                 'api_fallback' => false
             ];
 
-            if (isset($check_result['ssl_days_remaining'])) {
-                $days = (int)$check_result['ssl_days_remaining'];
+            // The cert details live in check_stages.tls.cert (built by check_http()),
+            // not at the top level of $check_result - reading ssl_days_remaining
+            // directly here never matched anything, so this block never ran.
+            $ssl_cert_info = $check_result['check_stages']['tls']['cert'] ?? null;
+            if (is_array($ssl_cert_info) && isset($ssl_cert_info['days_remaining'])) {
+                $days = (int)$ssl_cert_info['days_remaining'];
                 $details_arr['ssl_days_remaining'] = $days;
+                $details_arr['ssl_issuer'] = $ssl_cert_info['issuer'] ?? null;
+                $details_arr['ssl_valid_to'] = $ssl_cert_info['valid_to'] ?? null;
                 if ($days <= 14) {
-                    $last_ssl_warn = $details_arr['last_ssl_warn'] ?? 0;
+                    // Read the previous warn timestamp from the monitor's last stored
+                    // details, not from $details_arr (which is rebuilt fresh every run
+                    // and would otherwise always read 0, spamming this alert hourly).
+                    // $details_decoded is only populated on the down-path above, so
+                    // decode last_details fresh here rather than relying on it.
+                    $prev_details = json_decode($monitor['last_details'] ?? '{}', true);
+                    $last_ssl_warn = (is_array($prev_details) ? $prev_details['last_ssl_warn'] ?? 0 : 0);
                     if (time() - $last_ssl_warn > 86400) {
                         $details_arr['last_ssl_warn'] = time();
                         trigger_notifications($pdo, $monitor, 'ssl_expiring', "SSL certifikát pro '{$name}' vyprší za {$days} dní!");
                         log_monitor_event($pdo, $id, $name, $type, 'ssl_warning', "SSL certifikát vyprší za {$days} dní");
+                    } else {
+                        $details_arr['last_ssl_warn'] = $last_ssl_warn;
                     }
                 }
             }
