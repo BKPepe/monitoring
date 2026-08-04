@@ -218,7 +218,7 @@ export function WebsitesPage() {
                 disabled={saving}
                 className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                {saving ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit a spustit monitoring')}
+                {saving ? t('common.saving', 'Ukládám…') : t('websites.save_btn', 'Uložit a spustit monitoring')}
               </button>
             </div>
           </form>
@@ -250,7 +250,7 @@ export function WebsitesPage() {
                     </div>
                   </div>
                   <Badge variant={web.status === 'up' ? 'up' : 'down'} className="shrink-0">
-                    {web.status === 'up' ? t('common.online', 'Dostupný') : t('common.offline', 'Nedostupný')}
+                    {web.status === 'up' ? t('common.online', 'Online') : t('common.offline', 'Offline')}
                   </Badge>
                 </div>
 

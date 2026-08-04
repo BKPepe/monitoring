@@ -58,7 +58,7 @@ export function DashboardPage() {
         setMonitorsError(null);
       })
       .catch(() => {
-        if (active) setMonitorsError(t('common.error', 'Seznam monitorů se nepodařilo načíst.'));
+        if (active) setMonitorsError(t('dashboard.monitors_load_error', 'Seznam monitorů se nepodařilo načíst.'));
       })
       .finally(() => {
         if (active) setMonitorsLoading(false);
@@ -136,7 +136,7 @@ export function DashboardPage() {
         setDailyUptimeError(null);
       })
       .catch(() => {
-        if (active) setDailyUptimeError(t('common.error', 'Chyba při načítání denní dostupnosti.'));
+        if (active) setDailyUptimeError(t('dashboard.uptime_load_error', 'Chyba při načítání denní dostupnosti.'));
       });
     return () => { active = false; };
   }, [t]);
@@ -228,7 +228,7 @@ export function DashboardPage() {
               <TabsList className="mx-5 mb-0">
                 <TabsTrigger value="all">{t('common.all', 'Vše')} ({monitors.length})</TabsTrigger>
                 <TabsTrigger value="up">{t('common.online', 'Online')} ({monitors.filter(m => m.status === 'up').length})</TabsTrigger>
-                <TabsTrigger value="warning">{t('common.warning', 'Warning')} ({monitors.filter(m => m.status === 'warning').length})</TabsTrigger>
+                <TabsTrigger value="warning">{t('common.warning', 'Varování')} ({monitors.filter(m => m.status === 'warning').length})</TabsTrigger>
                 <TabsTrigger value="down">{t('common.offline', 'Offline')} ({monitors.filter(m => m.status === 'down').length})</TabsTrigger>
                 <TabsTrigger value="paused">{t('common.paused', 'Paused')} ({monitors.filter(m => m.status === 'paused').length})</TabsTrigger>
               </TabsList>
@@ -295,7 +295,7 @@ export function DashboardPage() {
                 }}
                 segments={[
                   { label: t('common.online', 'Online'), value: monitors.filter(m => m.status === 'up').length, variant: 'up' },
-                  { label: t('common.warning', 'Warning'), value: monitors.filter(m => m.status === 'warning').length, variant: 'warning' },
+                  { label: t('common.warning', 'Varování'), value: monitors.filter(m => m.status === 'warning').length, variant: 'warning' },
                   { label: t('common.offline', 'Offline'), value: monitors.filter(m => m.status === 'down').length, variant: 'down' },
                   { label: 'Paused', value: monitors.filter(m => m.status === 'paused').length, variant: 'paused' },
                 ]}
@@ -335,7 +335,7 @@ function MonitorTable({ rows }: { rows: ApiMonitor[] }) {
   const statusText: Record<MonitorStatus, string> = {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Warning'),
+    warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
   };
@@ -353,7 +353,7 @@ function MonitorTable({ rows }: { rows: ApiMonitor[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="pl-5">{t('common.name', 'Monitor')}</TableHead>
+            <TableHead className="pl-5">{t('dashboard.col_monitor_name', 'Monitor')}</TableHead>
             <TableHead>{t('common.status', 'Stav')}</TableHead>
             <TableHead>{t('common.response', 'Odezva')}</TableHead>
             <TableHead>CPU</TableHead>

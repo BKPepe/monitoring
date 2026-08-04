@@ -362,7 +362,7 @@ export function InfrastructurePage() {
   const statusLabel: Record<MonitorStatus, string> = {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Warning'),
+    warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
   };
@@ -945,7 +945,7 @@ export function InfrastructurePage() {
                       onClick={() => handleStartEdit(selectedAsset.monitorId ?? selectedAsset.id)}
                       className="text-xs font-semibold"
                     >
-                      {t('asset.edit_monitor', 'Upravit nastavení')}
+                      {t('infra.edit_settings', 'Upravit nastavení')}
                     </Button>
                   )}
                   <Button size="sm" asChild className="gap-1.5 font-semibold text-xs">
@@ -1002,7 +1002,7 @@ function AssetRow({ asset, isSelected, onSelect }: { asset: AssetNode; isSelecte
   const statusLabel: Record<MonitorStatus, string> = {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Warning'),
+    warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
   };

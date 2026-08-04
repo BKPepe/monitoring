@@ -2,9 +2,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { MetricChart } from './metric-chart';
 import type { ChartData } from '@/api/types';
+import { useLanguage } from '@/context/language-context';
 
-/** Karta s grafem — jednotné záhlaví, poslední hodnota a stav načítání. */
+/** Chart card - unified header, latest value, and loading state. */
 export function ChartCard({ data }: { data: ChartData }) {
+  const { t } = useLanguage();
   const primary = data.series[0];
   const latest = [...(primary?.points ?? [])].reverse().find((p) => p.v != null);
   const hasData = (primary?.points.length ?? 0) > 0;
@@ -20,10 +22,10 @@ export function ChartCard({ data }: { data: ChartData }) {
             </p>
           )}
         </div>
-        {/* Predikci počítá server (lineární regrese nad 7 dny), ne UI. */}
+        {/* The forecast is computed by the server (linear regression over 7 days), not the UI. */}
         {data.daysToFull != null && (
           <Badge variant={data.daysToFull < 14 ? 'warning' : 'info'}>
-            Plno za {data.daysToFull} dní
+            {t('chart_card.days_to_full', { days: data.daysToFull }, `Plno za ${data.daysToFull} dní`)}
           </Badge>
         )}
       </CardHeader>
@@ -31,10 +33,10 @@ export function ChartCard({ data }: { data: ChartData }) {
         {hasData ? (
           <MetricChart data={data} />
         ) : (
-          // Prázdný graf je legitimní odpověď — monitor nemusí tuhle
-          // metriku vůbec hlásit. Falešná křivka by lhala.
+          // An empty chart is a legitimate response - a monitor may not report
+          // this metric at all. A fabricated curve would be a lie.
           <div className="text-muted-foreground grid h-[200px] place-items-center text-center text-xs">
-            Pro tuto metriku nejsou data
+            {t('chart_card.no_data', 'Pro tuto metriku nejsou data')}
           </div>
         )}
       </CardContent>
@@ -42,8 +44,9 @@ export function ChartCard({ data }: { data: ChartData }) {
   );
 }
 
-/** Kostra karty během načítání — drží výšku, aby obsah pod ní nepodskočil. */
+/** Card skeleton during loading - holds the height so content below doesn't jump. */
 export function ChartCardSkeleton({ title }: { title: string }) {
+  const { t } = useLanguage();
   return (
     <Card>
       <CardHeader>
@@ -54,7 +57,7 @@ export function ChartCardSkeleton({ title }: { title: string }) {
           className="bg-muted/40 h-[200px] w-full animate-pulse rounded-md"
           aria-hidden="true"
         />
-        <span className="sr-only">Načítám {title}</span>
+        <span className="sr-only">{t('chart_card.loading', { title }, `Načítám ${title}`)}</span>
       </CardContent>
     </Card>
   );

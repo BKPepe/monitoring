@@ -1,6 +1,7 @@
 import { Badge, StatusDot } from '@/components/ui/badge';
 import type { TimelineEvent } from '@/data/mock';
 import { Clock, MapPin, Globe } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
 
 const resolutionVariant = {
   Resolved: 'up',
@@ -9,21 +10,22 @@ const resolutionVariant = {
 } as const;
 
 /**
- * Časová osa událostí na zařízení.
+ * Event timeline for a device.
  *
- * Vykreslená jako <ol> — je to uspořádaný seznam v čase, což čtečka ohlásí
- * ("položka 2 ze 4") a uživatel klávesnice tím projde.
+ * Rendered as an <ol> - it's an ordered list in time, which a screen reader
+ * announces ("item 2 of 4") and a keyboard user can step through.
  */
 export function Timeline({ events }: { events: TimelineEvent[] }) {
+  const { t } = useLanguage();
   if (events.length === 0) {
-    return <p className="text-muted-foreground py-6 text-center text-sm">Žádné události.</p>;
+    return <p className="text-muted-foreground py-6 text-center text-sm">{t('timeline.no_events', 'Žádné události.')}</p>;
   }
 
   return (
     <ol className="flex flex-col">
       {events.map((event, index) => (
         <li key={event.id} className="flex gap-3">
-          {/* Svislá linka spojuje body osy; u posledního se nekreslí. */}
+          {/* The vertical line connects timeline dots; not drawn for the last one. */}
           <div className="flex flex-col items-center pt-1.5">
             <StatusDot variant={event.severity} />
             {index < events.length - 1 && <span className="bg-border mt-1 w-px flex-1" />}
@@ -52,13 +54,13 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
                 {event.method && (
                   <span className="inline-flex items-center gap-1.5 font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border">
                     <Globe className="size-3 text-sky-400 shrink-0" />
-                    <span>Metoda / Test: <strong className="text-foreground">{event.method}</strong></span>
+                    <span>{t('timeline.method_label', 'Metoda / Test:')} <strong className="text-foreground">{event.method}</strong></span>
                   </span>
                 )}
                 {event.location && (
                   <span className="inline-flex items-center gap-1.5 font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border">
                     <MapPin className="size-3 text-rose-400 shrink-0" />
-                    <span>Uzel: <strong className="text-foreground">{event.location}</strong></span>
+                    <span>{t('timeline.node_label', 'Uzel:')} <strong className="text-foreground">{event.location}</strong></span>
                   </span>
                 )}
               </div>

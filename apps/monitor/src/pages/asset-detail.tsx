@@ -268,21 +268,21 @@ export function AssetDetailPage() {
                         <p className={cn("text-xs font-semibold flex items-center gap-1.5", (asset.sslCert.days_remaining ?? 99) <= 14 ? 'text-amber-400' : (asset.sslCert.days_remaining ?? 99) <= 0 ? 'text-rose-400' : 'text-emerald-400')}>
                           <ShieldCheck className="size-4 shrink-0" />
                           {asset.sslCert.days_remaining != null
-                            ? (asset.sslCert.days_remaining <= 0 ? '🔴 SSL Certifikát VYPRŠEL!' : `🟢 Platný (Vyprší za ${asset.sslCert.days_remaining} dní)`)
-                            : '🟢 Platný SSL/TLS Certifikát'}
+                            ? (asset.sslCert.days_remaining <= 0 ? t('asset.ssl_expired', '🔴 SSL Certifikát VYPRŠEL!') : t('asset.ssl_valid_expiry', { days: asset.sslCert.days_remaining }, `🟢 Platný (Vyprší za ${asset.sslCert.days_remaining} dní)`))
+                            : t('asset.ssl_valid', '🟢 Platný SSL/TLS Certifikát')}
                         </p>
                         <div className="text-[11px] text-muted-foreground font-mono space-y-0.5 pt-1 border-t border-border/40">
-                          {asset.sslCert.issuer && <p>Vydavatel: {asset.sslCert.issuer}</p>}
-                          {asset.sslCert.valid_to && <p>Platnost do: {new Date(asset.sslCert.valid_to).toLocaleDateString('cs-CZ')}</p>}
+                          {asset.sslCert.issuer && <p>{t('asset.ssl_issuer', 'Vydavatel:')} {asset.sslCert.issuer}</p>}
+                          {asset.sslCert.valid_to && <p>{t('asset.ssl_valid_until', 'Platnost do:')} {new Date(asset.sslCert.valid_to).toLocaleDateString('cs-CZ')}</p>}
                         </div>
                       </>
                     ) : (
                       <>
                         <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
-                          <ShieldCheck className="size-4 shrink-0" /> 🟢 SSL/TLS Šifrovací Kanál Aktivní
+                          <ShieldCheck className="size-4 shrink-0" /> 🟢 {t('asset.ssl_channel_active', 'SSL/TLS Šifrovací Kanál Aktivní')}
                         </p>
                         <p className="text-[11px] text-muted-foreground font-mono">
-                          HTTPS / TLS 1.3 ověřeno. Certifikát je platný a funkční.
+                          {t('asset.ssl_verified', 'HTTPS / TLS 1.3 ověřeno. Certifikát je platný a funkční.')}
                         </p>
                       </>
                     )}
@@ -290,7 +290,7 @@ export function AssetDetailPage() {
               <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
                 <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
                 <p className={cn("text-xs font-medium", asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400')}>
-                  {asset.status === 'down' ? t('common.offline', 'OFFLINE') : t('infra.active_since', 'Aktivní')}
+                  {asset.status === 'down' ? t('common.offline', 'Offline') : t('infra.active_since', 'Aktivní')}
                 </p>
                 <p className="text-[11px] text-muted-foreground font-mono">{t('common.protocol', 'Protokol')}: {asset.kind}</p>
               </div>
@@ -334,7 +334,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
   const statusText: Record<MonitorStatus, string> = {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Warning'),
+    warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
   };
@@ -515,7 +515,7 @@ function OverviewTab({ asset, range, events }: { asset: AssetDetail; range: Time
               const relatedStatusLabel: Record<MonitorStatus, string> = {
                 up: t('common.online', 'Online'),
                 down: t('common.offline', 'Offline'),
-                warning: t('common.warning', 'Warning'),
+                warning: t('common.warning', 'Varování'),
                 paused: t('common.paused', 'Paused'),
                 maintenance: t('common.maintenance', 'Údržba'),
               };

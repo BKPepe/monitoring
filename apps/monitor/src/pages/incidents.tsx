@@ -219,7 +219,7 @@ export function IncidentsPage() {
                 disabled={creating}
                 className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 cursor-pointer disabled:opacity-50"
               >
-                {creating ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit incident')}
+                {creating ? t('common.saving', 'Ukládám…') : t('incidents.save_btn', 'Uložit incident')}
               </button>
             </div>
           </form>

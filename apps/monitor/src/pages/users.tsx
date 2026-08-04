@@ -302,7 +302,7 @@ function UserDialog({
             </Button>
             <Button type="submit" variant="primary" size="sm" disabled={saving}>
               <Plus />
-              {saving ? t('settings.saving', 'Ukládám…') : t('users.save_btn', 'Uložit')}
+              {saving ? t('common.saving', 'Ukládám…') : t('users.save_btn', 'Uložit')}
             </Button>
           </DialogFooter>
         </form>

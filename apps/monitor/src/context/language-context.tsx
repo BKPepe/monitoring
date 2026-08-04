@@ -234,6 +234,19 @@ const translations: Record<string, { cs: string; en: string }> = {
   // Asset Detail
   'asset.loading': { cs: 'Načítám detail zařízení a diagnostické metriky…', en: 'Loading device detail and diagnostic metrics…' },
   'asset.back': { cs: 'Zpět na infrastrukturální přehled', en: 'Back to Infrastructure Overview' },
+  'asset.not_found': { cs: 'Zařízení nenašeno', en: 'Device Not Found' },
+  'asset.not_found_desc': { cs: 'Zařízení s ID {id} nebylo v monitorovací databázi nalezeno.', en: 'A device with ID {id} was not found in the monitoring database.' },
+  'asset.event_outage': { cs: 'Výpadek služby', en: 'Service Outage' },
+  'asset.event_degraded': { cs: 'Zhoršená odezva', en: 'Degraded Response' },
+  'asset.event_ok': { cs: 'Kontrola proběhla v pořádku', en: 'Check completed successfully' },
+  'asset.event_duration': { cs: ' (trvání {min} min)', en: ' (duration {min} min)' },
+  'asset.ssl_expired': { cs: '🔴 SSL Certifikát VYPRŠEL!', en: '🔴 SSL Certificate EXPIRED!' },
+  'asset.ssl_valid_expiry': { cs: '🟢 Platný (Vyprší za {days} dní)', en: '🟢 Valid (Expires in {days} days)' },
+  'asset.ssl_valid': { cs: '🟢 Platný SSL/TLS Certifikát', en: '🟢 Valid SSL/TLS Certificate' },
+  'asset.ssl_issuer': { cs: 'Vydavatel:', en: 'Issuer:' },
+  'asset.ssl_valid_until': { cs: 'Platnost do:', en: 'Valid Until:' },
+  'asset.ssl_channel_active': { cs: 'SSL/TLS Šifrovací Kanál Aktivní', en: 'SSL/TLS Encryption Channel Active' },
+  'asset.ssl_verified': { cs: 'HTTPS / TLS 1.3 ověřeno. Certifikát je platný a funkční.', en: 'HTTPS / TLS 1.3 verified. The certificate is valid and functional.' },
   'asset.tab_overview': { cs: 'Přehled & Výkon', en: 'Overview & Performance' },
   'asset.tab_processes': { cs: 'Procesy serveru', en: 'Server Processes' },
   'asset.tab_processes_short': { cs: 'Procesy', en: 'Processes' },
@@ -517,6 +530,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'users.save_created': { cs: 'Účet {name} byl vytvořen.', en: 'Account {name} was created.' },
   'users.save_created_no_invite': { cs: 'Účet {name} byl vytvořen, ale pozvánku se nepodařilo odeslat.', en: 'Account {name} was created, but the invitation could not be sent.' },
   'users.save_failed': { cs: 'Uložení selhalo.', en: 'Save failed.' },
+  'users.save_btn': { cs: 'Uložit', en: 'Save' },
   'users.delete_failed': { cs: 'Smazání selhalo.', en: 'Deletion failed.' },
   'users.delete_confirm_title': { cs: 'Smazat uživatele?', en: 'Delete user?' },
   'users.delete_confirm_prefix': { cs: 'Účet', en: 'The account' },
@@ -752,6 +766,37 @@ const translations: Record<string, { cs: string; en: string }> = {
   'sidebar.collapse_label': { cs: 'Sbalit', en: 'Collapse' },
 
   'breadcrumb.aria': { cs: 'Drobečková navigace', en: 'Breadcrumb' },
+
+  // Placeholder
+  'placeholder.not_built': { cs: 'Zatím nepostaveno', en: 'Not built yet' },
+  'placeholder.planned_for': { cs: 'Plánováno na {sprint}.', en: 'Planned for {sprint}.' },
+
+  // Timeline
+  'timeline.no_events': { cs: 'Žádné události.', en: 'No events.' },
+  'timeline.method_label': { cs: 'Metoda / Test:', en: 'Method / Test:' },
+  'timeline.node_label': { cs: 'Uzel:', en: 'Node:' },
+
+  // Chart Card
+  'chart_card.days_to_full': { cs: 'Plno za {days} dní', en: 'Full in {days} days' },
+  'chart_card.no_data': { cs: 'Pro tuto metriku nejsou data', en: 'No data for this metric' },
+  'chart_card.loading': { cs: 'Načítám {title}', en: 'Loading {title}' },
+
+  // Audit Log
+  'audit_log.title': { cs: 'Systémový Auditní Protokol & Logy Aktivitu', en: 'System Audit Log & Activity Logs' },
+  'audit_log.subtitle': { cs: 'Živý záznam bezpečnostních událostí, přihlášení a automatických kontrol', en: 'Live record of security events, logins, and automated checks' },
+  'audit_log.refresh': { cs: 'Obnovit data', en: 'Refresh Data' },
+  'audit_log.col_initiator': { cs: 'INICIÁTOR', en: 'INITIATOR' },
+  'audit_log.col_action': { cs: 'AKCE / UDÁLOST', en: 'ACTION / EVENT' },
+  'audit_log.col_detail': { cs: 'DETAIL ZPRÁVY', en: 'MESSAGE DETAIL' },
+  'audit_log.loading': { cs: 'Načítám auditní logy...', en: 'Loading audit logs...' },
+  'audit_log.no_logs': { cs: 'Žádné auditní záznamy nebyly nalezeny.', en: 'No audit records were found.' },
+  'audit_log.status_error': { cs: 'CHYBA', en: 'ERROR' },
+  'infra.edit_settings': { cs: 'Upravit nastavení', en: 'Edit Settings' },
+  'dashboard.monitors_load_error': { cs: 'Seznam monitorů se nepodařilo načíst.', en: 'Failed to load the monitor list.' },
+  'dashboard.uptime_load_error': { cs: 'Chyba při načítání denní dostupnosti.', en: 'Error loading daily uptime.' },
+  'dashboard.col_monitor_name': { cs: 'Monitor', en: 'Monitor' },
+  'incidents.save_btn': { cs: 'Uložit incident', en: 'Save Incident' },
+  'websites.save_btn': { cs: 'Uložit a spustit monitoring', en: 'Save & Start Monitoring' },
 
   // Footer
   'footer.operational': { cs: 'Operational', en: 'Operational' },
