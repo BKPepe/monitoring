@@ -148,16 +148,16 @@ export function DashboardPage() {
       if (dbDays && dbDays.length > 0) {
         return { monitorId: m.id, name: m.name, days: dbDays };
       }
+      // No history from the API yet for this monitor (e.g. it was added after
+      // the last fetch) - show real "no data" days instead of fabricating an
+      // all-up history, which would misrepresent actual availability.
       const days = [];
       const today = new Date();
       for (let i = 29; i >= 0; i--) {
         const d = new Date(today);
         d.setDate(d.getDate() - i);
         const dateStr = d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
-        const isTodayDown = m.status === 'down' && i === 0;
-        const isTodayWarn = m.status === 'warning' && i === 0;
-        const status = isTodayDown ? 'down' : isTodayWarn ? 'warning' : 'up';
-        days.push({ date: dateStr, status: status as any, uptimePct: isTodayDown ? 0 : 100 });
+        days.push({ date: dateStr, status: 'paused' as const, uptimePct: 0 });
       }
       return { monitorId: m.id, name: m.name, days };
     });

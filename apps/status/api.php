@@ -600,7 +600,12 @@ if ($action === 'daily_uptime') {
             $by_monitor[(int)$row['monitor_id']][$row['day']] = $row;
         }
 
-        $result = [];
+        // Frontend (dashboard.tsx) expects `series` keyed by monitor id -> day
+        // list, i.e. Record<number, DayRow[]>, not an array of
+        // {monitorId, name, days} objects. A shape mismatch here means
+        // data.series is always undefined, so the real data never loads and
+        // the UI silently falls back to a fabricated all-green 30-day history.
+        $series = [];
         foreach ($mon_rows as $m) {
             $mid = (int)$m['id'];
             $day_list = [];
@@ -639,12 +644,18 @@ if ($action === 'daily_uptime') {
                 $day_list[] = ['date' => $day_display, 'status' => $status, 'uptimePct' => $uptimePct, 'detail' => $detail];
             }
 
-            $result[] = ['monitorId' => $mid, 'name' => $m['name'], 'days' => $day_list];
+            $series[$mid] = $day_list;
         }
 
-        echo json_encode(['rows' => $result], JSON_UNESCAPED_UNICODE);
+        // Cast to stdClass (not JSON_FORCE_OBJECT, which would also flatten
+        // the nested `days` arrays into objects) so `series` always encodes
+        // as a {monitorId: days[]} object even if it's empty or its keys
+        // happen to form a 0-indexed sequence - json_encode() would
+        // otherwise emit `[]` for a plain array in either case, and the
+        // frontend indexes into it by id.
+        echo json_encode(['series' => (object)$series], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['rows' => []], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['series' => (object)[]], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
