@@ -4,10 +4,11 @@ import type { HealthMetric } from '@/data/mock';
 import { cn } from '@/lib/utils';
 
 /**
- * Dlaždice v řadě "Health Cards" na detailu zařízení.
+ * A tile in the "Health Cards" row on the device detail page.
  *
- * Trend se hodnotí podle `goodDirection`: u CPU je pokles dobře, u dostupnosti
- * naopak. Bez toho by zelená šipka dolů u odezvy znamenala pokaždé něco jiného.
+ * The trend is evaluated against `goodDirection`: for CPU a decrease is
+ * good, for uptime it's the opposite. Without that, a green down arrow on
+ * latency would mean something different every time.
  */
 export function HealthCard({ metric }: { metric: HealthMetric }) {
   const { label, value, caption, delta, goodDirection = 'up', series, tone } = metric;

@@ -3,11 +3,11 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 /**
- * Dlaždice s jednou klíčovou hodnotou (KPI).
+ * A tile with a single key value (KPI).
  *
- * Trend se vždy popisuje i slovem, ne jen barvou a šipkou — a hlavně:
- * "nižší je lepší" se u odezvy a u dostupnosti liší, takže si směr
- * hodnocení řídí volající přes `goodDirection`.
+ * The trend is always described in words too, not just color and arrow -
+ * and importantly: "lower is better" differs between latency and uptime,
+ * so the caller controls the evaluation direction via `goodDirection`.
  */
 export function MetricTile({
   label,

@@ -2,13 +2,13 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * Tenká obálka nad <table>. Sprint 4 na ni nasadí TanStack Table pro řazení
- * a filtrování — proto zůstává hloupá a jen stylující, aby se to dalo doplnit
- * bez přepisu markupu.
+ * A thin wrapper over <table>. Sprint 4 will layer TanStack Table on top of
+ * it for sorting and filtering - so it stays dumb and purely stylistic, to
+ * allow that without rewriting the markup.
  */
 export function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
-    // Široké tabulky scrollují uvnitř svého boxu, stránka se nesmí hýbat do stran.
+    // Wide tables scroll inside their own box - the page must never scroll sideways.
     <div className="w-full overflow-x-auto">
       <table className={cn('w-full caption-bottom text-sm', className)} {...props} />
     </div>

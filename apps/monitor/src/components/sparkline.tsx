@@ -1,11 +1,11 @@
 import { cn } from '@/lib/utils';
 
 /**
- * Miniaturní průběh bez os a popisků.
+ * A miniature trace with no axes or labels.
  *
- * Opět čisté SVG, ne ECharts — sparkline nemá zoom, tooltip ani legendu,
- * takže by grafová knihovna přidala jen váhu. Velké grafy s osami staví
- * Sprint 4 a ty už ECharts mít budou.
+ * Plain SVG again, not ECharts - a sparkline has no zoom, tooltip, or
+ * legend, so a charting library would only add weight. Larger charts with
+ * axes are built in Sprint 4, and those will use ECharts.
  */
 const strokeClass = {
   cpu: 'stroke-chart-cpu',
@@ -42,7 +42,7 @@ export function Sparkline({
   const height = 28;
   const min = Math.min(...data);
   const max = Math.max(...data);
-  // Konstantní řada by jinak dělila nulou a zmizela na okraji.
+  // A constant series would otherwise divide by zero and vanish at the edge.
   const range = max - min || 1;
 
   const points = data.map((value, i) => {
@@ -56,7 +56,7 @@ export function Sparkline({
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
       className={cn('h-7 w-full', className)}
-      // Sparkline je dekorace k číslu vedle — samostatně nic nesděluje.
+      // The sparkline decorates the adjacent number - it conveys nothing on its own.
       aria-hidden="true"
     >
       <polygon

@@ -19,7 +19,7 @@ const buttonVariants = cva(
         sm: 'h-8 px-3 text-xs',
         md: 'h-9 px-4',
         lg: 'h-10 px-6',
-        // Čtvercová varianta pro tlačítka, která nesou jen ikonu.
+        // Square variant for buttons that carry only an icon.
         icon: 'size-9',
       },
     },
@@ -33,7 +33,7 @@ const buttonVariants = cva(
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
-  /** Vykreslí potomka místo <button> — pro odkazy, které mají vypadat jako tlačítko. */
+  /** Renders the child in place of <button> - for links that should look like a button. */
   asChild?: boolean;
 }
 

@@ -771,6 +771,28 @@ const translations: Record<string, { cs: string; en: string }> = {
   'placeholder.not_built': { cs: 'Zatím nepostaveno', en: 'Not built yet' },
   'placeholder.planned_for': { cs: 'Plánováno na {sprint}.', en: 'Planned for {sprint}.' },
 
+  // Routes / Error Boundaries
+  'routes.update_detected_title': { cs: 'Byla zjištěna aktualizace aplikace', en: 'An app update was detected' },
+  'routes.update_detected_desc': { cs: 'Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.', en: 'The platform has been updated to a newer version. Refresh the page to load the latest components.' },
+  'routes.reload_app': { cs: 'Obnovit aplikaci', en: 'Reload App' },
+  'routes.load_failed_title': { cs: 'Stránku se nepodařilo načíst', en: 'Failed to Load Page' },
+  'routes.load_failed_desc': { cs: 'Počkat na dokončení aktualizace nebo obnovit relaci.', en: 'Wait for the update to finish or refresh the session.' },
+  'routes.reload_btn': { cs: 'Obnovit načtení', en: 'Retry Loading' },
+
+  // Uptime Heatmap
+  'heatmap.status_up': { cs: 'Dostupné (100 %)', en: 'Available (100%)' },
+  'heatmap.status_warning': { cs: 'Zhoršená latence', en: 'Degraded Latency' },
+  'heatmap.status_down': { cs: 'Výpadek služby (Offline)', en: 'Service Outage (Offline)' },
+  'heatmap.status_paused': { cs: 'Pozastaveno', en: 'Paused' },
+  'heatmap.status_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled Maintenance' },
+  'heatmap.caption': { cs: 'Denní dostupnost monitorů za posledních {days} dní', en: 'Daily monitor availability over the last {days} days' },
+  'heatmap.monitor_status': { cs: 'Stav monitoru:', en: 'Monitor Status:' },
+  'heatmap.detail_down': { cs: '🔴 Detekován výpadek.', en: '🔴 Outage detected.' },
+  'heatmap.detail_warning': { cs: '⚡ Zhoršená odezva zaznamenána.', en: '⚡ Degraded response recorded.' },
+  'heatmap.detail_maintenance': { cs: '🔧 Plánovaná údržba.', en: '🔧 Scheduled maintenance.' },
+  'heatmap.detail_paused': { cs: '⏸️ Bez naměřených dat pro tento den.', en: '⏸️ No measured data for this day.' },
+  'heatmap.detail_up': { cs: '🟢 Všechny testy dostupnosti proběhly bez chyb.', en: '🟢 All availability checks passed without errors.' },
+
   // Timeline
   'timeline.no_events': { cs: 'Žádné události.', en: 'No events.' },
   'timeline.method_label': { cs: 'Metoda / Test:', en: 'Method / Test:' },

@@ -16,6 +16,34 @@ import { ApiAgentsPage } from '@/pages/api-agents';
 import { NotFoundPage } from '@/pages/not-found';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useLanguage } from '@/context/language-context';
+
+// Class components can't use hooks, so the fallback UI is a small
+// functional component that GlobalErrorBoundary's render() delegates to.
+function AppUpdateNotice() {
+  const { t } = useLanguage();
+  return (
+    <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-100 p-6 text-center">
+      <div className="max-w-md w-full p-8 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl space-y-4">
+        <div className="size-12 rounded-full bg-rose-500/10 text-rose-400 grid place-items-center mx-auto">
+          <AlertTriangle className="size-6" />
+        </div>
+        <div className="space-y-1">
+          <h2 className="text-lg font-bold">{t('routes.update_detected_title', 'Byla zjištěna aktualizace aplikace')}</h2>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            {t('routes.update_detected_desc', 'Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.')}
+          </p>
+        </div>
+        <Button
+          onClick={() => window.location.reload()}
+          className="w-full flex items-center justify-center gap-2 font-bold text-xs"
+        >
+          <RefreshCw className="size-4" /> {t('routes.reload_app', 'Obnovit aplikaci')}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 class GlobalErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -31,7 +59,7 @@ class GlobalErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error) {
-    // Pokud selhalo stahování nového sestavení (ChunkLoadError / Failed to fetch dynamically imported module)
+    // If downloading the new build failed (ChunkLoadError / Failed to fetch dynamically imported module)
     if (
       error.message?.includes('Failed to fetch dynamically imported module') ||
       error.message?.includes('Loading chunk')
@@ -42,27 +70,7 @@ class GlobalErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
-      return (
-        <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-100 p-6 text-center">
-          <div className="max-w-md w-full p-8 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl space-y-4">
-            <div className="size-12 rounded-full bg-rose-500/10 text-rose-400 grid place-items-center mx-auto">
-              <AlertTriangle className="size-6" />
-            </div>
-            <div className="space-y-1">
-              <h2 className="text-lg font-bold">Byla zjištěna aktualizace aplikace</h2>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.
-              </p>
-            </div>
-            <Button
-              onClick={() => window.location.reload()}
-              className="w-full flex items-center justify-center gap-2 font-bold text-xs"
-            >
-              <RefreshCw className="size-4" /> Obnovit aplikaci
-            </Button>
-          </div>
-        </div>
-      );
+      return <AppUpdateNotice />;
     }
 
     return this.props.children;
@@ -70,17 +78,18 @@ class GlobalErrorBoundary extends React.Component<
 }
 
 export function RouteErrorFallback() {
+  const { t } = useLanguage();
   return (
     <div className="p-8 rounded-xl bg-slate-900 border border-slate-800 text-center space-y-4 my-8">
       <div className="size-10 rounded-full bg-amber-500/10 text-amber-400 grid place-items-center mx-auto">
         <AlertTriangle className="size-5" />
       </div>
       <div>
-        <h3 className="font-bold text-sm text-slate-100">Stránku se nepodařilo načíst</h3>
-        <p className="text-xs text-slate-400 mt-1">Počkat na dokončení aktualizace nebo obnovit relaci.</p>
+        <h3 className="font-bold text-sm text-slate-100">{t('routes.load_failed_title', 'Stránku se nepodařilo načíst')}</h3>
+        <p className="text-xs text-slate-400 mt-1">{t('routes.load_failed_desc', 'Počkat na dokončení aktualizace nebo obnovit relaci.')}</p>
       </div>
       <Button size="sm" onClick={() => window.location.reload()} className="gap-2 text-xs font-semibold">
-        <RefreshCw className="size-3.5" /> Obnovit načtení
+        <RefreshCw className="size-3.5" /> {t('routes.reload_btn', 'Obnovit načtení')}
       </Button>
     </div>
   );

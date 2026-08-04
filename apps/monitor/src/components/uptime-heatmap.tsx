@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { cn } from '@/lib/utils';
 import type { DayStatus, UptimeHistoryRow } from '@/data/mock';
+import { useLanguage } from '@/context/language-context';
 
 const cellClass: Record<DayStatus, string> = {
   up: 'bg-up hover:ring-2 hover:ring-emerald-400/80',
@@ -10,23 +11,24 @@ const cellClass: Record<DayStatus, string> = {
   maintenance: 'bg-info/70 hover:ring-2 hover:ring-sky-400/80',
 };
 
-const statusLabel: Record<DayStatus, string> = {
-  up: 'Dostupné (100 %)',
-  warning: 'Zhoršená latence',
-  down: 'Výpadek služby (Offline)',
-  paused: 'Pozastaveno',
-  maintenance: 'Plánovaná údržba',
-};
-
 export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
+  const { t } = useLanguage();
   const dayCount = rows[0]?.days.length ?? 0;
+
+  const statusLabel: Record<DayStatus, string> = {
+    up: t('heatmap.status_up', 'Dostupné (100 %)'),
+    warning: t('heatmap.status_warning', 'Zhoršená latence'),
+    down: t('heatmap.status_down', 'Výpadek služby (Offline)'),
+    paused: t('heatmap.status_paused', 'Pozastaveno'),
+    maintenance: t('heatmap.status_maintenance', 'Plánovaná údržba'),
+  };
 
   return (
     <div className="flex flex-col gap-4">
       <div className="overflow-visible py-2">
         <table className="w-full border-separate border-spacing-y-2 text-sm overflow-visible">
           <caption className="sr-only">
-            Denní dostupnost monitorů za posledních {dayCount} dní
+            {t('heatmap.caption', { days: dayCount }, `Denní dostupnost monitorů za posledních ${dayCount} dní`)}
           </caption>
           <tbody>
             {rows.map((row, rowIdx) => {
@@ -58,7 +60,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                               )}
                             />
 
-                            {/* Velký a jasný Tooltip s inteligentním směřováním dolů/nahoru */}
+                            {/* Large, clear tooltip with smart up/down direction */}
                             <div
                               className={cn(
                                 "absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-slate-950/98 border border-slate-700 text-slate-100 text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl ring-1 ring-white/10",
@@ -74,7 +76,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                             </div>
 
                             <div className="flex items-center justify-between text-xs pt-0.5">
-                              <span className="text-slate-400">Stav monitoru:</span>
+                              <span className="text-slate-400">{t('heatmap.monitor_status', 'Stav monitoru:')}</span>
                               <span className={cn("font-bold", day.status === 'down' ? 'text-rose-400' : day.status === 'warning' ? 'text-amber-400' : 'text-emerald-400')}>
                                 {statusLabel[day.status]}
                               </span>
@@ -83,14 +85,14 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                             <div className="text-xs text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed font-sans">
                               {day.detail ?? (
                                 day.status === 'down'
-                                  ? '🔴 Detekován výpadek.'
+                                  ? t('heatmap.detail_down', '🔴 Detekován výpadek.')
                                   : day.status === 'warning'
-                                  ? '⚡ Zhoršená odezva zaznamenána.'
+                                  ? t('heatmap.detail_warning', '⚡ Zhoršená odezva zaznamenána.')
                                   : day.status === 'maintenance'
-                                  ? '🔧 Plánovaná údržba.'
+                                  ? t('heatmap.detail_maintenance', '🔧 Plánovaná údržba.')
                                   : day.status === 'paused'
-                                  ? '⏸️ Bez naměřených dat pro tento den.'
-                                  : '🟢 Všechny testy dostupnosti proběhly bez chyb.'
+                                  ? t('heatmap.detail_paused', '⏸️ Bez naměřených dat pro tento den.')
+                                  : t('heatmap.detail_up', '🟢 Všechny testy dostupnosti proběhly bez chyb.')
                               )}
                             </div>
                           </div>
