@@ -37,10 +37,15 @@ if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
 }
 
 // --- DATABASE CONFIGURATION ---
-// Podporuje 'mysql' (MariaDB/MySQL) i 'pgsql' (PostgreSQL).
-define('DB_DRIVER', 'pgsql'); // 'pgsql' nebo 'mysql'
+// db.php lets you pass 'pgsql' here, but every migration and query in this
+// app (schema.sql, db.php, api.php, functions.php, cron.php) is written in
+// MySQL dialect (AUTO_INCREMENT, ON DUPLICATE KEY UPDATE, backticked
+// identifiers, ...). Setting DB_DRIVER to 'pgsql' will connect fine and
+// then silently fail every migration/query that follows - this app only
+// actually works against MySQL/MariaDB today.
+define('DB_DRIVER', 'mysql');
 define('DB_HOST', '127.0.0.1');
-define('DB_PORT', 5432); // 5432 pro PostgreSQL, 3306 pro MySQL
+define('DB_PORT', 3306);
 define('DB_NAME', 'bloodkings_status');
 define('DB_USER', 'bloodkings');
 define('DB_PASS', 'heslo_databaze');
