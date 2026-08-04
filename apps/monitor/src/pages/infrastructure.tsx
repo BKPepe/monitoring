@@ -56,12 +56,12 @@ export function InfrastructurePage() {
   const [query, setQuery] = React.useState('');
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
-  // Modal pro přidání / úpravu monitoru s plným rozsahem nastavení jako v PHP admin.php
+  // Add/edit monitor modal, with the same full range of settings as PHP admin.php
   const [showAddModal, setShowAddModal] = React.useState(false);
   const [editingId, setEditingId] = React.useState<number | null>(null);
   const [activeTab, setActiveTab] = React.useState<'general' | 'metrics' | 'advanced' | 'alerts'>('general');
 
-  // Všeobecná nastavení
+  // General settings
   const [monitorType, setMonitorType] = React.useState<'web' | 'minecraft' | 'teamspeak' | 'openwrt' | 'vps' | 'discord'>('web');
   const [monitorName, setMonitorName] = React.useState('');
   const [monitorTarget, setMonitorTarget] = React.useState('');
@@ -99,7 +99,7 @@ export function InfrastructurePage() {
     'restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe'
   ]);
 
-  // Zobrazované sekce dashboardu (Service Profiles)
+  // Displayed dashboard sections (Service Profiles)
   const [enabledMetrics, setEnabledMetrics] = React.useState<string[]>([
     'check_pipeline', 'response_breakdown', 'ssl_card', 'headers',
     'health_score', 'process', 'service', 'clients_chart', 'quality', 'ports', 'license_version'
@@ -155,10 +155,10 @@ export function InfrastructurePage() {
       setMonitorType((mon.type || 'web').toLowerCase() as any);
       setCategory(mon.category || 'Webové Portály & API');
 
-      const t = (mon.type || '').toLowerCase();
+      const typeLower = (mon.type || '').toLowerCase();
       const rawT = mon.target || '';
 
-      if (t === 'web' || rawT.startsWith('http')) {
+      if (typeLower === 'web' || rawT.startsWith('http')) {
         setMonitorTarget(rawT);
         setMonitorPort(mon.port ? String(mon.port) : '');
       } else if (rawT.includes(':') && !rawT.startsWith('http')) {
@@ -170,10 +170,11 @@ export function InfrastructurePage() {
         setMonitorPort(mon.port ? String(mon.port) : '');
       }
 
-      // Zbytek nastavení chodí jen přihlášenému administrátorovi (viz api.php
-      // action=monitors) - pole necháváme na uložené hodnotě monitoru, ne na
-      // pevném výchozím textu, jinak by uložení formuláře přepsalo skutečné
-      // nastavení (hlídané procesy, limity, Remote Actions...) tím výchozím.
+      // The rest of the settings are only sent to a logged-in administrator
+      // (see api.php action=monitors) - fields are left at the monitor's saved
+      // value, not a fixed default, otherwise saving the form would overwrite
+      // the real settings (monitored processes, limits, Remote Actions...)
+      // with that default.
       setTimeoutVal(mon.timeout != null ? String(mon.timeout) : '5');
       setEmailNotifications(mon.emailNotifications ?? true);
       setSmsNotifications(mon.smsNotifications ?? false);
@@ -184,11 +185,11 @@ export function InfrastructurePage() {
       setBodyKeyword(mon.bodyKeyword ?? '');
       setSqUsername(mon.sqUsername ?? 'serveradmin');
       setSqPassword('');
-      setSqPasswordPlaceholder(mon.sqPasswordSet ? '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)' : '');
+      setSqPasswordPlaceholder(mon.sqPasswordSet ? t('infra.password_saved_placeholder', '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)') : '');
       setTs3FiletransferPort(mon.ts3FiletransferPort != null ? String(mon.ts3FiletransferPort) : '30033');
       setRconPort(mon.rconPort != null ? String(mon.rconPort) : '25575');
       setRconPassword('');
-      setRconPasswordPlaceholder(mon.rconPasswordSet ? '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)' : '');
+      setRconPasswordPlaceholder(mon.rconPasswordSet ? t('infra.password_saved_placeholder', '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)') : '');
       setMonitoredProcesses(mon.monitoredProcesses ?? '');
       setCpuThreshold(mon.cpuThreshold != null ? String(mon.cpuThreshold) : '90');
       setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
@@ -221,10 +222,11 @@ export function InfrastructurePage() {
     setShowAddModal(true);
   };
 
-  // Strom zařízení se odvozuje ze skutečných monitorů (rawMonitors), ne z
-  // action=assets - ten endpoint na backendu vůbec neexistuje, takže dřívější
-  // getAssetGroups()/getDefaultAssetGroups() vždy skončily na natvrdo napsaném
-  // seznamu, úplně nezávisle na tom, kdo je přihlášený a co je v databázi.
+  // The asset tree is derived from the actual monitors (rawMonitors), not
+  // from action=assets - that backend endpoint doesn't exist at all, so the
+  // earlier getAssetGroups()/getDefaultAssetGroups() always ended up on a
+  // hardcoded list, completely independent of who's logged in or what's in
+  // the database.
   function kindFromType(type: string): string {
     const t = (type || '').toLowerCase();
     if (t === 'discord') return 'Discord';
@@ -339,8 +341,8 @@ export function InfrastructurePage() {
       return;
     }
 
-    // Žádná lokální fabrikace nového řádku - strom se odvozuje z rawMonitors,
-    // tak ho po úspěšném uložení jen znovu načteme ze serveru.
+    // No local fabrication of a new row - the tree is derived from
+    // rawMonitors, so we just reload it from the server after a successful save.
     loadMonitors();
 
     setAddedSuccess(true);
@@ -415,7 +417,7 @@ export function InfrastructurePage() {
         )}
       </div>
 
-      {/* Kompaktní, kompletní záložkový modal pro konfiguraci nového/stávajícího monitoru */}
+      {/* Compact, complete tabbed modal for configuring a new/existing monitor */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in-50">
           <div className="w-full max-w-3xl rounded-2xl bg-card border border-border shadow-2xl p-6 space-y-5 max-h-[92vh] flex flex-col">
@@ -429,7 +431,7 @@ export function InfrastructurePage() {
               <button onClick={() => setShowAddModal(false)} className="text-muted-foreground hover:text-foreground text-base px-2 py-1">✕</button>
             </div>
 
-            {/* Záložky modálu */}
+            {/* Modal tabs */}
             <div className="flex border-b border-border gap-2 shrink-0">
               {[
                 { id: 'general', label: t('infra.tab_general', '1. Základní & Typ') },
@@ -460,7 +462,7 @@ export function InfrastructurePage() {
               </div>
             ) : (
               <form onSubmit={handleSaveMonitor} className="space-y-4 overflow-y-auto pr-1 flex-1">
-                {/* TAB 1: Základní nastavení a výběr typu */}
+                {/* TAB 1: Basic settings and type selection */}
                 {activeTab === 'general' && (
                   <div className="space-y-4">
                     <div>
@@ -552,12 +554,12 @@ export function InfrastructurePage() {
                   </div>
                 )}
 
-                {/* TAB 2: Zobrazované sekce dashboardu (Service Profiles / Enabled Metrics) */}
+                {/* TAB 2: Displayed dashboard sections (Service Profiles / Enabled Metrics) */}
                 {activeTab === 'metrics' && (
                   <div className="space-y-4">
                     <div className="p-3 rounded-lg bg-secondary/50 border border-border text-xs text-muted-foreground">
-                      <p className="font-semibold text-foreground">Zobrazované sekce dashboardu (Service Profiles):</p>
-                      <p className="text-[11px] mt-0.5">Zvolte, které sekce se pro tento monitor zobrazí veřejně i v administraci. Doporučené položky jsou zapnuty.</p>
+                      <p className="font-semibold text-foreground">{t('infra.service_profiles_title', 'Zobrazované sekce dashboardu (Service Profiles):')}</p>
+                      <p className="text-[11px] mt-0.5">{t('infra.service_profiles_desc', 'Zvolte, které sekce se pro tento monitor zobrazí veřejně i v administraci. Doporučené položky jsou zapnuty.')}</p>
                     </div>
 
                     {monitorType === 'web' && (
@@ -613,7 +615,7 @@ export function InfrastructurePage() {
                   </div>
                 )}
 
-                {/* TAB 3: Rozšíření a specifická nastavení podle typu */}
+                {/* TAB 3: Extensions and type-specific settings */}
                 {activeTab === 'advanced' && (
                   <div className="space-y-4">
                     {/* Web: cPanel stats URL & Body Keyword */}
@@ -635,7 +637,7 @@ export function InfrastructurePage() {
                           <Input
                             value={bodyKeyword}
                             onChange={(e) => setBodyKeyword(e.target.value)}
-                            placeholder="Např. Blood Kings"
+                            placeholder={t('infra.body_keyword_placeholder', 'Např. Blood Kings')}
                             className="text-xs"
                           />
                           <p className="text-[11px] text-muted-foreground mt-1">{t('infra.body_keyword_hint', 'Kontrola ověří, že tělo HTTP odpovědi obsahuje tento řetězec. Pokud chybí, vyhodnotí výpadek.')}</p>
@@ -690,14 +692,14 @@ export function InfrastructurePage() {
 
                       return (
                         <div className="space-y-4 p-4 rounded-xl bg-secondary/40 border border-border text-xs text-foreground">
-                          {/* Indikátor stavu detekce agenta */}
+                          {/* Agent detection status indicator */}
                           {hasActiveAgent ? (
                             <div className="p-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
                               <span className="flex items-center gap-2">
                                 <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
-                                <span>Agent rozpoznán a aktivní na routeru (Verze: <strong className="font-mono font-bold text-emerald-400">v{agentVer}</strong>{lastSeenText ? ` · Poslední report: ${lastSeenText}` : ''})</span>
+                                <span>{t('infra.agent_detected_prefix', 'Agent rozpoznán a aktivní na routeru (Verze:')} <strong className="font-mono font-bold text-emerald-400">v{agentVer}</strong>{lastSeenText ? ` · ${t('infra.last_report', 'Poslední report:')} ${lastSeenText}` : ''})</span>
                               </span>
-                              <Badge variant="up" className="text-[10px]">Agent Připojen ✅</Badge>
+                              <Badge variant="up" className="text-[10px]">{t('infra.agent_connected_badge', 'Agent Připojen ✅')}</Badge>
                             </div>
                           ) : (
                             <div className="p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
@@ -789,7 +791,7 @@ export function InfrastructurePage() {
                         <Input
                           value={monitoredProcesses}
                           onChange={(e) => setMonitoredProcesses(e.target.value)}
-                          placeholder="Např. ts3server, nginx, mysql"
+                          placeholder={t('infra.monitored_processes_placeholder', 'Např. ts3server, nginx, mysql')}
                         />
                         <p className="text-[11px] text-muted-foreground">{t('infra.monitored_processes_hint', 'Zadejte názvy procesů, které má agent hlídat. Pokud některý nepoběží, monitor bude označen jako DOWN.')}</p>
                       </div>
@@ -797,7 +799,7 @@ export function InfrastructurePage() {
                   </div>
                 )}
 
-                {/* TAB 4: Výstražné limity & Notifikace */}
+                {/* TAB 4: Alert thresholds & Notifications */}
                 {activeTab === 'alerts' && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl bg-secondary/30 border border-border text-xs space-y-3">
@@ -861,7 +863,7 @@ export function InfrastructurePage() {
                       {maintenance && (
                         <div>
                           <label className="block text-[11px] font-medium text-muted-foreground mb-1">{t('infra.maintenance_desc_label', 'Popis údržby (zobrazí se uživatelům)')}</label>
-                          <Input value={maintenanceDescription} onChange={(e) => setMaintenanceDescription(e.target.value)} placeholder="Např. Aktualizace kernelu..." />
+                          <Input value={maintenanceDescription} onChange={(e) => setMaintenanceDescription(e.target.value)} placeholder={t('infra.maintenance_desc_placeholder', 'Např. Aktualizace kernelu...')} />
                         </div>
                       )}
 
@@ -884,7 +886,7 @@ export function InfrastructurePage() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* Levý strom zařízení */}
+        {/* Left asset tree */}
         <Card className="lg:col-span-5 p-4 space-y-4">
           <div className="relative">
             <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
@@ -922,7 +924,7 @@ export function InfrastructurePage() {
           </div>
         </Card>
 
-        {/* Pravý detail vybraného zařízení */}
+        {/* Right detail of the selected asset */}
         <Card className="lg:col-span-7 p-6 space-y-6">
           {selectedAsset ? (
             <>
