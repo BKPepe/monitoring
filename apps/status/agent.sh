@@ -106,6 +106,10 @@ for arg in "$@"; do
     esac
 done
 
+json_str() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | tr '\n' ' '
+}
+
 log_message() {
     local msg="$1"
     local ts
@@ -859,6 +863,20 @@ fi
 if [ "$http_code" = "200" ]; then
     log_debug "OK: Statistiky úspěšně odeslány."
 
+    # Potvrzení provedení akce zpět na server - bez tohohle by agent_actions.status
+    # zůstal navždy na 'sent' ("odesláno, čeká na potvrzení") v administraci, i když
+    # se akce ve skutečnosti provedla (stejný gap, jaký měl dřív agent_openwrt.sh).
+    # Samostatný lehký POST, protože hlavní telemetrie už pro tento cyklus odešla.
+    send_action_result() {
+        ar_id="$1"; ar_status="$2"; ar_msg="$3"
+        ar_payload="{\"agent_key\":\"$(json_str "$AGENT_KEY")\",\"action_result\":{\"action_id\":${ar_id},\"status\":\"$(json_str "$ar_status")\",\"message\":\"$(json_str "$ar_msg")\"}}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -s -m 10 -X POST -H "Content-Type: application/json" -d "$ar_payload" "$API_URL" >/dev/null 2>&1
+        elif command -v wget >/dev/null 2>&1; then
+            wget -T 10 --post-data="$ar_payload" --header="Content-Type: application/json" -q -O /dev/null "$API_URL" >/dev/null 2>&1
+        fi
+    }
+
     # --- Remote Actions (Opt-in přes REMOTE_ACTIONS_ENABLED=1) ---
     REMOTE_ACTIONS_ENABLED="${REMOTE_ACTIONS_ENABLED:-0}"
     ALLOWED_ACTIONS="${ALLOWED_ACTIONS:-restart_service,reboot_server}"
@@ -895,27 +913,40 @@ if [ "$http_code" = "200" ]; then
                                         if command -v systemctl >/dev/null 2>&1; then
                                             systemctl restart "$svc_name" >/dev/null 2>&1 || true
                                             log_message "Restartována služba přes systemctl: $svc_name"
+                                            send_action_result "$act_id" "executed" "Služba '$svc_name' restartována přes systemctl"
                                         elif [ -x "/etc/init.d/$svc_name" ]; then
                                             /etc/init.d/"$svc_name" restart >/dev/null 2>&1 || true
                                             log_message "Restartována služba přes init.d: $svc_name"
+                                            send_action_result "$act_id" "executed" "Služba '$svc_name' restartována přes init.d"
+                                        else
+                                            log_message "VAROVÁNÍ: Služba '$svc_name' nenalezena nebo neni spustitelná."
+                                            send_action_result "$act_id" "failed" "Služba '$svc_name' nenalezena nebo neni spustitelná"
                                         fi
+                                    else
+                                        send_action_result "$act_id" "failed" "Chybí service_name v payloadu akce"
                                     fi
                                     ;;
                                 reboot_server)
                                     log_message "PROVÁDÍM REBOOT SERVERU DLE PODEPSANÉHO POKYNU..."
+                                    # Potvrzení musí odejít PŘED rebootem - jakmile
+                                    # /sbin/reboot ukončí proces, už se nic dalšího neprovede.
+                                    send_action_result "$act_id" "executed" "Server se restartuje"
                                     /sbin/reboot >/dev/null 2>&1 || systemctl reboot >/dev/null 2>&1 || true
                                     ;;
                             esac
                         else
                             log_message "VAROVÁNÍ: Odmítnuta vzdálená akce - neplatný HMAC podpis!"
+                            send_action_result "$act_id" "failed" "Neplatný HMAC podpis"
                         fi
                         ;;
                     *)
                         log_message "VAROVÁNÍ: Odmítnuta vzdálená akce '$act_type' - není na seznamu ALLOWED_ACTIONS!"
+                        send_action_result "$act_id" "failed" "Akce '$act_type' neni v ALLOWED_ACTIONS"
                         ;;
                 esac
             else
                 log_message "VAROVÁNÍ: Odmítnuta vzdálená akce - vypršená platnost (časové okno > 30s)"
+                send_action_result "$act_id" "failed" "Vypršela platnost podpisu (>30s)"
             fi
         fi
     fi
