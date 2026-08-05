@@ -22,9 +22,7 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
                 </Link>
               ) : (
                 // The last crumb is the current page - not a link.
-                <span className={isLast ? 'text-foreground font-medium' : undefined}>
-                  {item.label}
-                </span>
+                <span className={isLast ? 'text-foreground font-medium' : undefined}>{item.label}</span>
               )}
               {!isLast && <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />}
             </li>

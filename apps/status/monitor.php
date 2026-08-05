@@ -469,11 +469,12 @@ foreach ($timeline as $ev) {
                     <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">IPv4 vs IPv6 Provoz (aktuální rychlost)</div>
                     <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem;">
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
-                            <div style="font-size: 1.2rem; font-weight: 700; color: var(--color-blue, #58a6ff);"><?php echo (float)($details['net_ipv4_kbps'] ?? 0); ?> KB/s</div>
+                            <?php // Chybějící hodnota = pomlčka, ne vymyšlených "0 KB/s" (agent hlásí třeba jen jednu rodinu). ?>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: var(--color-blue, #58a6ff);"><?php echo isset($details['net_ipv4_kbps']) ? (float)$details['net_ipv4_kbps'] . ' KB/s' : '—'; ?></div>
                             <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.2rem;"><i class="fas fa-network-wired"></i> IPv4 Provoz</div>
                         </div>
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
-                            <div style="font-size: 1.2rem; font-weight: 700; color: #8b5cf6;"><?php echo (float)($details['net_ipv6_kbps'] ?? 0); ?> KB/s</div>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: #8b5cf6;"><?php echo isset($details['net_ipv6_kbps']) ? (float)$details['net_ipv6_kbps'] . ' KB/s' : '—'; ?></div>
                             <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.2rem;"><i class="fas fa-globe"></i> IPv6 Provoz</div>
                         </div>
                     </div>
@@ -593,7 +594,8 @@ foreach ($timeline as $ev) {
                     <?php if (!empty($details['kernel'])): ?><div class="ao-sidebar-row"><span class="k">Kernel</span><span class="v"><?php echo htmlspecialchars($details['kernel']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['model'])): ?><div class="ao-sidebar-row"><span class="k">Model</span><span class="v"><?php echo htmlspecialchars($details['model']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['architecture'])): ?><div class="ao-sidebar-row"><span class="k">Arch</span><span class="v"><?php echo htmlspecialchars($details['architecture']); ?></span></div><?php endif; ?>
-                    <?php if (!empty($details['ram_total_mb'])): ?>
+                    <?php // ram_used_mb chodí vždy spolu s total; bez něj by "0 MB / X MB" byla vymyšlená hodnota. ?>
+                    <?php if (!empty($details['ram_total_mb']) && isset($details['ram_used_mb'])): ?>
                         <?php
                         $r_tot = (int)$details['ram_total_mb'];
                         $r_used = (int)($details['ram_used_mb'] ?? 0);

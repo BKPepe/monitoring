@@ -1,0 +1,189 @@
+<?php
+/**
+ * Testy sběrové/notifikační/e-mailové vrstvy - bez DB a bez sítě.
+ *
+ * Spuštění:  php apps/status/tests/run_pipeline_tests.php
+ *
+ * Tyhle tři oblasti (cron pipeline, e-mailové šablony, notifikační kanály)
+ * dosud neměly žádné pokrytí, přestože právě ony rozhodují, jestli se
+ * uživatel o výpadku dozví - a jestli mu systém neukáže vymyšlená data.
+ * Testuje se to, co jde deterministicky: vyhodnocení stavu sběru, jazyk
+ * e-mailů, výběr příjemců/kanálů a skládání textů.
+ */
+
+require_once __DIR__ . '/../lang.php';
+
+require_once __DIR__ . '/assert_helpers.php';
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_get_collection_issues', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
+    'bk_relative_time_label', 'bk_format_duration', 'bk_compute_baseline_anomaly',
+    'bk_half_window_rate', 'bk_latency_score',
+]);
+
+
+// =======================================================================
+// 1. SBĚR DAT - bk_get_collection_issues
+// Tvrdé pravidlo projektu: výpadek sběru MUSÍ být vidět. Tyhle testy hlídají,
+// že se hlásí právě tehdy, když se opravdu nesbírá - ani dřív, ani později.
+// =======================================================================
+if (function_exists('bk_get_collection_issues')) {
+    $healthy_monitor = ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s')];
+
+    check('zdravý monitor bez agenta nehlásí nic',
+        count(bk_get_collection_issues($healthy_monitor, [])), 0);
+
+    // cPanel exporter selhává - přesně scénář, který dva týdny nikdo neviděl.
+    $issues = bk_get_collection_issues($healthy_monitor, [
+        'cpanel_stats_error' => ['error' => 'HTTP 403', 'hint' => 'Špatný klíč', 'since' => '2026-08-01T10:00:00+02:00'],
+    ]);
+    check('selhání cPanel sběru se hlásí', count($issues), 1);
+    check('typ problému je cpanel_stats', $issues[0]['type'] ?? null, 'cpanel_stats');
+    check('hint se propaguje k adminovi', $issues[0]['hint'] ?? null, 'Špatný klíč');
+    check('začátek výpadku se propaguje', $issues[0]['since'] ?? null, '2026-08-01T10:00:00+02:00');
+
+    // Mlčící agent: hlásí se až po vypršení timeoutu, ne dřív.
+    $fresh = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 60], 3000);
+    check('čerstvý agent nehlásí problém', count($fresh), 0);
+
+    $stale = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 7200], 3000);
+    check_true('mlčící agent se hlásí',
+        count(array_filter($stale, fn($i) => $i['type'] === 'agent_silent')) === 1);
+
+    // Monitor, který agenta nikdy neměl, nesmí hlásit "agent mlčí".
+    $never = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => 0], 3000);
+    check('monitor bez agenta nehlásí mlčení agenta',
+        count(array_filter($never, fn($i) => $i['type'] === 'agent_silent')), 0);
+
+    // Zastavené kontroly - pauznutý monitor je legitimní stav, ne porucha.
+    $paused = bk_get_collection_issues(
+        ['status' => 'paused', 'last_checked' => date('Y-m-d H:i:s', time() - 86400)], []);
+    check('pozastavený monitor nehlásí zastavené kontroly',
+        count(array_filter($paused, fn($i) => $i['type'] === 'checks_stalled')), 0);
+
+    $stalled = bk_get_collection_issues(
+        ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s', time() - 3600)], []);
+    check_true('zastavené kontroly se hlásí',
+        count(array_filter($stalled, fn($i) => $i['type'] === 'checks_stalled')) === 1);
+}
+
+// =======================================================================
+// 2. E-MAILY - bk_with_email_lang
+// E-maily nemají návštěvníka, takže jazyk určuje nastavení. Test hlídá, že
+// se globály korektně přepnou A VRÁTÍ - jinak by první odeslaný e-mail
+// přepnul jazyk celému běžícímu requestu (a tím i stránce uživatele).
+// =======================================================================
+if (function_exists('bk_with_email_lang')) {
+    $GLOBALS['BK_LANG'] = 'cs';
+    $GLOBALS['BK_STRINGS'] = require __DIR__ . '/../lang/cs.php';
+
+    $en_text = bk_with_email_lang('en', fn() => t('day_no_data'));
+    $cs_text = bk_with_email_lang('cs', fn() => t('day_no_data'));
+    check_true('EN a CS text se liší', $en_text !== $cs_text);
+    check_true('EN text není prázdný', is_string($en_text) && $en_text !== '');
+
+    check('jazyk se po odeslání vrátí zpět', $GLOBALS['BK_LANG'], 'cs');
+    check('slovník se po odeslání vrátí zpět', t('day_no_data'), $cs_text);
+
+    // Nesmyslný kód jazyka nesmí shodit odesílání - fallback na češtinu.
+    $fallback = bk_with_email_lang('xx', fn() => t('day_no_data'));
+    check('neznámý jazyk padá na češtinu', $fallback, $cs_text);
+
+    // Výjimka uvnitř builderu nesmí nechat globály přepnuté.
+    try {
+        bk_with_email_lang('en', function () { throw new RuntimeException('boom'); });
+    } catch (RuntimeException $e) {
+        // očekávané
+    }
+    check('výjimka v šabloně nenechá přepnutý jazyk', $GLOBALS['BK_LANG'], 'cs');
+}
+
+// =======================================================================
+// 3. TEXTY UPOZORNĚNÍ - bk_enrich_threshold_tip
+// Obohacení tipu smí použít jen data, která opravdu dorazila. Vymyšlený
+// "top proces" nebo "Wi-Fi klientů: 0" by byl přesně ten druh lži, kvůli
+// které tenhle projekt prošel čistkou fabrikovaných dat.
+// =======================================================================
+if (function_exists('bk_enrich_threshold_tip')) {
+    $GLOBALS['BK_LANG'] = 'cs';
+    $GLOBALS['BK_STRINGS'] = require __DIR__ . '/../lang/cs.php';
+
+    $empty = bk_enrich_threshold_tip([], 'cpu');
+    check_false('bez dat se nevymýšlí top proces', str_contains($empty, '%)'));
+
+    $with_proc = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+        'load1' => 2.8, 'load5' => 2.4, 'load15' => 2.1,
+        'wifi_clients_count' => 27,
+    ], 'cpu');
+    check_true('viník je v textu', str_contains($with_proc, 'hostapd'));
+    check_true('podíl viníka je v textu', str_contains($with_proc, '61'));
+    check_true('load average je v textu', str_contains($with_proc, '2.8'));
+    check_true('kontext Wi-Fi klientů je v textu', str_contains($with_proc, '27'));
+    check_true('doporučení je v textu', str_contains(mb_strtolower($with_proc), 'doporučení'));
+
+    // Bez Wi-Fi telemetrie se o klientech nesmí psát vůbec.
+    $no_wifi = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+    ], 'cpu');
+    check_false('bez telemetrie se nepíše o klientech', str_contains(mb_strtolower($no_wifi), 'klient'));
+
+    // RAM varianta bere paměťový žebříček, ne CPU.
+    $ram_tip = bk_enrich_threshold_tip([
+        'top_ram_processes' => [['name' => 'java', 'ram_mb' => 2048]],
+    ], 'ram');
+    check_true('RAM tip jmenuje paměťového viníka', str_contains($ram_tip, 'java'));
+}
+
+// =======================================================================
+// 4. DETEKCE ANOMÁLIÍ A TRENDŮ (podklad pro notifikace a insights)
+// =======================================================================
+if (function_exists('bk_compute_baseline_anomaly')) {
+    // Stabilní řada + hodnota v normálu = žádná anomálie.
+    $stable = array_fill(0, 30, 20.0);
+    check('hodnota v normálu není anomálie',
+        bk_compute_baseline_anomaly($stable, 21.0, 5.0), null);
+
+    // Výrazný výkyv nad baseline anomálie být musí.
+    $spike = bk_compute_baseline_anomaly($stable, 90.0, 5.0);
+    check_true('výrazný výkyv je anomálie', is_array($spike));
+
+    // Prázdná historie nesmí nic tvrdit (nemáme s čím porovnávat).
+    check('bez historie se anomálie nehlásí',
+        bk_compute_baseline_anomaly([], 90.0, 5.0), null);
+}
+
+if (function_exists('bk_half_window_rate')) {
+    // Rostoucí zaplnění disku - podklad pro predikci "plno za N dní".
+    $rows = [];
+    for ($i = 0; $i < 14; $i++) {
+        $rows[] = ['checked_at' => date('Y-m-d H:i:s', strtotime("-" . (14 - $i) . " days")), 'hdd_usage' => 50 + $i];
+    }
+    $rate = bk_half_window_rate($rows, 'hdd_usage');
+    check_true('růst disku se detekuje', is_array($rate) && $rate['rate_per_day'] > 0);
+
+    // Plochá řada nesmí generovat předpověď zaplnění.
+    $flat = [];
+    for ($i = 0; $i < 14; $i++) {
+        $flat[] = ['checked_at' => date('Y-m-d H:i:s', strtotime("-" . (14 - $i) . " days")), 'hdd_usage' => 50];
+    }
+    $flat_rate = bk_half_window_rate($flat, 'hdd_usage');
+    check_true('plochá řada nemá růst',
+        $flat_rate === null || abs($flat_rate['rate_per_day']) < 0.01);
+}
+
+// =======================================================================
+// 5. FORMÁTOVÁNÍ V NOTIFIKACÍCH
+// =======================================================================
+if (function_exists('bk_relative_time_label')) {
+    check_true('relativní čas vrací text', is_string(bk_relative_time_label(time() - 300)));
+}
+if (function_exists('bk_latency_score')) {
+    check_true('nízká latence skóruje lépe než vysoká',
+        bk_latency_score(20) > bk_latency_score(2000));
+}
+
+$failed = bk_test_report('sběr, e-maily, notifikace');
+// Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
+if (!defined('BK_COVERAGE_RUN')) {
+    exit($failed > 0 ? 1 : 0);
+}

@@ -203,6 +203,17 @@ function bk_agent_files() {
  * (např. stará data bez uloženého agent_type) - volající pak nedělá žádné
  * srovnání verzí, místo srovnávání proti cizímu/neplatnému číslu.
  */
+/**
+ * Je verze $have starší než $latest? Porovnává se po číselných složkách,
+ * ne řetězcově - "1.10.0" < "1.9.0" by jinak vyšlo jako novější.
+ */
+function bk_version_is_older(?string $have, ?string $latest): bool {
+    if (!$have || !$latest) {
+        return false;
+    }
+    return version_compare($have, $latest, '<');
+}
+
 function bk_get_agent_latest_version($agent_type) {
     $agent_files = bk_agent_files();
     if (!isset($agent_files[$agent_type])) {
@@ -286,9 +297,10 @@ function render_vps_agent_details($details, $monitor = null) {
         <div>
             <?php
             $ram_detail_str = '';
-            if (!empty($details['ram_total_mb'])) {
+            // used chodí vždy spolu s total; bez něj by "0 MB / X MB" bylo vymyšlené.
+            if (!empty($details['ram_total_mb']) && isset($details['ram_used_mb'])) {
                 $tot_mb = (int)$details['ram_total_mb'];
-                $used_mb = (int)($details['ram_used_mb'] ?? 0);
+                $used_mb = (int)$details['ram_used_mb'];
                 $avail_mb = (int)($details['ram_available_mb'] ?? max(0, $tot_mb - $used_mb));
                 if ($tot_mb >= 1024) {
                     $tot_fmt = round($tot_mb / 1024, 1) . ' GB';
@@ -601,6 +613,61 @@ function bk_format_duration($minutes) {
     return $d . ' d ' . $h . ' h';
 }
 
+/**
+ * Obohacení threshold tipu o důkazy - kvalita podle laťky uživatele
+ * (2026-07-21): "CPU je nad 85 % po dobu 18 minut. Nejvíce zatěžuje:
+ * hostapd (61 %). Load average: 2.8/2.4/2.1. Wi-Fi klienti: 27.
+ * Doporučení: ...". Skládá se JEN ze skutečně dostupných dat - bez top
+ * procesů se věta o viníkovi prostě vynechá.
+ */
+function bk_enrich_threshold_tip(array $details, string $metric): string {
+    $parts = [];
+    $top_key = $metric === 'ram' ? 'top_ram_processes' : 'top_cpu_processes';
+    $top = (!empty($details[$top_key]) && is_array($details[$top_key])) ? ($details[$top_key][0] ?? null) : null;
+    $proc_name = $top ? strtolower((string)($top['name'] ?? '')) : '';
+
+    if ($top && $proc_name !== '') {
+        if ($metric === 'ram' && isset($top['ram_mb'])) {
+            $parts[] = sprintf(t('kt_top_proc_ram'), $top['name'], number_format((float)$top['ram_mb'], 0, ',', ' '));
+        } elseif (isset($top['cpu'])) {
+            $parts[] = sprintf(t('kt_top_proc_cpu'), $top['name'], number_format((float)$top['cpu'], 0));
+        }
+    }
+    if (isset($details['load1'], $details['load5'], $details['load15'])) {
+        $parts[] = sprintf(t('kt_load_avg'), $details['load1'], $details['load5'], $details['load15']);
+    }
+
+    // Kontext podle viníka - jen když příslušná telemetrie existuje.
+    $rec_key = 'kt_rec_generic';
+    if (strpos($proc_name, 'hostapd') !== false) {
+        if (isset($details['wifi_clients_count'])) {
+            $parts[] = sprintf(t('kt_ctx_wifi_clients'), (int)$details['wifi_clients_count']);
+        }
+        $rec_key = 'kt_rec_wifi';
+    } elseif (preg_match('/dnsmasq|kresd|unbound/', $proc_name)) {
+        if (isset($details['dns_queries'])) {
+            $parts[] = sprintf(t('kt_ctx_dns_queries'), (int)$details['dns_queries']);
+        }
+        $rec_key = 'kt_rec_dns';
+    } elseif (strpos($proc_name, 'ts3server') !== false) {
+        $ts = $details['teamspeak_servers'][0] ?? null;
+        if (is_array($ts) && isset($ts['clients_online'])) {
+            $parts[] = sprintf(t('kt_ctx_ts3_clients'), (int)$ts['clients_online']);
+        }
+        $rec_key = 'kt_rec_voice';
+    } elseif (strpos($proc_name, 'java') !== false) {
+        $rec_key = 'kt_rec_game';
+    } elseif (strpos($proc_name, 'wireguard') !== false || $proc_name === 'wg') {
+        if (!empty($details['wireguard_peers']) && is_array($details['wireguard_peers'])) {
+            $parts[] = sprintf(t('kt_ctx_wg_peers'), count($details['wireguard_peers']));
+        }
+        $rec_key = 'kt_rec_vpn';
+    }
+    $parts[] = t($rec_key);
+
+    return $parts ? ' ' . implode(' ', $parts) : '';
+}
+
 function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics, $pdo = null) {
     $tips = [];
     $add = function ($severity, $tip_key, ...$args) use (&$tips) {
@@ -621,7 +688,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'cpu_usage', 80) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
                 $add('critical', 'knowledge_tip_cpu_high');
-                $tips[count($tips)-1]['text'] .= $suffix;
+                $tips[count($tips)-1]['text'] .= $suffix . bk_enrich_threshold_tip($details, 'cpu');
             } elseif ($cpu > 50) $add('warn', 'knowledge_tip_cpu_high');
         }
         if (isset($details['ram'])) {
@@ -630,7 +697,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'ram_usage', 85) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
                 $add('critical', 'knowledge_tip_ram_high');
-                $tips[count($tips)-1]['text'] .= $suffix;
+                $tips[count($tips)-1]['text'] .= $suffix . bk_enrich_threshold_tip($details, 'ram');
             } elseif ($ram > 60) $add('warn', 'knowledge_tip_ram_high');
         }
         if (isset($details['hdd'])) {
@@ -1056,6 +1123,108 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     }
 
+    // Vytížení Wi-Fi kanálu (busy/active z iwinfo survey, sbíráno od v1.5.4)
+    if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
+        foreach ($details['wifi_radios'] as $radio) {
+            $busy = isset($radio['busy_pct']) && $radio['busy_pct'] !== null ? (float)$radio['busy_pct'] : null;
+            if ($busy !== null && $busy >= 65) {
+                $insights[] = [
+                    'type' => 'network',
+                    'icon' => 'fa-wifi',
+                    'color' => $busy >= 85 ? 'var(--color-red)' : 'var(--color-orange, #f39c12)',
+                    'text' => sprintf(t('net_insight_channel_busy'), (string)($radio['ssid'] ?? $radio['radio'] ?? '?'), (int)($radio['channel'] ?? 0), number_format($busy, 0)),
+                    'detail' => t('net_insight_channel_busy_detail'),
+                ];
+                break;
+            }
+        }
+    }
+
+    // OOM killer zásahy (od startu systému)
+    if (isset($details['oom_kills']) && (int)$details['oom_kills'] > 0) {
+        $insights[] = [
+            'type' => 'network',
+            'icon' => 'fa-skull-crossbones',
+            'color' => 'var(--color-red)',
+            'text' => sprintf(t('net_insight_oom'), (int)$details['oom_kills']),
+            'detail' => t('net_insight_oom_detail'),
+        ];
+    }
+
+    // Pomalé DNS odpovědi (měřený dotaz, sbíráno od v1.5.4/1.7.2)
+    if (isset($details['dns_latency_ms']) && $details['dns_latency_ms'] !== null) {
+        $dl = (float)$details['dns_latency_ms'];
+        if ($dl >= 150) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-hourglass-half',
+                'color' => $dl >= 400 ? 'var(--color-red)' : 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('net_insight_dns_slow'), number_format($dl, 0)),
+                'detail' => t('net_insight_dns_slow_detail'),
+            ];
+        }
+    }
+
+    // Chybovost v systémovém logu
+    if (isset($details['log_errors_24h']) && (int)$details['log_errors_24h'] >= 50) {
+        $le = (int)$details['log_errors_24h'];
+        $insights[] = [
+            'type' => 'network',
+            'icon' => 'fa-file-lines',
+            'color' => $le >= 200 ? 'var(--color-red)' : 'var(--color-orange, #f39c12)',
+            'text' => sprintf(t('net_insight_log_errors'), $le),
+            'detail' => t('net_insight_log_errors_detail'),
+        ];
+    }
+
+    // Skutečné WAN reconnecty (event 'wan_reconnected' loguje agent_api
+    // z delty čítače agenta - přesnější než pády celého monitoru výše)
+    try {
+        $stmt_wr = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = ? AND event_type = 'wan_reconnected' AND occurred_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
+        $stmt_wr->execute([$monitor_id]);
+        $wr = (int)$stmt_wr->fetchColumn();
+        if ($wr >= 2) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-plug-circle-xmark',
+                'color' => $wr >= 5 ? 'var(--color-red)' : 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('net_insight_wan_flaps'), $wr),
+                'detail' => t('net_insight_wan_flaps_detail'),
+            ];
+        }
+    } catch (PDOException $e) {}
+
+    // Nestabilní IPv6 prefix (event loguje agent_api při změně /64)
+    try {
+        $stmt_p6 = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = ? AND event_type = 'ipv6_prefix_changed' AND occurred_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
+        $stmt_p6->execute([$monitor_id]);
+        $p6 = (int)$stmt_p6->fetchColumn();
+        if ($p6 >= 3) {
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-shuffle',
+                'color' => 'var(--color-orange, #f39c12)',
+                'text' => sprintf(t('net_insight_ipv6_flapping'), $p6),
+                'detail' => t('net_insight_ipv6_flapping_detail'),
+            ];
+        }
+    } catch (PDOException $e) {}
+
+    // UPS na baterii (NUT) - "OB" = on battery, "LB" = low battery
+    if (!empty($details['ups_status'])) {
+        $ups = (string)$details['ups_status'];
+        if (strpos($ups, 'OB') !== false || strpos($ups, 'LB') !== false) {
+            $bat = isset($details['ups_battery_pct']) ? (int)$details['ups_battery_pct'] : null;
+            $insights[] = [
+                'type' => 'network',
+                'icon' => 'fa-battery-half',
+                'color' => 'var(--color-red)',
+                'text' => $bat !== null ? sprintf(t('net_insight_ups_battery'), $bat) : t('net_insight_ups_battery_nopct'),
+                'detail' => t('net_insight_ups_battery_detail'),
+            ];
+        }
+    }
+
     // LTE signal quality
     if (isset($details['lte_rsrp']) && $details['lte_rsrp'] !== null) {
         $rsrp = (float)$details['lte_rsrp'];
@@ -1147,40 +1316,7 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     return $insights;
 }
 
-/**
- * Spočíta plovoucí průměr (mu) a směrodatnou odchylku (sigma) po hodinách pro ECharts predikční pás.
- */
-function bk_get_metric_prediction_band($pdo, $monitor_id, $metric_key, $days = 7) {
-    $allowed_map = [
-        'cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage',
-        'net' => 'net_usage', 'load1' => 'load_avg_1', 'temperature' => 'temperature_c',
-        'conntrack' => 'conntrack_pct', 'disk_io_write' => 'disk_io_write_kbps'
-    ];
-    if (!isset($allowed_map[$metric_key])) return [];
-    $col = $allowed_map[$metric_key];
 
-    try {
-        $stmt = $pdo->prepare("
-            SELECT HOUR(checked_at) as hr, AVG($col) as avg_v, STDDEV($col) as std_v
-            FROM vps_metrics
-            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND $col IS NOT NULL
-            GROUP BY HOUR(checked_at)
-        ");
-        $stmt->execute([$monitor_id, $days]);
-        $rows = $stmt->fetchAll();
-        $band = [];
-        foreach ($rows as $r) {
-            $avg = (float)$r['avg_v'];
-            $std = (float)($r['std_v'] ?? 0);
-            $band[(int)$r['hr']] = [
-                'low' => max(0, round($avg - 2 * $std, 1)),
-                'avg' => round($avg, 1),
-                'high' => round($avg + 2 * $std, 1),
-            ];
-        }
-        return $band;
-    } catch (PDOException $e) { return []; }
-}
 
 /**
  * Sloučí monitor_events (přidání/odebrání, DNS/cert/schéma, agent
@@ -1556,9 +1692,9 @@ function bk_compute_metric_stats(array $points) {
         $newer_avg = array_sum($newer) / count($newer);
         if (abs($older_avg) > 0.01) {
             $trend_pct = round((($newer_avg - $older_avg) / $older_avg) * 100, 1);
-        } elseif ($newer_avg > 0.01) {
-            $trend_pct = 100.0;
         }
+        // Růst z nuly nemá smysluplné procento - dřívější sentinel "+100 %"
+        // vypadal jako spočítaný trend; null nechá UI trend prostě nevypsat.
     }
 
     return ['current' => round($current, 1), 'average' => $average, 'peak' => $peak, 'trend_pct' => $trend_pct];
@@ -2982,28 +3118,7 @@ function bk_compute_health_score(array $areas) {
     return ['score' => $score, 'areas' => $areas];
 }
 
-/**
- * Agregovaný stav assetu = nejhorší stav mezi jeho monitory (down je nejhorší,
- * pak unknown, pak maintenance, up je nejlepší). $statuses je pole hodnot
- * monitors.status ('up'/'down'/'maintenance'/'unknown') pro monitory patřící
- * pod jeden asset. Prázdné pole (asset bez monitorů) vrací 'unknown'.
- */
-function bk_compute_asset_status(array $statuses) {
-    if (empty($statuses)) {
-        return 'unknown';
-    }
-    $priority = ['down' => 0, 'unknown' => 1, 'maintenance' => 2, 'up' => 3];
-    $worst = 'up';
-    $worst_rank = $priority['up'];
-    foreach ($statuses as $s) {
-        $rank = $priority[$s] ?? $priority['unknown'];
-        if ($rank < $worst_rank) {
-            $worst_rank = $rank;
-            $worst = $s;
-        }
-    }
-    return $worst;
-}
+
 
 /**
  * Sestaví 7 vážených oblastí Health Score pro TeamSpeak monitor:
@@ -3755,8 +3870,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     }
     // Načtení všech příjemců notifikací (odběratelé + administrátoři bez přímého nastavení odběru)
     $stmt = $pdo->prepare("
-        SELECT u.id, u.email, u.phone, u.role, u.whatsapp_apikey,
-               COALESCE(s.email_notifications, m.email_notifications) as email_notifications, 
+        SELECT u.id, u.email, u.phone, u.role, u.whatsapp_apikey, u.email_lang,
+               COALESCE(s.email_notifications, m.email_notifications) as email_notifications,
                COALESCE(s.sms_notifications, m.sms_notifications, u.sms_notifications) as sms_notifications,
                COALESCE(s.whatsapp_notifications, u.whatsapp_notifications) as whatsapp_notifications
         FROM users u
@@ -3801,7 +3916,12 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // většina webmailů <style>/<head> při doručení ořízne, e-mail by dorazil
     // bez formátování. Viz stejný přístup u render_email_wrapper() (digest).
     $font = "font-family: Arial, Helvetica, sans-serif;";
-    [$email_subject, $html_body] = bk_with_email_lang(get_setting('email_lang', 'cs'), function () use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
+    // E-mail se renderuje per jazyk příjemce (users.email_lang, NULL = globální
+    // email_lang) - jednou na jazyk, ne jednou na příjemce. SMS/WhatsApp a
+    // webhooky níže zůstávají jednojazyčné.
+    $default_email_lang = get_setting('email_lang', 'cs');
+    $render_alert_email = function (string $lang) use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
+        return bk_with_email_lang($lang, function () use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
         $status_label = t($alert_status_key);
         $subject = "$emoji $status_label: $name";
         $html_body = '
@@ -3852,7 +3972,10 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     </body>
     </html>';
         return [$subject, $html_body];
-    });
+        });
+    };
+    // Cache vyrenderovaných variant - klíčem je jazyk.
+    $alert_email_by_lang = [];
 
     // SMS / WhatsApp Zpráva
     $sms_body = "$emoji Monitor $name je $status_text. Čas: $time.";
@@ -3866,8 +3989,13 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     }
     
     foreach ($recipients as $rec) {
-        // E-mailové notifikace
+        // E-mailové notifikace - v jazyce příjemce (fallback globální email_lang)
         if ($rec['email_notifications'] && !empty($rec['email'])) {
+            $rec_lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_email_lang;
+            if (!isset($alert_email_by_lang[$rec_lang])) {
+                $alert_email_by_lang[$rec_lang] = $render_alert_email($rec_lang);
+            }
+            [$email_subject, $html_body] = $alert_email_by_lang[$rec_lang];
             send_email($rec['email'], $email_subject, $html_body);
         }
         
@@ -3966,9 +4094,9 @@ function send_webhook_post($url, $payload_json) {
 function send_digest_report($pdo, $period = 'weekly') {
     $GLOBALS['last_mail_error'] = '';
     try {
-        return bk_with_email_lang(get_setting('email_lang', 'cs'), function () use ($pdo, $period) {
-            return send_digest_report_inner($pdo, $period);
-        });
+        // Jazyková obálka se přesunula dovnitř - digest se renderuje per
+        // jazyk příjemce (users.email_lang), ne jednou globálně.
+        return send_digest_report_inner($pdo, $period);
     } catch (Exception $e) {
         $GLOBALS['last_mail_error'] = $e->getMessage();
         return false;
@@ -4030,15 +4158,24 @@ function bk_infra_score($availability, $avg_latency_ms, $incident_count, $expiri
  */
 function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_metrics) {
     $score = 0.0;
+    $weight_used = 0.0;
 
-    // 1. Uptime (30%) - z posledních 30 dní
+    // 1. Uptime (30%) - z posledních 30 dní. Bez jediné kontroly (nebo při
+    // chybě DB) se komponenta vynechá a skóre se přenormuje na zbylé váhy -
+    // dřívější dosazení 100 dávalo plný kredit za dostupnost, o které nic nevíme.
+    $uptime_pct = null;
     try {
-        $stmt = $pdo->prepare("SELECT SUM(status='up') as up_cnt, COUNT(*) as total FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status != 'maintenance'");
+        $stmt = $pdo->prepare("SELECT SUM(status='up') as up_cnt, COUNT(*) as total FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status IN ('up','down','warning')");
         $stmt->execute([$monitor['id']]);
         $row = $stmt->fetch();
-        $uptime_pct = ($row && $row['total'] > 0) ? ($row['up_cnt'] / $row['total']) * 100 : 100;
-    } catch (PDOException $e) { $uptime_pct = 100; }
-    $score += min(100, $uptime_pct) * 0.30;
+        if ($row && $row['total'] > 0) {
+            $uptime_pct = ($row['up_cnt'] / $row['total']) * 100;
+        }
+    } catch (PDOException $e) { /* neznámé zůstává neznámé */ }
+    if ($uptime_pct !== null) {
+        $score += min(100, $uptime_pct) * 0.30;
+        $weight_used += 0.30;
+    }
 
     // 2. Thresholdy (30%) - CPU/RAM/HDD pod limity
     $threshold_score = 100;
@@ -4078,8 +4215,10 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
         elseif ($age_min > 10) $freshness = 60;
     }
     $score += $freshness * 0.20;
+    $weight_used += 0.70; // thresholdy + konektivita + čerstvost se počítají vždy
 
-    return (int)round(min(100, max(0, $score)));
+    // Přenormování na skutečně změřené komponenty (0-100).
+    return (int)round(min(100, max(0, $score / $weight_used)));
 }
 
 /**
@@ -4233,7 +4372,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $stmt_overall = $pdo->prepare("
         SELECT
             SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-            SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count,
+            SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count,
             SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
             COUNT(*) as all_rows,
             AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
@@ -4262,7 +4401,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $stmt_regions = $pdo->prepare("
         SELECT checked_from,
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-               SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count,
+               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count,
                AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND checked_from IS NOT NULL
@@ -4274,9 +4413,14 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $regions_raw = $stmt_regions->fetchAll();
     $regions = [];
     foreach ($regions_raw as $r) {
+        // Region, ze kterého v okně nepřišla jediná měřená kontrola, se
+        // vynechá - dřív dostal vymyšlených 100.0 % uptime.
+        if ((int)$r['total_count'] <= 0) {
+            continue;
+        }
         $regions[] = [
             'name' => $r['checked_from'],
-            'uptime' => $r['total_count'] > 0 ? round(($r['up_count'] / $r['total_count']) * 100, 2) : 100.0,
+            'uptime' => round(($r['up_count'] / $r['total_count']) * 100, 2),
             'avg_latency' => $r['avg_latency'] !== null ? (int)round($r['avg_latency']) : null,
         ];
     }
@@ -4291,7 +4435,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         SELECT m.name, m.type,
                SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_count,
                SUM(CASE WHEN l.status = 'down' THEN 1 ELSE 0 END) as down_count,
-               SUM(CASE WHEN l.status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+               SUM(CASE WHEN l.status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
         FROM monitor_logs l
         JOIN monitors m ON m.id = l.monitor_id
         WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
@@ -4642,7 +4786,7 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
     $stmt_days = $pdo->prepare("
         SELECT DATE(checked_at) as d,
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-               SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
         GROUP BY DATE(checked_at)
@@ -5070,23 +5214,34 @@ function render_digest_html($data) {
 }
 
 function send_digest_report_inner($pdo, $period = 'weekly') {
+    // Data jsou jazykově neutrální a staví se jednou; jazyk se uplatní až
+    // při renderu HTML - jednou na každý jazyk mezi příjemci.
     $data = build_digest_data($pdo, $period);
-    $html_body = render_digest_html($data);
 
-    $period_label = ($period === 'monthly') ? t('digest_subject_monthly') : t('digest_subject_weekly');
-    $subject = "📊 $period_label – {$data['site_title']} ({$data['range_from']} – {$data['range_to']})";
-
-    // Příjemci - všichni administrátoři se zadaným e-mailem
-    $stmt_admins = $pdo->query("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
-    $admin_emails = $stmt_admins->fetchAll(PDO::FETCH_COLUMN);
-    if (empty($admin_emails)) {
+    // Příjemci - všichni administrátoři se zadaným e-mailem, včetně jejich jazyka
+    $stmt_admins = $pdo->query("SELECT email, email_lang FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
+    $admins = $stmt_admins->fetchAll();
+    if (empty($admins)) {
         $GLOBALS['last_mail_error'] = t('digest_error_no_admin_email');
         return false;
     }
 
+    $default_lang = get_setting('email_lang', 'cs');
+    $rendered_by_lang = [];
     $any_success = false;
-    foreach ($admin_emails as $email) {
-        if (send_email($email, $subject, $html_body)) {
+    foreach ($admins as $adm) {
+        $lang = in_array($adm['email_lang'] ?? '', ['cs', 'en'], true) ? $adm['email_lang'] : $default_lang;
+        if (!isset($rendered_by_lang[$lang])) {
+            $rendered_by_lang[$lang] = bk_with_email_lang($lang, function () use ($data, $period) {
+                $period_label = ($period === 'monthly') ? t('digest_subject_monthly') : t('digest_subject_weekly');
+                return [
+                    "📊 $period_label – {$data['site_title']} ({$data['range_from']} – {$data['range_to']})",
+                    render_digest_html($data),
+                ];
+            });
+        }
+        [$subject, $html_body] = $rendered_by_lang[$lang];
+        if (send_email($adm['email'], $subject, $html_body)) {
             $any_success = true;
         }
     }
@@ -5169,6 +5324,7 @@ function check_cpanel($url, $timeout = 5) {
             return [
                 'status' => 'down',
                 'response_time' => 0,
+                'http_code' => 0,
                 'error' => "cURL chyba: " . $error
             ];
         }
@@ -5185,12 +5341,17 @@ function check_cpanel($url, $timeout = 5) {
                     'processes' => $data['processes'] ?? null,
                     'database' => $data['database'] ?? null,
                     'bandwidth' => $data['bandwidth'] ?? null,
-                    'postgresql' => $data['postgresql'] ?? null
+                    'postgresql' => $data['postgresql'] ?? null,
+                    // cpanel_stats.php exportuje i cpuusage (uapi StatsBar) - bez
+                    // tohohle passthrough cron četl $cp_res['cpu'] vždy jako null
+                    // a do vps_metrics zapisoval CPU trvale 0.0.
+                    'cpu' => $data['cpu'] ?? null
                 ];
             } else {
                 return [
                     'status' => 'down',
                     'response_time' => $duration,
+                    'http_code' => (int)$http_code,
                     'error' => 'Neplatný JSON formát nebo chybný bezpečnostní klíč.'
                 ];
             }
@@ -5198,6 +5359,7 @@ function check_cpanel($url, $timeout = 5) {
             return [
                 'status' => 'down',
                 'response_time' => $duration,
+                'http_code' => (int)$http_code,
                 'error' => "HTTP status kód: " . $http_code
             ];
         }
@@ -5931,9 +6093,181 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
 }
 
 /**
+ * ASN lookup přes Team Cymru DNS (origin.asn.cymru.com) - žádná externí
+ * HTTP API: jeden TXT dotaz z hostingu, který ven nese jen IP, na kterou
+ * se ptáme (a tu už server stejně zná z REMOTE_ADDR agenta). Privátní
+ * rozsahy se nedotazují vůbec.
+ * Vrací [asn ("AS12345"|null), jméno sítě (string|null)].
+ */
+function bk_lookup_asn(string $ip): array {
+    try {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return [null, null];
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $q = implode('.', array_reverse(explode('.', $ip))) . '.origin.asn.cymru.com';
+        } else {
+            $hex = bin2hex(inet_pton($ip));
+            $q = implode('.', array_reverse(str_split($hex))) . '.origin6.asn.cymru.com';
+        }
+        $rec = @dns_get_record($q, DNS_TXT);
+        if (empty($rec[0]['txt'])) {
+            return [null, null];
+        }
+        // "23033 | 85.195.64.0/18 | CZ | ripencc | 2004-04-05"
+        $parts = array_map('trim', explode('|', $rec[0]['txt']));
+        $asn_num = preg_replace('/[^0-9].*$/', '', $parts[0] ?? '');
+        if ($asn_num === '') {
+            return [null, null];
+        }
+        $asn_name = null;
+        $rec2 = @dns_get_record("AS{$asn_num}.asn.cymru.com", DNS_TXT);
+        if (!empty($rec2[0]['txt'])) {
+            // "23033 | CZ | ripencc | 2004-04-05 | WEDOS, CZ"
+            $p2 = array_map('trim', explode('|', $rec2[0]['txt']));
+            $asn_name = $p2[count($p2) - 1] ?? null;
+        }
+        return ['AS' . $asn_num, $asn_name];
+    } catch (Throwable $e) {
+        return [null, null];
+    }
+}
+
+/**
+ * Zápis výsledku agent-side kontroly do monitoru typu 'agent_service'.
+ *
+ * Služby na privátní síti (kresd na routeru, MQTT broker na LAN) hosting
+ * nikdy nedosáhne - kontrolu proto dělá agent přímo na stroji a server tu
+ * jen poctivě zaznamená výsledek: přechod stavu, log BEZ response_time
+ * (agent neměří latenci, nula by byla vymyšlená) a notifikaci při změně.
+ */
+function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, string $detail): void {
+    $new_status = $running ? 'up' : 'down';
+    $old_status = $svc_monitor['status'] ?? 'unknown';
+    $error_msg = $running ? null : ($detail !== '' ? $detail : 'Agent hlásí, že služba neběží.');
+
+    if ($old_status !== $new_status) {
+        $stmt = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW() WHERE id = ?");
+        $stmt->execute([$new_status, $svc_monitor['id']]);
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
+        $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
+        // Notifikace jen pro reálné up/down přechody; přechod z 'unknown'
+        // na 'up' při prvním výsledku nikoho budit nemusí.
+        if (in_array($old_status, ['up', 'down'], true) || $new_status === 'down') {
+            trigger_notifications($pdo, $svc_monitor, $new_status, (string)$error_msg);
+        }
+    } else {
+        $stmt = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW() WHERE id = ?");
+        $stmt->execute([$new_status, $svc_monitor['id']]);
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
+        $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
+    }
+}
+
+/**
+ * Validace cíle monitoru importovaného ze Service Discovery.
+ *
+ * Cíl pochází od AGENTA (discovery payload i hostname fallback) - tedy od
+ * nižší úrovně důvěry než admin, který import jen odklikává. Kontroly navíc
+ * běží z webhostingu: loopback, privátní a link-local rozsahy odsud nikdy
+ * nejsou dosažitelné, takže by kontrola jen věčně selhávala a mířila do
+ * vnitřní sítě poskytovatele hostingu. Ruční tvorba monitoru přes admin
+ * (save_monitor) zůstává bez tohoto omezení - admin je plně důvěryhodný.
+ *
+ * Vrací text chyby pro uživatele, nebo null, když je cíl v pořádku.
+ */
+function bk_validate_import_target(string $target): ?string {
+    $host = trim($target);
+    // Případná URL (web služby) - zajímá nás jen host.
+    if (preg_match('#^[a-z][a-z0-9+.-]*://([^/]+)#i', $host, $m)) {
+        $host = $m[1];
+    }
+    // Oddělení portu: [ipv6]:port, host:port. Holé IPv6 (víc dvojteček) se nechává být.
+    if ($host !== '' && $host[0] === '[') {
+        if (preg_match('/^\[([^\]]+)\](?::\d+)?$/', $host, $m)) {
+            $host = $m[1];
+        }
+    } elseif (substr_count($host, ':') === 1) {
+        $host = preg_replace('/:\d+$/', '', $host);
+    }
+
+    if ($host === '') {
+        return 'Služba nehlásí použitelnou cílovou adresu. Vytvořte monitor ručně a adresu doplňte.';
+    }
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        if (!filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return "Cíl '{$host}' je v privátním nebo rezervovaném rozsahu - z hostingu není dosažitelný a kontrola by sondovala cizí vnitřní síť. Zadejte veřejnou adresu ručně.";
+        }
+        return null;
+    }
+    $lower = strtolower($host);
+    foreach (['.local', '.localhost', '.internal', '.lan', '.home.arpa'] as $suffix) {
+        if (str_ends_with($lower, $suffix)) {
+            return "Cíl '{$host}' je interní jméno - z hostingu není dosažitelné. Zadejte veřejnou adresu ručně.";
+        }
+    }
+    if ($lower === 'localhost') {
+        return "Cíl 'localhost' by kontroloval hostingový server, ne službu agenta. Zadejte veřejnou adresu ručně.";
+    }
+    if (!preg_match('/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i', $host)) {
+        return "Cíl '{$host}' není platný hostname ani IP adresa.";
+    }
+    return null;
+}
+
+/**
  * Propojí a sloučí detaily z agenta (ts3_process, discovered_services, top_cpu_processes, interfaces atd.)
  * pro libovolný monitor (např. TeamSpeak, Minecraft, Web), i když uživatel ručně nenastavil asset_id.
  */
+/**
+ * Detekce výpadků SBĚRU dat pro jeden monitor - ne výpadků služby samotné.
+ * Zásada (2026-08-05, po dvou týdnech neviditelně mrtvého cpanel sběru):
+ * když se data přestanou sbírat, frontend musí řvát, ne tiše nic neukazovat.
+ * Vrací pole položek {type, message, since}; prázdné pole = sběr zdravý.
+ * Sdílené mezi api.php (React SPA) a index.php (veřejná status stránka).
+ */
+function bk_get_collection_issues(array $monitor_row, array $details, int $agent_offline_timeout_secs = 3000): array {
+    $issues = [];
+    $status = strtolower($monitor_row['status'] ?? '');
+
+    // 1. Selhávající sběr cPanel statistik (zapisuje cron.php při každém
+    //    neúspěšném check_cpanel; klíč nese i důvod a začátek výpadku).
+    if (!empty($details['cpanel_stats_error']) && is_array($details['cpanel_stats_error'])) {
+        $issues[] = [
+            'type' => 'cpanel_stats',
+            'message' => (string)($details['cpanel_stats_error']['error'] ?? t('collection_issue_cpanel_generic')),
+            'hint' => $details['cpanel_stats_error']['hint'] ?? null,
+            'since' => $details['cpanel_stats_error']['since'] ?? null,
+        ];
+    }
+
+    // 2. Agent přestal hlásit (agent_last_seen starší než offline timeout).
+    //    Jen pro monitory, které někdy agenta měly - jinak by řval každý web.
+    $agent_last_seen = (int)($details['agent_last_seen'] ?? 0);
+    if ($agent_last_seen > 0 && (time() - $agent_last_seen) > $agent_offline_timeout_secs) {
+        $issues[] = [
+            'type' => 'agent_silent',
+            'message' => sprintf(t('collection_issue_agent_silent'), round((time() - $agent_last_seen) / 60)),
+            'since' => date('c', $agent_last_seen),
+        ];
+    }
+
+    // 3. Kontroly samotné neběží (mrtvý cron pro tento monitor). Pauza a
+    //    údržba jsou legitimní stavy bez kontrol - ty se nehlásí.
+    if (!in_array($status, ['paused', 'maintenance'], true) && !empty($monitor_row['last_checked'])) {
+        $last_checked_ts = strtotime($monitor_row['last_checked']);
+        if ($last_checked_ts && (time() - $last_checked_ts) > 15 * 60) {
+            $issues[] = [
+                'type' => 'checks_stalled',
+                'message' => sprintf(t('collection_issue_checks_stalled'), round((time() - $last_checked_ts) / 60)),
+                'since' => date('c', $last_checked_ts),
+            ];
+        }
+    }
+
+    return $issues;
+}
+
 function bk_enrich_monitor_details($pdo, $monitor, &$details) {
     if (!is_array($details)) $details = [];
     if (!$pdo || empty($monitor) || !is_array($monitor)) return;

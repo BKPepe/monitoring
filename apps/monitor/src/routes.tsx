@@ -29,9 +29,14 @@ function AppUpdateNotice() {
           <AlertTriangle className="size-6" />
         </div>
         <div className="space-y-1">
-          <h2 className="text-lg font-bold">{t('routes.update_detected_title', 'Byla zjištěna aktualizace aplikace')}</h2>
+          <h2 className="text-lg font-bold">
+            {t('routes.update_detected_title', 'Byla zjištěna aktualizace aplikace')}
+          </h2>
           <p className="text-xs text-slate-400 leading-relaxed">
-            {t('routes.update_detected_desc', 'Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.')}
+            {t(
+              'routes.update_detected_desc',
+              'Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.'
+            )}
           </p>
         </div>
         <Button
@@ -45,10 +50,7 @@ function AppUpdateNotice() {
   );
 }
 
-class GlobalErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean }
-> {
+class GlobalErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false };
@@ -85,8 +87,12 @@ export function RouteErrorFallback() {
         <AlertTriangle className="size-5" />
       </div>
       <div>
-        <h3 className="font-bold text-sm text-slate-100">{t('routes.load_failed_title', 'Stránku se nepodařilo načíst')}</h3>
-        <p className="text-xs text-slate-400 mt-1">{t('routes.load_failed_desc', 'Počkat na dokončení aktualizace nebo obnovit relaci.')}</p>
+        <h3 className="font-bold text-sm text-slate-100">
+          {t('routes.load_failed_title', 'Stránku se nepodařilo načíst')}
+        </h3>
+        <p className="text-xs text-slate-400 mt-1">
+          {t('routes.load_failed_desc', 'Počkat na dokončení aktualizace nebo obnovit relaci.')}
+        </p>
       </div>
       <Button size="sm" onClick={() => window.location.reload()} className="gap-2 text-xs font-semibold">
         <RefreshCw className="size-3.5" /> {t('routes.reload_btn', 'Obnovit načtení')}

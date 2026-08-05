@@ -8,13 +8,15 @@ import (
 )
 
 type PublicStatusResult struct {
-	Status        string       `json:"status"` // "healthy", "degraded"
-	UptimePercent float64      `json:"uptimePercent"`
+	Status string `json:"status"` // "healthy", "degraded"
+	// nil = v okně neexistuje jediná měřená kontrola; JSON pak nese null,
+	// nikdy vymyšlené číslo (100 % uptime / 0 ms latence).
+	UptimePercent *float64     `json:"uptimePercent"`
 	TotalMonitors int          `json:"totalMonitors"`
 	DownMonitors  int          `json:"downMonitors"`
 	AgentsOnline  int          `json:"agentsOnline"`
 	AgentsTotal   int          `json:"agentsTotal"`
-	AvgLatencyMs  int          `json:"avgLatencyMs"`
+	AvgLatencyMs  *int         `json:"avgLatencyMs"`
 	LastUpdated   string       `json:"lastUpdated"`
 	Nodes         []NodeStatus `json:"nodes"`
 }
@@ -70,15 +72,16 @@ func (s *Store) GetPublicStatus(ctx context.Context) (*PublicStatusResult, error
 		WHERE status != 'maintenance' AND created_at >= now() - INTERVAL '30 DAY'`)
 	_ = rowUptime.Scan(&totalLogs, &upLogs)
 
-	uptimePercent := 100.0
+	var uptimePercent *float64
 	if totalLogs > 0 {
-		uptimePercent = math.Round((float64(upLogs)/float64(totalLogs)*100.0)*100) / 100
+		v := math.Round((float64(upLogs)/float64(totalLogs)*100.0)*100) / 100
+		uptimePercent = &v
 	}
 
-	// Průměrná latence
-	var avgLatency float64
+	// Průměrná latence - NULL (žádné up záznamy za hodinu) zůstává nil
+	var avgLatency *float64
 	rowLat := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(AVG(response_time), 0)
+		SELECT AVG(response_time)
 		FROM monitor_logs
 		WHERE status = 'up' AND created_at >= now() - INTERVAL '1 HOUR'`)
 	_ = rowLat.Scan(&avgLatency)
@@ -107,7 +110,7 @@ func (s *Store) GetPublicStatus(ctx context.Context) (*PublicStatusResult, error
 	}
 
 	overallStatus := "healthy"
-	if downMonitors > 0 || uptimePercent < 98.0 {
+	if downMonitors > 0 || (uptimePercent != nil && *uptimePercent < 98.0) {
 		overallStatus = "degraded"
 	}
 
@@ -118,10 +121,36 @@ func (s *Store) GetPublicStatus(ctx context.Context) (*PublicStatusResult, error
 		DownMonitors:  downMonitors,
 		AgentsOnline:  agentsOnline,
 		AgentsTotal:   agentsTotal,
-		AvgLatencyMs:  int(math.Round(avgLatency)),
+		AvgLatencyMs: func() *int {
+			if avgLatency == nil {
+				return nil
+			}
+			v := int(math.Round(*avgLatency))
+			return &v
+		}(),
 		LastUpdated:   now.Format(time.RFC3339),
 		Nodes:         nodes,
 	}, nil
+}
+
+
+// MonitorUptimePercent30d vrací naměřený uptime monitoru za posledních 30 dní,
+// nebo nil, pokud v okně neproběhla jediná měřená (ne-maintenance) kontrola.
+// Report pak poctivě řekne "bez dat" místo dřívějších natvrdo zadaných 99.9 %.
+func (s *Store) MonitorUptimePercent30d(ctx context.Context, monitorID int64) (*float64, error) {
+	var total, up int
+	row := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE status = 'up')
+		FROM monitor_logs
+		WHERE monitor_id = $1 AND status != 'maintenance' AND created_at >= now() - INTERVAL '30 DAY'`, monitorID)
+	if err := row.Scan(&total, &up); err != nil {
+		return nil, err
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	pct := math.Round((float64(up)/float64(total)*100.0)*100) / 100
+	return &pct, nil
 }
 
 func (s *Store) CreateIncident(ctx context.Context, monitorID *int64, title string, status string, impact string) (*Incident, error) {

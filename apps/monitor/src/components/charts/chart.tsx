@@ -52,14 +52,7 @@ export interface ChartProps {
   animate?: boolean;
 }
 
-export function Chart({
-  option,
-  ariaLabel,
-  summary,
-  height = 200,
-  className,
-  animate = true,
-}: ChartProps) {
+export function Chart({ option, ariaLabel, summary, height = 200, className, animate = true }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
 
@@ -97,13 +90,7 @@ export function Chart({
 
   return (
     <figure className={cn('relative', className)}>
-      <div
-        ref={containerRef}
-        style={{ height }}
-        role="img"
-        aria-label={ariaLabel}
-        className="w-full"
-      />
+      <div ref={containerRef} style={{ height }} role="img" aria-label={ariaLabel} className="w-full" />
       {summary && <figcaption className="sr-only">{summary}</figcaption>}
     </figure>
   );

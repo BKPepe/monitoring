@@ -242,7 +242,9 @@ if (!$is_logged_in) {
             <button id="theme-toggle" class="btn btn-secondary btn-sm" style="border-radius: 4px; padding: 0.5rem 0.75rem;" title="Přepnout tmavý/světlý motiv"><i class="fas fa-sun"></i></button>
         </div>
         <div class="login-wrapper">
-            <h2><i class="fas fa-lock" style="color: var(--color-red); margin-right: 0.5rem;"></i> <?php echo htmlspecialchars($site_title); ?> Admin</h2>
+            <?php $bk_login_logo = trim(get_setting('custom_logo_url')) ?: 'assets/bk-logo-white.svg'; ?>
+            <img src="<?php echo htmlspecialchars($bk_login_logo); ?>" alt="<?php echo htmlspecialchars($site_title); ?>" style="display: block; margin: 0 auto 1.25rem; width: 200px; max-width: 80%;">
+            <h2 style="text-align: center;"><i class="fas fa-lock" style="color: var(--color-red); margin-right: 0.5rem;"></i> <?php echo htmlspecialchars($site_title); ?> Admin</h2>
             <?php if (!empty($login_error)): ?>
                 <div class="alert alert-danger"><?php echo $login_error; ?></div>
             <?php endif; ?>
@@ -582,6 +584,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     $wa_apikey = trim($_POST['whatsapp_apikey'] ?? '');
     $sms_notif = isset($_POST['sms_notifications']) ? 1 : 0;
     $whatsapp_notif = isset($_POST['whatsapp_notifications']) ? 1 : 0;
+    // Per-user jazyk e-mailů; prázdné = řídit se globálním nastavením email_lang
+    $my_email_lang = in_array($_POST['email_lang'] ?? '', ['cs', 'en'], true) ? $_POST['email_lang'] : null;
     $old_pass = $_POST['old_password'];
     $new_pass = $_POST['new_password'];
     
@@ -599,8 +603,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 $error_msg = 'Heslo musí mít alespoň 8 znaků.';
             } elseif (password_verify($old_pass, $me['password_hash'])) {
                 $new_hash = password_hash($new_pass, PASSWORD_BCRYPT);
-                $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, password_hash = ? WHERE id = ?");
-                $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $new_hash, $me['id']]);
+                $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ?, password_hash = ? WHERE id = ?");
+                $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $my_email_lang, $new_hash, $me['id']]);
                 bk_audit_log($pdo, 'password_changed', 'Vlastní profil', 'user', $me['id']);
                 $success_msg = 'Profil a heslo byly úspěšně aktualizovány.';
             } else {
@@ -608,8 +612,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             }
         } else {
             // Pouze aktualizace profilu bez hesla
-            $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ? WHERE id = ?");
-            $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $me['id']]);
+            $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ? WHERE id = ?");
+            $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $my_email_lang, $me['id']]);
             bk_audit_log($pdo, 'profile_updated', 'Vlastní profil', 'user', $me['id']);
             $success_msg = 'Profil byl úspěšně aktualizován.';
         }
@@ -1022,10 +1026,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trigger_remote_action
     } elseif (!in_array($action_type, $allowed_action_types, true) || !in_array($action_type, $ra_monitor_allowed, true)) {
         $error_msg = "Akce '{$action_type}' není pro tento monitor v seznamu povolených akcí.";
     } else {
-        $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (?, ?, 'pending')");
-        $stmt->execute([$mid, $action_type]);
-        bk_audit_log($pdo, 'remote_action_triggered', $action_type . ' na ' . ($ra_monitor['name'] ?? ('#' . $mid)), 'monitor', $mid);
-        $success_msg = "Požadavek na akční příkaz '{$action_type}' byl podepsán a zařazen do fronty pro agenta.";
+        // restart_service bez jména služby nemá co restartovat - agenti
+        // takovou akci správně odmítají, takže ji ani nezařazujeme.
+        $ra_service = trim($_POST['service_name'] ?? '');
+        if ($action_type === 'restart_service' && !preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $ra_service)) {
+            $error_msg = "Akce 'restart_service' vyžaduje název služby (povolené znaky: písmena, číslice, _.@-).";
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (?, ?, ?, 'pending')");
+            $stmt->execute([$mid, $action_type, $action_type === 'restart_service' ? $ra_service : null]);
+            bk_audit_log($pdo, 'remote_action_triggered', $action_type . ($action_type === 'restart_service' ? " ({$ra_service})" : '') . ' na ' . ($ra_monitor['name'] ?? ('#' . $mid)), 'monitor', $mid);
+            $success_msg = "Požadavek na akční příkaz '{$action_type}' byl podepsán a zařazen do fronty pro agenta.";
+        }
     }
 }
 
@@ -1037,7 +1048,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $use
         $error_msg = 'Chyba: Administrátor nemá nastavenou e-mailovou adresu.';
     } else {
         $sent_at = date('d.m.Y H:i:s');
-        [$subject, $body] = bk_with_email_lang(get_setting('email_lang', 'cs'), function () use ($sent_at) {
+        // Testovací e-mail jde na adresu přihlášeného admina - použije se
+        // tedy JEHO jazyk (fallback globální), stejně jako u ostrých alertů.
+        $test_lang = in_array($me['email_lang'] ?? '', ['cs', 'en'], true) ? $me['email_lang'] : get_setting('email_lang', 'cs');
+        [$subject, $body] = bk_with_email_lang($test_lang, function () use ($sent_at) {
             $subject = t('test_email_subject');
             $body = '<h1>' . htmlspecialchars(t('test_email_heading')) . '</h1>
                  <p>' . htmlspecialchars(t('test_email_body1')) . '</p>
@@ -1100,7 +1114,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_monthly_digest']
 // Náhled infrastructure reportu v prohlížeči (bez odeslání e-mailu) - pouze pro Admina
 if (isset($_GET['action']) && in_array($_GET['action'], ['preview_weekly_digest', 'preview_monthly_digest'], true) && $user_role === 'admin') {
     $preview_period = $_GET['action'] === 'preview_monthly_digest' ? 'monthly' : 'weekly';
-    echo bk_with_email_lang(get_setting('email_lang', 'cs'), function () use ($pdo, $preview_period) {
+    // Náhled v jazyce, ve kterém by digest dorazil prohlížejícímu adminovi
+    $preview_lang = in_array($me['email_lang'] ?? '', ['cs', 'en'], true) ? $me['email_lang'] : get_setting('email_lang', 'cs');
+    echo bk_with_email_lang($preview_lang, function () use ($pdo, $preview_period) {
         $preview_data = build_digest_data($pdo, $preview_period, false);
         return render_digest_html($preview_data);
     });
@@ -1324,6 +1340,44 @@ $site_title = get_setting('site_title', 'Blood Kings');
         
         <?php if (!empty($error_msg)): ?>
             <div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> <?php echo $error_msg; ?></div>
+        <?php endif; ?>
+
+        <?php
+        // Výpadky SBĚRU dat - administrace je primární místo, kde tohle admin
+        // MUSÍ vidět (veřejný dashboard tuhle diagnostiku záměrně neukazuje).
+        $bk_adm_collection_rows = [];
+        try {
+            $bk_adm_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
+            $bk_adm_stmt = $pdo->query("SELECT id, name, status, last_checked, last_details FROM monitors");
+            foreach ($bk_adm_stmt->fetchAll() as $bk_adm_mon) {
+                $bk_adm_details = json_decode($bk_adm_mon['last_details'] ?? '', true) ?: [];
+                foreach (bk_get_collection_issues($bk_adm_mon, $bk_adm_details, $bk_adm_offline_secs) as $bk_adm_ci) {
+                    $bk_adm_collection_rows[] = ['name' => $bk_adm_mon['name'], 'issue' => $bk_adm_ci];
+                }
+            }
+        } catch (Exception $e) {}
+        ?>
+        <?php if (!empty($bk_adm_collection_rows)): ?>
+        <div class="admin-card" style="border: 2px solid var(--color-red); background: rgba(193,18,31,0.08);">
+            <div class="admin-header">
+                <h2 style="color: var(--color-red);"><i class="fas fa-database"></i> <?php echo htmlspecialchars(t('collection_issues_heading')); ?> (<?php echo count($bk_adm_collection_rows); ?>)</h2>
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 0.75rem;"><?php echo htmlspecialchars(t('collection_issues_intro')); ?></p>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <?php foreach ($bk_adm_collection_rows as $bk_adm_cr): ?>
+                    <div style="font-size: 0.85rem; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                        <strong><?php echo htmlspecialchars($bk_adm_cr['name']); ?></strong>
+                        <span style="color: var(--color-red); margin-left: 0.4rem;"><?php echo htmlspecialchars($bk_adm_cr['issue']['message']); ?></span>
+                        <?php if (!empty($bk_adm_cr['issue']['since'])): ?>
+                            <span style="color: var(--text-muted); font-family: monospace; font-size: 0.75rem; margin-left: 0.4rem;">(<?php echo htmlspecialchars(t('collection_issue_since')); ?> <?php echo htmlspecialchars(date('d.m.Y H:i', strtotime($bk_adm_cr['issue']['since']))); ?>)</span>
+                        <?php endif; ?>
+                        <?php if (!empty($bk_adm_cr['issue']['hint'])): ?>
+                            <div style="color: var(--text-secondary); font-size: 0.78rem; margin-top: 0.25rem;">💡 <?php echo htmlspecialchars($bk_adm_cr['issue']['hint']); ?></div>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
         <?php endif; ?>
 
         <?php if (!empty($security_warnings)): ?>
@@ -2751,6 +2805,16 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         </div>
 
                         <div class="form-group">
+                            <label for="profile_email_lang">Jazyk e-mailových notifikací</label>
+                            <select name="email_lang" class="form-control">
+                                <option value="" <?php echo empty($me['email_lang']) ? 'selected' : ''; ?>>Podle globálního nastavení</option>
+                                <option value="cs" <?php echo ($me['email_lang'] ?? '') === 'cs' ? 'selected' : ''; ?>>Čeština</option>
+                                <option value="en" <?php echo ($me['email_lang'] ?? '') === 'en' ? 'selected' : ''; ?>>English</option>
+                            </select>
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Jazyk alertů a reportů zasílaných na váš e-mail. Ostatní kanály (SMS, WhatsApp) se řídí globálním nastavením.</small>
+                        </div>
+
+                        <div class="form-group">
                             <label for="whatsapp_apikey">CallMeBot API klíč pro WhatsApp</label>
                             <input type="password" name="whatsapp_apikey" id="whatsapp_apikey" value="<?php echo htmlspecialchars($me['whatsapp_apikey'] ?? ''); ?>" class="form-control" placeholder="Váš osobní CallMeBot API klíč" autocomplete="off">
                             <small style="font-size: 0.75rem; color: var(--text-muted);">
@@ -3027,6 +3091,16 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             <small style="font-size: 0.75rem; color: var(--text-muted);">Zadejte v mezinárodním formátu vč. předvolby.</small>
                         </div>
                         
+                        <div class="form-group">
+                            <label for="profile_email_lang">Jazyk e-mailových notifikací</label>
+                            <select name="email_lang" class="form-control">
+                                <option value="" <?php echo empty($me['email_lang']) ? 'selected' : ''; ?>>Podle globálního nastavení</option>
+                                <option value="cs" <?php echo ($me['email_lang'] ?? '') === 'cs' ? 'selected' : ''; ?>>Čeština</option>
+                                <option value="en" <?php echo ($me['email_lang'] ?? '') === 'en' ? 'selected' : ''; ?>>English</option>
+                            </select>
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Jazyk alertů a reportů zasílaných na váš e-mail. Ostatní kanály (SMS, WhatsApp) se řídí globálním nastavením.</small>
+                        </div>
+
                         <div class="form-group">
                             <label for="whatsapp_apikey">CallMeBot API klíč pro WhatsApp</label>
                             <input type="password" name="whatsapp_apikey" id="whatsapp_apikey" value="<?php echo htmlspecialchars($me['whatsapp_apikey'] ?? ''); ?>" class="form-control" placeholder="Váš osobní CallMeBot API klíč" autocomplete="off">

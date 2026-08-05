@@ -108,16 +108,20 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     $stmt_upt = $pdo->query("
         SELECT monitor_id,
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-               SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         GROUP BY monitor_id
     ");
     $uptime_pct = [];
     while ($row = $stmt_upt->fetch()) {
-        $uptime_pct[$row['monitor_id']] = $row['total_count'] > 0
-            ? round(($row['up_count'] / $row['total_count']) * 100, 2)
-            : 100.00;
+        // total_count počítá jen ne-maintenance kontroly. Monitor, který byl
+        // celé okno v údržbě, žádnou měřenou dostupnost nemá - vynecháním
+        // (místo dřívějších vymyšlených 100.00) se nepočítá do průměrů
+        // a isset() checky ho zobrazí jako "bez dat".
+        if ((int)$row['total_count'] > 0) {
+            $uptime_pct[$row['monitor_id']] = round(($row['up_count'] / $row['total_count']) * 100, 2);
+        }
     }
 
     $stmt_hist = $pdo->query("
@@ -125,7 +129,7 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
                SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
                SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) as maintenance_count,
-               SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         GROUP BY monitor_id, DATE(checked_at)
@@ -135,9 +139,13 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     while ($row = $stmt_hist->fetch()) {
         $mid = $row['monitor_id'];
         $date = $row['log_date'];
+        // total_count = ne-maintenance kontroly. Den strávený celý v údržbě
+        // (total 0, maintenance > 0) je údržba - stará podmínka
+        // maintenance == total ho kvůli vyloučení údržby z totalu nikdy
+        // netrefila a den se tvářil jako "nodata".
         if ($row['down_count'] > 0) {
             $history_data[$mid][$date] = 'down';
-        } elseif ($row['maintenance_count'] == $row['total_count'] && $row['total_count'] > 0) {
+        } elseif ((int)$row['total_count'] === 0 && $row['maintenance_count'] > 0) {
             $history_data[$mid][$date] = 'maintenance';
         } elseif ($row['total_count'] > 0) {
             $history_data[$mid][$date] = 'up';
@@ -145,9 +153,11 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
             $history_data[$mid][$date] = 'nodata';
         }
 
-        $history_uptime[$mid][$date] = $row['total_count'] > 0
-            ? round(($row['up_count'] / $row['total_count']) * 100, 2)
-            : 100.00;
+        // Bez měřených kontrol není denní uptime - klíč se nezaloží
+        // (dřív se dosazovalo vymyšlených 100.00).
+        if ((int)$row['total_count'] > 0) {
+            $history_uptime[$mid][$date] = round(($row['up_count'] / $row['total_count']) * 100, 2);
+        }
     }
 
     // Načtení posledních incidentů – pouze výpadky a zprávy při návratu (ne každý úspěšný ping)
@@ -392,6 +402,46 @@ $portal_url = trim(get_setting('portal_url'));
                 <?php endif; ?>
             </div>
         </div>
+
+        <?php
+        // Výpadky SBĚRU dat (ne služeb) - stejná zásada jako v React appce:
+        // když se data přestanou sbírat, stránka to musí říct nahlas. Dva
+        // týdny neviditelně mrtvého cpanel sběru (07/2026) se nesmí opakovat.
+        // JEN PRO PŘIHLÁŠENÉHO ADMINA - je to provozní diagnostika s detaily
+        // konfigurace (STATS_KEY, cesty k souborům), ne veřejný stav služeb.
+        $bk_collection_rows = [];
+        if (!empty($_SESSION['admin_logged_in'])) {
+            $bk_agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
+            foreach ($monitors as $bk_ci_mon) {
+                $bk_ci_details = json_decode($bk_ci_mon['last_details'] ?? '', true) ?: [];
+                foreach (bk_get_collection_issues($bk_ci_mon, $bk_ci_details, $bk_agent_offline_secs) as $bk_ci) {
+                    $bk_collection_rows[] = ['name' => $bk_ci_mon['name'], 'issue' => $bk_ci];
+                }
+            }
+        }
+        ?>
+        <?php if (!empty($bk_collection_rows)): ?>
+            <div role="alert" style="background: rgba(193, 18, 31, 0.12); border: 2px solid rgba(193, 18, 31, 0.55); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;">
+                <div style="font-weight: 700; color: var(--color-red); margin-bottom: 0.35rem;">
+                    <i class="fas fa-triangle-exclamation"></i> <?php echo htmlspecialchars(t('collection_issues_heading')); ?> (<?php echo count($bk_collection_rows); ?>)
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.6rem;"><?php echo htmlspecialchars(t('collection_issues_intro')); ?></div>
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <?php foreach ($bk_collection_rows as $bk_cr): ?>
+                        <div style="font-size: 0.8rem; background: rgba(0,0,0,0.25); border-radius: 6px; padding: 0.4rem 0.65rem;">
+                            <strong><?php echo htmlspecialchars($bk_cr['name']); ?></strong>
+                            <span style="color: var(--color-red); margin-left: 0.4rem;"><?php echo htmlspecialchars($bk_cr['issue']['message']); ?></span>
+                            <?php if (!empty($bk_cr['issue']['since'])): ?>
+                                <span style="color: var(--text-muted); font-family: monospace; font-size: 0.72rem; margin-left: 0.4rem;">(<?php echo htmlspecialchars(t('collection_issue_since')); ?> <?php echo htmlspecialchars(date('d.m.Y H:i', strtotime($bk_cr['issue']['since']))); ?>)</span>
+                            <?php endif; ?>
+                            <?php if (!empty($bk_cr['issue']['hint'])): ?>
+                                <div style="color: var(--text-muted); font-size: 0.74rem; margin-top: 0.2rem;">💡 <?php echo htmlspecialchars($bk_cr['issue']['hint']); ?></div>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <?php
         // Recent Events - napříč celou flotilou monitorů (Level 1 Dashboard).
@@ -652,55 +702,52 @@ $portal_url = trim(get_setting('portal_url'));
                                         <?php if (($m_type === 'vps' || $m_type === 'openwrt' || $m_type === 'cpanel') && $status === 'up' && (isset($details['cpu']) || isset($details['disk']))): ?>
                                             <!-- Pokud jde o VPS, OpenWrt nebo cPanel, ukážeme rychlé grafy vytížení -->
                                             <div class="metrics-charts">
-                                                <?php if ($m_type === 'vps' || $m_type === 'openwrt'): ?>
+                                                <?php
+                                                // Nezměřená metrika (null/chybějící klíč) graf vůbec nevykreslí -
+                                                // dřívější "?? 0" tu kreslilo zelené 0% pruhy pro hodnoty,
+                                                // které nikdo nezměřil (např. processes bez CloudLinux).
+                                                if ($m_type === 'vps' || $m_type === 'openwrt') {
+                                                    $mini_cpu_label = t('chart_cpu');
+                                                    $mini_cpu_val = $details['cpu'] ?? null;
+                                                } else {
+                                                    $mini_cpu_label = t('chart_processes');
+                                                    $mini_cpu_val = $details['processes']['percent'] ?? null;
+                                                }
+                                                $mini_ram_val = ($m_type === 'vps' || $m_type === 'openwrt') ? ($details['ram'] ?? null) : ($details['memory']['percent'] ?? null);
+                                                $mini_hdd_val = ($m_type === 'vps' || $m_type === 'openwrt') ? ($details['hdd'] ?? null) : ($details['disk']['percent'] ?? null);
+                                                ?>
+                                                <?php if ($mini_cpu_val !== null): ?>
                                                     <div class="mini-chart">
-                                                        <div class="chart-title"><?php echo htmlspecialchars(t('chart_cpu')); ?></div>
+                                                        <div class="chart-title"><?php echo htmlspecialchars($mini_cpu_label); ?></div>
                                                         <div class="chart-bar-container">
-                                                            <?php 
-                                                            $cpu_val = $details['cpu'];
-                                                            $cpu_color = ($cpu_val > 80) ? 'red' : (($cpu_val > 50) ? 'yellow' : 'green');
-                                                            ?>
-                                                            <div class="chart-bar-fill <?php echo $cpu_color; ?>" style="width: <?php echo $cpu_val; ?>%"></div>
+                                                            <?php $cpu_color = ($mini_cpu_val > 80) ? 'red' : (($mini_cpu_val > 50) ? 'yellow' : 'green'); ?>
+                                                            <div class="chart-bar-fill <?php echo $cpu_color; ?>" style="width: <?php echo min(100, $mini_cpu_val); ?>%"></div>
                                                         </div>
-                                                        <div class="chart-value"><?php echo $cpu_val; ?>%</div>
-                                                    </div>
-                                                <?php else: // cpanel processes/CPU ?>
-                                                    <div class="mini-chart">
-                                                        <div class="chart-title"><?php echo htmlspecialchars(t('chart_processes')); ?></div>
-                                                        <div class="chart-bar-container">
-                                                            <?php 
-                                                            $proc_val = $details['processes']['percent'] ?? 0;
-                                                            $proc_color = ($proc_val > 80) ? 'red' : (($proc_val > 50) ? 'yellow' : 'green');
-                                                            ?>
-                                                            <div class="chart-bar-fill <?php echo $proc_color; ?>" style="width: <?php echo $proc_val; ?>%"></div>
-                                                        </div>
-                                                        <div class="chart-value"><?php echo $proc_val; ?>%</div>
+                                                        <div class="chart-value"><?php echo $mini_cpu_val; ?>%</div>
                                                     </div>
                                                 <?php endif; ?>
-                                                
+
+                                                <?php if ($mini_ram_val !== null): ?>
                                                 <div class="mini-chart">
                                                     <div class="chart-title"><?php echo htmlspecialchars(t('chart_ram')); ?></div>
                                                     <div class="chart-bar-container">
-                                                        <?php 
-                                                        $ram_val = ($m_type === 'vps' || $m_type === 'openwrt') ? $details['ram'] : ($details['memory']['percent'] ?? 0);
-                                                        $ram_color = ($ram_val > 85) ? 'red' : (($ram_val > 60) ? 'yellow' : 'green');
-                                                        ?>
-                                                        <div class="chart-bar-fill <?php echo $ram_color; ?>" style="width: <?php echo $ram_val; ?>%"></div>
+                                                        <?php $ram_color = ($mini_ram_val > 85) ? 'red' : (($mini_ram_val > 60) ? 'yellow' : 'green'); ?>
+                                                        <div class="chart-bar-fill <?php echo $ram_color; ?>" style="width: <?php echo min(100, $mini_ram_val); ?>%"></div>
                                                     </div>
-                                                    <div class="chart-value"><?php echo $ram_val; ?>%</div>
+                                                    <div class="chart-value"><?php echo $mini_ram_val; ?>%</div>
                                                 </div>
-                                                
+                                                <?php endif; ?>
+
+                                                <?php if ($mini_hdd_val !== null): ?>
                                                 <div class="mini-chart">
                                                     <div class="chart-title"><?php echo htmlspecialchars(t('chart_disk')); ?></div>
                                                     <div class="chart-bar-container">
-                                                        <?php 
-                                                        $hdd_val = ($m_type === 'vps' || $m_type === 'openwrt') ? $details['hdd'] : ($details['disk']['percent'] ?? 0);
-                                                        $hdd_color = ($hdd_val > 90) ? 'red' : (($hdd_val > 70) ? 'yellow' : 'green');
-                                                        ?>
-                                                        <div class="chart-bar-fill <?php echo $hdd_color; ?>" style="width: <?php echo $hdd_val; ?>%"></div>
+                                                        <?php $hdd_color = ($mini_hdd_val > 90) ? 'red' : (($mini_hdd_val > 70) ? 'yellow' : 'green'); ?>
+                                                        <div class="chart-bar-fill <?php echo $hdd_color; ?>" style="width: <?php echo min(100, $mini_hdd_val); ?>%"></div>
                                                     </div>
-                                                    <div class="chart-value"><?php echo $hdd_val; ?>%</div>
+                                                    <div class="chart-value"><?php echo $mini_hdd_val; ?>%</div>
                                                 </div>
+                                                <?php endif; ?>
                                             </div>
                                         <?php else: ?>
                                             <!-- Standardní 30denní historie sloupců -->
@@ -715,8 +762,12 @@ $portal_url = trim(get_setting('portal_url'));
                                                              $day_text = t('history_tooltip_up');
                                                          } elseif ($day_status === 'down') {
                                                              $day_class = 'down';
-                                                             $day_uptime = $history_uptime[$mid][$day] ?? 100.00;
-                                                             $day_text = sprintf(t('history_tooltip_down'), number_format($day_uptime, 2, ',', ' '));
+                                                             // Den se statusem down má vždy měřené kontroly, takže klíč existuje;
+                                                             // kdyby ne, radši bez procenta než s vymyšleným.
+                                                             $day_uptime = $history_uptime[$mid][$day] ?? null;
+                                                             $day_text = $day_uptime !== null
+                                                                 ? sprintf(t('history_tooltip_down'), number_format($day_uptime, 2, ',', ' '))
+                                                                 : t('history_tooltip_down_nopct');
                                                          } elseif ($day_status === 'maintenance') {
                                                              $day_class = 'maintenance';
                                                              $day_text = t('history_tooltip_maintenance');
@@ -2204,16 +2255,25 @@ $portal_url = trim(get_setting('portal_url'));
                                                     $net_count = 0;
                                                     $count_mh = count($metrics_history);
 
+                                                    // NULL metriky (zdroj hodnotu nevrací) se do sum ani maxim
+                                                    // nepočítají - průměr z falešných nul by lhal.
+                                                    $cpu_count = $ram_count = $hdd_count = 0;
                                                     foreach ($metrics_history as $mh) {
-                                                        $cpu_sum += $mh['cpu_usage'];
-                                                        if ($mh['cpu_usage'] > $cpu_max) $cpu_max = $mh['cpu_usage'];
-
-                                                        $ram_sum += $mh['ram_usage'];
-                                                        if ($mh['ram_usage'] > $ram_max) $ram_max = $mh['ram_usage'];
-
-                                                        $hdd_sum += $mh['hdd_usage'];
-                                                        if ($mh['hdd_usage'] > $hdd_max) $hdd_max = $mh['hdd_usage'];
-
+                                                        if ($mh['cpu_usage'] !== null) {
+                                                            $cpu_sum += $mh['cpu_usage'];
+                                                            $cpu_count++;
+                                                            if ($mh['cpu_usage'] > $cpu_max) $cpu_max = $mh['cpu_usage'];
+                                                        }
+                                                        if ($mh['ram_usage'] !== null) {
+                                                            $ram_sum += $mh['ram_usage'];
+                                                            $ram_count++;
+                                                            if ($mh['ram_usage'] > $ram_max) $ram_max = $mh['ram_usage'];
+                                                        }
+                                                        if ($mh['hdd_usage'] !== null) {
+                                                            $hdd_sum += $mh['hdd_usage'];
+                                                            $hdd_count++;
+                                                            if ($mh['hdd_usage'] > $hdd_max) $hdd_max = $mh['hdd_usage'];
+                                                        }
                                                         if ($mh['net_usage'] !== null) {
                                                             $net_sum += $mh['net_usage'];
                                                             $net_count++;
@@ -2221,15 +2281,15 @@ $portal_url = trim(get_setting('portal_url'));
                                                         }
 
                                                         $labels[] = date('H:i', strtotime($mh['checked_at']));
-                                                        $cpu_data[] = $mh['cpu_usage'];
-                                                        $ram_data[] = $mh['ram_usage'];
-                                                        $hdd_data[] = $mh['hdd_usage'];
+                                                        $cpu_data[] = $mh['cpu_usage'] !== null ? (float)$mh['cpu_usage'] : null;
+                                                        $ram_data[] = $mh['ram_usage'] !== null ? (float)$mh['ram_usage'] : null;
+                                                        $hdd_data[] = $mh['hdd_usage'] !== null ? (float)$mh['hdd_usage'] : null;
                                                         $net_data[] = $mh['net_usage'] !== null ? (float)$mh['net_usage'] : null;
                                                     }
 
-                                                    $cpu_avg = round($cpu_sum / $count_mh, 1);
-                                                    $ram_avg = round($ram_sum / $count_mh, 1);
-                                                    $hdd_avg = round($hdd_sum / $count_mh, 1);
+                                                    $cpu_avg = $cpu_count > 0 ? round($cpu_sum / $cpu_count, 1) : null;
+                                                    $ram_avg = $ram_count > 0 ? round($ram_sum / $ram_count, 1) : null;
+                                                    $hdd_avg = $hdd_count > 0 ? round($hdd_sum / $hdd_count, 1) : null;
                                                     $net_avg = $net_count > 0 ? round($net_sum / $net_count, 1) : 0;
                                                 }
                                             }
@@ -2248,15 +2308,15 @@ $portal_url = trim(get_setting('portal_url'));
                                                     <div style="display: flex; gap: 1rem; margin: 0.75rem 0 1rem 0; font-size: 0.8rem; flex-wrap: wrap;">
                                                         <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=cpu" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('cpu_avg_max')); ?></span>
-                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="cpuStats-<?php echo $mid; ?>"><?php echo $cpu_avg; ?>% / <?php echo $cpu_max; ?>%</strong>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="cpuStats-<?php echo $mid; ?>"><?php echo $cpu_avg !== null ? "{$cpu_avg}% / {$cpu_max}%" : '–'; ?></strong>
                                                         </a>
                                                         <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=ram" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ram_avg_max')); ?></span>
-                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="ramStats-<?php echo $mid; ?>"><?php echo $ram_avg; ?>% / <?php echo $ram_max; ?>%</strong>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="ramStats-<?php echo $mid; ?>"><?php echo $ram_avg !== null ? "{$ram_avg}% / {$ram_max}%" : '–'; ?></strong>
                                                         </a>
                                                         <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=hdd" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('hdd_avg_max')); ?></span>
-                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="hddStats-<?php echo $mid; ?>"><?php echo $hdd_avg; ?>% / <?php echo $hdd_max; ?>%</strong>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="hddStats-<?php echo $mid; ?>"><?php echo $hdd_avg !== null ? "{$hdd_avg}% / {$hdd_max}%" : '–'; ?></strong>
                                                         </a>
                                                         <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=net" class="net-stats-box" id="netStatsBox-<?php echo $mid; ?>" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit; <?php echo $net_max > 0 ? '' : 'display: none;'; ?>" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
                                                             <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('net_avg_max')); ?></span>
@@ -2696,10 +2756,12 @@ $portal_url = trim(get_setting('portal_url'));
                     const hddStats = document.getElementById('hddStats-' + monitorId);
                     const netStats = document.getElementById('netStats-' + monitorId);
                     const netStatsBox = document.getElementById('netStatsBox-' + monitorId);
-                    if (cpuStats) cpuStats.textContent = data.cpu_avg + '% / ' + data.cpu_max + '%';
-                    if (ramStats) ramStats.textContent = data.ram_avg + '% / ' + data.ram_max + '%';
-                    if (hddStats) hddStats.textContent = data.hdd_avg + '% / ' + data.hdd_max + '%';
-                    if (netStats) netStats.textContent = data.net_avg + ' / ' + data.net_max + ' KB/s';
+                    // null = metrika se v daném období vůbec neměřila - pomlčka, ne "0%"
+                    const fmtPct = (avg, max) => (avg !== null && avg !== undefined) ? avg + '% / ' + max + '%' : '–';
+                    if (cpuStats) cpuStats.textContent = fmtPct(data.cpu_avg, data.cpu_max);
+                    if (ramStats) ramStats.textContent = fmtPct(data.ram_avg, data.ram_max);
+                    if (hddStats) hddStats.textContent = fmtPct(data.hdd_avg, data.hdd_max);
+                    if (netStats) netStats.textContent = (data.net_avg !== null && data.net_avg !== undefined) ? data.net_avg + ' / ' + data.net_max + ' KB/s' : '–';
                     if (netStatsBox) netStatsBox.style.display = data.net_max > 0 ? '' : 'none';
                 } catch (e) {
                     console.error(<?php echo json_encode(t('js_metrics_load_error')); ?>, e);

@@ -42,9 +42,7 @@ export function SearchCommand({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const filtered = query
-    ? results.filter((r) => r.label.toLowerCase().includes(query.toLowerCase()))
-    : results;
+  const filtered = query ? results.filter((r) => r.label.toLowerCase().includes(query.toLowerCase())) : results;
 
   const groups = filtered.reduce<Record<string, SearchResult[]>>((acc, result) => {
     (acc[result.group] ??= []).push(result);
@@ -85,9 +83,7 @@ export function SearchCommand({
 
           <div className="max-h-80 overflow-y-auto p-2">
             {filtered.length === 0 ? (
-              <p className="text-muted-foreground px-3 py-6 text-center text-sm">
-                Nic nenalezeno.
-              </p>
+              <p className="text-muted-foreground px-3 py-6 text-center text-sm">Nic nenalezeno.</p>
             ) : (
               Object.entries(groups).map(([group, items]) => (
                 <div key={group} className="mb-2 last:mb-0">
@@ -103,9 +99,7 @@ export function SearchCommand({
                       className="hover:bg-accent flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors"
                     >
                       <span>{item.label}</span>
-                      {item.hint && (
-                        <span className="text-muted-foreground text-xs">{item.hint}</span>
-                      )}
+                      {item.hint && <span className="text-muted-foreground text-xs">{item.hint}</span>}
                     </button>
                   ))}
                 </div>

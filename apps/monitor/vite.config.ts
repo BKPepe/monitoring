@@ -2,6 +2,20 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath, URL } from 'node:url';
+import { execSync } from 'node:child_process';
+import pkg from './package.json';
+
+/**
+ * Skutečná identita buildu pro patičku: verze z package.json + krátký git
+ * hash. Nahrazuje dřívější vymyšlenou konstantu '0.1.0-stable' z mock.ts.
+ */
+let gitHash = '';
+try {
+  gitHash = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+} catch {
+  // Build mimo git checkout (např. z tarballu) - hash prostě nebude.
+}
+const appVersion = gitHash ? `${pkg.version} (${gitHash})` : pkg.version;
 
 /**
  * Cíl proxy pro vývoj. Přepíše se přes STATUS_ORIGIN:
@@ -11,6 +25,9 @@ const STATUS_ORIGIN = process.env.STATUS_ORIGIN ?? 'https://bloodkings.eu';
 
 export default defineConfig({
   base: '/app/',
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

@@ -60,14 +60,7 @@ export function HealthDonut({
     <div className={cn('flex flex-wrap items-center justify-center gap-6', className)}>
       <div className="relative shrink-0">
         <svg viewBox="0 0 140 140" className="size-36 -rotate-90" role="presentation">
-          <circle
-            cx="70"
-            cy="70"
-            r={RADIUS}
-            fill="none"
-            strokeWidth="14"
-            className="stroke-muted"
-          />
+          <circle cx="70" cy="70" r={RADIUS} fill="none" strokeWidth="14" className="stroke-muted" />
           {arcs.map((arc) => (
             <circle
               key={arc.label}

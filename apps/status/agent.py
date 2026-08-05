@@ -9,7 +9,11 @@ import os
 import re
 import sys
 import time
+import socket
 import json
+import hmac
+import hashlib
+import datetime
 import urllib.request
 import subprocess
 
@@ -19,6 +23,8 @@ API_URL = "http://localhost/status/agent_api.php"
 AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 AUTO_UPDATE = False  # Povolení automatických aktualizací agenta ze serveru
 HEAVY_OP_INTERVAL_HOURS = 24  # Interval pro náročné operace v hodinách (výchozí 24h)
+REMOTE_ACTIONS_ENABLED = False  # Opt-in: povolení HMAC-podepsaných vzdálených akcí ze serveru
+ALLOWED_ACTIONS = "restart_service,reboot_server"  # Whitelist povolených akcí (čárkou oddělené)
 # ===========================
 
 # Načtení z Environment proměnných
@@ -28,6 +34,10 @@ if os.environ.get("STATUS_AGENT_KEY"):
     AGENT_KEY = os.environ.get("STATUS_AGENT_KEY")
 if os.environ.get("STATUS_AUTO_UPDATE"):
     AUTO_UPDATE = os.environ.get("STATUS_AUTO_UPDATE") == "1"
+if os.environ.get("STATUS_REMOTE_ACTIONS_ENABLED"):
+    REMOTE_ACTIONS_ENABLED = os.environ.get("STATUS_REMOTE_ACTIONS_ENABLED") == "1"
+if os.environ.get("STATUS_ALLOWED_ACTIONS"):
+    ALLOWED_ACTIONS = os.environ.get("STATUS_ALLOWED_ACTIONS")
 if os.environ.get("STATUS_HEAVY_OP_INTERVAL_HOURS"):
     try:
         HEAVY_OP_INTERVAL_HOURS = int(os.environ.get("STATUS_HEAVY_OP_INTERVAL_HOURS"))
@@ -57,6 +67,10 @@ if os.path.exists(cfg_path):
                         AGENT_KEY = v
                     elif k == "AUTO_UPDATE":
                         AUTO_UPDATE = v == "1"
+                    elif k == "REMOTE_ACTIONS_ENABLED":
+                        REMOTE_ACTIONS_ENABLED = v == "1"
+                    elif k == "ALLOWED_ACTIONS":
+                        ALLOWED_ACTIONS = v
                     elif k == 'HEAVY_OP_INTERVAL_HOURS':
                         try:
                             HEAVY_OP_INTERVAL_HOURS = int(v)
@@ -65,7 +79,7 @@ if os.path.exists(cfg_path):
     except Exception:
         pass
 
-AGENT_VERSION = "1.7.1"
+AGENT_VERSION = "1.7.3"
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
 # V Docker režimu je adresář se skriptem připojený read-only, proto se stavový
 # soubor pro výpočet síťové propustnosti ukládá vždy do /tmp.
@@ -151,6 +165,136 @@ def get_cpu_usage():
     steal_pct = round((steal_delta / total_delta) * 100, 1)
     iowait_pct = round((iowait_delta / total_delta) * 100, 1)
     return cpu_pct, steal_pct, iowait_pct
+
+def get_tailscale():
+    """(up, peer_count) z tailscale status --json; (None, None) bez Tailscale."""
+    try:
+        out = subprocess.run(['tailscale', 'status', '--json'], capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return None, None
+        data = json.loads(out.stdout)
+        up = data.get('BackendState') == 'Running'
+        peers = len(data.get('Peer') or {})
+        return up, peers
+    except Exception:
+        return None, None
+
+
+def get_zerotier_networks():
+    try:
+        out = subprocess.run(['zerotier-cli', 'listnetworks'], capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return None
+        return sum(1 for line in out.stdout.splitlines() if ' OK ' in line)
+    except Exception:
+        return None
+
+
+def get_ups():
+    """(status, battery_pct) z NUT upsc; (None, None) bez UPS."""
+    try:
+        names = subprocess.run(['upsc', '-l'], capture_output=True, text=True, timeout=10)
+        name = names.stdout.split()[0] if names.returncode == 0 and names.stdout.split() else None
+        if not name:
+            return None, None
+        data = subprocess.run(['upsc', name], capture_output=True, text=True, timeout=10)
+        status = battery = None
+        for line in data.stdout.splitlines():
+            if line.startswith('ups.status:'):
+                status = line.split(':', 1)[1].strip()
+            elif line.startswith('battery.charge:'):
+                try:
+                    battery = int(float(line.split(':', 1)[1].strip()))
+                except ValueError:
+                    pass
+        return status, battery
+    except Exception:
+        return None, None
+
+
+def get_ram_detail_mb():
+    """RAM detail v MB (total/used/available/free) - parita s agent.sh, který
+    to posílá odjakživa; UI z toho skládá "8.2 GB / 16 GB (volné ...)"."""
+    total = used = avail = free = None
+    try:
+        info = {}
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].rstrip(':') in ('MemTotal', 'MemAvailable', 'MemFree'):
+                    info[parts[0].rstrip(':')] = int(parts[1])
+        if 'MemTotal' in info:
+            total = info['MemTotal'] // 1024
+            avail = info.get('MemAvailable', info.get('MemFree', 0)) // 1024
+            free = info.get('MemFree', 0) // 1024
+            used = total - avail
+    except Exception:
+        pass
+    return total, used, avail, free
+
+
+def get_tcp_retrans():
+    """Kumulativní TCP retransmise z /proc/net/snmp (RetransSegs)."""
+    try:
+        with open('/proc/net/snmp', 'r') as f:
+            lines = f.readlines()
+        for i, line in enumerate(lines):
+            if line.startswith('Tcp:') and i + 1 < len(lines) and lines[i + 1].startswith('Tcp:'):
+                header = line.split()
+                values = lines[i + 1].split()
+                if 'RetransSegs' in header:
+                    return int(values[header.index('RetransSegs')])
+    except Exception:
+        pass
+    return None
+
+
+def get_conntrack_count():
+    try:
+        with open('/proc/sys/net/netfilter/nf_conntrack_count', 'r') as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def get_oom_kills():
+    """Počet OOM zásahů od startu (dmesg). None = dmesg nedostupný (práva)."""
+    try:
+        out = subprocess.run(['dmesg'], capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return None
+        low = out.stdout.lower()
+        return low.count('oom-killer') + low.count('out of memory')
+    except Exception:
+        return None
+
+
+def get_dns_latency_ms():
+    """Změřená latence skutečného DNS dotazu přes systémový resolver."""
+    try:
+        t0 = time.time()
+        socket.getaddrinfo('example.com', 80)
+        return round((time.time() - t0) * 1000, 1)
+    except Exception:
+        return None
+
+
+def get_openvpn_tunnels():
+    try:
+        out = subprocess.run(['pidof', 'openvpn'], capture_output=True, text=True, timeout=5)
+        pids = out.stdout.split()
+        return len(pids)
+    except Exception:
+        return None
+
+
+def get_usb_devices():
+    try:
+        entries = os.listdir('/sys/bus/usb/devices')
+        return sum(1 for e in entries if e and e[0].isdigit() and '-' in e)
+    except Exception:
+        return None
+
 
 def get_ram_usage():
     """Vypočítá využití RAM v % z /proc/meminfo"""
@@ -905,6 +1049,114 @@ def self_update(update_info):
         return False
 
 
+def send_action_result(action_id, status, message):
+    """Potvrzení výsledku vzdálené akce zpět na server. Bez tohohle by
+    agent_actions.status zůstal navždy na 'sent' v administraci, i když se
+    akce provedla - stejný kontrakt jako send_action_result() v agent.sh
+    a agent_openwrt.sh (agent_api.php větev action_result)."""
+    ts_up, ts_peers = get_tailscale()
+    ups_status, ups_battery = get_ups()
+    ram_total_mb, ram_used_mb, ram_available_mb, ram_free_mb = get_ram_detail_mb()
+    payload = {
+        "agent_key": AGENT_KEY,
+        "action_result": {
+            "action_id": int(action_id),
+            "status": status,
+            "message": message,
+        },
+    }
+    req = urllib.request.Request(
+        API_URL,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+    except Exception as e:
+        log_message(f"VAROVÁNÍ: Potvrzení akce {action_id} se nepodařilo odeslat: {e}")
+
+
+def handle_remote_action(res_body):
+    """Zpracování HMAC-podepsané vzdálené akce z odpovědi serveru. Opt-in přes
+    REMOTE_ACTIONS_ENABLED=1; whitelist v ALLOWED_ACTIONS; podpis se ověřuje
+    proti "action={a}|ts={t}|nonce={n}" klíčem agenta a platí max. 30 s -
+    identická logika jako v shell agentech, jen s poctivým JSON parsováním
+    místo awk. Každá větev (úspěch i odmítnutí) hlásí výsledek zpět."""
+    try:
+        data = json.loads(res_body)
+    except ValueError:
+        return
+
+    # Server akci posílá zanořenou v "pending_action" (viz agent_api.php);
+    # top-level fallback jen pro případ budoucí změny formátu.
+    act = data.get("pending_action") if isinstance(data.get("pending_action"), dict) else data
+
+    act_id = act.get("action_id")
+    act_type = act.get("action")
+    act_ts = act.get("timestamp")
+    act_sig = act.get("signature")
+    act_nonce = act.get("nonce", "")
+
+    if not act_id or not act_type or not act_ts or not act_sig:
+        return
+
+    if abs(int(time.time()) - int(act_ts)) > 30:
+        log_message("VAROVÁNÍ: Odmítnuta vzdálená akce - vypršená platnost (časové okno > 30s)")
+        send_action_result(act_id, "failed", "Vypršela platnost podpisu (>30s)")
+        return
+
+    allowed = [a.strip() for a in ALLOWED_ACTIONS.split(",") if a.strip()]
+    if act_type not in allowed:
+        log_message(f"VAROVÁNÍ: Odmítnuta vzdálená akce '{act_type}' - není na seznamu ALLOWED_ACTIONS!")
+        send_action_result(act_id, "failed", f"Akce '{act_type}' není v ALLOWED_ACTIONS")
+        return
+
+    calc_str = f"action={act_type}|ts={act_ts}|nonce={act_nonce}"
+    calc_sig = hmac.new(AGENT_KEY.encode('utf-8'), calc_str.encode('utf-8'), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calc_sig, str(act_sig)):
+        log_message("VAROVÁNÍ: Odmítnuta vzdálená akce - neplatný HMAC podpis!")
+        send_action_result(act_id, "failed", "Neplatný HMAC podpis")
+        return
+
+    log_message(f"Aktivována bezpečná vzdálená akce: {act_type} (ID: {act_id})")
+
+    if act_type == "restart_service":
+        svc_name = str(act.get("service_name") or data.get("service_name") or "").strip()
+        # Jméno služby jde do shellového příkazu - povolit jen bezpečné znaky,
+        # i když je podepsané serverem (obrana do hloubky).
+        if not svc_name or not re.fullmatch(r'[A-Za-z0-9_.@-]+', svc_name):
+            send_action_result(act_id, "failed", "Chybí nebo je neplatné service_name v payloadu akce")
+            return
+        try:
+            if subprocess.call(["systemctl", "restart", svc_name],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+                log_message(f"Restartována služba přes systemctl: {svc_name}")
+                send_action_result(act_id, "executed", f"Služba '{svc_name}' restartována přes systemctl")
+                return
+        except OSError:
+            pass
+        init_script = f"/etc/init.d/{svc_name}"
+        if os.access(init_script, os.X_OK):
+            subprocess.call([init_script, "restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log_message(f"Restartována služba přes init.d: {svc_name}")
+            send_action_result(act_id, "executed", f"Služba '{svc_name}' restartována přes init.d")
+        else:
+            log_message(f"VAROVÁNÍ: Služba '{svc_name}' nenalezena nebo není spustitelná.")
+            send_action_result(act_id, "failed", f"Služba '{svc_name}' nenalezena nebo není spustitelná")
+    elif act_type == "reboot_server":
+        log_message("PROVÁDÍM REBOOT SERVERU DLE PODEPSANÉHO POKYNU...")
+        # Potvrzení musí odejít PŘED rebootem - jakmile reboot ukončí proces,
+        # už se nic dalšího neprovede.
+        send_action_result(act_id, "executed", "Server se restartuje")
+        for cmd in (["/sbin/reboot"], ["systemctl", "reboot"]):
+            try:
+                if subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+                    break
+            except OSError:
+                continue
+
+
 def get_discovered_services(ports, processes):
     """Detekce běžících služeb podle portů/procesů/konfiguračních souborů.
     Vrací seznam dictů: {name, type, port, confidence, evidence, missing}.
@@ -1039,7 +1291,8 @@ def main():
             print("  --help, -h                   Zobrazí tuto nápovědu")
             print("\nKonfigurace:")
             print("  Čte nastavení ze souboru agent.cfg nebo proměnných prostředí:")
-            print("  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE, STATUS_HEAVY_OP_INTERVAL_HOURS")
+            print("  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE, STATUS_HEAVY_OP_INTERVAL_HOURS,")
+            print("  STATUS_REMOTE_ACTIONS_ENABLED, STATUS_ALLOWED_ACTIONS")
             sys.exit(0)
         elif arg in ('--version', '-V'):
             print(f"Python VPS Status Agent v{AGENT_VERSION}")
@@ -1113,6 +1366,23 @@ def main():
         "reboot_required": identity['reboot_required'],
         "cloud_provider": identity['cloud_provider'],
         "virtualization": identity['virtualization'],
+        "ram_total_mb": ram_total_mb,
+        "ram_used_mb": ram_used_mb,
+        "ram_available_mb": ram_available_mb,
+        "ram_free_mb": ram_free_mb,
+        "tcp_retrans": get_tcp_retrans(),
+        "conntrack_count": get_conntrack_count(),
+        "auto_update": 1 if AUTO_UPDATE else 0,
+        "oom_kills": get_oom_kills(),
+        "tailscale_up": ts_up,
+        "tailscale_peers": ts_peers,
+        "zerotier_networks": get_zerotier_networks(),
+        "ups_status": ups_status,
+        "ups_battery_pct": ups_battery,
+        "boot_time": int(time.time() - uptime) if uptime else None,
+        "dns_latency_ms": get_dns_latency_ms(),
+        "openvpn_tunnels": get_openvpn_tunnels(),
+        "usb_devices": get_usb_devices(),
         "discovered_services": discovered_services
     }
 
@@ -1134,6 +1404,11 @@ def main():
             if res_code == 200:
                 log_debug("OK: Statistiky úspěšně odeslány.")
                 log_debug("Odpověď: " + res_body.strip())
+
+                # Vzdálené akce (opt-in přes REMOTE_ACTIONS_ENABLED=1) - v Docker
+                # režimu nedávají smysl (kontejner nevidí systemd hostitele).
+                if REMOTE_ACTIONS_ENABLED and not DOCKER_MODE:
+                    handle_remote_action(res_body)
 
                 # Automatická aktualizace agenta (opt-in přes AUTO_UPDATE=1).
                 # V Docker režimu je skript připojen read-only z hostitele, tam se neaktualizuje.

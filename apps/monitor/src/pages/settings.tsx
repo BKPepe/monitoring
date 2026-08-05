@@ -2,10 +2,30 @@ import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
-  Settings, Bell, Shield, Save, Check, Send, Mail, MessageSquare,
-  SendHorizontal, MessageCircle, Phone, Globe, Plug, Palette, Lock,
-  Key, Server, AlertTriangle, Eye, EyeOff, RefreshCw, FileBarChart,
-  BellRing, ExternalLink
+  Settings,
+  Bell,
+  Shield,
+  Save,
+  Check,
+  Send,
+  Mail,
+  MessageSquare,
+  SendHorizontal,
+  MessageCircle,
+  Phone,
+  Globe,
+  Plug,
+  Palette,
+  Lock,
+  Key,
+  Server,
+  AlertTriangle,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  FileBarChart,
+  BellRing,
+  ExternalLink,
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
@@ -20,7 +40,8 @@ const tabClass = (active: boolean) =>
       : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
   }`;
 
-const inputCls = 'w-full rounded-md bg-background border border-border px-3 py-2 text-xs focus:ring-1 focus:ring-primary/40 focus:border-primary transition-colors';
+const inputCls =
+  'w-full rounded-md bg-background border border-border px-3 py-2 text-xs focus:ring-1 focus:ring-primary/40 focus:border-primary transition-colors';
 const selectCls = inputCls;
 const labelCls = 'block text-[11px] font-medium text-muted-foreground mb-1';
 const hintCls = 'text-[10px] text-muted-foreground/70 mt-0.5';
@@ -37,10 +58,22 @@ function GithubIcon({ className }: { className?: string }) {
 function GoogleIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className}>
-      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
-      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
+      <path
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+        fill="#34A853"
+      />
+      <path
+        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+        fill="#FBBC05"
+      />
+      <path
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+        fill="#EA4335"
+      />
     </svg>
   );
 }
@@ -62,10 +95,28 @@ function GitlabIcon({ className }: { className?: string }) {
 }
 
 const OAUTH_PROVIDERS = [
-  { key: 'github', label: 'GitHub', icon: GithubIcon, color: 'text-foreground', bg: 'bg-zinc-800/80 border border-zinc-700' },
+  {
+    key: 'github',
+    label: 'GitHub',
+    icon: GithubIcon,
+    color: 'text-foreground',
+    bg: 'bg-zinc-800/80 border border-zinc-700',
+  },
   { key: 'google', label: 'Google', icon: GoogleIcon, color: '', bg: 'bg-slate-800/60 border border-slate-700' },
-  { key: 'discord', label: 'Discord', icon: DiscordIcon, color: 'text-[#5865F2]', bg: 'bg-[#5865F2]/15 border border-[#5865F2]/30' },
-  { key: 'gitlab', label: 'GitLab', icon: GitlabIcon, color: 'text-[#fc6d26]', bg: 'bg-[#fc6d26]/15 border border-[#fc6d26]/30' },
+  {
+    key: 'discord',
+    label: 'Discord',
+    icon: DiscordIcon,
+    color: 'text-[#5865F2]',
+    bg: 'bg-[#5865F2]/15 border border-[#5865F2]/30',
+  },
+  {
+    key: 'gitlab',
+    label: 'GitLab',
+    icon: GitlabIcon,
+    color: 'text-[#fc6d26]',
+    bg: 'bg-[#fc6d26]/15 border border-[#fc6d26]/30',
+  },
 ];
 
 type SettingsMap = Record<string, string>;
@@ -86,7 +137,14 @@ export function SettingsPage() {
   const [digestSending, setDigestSending] = useState<string | null>(null);
   const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  interface SubEntry { id: number; name: string; type: string; email: number; sms: number; whatsapp: number; }
+  interface SubEntry {
+    id: number;
+    name: string;
+    type: string;
+    email: number;
+    sms: number;
+    whatsapp: number;
+  }
   const [subs, setSubs] = useState<SubEntry[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);
   const [subsSaved, setSubsSaved] = useState(false);
@@ -119,15 +177,36 @@ export function SettingsPage() {
     if (activeTab === 'notifikace' && session?.authenticated && subs.length === 0) {
       setSubsLoading(true);
       fetch(`${API_BASE}?action=get_subscriptions`, { credentials: 'include' })
-        .then(r => r.json())
-        .then(d => setSubs(d.subscriptions ?? []))
+        .then((r) => r.json())
+        .then((d) => setSubs(d.subscriptions ?? []))
         .catch(() => {})
         .finally(() => setSubsLoading(false));
     }
   }, [activeTab, session, subs.length]);
 
   // Update a single setting
-  const set = (key: string, val: string) => setSettings(prev => ({ ...prev, [key]: val }));
+  const set = (key: string, val: string) => setSettings((prev) => ({ ...prev, [key]: val }));
+
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const handleLogoUpload = async (file: File | null) => {
+    if (!file) return;
+    setLogoUploading(true);
+    setLogoError(null);
+    try {
+      const fd = new FormData();
+      fd.append('logo', file);
+      const res = await fetch(`${API_BASE}?action=upload_logo`, { method: 'POST', credentials: 'include', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      // Server nastavení uložil sám; tady jen zrcadlíme novou URL do formuláře.
+      set('custom_logo_url', data.url);
+    } catch (e) {
+      setLogoError(e instanceof Error ? e.message : t('settings.logo_upload_failed', 'Nahrání loga selhalo.'));
+    } finally {
+      setLogoUploading(false);
+    }
+  };
 
   // Save all settings
   const handleSave = async (e: React.FormEvent) => {
@@ -164,12 +243,16 @@ export function SettingsPage() {
     setDigestResult(null);
     try {
       const res = await fetch(`${API_BASE}?action=send_digest`, {
-        method: 'POST', credentials: 'include',
+        method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ period }),
       });
       const data = await res.json();
-      setDigestResult({ ok: data.success === true, msg: data.message || data.error || t('settings.digest_unknown_result', 'Neznámý výsledek.') });
+      setDigestResult({
+        ok: data.success === true,
+        msg: data.message || data.error || t('settings.digest_unknown_result', 'Neznámý výsledek.'),
+      });
     } catch {
       setDigestResult({ ok: false, msg: t('settings.digest_comm_error', 'Chyba při komunikaci se serverem.') });
     } finally {
@@ -181,22 +264,25 @@ export function SettingsPage() {
   const handleSaveSubs = async () => {
     try {
       await fetch(`${API_BASE}?action=save_subscriptions`, {
-        method: 'POST', credentials: 'include',
+        method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscriptions: subs }),
       });
       setSubsSaved(true);
       setTimeout(() => setSubsSaved(false), 3000);
-    } catch {}
+    } catch (e) {
+      // Tiché spolknutí chyby by uživateli tvrdilo, že se odběry uložily.
+      setError(e instanceof Error ? e.message : t('settings.save_error', 'Uložení se nezdařilo.'));
+    }
   };
 
   const toggleSub = (id: number, field: 'email' | 'sms' | 'whatsapp') => {
-    setSubs(prev => prev.map(s => s.id === id ? { ...s, [field]: s[field] ? 0 : 1 } : s));
+    setSubs((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: s[field] ? 0 : 1 } : s)));
   };
 
   const isLocked = (key: string) => envLocked.includes(key);
-  const togglePasswordVisibility = (key: string) =>
-    setShowPasswords(prev => ({ ...prev, [key]: !prev[key] }));
+  const togglePasswordVisibility = (key: string) => setShowPasswords((prev) => ({ ...prev, [key]: !prev[key] }));
 
   // --- Access control ---
   if (!session?.authenticated) {
@@ -208,7 +294,10 @@ export function SettingsPage() {
             {t('settings.login_required_desc', 'Konfigurace nastavení je přístupná pouze přihlášeným administrátorům.')}
           </p>
         </div>
-        <Link to="/setup" className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors">
+        <Link
+          to="/setup"
+          className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors"
+        >
           {t('settings.go_to_login', 'Přejít na přihlášení')}
         </Link>
       </Card>
@@ -221,7 +310,11 @@ export function SettingsPage() {
         <Shield className="size-12 text-muted-foreground/40" />
         <p className="font-semibold text-lg">{t('settings.insufficient_perms_title', 'Nedostatečná oprávnění')}</p>
         <p className="text-muted-foreground text-sm max-w-md">
-          {t('settings.insufficient_perms_desc_prefix', 'Konfigurace systémových nastavení je přístupná výhradně uživatelům s rolí')} <strong>{t('settings.role_admin', 'administrátor')}</strong>.
+          {t(
+            'settings.insufficient_perms_desc_prefix',
+            'Konfigurace systémových nastavení je přístupná výhradně uživatelům s rolí'
+          )}{' '}
+          <strong>{t('settings.role_admin', 'administrátor')}</strong>.
         </p>
       </Card>
     );
@@ -236,53 +329,36 @@ export function SettingsPage() {
     );
   }
 
-  // Render helpers
-  const FieldInput = ({ k, label, hint, type = 'text', placeholder, disabled, className }: {
-    k: string; label: string; hint?: string; type?: string; placeholder?: string; disabled?: boolean; className?: string;
-  }) => {
-    const locked = isLocked(k);
-    const isSecret = type === 'password';
-    const visible = showPasswords[k];
-    return (
-      <div className={className}>
-        <label className={labelCls}>
-          {label}
-          {locked && (
-            <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-blue-400" title={t('settings.env_locked_title', 'Definováno v config.php / prostředí')}>
-              <Lock className="size-2.5" /> ENV
-            </span>
-          )}
-        </label>
-        <div className="relative">
-          <input
-            type={isSecret && !visible ? 'password' : 'text'}
-            value={settings[k] ?? ''}
-            onChange={(e) => set(k, e.target.value)}
-            className={`${inputCls} ${isSecret ? 'pr-9 font-mono' : ''}`}
-            placeholder={placeholder}
-            disabled={locked || disabled}
-            autoComplete={isSecret ? 'new-password' : undefined}
-          />
-          {isSecret && (
-            <button
-              type="button"
-              onClick={() => togglePasswordVisibility(k)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              tabIndex={-1}
-            >
-              {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-            </button>
-          )}
-        </div>
-        {hint && <p className={hintCls}>{hint}</p>}
-      </div>
-    );
-  };
+  // FieldInput je definovaný na úrovni modulu (viz dole) - když byl uvnitř
+  // komponenty, vznikal při každém překreslení NOVÝ typ, React input
+  // odmountoval a znovu vytvořil, takže po každém napsaném znaku zmizel
+  // fokus (hlášeno u SMTP hostu). Props se předávají explicitně.
+  const FieldInput = (
+    props: Omit<FieldInputProps, 'value' | 'locked' | 'visible' | 'onChange' | 'onToggleVisibility' | 'envLockedTitle'>
+  ) => (
+    <SettingsField
+      {...props}
+      value={settings[props.k] ?? ''}
+      locked={isLocked(props.k)}
+      visible={!!showPasswords[props.k]}
+      onChange={(v) => set(props.k, v)}
+      onToggleVisibility={() => togglePasswordVisibility(props.k)}
+      envLockedTitle={t('settings.env_locked_title', 'Definováno v config.php / prostředí')}
+    />
+  );
 
   const tabs = [
     { id: 'obecne' as const, label: t('settings.tab_general', 'Obecné'), icon: <Settings className="size-3.5" /> },
-    { id: 'notifikace' as const, label: t('settings.tab_notifications', 'Notifikace'), icon: <Bell className="size-3.5" /> },
-    { id: 'integrace' as const, label: t('settings.tab_integrations', 'Integrace'), icon: <Plug className="size-3.5" /> },
+    {
+      id: 'notifikace' as const,
+      label: t('settings.tab_notifications', 'Notifikace'),
+      icon: <Bell className="size-3.5" />,
+    },
+    {
+      id: 'integrace' as const,
+      label: t('settings.tab_integrations', 'Integrace'),
+      icon: <Plug className="size-3.5" />,
+    },
     { id: 'vzhled' as const, label: t('settings.tab_appearance', 'Vzhled'), icon: <Palette className="size-3.5" /> },
   ];
 
@@ -292,7 +368,9 @@ export function SettingsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('settings.title', 'Nastavení Systému & Notifikací')}</h1>
-          <p className="text-muted-foreground text-sm">{t('settings.subtitle', 'Správa parametrů platformy, notifikačních kanálů, OAuth integrací a brandingu.')}</p>
+          <p className="text-muted-foreground text-sm">
+            {t('settings.subtitle', 'Správa parametrů platformy, notifikačních kanálů, OAuth integrací a brandingu.')}
+          </p>
         </div>
       </div>
 
@@ -305,7 +383,9 @@ export function SettingsPage() {
       )}
       {testSent && (
         <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center justify-between animate-in fade-in-50">
-          <span>✅ {t('settings.test_sent', { channel: testSent }, `Testovací notifikace odeslána na kanál: ${testSent}`)}</span>
+          <span>
+            ✅ {t('settings.test_sent', { channel: testSent }, `Testovací notifikace odeslána na kanál: ${testSent}`)}
+          </span>
           <Badge variant="up">{t('settings.test_ok', 'Test OK')}</Badge>
         </div>
       )}
@@ -313,7 +393,7 @@ export function SettingsPage() {
       <form onSubmit={handleSave} className="space-y-0">
         {/* Tab bar */}
         <div className="flex gap-1 border-b border-border mb-6">
-          {tabs.map(t => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -335,29 +415,56 @@ export function SettingsPage() {
               <h3 className={sectionTitle}>{t('settings.general_section', 'Obecné nastavení')}</h3>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <FieldInput k="site_title" label={t('settings.site_title_label', 'Název status stránky')} placeholder="Blood Kings | Status Monitoring" />
-                <FieldInput k="site_url" label={t('settings.site_url_label', 'Veřejná URL status stránky (bez lomítka na konci)')} placeholder="https://status.vasedomena.cz"
-                  hint={t('settings.site_url_hint', 'Používá se k prokliku z e-mailů zpět na konkrétní monitor.')} />
+                <FieldInput
+                  k="site_title"
+                  label={t('settings.site_title_label', 'Název status stránky')}
+                  placeholder="Blood Kings | Status Monitoring"
+                />
+                <FieldInput
+                  k="site_url"
+                  label={t('settings.site_url_label', 'Veřejná URL status stránky (bez lomítka na konci)')}
+                  placeholder="https://status.vasedomena.cz"
+                  hint={t('settings.site_url_hint', 'Používá se k prokliku z e-mailů zpět na konkrétní monitor.')}
+                />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <FieldInput k="cron_key" label={t('settings.cron_key_label', 'Cron Bezpečnostní Klíč (URL parametr ?key=...)')} placeholder={t('settings.cron_key_placeholder', 'Např. secure123key')} />
+                  <FieldInput
+                    k="cron_key"
+                    label={t('settings.cron_key_label', 'Cron Bezpečnostní Klíč (URL parametr ?key=...)')}
+                    placeholder={t('settings.cron_key_placeholder', 'Např. secure123key')}
+                  />
                   {settings.cron_key && (
                     <p className="text-[10px] text-muted-foreground/60 mt-1 font-mono break-all">
-                      {t('settings.cron_url_label', 'Cron URL:')} <code className="text-primary/80">{`${settings.site_url || window.location.origin}/status/cron.php?key=${settings.cron_key}`}</code>
+                      {t('settings.cron_url_label', 'Cron URL:')}{' '}
+                      <code className="text-primary/80">{`${settings.site_url || window.location.origin}/status/cron.php?key=${settings.cron_key}`}</code>
                     </p>
                   )}
                 </div>
-                <FieldInput k="cron_location" label={t('settings.cron_location_label', 'Lokace hlavního serveru')}
-                  placeholder={t('settings.cron_location_placeholder', 'Necháte prázdné pro AUTO detekci nebo např. 🇩🇪 Frankfurt, DE')}
-                  hint={t('settings.cron_location_hint', 'Prázdné nebo AUTO = automaticky zjištěno dle IP hostingu.')} />
+                <FieldInput
+                  k="cron_location"
+                  label={t('settings.cron_location_label', 'Lokace hlavního serveru')}
+                  placeholder={t(
+                    'settings.cron_location_placeholder',
+                    'Necháte prázdné pro AUTO detekci nebo např. 🇩🇪 Frankfurt, DE'
+                  )}
+                  hint={t('settings.cron_location_hint', 'Prázdné nebo AUTO = automaticky zjištěno dle IP hostingu.')}
+                />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <FieldInput k="sla_goal_pct" label={t('settings.sla_goal_label', 'Cílová dostupnost SLA (%)')} placeholder="99.95"
-                  hint={t('settings.sla_goal_hint', 'Používá se v měsíčním infrastructure reportu.')} />
-                <FieldInput k="ssl_alert_days" label={t('settings.ssl_alert_label', 'Varování před vypršením SSL (dní)')} placeholder="14" />
+                <FieldInput
+                  k="sla_goal_pct"
+                  label={t('settings.sla_goal_label', 'Cílová dostupnost SLA (%)')}
+                  placeholder="99.95"
+                  hint={t('settings.sla_goal_hint', 'Používá se v měsíčním infrastructure reportu.')}
+                />
+                <FieldInput
+                  k="ssl_alert_days"
+                  label={t('settings.ssl_alert_label', 'Varování před vypršením SSL (dní)')}
+                  placeholder="14"
+                />
               </div>
             </Card>
           </div>
@@ -366,41 +473,63 @@ export function SettingsPage() {
         {/* TAB: Notifikace */}
         {activeTab === 'notifikace' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
-
             {/* SMTP */}
             <Card className="p-6 space-y-5">
               <div className="flex items-center gap-3 border-b border-border pb-3">
                 <Mail className="size-5 text-sky-400" />
                 <div>
                   <h3 className="font-semibold text-sm">{t('settings.smtp_title', 'E-mailové Notifikace (SMTP)')}</h3>
-                  <p className="text-[10px] text-muted-foreground">{t('settings.smtp_desc', 'SMTP připojení pro odesílání notifikací. Prázdný SMTP server = výchozí PHP mail().')}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {t(
+                      'settings.smtp_desc',
+                      'SMTP připojení pro odesílání notifikací. Prázdný SMTP server = výchozí PHP mail().'
+                    )}
+                  </p>
                 </div>
               </div>
 
               {isLocked('smtp_host') ? (
                 <div className="p-3 rounded-lg bg-blue-500/8 border border-blue-500/25 text-xs text-blue-300 flex items-center gap-2">
                   <Lock className="size-4 shrink-0" />
-                  {t('settings.smtp_locked', 'SMTP je nastaveno pevně v')} <code className="mx-1 font-mono">config.php</code> {t('settings.smtp_locked_suffix', 'a nelze ho změnit odsud.')}
+                  {t('settings.smtp_locked', 'SMTP je nastaveno pevně v')}{' '}
+                  <code className="mx-1 font-mono">config.php</code>{' '}
+                  {t('settings.smtp_locked_suffix', 'a nelze ho změnit odsud.')}
                 </div>
               ) : (
                 <>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
                       <label className={labelCls}>{t('settings.email_lang_label', 'Jazyk odchozích e-mailů')}</label>
-                      <select value={settings.email_lang ?? 'cs'} onChange={e => set('email_lang', e.target.value)} className={selectCls}>
+                      <select
+                        value={settings.email_lang ?? 'cs'}
+                        onChange={(e) => set('email_lang', e.target.value)}
+                        className={selectCls}
+                      >
                         <option value="cs">{t('settings.lang_cs', 'Čeština')}</option>
                         <option value="en">English</option>
                       </select>
                     </div>
-                    <FieldInput k="smtp_user" label={t('settings.smtp_user_label', 'Odesílatel zpráv (From E-mail)')} placeholder="status@vasedomena.cz" />
+                    <FieldInput
+                      k="smtp_user"
+                      label={t('settings.smtp_user_label', 'Odesílatel zpráv (From E-mail)')}
+                      placeholder="status@vasedomena.cz"
+                    />
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-3">
-                    <FieldInput k="smtp_host" label={t('settings.smtp_host_label', 'SMTP Server (Host)')} placeholder="smtp.vasedomena.cz" />
+                    <FieldInput
+                      k="smtp_host"
+                      label={t('settings.smtp_host_label', 'SMTP Server (Host)')}
+                      placeholder="smtp.vasedomena.cz"
+                    />
                     <FieldInput k="smtp_port" label="SMTP Port" placeholder="465" />
                     <div>
                       <label className={labelCls}>{t('settings.smtp_secure_label', 'SMTP Zabezpečení')}</label>
-                      <select value={settings.smtp_secure ?? 'ssl'} onChange={e => set('smtp_secure', e.target.value)} className={selectCls}>
+                      <select
+                        value={settings.smtp_secure ?? 'ssl'}
+                        onChange={(e) => set('smtp_secure', e.target.value)}
+                        className={selectCls}
+                      >
                         <option value="ssl">SSL (Port 465)</option>
                         <option value="tls">TLS (Port 587)</option>
                         <option value="none">{t('settings.smtp_secure_none', 'Bez zabezpečení')}</option>
@@ -408,11 +537,19 @@ export function SettingsPage() {
                     </div>
                   </div>
 
-                  <FieldInput k="smtp_pass" label={t('settings.smtp_pass_label', 'SMTP Heslo')} type="password" placeholder={t('settings.smtp_pass_placeholder', 'Heslo k e-mailové schránce')} />
+                  <FieldInput
+                    k="smtp_pass"
+                    label={t('settings.smtp_pass_label', 'SMTP Heslo')}
+                    type="password"
+                    placeholder={t('settings.smtp_pass_placeholder', 'Heslo k e-mailové schránce')}
+                  />
 
                   <div className="flex justify-end">
-                    <button type="button" onClick={() => handleSendTest(t('settings.channel_email', 'E-mail (SMTP)'))}
-                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-sky-600/20 text-sky-300 text-xs font-semibold hover:bg-sky-600/30 transition-colors">
+                    <button
+                      type="button"
+                      onClick={() => handleSendTest(t('settings.channel_email', 'E-mail (SMTP)'))}
+                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-sky-600 text-white text-xs font-semibold shadow-sm hover:bg-sky-500 transition-colors"
+                    >
                       <Send className="size-3.5" /> {t('settings.send_test_email', 'Odeslat testovací e-mail')}
                     </button>
                   </div>
@@ -429,7 +566,11 @@ export function SettingsPage() {
 
               <div className="max-w-xs">
                 <label className={labelCls}>{t('settings.sms_gateway_label', 'Placená SMS brána')}</label>
-                <select value={settings.sms_gateway_type ?? ''} onChange={e => set('sms_gateway_type', e.target.value)} className={selectCls}>
+                <select
+                  value={settings.sms_gateway_type ?? ''}
+                  onChange={(e) => set('sms_gateway_type', e.target.value)}
+                  className={selectCls}
+                >
                   <option value="">{t('settings.sms_gateway_none', 'Žádná (SMS notifikace vypnuty)')}</option>
                   <option value="twilio">Twilio</option>
                   <option value="smsbrana">SMSbrana.cz</option>
@@ -440,14 +581,25 @@ export function SettingsPage() {
                 <div className="grid gap-4 md:grid-cols-3">
                   <FieldInput k="twilio_sid" label="Twilio Account SID" />
                   <FieldInput k="twilio_token" label="Twilio Auth Token" type="password" />
-                  <FieldInput k="twilio_from" label={t('settings.twilio_from_label', 'Twilio Odesílací číslo (From)')} placeholder="+1234567890" />
+                  <FieldInput
+                    k="twilio_from"
+                    label={t('settings.twilio_from_label', 'Twilio Odesílací číslo (From)')}
+                    placeholder="+1234567890"
+                  />
                 </div>
               )}
 
               {settings.sms_gateway_type === 'smsbrana' && (
                 <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput k="smsbrana_user" label={t('settings.smsbrana_user_label', 'SMS Brána - Přihlašovací jméno (API)')} />
-                  <FieldInput k="smsbrana_password" label={t('settings.smsbrana_pass_label', 'SMS Brána - Heslo (API)')} type="password" />
+                  <FieldInput
+                    k="smsbrana_user"
+                    label={t('settings.smsbrana_user_label', 'SMS Brána - Přihlašovací jméno (API)')}
+                  />
+                  <FieldInput
+                    k="smsbrana_password"
+                    label={t('settings.smsbrana_pass_label', 'SMS Brána - Heslo (API)')}
+                    type="password"
+                  />
                 </div>
               )}
             </Card>
@@ -459,40 +611,81 @@ export function SettingsPage() {
                 <h3 className="font-semibold text-sm">{t('settings.vps_agent_title', 'VPS Agent Nastavení')}</h3>
               </div>
 
-              <FieldInput k="agent_offline_timeout" label={t('settings.agent_offline_timeout_label', 'Časový limit pro označení agenta za offline (minuty)')} placeholder="50"
-                hint={t('settings.agent_offline_timeout_hint', 'Doba neaktivity, po které bude agent považován za odpojeného. 0 = detekce neaktivity vypnuta.')}
-                className="max-w-xs" />
+              <FieldInput
+                k="agent_offline_timeout"
+                label={t(
+                  'settings.agent_offline_timeout_label',
+                  'Časový limit pro označení agenta za offline (minuty)'
+                )}
+                placeholder="50"
+                hint={t(
+                  'settings.agent_offline_timeout_hint',
+                  'Doba neaktivity, po které bude agent považován za odpojeného. 0 = detekce neaktivity vypnuta.'
+                )}
+                className="max-w-xs"
+              />
 
               <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-2.5">
                 <label className="flex items-center gap-2 text-xs cursor-pointer font-medium text-foreground">
-                  <input type="checkbox" checked={settings.agent_outdated_email_enabled !== '0'}
-                    onChange={e => set('agent_outdated_email_enabled', e.target.checked ? '1' : '0')}
-                    className="rounded border-border text-primary" />
-                  <span>{t('settings.agent_outdated_email_label', 'Zasílat e-mailová varování při detekci neaktuální verze agenta (Outdated Agent Alert)')}</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.agent_outdated_email_enabled !== '0'}
+                    onChange={(e) => set('agent_outdated_email_enabled', e.target.checked ? '1' : '0')}
+                    className="rounded border-border text-primary"
+                  />
+                  <span>
+                    {t(
+                      'settings.agent_outdated_email_label',
+                      'Zasílat e-mailová varování při detekci neaktuální verze agenta (Outdated Agent Alert)'
+                    )}
+                  </span>
                 </label>
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
-                  <input type="checkbox" checked={settings.agent_notifications_enabled === '1'}
-                    onChange={e => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
-                    className="rounded border-border" />
-                  <span>{t('settings.agent_resource_alert_label', 'Upozorňovat na překročení limitů CPU/RAM/HDD')}</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.agent_notifications_enabled === '1'}
+                    onChange={(e) => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
+                    className="rounded border-border"
+                  />
+                  <span>
+                    {t('settings.agent_resource_alert_label', 'Upozorňovat na překročení limitů CPU/RAM/HDD')}
+                  </span>
                 </label>
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
-                  <input type="checkbox" checked={settings.agent_notify_admin_only === '1'}
-                    onChange={e => set('agent_notify_admin_only', e.target.checked ? '1' : '0')}
-                    className="rounded border-border" />
-                  <span>{t('settings.agent_admin_only_label', 'Upozornění VPS agenta doručovat pouze administrátorům')}</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.agent_notify_admin_only === '1'}
+                    onChange={(e) => set('agent_notify_admin_only', e.target.checked ? '1' : '0')}
+                    className="rounded border-border"
+                  />
+                  <span>
+                    {t('settings.agent_admin_only_label', 'Upozornění VPS agenta doručovat pouze administrátorům')}
+                  </span>
                 </label>
-                <p className={hintCls}>{t('settings.agent_outdated_hint', 'Při zjištění zastaralé verze agenta systém odesílá e-mailovou výstrahu a eviduje varovný incident.')}</p>
+                <p className={hintCls}>
+                  {t(
+                    'settings.agent_outdated_hint',
+                    'Při zjištění zastaralé verze agenta systém odesílá e-mailovou výstrahu a eviduje varovný incident.'
+                  )}
+                </p>
               </div>
 
-              <FieldInput k="agent_registration_token" label={t('settings.agent_token_label', 'Token pro auto-registraci agentů')} type="password" placeholder="TajnyRegistracniToken123" className="max-w-md" />
+              <FieldInput
+                k="agent_registration_token"
+                label={t('settings.agent_token_label', 'Token pro auto-registraci agentů')}
+                type="password"
+                placeholder="TajnyRegistracniToken123"
+                className="max-w-md"
+              />
             </Card>
 
             {/* Webhooks and external notifications */}
             <Card className="p-6 space-y-5">
               <div className="flex items-center gap-3 border-b border-border pb-3">
                 <MessageSquare className="size-5 text-indigo-400" />
-                <h3 className="font-semibold text-sm">{t('settings.webhooks_title', 'Webhooky & Externí Notifikace')}</h3>
+                <h3 className="font-semibold text-sm">
+                  {t('settings.webhooks_title', 'Webhooky & Externí Notifikace')}
+                </h3>
               </div>
 
               {/* Discord */}
@@ -501,10 +694,17 @@ export function SettingsPage() {
                   <MessageSquare className="size-4 text-indigo-400" />
                   <span className="font-bold text-xs">Discord Webhook</span>
                 </div>
-                <FieldInput k="discord_webhook_url" label="Discord Webhook URL" placeholder="https://discord.com/api/webhooks/..." />
+                <FieldInput
+                  k="discord_webhook_url"
+                  label="Discord Webhook URL"
+                  placeholder="https://discord.com/api/webhooks/..."
+                />
                 <div className="flex justify-end">
-                  <button type="button" onClick={() => handleSendTest('Discord Webhook')}
-                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-indigo-600/20 text-indigo-300 text-xs font-semibold hover:bg-indigo-600/30 transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => handleSendTest('Discord Webhook')}
+                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold shadow-sm hover:bg-indigo-500 transition-colors"
+                  >
                     <Send className="size-3.5" /> {t('settings.test_discord', 'Test Discord')}
                   </button>
                 </div>
@@ -516,7 +716,11 @@ export function SettingsPage() {
                   <MessageCircle className="size-4 text-amber-400" />
                   <span className="font-bold text-xs">Slack Webhook</span>
                 </div>
-                <FieldInput k="slack_webhook_url" label="Slack Incoming Webhook URL" placeholder="https://hooks.slack.com/services/..." />
+                <FieldInput
+                  k="slack_webhook_url"
+                  label="Slack Incoming Webhook URL"
+                  placeholder="https://hooks.slack.com/services/..."
+                />
               </div>
 
               {/* Telegram */}
@@ -530,8 +734,11 @@ export function SettingsPage() {
                   <FieldInput k="telegram_chat_id" label="Telegram Chat ID" placeholder="-1001987654321" />
                 </div>
                 <div className="flex justify-end">
-                  <button type="button" onClick={() => handleSendTest('Telegram Bot')}
-                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-sky-600/20 text-sky-300 text-xs font-semibold hover:bg-sky-600/30 transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => handleSendTest('Telegram Bot')}
+                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-sky-600 text-white text-xs font-semibold shadow-sm hover:bg-sky-500 transition-colors"
+                  >
                     <Send className="size-3.5" /> {t('settings.test_telegram', 'Test Telegram')}
                   </button>
                 </div>
@@ -549,7 +756,12 @@ export function SettingsPage() {
                 <FieldInput k="pushover_user_key" label="Pushover User Key" placeholder="uQiROw1C4K3Y..." />
                 <FieldInput k="pushover_api_token" label="Pushover API Token" type="password" />
               </div>
-              <FieldInput k="pagerduty_routing_key" label="PagerDuty Integration / Routing Key" type="password" className="max-w-md" />
+              <FieldInput
+                k="pagerduty_routing_key"
+                label="PagerDuty Integration / Routing Key"
+                type="password"
+                className="max-w-md"
+              />
             </Card>
 
             {/* WhatsApp Business Gateway */}
@@ -558,19 +770,39 @@ export function SettingsPage() {
                 <MessageCircle className="size-5 text-emerald-400" />
                 <div>
                   <h3 className="font-semibold text-sm">WhatsApp Business Gateway</h3>
-                  <p className="text-[10px] text-muted-foreground">{t('settings.whatsapp_desc', 'Konfigurace WhatsApp API pro doručování výstrah (Twilio WhatsApp, UltraMsg nebo Meta Cloud API).')}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {t(
+                      'settings.whatsapp_desc',
+                      'Konfigurace WhatsApp API pro doručování výstrah (Twilio WhatsApp, UltraMsg nebo Meta Cloud API).'
+                    )}
+                  </p>
                 </div>
               </div>
 
               <div className="grid gap-4 md:grid-cols-3">
-                <FieldInput k="whatsapp_api_endpoint" label="WhatsApp API Endpoint URL" placeholder="https://api.ultramsg.com/instance1234/messages/chat" />
-                <FieldInput k="whatsapp_token" label={t('settings.whatsapp_token_label', 'WhatsApp Access Token / Token')} type="password" />
-                <FieldInput k="whatsapp_phone_number" label={t('settings.whatsapp_phone_label', 'Cílové / Odesílací číslo WhatsApp')} placeholder="+420777111222" />
+                <FieldInput
+                  k="whatsapp_api_endpoint"
+                  label="WhatsApp API Endpoint URL"
+                  placeholder="https://api.ultramsg.com/instance1234/messages/chat"
+                />
+                <FieldInput
+                  k="whatsapp_token"
+                  label={t('settings.whatsapp_token_label', 'WhatsApp Access Token / Token')}
+                  type="password"
+                />
+                <FieldInput
+                  k="whatsapp_phone_number"
+                  label={t('settings.whatsapp_phone_label', 'Cílové / Odesílací číslo WhatsApp')}
+                  placeholder="+420777111222"
+                />
               </div>
 
               <div className="flex justify-end">
-                <button type="button" onClick={() => handleSendTest('WhatsApp Gateway')}
-                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-emerald-600/20 text-emerald-300 text-xs font-semibold hover:bg-emerald-600/30 transition-colors cursor-pointer">
+                <button
+                  type="button"
+                  onClick={() => handleSendTest('WhatsApp Gateway')}
+                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold shadow-sm hover:bg-emerald-500 transition-colors cursor-pointer"
+                >
                   <Send className="size-3.5" /> {t('settings.test_whatsapp', 'Test WhatsApp Gateway')}
                 </button>
               </div>
@@ -581,45 +813,88 @@ export function SettingsPage() {
               <div className="flex items-center gap-3 border-b border-border pb-3">
                 <FileBarChart className="size-5 text-teal-400" />
                 <div>
-                  <h3 className="font-semibold text-sm">{t('settings.digest_title', 'Týdenní & Měsíční Digest Report')}</h3>
-                  <p className="text-[10px] text-muted-foreground">{t('settings.digest_desc', 'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.')}</p>
+                  <h3 className="font-semibold text-sm">
+                    {t('settings.digest_title', 'Týdenní & Měsíční Digest Report')}
+                  </h3>
+                  <p className="text-[10px] text-muted-foreground">
+                    {t(
+                      'settings.digest_desc',
+                      'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.'
+                    )}
+                  </p>
                 </div>
               </div>
 
               {digestResult && (
-                <div className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${digestResult.ok ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' : 'bg-destructive/10 border border-destructive/30 text-destructive'}`}>
+                <div
+                  className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${digestResult.ok ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' : 'bg-destructive/10 border border-destructive/30 text-destructive'}`}
+                >
                   {digestResult.ok ? '✅' : '❌'} {digestResult.msg}
                 </div>
               )}
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="p-4 rounded-xl bg-background border border-border space-y-3">
-                  <h4 className="font-bold text-xs text-foreground flex items-center gap-2">📅 {t('settings.weekly_digest_title', 'Týdenní Souhrn (Weekly Digest)')}</h4>
-                  <p className="text-[11px] text-muted-foreground">{t('settings.weekly_digest_desc', 'Souhrnný e-mail se statistikami SLA, incidenty a průměrnou latencí za posledních 7 dnů.')}</p>
+                  <h4 className="font-bold text-xs text-foreground flex items-center gap-2">
+                    📅 {t('settings.weekly_digest_title', 'Týdenní Souhrn (Weekly Digest)')}
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground">
+                    {t(
+                      'settings.weekly_digest_desc',
+                      'Souhrnný e-mail se statistikami SLA, incidenty a průměrnou latencí za posledních 7 dnů.'
+                    )}
+                  </p>
                   <div className="flex items-center gap-2 pt-1">
-                    <button type="button" onClick={() => handleSendDigest('weekly')} disabled={digestSending !== null}
-                      className="inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 bg-teal-500 text-slate-950 font-bold text-xs hover:bg-teal-400 transition-colors disabled:opacity-50 shadow cursor-pointer">
+                    <button
+                      type="button"
+                      onClick={() => handleSendDigest('weekly')}
+                      disabled={digestSending !== null}
+                      className="inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 bg-teal-500 text-slate-950 font-bold text-xs hover:bg-teal-400 transition-colors disabled:opacity-50 shadow cursor-pointer"
+                    >
                       <Send className="size-3.5" />
-                      {digestSending === 'weekly' ? t('settings.sending', 'Odesílám…') : t('settings.send_weekly_digest', 'Odeslat Týdenní Digest')}
+                      {digestSending === 'weekly'
+                        ? t('settings.sending', 'Odesílám…')
+                        : t('settings.send_weekly_digest', 'Odeslat Týdenní Digest')}
                     </button>
-                    <a href="/status/admin.php?action=preview_weekly_digest" target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 bg-secondary text-secondary-foreground text-xs font-semibold hover:bg-secondary/80 transition-colors">
+                    <a
+                      href="/status/admin.php?action=preview_weekly_digest"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 bg-secondary text-secondary-foreground text-xs font-semibold hover:bg-secondary/80 transition-colors"
+                    >
                       <ExternalLink className="size-3.5" /> {t('settings.preview', 'Náhled')}
                     </a>
                   </div>
                 </div>
 
                 <div className="p-4 rounded-xl bg-background border border-border space-y-3">
-                  <h4 className="font-bold text-xs text-foreground flex items-center gap-2">📊 {t('settings.monthly_digest_title', 'Měsíční Souhrn (Monthly Digest)')}</h4>
-                  <p className="text-[11px] text-muted-foreground">{t('settings.monthly_digest_desc', 'Kompletní měsíční auditní zpráva pro vedení se všemi výpadky, MTTR a plněním SLA.')}</p>
+                  <h4 className="font-bold text-xs text-foreground flex items-center gap-2">
+                    📊 {t('settings.monthly_digest_title', 'Měsíční Souhrn (Monthly Digest)')}
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground">
+                    {t(
+                      'settings.monthly_digest_desc',
+                      'Kompletní měsíční auditní zpráva pro vedení se všemi výpadky, MTTR a plněním SLA.'
+                    )}
+                  </p>
                   <div className="flex items-center gap-2 pt-1">
-                    <button type="button" onClick={() => handleSendDigest('monthly')} disabled={digestSending !== null}
-                      className="inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 bg-teal-500 text-slate-950 font-bold text-xs hover:bg-teal-400 transition-colors disabled:opacity-50 shadow cursor-pointer">
+                    <button
+                      type="button"
+                      onClick={() => handleSendDigest('monthly')}
+                      disabled={digestSending !== null}
+                      className="inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 bg-teal-500 text-slate-950 font-bold text-xs hover:bg-teal-400 transition-colors disabled:opacity-50 shadow cursor-pointer"
+                    >
                       <Send className="size-3.5" />
-                      {digestSending === 'monthly' ? t('settings.sending', 'Odesílám…') : t('settings.send_monthly_digest', 'Odeslat Měsíční Digest')}
+                      {digestSending === 'monthly'
+                        ? t('settings.sending', 'Odesílám…')
+                        : t('settings.send_monthly_digest', 'Odeslat Měsíční Digest')}
                     </button>
-                    <a href="/status/admin.php?action=preview_monthly_digest" target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 bg-secondary text-secondary-foreground text-xs font-semibold hover:bg-secondary/80 transition-colors">
+                    <a
+                      href="/status/admin.php?action=preview_monthly_digest"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 bg-secondary text-secondary-foreground text-xs font-semibold hover:bg-secondary/80 transition-colors"
+                    >
                       <ExternalLink className="size-3.5" /> {t('settings.preview', 'Náhled')}
                     </a>
                   </div>
@@ -633,7 +908,12 @@ export function SettingsPage() {
                 <BellRing className="size-5 text-violet-400" />
                 <div>
                   <h3 className="font-semibold text-sm">{t('settings.subs_title', 'Odběr notifikací pro můj účet')}</h3>
-                  <p className="text-[10px] text-muted-foreground">{t('settings.subs_desc', 'Zvolte, pro které monitory chcete dostávat e-mailové, SMS nebo WhatsApp notifikace při výpadku.')}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {t(
+                      'settings.subs_desc',
+                      'Zvolte, pro které monitory chcete dostávat e-mailové, SMS nebo WhatsApp notifikace při výpadku.'
+                    )}
+                  </p>
                 </div>
               </div>
 
@@ -649,23 +929,46 @@ export function SettingsPage() {
                     <span className="text-center">SMS</span>
                     <span className="text-center">WhatsApp</span>
                   </div>
-                  {subs.map(s => (
-                    <div key={s.id} className="grid grid-cols-[1fr_60px_60px_70px] gap-2 items-center p-2 rounded-lg bg-secondary/30 border border-border/50 text-xs">
-                      <span className="font-medium truncate" title={s.name}>{s.name}</span>
+                  {subs.map((s) => (
+                    <div
+                      key={s.id}
+                      className="grid grid-cols-[1fr_60px_60px_70px] gap-2 items-center p-2 rounded-lg bg-secondary/30 border border-border/50 text-xs"
+                    >
+                      <span className="font-medium truncate" title={s.name}>
+                        {s.name}
+                      </span>
                       <label className="flex justify-center cursor-pointer">
-                        <input type="checkbox" checked={s.email === 1} onChange={() => toggleSub(s.id, 'email')} className="rounded border-border" />
+                        <input
+                          type="checkbox"
+                          checked={s.email === 1}
+                          onChange={() => toggleSub(s.id, 'email')}
+                          className="rounded border-border"
+                        />
                       </label>
                       <label className="flex justify-center cursor-pointer">
-                        <input type="checkbox" checked={s.sms === 1} onChange={() => toggleSub(s.id, 'sms')} className="rounded border-border" />
+                        <input
+                          type="checkbox"
+                          checked={s.sms === 1}
+                          onChange={() => toggleSub(s.id, 'sms')}
+                          className="rounded border-border"
+                        />
                       </label>
                       <label className="flex justify-center cursor-pointer">
-                        <input type="checkbox" checked={s.whatsapp === 1} onChange={() => toggleSub(s.id, 'whatsapp')} className="rounded border-border" />
+                        <input
+                          type="checkbox"
+                          checked={s.whatsapp === 1}
+                          onChange={() => toggleSub(s.id, 'whatsapp')}
+                          className="rounded border-border"
+                        />
                       </label>
                     </div>
                   ))}
                   <div className="flex justify-end pt-2">
-                    <button type="button" onClick={handleSaveSubs}
-                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-violet-600/20 text-violet-300 text-xs font-bold hover:bg-violet-600/30 transition-colors">
+                    <button
+                      type="button"
+                      onClick={handleSaveSubs}
+                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-violet-600 text-white text-xs font-bold shadow-sm hover:bg-violet-500 transition-colors"
+                    >
                       {subsSaved ? <Check className="size-3.5" /> : <Save className="size-3.5" />}
                       {subsSaved ? t('settings.subs_saved', 'Uloženo!') : t('settings.subs_save', 'Uložit odběry')}
                     </button>
@@ -679,17 +982,23 @@ export function SettingsPage() {
         {/* TAB: Integrace */}
         {activeTab === 'integrace' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
-
             {/* Prometheus */}
             <Card className="p-6 space-y-5">
               <div className="flex items-center gap-3 border-b border-border pb-3">
                 <Globe className="size-5 text-orange-400" />
                 <h3 className="font-semibold text-sm">Prometheus Exporter</h3>
               </div>
-              <FieldInput k="metrics_token" label={t('settings.metrics_token_label', 'Přístupový token pro /status/metrics.php')} type="password"
+              <FieldInput
+                k="metrics_token"
+                label={t('settings.metrics_token_label', 'Přístupový token pro /status/metrics.php')}
+                type="password"
                 placeholder={t('settings.metrics_token_placeholder', 'Prázdné = endpoint vypnutý')}
-                hint={t('settings.metrics_token_hint', 'Scraper předává token jako ?token=... nebo hlavičkou Authorization: Bearer. Vygenerujte např. openssl rand -hex 24.')}
-                className="max-w-lg" />
+                hint={t(
+                  'settings.metrics_token_hint',
+                  'Scraper předává token jako ?token=... nebo hlavičkou Authorization: Bearer. Vygenerujte např. openssl rand -hex 24.'
+                )}
+                className="max-w-lg"
+              />
             </Card>
 
             {/* OAuth SSO */}
@@ -699,12 +1008,16 @@ export function SettingsPage() {
                 <div>
                   <h3 className="font-semibold text-sm">{t('settings.oauth_title', 'Přihlášení přes OAuth (SSO)')}</h3>
                   <p className="text-[10px] text-muted-foreground">
-                    {t('settings.oauth_desc_prefix', 'OAuth přihlášení funguje jen pro účty, které si ho samy propojily v Profilu. Jako Authorization/Redirect callback URL u každého poskytovatele zadejte URL vaší')} <code className="font-mono">admin.php</code>.
+                    {t(
+                      'settings.oauth_desc_prefix',
+                      'OAuth přihlášení funguje jen pro účty, které si ho samy propojily v Profilu. Jako Authorization/Redirect callback URL u každého poskytovatele zadejte URL vaší'
+                    )}{' '}
+                    <code className="font-mono">admin.php</code>.
                   </p>
                 </div>
               </div>
 
-              {OAUTH_PROVIDERS.map(op => {
+              {OAUTH_PROVIDERS.map((op) => {
                 const Icon = op.icon;
                 return (
                   <div key={op.key} className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
@@ -716,7 +1029,11 @@ export function SettingsPage() {
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <FieldInput k={`oauth_${op.key}_client_id`} label={`${op.label} Client ID`} />
-                      <FieldInput k={`oauth_${op.key}_client_secret`} label={`${op.label} Client Secret`} type="password" />
+                      <FieldInput
+                        k={`oauth_${op.key}_client_secret`}
+                        label={`${op.label} Client Secret`}
+                        type="password"
+                      />
                     </div>
                   </div>
                 );
@@ -732,28 +1049,73 @@ export function SettingsPage() {
               <h3 className={sectionTitle}>{t('settings.branding_title', 'Vlastní branding (Custom Branding)')}</h3>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <FieldInput k="custom_logo_url" label={t('settings.logo_url_label', 'Adresa loga (Logo URL)')} placeholder="https://example.com/logo.png" />
-                <FieldInput k="custom_color_theme" label={t('settings.accent_color_label', 'Akcentová barva (Hex Color)')} placeholder="#b00020" />
+                <FieldInput
+                  k="custom_logo_url"
+                  label={t('settings.logo_url_label', 'Adresa loga (Logo URL)')}
+                  placeholder="https://example.com/logo.png"
+                />
+                <FieldInput
+                  k="custom_color_theme"
+                  label={t('settings.accent_color_label', 'Akcentová barva (Hex Color)')}
+                  placeholder="#b00020"
+                />
               </div>
 
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 rounded-md border border-border bg-secondary/50 px-3 py-2 text-xs font-semibold cursor-pointer hover:bg-secondary transition-colors">
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    disabled={logoUploading}
+                    onChange={(e) => {
+                      handleLogoUpload(e.target.files?.[0] ?? null);
+                      e.target.value = '';
+                    }}
+                  />
+                  {logoUploading
+                    ? t('settings.logo_uploading', 'Nahrávám…')
+                    : t('settings.logo_upload_btn', '📤 Nahrát logo (PNG/JPG/WebP, max 2 MB)')}
+                </label>
+                {settings.custom_logo_url && (
+                  <img
+                    src={settings.custom_logo_url}
+                    alt={t('settings.logo_preview_alt', 'Náhled loga')}
+                    className="h-10 max-w-[180px] object-contain rounded bg-white/90 p-1 border border-border"
+                  />
+                )}
+                {logoError && <p className="text-xs font-semibold text-destructive">{logoError}</p>}
+              </div>
+              <p className={hintCls}>
+                {t(
+                  'settings.logo_upload_hint',
+                  'Nahrané logo se uloží do /status/uploads/ a adresa se vyplní automaticky. SVG nejde nahrát (může nést skripty) — na SVG vložte URL ručně, např. /status/assets/bk-logo.svg.'
+                )}
+              </p>
+
               <div>
-                <label className={labelCls}>{t('settings.nav_links_label', 'Vlastní odkazy v menu (JSON formát)')}</label>
+                <label className={labelCls}>
+                  {t('settings.nav_links_label', 'Vlastní odkazy v menu (JSON formát)')}
+                </label>
                 <textarea
                   value={settings.custom_nav_links ?? ''}
-                  onChange={e => set('custom_nav_links', e.target.value)}
+                  onChange={(e) => set('custom_nav_links', e.target.value)}
                   className={`${inputCls} font-mono`}
                   rows={2}
                   placeholder='[{"name": "Hlavní Web", "url": "https://example.com"}]'
                 />
-                <p className={hintCls}>{t('settings.nav_links_hint', 'Zadejte pole objektů: [{"name": "Nápověda", "url": "..."}]')}</p>
+                <p className={hintCls}>
+                  {t('settings.nav_links_hint', 'Zadejte pole objektů: [{"name": "Nápověda", "url": "..."}]')}
+                </p>
               </div>
 
-              <FieldInput k="portal_url" label={t('settings.portal_url_label', 'Odkaz na nadřazený portál (nepovinné)')}
+              <FieldInput
+                k="portal_url"
+                label={t('settings.portal_url_label', 'Odkaz na nadřazený portál (nepovinné)')}
                 placeholder="https://vas-hlavni-web.cz"
-                hint={t('settings.portal_url_hint', "Zobrazí se v menu jako 'Portál'. Prázdné = odkaz se nezobrazí.")} />
+                hint={t('settings.portal_url_hint', "Zobrazí se v menu jako 'Portál'. Prázdné = odkaz se nezobrazí.")}
+              />
             </Card>
-
-
           </div>
         )}
 
@@ -765,10 +1127,86 @@ export function SettingsPage() {
             className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground shadow-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
             {saved ? <Check className="size-4 text-emerald-400" /> : <Save className="size-4" />}
-            {saving ? t('settings.saving', 'Ukládání…') : saved ? t('settings.saved', 'Uloženo!') : t('settings.save_all', 'Uložit všechna nastavení')}
+            {saving
+              ? t('settings.saving', 'Ukládání…')
+              : saved
+                ? t('settings.saved', 'Uloženo!')
+                : t('settings.save_all', 'Uložit všechna nastavení')}
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+interface FieldInputProps {
+  k: string;
+  label: string;
+  hint?: string;
+  type?: string;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+  value: string;
+  locked: boolean;
+  visible: boolean;
+  onChange: (value: string) => void;
+  onToggleVisibility: () => void;
+  envLockedTitle: string;
+}
+
+/**
+ * Jedno pole nastavení. Musí žít na úrovni modulu - komponenta vytvářená
+ * uvnitř render funkce dostane při každém překreslení novou identitu a
+ * React její DOM podstrom zahodí i s fokusem a kurzorem.
+ */
+function SettingsField({
+  label,
+  hint,
+  type = 'text',
+  placeholder,
+  disabled,
+  className,
+  value,
+  locked,
+  visible,
+  onChange,
+  onToggleVisibility,
+  envLockedTitle,
+}: FieldInputProps) {
+  const isSecret = type === 'password';
+  return (
+    <div className={className}>
+      <label className={labelCls}>
+        {label}
+        {locked && (
+          <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-blue-400" title={envLockedTitle}>
+            <Lock className="size-2.5" /> ENV
+          </span>
+        )}
+      </label>
+      <div className="relative">
+        <input
+          type={isSecret && !visible ? 'password' : 'text'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${inputCls} ${isSecret ? 'pr-9 font-mono' : ''}`}
+          placeholder={placeholder}
+          disabled={locked || disabled}
+          autoComplete={isSecret ? 'new-password' : undefined}
+        />
+        {isSecret && (
+          <button
+            type="button"
+            onClick={onToggleVisibility}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+            tabIndex={-1}
+          >
+            {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+          </button>
+        )}
+      </div>
+      {hint && <p className={hintCls}>{hint}</p>}
     </div>
   );
 }

@@ -63,16 +63,8 @@ export function UsersPage() {
         </Button>
       </div>
 
-      {notice && (
-        <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">
-          {notice}
-        </div>
-      )}
-      {error && (
-        <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">
-          {error}
-        </div>
-      )}
+      {notice && <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">{notice}</div>}
+      {error && <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">{error}</div>}
 
       <Card>
         <CardHeader>
@@ -109,7 +101,9 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={user.role === 'admin' ? 'primary' : 'neutral'}>
-                        {user.role === 'admin' ? t('users.role_admin', 'Administrátor') : t('users.role_user', 'Uživatel')}
+                        {user.role === 'admin'
+                          ? t('users.role_admin', 'Administrátor')
+                          : t('users.role_user', 'Uživatel')}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -180,7 +174,9 @@ export function UsersPage() {
           user={deleting}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
-            setNotice(t('users.deleted_notice', { name: deleting.username }, `Uživatel ${deleting.username} byl smazán.`));
+            setNotice(
+              t('users.deleted_notice', { name: deleting.username }, `Uživatel ${deleting.username} byl smazán.`)
+            );
             setDeleting(null);
             reload();
           }}
@@ -229,13 +225,25 @@ function UserDialog({
       if (user) {
         onSaved(t('users.save_updated', { name: username }, `Uživatel ${username} byl upraven.`));
       } else if (result.invited) {
-        onSaved(t('users.save_invited', { name: username, email }, `Účet ${username} byl vytvořen, pozvánka odeslána na ${email}.`));
+        onSaved(
+          t(
+            'users.save_invited',
+            { name: username, email },
+            `Účet ${username} byl vytvořen, pozvánka odeslána na ${email}.`
+          )
+        );
       } else if (password) {
         onSaved(t('users.save_created', { name: username }, `Účet ${username} byl vytvořen.`));
       } else {
         // Account was created but the email failed to send - the admin needs
         // to know, otherwise the user will wait for an invite that never arrives.
-        onSaved(t('users.save_created_no_invite', { name: username }, `Účet ${username} byl vytvořen, ale pozvánku se nepodařilo odeslat.`));
+        onSaved(
+          t(
+            'users.save_created_no_invite',
+            { name: username },
+            `Účet ${username} byl vytvořen, ale pozvánku se nepodařilo odeslat.`
+          )
+        );
       }
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : t('users.save_failed', 'Uložení selhalo.'));
@@ -249,7 +257,11 @@ function UserDialog({
       <DialogContent>
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>{user ? t('users.edit_title', { name: user.username }, `Upravit ${user.username}`) : t('users.new_user_title', 'Nový uživatel')}</DialogTitle>
+            <DialogTitle>
+              {user
+                ? t('users.edit_title', { name: user.username }, `Upravit ${user.username}`)
+                : t('users.new_user_title', 'Nový uživatel')}
+            </DialogTitle>
             <DialogDescription>
               {user
                 ? t('users.edit_desc', 'Heslo nechte prázdné, pokud ho nechcete měnit.')
@@ -262,12 +274,7 @@ function UserDialog({
               <Input value={username} onChange={(e) => setUsername(e.target.value)} required />
             </Field>
             <Field label={t('users.field_email', 'E-mail')} required>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             </Field>
             <Field label={t('users.field_phone', 'Telefon')}>
               <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -289,7 +296,11 @@ function UserDialog({
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={8}
                 autoComplete="new-password"
-                placeholder={user ? t('users.password_unchanged', 'Beze změny') : t('users.password_invite', 'Prázdné = poslat pozvánku')}
+                placeholder={
+                  user
+                    ? t('users.password_unchanged', 'Beze změny')
+                    : t('users.password_invite', 'Prázdné = poslat pozvánku')
+                }
               />
             </Field>
 
@@ -311,15 +322,7 @@ function UserDialog({
   );
 }
 
-function DeleteDialog({
-  user,
-  onClose,
-  onDeleted,
-}: {
-  user: ApiUser;
-  onClose: () => void;
-  onDeleted: () => void;
-}) {
+function DeleteDialog({ user, onClose, onDeleted }: { user: ApiUser; onClose: () => void; onDeleted: () => void }) {
   const { t } = useLanguage();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -343,7 +346,8 @@ function DeleteDialog({
         <DialogHeader>
           <DialogTitle>{t('users.delete_confirm_title', 'Smazat uživatele?')}</DialogTitle>
           <DialogDescription>
-            {t('users.delete_confirm_prefix', 'Účet')} <strong>{user.username}</strong> ({user.email}) {t('users.delete_confirm_suffix', 'bude nenávratně odstraněn.')}
+            {t('users.delete_confirm_prefix', 'Účet')} <strong>{user.username}</strong> ({user.email}){' '}
+            {t('users.delete_confirm_suffix', 'bude nenávratně odstraněn.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -363,15 +367,7 @@ function DeleteDialog({
   );
 }
 
-function Field({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
+function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-muted-foreground text-xs font-medium">

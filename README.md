@@ -10,27 +10,32 @@ not another hosted uptime-checker SaaS.
 
 ## Project structure
 
-This is an NPM workspaces monorepo (`apps/site`, `apps/worker`). `apps/status` is
-a standalone PHP application outside the NPM workspaces — the reference
-self-hosted implementation of the monitoring dashboard, i.e. what you deploy on
-your own hosting:
+This is an NPM workspaces monorepo (`apps/site`, `apps/worker`, `apps/monitor`).
+`apps/status` is a standalone PHP application outside the NPM workspaces — the
+reference self-hosted implementation of the monitoring dashboard, i.e. what you
+deploy on your own hosting. `apps/server` is a Go rewrite of that backend, not
+yet deployed:
 
 ```
 /
 ├── apps/
 │   ├── site/                      # Astro v5 - static landing page (SSG), EN + CS
 │   ├── worker/                    # Cloudflare Worker + Hono - backend API for the landing page
-│   └── status/                    # PHP - self-hosted monitoring dashboard (reference deployment)
+│   ├── monitor/                   # React SPA - monitoring app, served at bloodkings.eu/app/
+│   ├── status/                    # PHP - self-hosted monitoring dashboard (live backend)
+│   └── server/                    # Go + Postgres - future backend replacing apps/status (not deployed)
+├── agents/                        # git submodule -> BKPepe/monitoring-agent
 ├── .github/
-│   └── workflows/
-│       └── deploy.yml             # CI/CD to Cloudflare Pages & Workers
-└── package.json                   # NPM workspaces config (site, worker)
+│   └── workflows/                 # deploy.yml (site+worker), deploy-status.yml (PHP+SPA),
+│                                  # deploy-go.yml, release-agents.yml, codeql.yml
+└── package.json                   # NPM workspaces config (site, worker, monitor)
 ```
 
-Distributed agents (HTTP probes from GitHub Actions/Cloudflare Worker, and the
-VPS host-metrics agents for Python/Bash/PowerShell/Docker) live in a separate
-repository, [BKPepe/monitoring-agent](https://github.com/BKPepe/monitoring-agent),
-since each self-hoster deploys those independently from the main dashboard.
+Host-metrics agents ship in two places: the reference scripts deployed together
+with the dashboard live in `apps/status/` (`agent.sh`, `agent.py`, `agent.ps1`,
+`agent_openwrt.sh`), and the standalone distribution lives in the
+[BKPepe/monitoring-agent](https://github.com/BKPepe/monitoring-agent) repository
+(the `agents/` submodule here).
 
 ### apps/status — self-hosted monitoring dashboard
 
@@ -40,8 +45,9 @@ VPS agents, and a Prometheus exporter. Installation guide in
 [apps/status/README.md](apps/status/README.md).
 
 **Language:** the public landing page (`apps/site`) ships in English and Czech
-(`/cs/`). The self-hosted dashboard (`apps/status`) is currently Czech-only;
-English support is in progress.
+(`/cs/`). The self-hosted dashboard (`apps/status`) and the React app
+(`apps/monitor`) are fully bilingual too — Czech and English (`?lang=cs|en` on
+the status page, a language switcher in the app).
 
 ---
 
@@ -97,4 +103,4 @@ Deployment runs automatically on every push to `main` via GitHub Actions
 ## 📈 Design goals
 *   **Performance:** 100/100 on Lighthouse metrics via static Astro compilation with no heavy client-side JS framework, responsive from 360px to 4K.
 *   **Premium design:** minimal, dark-mode-first, red used only as an accent, smooth Vercel-style animations.
-*   **Interactive elements:** a dashboard preview widget with clearly labeled demo data (`SIMULATED DATA`), an interactive SVG agent map, and a working ping-test console (Playground).
+*   **Interactive elements:** a dashboard widget fed by live data from the status API (with an honest error state when the API is unreachable), an interactive SVG agent map, and a working ping-test console (Playground) that measures a real round-trip from the Cloudflare network.

@@ -4,6 +4,7 @@ import {
   Activity,
   BarChart3,
   Cpu,
+  ExternalLink,
   Globe,
   KeyRound,
   LayoutDashboard,
@@ -56,6 +57,22 @@ export function Sidebar({
 }) {
   const { t } = useLanguage();
 
+  // Vlastní odkazy z nastavení (custom_nav_links) - stejná data, která
+  // renderuje menu veřejné status stránky; endpoint ui_config je veřejný.
+  const [customLinks, setCustomLinks] = React.useState<{ name: string; url: string }[]>([]);
+  React.useEffect(() => {
+    let active = true;
+    fetch('/status/api.php?action=ui_config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && Array.isArray(data?.customNavLinks)) setCustomLinks(data.customNavLinks);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const dynamicPrimaryNav = React.useMemo(() => {
     return primaryNav.map((item) => ({
       ...item,
@@ -79,15 +96,12 @@ export function Sidebar({
       )}
     >
       <div className="flex h-16 items-center gap-2.5 px-4">
-        <span className="bg-primary/12 text-primary grid size-8 shrink-0 place-items-center rounded-lg">
-          <Crown />
-        </span>
+        {/* Skutečný znak Blood Kings (koruna s mečem) místo generické korunky. */}
+        <img src="/status/assets/bk-mark.svg" alt="" aria-hidden="true" className="size-8 shrink-0 object-contain" />
         {!collapsed && (
           <div className="min-w-0 leading-tight">
             <p className="truncate text-sm font-semibold">Blood Kings</p>
-            <p className="text-muted-foreground truncate text-[10px] tracking-[0.14em] uppercase">
-              Monitoring
-            </p>
+            <p className="text-muted-foreground truncate text-[10px] tracking-[0.14em] uppercase">Monitoring</p>
           </div>
         )}
       </div>
@@ -96,6 +110,32 @@ export function Sidebar({
         <NavGroup items={dynamicPrimaryNav} collapsed={collapsed} />
         <div className="my-3 border-t border-sidebar-border" />
         <NavGroup items={dynamicSecondaryNav} collapsed={collapsed} />
+        {customLinks.length > 0 && (
+          <>
+            <div className="my-3 border-t border-sidebar-border" />
+            {!collapsed && (
+              <p className="text-muted-foreground px-3 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase">
+                {t('sidebar.custom_links', 'Vlastní odkazy')}
+              </p>
+            )}
+            <ul className="flex flex-col gap-0.5">
+              {customLinks.map((link) => (
+                <li key={link.url}>
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={collapsed ? link.name : undefined}
+                    className="text-muted-foreground hover:bg-sidebar-accent hover:text-foreground flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors"
+                  >
+                    <ExternalLink className="size-4 shrink-0" />
+                    {!collapsed && <span className="truncate">{link.name}</span>}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </nav>
 
       <div className="border-t border-sidebar-border p-2">
@@ -103,7 +143,9 @@ export function Sidebar({
           type="button"
           onClick={onToggle}
           className="text-muted-foreground hover:bg-sidebar-accent hover:text-foreground flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors"
-          aria-label={collapsed ? t('sidebar.expand_nav', 'Rozbalit navigaci') : t('sidebar.collapse_nav', 'Sbalit navigaci')}
+          aria-label={
+            collapsed ? t('sidebar.expand_nav', 'Rozbalit navigaci') : t('sidebar.collapse_nav', 'Sbalit navigaci')
+          }
         >
           {collapsed ? (
             <PanelLeftOpen className="size-4 shrink-0" />
@@ -154,14 +196,5 @@ function NavGroup({ items, collapsed }: { items: NavItem[]; collapsed: boolean }
         </li>
       ))}
     </ul>
-  );
-}
-
-/** Brand crown. Custom SVG - Lucide has nothing matching it. */
-function Crown() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="size-4" aria-hidden="true">
-      <path d="M3 6.5 6.2 11 12 3.5 17.8 11 21 6.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5Z" />
-    </svg>
   );
 }

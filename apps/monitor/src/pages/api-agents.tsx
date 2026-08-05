@@ -1,6 +1,19 @@
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Terminal, Copy, Check, ShieldCheck, Lock, Cpu, Server, Router, Globe, Container, AlertTriangle, RefreshCw } from 'lucide-react';
+import {
+  Terminal,
+  Copy,
+  Check,
+  ShieldCheck,
+  Lock,
+  Cpu,
+  Server,
+  Router,
+  Globe,
+  Container,
+  AlertTriangle,
+  RefreshCw,
+} from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
@@ -9,8 +22,6 @@ import { Link } from 'react-router';
 import { cn } from '@/lib/utils';
 
 type PlatformId = 'linux' | 'openwrt' | 'windows' | 'cpanel' | 'docker';
-
-const LATEST_AGENT_VERSION = '3.13.8';
 
 interface PlatformInstaller {
   id: PlatformId;
@@ -33,35 +44,39 @@ export function ApiAgentsPage() {
 
   useEffect(() => {
     fetch('/status/api.php?action=get_settings', { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
+      .then((r) => r.json())
+      .then((data) => {
         if (data.settings?.agent_outdated_email_enabled != null) {
           setNotifyOutdatedEmail(data.settings.agent_outdated_email_enabled !== '0');
         }
       })
       .catch(() => {});
 
-    appApi.getMonitors().then((rows) => {
-      const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
-      const agentMonitors = list.filter((m: any) => {
-        const type = (m.type || '').toLowerCase();
-        const name = (m.name || '').toLowerCase();
-        return (
-          type === 'openwrt' ||
-          type === 'vps' ||
-          type === 'agent' ||
-          type === 'router' ||
-          type === 'teamspeak' ||
-          type === 'minecraft' ||
-          name.includes('donald') ||
-          name.includes('router') ||
-          m.agentLastSeen != null ||
-          Boolean(m.details?.agent_version) ||
-          Boolean(m.details?.cpanel_stats)
-        );
-      });
-      setAgents(agentMonitors);
-    }).catch(() => {}).finally(() => setLoading(false));
+    appApi
+      .getMonitors()
+      .then((rows) => {
+        const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
+        const agentMonitors = list.filter((m: any) => {
+          const type = (m.type || '').toLowerCase();
+          const name = (m.name || '').toLowerCase();
+          return (
+            type === 'openwrt' ||
+            type === 'vps' ||
+            type === 'agent' ||
+            type === 'router' ||
+            type === 'teamspeak' ||
+            type === 'minecraft' ||
+            name.includes('donald') ||
+            name.includes('router') ||
+            m.agentLastSeen != null ||
+            Boolean(m.details?.agent_version) ||
+            Boolean(m.details?.cpanel_stats)
+          );
+        });
+        setAgents(agentMonitors);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   if (!session?.authenticated) {
@@ -70,10 +85,16 @@ export function ApiAgentsPage() {
         <div className="space-y-1">
           <p className="font-semibold text-lg">{t('api_agents.login_required_title', 'Přihlášení vyžadováno')}</p>
           <p className="text-muted-foreground text-sm max-w-md">
-            {t('api_agents.login_required_desc', 'Správa API klíčů a instalačních skriptů je přístupná pouze přihlášeným administrátorům.')}
+            {t(
+              'api_agents.login_required_desc',
+              'Správa API klíčů a instalačních skriptů je přístupná pouze přihlášeným administrátorům.'
+            )}
           </p>
         </div>
-        <Link to="/setup" className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors">
+        <Link
+          to="/setup"
+          className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors"
+        >
           {t('settings.go_to_login', 'Přejít na přihlášení')}
         </Link>
       </Card>
@@ -86,25 +107,42 @@ export function ApiAgentsPage() {
       name: 'Linux / VPS Server',
       badge: 'Python 3 / Bash',
       icon: Server,
-      desc: t('api_agents.desc_linux', 'Automatický sběr CPU, RAM, zátěže disku, běžících procesů a služeb pro Debian, Ubuntu, CentOS a RHEL.'),
-      command: 'curl -sSL https://bloodkings.eu/status/agent.sh | bash -s -- --server=https://bloodkings.eu --key=YOUR_MONITOR_KEY',
-      extraNote: t('api_agents.note_linux', 'Skript automaticky nainstaluje systémovou službu systemd (bk-agent.service) a spustí pozadí polling.'),
+      desc: t(
+        'api_agents.desc_linux',
+        'Automatický sběr CPU, RAM, zátěže disku, běžících procesů a služeb pro Debian, Ubuntu, CentOS a RHEL.'
+      ),
+      command:
+        'curl -sSL https://bloodkings.eu/status/agent.sh | bash -s -- --server=https://bloodkings.eu --key=YOUR_MONITOR_KEY',
+      extraNote: t(
+        'api_agents.note_linux',
+        'Skript automaticky nainstaluje systémovou službu systemd (bk-agent.service) a spustí pozadí polling.'
+      ),
     },
     {
       id: 'openwrt',
       name: 'OpenWrt Router',
       badge: 'Shell + ubus',
       icon: Router,
-      desc: t('api_agents.desc_openwrt', 'Lehký shell agent přímo pro routery OpenWrt/LEDE. Využívá ubus, iwinfo, /proc a podporuje bezpečné Remote Actions (potvrzovací pingy).'),
-      command: 'wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh',
-      extraNote: t('api_agents.note_openwrt', 'Do /etc/crontabs/root přidejte řádek: * * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1'),
+      desc: t(
+        'api_agents.desc_openwrt',
+        'Lehký shell agent přímo pro routery OpenWrt/LEDE. Využívá ubus, iwinfo, /proc a podporuje bezpečné Remote Actions (potvrzovací pingy).'
+      ),
+      command:
+        'wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh',
+      extraNote: t(
+        'api_agents.note_openwrt',
+        'Do /etc/crontabs/root přidejte řádek: * * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1'
+      ),
     },
     {
       id: 'windows',
       name: 'Windows Server',
       badge: 'PowerShell',
       icon: Terminal,
-      desc: t('api_agents.desc_windows', 'PowerShell agent pro Windows Server 2016 / 2019 / 2022 s automatickou registrací do Windows Task Scheduler.'),
+      desc: t(
+        'api_agents.desc_windows',
+        'PowerShell agent pro Windows Server 2016 / 2019 / 2022 s automatickou registrací do Windows Task Scheduler.'
+      ),
       command: 'iwr -useb https://bloodkings.eu/status/agent.ps1 | iex',
       extraNote: t('api_agents.note_windows', 'Spusťte v PowerShell okénku správce (Run as Administrator).'),
     },
@@ -113,18 +151,31 @@ export function ApiAgentsPage() {
       name: 'cPanel / Web Hosting',
       badge: 'PHP Stats API',
       icon: Globe,
-      desc: t('api_agents.desc_cpanel', 'Stáhněte cpanel_stats.php do kořenového adresáře hostingu pro veřejný sběr diskového prostoru, RAM a MySQL zátěže.'),
+      desc: t(
+        'api_agents.desc_cpanel',
+        'Stáhněte cpanel_stats.php do kořenového adresáře hostingu pro veřejný sběr diskového prostoru, RAM a MySQL zátěže.'
+      ),
       command: 'wget -O cpanel_stats.php https://bloodkings.eu/status/cpanel_stats.php',
-      extraNote: t('api_agents.note_cpanel', 'URL k souboru s vaším tajným klíčem následně zadejte v detailu monitoru v záložce Nastavení Webu.'),
+      extraNote: t(
+        'api_agents.note_cpanel',
+        'URL k souboru s vaším tajným klíčem následně zadejte v detailu monitoru v záložce Nastavení Webu.'
+      ),
     },
     {
       id: 'docker',
       name: 'Docker Container',
       badge: 'Docker Run / Compose',
       icon: Container,
-      desc: t('api_agents.desc_docker', 'Izolovaný Docker kontejner pro provoz v prostředí Docker / Kubernetes bez zásahu do hostitelského OS.'),
-      command: 'docker run -d --name bk-agent --restart=always -v /proc:/host/proc:ro -e SERVER_URL=https://bloodkings.eu -e AGENT_KEY=YOUR_MONITOR_KEY bloodkings/agent:latest',
-      extraNote: t('api_agents.note_docker', 'Kontejner mapuje pouze /proc v režimu jen pro čtení (read-only) pro nulové bezpečnostní riziko.'),
+      desc: t(
+        'api_agents.desc_docker',
+        'Izolovaný Docker kontejner pro provoz v prostředí Docker / Kubernetes bez zásahu do hostitelského OS.'
+      ),
+      command:
+        'docker run -d --name bk-agent --restart=always -v /proc:/host/proc:ro -e SERVER_URL=https://bloodkings.eu -e AGENT_KEY=YOUR_MONITOR_KEY bloodkings/agent:latest',
+      extraNote: t(
+        'api_agents.note_docker',
+        'Kontejner mapuje pouze /proc v režimu jen pro čtení (read-only) pro nulové bezpečnostní riziko.'
+      ),
     },
   ];
 
@@ -136,22 +187,31 @@ export function ApiAgentsPage() {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const hasOutdatedAgent = agents.some((a) => {
-    const v = a.details?.agent_version || a.details?.version;
-    return v && v < LATEST_AGENT_VERSION;
-  });
+  // Zdrojem pravdy je server: porovnává verzi z reportu s verzí SOUBORU
+  // agenta (agentUpdateAvailable/agentLatestVersion). Dřív se tu porovnávalo
+  // proti natvrdo zapsané "3.13.8" - což je verze TeamSpeak SERVERU, ne
+  // agenta - navíc řetězcovým '<'.
+  const hasOutdatedAgent = agents.some((a) => Boolean(a.agentUpdateAvailable));
 
+  // Varování o vypnutých aktualizacích má smysl jen u monitorů, které
+  // agenta opravdu mají a hlásí svůj stav auto-update. Dřív hlásilo
+  // "vypnuto" i u cPanel webu bez agenta (uživatelský report).
   const hasDisabledAutoUpdate = agents.some((a) => {
-    const au = a.details?.auto_update ?? a.details?.AUTO_UPDATE;
-    return au !== 1 && au !== '1' && au !== true && au !== 'true';
+    if (!a.details?.agent_version) return false;
+    const au = a.details?.auto_update;
+    return au === 0 || au === '0' || au === false;
   });
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('api_agents.title', 'API Klíče, Bezpečnost & Správa Agentů')}</h1>
-          <p className="text-muted-foreground text-sm">{t('api_agents.subtitle', 'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.')}</p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {t('api_agents.title', 'API Klíče, Bezpečnost & Správa Agentů')}
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            {t('api_agents.subtitle', 'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.')}
+          </p>
         </div>
       </div>
 
@@ -161,8 +221,15 @@ export function ApiAgentsPage() {
           <div className="flex items-center gap-3">
             <Terminal className="size-5 text-primary" />
             <div>
-              <h3 className="font-bold text-base">{t('api_agents.install_scripts_title', 'Instalační skripty agentů dle platformy')}</h3>
-              <p className="text-xs text-muted-foreground">{t('api_agents.install_scripts_desc', 'Vyberte váš cílový systém pro zobrazení správného příkazu a postupu instalace')}</p>
+              <h3 className="font-bold text-base">
+                {t('api_agents.install_scripts_title', 'Instalační skripty agentů dle platformy')}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'api_agents.install_scripts_desc',
+                  'Vyberte váš cílový systém pro zobrazení správného příkazu a postupu instalace'
+                )}
+              </p>
             </div>
           </div>
         </div>
@@ -185,7 +252,9 @@ export function ApiAgentsPage() {
               >
                 <div className="flex items-center justify-between w-full">
                   <Icon className={cn('size-4', isSelected ? 'text-primary' : 'text-muted-foreground')} />
-                  <Badge variant="info" className="text-[9px] px-1.5 py-0">{p.badge}</Badge>
+                  <Badge variant="info" className="text-[9px] px-1.5 py-0">
+                    {p.badge}
+                  </Badge>
                 </div>
                 <p className="font-bold text-xs leading-tight">{p.name}</p>
               </button>
@@ -193,32 +262,43 @@ export function ApiAgentsPage() {
           })}
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-700/80 space-y-3 text-slate-200">
+        {/* Kontejner respektuje motiv; tmavý zůstává jen samotný terminálový
+            blok s příkazem (tam je tmavé pozadí konvence, ne nedopatření). */}
+        <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <currentPlatform.icon className="size-5 text-primary" />
-              <h4 className="font-bold text-sm text-white">{currentPlatform.name}</h4>
-              <Badge variant="up" className="text-[10px]">{currentPlatform.badge}</Badge>
+              <h4 className="font-bold text-sm text-foreground">{currentPlatform.name}</h4>
+              <Badge variant="up" className="text-[10px]">
+                {currentPlatform.badge}
+              </Badge>
             </div>
             <button
               type="button"
               onClick={() => handleCopy(currentPlatform.id, currentPlatform.command)}
               className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 bg-primary/20 text-primary text-xs font-semibold hover:bg-primary/30 transition-colors cursor-pointer border border-primary/40"
             >
-              {copiedKey === currentPlatform.id ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
-              {copiedKey === currentPlatform.id ? t('common.copied', 'Zkopírováno!') : t('api_agents.copy_cmd', 'Kopírovat příkaz')}
+              {copiedKey === currentPlatform.id ? (
+                <Check className="size-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+              {copiedKey === currentPlatform.id
+                ? t('common.copied', 'Zkopírováno!')
+                : t('api_agents.copy_cmd', 'Kopírovat příkaz')}
             </button>
           </div>
 
-          <p className="text-xs text-slate-300 leading-relaxed">{currentPlatform.desc}</p>
+          <p className="text-xs text-muted-foreground leading-relaxed">{currentPlatform.desc}</p>
 
           <div className="p-3 rounded-lg bg-slate-950 font-mono text-xs text-emerald-400 flex items-center justify-between overflow-x-auto border border-slate-800 break-all select-all">
             <code>{currentPlatform.command}</code>
           </div>
 
           {currentPlatform.extraNote && (
-            <p className="text-[11px] text-amber-300/90 bg-amber-950/40 p-2.5 rounded-md border border-amber-800/40 font-mono">
-              💡 <strong>{t('api_agents.setup_note_label', 'Poznámka k nastavení:')}</strong> {currentPlatform.extraNote}
+            <p className="text-[11px] text-amber-800 dark:text-amber-300 bg-amber-500/10 p-2.5 rounded-md border border-amber-500/30 font-mono">
+              💡 <strong>{t('api_agents.setup_note_label', 'Poznámka k nastavení:')}</strong>{' '}
+              {currentPlatform.extraNote}
             </p>
           )}
         </div>
@@ -230,16 +310,27 @@ export function ApiAgentsPage() {
           <div className="flex items-center gap-2.5">
             <Cpu className="size-5 text-primary" />
             <div>
-              <h3 className="font-bold text-base">{t('api_agents.version_status_title', { count: agents.length }, `Stav verzí & Automatické aktualizace agentů (${agents.length})`)}</h3>
-              <p className="text-xs text-muted-foreground">{t('api_agents.recommended_version', 'Aktuální doporučená verze systému:')} <span className="font-mono font-bold text-foreground">v{LATEST_AGENT_VERSION}</span></p>
+              <h3 className="font-bold text-base">
+                {t(
+                  'api_agents.version_status_title',
+                  { count: agents.length },
+                  `Stav verzí & Automatické aktualizace agentů (${agents.length})`
+                )}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'api_agents.recommended_version_hint',
+                  'Doporučená verze se určuje podle skriptu agenta nasazeného na serveru.'
+                )}
+              </p>
             </div>
           </div>
-          <Badge variant={hasOutdatedAgent ? "down" : hasDisabledAutoUpdate ? "warning" : "up"}>
+          <Badge variant={hasOutdatedAgent ? 'down' : hasDisabledAutoUpdate ? 'warning' : 'up'}>
             {hasOutdatedAgent
               ? t('api_agents.status_outdated', '🔴 Zjištěna neaktuální verze agenta!')
               : hasDisabledAutoUpdate
-              ? t('api_agents.status_auto_update_off', '⚠️ U některých agentů vypnuty auto-updates')
-              : t('api_agents.status_all_ok', 'Všichni agenti aktuální & auto-updates OK ✅')}
+                ? t('api_agents.status_auto_update_off', '⚠️ U některých agentů vypnuty auto-updates')
+                : t('api_agents.status_all_ok', 'Všichni agenti aktuální & auto-updates OK ✅')}
           </Badge>
         </div>
 
@@ -261,38 +352,57 @@ export function ApiAgentsPage() {
               }}
               className="rounded border-border size-4 text-primary cursor-pointer"
             />
-            <span>{t('settings.agent_outdated_email_label', 'Zasílat e-mailová varování při detekci neaktuální verze agenta (Outdated Agent Alert)')}</span>
+            <span>
+              {t(
+                'settings.agent_outdated_email_label',
+                'Zasílat e-mailová varování při detekci neaktuální verze agenta (Outdated Agent Alert)'
+              )}
+            </span>
           </label>
-          <Badge variant={notifyOutdatedEmail ? "up" : "warning"} className="text-[10px]">
-            {notifyOutdatedEmail ? t('api_agents.email_alerts_on', 'E-mail výstrahy zapnuty 📧') : t('api_agents.email_alerts_off', 'E-mail výstrahy vypnuty 🔕')}
+          <Badge variant={notifyOutdatedEmail ? 'up' : 'warning'} className="text-[10px]">
+            {notifyOutdatedEmail
+              ? t('api_agents.email_alerts_on', 'E-mail výstrahy zapnuty 📧')
+              : t('api_agents.email_alerts_off', 'E-mail výstrahy vypnuty 🔕')}
           </Badge>
         </div>
 
         <div className="space-y-3">
           {loading ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">{t('api_agents.loading', 'Načítám agenty…')}</p>
+            <p className="text-xs text-muted-foreground py-4 text-center">
+              {t('api_agents.loading', 'Načítám agenty…')}
+            </p>
           ) : agents.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">{t('api_agents.no_agents', 'Žádní registrovaní agenti v databázi.')}</p>
+            <p className="text-xs text-muted-foreground py-4 text-center">
+              {t('api_agents.no_agents', 'Žádní registrovaní agenti v databázi.')}
+            </p>
           ) : (
             agents.map((a) => {
-              const version = a.details?.agent_version || a.details?.version || (a.agentLastSeen ? LATEST_AGENT_VERSION : null);
-              const isOutdated = version && version < LATEST_AGENT_VERSION;
-              const autoUpdateRaw = a.details?.auto_update ?? a.details?.AUTO_UPDATE;
-              const autoUpdateEnabled = autoUpdateRaw === 1 || autoUpdateRaw === '1' || autoUpdateRaw === true || autoUpdateRaw === 'true';
+              // Verze agenta - nikdy details.version (to je verze SLUŽBY, např. TS3).
+              const version = a.details?.agent_version ?? null;
+              const latestVersion = a.agentLatestVersion ?? null;
+              const isOutdated = Boolean(a.agentUpdateAvailable);
+              const autoUpdateRaw = a.details?.auto_update;
+              const autoUpdateKnown = autoUpdateRaw !== undefined && autoUpdateRaw !== null;
+              const autoUpdateEnabled = autoUpdateRaw === 1 || autoUpdateRaw === '1' || autoUpdateRaw === true;
 
               return (
-                <div key={a.id} className={cn(
-                  'p-4 rounded-xl border transition-colors space-y-2 text-xs',
-                  isOutdated
-                    ? 'bg-rose-500/10 border-rose-500/40'
-                    : !autoUpdateEnabled
-                    ? 'bg-amber-500/10 border-amber-500/30'
-                    : 'bg-secondary/30 border-border'
-                )}>
+                <div
+                  key={a.id}
+                  className={cn(
+                    'p-4 rounded-xl border transition-colors space-y-2 text-xs',
+                    isOutdated
+                      ? 'bg-rose-500/10 border-rose-500/40'
+                      : autoUpdateKnown && !autoUpdateEnabled
+                        ? 'bg-amber-500/10 border-amber-500/30'
+                        : 'bg-secondary/30 border-border'
+                  )}
+                >
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-foreground text-sm">{a.name}</p>
-                      <Badge variant="info" className="font-mono text-[10px]">{a.type.toUpperCase()}</Badge>
+                      <Badge variant="info" className="font-mono text-[10px]">
+                        {a.type.toUpperCase()}
+                      </Badge>
                       <Badge variant={a.status === 'up' ? 'up' : 'down'}>
                         {a.status === 'up' ? t('infra.active_since', 'Aktivní') : t('api_agents.inactive', 'Neaktivní')}
                       </Badge>
@@ -303,7 +413,11 @@ export function ApiAgentsPage() {
                       {version ? (
                         isOutdated ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-sm animate-pulse">
-                            {t('api_agents.version_outdated', { version, latest: LATEST_AGENT_VERSION }, `🔴 v${version} (Neaktuální — Doporučeno v${LATEST_AGENT_VERSION})`)}
+                            {t(
+                              'api_agents.version_outdated',
+                              { version, latest: latestVersion ?? '' },
+                              `🔴 v${version} (Neaktuální — Doporučeno v${latestVersion})`
+                            )}
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-sm">
@@ -318,36 +432,54 @@ export function ApiAgentsPage() {
 
                       {/* Auto-update status indicator */}
                       {autoUpdateEnabled ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                           <RefreshCw className="size-3" /> {t('api_agents.auto_update_on', 'Auto-updates: Zapnuto')}
                         </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                          <AlertTriangle className="size-3 text-amber-400" /> {t('api_agents.auto_update_off', 'Auto-updates: VYPNUTO')}
+                      ) : autoUpdateKnown ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40">
+                          <AlertTriangle className="size-3" />{' '}
+                          {t('api_agents.auto_update_off', 'Auto-updates: VYPNUTO')}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
 
                   <p className="text-muted-foreground font-mono text-[11px]">
-                    OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> · {t('common.target', 'Cíl')}: <span className="text-foreground">{a.target}</span>
+                    OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> ·{' '}
+                    {t('common.target', 'Cíl')}: <span className="text-foreground">{a.target}</span>
                   </p>
 
                   {/* Warning message for outdated version or disabled auto-updates */}
                   {isOutdated && (
-                    <div className="p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2">
+                    <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/40 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
                       <AlertTriangle className="size-4 text-rose-400 shrink-0" />
                       <span>
-                        <strong>{t('api_agents.outdated_warning_title', 'Agent je neaktuální!')}</strong> {t('api_agents.outdated_warning_desc', { version, latest: LATEST_AGENT_VERSION }, `Používá verzi v${version}, doporučená verze je v${LATEST_AGENT_VERSION}. Při neaktuální verzi systém zařazuje varovný incident a zasílá notifikaci administrátorům.`)}
+                        <strong>{t('api_agents.outdated_warning_title', 'Agent je neaktuální!')}</strong>{' '}
+                        {t(
+                          'api_agents.outdated_warning_desc',
+                          { version, latest: latestVersion ?? '' },
+                          `Používá verzi v${version}, na serveru je připravená v${latestVersion}. Agent se aktualizuje sám, pokud má AUTO_UPDATE="1"; jinak stáhněte novou verzi ručně.`
+                        )}
                       </span>
                     </div>
                   )}
 
-                  {!autoUpdateEnabled && (
-                    <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-200 text-[11px] flex items-center gap-2">
+                  {autoUpdateKnown && !autoUpdateEnabled && (
+                    <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
                       <AlertTriangle className="size-3.5 text-amber-400 shrink-0" />
                       <span>
-                        <strong>{t('api_agents.auto_update_disabled_title', 'Automatické aktualizace jsou vypnuty:')}</strong> {t('api_agents.auto_update_disabled_desc', 'Doporučujeme v konfiguraci agenta (`agent.cfg` nebo `agent_openwrt.cfg`) nastavit')} <code>AUTO_UPDATE="1"</code>{t('api_agents.auto_update_disabled_desc_suffix', ', aby se bezpečnostní záplaty a opravy instalovaly automaticky bez nutnosti ručního zásahu.')}
+                        <strong>
+                          {t('api_agents.auto_update_disabled_title', 'Automatické aktualizace jsou vypnuty:')}
+                        </strong>{' '}
+                        {t(
+                          'api_agents.auto_update_disabled_desc',
+                          'Doporučujeme v konfiguraci agenta (`agent.cfg` nebo `agent_openwrt.cfg`) nastavit'
+                        )}{' '}
+                        <code>AUTO_UPDATE="1"</code>
+                        {t(
+                          'api_agents.auto_update_disabled_desc_suffix',
+                          ', aby se bezpečnostní záplaty a opravy instalovaly automaticky bez nutnosti ručního zásahu.'
+                        )}
                       </span>
                     </div>
                   )}
@@ -364,12 +496,17 @@ export function ApiAgentsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <Lock className="size-5 text-primary" />
-              <h4 className="font-semibold text-sm">{t('api_agents.privacy_title', 'Záruka Soukromí & Zero Telemetry')}</h4>
+              <h4 className="font-semibold text-sm">
+                {t('api_agents.privacy_title', 'Záruka Soukromí & Zero Telemetry')}
+              </h4>
             </div>
             <Badge variant="up">100% Private</Badge>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            {t('api_agents.privacy_desc', '0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně ve vaší MySQL/PostgreSQL databázi pod vaší plnou kontrolou.')}
+            {t(
+              'api_agents.privacy_desc',
+              '0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně ve vaší MySQL/PostgreSQL databázi pod vaší plnou kontrolou.'
+            )}
           </p>
         </Card>
 
@@ -377,12 +514,17 @@ export function ApiAgentsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <ShieldCheck className="size-5 text-primary" />
-              <h4 className="font-semibold text-sm">{t('api_agents.auth_title', 'Autentizace agentů & Notifikace verze')}</h4>
+              <h4 className="font-semibold text-sm">
+                {t('api_agents.auth_title', 'Autentizace agentů & Notifikace verze')}
+              </h4>
             </div>
             <Badge variant="up">{t('api_agents.key_hmac_badge', 'Klíč + HMAC-SHA256')}</Badge>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            {t('api_agents.auth_desc', 'Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.')}
+            {t(
+              'api_agents.auth_desc',
+              'Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.'
+            )}
           </p>
         </Card>
       </div>

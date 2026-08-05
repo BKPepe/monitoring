@@ -19,18 +19,11 @@ export interface ChartTheme {
   key: string;
 }
 
-export type SeriesTone =
-  | 'cpu'
-  | 'memory'
-  | 'network'
-  | 'temperature'
-  | 'disk'
-  | 'latency';
+export type SeriesTone = 'cpu' | 'memory' | 'network' | 'temperature' | 'disk' | 'latency';
 
 function readTokens(): ChartTheme {
   const style = getComputedStyle(document.documentElement);
-  const token = (name: string, fallback: string) =>
-    style.getPropertyValue(name).trim() || fallback;
+  const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
 
   const isDark = document.documentElement.classList.contains('dark');
 
@@ -72,9 +65,7 @@ export function useChartTheme(): ChartTheme {
 
 /** Uživatel si vyžádal omezený pohyb — animace grafů se pak nespouští. */
 export function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = React.useState(
-    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
+  const [reduced, setReduced] = React.useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   React.useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');

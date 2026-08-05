@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import { cn } from '@/lib/utils';
-import type { DayStatus, UptimeHistoryRow } from '@/data/mock';
+import type { DayStatus, UptimeHistoryRow } from '@/data/model';
 import { useLanguage } from '@/context/language-context';
 
 const cellClass: Record<DayStatus, string> = {
@@ -40,7 +40,10 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                     scope="row"
                     className="text-muted-foreground w-48 pr-3 text-left text-xs font-normal whitespace-nowrap"
                   >
-                    <Link to={`/infrastructure/${row.monitorId}`} className="hover:underline text-foreground font-semibold text-xs">
+                    <Link
+                      to={`/infrastructure/${row.monitorId}`}
+                      className="hover:underline text-foreground font-semibold text-xs"
+                    >
                       {row.name}
                     </Link>
                   </th>
@@ -63,46 +66,69 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                             {/* Large, clear tooltip with smart up/down direction */}
                             <div
                               className={cn(
-                                "absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-slate-950/98 border border-slate-700 text-slate-100 text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl ring-1 ring-white/10",
-                                isTopRow ? "top-full mt-2.5" : "bottom-full mb-2.5",
-                                isNearRight ? "right-0" : isNearLeft ? "left-0" : "left-1/2 -translate-x-1/2"
+                                'absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-slate-950/98 border border-slate-700 text-slate-100 text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl ring-1 ring-white/10',
+                                isTopRow ? 'top-full mt-2.5' : 'bottom-full mb-2.5',
+                                isNearRight ? 'right-0' : isNearLeft ? 'left-0' : 'left-1/2 -translate-x-1/2'
                               )}
                             >
-                            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                              <span className="font-bold text-xs text-slate-200">{day.date}</span>
-                              <span className={cn("font-extrabold text-xs px-2 py-0.5 rounded-md", day.uptimePct >= 99.5 ? 'bg-emerald-500/20 text-emerald-300' : day.uptimePct >= 95 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300')}>
-                                {day.uptimePct.toFixed(1)} % Uptime
-                              </span>
-                            </div>
+                              <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                                <span className="font-bold text-xs text-slate-200">{day.date}</span>
+                                {day.uptimePct != null ? (
+                                  <span
+                                    className={cn(
+                                      'font-extrabold text-xs px-2 py-0.5 rounded-md',
+                                      day.uptimePct >= 99.5
+                                        ? 'bg-emerald-500/20 text-emerald-300'
+                                        : day.uptimePct >= 95
+                                          ? 'bg-amber-500/20 text-amber-300'
+                                          : 'bg-rose-500/20 text-rose-300'
+                                    )}
+                                  >
+                                    {day.uptimePct.toFixed(1)} % Uptime
+                                  </span>
+                                ) : (
+                                  <span className="font-extrabold text-xs px-2 py-0.5 rounded-md bg-slate-700/50 text-slate-300">
+                                    {t('heatmap.no_data_badge', 'Bez dat')}
+                                  </span>
+                                )}
+                              </div>
 
-                            <div className="flex items-center justify-between text-xs pt-0.5">
-                              <span className="text-slate-400">{t('heatmap.monitor_status', 'Stav monitoru:')}</span>
-                              <span className={cn("font-bold", day.status === 'down' ? 'text-rose-400' : day.status === 'warning' ? 'text-amber-400' : 'text-emerald-400')}>
-                                {statusLabel[day.status]}
-                              </span>
-                            </div>
+                              <div className="flex items-center justify-between text-xs pt-0.5">
+                                <span className="text-slate-400">{t('heatmap.monitor_status', 'Stav monitoru:')}</span>
+                                <span
+                                  className={cn(
+                                    'font-bold',
+                                    day.status === 'down'
+                                      ? 'text-rose-400'
+                                      : day.status === 'warning'
+                                        ? 'text-amber-400'
+                                        : 'text-emerald-400'
+                                  )}
+                                >
+                                  {statusLabel[day.status]}
+                                </span>
+                              </div>
 
-                            <div className="text-xs text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed font-sans">
-                              {day.detail ?? (
-                                day.status === 'down'
-                                  ? t('heatmap.detail_down', '🔴 Detekován výpadek.')
-                                  : day.status === 'warning'
-                                  ? t('heatmap.detail_warning', '⚡ Zhoršená odezva zaznamenána.')
-                                  : day.status === 'maintenance'
-                                  ? t('heatmap.detail_maintenance', '🔧 Plánovaná údržba.')
-                                  : day.status === 'paused'
-                                  ? t('heatmap.detail_paused', '⏸️ Bez naměřených dat pro tento den.')
-                                  : t('heatmap.detail_up', '🟢 Všechny testy dostupnosti proběhly bez chyb.')
-                              )}
+                              <div className="text-xs text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed font-sans">
+                                {day.detail ??
+                                  (day.status === 'down'
+                                    ? t('heatmap.detail_down', '🔴 Detekován výpadek.')
+                                    : day.status === 'warning'
+                                      ? t('heatmap.detail_warning', '⚡ Zhoršená odezva zaznamenána.')
+                                      : day.status === 'maintenance'
+                                        ? t('heatmap.detail_maintenance', '🔧 Plánovaná údržba.')
+                                        : day.status === 'paused'
+                                          ? t('heatmap.detail_paused', '⏸️ Bez naměřených dat pro tento den.')
+                                          : t('heatmap.detail_up', '🟢 Všechny testy dostupnosti proběhly bez chyb.'))}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </td>
-              </tr>
-            );
+                        );
+                      })}
+                    </div>
+                  </td>
+                </tr>
+              );
             })}
           </tbody>
         </table>

@@ -1,0 +1,162 @@
+name: "Quality Gate"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Souběžné běhy nad stejnou větví se ruší - poslední commit je ten, který nás zajímá.
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint, format, types, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier (formát)
+        run: npm run format:check
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Build všech workspace aplikací
+        run: npm run build
+
+  php:
+    name: PHP (testy, coverage, lint, mrtvý kód)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup PHP s Xdebug (kvůli coverage)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: xdebug
+          extensions: mbstring, curl, pdo
+
+      - name: Syntaktická kontrola všech PHP souborů
+        run: |
+          set -e
+          for f in apps/status/*.php apps/status/lang/*.php apps/status/tests/*.php; do
+            php -l "$f" > /dev/null
+          done
+          echo "Všechny PHP soubory se parsují."
+
+      - name: Unit testy
+        run: php apps/status/tests/run_tests.php
+
+      - name: Testy sběru, e-mailů a notifikací
+        run: php apps/status/tests/run_pipeline_tests.php
+
+      - name: SQL lint (rizikové dotazy)
+        run: php apps/status/tests/run_query_lint.php
+
+      - name: Detekce mrtvého kódu
+        run: php apps/status/tests/find_dead_code.php
+
+      - name: Coverage report (Cobertura + Clover)
+        run: |
+          mkdir -p coverage
+          php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
+        continue-on-error: true
+
+      - name: Upload coverage artefaktu
+        uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: php-coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+  agents:
+    name: Agent skripty (shell, python, powershell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shell syntaxe
+        run: |
+          set -e
+          # agent.sh má shebang #!/bin/bash a bashismy používá záměrně;
+          # agent_openwrt.sh musí být čistý POSIX (routery mají ash/dash).
+          bash -n apps/status/agent.sh
+          dash -n apps/status/agent_openwrt.sh
+          echo "Shell agenti se parsují."
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: './apps/status'
+          severity: error
+          additional_files: 'agent.sh agent_openwrt.sh'
+        continue-on-error: true
+
+      - name: Python agent
+        run: python3 -m py_compile apps/status/agent.py
+
+      - name: PowerShell agent
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/apps/status/agent.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "agent.ps1 se parsuje."
+
+  go:
+    name: Go backend (vet, testy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          # Verze se čte z go.mod - natvrdo zapsaná '1.23' rozbila job,
+          # protože go.mod vyžaduje novější toolchain.
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: go vet
+        working-directory: apps/server
+        run: go vet ./...
+      - name: Testy s coverage
+        working-directory: apps/server
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+      - name: Upload Go coverage
+        uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: go-coverage
+          path: apps/server/coverage.out
+          if-no-files-found: ignore
+
+  perf:
+    name: Výkon produkčních endpointů
+    runs-on: ubuntu-latest
+    # Měří živou instalaci, takže jen po nasazení na main - ne u PR.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl
+      - name: Perf check
+        run: php apps/status/tests/run_perf_check.php
+        continue-on-error: true # regresi hlásí, ale nezastavuje pipeline

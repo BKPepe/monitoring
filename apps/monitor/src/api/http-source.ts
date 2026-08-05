@@ -1,12 +1,4 @@
-import type {
-  ChartData,
-  MetricKey,
-  MetricPoint,
-  MetricsSource,
-  MetricTone,
-  PublicStatus,
-  TimeRange,
-} from './types';
+import type { ChartData, MetricKey, MetricPoint, MetricsSource, MetricTone, PublicStatus, TimeRange } from './types';
 
 /**
  * Napojení na PHP backend (`apps/status/api.php`).

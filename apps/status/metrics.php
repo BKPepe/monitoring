@@ -73,14 +73,15 @@ try {
 
     // Poslední odezvy z monitor_logs (jeden nejnovější záznam pro každý monitor)
     $response_times = [];
+    // Poslední odezva na monitor: dohledává se přes index (monitor_id, id),
+    // ne agregací MAX(id) přes celou tabulku logů - ta rostla s historií
+    // a scrapování Promethea by ji časem zdrželo na sekundy.
     $stmt_rt = $pdo->query("
-        SELECT l.monitor_id, l.response_time
-        FROM monitor_logs l
-        INNER JOIN (
-            SELECT monitor_id, MAX(id) AS max_id
-            FROM monitor_logs
-            GROUP BY monitor_id
-        ) latest ON latest.max_id = l.id
+        SELECT m.id AS monitor_id,
+               (SELECT l.response_time FROM monitor_logs l
+                WHERE l.monitor_id = m.id
+                ORDER BY l.id DESC LIMIT 1) AS response_time
+        FROM monitors m
     ");
     while ($row = $stmt_rt->fetch()) {
         $response_times[$row['monitor_id']] = $row['response_time'];

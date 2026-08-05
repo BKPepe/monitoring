@@ -3,9 +3,11 @@
 Nová implementace backendu monitorovací platformy. **Nahrazuje `apps/status`**,
 neběží vedle něj a nesdílí s ním databázi — žádná obousměrná podpora PHP↔Go.
 
-Stav: **základ + autentizace + správa uživatelů.** Monitorovací doména
-(sondy, agenti, metriky, notifikace) zatím není přenesená; soupis toho, co
-musí přibýt, je v [API-CONTRACT.md](API-CONTRACT.md).
+Stav: **neběží v produkci.** Implementované: autentizace + správa uživatelů,
+monitory, sondy (HTTP/TCP/...), metriky + série pro grafy, incidenty,
+notifikace, WebSocket, integrační endpointy (Prometheus, badge, widget,
+SLA report). Zbývající rozdíly proti PHP backendu jsou
+v [API-CONTRACT.md](API-CONTRACT.md).
 
 ```bash
 # Databáze

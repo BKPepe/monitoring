@@ -29,8 +29,7 @@ export function MetricChart({ data, height = 200 }: { data: ChartData; height?: 
         borderWidth: 1,
         textStyle: { color: theme.text, fontSize: 12 },
         axisPointer: { type: 'line', lineStyle: { color: theme.grid } },
-        valueFormatter: (value: unknown) =>
-          value == null ? '—' : `${value} ${unit}`,
+        valueFormatter: (value: unknown) => (value == null ? '—' : `${value} ${unit}`),
       },
       legend:
         data.series.length > 1
@@ -63,7 +62,7 @@ export function MetricChart({ data, height = 200 }: { data: ChartData; height?: 
         },
         splitLine: { lineStyle: { color: theme.grid } },
       },
-        series: data.series.map((s, i) =>
+      series: data.series.map((s, i) =>
         buildSeries(s, theme.series[s.tone], data.series.length, i === 0 ? data.events : undefined, theme.textMuted)
       ),
     };
@@ -128,9 +127,14 @@ function buildSeries(
 /** Přidá alfa kanál k hex barvě z tokenu. */
 function withAlpha(color: string, alpha: number): string {
   if (!color.startsWith('#')) return color;
-  const hex = color.length === 4
-    ? color.slice(1).split('').map((c) => c + c).join('')
-    : color.slice(1);
+  const hex =
+    color.length === 4
+      ? color
+          .slice(1)
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : color.slice(1);
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
   const b = parseInt(hex.slice(4, 6), 16);

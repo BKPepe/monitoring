@@ -24,21 +24,13 @@ export function TableBody({ className, ...props }: React.ComponentProps<'tbody'>
 }
 
 export function TableRow({ className, ...props }: React.ComponentProps<'tr'>) {
-  return (
-    <tr
-      className={cn('border-b border-border transition-colors hover:bg-muted/40', className)}
-      {...props}
-    />
-  );
+  return <tr className={cn('border-b border-border transition-colors hover:bg-muted/40', className)} {...props} />;
 }
 
 export function TableHead({ className, ...props }: React.ComponentProps<'th'>) {
   return (
     <th
-      className={cn(
-        'text-muted-foreground h-9 px-3 text-left text-xs font-medium whitespace-nowrap',
-        className
-      )}
+      className={cn('text-muted-foreground h-9 px-3 text-left text-xs font-medium whitespace-nowrap', className)}
       {...props}
     />
   );

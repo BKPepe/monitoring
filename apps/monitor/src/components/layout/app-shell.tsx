@@ -4,7 +4,7 @@ import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { Footer } from './footer';
 import { UserMenu } from './user-menu';
-import { searchIndex, appVersion } from '@/data/mock';
+import { searchIndex } from '@/data/model';
 import { cn } from '@/lib/utils';
 
 /**
@@ -16,19 +16,41 @@ import { cn } from '@/lib/utils';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 
-import { usePublicStatus } from '@/api/use-asset-charts';
-
 export function AppShell() {
   const { t } = useLanguage();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const { session } = useSession();
-  const { data: statusData } = usePublicStatus();
 
   const isLoggedOut = !(session?.authenticated && session.user);
-  const userName = session?.authenticated && session.user ? session.user.username : t('user_menu.logged_out', 'Nepřihlášen');
-  const userRole = session?.authenticated && session.user ? session.user.role : t('user_menu.please_login', 'Přihlaste se');
-  const realAlertCount = statusData?.downMonitors ?? 0;
+  const userName =
+    session?.authenticated && session.user ? session.user.username : t('user_menu.logged_out', 'Nepřihlášen');
+  const userRole =
+    session?.authenticated && session.user ? session.user.role : t('user_menu.please_login', 'Přihlaste se');
+  // Odznak u Incidentů musí počítat TOTÉŽ, co stránka incidentů ukazuje -
+  // dřív bral downMonitors z public_status a ukazoval "2", zatímco stránka
+  // (otevřené incidenty z DB + monitory v problému) žádné neměla.
+  // Jediný zdroj: endpoint incidents už v sobě má i právě padlé monitory,
+  // takže se nic nesčítá (jinak by se výpadek počítal dvakrát).
+  const [realAlertCount, setRealAlertCount] = React.useState(0);
+  React.useEffect(() => {
+    let active = true;
+    const load = () =>
+      fetch('/status/api.php?action=incidents', { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (active && Array.isArray(data?.incidents)) {
+            setRealAlertCount(data.incidents.filter((i: any) => (i.status ?? 'investigating') !== 'resolved').length);
+          }
+        })
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 60000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   // Escape closes the mobile nav - otherwise there's no way out of it
   // on a touch device with a keyboard.
@@ -86,7 +108,7 @@ export function AppShell() {
           </div>
         </main>
 
-        <Footer version={appVersion} />
+        <Footer version={__APP_VERSION__} />
       </div>
     </div>
   );

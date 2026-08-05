@@ -4,7 +4,7 @@ param(
     [switch]$Update
 )
 
-$AGENT_VERSION = "1.7.1"
+$AGENT_VERSION = "1.7.3"
 
 if ($Help) {
     Write-Host "Windows PowerShell Status Agent v$AGENT_VERSION"
@@ -18,7 +18,8 @@ if ($Help) {
     Write-Host ""
     Write-Host "Konfigurace:"
     Write-Host "  Čte nastavení ze souboru agent.cfg nebo z proměnných prostředí:"
-    Write-Host "  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE"
+    Write-Host "  STATUS_API_URL, STATUS_AGENT_KEY, STATUS_AUTO_UPDATE,"
+    Write-Host "  STATUS_REMOTE_ACTIONS_ENABLED, STATUS_ALLOWED_ACTIONS"
     exit 0
 }
 
@@ -32,6 +33,8 @@ if ($Version) {
 $API_URL = "http://localhost/status/agent_api.php"
 $AGENT_KEY = "ZDE_VLOZTE_UNIKATNI_KLIC_Z_ADMINISTRACE"
 $AUTO_UPDATE = "0" # Nastavte na "1" pro povolení automatických aktualizací agenta ze serveru
+$REMOTE_ACTIONS_ENABLED = "0" # Opt-in: povolení HMAC-podepsaných vzdálených akcí ze serveru
+$ALLOWED_ACTIONS = "restart_service,reboot_server" # Whitelist povolených akcí (čárkou oddělené)
 # ===========================
 
 if ($Update) { $AUTO_UPDATE = "1" }
@@ -40,6 +43,8 @@ if ($Update) { $AUTO_UPDATE = "1" }
 if ($env:STATUS_API_URL) { $API_URL = $env:STATUS_API_URL }
 if ($env:STATUS_AGENT_KEY) { $AGENT_KEY = $env:STATUS_AGENT_KEY }
 if ($env:STATUS_AUTO_UPDATE) { $AUTO_UPDATE = $env:STATUS_AUTO_UPDATE }
+if ($env:STATUS_REMOTE_ACTIONS_ENABLED) { $REMOTE_ACTIONS_ENABLED = $env:STATUS_REMOTE_ACTIONS_ENABLED }
+if ($env:STATUS_ALLOWED_ACTIONS) { $ALLOWED_ACTIONS = $env:STATUS_ALLOWED_ACTIONS }
 
 # Načtení z externí konfigurace 'agent.cfg'
 $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -55,6 +60,8 @@ if (Test-Path $CfgPath) {
                 "API_URL" { $API_URL = $val }
                 "AGENT_KEY" { $AGENT_KEY = $val }
                 "AUTO_UPDATE" { $AUTO_UPDATE = $val }
+                "REMOTE_ACTIONS_ENABLED" { $REMOTE_ACTIONS_ENABLED = $val }
+                "ALLOWED_ACTIONS" { $ALLOWED_ACTIONS = $val }
             }
         }
     }
@@ -366,6 +373,70 @@ foreach ($det in $detectors) {
     }
 }
 
+# --- Parita s Linux agenty: Tailscale / ZeroTier / UPS (null bez nastroje) ---
+$tailscaleUp = $null
+$tailscalePeers = $null
+try {
+    $tsExe = Get-Command tailscale.exe -ErrorAction Stop
+    $tsRaw = & $tsExe.Source status --json 2>$null
+    if ($tsRaw) {
+        $tsJson = $tsRaw | ConvertFrom-Json
+        $tailscaleUp = ($tsJson.BackendState -eq 'Running')
+        $tailscalePeers = @($tsJson.Peer.PSObject.Properties).Count
+    }
+} catch {}
+
+$zerotierNetworks = $null
+try {
+    $ztExe = Get-Command zerotier-cli.bat -ErrorAction SilentlyContinue
+    if (-not $ztExe) { $ztExe = Get-Command zerotier-cli -ErrorAction Stop }
+    $ztOut = & $ztExe.Source listnetworks 2>$null
+    if ($ztOut) { $zerotierNetworks = @($ztOut | Where-Object { $_ -match ' OK ' }).Count }
+} catch {}
+
+$upsStatus = $null
+$upsBattery = $null
+try {
+    # Bez NUT klienta zkusime aspon Windows baterii/UPS pres WMI.
+    $batt = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+    if ($batt) {
+        # BatteryStatus 1 = vybijeni (bezi na baterii), 2 = na siti
+        $upsStatus = if ($batt.BatteryStatus -eq 1) { "OB" } else { "OL" }
+        if ($null -ne $batt.EstimatedChargeRemaining) { $upsBattery = [int]$batt.EstimatedChargeRemaining }
+    }
+} catch {}
+
+# --- Parita s Linux agenty v1.7.2: RAM detail, boot time, pending reboot, DNS latence, USB ---
+$ramTotalMb = $null; $ramUsedMb = $null; $ramAvailMb = $null; $ramFreeMb = $null
+$bootTime = $null
+try {
+    $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $ramTotalMb = [math]::Round($osInfo.TotalVisibleMemorySize / 1024)
+    $ramFreeMb = [math]::Round($osInfo.FreePhysicalMemory / 1024)
+    $ramAvailMb = $ramFreeMb
+    $ramUsedMb = $ramTotalMb - $ramFreeMb
+    $bootTime = [int][double]::Parse((Get-Date $osInfo.LastBootUpTime -UFormat %s))
+} catch {}
+
+# Windows umi "ceka na restart" precist z registru - dosavadni natvrdo $null
+# byl zbytecne zahozeny signal.
+$rebootRequired = $false
+try {
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $rebootRequired = $true }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $rebootRequired = $true }
+} catch { $rebootRequired = $null }
+
+$dnsLatencyMs = $null
+try {
+    $dnsSw = Measure-Command { [System.Net.Dns]::GetHostAddresses('example.com') | Out-Null }
+    $dnsLatencyMs = [math]::Round($dnsSw.TotalMilliseconds, 1)
+} catch {}
+
+$usbDevices = $null
+try {
+    $usbDevices = @(Get-PnpDevice -Class USB -Status OK -ErrorAction Stop).Count
+} catch {}
+
 $payload = @{
     agent_key = $AGENT_KEY
     agent_type = "powershell"
@@ -399,9 +470,22 @@ $payload = @{
     hostname = $sys_hostname
     kernel = $sys_kernel
     timezone = $sys_timezone
-    reboot_required = $null
+    reboot_required = $rebootRequired
     cloud_provider = $cloud_provider
     virtualization = $virtualization
+    ram_total_mb = $ramTotalMb
+    ram_used_mb = $ramUsedMb
+    ram_available_mb = $ramAvailMb
+    ram_free_mb = $ramFreeMb
+    boot_time = $bootTime
+    dns_latency_ms = $dnsLatencyMs
+    usb_devices = $usbDevices
+    auto_update = $(if ($AUTO_UPDATE -eq "1") { 1 } else { 0 })
+    tailscale_up = $tailscaleUp
+    tailscale_peers = $tailscalePeers
+    zerotier_networks = $zerotierNetworks
+    ups_status = $upsStatus
+    ups_battery_pct = $upsBattery
     discovered_services = $discoveredServices
 } | ConvertTo-Json -Depth 4
 
@@ -417,6 +501,88 @@ try {
 } catch {
     Write-AgentLog "CHYBA: Nepodařilo se odeslat data na server. Detaily: $($_.Exception.Message)"
     exit 1
+}
+
+# --- Vzdálené akce (opt-in přes REMOTE_ACTIONS_ENABLED=1) ---
+# Stejný kontrakt jako shell/Python agenti: server může v odpovědi poslat
+# HMAC-SHA256 podepsanou akci (podpis přes "action={a}|ts={t}|nonce={n}"
+# klíčem agenta, platnost 30 s, whitelist v ALLOWED_ACTIONS) a agent výsledek
+# VŽDY potvrdí zpět (agent_api.php větev action_result) - jinak by akce
+# v administraci navždy visela ve stavu "odesláno".
+function Send-ActionResult {
+    param([int]$ActionId, [string]$Status, [string]$Message)
+    $resultPayload = @{
+        agent_key = $AGENT_KEY
+        action_result = @{
+            action_id = $ActionId
+            status = $Status
+            message = $Message
+        }
+    } | ConvertTo-Json -Depth 4
+    try {
+        Invoke-RestMethod -Uri $API_URL -Method Post -Body $resultPayload -ContentType "application/json; charset=utf-8" -TimeoutSec 10 | Out-Null
+    } catch {
+        Write-AgentLog "VAROVÁNÍ: Potvrzení akce $ActionId se nepodařilo odeslat: $($_.Exception.Message)"
+    }
+}
+
+# Server akci posílá zanořenou v "pending_action" (viz agent_api.php).
+$pendingAction = if ($response -and $response.pending_action) { $response.pending_action } else { $response }
+
+if ($REMOTE_ACTIONS_ENABLED -eq "1" -and $pendingAction -and $pendingAction.action_id -and $pendingAction.action -and $pendingAction.timestamp -and $pendingAction.signature) {
+    $actId = [int]$pendingAction.action_id
+    $actType = [string]$pendingAction.action
+    $actTs = [long]$pendingAction.timestamp
+    $actSig = [string]$pendingAction.signature
+    $actNonce = [string]$pendingAction.nonce
+
+    $nowTs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ([Math]::Abs($nowTs - $actTs) -gt 30) {
+        Write-AgentLog "VAROVÁNÍ: Odmítnuta vzdálená akce - vypršená platnost (časové okno > 30s)"
+        Send-ActionResult -ActionId $actId -Status "failed" -Message "Vypršela platnost podpisu (>30s)"
+    } elseif (($ALLOWED_ACTIONS -split ",").Trim() -notcontains $actType) {
+        Write-AgentLog "VAROVÁNÍ: Odmítnuta vzdálená akce '$actType' - není na seznamu ALLOWED_ACTIONS!"
+        Send-ActionResult -ActionId $actId -Status "failed" -Message "Akce '$actType' není v ALLOWED_ACTIONS"
+    } else {
+        $hmacObj = New-Object System.Security.Cryptography.HMACSHA256
+        $hmacObj.Key = [Text.Encoding]::UTF8.GetBytes($AGENT_KEY)
+        $calcStr = "action=$actType|ts=$actTs|nonce=$actNonce"
+        $calcSig = ([BitConverter]::ToString($hmacObj.ComputeHash([Text.Encoding]::UTF8.GetBytes($calcStr)))).Replace("-", "").ToLower()
+
+        if ($calcSig -ne $actSig.ToLower()) {
+            Write-AgentLog "VAROVÁNÍ: Odmítnuta vzdálená akce - neplatný HMAC podpis!"
+            Send-ActionResult -ActionId $actId -Status "failed" -Message "Neplatný HMAC podpis"
+        } else {
+            Write-AgentLog "Aktivována bezpečná vzdálená akce: $actType (ID: $actId)"
+            switch ($actType) {
+                "restart_service" {
+                    $svcName = [string]$(if ($pendingAction.service_name) { $pendingAction.service_name } else { $response.service_name })
+                    if (-not $svcName -or $svcName -notmatch '^[A-Za-z0-9_. @-]+$') {
+                        Send-ActionResult -ActionId $actId -Status "failed" -Message "Chybí nebo je neplatné service_name v payloadu akce"
+                    } elseif (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                        try {
+                            Restart-Service -Name $svcName -Force -ErrorAction Stop
+                            Write-AgentLog "Restartována služba: $svcName"
+                            Send-ActionResult -ActionId $actId -Status "executed" -Message "Služba '$svcName' restartována"
+                        } catch {
+                            Write-AgentLog "VAROVÁNÍ: Restart služby '$svcName' selhal: $($_.Exception.Message)"
+                            Send-ActionResult -ActionId $actId -Status "failed" -Message "Restart služby '$svcName' selhal: $($_.Exception.Message)"
+                        }
+                    } else {
+                        Write-AgentLog "VAROVÁNÍ: Služba '$svcName' nenalezena."
+                        Send-ActionResult -ActionId $actId -Status "failed" -Message "Služba '$svcName' nenalezena"
+                    }
+                }
+                "reboot_server" {
+                    Write-AgentLog "PROVÁDÍM REBOOT SERVERU DLE PODEPSANÉHO POKYNU..."
+                    # Potvrzení musí odejít PŘED rebootem - po Restart-Computer
+                    # se už nic dalšího neprovede.
+                    Send-ActionResult -ActionId $actId -Status "executed" -Message "Server se restartuje"
+                    Restart-Computer -Force
+                }
+            }
+        }
+    }
 }
 
 # --- Automatická aktualizace agenta (opt-in přes AUTO_UPDATE=1) ---

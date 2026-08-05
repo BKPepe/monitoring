@@ -1,10 +1,5 @@
 import { httpMetricsSource } from './http-source';
-import type {
-  ChartData,
-  MetricsSource,
-  PublicStatus,
-  TimeRange,
-} from './types';
+import type { ChartData, MetricsSource, PublicStatus, TimeRange } from './types';
 
 export const mockMetricsSource: MetricsSource = {
   name: 'mock',

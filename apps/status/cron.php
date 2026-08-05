@@ -115,6 +115,25 @@ foreach ($monitors as $monitor) {
         continue;
     }
     
+    // Agent-side kontrola (služby na LAN, z hostingu nedosažitelné): stav
+    // zapisuje agent_api při reportu agenta. Cron tu hlídá jen čerstvost -
+    // když výsledky přestanou chodit (agent mlčí), monitor nesmí věčně
+    // svítit poslední známou barvou. 'unknown' se do SLA nepočítá.
+    if ($type === 'agent_service') {
+        $offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
+        $last_checked_ts = $monitor['last_checked'] ? strtotime($monitor['last_checked']) : 0;
+        if ($offline_secs > 0 && (time() - $last_checked_ts) > $offline_secs && $monitor['status'] !== 'unknown') {
+            $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'unknown', last_status_change = NOW() WHERE id = ?");
+            $stmt_up->execute([$id]);
+            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, 'unknown', NULL, ?, 'Agent')");
+            $stmt_log->execute([$id, 'Zdrojový agent přestal posílat výsledky kontroly - stav služby není známý.']);
+            echo "UNKNOWN (agent-side kontrola bez čerstvých výsledků)\n";
+        } else {
+            echo "OK (kontrolu provádí agent)\n";
+        }
+        continue;
+    }
+
     $check_result = [
         'status' => 'unknown',
         'response_time' => 0,
@@ -216,8 +235,67 @@ foreach ($monitors as $monitor) {
         case 'discord':
             $check_result = check_discord($target, $timeout);
             break;
+
+        default:
+            // Typ bez aktivní kontroly (např. starší import z Service
+            // Discovery s typem 'dns'). Dřív tudy každou minutu propadl
+            // výchozí 'unknown' výsledek až do monitor_logs a SLA report
+            // pak monitoru ukazoval 0 % uptime, přestože ho nikdy nikdo
+            // nekontroloval. Bez měření žádný zápis.
+            $stmt_skip = $pdo->prepare("UPDATE monitors SET last_checked = NOW() WHERE id = ?");
+            $stmt_skip->execute([$id]);
+            echo "SKIP (typ '{$type}' nemá aktivní kontrolu)\n";
+            continue 2;
     }
-    
+
+    // Okamžitý druhý pokus při selhání - jediný přechodný 5s timeout (síťový
+    // hiccup, chvilkové přetížení sdíleného hostingu) dřív okamžitě překlopil
+    // stav na down a vystřelil notifikace (WhatsApp/SMS/e-mail), aby se za
+    // minutu vše vrátilo s druhou notifikací. Skutečný výpadek selže i
+    // napodruhé; blip tímhle zmizí úplně a žádná notifikace neodejde.
+    if (($check_result['status'] ?? '') === 'down') {
+        sleep(2);
+        $retry_result = null;
+        switch ($type) {
+            case 'web':
+                $retry_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
+                break;
+            case 'cpanel':
+                $retry_result = check_cpanel($target, $timeout);
+                break;
+            case 'port':
+                $retry_result = check_socket($target, $port ?: 80, $timeout);
+                break;
+            case 'minecraft':
+                $retry_result = check_minecraft($target, $port ?: 25565, $timeout, $monitor['rcon_port'] ?? null, $monitor['rcon_password'] ?? null);
+                break;
+            case 'teamspeak':
+                $retry_result = check_teamspeak($target, $port ?: 10011, $timeout, $monitor['sq_username'] ?? null, $monitor['sq_password'] ?? null, $monitor['ts3_filetransfer_port'] ?? null);
+                break;
+            case 'discord':
+                $retry_result = check_discord($target, $timeout);
+                break;
+        }
+        if ($retry_result !== null && ($retry_result['status'] ?? '') === 'up') {
+            echo "RETRY OK (první pokus selhal: " . ($check_result['error'] ?? '?') . ")\n";
+            $check_result = $retry_result;
+        }
+    }
+
+    // cPanel fallback pro web monitory: když HTTP kontrola selže i napodruhé,
+    // ale cPanel exporter na stejném hostingu normálně odpovídá, server žije -
+    // problém je v HTTP cestě (Cloudflare, PHP-FPM apod.), ne v celém stroji.
+    // Zapíše se down s doplněnou informací, ale stejná logika jako agent
+    // fallback níže se tady záměrně NEaplikuje - web, který nevrací stránky,
+    // JE nedostupný pro návštěvníky, jen chceme do notifikace přesnější kontext.
+    if (($check_result['status'] ?? '') === 'down' && $type === 'web' && !empty($monitor['cpanel_stats_url'])) {
+        $cp_probe = check_cpanel($monitor['cpanel_stats_url'], min($timeout, 5));
+        if (($cp_probe['status'] ?? '') === 'up') {
+            $check_result['error'] = ($check_result['error'] ?? 'Web nedostupný')
+                . ' | Server samotný běží (cPanel exporter odpovídá) - problém je pravděpodobně v HTTP vrstvě/CDN, ne ve stroji.';
+        }
+    }
+
     $new_status = $check_result['status'];
     $response_time = $check_result['response_time'];
     $error_msg = $check_result['error'];
@@ -405,13 +483,43 @@ foreach ($monitors as $monitor) {
                         'postgresql' => $cp_res['postgresql'] ?? null,
                         'cpu' => $cp_res['cpu'] ?? null
                     ];
-                    
-                    // Uložit do vps_metrics pro historii grafů
-                    $cpu_val = isset($cp_res['cpu']['percent']) ? floatval($cp_res['cpu']['percent']) : 0.0;
-                    $ram_val = isset($cp_res['memory']['percent']) ? floatval($cp_res['memory']['percent']) : 0.0;
-                    $hdd_val = isset($cp_res['disk']['percent']) ? floatval($cp_res['disk']['percent']) : 0.0;
+                    $details_arr['cpanel_stats_error'] = null;
+
+                    // Uložit do vps_metrics pro historii grafů. Chybějící metrika
+                    // se ukládá jako NULL, ne 0.0 - nula je reálná hodnota a
+                    // vymyšlená nula by v grafech vypadala jako "server se fláká"
+                    // (StatsBar bez CloudLinux např. cpuusage vůbec nevrací).
+                    $cpu_val = isset($cp_res['cpu']['percent']) ? floatval($cp_res['cpu']['percent']) : null;
+                    $ram_val = isset($cp_res['memory']['percent']) ? floatval($cp_res['memory']['percent']) : null;
+                    $hdd_val = isset($cp_res['disk']['percent']) ? floatval($cp_res['disk']['percent']) : null;
                     $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
                     $stmt_metrics->execute([$id, $cpu_val, $ram_val, $hdd_val]);
+                } else {
+                    // Selhání sběru cPanel statistik dřív jen tiše přeskočilo zápis -
+                    // data zmizela bez jediné stopy (přesně tak umřel sběr 21.7.,
+                    // když deploy přepsal na serveru ručně vložený STATS_KEY).
+                    // Chyba se teď ukládá do details, aby byla vidět v UI/API;
+                    // `since` drží začátek výpadku napříč běhy cronu a `hint`
+                    // říká adminovi, jak KONKRÉTNĚ tenhle druh selhání opravit.
+                    $cp_http = $cp_res['http_code'] ?? null;
+                    if ($cp_http === 404) {
+                        $cp_hint = t('cpanel_hint_404');
+                    } elseif ($cp_http === 403) {
+                        $cp_hint = t('cpanel_hint_403');
+                    } elseif ($cp_http === 0) {
+                        $cp_hint = t('cpanel_hint_conn');
+                    } elseif ($cp_http === 200) {
+                        $cp_hint = t('cpanel_hint_json');
+                    } else {
+                        $cp_hint = null;
+                    }
+                    $prev_cp_details = json_decode($monitor['last_details'] ?? '{}', true);
+                    $prev_cp_since = is_array($prev_cp_details) ? ($prev_cp_details['cpanel_stats_error']['since'] ?? null) : null;
+                    $details_arr['cpanel_stats_error'] = [
+                        'error' => $cp_res['error'] ?? 'Neznámá chyba',
+                        'hint' => $cp_hint,
+                        'since' => $prev_cp_since ?? date('c'),
+                    ];
                 }
             }
             
@@ -428,9 +536,10 @@ foreach ($monitors as $monitor) {
             ], JSON_UNESCAPED_UNICODE);
             
             if ($new_status === 'up') {
-                $cpu_val = isset($check_result['cpu']['percent']) ? floatval($check_result['cpu']['percent']) : 0.0;
-                $ram_val = isset($check_result['memory']['percent']) ? floatval($check_result['memory']['percent']) : 0.0;
-                $hdd_val = isset($check_result['disk']['percent']) ? floatval($check_result['disk']['percent']) : 0.0;
+                // NULL pro chybějící metriky - stejný důvod jako u web monitorů výše.
+                $cpu_val = isset($check_result['cpu']['percent']) ? floatval($check_result['cpu']['percent']) : null;
+                $ram_val = isset($check_result['memory']['percent']) ? floatval($check_result['memory']['percent']) : null;
+                $hdd_val = isset($check_result['disk']['percent']) ? floatval($check_result['disk']['percent']) : null;
                 $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
                 $stmt_metrics->execute([$id, $cpu_val, $ram_val, $hdd_val]);
             }
@@ -446,6 +555,13 @@ foreach ($monitors as $monitor) {
         $new_details_arr = json_decode($details, true);
         if (is_array($new_details_arr)) {
             $merged_details_arr = array_merge($old_details, $new_details_arr);
+            // Otisk verze nasazení do details - diagnostika, KTERÝ soubor cron.php
+            // reálně běží. FTP deploy porovnává jen proti vlastnímu stavovému
+            // souboru, takže ručně přepsaný soubor na serveru (nebo cron job
+            // mířící na starou kopii mimo public_html/status/) z gitu nepoznáme
+            // jinak než touhle stopou v datech.
+            @include_once __DIR__ . '/version.php';
+            $merged_details_arr['cron_version'] = defined('APP_VERSION_HASH') ? APP_VERSION_HASH : 'dev';
             $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
         }
     } else {

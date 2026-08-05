@@ -184,10 +184,20 @@
     text-wrap: balance;
   }
 
-  h1 { font-size: var(--text-4xl); font-weight: 800; }
-  h2 { font-size: var(--text-3xl); font-weight: 800; }
-  h3 { font-size: var(--text-xl); }
-  h4 { font-size: var(--text-lg); }
+  h1 {
+    font-size: var(--text-4xl);
+    font-weight: 800;
+  }
+  h2 {
+    font-size: var(--text-3xl);
+    font-weight: 800;
+  }
+  h3 {
+    font-size: var(--text-xl);
+  }
+  h4 {
+    font-size: var(--text-lg);
+  }
 
   p {
     color: var(--text-mid);
@@ -374,14 +384,25 @@
   }
 
   @media (hover: hover) {
-    .btn:hover { transform: translateY(-1px); }
-    .btn-primary:hover { background: var(--brand-500); }
-    .btn-secondary:hover { border-color: var(--border-strong); }
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+    .btn-primary:hover {
+      background: var(--brand-500);
+    }
+    .btn-secondary:hover {
+      border-color: var(--border-strong);
+    }
     .btn-ghost:hover,
-    .btn-outline:hover { border-color: var(--brand-500); color: var(--brand-500); }
+    .btn-outline:hover {
+      border-color: var(--brand-500);
+      color: var(--brand-500);
+    }
   }
 
-  .btn:active { transform: translateY(0); }
+  .btn:active {
+    transform: translateY(0);
+  }
 
   /* --- Odznaky --------------------------------------------------------- */
   .badge {
@@ -409,13 +430,27 @@
     color: var(--badge-color);
   }
 
-  .badge-up { --badge-color: var(--up); }
-  .badge-down { --badge-color: var(--down); }
-  .badge-warning { --badge-color: var(--warning); }
-  .badge-info { --badge-color: var(--info); }
-  .badge-paused { --badge-color: var(--paused); }
-  .badge-accent { --badge-color: var(--brand-500); }
-  .badge-success { --badge-color: var(--up); }
+  .badge-up {
+    --badge-color: var(--up);
+  }
+  .badge-down {
+    --badge-color: var(--down);
+  }
+  .badge-warning {
+    --badge-color: var(--warning);
+  }
+  .badge-info {
+    --badge-color: var(--info);
+  }
+  .badge-paused {
+    --badge-color: var(--paused);
+  }
+  .badge-accent {
+    --badge-color: var(--brand-500);
+  }
+  .badge-success {
+    --badge-color: var(--up);
+  }
 
   /* Tečka stavu doplňuje odznak i samostatné indikátory. */
   .status-dot {
@@ -507,11 +542,19 @@
   }
 
   /* auto-fit místo pevných sloupců + media queries: mřížka se přizpůsobí sama. */
-  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
-  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); }
-  .grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
+  .grid-2 {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  }
+  .grid-3 {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  }
+  .grid-4 {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  }
 
-  .text-center { text-align: center; }
+  .text-center {
+    text-align: center;
+  }
   .text-gradient {
     background: linear-gradient(135deg, var(--text-hi) 25%, var(--brand-500) 100%);
     -webkit-background-clip: text;
@@ -520,11 +563,15 @@
     color: transparent;
   }
 
-  .text-brand { color: var(--brand-500); }
+  .text-brand {
+    color: var(--brand-500);
+  }
 
   /* Skrývání přes třídu, ne přes style="display:none" — inline styl by
      strict CSP (style-src bez 'unsafe-inline') zablokovala. */
-  .is-hidden { display: none; }
+  .is-hidden {
+    display: none;
+  }
 
   .visually-hidden {
     position: absolute;
@@ -540,15 +587,30 @@
    KEYFRAMES
    ========================================================================== */
 @keyframes ping {
-  0% { box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 60%, transparent); }
-  70% { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 60%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 @keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
 }
 
-.float { animation: float 6s var(--ease) infinite; }
-.pulse { animation: ping 2s var(--ease) infinite; }
+.float {
+  animation: float 6s var(--ease) infinite;
+}
+.pulse {
+  animation: ping 2s var(--ease) infinite;
+}

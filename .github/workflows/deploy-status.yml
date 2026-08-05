@@ -17,6 +17,30 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v7
 
+      - name: Run PHP unit tests (pure functions)
+        run: php apps/status/tests/run_tests.php
+
+      - name: Run pipeline tests (collection, e-mail, notifications)
+        run: php apps/status/tests/run_pipeline_tests.php
+
+      - name: PHP syntax check
+        run: |
+          set -e
+          for f in apps/status/*.php apps/status/lang/*.php; do
+            php -l "$f" > /dev/null
+          done
+          echo "All PHP files parse cleanly."
+
+      - name: Agent script syntax check
+        run: |
+          set -e
+          # agent.sh má shebang #!/bin/bash a bashismy používá záměrně;
+          # agent_openwrt.sh musí být čistý POSIX (routery mají ash/dash).
+          bash -n apps/status/agent.sh
+          dash -n apps/status/agent_openwrt.sh
+          python3 -m py_compile apps/status/agent.py
+          echo "Agent scripts parse cleanly."
+
       - name: Inject Status Database Config
         env:
           STATUS_CONFIG_PHP: ${{ secrets.STATUS_CONFIG_PHP || secrets.status_config_php }}

@@ -31,7 +31,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260731');
+    define('BK_SCHEMA_VERSION', '20260805f');
 
     $bk_current_schema = false;
     try {
@@ -440,6 +440,53 @@ try {
         }
     } catch (PDOException $e) {
         // Tabulka monitors/assets ještě neexistuje (čerstvá instalace před importem schema.sql) - ignorujeme
+    }
+
+    // Per-user jazyk e-mailů: NULL = řídí se globálním nastavením email_lang
+    try {
+        $pdo->exec("ALTER TABLE users ADD COLUMN email_lang VARCHAR(5) DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+
+    // Metriky ve vps_metrics smí být NULL - když zdroj (StatsBar bez CloudLinux,
+    // agent bez čidla) hodnotu nevrací, ukládá se NULL místo vymyšlené nuly
+    try {
+        $pdo->exec("ALTER TABLE vps_metrics MODIFY COLUMN cpu_usage FLOAT NULL, MODIFY COLUMN ram_usage FLOAT NULL, MODIFY COLUMN hdd_usage FLOAT NULL");
+    } catch (PDOException $e) {
+        // Tabulka ještě neexistuje (čerstvá instalace) - ignorujeme
+    }
+
+    // restart_service potřebuje vědět KTEROU službu restartovat - bez sloupce
+    // se jméno nikdy nepřeneslo a akce u všech agentů končila "failed".
+    try {
+        $pdo->exec("ALTER TABLE agent_actions ADD COLUMN service_name VARCHAR(64) DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+
+    // Přečtená upozornění se drží na uživateli, ne v localStorage prohlížeče -
+    // jinak "označit vše jako přečtené" platí jen na jednom počítači.
+    try {
+        $pdo->exec("ALTER TABLE users ADD COLUMN alerts_read_log_id INT DEFAULT 0");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+
+    // Výkon: seznam monitorů se ptá na POSLEDNÍ řádek podle id pro každý
+    // monitor (odezva z logů, metriky z agenta). Bez indexu (monitor_id, id)
+    // to znamenalo scan - endpoint monitors trval ~0,7 s a brzdil celou appku.
+    foreach ([
+        "CREATE INDEX idx_logs_monitor_id_desc ON monitor_logs (monitor_id, id)",
+        // Okenní SLA agregace (websites_overview) filtruje rok logů podle času.
+        "CREATE INDEX idx_logs_checked_at ON monitor_logs (checked_at)",
+        "CREATE INDEX idx_vpsm_monitor_id_desc ON vps_metrics (monitor_id, id)",
+    ] as $idx_sql) {
+        try {
+            $pdo->exec($idx_sql);
+        } catch (PDOException $e) {
+            // Index už existuje (nebo tabulka ještě ne) - ignorujeme
+        }
     }
 
     // Uložení aktuální verze schématu - migrace se příště přeskočí

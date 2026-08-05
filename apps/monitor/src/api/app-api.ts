@@ -36,6 +36,11 @@ export interface ApiMonitor {
   hostname: string | null;
   os: string | null;
   details?: Record<string, any>;
+  /** Výpadky SBĚRU dat (ne služby samotné) - viz bk_get_collection_issues()
+   *  v PHP. Pravidlo projektu: frontend je MUSÍ viditelně zobrazit; tiché
+   *  zahazování/zamlčení chybějících dat je zakázané. Server je posílá JEN
+   *  administrátorovi - je to provozní diagnostika, ne veřejný stav služeb. */
+  collectionIssues?: { type: string; message: string; hint?: string | null; since: string | null }[];
   // Konfigurační pole - přítomná jen v odpovědi pro přihlášeného administrátora
   // (viz api.php action=monitors, $is_admin blok). Hesla se nikdy neposílají zpátky,
   // jen příznak, že jsou nastavená.
@@ -59,6 +64,12 @@ export interface ApiMonitor {
   rconPort?: number | null;
   rconPasswordSet?: boolean;
   enabledMetrics?: string[];
+  /** Novější verze agenta dostupná na serveru (admin-only; chybí = aktuální/neznámé). */
+  agentUpdateAvailable?: string;
+  /** Verze skriptu agenta nasazená na serveru (admin-only). */
+  agentLatestVersion?: string;
+  /** Cíl monitoru není z hostingu dosažitelný (privátní síť) - admin-only. */
+  unreachableTarget?: boolean;
   remoteActionsEnabled?: boolean;
   allowedActions?: string[];
 }
@@ -120,7 +131,9 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
       if (fallbackRes.ok) return (await fallbackRes.json()) as T;
     }
     throw new ApiError(
-      (data as { error?: string; message?: string }).message ?? (data as { error?: string }).error ?? `HTTP ${res.status}`,
+      (data as { error?: string; message?: string }).message ??
+        (data as { error?: string }).error ??
+        `HTTP ${res.status}`,
       res.status
     );
   }
@@ -152,14 +165,8 @@ export const appApi = {
 
   getUsers: () => request<{ users: ApiUser[] }>('users').then((r) => r.users),
 
-  saveUser: (user: {
-    id?: number;
-    username: string;
-    email: string;
-    phone?: string;
-    role: string;
-    password?: string;
-  }) => mutate<{ success: true; id: number; invited?: boolean }>('save_user', user),
+  saveUser: (user: { id?: number; username: string; email: string; phone?: string; role: string; password?: string }) =>
+    mutate<{ success: true; id: number; invited?: boolean }>('save_user', user),
 
   deleteUser: (id: number) => mutate<{ success: true }>('delete_user', { id }),
 };

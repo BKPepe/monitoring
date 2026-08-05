@@ -52,8 +52,16 @@ export function UserMenu({
   );
 
   if (isLoggedOut) {
-    return <Link to="/setup" title={t('user_menu.login_title', 'Přihlásit se / Nastavit')}>{content}</Link>;
+    return (
+      <Link to="/setup" title={t('user_menu.login_title', 'Přihlásit se / Nastavit')}>
+        {content}
+      </Link>
+    );
   }
 
-  return <Link to="/users" title={t('user_menu.profile_title', 'Profil a uživatelé')}>{content}</Link>;
+  return (
+    <Link to="/users" title={t('user_menu.profile_title', 'Profil a uživatelé')}>
+      {content}
+    </Link>
+  );
 }

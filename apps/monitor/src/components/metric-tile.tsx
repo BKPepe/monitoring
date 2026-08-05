@@ -55,12 +55,7 @@ export function MetricTile({
 
       <div className="mt-1 flex items-center gap-2">
         {delta && (
-          <span
-            className={cn(
-              'tabular text-xs font-medium',
-              isGood ? 'text-up' : 'text-down'
-            )}
-          >
+          <span className={cn('tabular text-xs font-medium', isGood ? 'text-up' : 'text-down')}>
             {delta.direction === 'up' ? '▲' : '▼'} {delta.value}
           </span>
         )}

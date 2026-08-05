@@ -19,8 +19,8 @@ export function StatusPagesPage() {
 
   useEffect(() => {
     fetch('/status/api.php?action=get_settings', { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
+      .then((r) => r.json())
+      .then((data) => {
         const title = data.settings?.site_title || t('status_pages.default_title', 'Hlavní Status Portál');
         const url = data.settings?.site_url ? `${data.settings.site_url}/` : `${window.location.origin}/status/`;
         setPages([
@@ -31,7 +31,7 @@ export function StatusPagesPage() {
             slug: 'default',
             isPublic: true,
             status: 'active',
-          }
+          },
         ]);
       })
       .catch(() => {
@@ -43,7 +43,7 @@ export function StatusPagesPage() {
             slug: 'default',
             isPublic: true,
             status: 'active',
-          }
+          },
         ]);
       });
   }, [t]);
@@ -54,7 +54,10 @@ export function StatusPagesPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('status_pages.title', 'Veřejná Status Stránka')}</h1>
           <p className="text-muted-foreground text-sm">
-            {t('status_pages.subtitle', 'Zobrazuje veřejnou status stránku dostupnosti všech sledovaných služeb a plánovaných údržeb v reálném čase.')}
+            {t(
+              'status_pages.subtitle',
+              'Zobrazuje veřejnou status stránku dostupnosti všech sledovaných služeb a plánovaných údržeb v reálném čase.'
+            )}
           </p>
         </div>
       </div>
@@ -77,7 +80,10 @@ export function StatusPagesPage() {
               </div>
 
               <p className="text-xs text-muted-foreground leading-relaxed">
-                {t('status_pages.desc', 'Zobrazuje stav sledovaných služeb v reálném čase a příchozí plánované údržby.')}
+                {t(
+                  'status_pages.desc',
+                  'Zobrazuje stav sledovaných služeb v reálném čase a příchozí plánované údržby.'
+                )}
               </p>
             </div>
 
