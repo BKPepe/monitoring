@@ -20,7 +20,11 @@ try {
         $db_port = defined('DB_PORT') ? DB_PORT : 5432;
         $dsn = "pgsql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME;
     } else {
-        $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+        // DB_PORT se dřív používal jen u Postgresu, takže MySQL na jiném
+        // než výchozím portu se nepřipojila a uživatel viděl jen obecnou
+        // hlášku "Chyba připojení k databázi".
+        $db_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
+        $dsn = "mysql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME . ";charset=utf8mb4";
     }
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,

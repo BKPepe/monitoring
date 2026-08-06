@@ -101,6 +101,41 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
 
+  api:
+    name: API integrační testy (api.php nad MySQL)
+    runs-on: ubuntu-latest
+    # api.php je monolit nad databází - jediný způsob, jak otestovat jeho
+    # dotazy a názvy sloupců, je opravdu ho zavolat. Přesně tahle třída
+    # chyb (setting_key vs key_name) tu už jednou shodila endpoint na 500.
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: bk_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, curl, pdo, pdo_mysql
+
+      - name: Integrační testy api.php
+        env:
+          BK_TEST_DB_HOST: 127.0.0.1
+          BK_TEST_DB_NAME: bk_test
+          BK_TEST_DB_USER: root
+          BK_TEST_DB_PASS: test
+        run: php apps/status/tests/run_api_tests.php
+
   agents:
     name: Agent skripty (shell, python, powershell)
     runs-on: ubuntu-latest
