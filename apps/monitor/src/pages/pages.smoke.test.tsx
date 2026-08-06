@@ -8,6 +8,14 @@ import { DashboardPage } from './dashboard';
 import { WebsitesPage } from './websites';
 import { IncidentsPage } from './incidents';
 import { ServicesPage } from './services';
+import { InfrastructurePage } from './infrastructure';
+import { InsightsPage } from './insights';
+import { ReportsPage } from './reports';
+import { UsersPage } from './users';
+import { ApiAgentsPage } from './api-agents';
+import { StatusPagesPage } from './status-pages';
+import { SettingsPage } from './settings';
+import { NotFoundPage } from './not-found';
 
 /**
  * Smoke testy stránek: každá stránka se musí vykreslit bez pádu
@@ -35,6 +43,15 @@ const emptyApi = (url: string): Response => {
   if (url.includes('action=dashboard_layout')) return jsonResponse({ catalog: [], tiles: [] });
   if (url.includes('action=websites_overview')) return jsonResponse({ slaGoal: 99.95, monitors: {} });
   if (url.includes('action=session')) return jsonResponse({ authenticated: false });
+  if (url.includes('action=get_settings')) return jsonResponse({ settings: {} });
+  if (url.includes('action=get_subscriptions')) return jsonResponse({ subscriptions: [] });
+  if (url.includes('action=sla_report')) return jsonResponse({ slaGoal: 99.95, overallUptime: null, monitors: [] });
+  if (url.includes('action=users')) return jsonResponse({ users: [] });
+  if (url.includes('action=audit_logs')) return jsonResponse({ logs: [] });
+  if (url.includes('action=discovered_services')) return jsonResponse({ services: [] });
+  if (url.includes('action=events')) return jsonResponse({ events: [] });
+  if (url.includes('action=daily_uptime')) return jsonResponse({ rows: [] });
+  if (url.includes('action=ui_config')) return jsonResponse({ title: 'Blood Kings', navLinks: [] });
   return jsonResponse({});
 };
 
@@ -51,6 +68,14 @@ const pages: [string, () => React.ReactElement][] = [
   ['Websites', () => <WebsitesPage />],
   ['Incidents', () => <IncidentsPage />],
   ['Services', () => <ServicesPage />],
+  ['Infrastructure', () => <InfrastructurePage />],
+  ['Insights', () => <InsightsPage />],
+  ['Reports', () => <ReportsPage />],
+  ['Users', () => <UsersPage />],
+  ['ApiAgents', () => <ApiAgentsPage />],
+  ['StatusPages', () => <StatusPagesPage />],
+  ['Settings', () => <SettingsPage />],
+  ['NotFound', () => <NotFoundPage />],
 ];
 
 describe('smoke: stránky se vykreslí', () => {

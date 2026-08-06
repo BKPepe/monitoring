@@ -123,4 +123,23 @@ foreach ($files as $f) {
 file_put_contents($out_dir . '/coverage.txt', $report);
 echo $report;
 echo "\nCobertura XML: coverage/cobertura.xml\n";
+
+// Rohatka proti propadu pokrytí: prah se drží v CI (BK_COVERAGE_MIN) a
+// zvedá se, kdyz testu pribude. Bez promenne se jen reportuje - lokalni
+// beh nema duvod padat.
+$min = getenv('BK_COVERAGE_MIN');
+if ($min !== false && $min !== '') {
+    $min_pct = (float)$min;
+    $actual = $rate * 100;
+    if ($actual + 0.05 < $min_pct) {
+        fwrite(STDERR, sprintf(
+            "\nPokryti kleslo na %.1f %%, pozadovane minimum je %.1f %%.\n"
+            . "Bud dopis testy, nebo (kdyz to je zamer) sniz BK_COVERAGE_MIN v quality.yml.\n",
+            $actual,
+            $min_pct
+        ));
+        exit(1);
+    }
+    printf("Pokryti %.1f %% splnuje minimum %.1f %%.\n", $actual, $min_pct);
+}
 exit(0);

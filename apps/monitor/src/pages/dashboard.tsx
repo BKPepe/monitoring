@@ -40,6 +40,7 @@ import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
 import { nestUnderAgents, processUsage } from '@/lib/monitor-grouping';
+import { buildNeedsAttention } from '@/lib/attention';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -259,94 +260,22 @@ export function DashboardPage() {
     });
   }, [monitors, dailyUptimeRows]);
 
-  // Sekce "Vyžaduje pozornost": jen skutečné, aktuálně platné problémy
-  // odvozené z naměřených dat - žádné vycpávky, prázdný seznam je dobrá zpráva.
-  const needsAttention = React.useMemo(() => {
-    const items: {
-      key: string;
-      assetId: number;
-      name: string;
-      severity: 'down' | 'warning';
-      text: string;
-    }[] = [];
-    for (const m of monitors) {
-      if (m.status === 'down') {
-        items.push({
-          key: `down-${m.id}`,
-          assetId: m.id,
-          name: m.name,
-          severity: 'down',
-          text: t('attention.down', 'Služba je nedostupná'),
-        });
-      } else if (m.status === 'warning') {
-        items.push({
-          key: `warn-${m.id}`,
-          assetId: m.id,
-          name: m.name,
-          severity: 'warning',
-          text: t('attention.warning', 'Monitor hlásí varování'),
-        });
-      }
-      if (m.unreachableTarget) {
-        items.push({
-          key: `unreach-${m.id}`,
-          assetId: m.id,
-          name: m.name,
-          severity: 'warning',
-          text: t('attention.unreachable', 'Cíl je trvale nedosažitelný — zvažte kontrolu agentem'),
-        });
-      }
-      const sslDays = m.details?.ssl_days_remaining;
-      if (typeof sslDays === 'number' && sslDays <= 14) {
-        items.push({
-          key: `ssl-${m.id}`,
-          assetId: m.id,
-          name: m.name,
-          severity: sslDays <= 0 ? 'down' : 'warning',
-          text:
-            sslDays <= 0
-              ? t('attention.ssl_expired', 'SSL certifikát vypršel!')
-              : t('attention.ssl_expiring', { days: sslDays }, `SSL certifikát vyprší za ${sslDays} dní`),
-        });
-      }
-      if (m.agentUpdateAvailable) {
-        items.push({
-          key: `agent-${m.id}`,
-          assetId: m.id,
-          name: m.name,
-          severity: 'warning',
-          text: t(
-            'attention.agent_update',
-            { version: m.agentUpdateAvailable },
-            `Agent je zastaralý — k dispozici je verze ${m.agentUpdateAvailable}`
-          ),
-        });
-      }
-      for (const [metric, value] of [
-        ['CPU', m.cpu],
-        ['RAM', m.ram],
-        ['Disk', m.hdd],
-      ] as const) {
-        if (typeof value === 'number' && value >= 90) {
-          items.push({
-            key: `${metric}-${m.id}`,
-            assetId: m.id,
-            name: m.name,
-            severity: 'warning',
-            text: t(
-              'attention.metric_high',
-              { metric, value: Math.round(value) },
-              `${metric} na ${Math.round(value)} %`
-            ),
-          });
-        }
-      }
-    }
-    // Výpadky první, pak varování; v rámci závažnosti podle jména.
-    return items.sort((a, b) =>
-      a.severity === b.severity ? a.name.localeCompare(b.name) : a.severity === 'down' ? -1 : 1
-    );
-  }, [monitors, t]);
+  // Sekce "Vyžaduje pozornost" - logika i prahy v lib/attention.ts, ať jde
+  // otestovat bez renderu (viz attention.test.ts).
+  const needsAttention = React.useMemo(
+    () =>
+      buildNeedsAttention(monitors, {
+        down: t('attention.down', 'Služba je nedostupná'),
+        warning: t('attention.warning', 'Monitor hlásí varování'),
+        unreachable: t('attention.unreachable', 'Cíl je trvale nedosažitelný — zvažte kontrolu agentem'),
+        sslExpired: t('attention.ssl_expired', 'SSL certifikát vypršel!'),
+        sslExpiring: (days) => t('attention.ssl_expiring', { days }, `SSL certifikát vyprší za ${days} dní`),
+        agentUpdate: (version) =>
+          t('attention.agent_update', { version }, `Agent je zastaralý — k dispozici je verze ${version}`),
+        metricHigh: (metric, value) => t('attention.metric_high', { metric, value }, `${metric} na ${value} %`),
+      }),
+    [monitors, t]
+  );
 
   // --- Sekce dashboardu jako pojmenované bloky -------------------------
   // Uložené rozložení určuje jejich pořadí a viditelnost; bez uloženého

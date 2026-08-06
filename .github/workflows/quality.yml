@@ -75,11 +75,14 @@ jobs:
       - name: Detekce mrtvého kódu
         run: php apps/status/tests/find_dead_code.php
 
+      # BK_COVERAGE_MIN je rohatka: az bude zmerena skutecna hodnota z CI,
+      # doplni se sem a pokryti uz nesmi klesnout niz.
       - name: Coverage report (Cobertura + Clover)
+        env:
+          BK_COVERAGE_MIN: ''
         run: |
           mkdir -p coverage
           php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
-        continue-on-error: true
 
       - name: Upload coverage artefaktu
         uses: actions/upload-artifact@v5
@@ -104,13 +107,15 @@ jobs:
           dash -n apps/status/agent_openwrt.sh
           echo "Shell agenti se parsují."
 
+      # Blokujici: na urovni 'error' jsou agenti dnes ciste, takze cokoli
+      # noveho je regrese. Nizsi urovne (warning/info) zamerne netestujeme -
+      # 13 zbylych nalezu jsou stylisticke veci, ne chyby.
       - name: ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: './apps/status'
           severity: error
           additional_files: 'agent.sh agent_openwrt.sh'
-        continue-on-error: true
 
       - name: Python agent
         run: python3 -m py_compile apps/status/agent.py
