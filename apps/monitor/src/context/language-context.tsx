@@ -1822,14 +1822,23 @@ const LanguageContext = createContext<LanguageContextType>({
 });
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
+  // localStorage nemusí existovat (testy, private mode se zákazem storage) -
+  // bez guardu by celá aplikace spadla při mountu na čtení jazyka.
   const [lang, setLangState] = useState<Language>(() => {
-    const saved = localStorage.getItem('bk_lang');
-    return saved === 'en' ? 'en' : 'cs';
+    try {
+      return localStorage.getItem('bk_lang') === 'en' ? 'en' : 'cs';
+    } catch {
+      return 'cs';
+    }
   });
 
   const setLang = (newLang: Language) => {
     setLangState(newLang);
-    localStorage.setItem('bk_lang', newLang);
+    try {
+      localStorage.setItem('bk_lang', newLang);
+    } catch {
+      // Jazyk se nepodaří persistovat - session poběží dál v paměti.
+    }
   };
 
   // useCallback: t se předává do závislostí efektů napříč aplikací -
