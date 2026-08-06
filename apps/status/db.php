@@ -31,7 +31,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260805f');
+    define('BK_SCHEMA_VERSION', '20260806a');
 
     $bk_current_schema = false;
     try {
@@ -477,6 +477,13 @@ try {
     // monitor (odezva z logů, metriky z agenta). Bez indexu (monitor_id, id)
     // to znamenalo scan - endpoint monitors trval ~0,7 s a brzdil celou appku.
     foreach ([
+        // Incidenty jako plnohodnotné objekty: vazba na monitor, převzetí
+        // (acknowledge) a postmortem. NULLable - ručně založené incidenty
+        // vazbu na monitor nemají.
+        "ALTER TABLE incidents ADD COLUMN monitor_id INT NULL",
+        "ALTER TABLE incidents ADD COLUMN acknowledged_by VARCHAR(64) NULL",
+        "ALTER TABLE incidents ADD COLUMN acknowledged_at DATETIME NULL",
+        "ALTER TABLE incidents ADD COLUMN postmortem TEXT NULL",
         "CREATE INDEX idx_logs_monitor_id_desc ON monitor_logs (monitor_id, id)",
         // Okenní SLA agregace (websites_overview) filtruje rok logů podle času.
         "CREATE INDEX idx_logs_checked_at ON monitor_logs (checked_at)",

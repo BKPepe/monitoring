@@ -25,6 +25,34 @@ export function IncidentsPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const { data: publicData } = usePublicStatus();
+  // Rozbalený incident (timeline + akce) a rozepsané texty poznámek.
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [noteText, setNoteText] = useState('');
+  const [postmortemText, setPostmortemText] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const incidentAction = async (id: number, op: string, extra: Record<string, string> = {}) => {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const res = await fetch('/status/api.php?action=incident_action', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, op, ...extra }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      loadIncidents();
+      return true;
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : t('incidents.action_failed', 'Akce se nezdařila.'));
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   const loadIncidents = () => {
     fetch('/status/api.php?action=incidents', { credentials: 'include' })
@@ -309,48 +337,186 @@ export function IncidentsPage() {
                       </div>
                     </div>
 
-                    <Link
-                      to={`/infrastructure/${inc.monitor_id}`}
-                      className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
-                    >
-                      {t('incidents.view_outage', 'Detail výpadku')} <ArrowRight className="size-3" />
-                    </Link>
-                  </div>
-                ))}
-
-                {manualIncidents.map((inc) => (
-                  <div
-                    key={inc.id}
-                    className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start justify-between gap-4"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`size-2.5 rounded-full ${inc.status === 'resolved' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`}
-                        />
-                        <h4 className="font-bold text-sm text-foreground">{inc.title}</h4>
-                        <Badge variant="warning">{t('incidents.manual_badge', 'Ručně nahlášeno')}</Badge>
-                        <Badge variant={inc.status === 'resolved' ? 'up' : 'warning'}>{inc.status}</Badge>
-                      </div>
-                      {inc.updates?.[0]?.message && (
-                        <p className="text-xs text-muted-foreground">{inc.updates[0].message}</p>
+                    <div className="shrink-0 flex flex-col items-end gap-1.5">
+                      <Link
+                        to={`/infrastructure/${inc.monitor_id}`}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
+                      >
+                        {t('incidents.view_outage', 'Detail výpadku')} <ArrowRight className="size-3" />
+                      </Link>
+                      {inc.acknowledgedBy ? (
+                        <span className="text-[11px] text-muted-foreground">
+                          {t('incidents.ack_by', { user: inc.acknowledgedBy }, `Převzal: ${inc.acknowledgedBy}`)}
+                        </span>
+                      ) : (
+                        isAuthenticated &&
+                        inc.incidentId != null && (
+                          <button
+                            type="button"
+                            disabled={actionBusy}
+                            onClick={() => incidentAction(inc.incidentId, 'ack')}
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                          >
+                            {t('incidents.ack_btn', 'Převzít incident')}
+                          </button>
+                        )
                       )}
-                      <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-warning flex-wrap">
-                        <span>
-                          {t('incidents.created_label', 'Vytvořeno')}: {inc.createdAt}
-                        </span>
-                        {inc.resolvedAt && (
-                          <span>
-                            {t('incidents.resolved_label', 'Vyřešeno')}: {inc.resolvedAt}
-                          </span>
-                        )}
-                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-bold">
-                          {t('incidents.duration', 'Doba trvání')}: {inc.durationText}
-                        </span>
-                      </div>
                     </div>
                   </div>
                 ))}
+
+                {manualIncidents.map((inc) => {
+                  const expanded = expandedId === inc.id;
+                  const open = inc.status !== 'resolved';
+                  return (
+                    <div
+                      key={inc.id}
+                      className={`p-4 rounded-lg border ${open ? 'bg-amber-500/10 border-amber-500/30' : 'bg-secondary/30 border-border'}`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`size-2.5 rounded-full ${inc.status === 'resolved' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`}
+                            />
+                            <h4 className="font-bold text-sm text-foreground">{inc.title}</h4>
+                            {inc.monitorId == null && (
+                              <Badge variant="warning">{t('incidents.manual_badge', 'Ručně nahlášeno')}</Badge>
+                            )}
+                            <Badge variant={inc.status === 'resolved' ? 'up' : 'warning'}>{inc.status}</Badge>
+                            {inc.acknowledgedBy && (
+                              <span className="text-[11px] text-muted-foreground">
+                                {t('incidents.ack_by', { user: inc.acknowledgedBy }, `Převzal: ${inc.acknowledgedBy}`)}
+                              </span>
+                            )}
+                          </div>
+                          {!expanded && inc.updates?.length > 0 && (
+                            <p className="text-xs text-muted-foreground truncate">
+                              {inc.updates[inc.updates.length - 1].message}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-warning flex-wrap">
+                            <span>
+                              {t('incidents.created_label', 'Vytvořeno')}: {inc.createdAt}
+                            </span>
+                            {inc.resolvedAt && (
+                              <span>
+                                {t('incidents.resolved_label', 'Vyřešeno')}: {inc.resolvedAt}
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-bold">
+                              {t('incidents.duration', 'Doba trvání')}: {inc.durationText}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedId(expanded ? null : inc.id);
+                            setNoteText('');
+                            setPostmortemText(inc.postmortem ?? '');
+                            setActionError(null);
+                          }}
+                          className="shrink-0 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80"
+                        >
+                          {expanded ? t('incidents.collapse', 'Sbalit') : t('incidents.detail_btn', 'Timeline & akce')}
+                        </button>
+                      </div>
+
+                      {expanded && (
+                        <div className="mt-3 space-y-3 border-t border-border pt-3">
+                          {/* Timeline všech kroků - automatických i ručních. */}
+                          <ol className="space-y-1.5">
+                            {(inc.updates ?? []).map((u: any, i: number) => (
+                              <li key={i} className="flex items-start gap-2 text-xs">
+                                <span
+                                  className={`mt-1 size-1.5 shrink-0 rounded-full ${u.status === 'resolved' ? 'bg-emerald-500' : 'bg-amber-400'}`}
+                                />
+                                <span className="text-muted-foreground font-mono shrink-0">{u.at}</span>
+                                <span className="text-muted-foreground shrink-0">[{u.status}]</span>
+                                <span className="min-w-0">{u.message}</span>
+                              </li>
+                            ))}
+                          </ol>
+
+                          {inc.postmortem && (
+                            <div className="rounded-md bg-secondary/40 border border-border p-3">
+                              <p className="text-xs font-bold mb-1">{t('incidents.postmortem', 'Postmortem')}</p>
+                              <p className="text-xs whitespace-pre-wrap">{inc.postmortem}</p>
+                            </div>
+                          )}
+
+                          {actionError && <p className="text-xs font-semibold text-down">{actionError}</p>}
+
+                          {isAuthenticated && (
+                            <div className="space-y-2">
+                              {open && (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {!inc.acknowledgedBy && (
+                                    <button
+                                      type="button"
+                                      disabled={actionBusy}
+                                      onClick={() => incidentAction(inc.id, 'ack')}
+                                      className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                                    >
+                                      {t('incidents.ack_btn', 'Převzít incident')}
+                                    </button>
+                                  )}
+                                  <input
+                                    value={noteText}
+                                    onChange={(e) => setNoteText(e.target.value)}
+                                    placeholder={t('incidents.note_placeholder', 'Poznámka do timeline…')}
+                                    className="min-w-40 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={actionBusy || !noteText.trim()}
+                                    onClick={async () => {
+                                      if (await incidentAction(inc.id, 'note', { message: noteText })) setNoteText('');
+                                    }}
+                                    className="rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 disabled:opacity-50"
+                                  >
+                                    {t('incidents.note_btn', 'Přidat poznámku')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={actionBusy}
+                                    onClick={() => incidentAction(inc.id, 'resolve', { note: noteText })}
+                                    className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                                  >
+                                    {t('incidents.resolve_btn', 'Uzavřít incident')}
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Postmortem dává smysl hlavně po vyřešení, ale psát ho jde kdykoli. */}
+                              <div className="flex flex-col gap-1.5">
+                                <textarea
+                                  value={postmortemText}
+                                  onChange={(e) => setPostmortemText(e.target.value)}
+                                  placeholder={t(
+                                    'incidents.postmortem_placeholder',
+                                    'Postmortem: co se stalo, proč, a co uděláme jinak…'
+                                  )}
+                                  rows={3}
+                                  className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={actionBusy || postmortemText === (inc.postmortem ?? '')}
+                                  onClick={() => incidentAction(inc.id, 'postmortem', { postmortem: postmortemText })}
+                                  className="self-end rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 disabled:opacity-50"
+                                >
+                                  {t('incidents.postmortem_save', 'Uložit postmortem')}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Card>

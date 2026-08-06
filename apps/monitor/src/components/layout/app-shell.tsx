@@ -64,6 +64,12 @@ export function AppShell() {
         hint: '/websites',
       },
       {
+        id: 'p-/services',
+        label: t('nav.services', 'Služby'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/services',
+      },
+      {
         id: 'p-/incidents',
         label: t('nav.incidents', 'Incidenty'),
         group: t('search.group_pages', 'Stránky'),

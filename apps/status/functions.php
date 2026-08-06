@@ -3839,7 +3839,47 @@ function is_in_maintenance($monitor) {
 /**
  * Spuštění notifikačního procesu při změně stavu monitoru
  */
+/**
+ * Životní cyklus incidentů navázaných na monitor.
+ *
+ * Výpadek automaticky založí incident (jednou - dokud je otevřený, další
+ * down průchody cronu nic nepřidávají), obnovení ho automaticky uzavře
+ * se záznamem v timeline. Ruční kroky (převzetí, poznámky, postmortem)
+ * dělá admin přes API - tohle jen garantuje, že žádný výpadek nezmizí
+ * bez záznamu.
+ */
+function bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg = '') {
+    $monitor_id = (int)($monitor['id'] ?? 0);
+    if ($monitor_id <= 0) {
+        return;
+    }
+    try {
+        if ($new_status === 'down') {
+            $stmt = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved' LIMIT 1");
+            $stmt->execute([$monitor_id]);
+            if ($stmt->fetchColumn() === false) {
+                $ins = $pdo->prepare("INSERT INTO incidents (title, impact, status, monitor_id) VALUES (?, 'major', 'investigating', ?)");
+                $ins->execute(['Výpadek: ' . ($monitor['name'] ?? ('monitor #' . $monitor_id)), $monitor_id]);
+                $incident_id = (int)$pdo->lastInsertId();
+                $upd = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, 'investigating', ?)");
+                $upd->execute([$incident_id, 'Automaticky detekován výpadek. ' . ($error_msg !== '' ? 'Důvod: ' . $error_msg : '')]);
+            }
+        } elseif ($new_status === 'up') {
+            $stmt = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved'");
+            $stmt->execute([$monitor_id]);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $incident_id) {
+                $pdo->prepare("UPDATE incidents SET status = 'resolved', resolved_at = NOW() WHERE id = ?")->execute([$incident_id]);
+                $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, 'resolved', 'Monitor je opět dostupný - incident uzavřen automaticky.')")
+                    ->execute([$incident_id]);
+            }
+        }
+    } catch (Throwable $e) {
+        // Incident je doprovodný záznam - jeho selhání nesmí zastavit notifikace.
+    }
+}
+
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
+    bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg);
     $name = $monitor['name'];
     $type = $monitor['type'];
     $target = $monitor['target'];

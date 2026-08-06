@@ -7,6 +7,7 @@ import { AssetDetailPage } from '@/pages/asset-detail';
 import { UsersPage } from '@/pages/users';
 import { SetupPage } from '@/pages/setup';
 import { WebsitesPage } from '@/pages/websites';
+import { ServicesPage } from '@/pages/services';
 import { StatusPagesPage } from '@/pages/status-pages';
 import { IncidentsPage } from '@/pages/incidents';
 import { ReportsPage } from '@/pages/reports';
@@ -125,6 +126,7 @@ export const router = createBrowserRouter(
         { path: 'infrastructure', element: <InfrastructurePage /> },
         { path: 'infrastructure/:assetId', element: <AssetDetailPage /> },
         { path: 'websites', element: <WebsitesPage /> },
+        { path: 'services', element: <ServicesPage /> },
         { path: 'status-pages', element: <StatusPagesPage /> },
         { path: 'incidents', element: <IncidentsPage /> },
         { path: 'insights', element: <InsightsPage /> },

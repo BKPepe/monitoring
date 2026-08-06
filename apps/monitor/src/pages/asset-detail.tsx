@@ -252,7 +252,9 @@ export function AssetDetailPage() {
       <Hero asset={asset} />
 
       <Tabs defaultValue="overview" className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-3">
+        {/* Sticky pod headerem (h-16): u dlouhého detailu jsou záložky a
+            přepínač rozsahu pořád po ruce, bez scrollování zpět nahoru. */}
+        <div className="bg-background/95 sticky top-16 z-20 -mx-1 flex flex-wrap items-center justify-between gap-4 border-b border-border px-1 pb-3 pt-1 backdrop-blur-sm">
           <TabsList className="bg-secondary/40 p-1">
             <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled & Výkon')}</TabsTrigger>
             <TabsTrigger value="processes">
@@ -810,7 +812,13 @@ function OverviewTab({
       </Card>
 
       <div className="xl:col-span-12">
-        <PerformanceCharts data={charts.data} error={charts.error} loading={charts.loading} range={range} />
+        <PerformanceCharts
+          data={charts.data}
+          error={charts.error}
+          loading={charts.loading}
+          range={range}
+          events={events}
+        />
       </div>
 
       <Card className="xl:col-span-5">
@@ -1446,13 +1454,27 @@ function PerformanceCharts({
   error,
   loading,
   range,
+  events = [],
 }: {
   data: ChartData[] | null;
   error: Error | null;
   loading: boolean;
   range: TimeRange;
+  events?: TimelineEvent[];
 }) {
   const { t } = useLanguage();
+
+  // Události monitoru jako svislé značky ve VŠECH grafech - výpadek nebo
+  // restart je vidět přímo v místě, kde metrika uskočila. MySQL datetime se
+  // parsuje přes 'T' variantu (Safari čisté 'YYYY-MM-DD HH:MM' neumí).
+  const chartEvents = React.useMemo(() => {
+    return events
+      .map((e) => {
+        const ms = Date.parse(String(e.at).replace(' ', 'T'));
+        return Number.isNaN(ms) ? null : { t: ms, label: e.title };
+      })
+      .filter((e): e is { t: number; label: string } => e != null);
+  }, [events]);
 
   const data = React.useMemo(() => {
     if (rawData && rawData.length > 0 && rawData.some((c) => c.series.some((s) => s.points.length > 0))) {
@@ -1500,7 +1522,11 @@ function PerformanceCharts({
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {data.map((chart) => (
-        <ChartCard key={chart.id} data={chart} />
+        <ChartCard
+          key={chart.id}
+          data={chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart}
+          group="asset-performance"
+        />
       ))}
     </div>
   );

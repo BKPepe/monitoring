@@ -38,7 +38,7 @@ import { useLanguage } from '@/context/language-context';
 import { DataSourceBanner } from '@/components/data-source-banner';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { usePublicStatus } from '@/api/use-asset-charts';
-import { formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
+import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
 import { nestUnderAgents, processUsage } from '@/lib/monitor-grouping';
 
 type MonitorStatus = ApiMonitor['status'];
@@ -805,112 +805,170 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
   }
 
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="pl-5">{t('dashboard.col_monitor_name', 'Monitor')}</TableHead>
-            <TableHead>{t('common.status', 'Stav')}</TableHead>
-            <TableHead>{t('common.response', 'Odezva')}</TableHead>
-            <TableHead>CPU</TableHead>
-            <TableHead>RAM</TableHead>
-            <TableHead>HDD</TableHead>
-            <TableHead>{t('common.uptime', 'Uptime')}</TableHead>
-            <TableHead className="pr-5">{t('common.last_check', 'Poslední kontrola')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {nestUnderAgents(rows).map(({ row: monitor, child }) => (
-            <TableRow key={monitor.id}>
-              <TableCell className={child ? 'pl-10' : 'pl-5'}>
-                <div className="flex items-center gap-2.5">
-                  {child && <span className="text-muted-foreground/60 -ml-4 shrink-0 font-mono text-xs">└</span>}
-                  {(() => {
-                    const tkey = (monitor.type || '').toLowerCase();
-                    const Icon = typeIcon[tkey] ?? Server;
-                    return (
-                      <span
-                        className={`grid size-8 shrink-0 place-items-center rounded-lg ${typeTint[tkey] ?? 'bg-muted text-muted-foreground'}`}
-                      >
-                        <Icon className="size-4" />
-                      </span>
-                    );
-                  })()}
-                  <div className="leading-tight min-w-0">
-                    <Link to={`/infrastructure/${monitor.id}`} className="font-medium hover:underline text-foreground">
-                      {monitor.name}
-                    </Link>
-                    <p className="text-muted-foreground text-xs truncate">
-                      {monitor.type} · {monitor.target}
-                    </p>
-                  </div>
-                </div>
-              </TableCell>
-              <TableCell>
-                {/* Mockup: stav jako barevný text s tečkou, ne pill badge. */}
-                <span className="flex items-center gap-1.5 text-xs font-semibold">
-                  <StatusDot variant={monitor.status === 'maintenance' ? 'info' : monitor.status} />
+    <>
+      {/* Mobil: karty místo tabulky - 8 sloupců se na 390px displeji nedá
+          číst ani horizontálním scrollem. */}
+      <div className="flex flex-col gap-2 px-4 pb-4 md:hidden">
+        {nestUnderAgents(rows).map(({ row: monitor, child }) => {
+          const usage = processUsage(monitor, rows);
+          return (
+            <Link
+              key={monitor.id}
+              to={`/infrastructure/${monitor.id}`}
+              className={cn(
+                'rounded-lg border border-border bg-card p-3 transition-colors hover:border-primary/40',
+                child && 'ml-5'
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-sm font-semibold">
+                  {child && <span className="text-muted-foreground/60 mr-1 font-mono text-xs">└</span>}
+                  {monitor.name}
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
+                  <StatusDot variant={monitor.status === 'maintenance' ? 'paused' : monitor.status} />
                   <span
                     className={
                       monitor.status === 'up'
                         ? 'text-up'
                         : monitor.status === 'down'
                           ? 'text-down'
-                          : monitor.status === 'warning'
-                            ? 'text-warning'
-                            : 'text-muted-foreground'
+                          : 'text-muted-foreground'
                     }
                   >
                     {statusText[monitor.status]}
                   </span>
                 </span>
-              </TableCell>
-              <TableCell className="tabular">
-                <div className="flex items-center gap-2">
-                  <span>{formatMs(monitor.responseMs)}</span>
-                  {(latencySeries[monitor.id]?.length ?? 0) >= 2 && (
-                    <Sparkline data={latencySeries[monitor.id]} tone="latency" className="h-4 w-14 shrink-0" />
-                  )}
-                </div>
-              </TableCell>
-              {(() => {
-                // Agent-side kontrola nemá vlastní CPU/RAM stroje - ukážeme
-                // spotřebu JEJÍHO procesu z žebříčků agenta (uživatelský podnět).
-                const usage = processUsage(monitor, rows);
-                const isProc = (monitor.type || '').toLowerCase() === 'agent_service';
-                return (
-                  <>
-                    <TableCell className="tabular">
-                      <ThresholdValue value={usage.cpu} />
-                    </TableCell>
-                    <TableCell className="tabular">
-                      {isProc ? (
-                        usage.ram != null ? (
-                          <span className="text-muted-foreground">{usage.ram} MB</span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )
-                      ) : (
-                        <ThresholdValue value={usage.ram} />
-                      )}
-                    </TableCell>
-                  </>
-                );
-              })()}
-              <TableCell className="tabular">
-                <ThresholdValue value={monitor.hdd} />
-              </TableCell>
-              <TableCell className="tabular text-muted-foreground">
-                {monitor.uptimeSeconds == null ? '—' : formatUptime(monitor.uptimeSeconds)}
-              </TableCell>
-              <TableCell className="text-muted-foreground pr-5 text-xs">
-                {monitor.lastCheck ? formatRelative(monitor.lastCheck) : '—'}
-              </TableCell>
+              </div>
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+                <span>{monitor.responseMs != null ? formatMs(monitor.responseMs) : '—'}</span>
+                {usage.cpu != null && <span>CPU {formatPercent(usage.cpu)}</span>}
+                {usage.ram != null && (
+                  <span>
+                    RAM{' '}
+                    {(monitor.type || '').toLowerCase() === 'agent_service'
+                      ? `${usage.ram} MB`
+                      : formatPercent(usage.ram)}
+                  </span>
+                )}
+                {monitor.hdd != null && <span>HDD {formatPercent(monitor.hdd)}</span>}
+                {monitor.lastCheck && <span>{formatRelative(monitor.lastCheck)}</span>}
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="pl-5">{t('dashboard.col_monitor_name', 'Monitor')}</TableHead>
+              <TableHead>{t('common.status', 'Stav')}</TableHead>
+              <TableHead>{t('common.response', 'Odezva')}</TableHead>
+              <TableHead>CPU</TableHead>
+              <TableHead>RAM</TableHead>
+              <TableHead>HDD</TableHead>
+              <TableHead>{t('common.uptime', 'Uptime')}</TableHead>
+              <TableHead className="pr-5">{t('common.last_check', 'Poslední kontrola')}</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+          </TableHeader>
+          <TableBody>
+            {nestUnderAgents(rows).map(({ row: monitor, child }) => (
+              <TableRow key={monitor.id}>
+                <TableCell className={child ? 'pl-10' : 'pl-5'}>
+                  <div className="flex items-center gap-2.5">
+                    {child && <span className="text-muted-foreground/60 -ml-4 shrink-0 font-mono text-xs">└</span>}
+                    {(() => {
+                      const tkey = (monitor.type || '').toLowerCase();
+                      const Icon = typeIcon[tkey] ?? Server;
+                      return (
+                        <span
+                          className={`grid size-8 shrink-0 place-items-center rounded-lg ${typeTint[tkey] ?? 'bg-muted text-muted-foreground'}`}
+                        >
+                          <Icon className="size-4" />
+                        </span>
+                      );
+                    })()}
+                    <div className="leading-tight min-w-0">
+                      <Link
+                        to={`/infrastructure/${monitor.id}`}
+                        className="font-medium hover:underline text-foreground"
+                      >
+                        {monitor.name}
+                      </Link>
+                      <p className="text-muted-foreground text-xs truncate">
+                        {monitor.type} · {monitor.target}
+                      </p>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {/* Mockup: stav jako barevný text s tečkou, ne pill badge. */}
+                  <span className="flex items-center gap-1.5 text-xs font-semibold">
+                    <StatusDot variant={monitor.status === 'maintenance' ? 'info' : monitor.status} />
+                    <span
+                      className={
+                        monitor.status === 'up'
+                          ? 'text-up'
+                          : monitor.status === 'down'
+                            ? 'text-down'
+                            : monitor.status === 'warning'
+                              ? 'text-warning'
+                              : 'text-muted-foreground'
+                      }
+                    >
+                      {statusText[monitor.status]}
+                    </span>
+                  </span>
+                </TableCell>
+                <TableCell className="tabular">
+                  <div className="flex items-center gap-2">
+                    <span>{formatMs(monitor.responseMs)}</span>
+                    {(latencySeries[monitor.id]?.length ?? 0) >= 2 && (
+                      <Sparkline data={latencySeries[monitor.id]} tone="latency" className="h-4 w-14 shrink-0" />
+                    )}
+                  </div>
+                </TableCell>
+                {(() => {
+                  // Agent-side kontrola nemá vlastní CPU/RAM stroje - ukážeme
+                  // spotřebu JEJÍHO procesu z žebříčků agenta (uživatelský podnět).
+                  const usage = processUsage(monitor, rows);
+                  const isProc = (monitor.type || '').toLowerCase() === 'agent_service';
+                  return (
+                    <>
+                      <TableCell className="tabular">
+                        <ThresholdValue value={usage.cpu} />
+                      </TableCell>
+                      <TableCell className="tabular">
+                        {isProc ? (
+                          usage.ram != null ? (
+                            <span className="text-muted-foreground">{usage.ram} MB</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )
+                        ) : (
+                          <ThresholdValue value={usage.ram} />
+                        )}
+                      </TableCell>
+                    </>
+                  );
+                })()}
+                <TableCell className="tabular">
+                  <ThresholdValue value={monitor.hdd} />
+                </TableCell>
+                <TableCell className="tabular text-muted-foreground">
+                  {monitor.uptimeSeconds == null ? '—' : formatUptime(monitor.uptimeSeconds)}
+                </TableCell>
+                <TableCell className="text-muted-foreground pr-5 text-xs">
+                  {monitor.lastCheck ? formatRelative(monitor.lastCheck) : '—'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </>
   );
 }
 

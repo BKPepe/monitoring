@@ -1425,10 +1425,25 @@ if ($action === 'incidents') {
                 LIMIT 50
             ");
             $log_rows = $stmt_logs ? $stmt_logs->fetchAll() : [];
+
+            // Otevřené DB incidenty podle monitoru - živý výpadek se na ně
+            // naváže, aby šel z UI převzít/uzavřít (lifecycle je zakládá
+            // automaticky při přechodu na down).
+            $open_by_monitor = [];
+            try {
+                $stmt_open = $pdo->query("SELECT id, acknowledged_by, acknowledged_at FROM incidents WHERE status != 'resolved' AND monitor_id IS NOT NULL");
+                foreach ($stmt_open->fetchAll() as $oi) {
+                    $open_by_monitor[(int)$oi['monitor_id']] = $oi;
+                }
+            } catch (Throwable $t) {}
+
             foreach ($log_rows as $r) {
                 $start_ts = strtotime($r['checked_at']);
+                $open_inc = $open_by_monitor[(int)$r['monitor_id']] ?? null;
                 $incidents[] = [
                     'id' => (int)$r['id'],
+                    'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
+                    'acknowledgedBy' => $open_inc ? $open_inc['acknowledged_by'] : null,
                     'monitor_id' => (int)$r['monitor_id'],
                     'monitor_name' => $r['monitor_name'],
                     'target' => $r['target'],
@@ -1448,7 +1463,8 @@ if ($action === 'incidents') {
         $manual_incidents = [];
         try {
             $stmt_inc = $pdo->query("
-                SELECT id, title, impact, status, created_at, updated_at, resolved_at
+                SELECT id, title, impact, status, created_at, updated_at, resolved_at,
+                       monitor_id, acknowledged_by, acknowledged_at, postmortem
                 FROM incidents
                 ORDER BY id DESC
                 LIMIT 50
@@ -1470,6 +1486,10 @@ if ($action === 'incidents') {
                     'title' => $r['title'],
                     'impact' => $r['impact'],
                     'status' => $r['status'],
+                    'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
+                    'acknowledgedBy' => $r['acknowledged_by'],
+                    'acknowledgedAt' => $r['acknowledged_at'] ? date('d.m.Y H:i:s', strtotime($r['acknowledged_at'])) : null,
+                    'postmortem' => $r['postmortem'],
                     'createdAt' => date('d.m.Y H:i:s', $start_ts),
                     'resolvedAt' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
                     'durationText' => bk_duration_text($end_ts - $start_ts),
@@ -1481,6 +1501,78 @@ if ($action === 'incidents') {
         echo json_encode(['incidents' => $incidents, 'manualIncidents' => $manual_incidents], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['incidents' => [], 'manualIncidents' => []], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2c2x. Akce nad incidentem (admin-only): převzetí, poznámka/změna stavu,
+// vyřešení s poznámkou, postmortem. Každý krok se zapisuje do
+// incident_updates - timeline je tak úplná bez ohledu na to, kdo co udělal.
+if ($action === 'incident_action') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $incident_id = (int)($input['id'] ?? 0);
+    $op = (string)($input['op'] ?? '');
+    $username = $_SESSION['admin_username'] ?? 'admin';
+
+    try {
+        $stmt = $pdo->prepare("SELECT id, status FROM incidents WHERE id = ?");
+        $stmt->execute([$incident_id]);
+        $incident = $stmt->fetch();
+        if (!$incident) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Incident nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $add_update = function (string $status, string $message) use ($pdo, $incident_id) {
+            $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)")
+                ->execute([$incident_id, $status, $message]);
+        };
+
+        if ($op === 'ack') {
+            $pdo->prepare("UPDATE incidents SET acknowledged_by = ?, acknowledged_at = NOW() WHERE id = ?")
+                ->execute([$username, $incident_id]);
+            $add_update((string)$incident['status'], "Incident převzal: {$username}");
+            bk_audit_log($pdo, 'incident_ack', "Incident #{$incident_id} převzat", 'incident', $incident_id);
+        } elseif ($op === 'note') {
+            $message = trim((string)($input['message'] ?? ''));
+            if ($message === '') {
+                http_response_code(400);
+                echo json_encode(['error' => 'Poznámka nesmí být prázdná.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $status = in_array($input['status'] ?? '', ['investigating', 'identified', 'monitoring'], true)
+                ? $input['status'] : (string)$incident['status'];
+            $pdo->prepare("UPDATE incidents SET status = ? WHERE id = ?")->execute([$status, $incident_id]);
+            $add_update($status, "[{$username}] " . $message);
+            bk_audit_log($pdo, 'incident_note', "Incident #{$incident_id}: poznámka", 'incident', $incident_id);
+        } elseif ($op === 'resolve') {
+            $note = trim((string)($input['note'] ?? ''));
+            $pdo->prepare("UPDATE incidents SET status = 'resolved', resolved_at = NOW() WHERE id = ?")
+                ->execute([$incident_id]);
+            $add_update('resolved', "[{$username}] " . ($note !== '' ? $note : 'Incident uzavřen ručně.'));
+            bk_audit_log($pdo, 'incident_resolve', "Incident #{$incident_id} uzavřen", 'incident', $incident_id);
+        } elseif ($op === 'postmortem') {
+            $text = trim((string)($input['postmortem'] ?? ''));
+            $pdo->prepare("UPDATE incidents SET postmortem = ? WHERE id = ?")
+                ->execute([$text !== '' ? $text : null, $incident_id]);
+            $add_update((string)$incident['status'], "[{$username}] Postmortem " . ($text !== '' ? 'doplněn.' : 'odstraněn.'));
+            bk_audit_log($pdo, 'incident_postmortem', "Incident #{$incident_id}: postmortem", 'incident', $incident_id);
+        } else {
+            http_response_code(400);
+            echo json_encode(['error' => 'Neznámá operace.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Akci se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

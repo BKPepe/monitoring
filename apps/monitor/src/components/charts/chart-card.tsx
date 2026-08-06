@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
  * okno (průměr poslední vs. první čtvrtiny bodů) - vizuální jazyk podle
  * mockupu dashboardu ("CPU Usage (%) / 23 % ↓ 5 %").
  */
-export function ChartCard({ data }: { data: ChartData }) {
+export function ChartCard({ data, group }: { data: ChartData; group?: string }) {
   const { t } = useLanguage();
   const primary = data.series[0];
   const latest = [...(primary?.points ?? [])].reverse().find((p) => p.v != null);
@@ -56,7 +56,7 @@ export function ChartCard({ data }: { data: ChartData }) {
       </CardHeader>
       <CardContent className="pb-3">
         {hasData ? (
-          <MetricChart data={data} />
+          <MetricChart data={data} group={group} />
         ) : (
           // An empty chart is a legitimate response - a monitor may not report
           // this metric at all. A fabricated curve would be a lie.

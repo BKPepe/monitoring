@@ -14,6 +14,7 @@ import {
   Settings,
   ShieldAlert,
   Users,
+  Radar,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -34,6 +35,7 @@ const primaryNav: NavItem[] = [
   { to: '/', labelKey: 'nav.dashboard', defaultLabel: 'Dashboard', icon: LayoutDashboard },
   { to: '/infrastructure', labelKey: 'nav.infrastructure', defaultLabel: 'Infrastructure', icon: Cpu },
   { to: '/websites', labelKey: 'nav.websites', defaultLabel: 'Websites', icon: Globe },
+  { to: '/services', labelKey: 'nav.services', defaultLabel: 'Služby', icon: Radar },
   { to: '/status-pages', labelKey: 'nav.status-pages', defaultLabel: 'Status Pages', icon: Activity },
   { to: '/incidents', labelKey: 'nav.incidents', defaultLabel: 'Incidents', icon: ShieldAlert, count: 0 },
   { to: '/insights', labelKey: 'nav.insights', defaultLabel: 'Insights', icon: Lightbulb },
