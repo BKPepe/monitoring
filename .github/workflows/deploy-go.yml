@@ -9,6 +9,10 @@ on:
       - 'apps/monitor/**'
       - '.github/workflows/deploy-go.yml'
 
+  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
+  # Actions zrovna nezareagovaly na push).
+  workflow_dispatch:
+
 jobs:
   build-and-deploy:
     name: Build Go Server & React SPA, Deploy via FTP

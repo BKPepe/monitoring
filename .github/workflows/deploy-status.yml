@@ -8,6 +8,10 @@ on:
       - 'apps/status/**'
       - '.github/workflows/deploy-status.yml'
 
+  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
+  # Actions zrovna nezareagovaly na push).
+  workflow_dispatch:
+
 jobs:
   deploy:
     name: Build and Deploy Status App
