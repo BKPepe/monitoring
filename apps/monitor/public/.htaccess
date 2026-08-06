@@ -1,21 +1,19 @@
-# LiteSpeed / Apache SPA fallback configuration for Blood Kings SPA under /app/
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-  RewriteBase /app/
-  RewriteRule ^index\.html$ - [L]
-  RewriteCond %{REQUEST_FILENAME} !-f
-  RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule . /app/index.html [L]
-</IfModule>
+# SPA fallback pro React Router (BrowserRouter s base /app/).
+#
+# Bez tohohle F5 na /app/infrastructure/5 hledá soubor na disku a vrací 404.
+#
+# ZÁMĚRNĚ bez <IfModule> obálek: LiteSpeed na sdíleném hostingu IfModule
+# testy vyhodnocuje nespolehlivě (a FallbackResource nepodporuje vůbec),
+# takže původní "opatrná" verze se celá tiše přeskočila a deep linky
+# vracely 404, přestože soubor na serveru byl. Když mod_rewrite chybí,
+# ať to spadne nahlas - tichá degradace na 404 je horší.
+RewriteEngine On
+RewriteBase /app/
 
-<IfModule !mod_rewrite.c>
-  FallbackResource /app/index.html
-</IfModule>
+# Skutečné soubory a adresáře buildu se servírují beze změny.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
 
-# Fix PHP session.gc_divisor warning
-<IfModule mod_php7.c>
-  php_value session.gc_divisor 100
-</IfModule>
-<IfModule mod_php.c>
-  php_value session.gc_divisor 100
-</IfModule>
+# Všechno ostatní je route - o tu se postará React Router v index.html.
+RewriteRule ^ index.html [L]
