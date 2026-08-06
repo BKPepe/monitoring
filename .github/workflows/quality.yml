@@ -36,6 +36,9 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
 
+      - name: Unit testy SPA (vitest)
+        run: npm run test:react
+
       - name: Build všech workspace aplikací
         run: npm run build
 

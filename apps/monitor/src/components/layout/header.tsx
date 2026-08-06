@@ -9,10 +9,12 @@ import { cn } from '@/lib/utils';
 
 export function Header({
   searchResults,
+  onSearchSelect,
   alertCount: propAlertCount,
   onOpenMobileNav,
 }: {
   searchResults?: SearchResult[];
+  onSearchSelect?: (result: SearchResult) => void;
   alertCount?: number;
   onOpenMobileNav?: () => void;
 }) {
@@ -91,7 +93,7 @@ export function Header({
       </Button>
 
       <div className="mx-auto w-full max-w-md">
-        <SearchCommand results={searchResults} />
+        <SearchCommand results={searchResults} onSelect={onSearchSelect} />
       </div>
 
       <div className="ml-auto flex items-center gap-2 relative" ref={dropdownRef}>

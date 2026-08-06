@@ -5,7 +5,6 @@
  * (aplikace jede výhradně na živém API), zůstaly jen typy, které sdílí
  * víc komponent, a seznam stránek pro vyhledávání.
  */
-import type { SearchResult } from '@/components/ui/search-command';
 
 export type MonitorStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
 export type DayStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
@@ -46,10 +45,3 @@ export interface TimelineEvent {
   location?: string;
   method?: string;
 }
-
-export const searchIndex: SearchResult[] = [
-  { id: 'p-incidents', label: 'Incidenty a výpadky', group: 'Stránky', hint: '/incidents' },
-  { id: 'p-infrastructure', label: 'Infrastruktura', group: 'Stránky', hint: '/infrastructure' },
-  { id: 'p-reports', label: 'Výkazy a SLA', group: 'Stránky', hint: '/reports' },
-  { id: 'p-settings', label: 'Nastavení', group: 'Stránky', hint: '/settings' },
-];

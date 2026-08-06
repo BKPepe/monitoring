@@ -881,16 +881,14 @@ if ($action === 'dashboard_layout') {
     try {
         // 1. Co se skutečně měří: sloupce vps_metrics, které mají alespoň
         //    jednu nenulovou hodnotu za posledních 7 dní.
+        // Katalog nabízí jen metriky, které dashboard umí vykreslit z dat,
+        // co endpoint monitors reálně vrací (cpu/ram/hdd na řádku monitoru).
+        // Další metriky (teplota, load, wifi klienti…) sem přibudou až s
+        // vykreslením - nabízet přepínač bez implementace je mrtvý spínač.
         $metric_defs = [
             'cpu' => ['col' => 'cpu_usage', 'label' => t('metric_label_cpu'), 'unit' => '%'],
             'ram' => ['col' => 'ram_usage', 'label' => t('metric_label_ram'), 'unit' => '%'],
             'hdd' => ['col' => 'hdd_usage', 'label' => t('metric_label_hdd'), 'unit' => '%'],
-            'net' => ['col' => 'net_usage', 'label' => t('metric_label_net'), 'unit' => 'KB/s'],
-            'temperature' => ['col' => 'temperature_c', 'label' => t('metric_label_temp'), 'unit' => '°C'],
-            'load1' => ['col' => 'load_avg_1', 'label' => 'Load average', 'unit' => ''],
-            'swap' => ['col' => 'swap_usage', 'label' => t('metric_label_swap'), 'unit' => '%'],
-            'wifi_clients' => ['col' => 'wifi_clients_total', 'label' => t('metric_label_wifi'), 'unit' => ''],
-            'conntrack' => ['col' => 'conntrack_pct', 'label' => 'Conntrack', 'unit' => '%'],
         ];
         $measured = [];
         foreach ($metric_defs as $key => $def) {

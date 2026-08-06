@@ -21,7 +21,8 @@
     "test:php": "php apps/status/tests/run_tests.php && php apps/status/tests/run_pipeline_tests.php",
     "lint:sql": "php apps/status/tests/run_query_lint.php",
     "deadcode": "php apps/status/tests/find_dead_code.php",
-    "perf": "php apps/status/tests/run_perf_check.php"
+    "perf": "php apps/status/tests/run_perf_check.php",
+    "test:react": "npm run test -w apps/monitor"
   },
   "overrides": {
     "sharp": "^0.35.0",

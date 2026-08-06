@@ -1449,6 +1449,33 @@ const translations: Record<string, { cs: string; en: string }> = {
   // Uptime Heatmap
   'heatmap.status_up': { cs: 'Dostupné (100 %)', en: 'Available (100%)' },
   'heatmap.no_data_badge': { cs: 'Bez dat', en: 'No data' },
+  'search.placeholder': { cs: 'Hledat monitory, stránky…', en: 'Search monitors, pages…' },
+  'search.no_results': { cs: 'Nic nenalezeno.', en: 'No results.' },
+  'search.group_pages': { cs: 'Stránky', en: 'Pages' },
+  'search.group_monitors': { cs: 'Monitory', en: 'Monitors' },
+  'attention.title': { cs: 'Vyžaduje pozornost', en: 'Needs attention' },
+  'attention.all_clear': {
+    cs: 'Nic nevyžaduje pozornost — vše v normálu.',
+    en: 'Nothing needs attention — all normal.',
+  },
+  'attention.unknown': {
+    cs: 'Stav nelze zjistit — seznam monitorů se nenačetl.',
+    en: 'State unknown — the monitor list failed to load.',
+  },
+  'attention.down': { cs: 'Služba je nedostupná', en: 'Service is down' },
+  'attention.warning': { cs: 'Monitor hlásí varování', en: 'Monitor reports a warning' },
+  'attention.unreachable': {
+    cs: 'Cíl je trvale nedosažitelný — zvažte kontrolu agentem',
+    en: 'Target is permanently unreachable — consider an agent check',
+  },
+  'attention.ssl_expired': { cs: 'SSL certifikát vypršel!', en: 'SSL certificate expired!' },
+  'attention.ssl_expiring': { cs: 'SSL certifikát vyprší za {days} dní', en: 'SSL certificate expires in {days} days' },
+  'attention.agent_update': {
+    cs: 'Agent je zastaralý — k dispozici je verze {version}',
+    en: 'Agent is outdated — version {version} is available',
+  },
+  'attention.metric_high': { cs: '{metric} na {value} %', en: '{metric} at {value} %' },
+  'dashboard.metric_worst': { cs: 'Nejvyšší {label}', en: 'Highest {label}' },
   'dashboard.customize': { cs: 'Upravit rozložení', en: 'Customize layout' },
   'layout.title': { cs: 'Rozložení dashboardu', en: 'Dashboard layout' },
   'layout.subtitle': {
