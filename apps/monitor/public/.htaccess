@@ -1,19 +1,17 @@
 # SPA fallback pro React Router (BrowserRouter s base /app/).
+# Bez něj F5 na /app/<route> hledá soubor na disku a vrací 404.
 #
-# Bez tohohle F5 na /app/infrastructure/5 hledá soubor na disku a vrací 404.
-#
-# ZÁMĚRNĚ bez <IfModule> obálek: LiteSpeed na sdíleném hostingu IfModule
-# testy vyhodnocuje nespolehlivě (a FallbackResource nepodporuje vůbec),
-# takže původní "opatrná" verze se celá tiše přeskočila a deep linky
-# vracely 404, přestože soubor na serveru byl. Když mod_rewrite chybí,
-# ať to spadne nahlas - tichá degradace na 404 je horší.
+# Tvar pravidel záměrně kopíruje WordPress vzor (nejprověřenější na
+# LiteSpeed sdílených hostinzích): žádný RewriteBase, negované -f/-d
+# podmínky, tečkový pattern. Předchozí varianty ([OR] + průchozí
+# pravidlo s pomlčkou, IfModule obálky) tu LiteSpeed tiše ignoroval.
 RewriteEngine On
-RewriteBase /app/
 
-# Skutečné soubory a adresáře buildu se servírují beze změny.
-RewriteCond %{REQUEST_FILENAME} -f [OR]
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
+# Trvalý CI marker: /app/__rwcheck vrací index.html, POUZE pokud
+# mod_rewrite v tomhle adresáři skutečně vyhodnocuje pravidla. Deploy
+# workflow tím odliší "rewrite nefunguje" od "podmínky selhávají".
+RewriteRule ^__rwcheck$ index.html [L]
 
-# Všechno ostatní je route - o tu se postará React Router v index.html.
-RewriteRule ^ index.html [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . index.html [L]

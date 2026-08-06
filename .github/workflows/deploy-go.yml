@@ -135,6 +135,13 @@ jobs:
             echo "--- diagnostika: koren public_html/.htaccess ---"
             curl --silent --ssl-reqd --insecure --user "$FTP_USER:$FTP_PASS" \
               "ftp://$FTP_HOST/public_html/.htaccess" || echo "(zadny korenovy .htaccess)"
+            echo "--- diagnostika: funguje mod_rewrite v /app/ vubec? ---"
+            rw=$(curl -s -o /dev/null -w "%{http_code}" "https://bloodkings.eu/app/__rwcheck")
+            if [ "$rw" = "200" ]; then
+              echo "mod_rewrite JE aktivni ($rw) - selhavaji tedy podminky -f/-d, ne cely soubor."
+            else
+              echo "mod_rewrite v /app/ NEVYHODNOCUJE pravidla ($rw) - .htaccess je ignorovan (AllowOverride?)."
+            fi
             exit 1
           fi
           echo "SPA fallback funguje (HTTP $code)."
