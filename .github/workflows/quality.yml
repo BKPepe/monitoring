@@ -163,3 +163,16 @@ jobs:
       - name: Perf check
         run: php apps/status/tests/run_perf_check.php
         continue-on-error: true # regresi hlásí, ale nezastavuje pipeline
+
+      # Přesně tahle kontrola chyběla, když F5 na /app/<route> vracel 404:
+      # API se měřilo, ale nasazené SPA routy nikdo netestoval. Deploy
+      # workflow to ověřuje po nasazení; tady se to hlídá při každém pushi,
+      # protože .htaccess může ze serveru zmizet i bez deploye.
+      - name: SPA deep-link check (F5 na route musí vrátit aplikaci)
+        run: |
+          code=$(curl -s -o /tmp/deeplink.html -w "%{http_code}" "https://bloodkings.eu/app/infrastructure/1")
+          if [ "$code" != "200" ] || ! grep -q "id=.root." /tmp/deeplink.html; then
+            echo "Deep link vraci $code misto SPA - rewrite pravidlo na serveru nefunguje."
+            exit 1
+          fi
+          echo "SPA fallback OK (HTTP $code).
