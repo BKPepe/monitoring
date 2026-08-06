@@ -1,5 +1,16 @@
 # SPA fallback pro React Router (BrowserRouter s base /app/).
 # Bez něj F5 na /app/<route> hledá soubor na disku a vrací 404.
+#
+# POZOR (08/2026): server tenhle soubor v /app/ ZATÍM IGNORUJE - žádná
+# direktiva odsud nemá efekt (ověřeno sondou níže i hlavičkou). Ve stejném
+# účtu přitom /status/.htaccess funguje, takže .htaccess jako takový
+# zakázaný není. Podezření: aplikace registrovaná v cPanel Application
+# Manageru na URL "app" přebírá obsluhu toho URI. Až se registrace zruší,
+# pravidla níže se aktivují sama a F5 začne vracet 200.
+#
+# Kromě F5 tím trpí i výpis adresáře: /app/assets/ dnes servíruje autoindex
+# se seznamem všech buildových souborů. Options -Indexes níže to vypne -
+# jakmile se soubor začne číst.
 
 # Sonda: dokazuje, že se TENHLE soubor v /app/ vůbec čte. Hlavička je
 # vidět v odpovědi na jakýkoli požadavek pod /app/. Bez ní se ladilo
@@ -8,6 +19,9 @@
 <IfModule mod_headers.c>
     Header set X-BK-App-Htaccess "loaded"
 </IfModule>
+
+# Výpis adresáře nemá u buildových assetů co dělat.
+Options -Indexes
 
 # Primární cesta: interní rewrite neexistujících cest na index.html.
 RewriteEngine On
