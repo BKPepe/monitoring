@@ -1,17 +1,27 @@
 # SPA fallback pro React Router (BrowserRouter s base /app/).
 # Bez něj F5 na /app/<route> hledá soubor na disku a vrací 404.
-#
-# Tvar pravidel záměrně kopíruje WordPress vzor (nejprověřenější na
-# LiteSpeed sdílených hostinzích): žádný RewriteBase, negované -f/-d
-# podmínky, tečkový pattern. Předchozí varianty ([OR] + průchozí
-# pravidlo s pomlčkou, IfModule obálky) tu LiteSpeed tiše ignoroval.
+
+# Sonda: dokazuje, že se TENHLE soubor v /app/ vůbec čte. Hlavička je
+# vidět v odpovědi na jakýkoli požadavek pod /app/. Bez ní se ladilo
+# naslepo - rewrite nefungoval a nešlo poznat, jestli je problém v
+# pravidlech, nebo v tom, že server .htaccess ignoruje.
+<IfModule mod_headers.c>
+    Header set X-BK-App-Htaccess "loaded"
+</IfModule>
+
+# Primární cesta: interní rewrite neexistujících cest na index.html.
 RewriteEngine On
 
-# Trvalý CI marker: /app/__rwcheck vrací index.html, POUZE pokud
-# mod_rewrite v tomhle adresáři skutečně vyhodnocuje pravidla. Deploy
-# workflow tím odliší "rewrite nefunguje" od "podmínky selhávají".
+# Trvalý marker pro CI: bezpodmínečné pravidlo. Když vrátí index.html,
+# rewrite v tomhle adresáři funguje; když ne, ignoruje se celý blok.
 RewriteRule ^__rwcheck$ index.html [L]
 
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . index.html [L]
+
+# Záchranná brzda pro případ, že LiteSpeed rewrite v .htaccess neprovádí:
+# neexistující cesta pak vrátí aplikaci místo chybové stránky serveru.
+# Stav zůstane 404 (ErrorDocument na statický soubor ho nemění), ale
+# uživatel po F5 dostane funkční aplikaci, ne "not found".
+ErrorDocument 404 /app/index.html
