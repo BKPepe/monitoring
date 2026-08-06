@@ -1,41 +1,17 @@
 # SPA fallback pro React Router (BrowserRouter s base /app/).
 # Bez něj F5 na /app/<route> hledá soubor na disku a vrací 404.
 #
-# POZOR (08/2026): server tenhle soubor v /app/ ZATÍM IGNORUJE - žádná
-# direktiva odsud nemá efekt (ověřeno sondou níže i hlavičkou). Ve stejném
-# účtu přitom /status/.htaccess funguje, takže .htaccess jako takový
-# zakázaný není. Podezření: aplikace registrovaná v cPanel Application
-# Manageru na URL "app" přebírá obsluhu toho URI. Až se registrace zruší,
-# pravidla níže se aktivují sama a F5 začne vracet 200.
-#
-# Kromě F5 tím trpí i výpis adresáře: /app/assets/ dnes servíruje autoindex
-# se seznamem všech buildových souborů. Options -Indexes níže to vypne -
-# jakmile se soubor začne číst.
-
-# Sonda: dokazuje, že se TENHLE soubor v /app/ vůbec čte. Hlavička je
-# vidět v odpovědi na jakýkoli požadavek pod /app/. Bez ní se ladilo
-# naslepo - rewrite nefungoval a nešlo poznat, jestli je problém v
-# pravidlech, nebo v tom, že server .htaccess ignoruje.
-<IfModule mod_headers.c>
-    Header set X-BK-App-Htaccess "loaded"
-</IfModule>
-
-# Výpis adresáře nemá u buildových assetů co dělat.
-Options -Indexes
-
-# Primární cesta: interní rewrite neexistujících cest na index.html.
+# Historie (08/2026): pravidla tu dlouho neměla ŽÁDNÝ efekt, protože v
+# cPanel Application Manageru byla na URL /app zaregistrovaná aplikace -
+# Passenger si to URI vzal a .htaccess se v jeho kontextu neprocesuje.
+# Přeregistrováním aplikace na jiné URL se to vyřešilo. Kdyby se F5 na
+# route zase rozbilo, tohle je první místo, kam se podívat.
 RewriteEngine On
 
-# Trvalý marker pro CI: bezpodmínečné pravidlo. Když vrátí index.html,
-# rewrite v tomhle adresáři funguje; když ne, ignoruje se celý blok.
-RewriteRule ^__rwcheck$ index.html [L]
-
+# Skutečné soubory a adresáře buildu se servírují beze změny.
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . index.html [L]
 
-# Záchranná brzda pro případ, že LiteSpeed rewrite v .htaccess neprovádí:
-# neexistující cesta pak vrátí aplikaci místo chybové stránky serveru.
-# Stav zůstane 404 (ErrorDocument na statický soubor ho nemění), ale
-# uživatel po F5 dostane funkční aplikaci, ne "not found".
-ErrorDocument 404 /app/index.html
+# Výpis adresáře nemá u buildových assetů co dělat.
+Options -Indexes
