@@ -48,12 +48,19 @@ if ($status === 'down') {
 }
 
 if ($type === 'uptime') {
-    $uptime = calculate_uptime($pdo, $mid, 30);
-    $status_text = number_format($uptime, 2, '.', '') . '%';
-    if ($uptime < 95.0) {
-        $bg_color = '#e61e2a';
-    } elseif ($uptime < 99.0) {
-        $bg_color = '#ffb703';
+    // Tady byla stejna nedefinovana funkce jako ve widget.php.
+    $uptime = bk_uptime_30d($pdo, $mid);
+    if ($uptime === null) {
+        // Bez mereni odznak rekne "bez dat" misto vymyslenych procent.
+        $status_text = 'BEZ DAT';
+        $bg_color = '#475569';
+    } else {
+        $status_text = number_format($uptime, 2, '.', '') . '%';
+        if ($uptime < 95.0) {
+            $bg_color = '#e61e2a';
+        } elseif ($uptime < 99.0) {
+            $bg_color = '#ffb703';
+        }
     }
 }
 

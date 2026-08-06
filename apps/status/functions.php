@@ -619,6 +619,34 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
  * Neznámý počet chyb NENÍ nula chyb - vrací false (nebarví se červeně),
  * ale bez předstírání, že je vše v pořádku změřené.
  */
+/**
+ * Dostupnost monitoru za posledních N dní z reálných kontrol.
+ *
+ * Vrací null, když v okně není ani jedno měření - widget/odznak pak ukáže
+ * pomlčku místo vymyšlených 100 %. Vznikla proto, že widget.php i badge.php
+ * volaly funkci calculate_uptime(), která v kódu vůbec neexistovala, a obě
+ * stránky proto končily fatální chybou.
+ */
+function bk_uptime_30d(PDO $pdo, int $monitor_id, int $days = 30): ?float {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT SUM(status = 'up') AS up_count, COUNT(*) AS total
+            FROM monitor_logs
+            WHERE monitor_id = ?
+              AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              AND status IN ('up', 'down', 'warning')
+        ");
+        $stmt->execute([$monitor_id, $days]);
+        $row = $stmt->fetch();
+        if ($row && (int)$row['total'] > 0) {
+            return ((int)$row['up_count'] / (int)$row['total']) * 100;
+        }
+    } catch (Throwable $e) {
+        // Bez dat zůstává null.
+    }
+    return null;
+}
+
 function bk_iface_has_errors(array $iface): bool {
     $rx = isset($iface['rx_errors']) && is_numeric($iface['rx_errors']) ? (int)$iface['rx_errors'] : 0;
     $tx = isset($iface['tx_errors']) && is_numeric($iface['tx_errors']) ? (int)$iface['tx_errors'] : 0;

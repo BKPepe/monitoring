@@ -44,6 +44,80 @@ foreach ($defs as $fn => $file) {
     }
 }
 
+// --- 1b. Volané, ale nikde nedefinované funkce ---------------------------
+// Opačný směr než kontrola výše, a v praxi nebezpečnější: widget.php volal
+// calculate_uptime(), která v repu vůbec nebyla, takže stránka končila
+// fatální chybou pro každý existující monitor. php -l to nezachytí -
+// nedefinovaná funkce je chyba za běhu, ne syntaktická.
+$builtin = get_defined_functions()['internal'];
+$builtin_map = array_flip(array_map('strtolower', $builtin));
+
+// Konstrukty jazyka a věci z knihoven, které se volají jako funkce.
+$known_external = array_flip([
+    'echo', 'print', 'isset', 'unset', 'empty', 'list', 'array', 'exit', 'die',
+    'include', 'require', 'include_once', 'require_once', 'eval', 'fn', 'function',
+    'match', 'if', 'for', 'foreach', 'while', 'switch', 'catch', 'return', 'new',
+    'and', 'or', 'xor', 'use', 'static', 'parent', 'self', 'PHPMailer', 'SMTP',
+    'Exception', 'DateTime', 'DateTimeZone', 'DateInterval', 'PDO', 'PDOException',
+    'Throwable', 'SimpleXMLElement', 'RecursiveIteratorIterator', 'RecursiveDirectoryIterator',
+    'FilesystemIterator', 'ArrayObject', 'stdClass', 'Closure', 'Generator', 'JsonException',
+    // Xdebug nemusi byt nainstalovany; volani jsou hlidana function_exists().
+    'xdebug_start_code_coverage', 'xdebug_stop_code_coverage', 'xdebug_get_code_coverage',
+]);
+
+$undefined_calls = [];
+foreach ($php_files as $f) {
+    // token_get_all() misto regexu: rozumi komentarum, retezcum i vlozenemu
+    // HTML/JS, takze "poskytovatele(" v ceskem komentari uz nikdo nehlasi
+    // jako volani funkce.
+    $tokens = @token_get_all(file_get_contents($f));
+    $count = count($tokens);
+
+    for ($i = 0; $i < $count; $i++) {
+        $tok = $tokens[$i];
+        if (!is_array($tok) || $tok[0] !== T_STRING) {
+            continue;
+        }
+
+        // Nasleduje zavorka? (mezi tim smi byt jen bily znak)
+        $j = $i + 1;
+        while ($j < $count && is_array($tokens[$j]) && $tokens[$j][0] === T_WHITESPACE) {
+            $j++;
+        }
+        if ($j >= $count || $tokens[$j] !== '(') {
+            continue;
+        }
+
+        // Predchozi vyznamovy token urcuje, jestli jde o volani funkce.
+        $k = $i - 1;
+        while ($k >= 0 && is_array($tokens[$k]) && $tokens[$k][0] === T_WHITESPACE) {
+            $k--;
+        }
+        if ($k >= 0 && is_array($tokens[$k])) {
+            $prev = $tokens[$k][0];
+            // definice funkce, metoda objektu, staticka metoda, new Trida()
+            if (in_array($prev, [T_FUNCTION, T_OBJECT_OPERATOR, T_DOUBLE_COLON, T_NEW, T_CLASS], true)) {
+                continue;
+            }
+            if (defined('T_NULLSAFE_OBJECT_OPERATOR') && $prev === T_NULLSAFE_OBJECT_OPERATOR) {
+                continue;
+            }
+        }
+
+        $name = $tok[1];
+        $lower = strtolower($name);
+        if (isset($defs[$name]) || isset($builtin_map[$lower]) || isset($known_external[$name])) {
+            continue;
+        }
+        // Jmena tridy pouzita jako typ/konstruktor bez new (napr. Closure::)
+        if ($name !== $lower) {
+            continue;
+        }
+
+        $undefined_calls[$name . '|' . basename($f) . ':' . $tok[2]] = [$name, basename($f), $tok[2]];
+    }
+}
+
 // --- 2. Nastavení ukládaná v adminu, ale nikde nečtená -------------------
 $admin = file_get_contents($dir . '/admin.php');
 $saved = [];
@@ -115,7 +189,22 @@ if ($unused_lang) {
     echo '  ' . implode(', ', array_slice($unused_lang, 0, 15)) . (count($unused_lang) > 15 ? ', …' : '') . "\n\n";
 }
 
+if ($undefined_calls) {
+    echo "Volání funkcí, které nikde nejsou definované (" . count($undefined_calls) . "):\n";
+    foreach ($undefined_calls as [$name, $file, $line]) {
+        printf("  %s()  (%s:%d)\n", $name, $file, $line);
+    }
+    echo "\n";
+} else {
+    echo "Nedefinovaná volání: žádná\n\n";
+}
+
+// Nedefinované volání je vždy chyba za běhu, takže shazuje i bez --strict.
 $problems = count($dead_functions) + count($dead_settings);
+if ($undefined_calls) {
+    fwrite(STDERR, "Nalezena volání nedefinovaných funkcí - stránka by skončila fatální chybou.\n");
+    exit(1);
+}
 if ($strict && $problems > 0) {
     fwrite(STDERR, "Mrtvý kód nalezen ({$problems} položek).\n");
     exit(1);
