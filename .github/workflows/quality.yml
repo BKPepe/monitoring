@@ -51,7 +51,9 @@ jobs:
       - name: Setup PHP s Xdebug (kvůli coverage)
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
+          # verzi znamena netestovat to, co uzivatelum opravdu bezi.
+          php-version: '8.4'
           coverage: xdebug
           extensions: mbstring, curl, pdo
 
@@ -170,11 +172,18 @@ jobs:
       - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
+          # verzi znamena netestovat to, co uzivatelum opravdu bezi.
+          php-version: '8.4'
           extensions: curl
       - name: Perf check
         run: php apps/status/tests/run_perf_check.php
         continue-on-error: true # regresi hlásí, ale nezastavuje pipeline
+
+      # widget.php a badge.php mesice vracely 500, protoze je nikdo neotevrel
+      # a php -l chybu za behu nevidi. Tenhle test kazdou stranku pozada.
+      - name: Smoke test PHP stránek (žádná nesmí spadnout)
+        run: php apps/status/tests/run_page_smoke.php
 
       # Přesně tahle kontrola chyběla, když F5 na /app/<route> vracel 404:
       # API se měřilo, ale nasazené SPA routy nikdo netestoval. Deploy

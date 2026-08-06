@@ -82,3 +82,18 @@ jobs:
             **/.git*/**
             **/node_modules/**
             .github/**
+
+      # Po nasazeni se kazda verejna stranka pozada, jestli neupadla.
+      # widget.php a badge.php takhle mesice vracely 500 (volaly funkci,
+      # ktera v kodu nebyla) a nikdo si toho nevsiml - php -l chybu za
+      # behu nevidi a nikdo ty stranky neotviral.
+      - name: Setup PHP pro smoke test
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring
+
+      - name: Smoke test nasazených stránek
+        run: |
+          sleep 5
+          php apps/status/tests/run_page_smoke.php
