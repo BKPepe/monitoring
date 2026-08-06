@@ -5,6 +5,9 @@ import { ChevronDown, ChevronUp, Eye, EyeOff, LayoutGrid, X } from 'lucide-react
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 
+/** Sekce, ktere davaji smysl jen pres celou sirku. */
+const WIDE_BY_DEFAULT = new Set(['monitors', 'insights', 'uptime_history', 'attention']);
+
 export interface DashboardTile {
   key: string;
   visible: boolean;
@@ -65,7 +68,9 @@ export function DashboardLayoutEditor({
             .map((c) => ({
               key: c.key,
               visible: c.kind === 'panel' && c.available,
-              size: 'normal' as const,
+              // Sekce, ktere se v uzkem sloupci necetly by (tabulka monitoru,
+              // heatmapa, radek insightu), zacinaji jako siroke.
+              size: WIDE_BY_DEFAULT.has(c.key) ? ('wide' as const) : ('normal' as const),
             })),
         ];
         setTiles(merged);

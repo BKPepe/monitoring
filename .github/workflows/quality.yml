@@ -72,6 +72,12 @@ jobs:
       - name: SQL lint (rizikové dotazy)
         run: php apps/status/tests/run_query_lint.php
 
+      # Jadro pravidel projektu: nezmerena hodnota je NULL a v UI pomlcka.
+      # Dva rucni audity to nepodchytily (poprve chybely coercions, podruhe
+      # legacy PHP stranky), takze to hlida skript.
+      - name: Honesty lint (žádné vymyšlené nuly)
+        run: php apps/status/tests/run_honesty_lint.php
+
       - name: Detekce mrtvého kódu
         run: php apps/status/tests/find_dead_code.php
 
@@ -79,7 +85,8 @@ jobs:
       # doplni se sem a pokryti uz nesmi klesnout niz.
       - name: Coverage report (Cobertura + Clover)
         env:
-          BK_COVERAGE_MIN: ''
+          # Namerena hodnota z prvniho behu CI; snizovat se nema, zvysovat ano.
+          BK_COVERAGE_MIN: '55'
         run: |
           mkdir -p coverage
           php -d xdebug.mode=coverage apps/status/tests/run_coverage.php

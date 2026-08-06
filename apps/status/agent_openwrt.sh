@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.6"
+AGENT_VERSION="1.5.7"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -838,6 +838,48 @@ if command -v nslookup >/dev/null 2>&1 && command -v time >/dev/null 2>&1; then
     fi
 fi
 
+# --- Odezva a rychlost linky ---------------------------------------------
+#
+# Server odezvu routeru zmerit nedokaze: ping z hostingu na WAN IP router
+# zahodi. Merime ji proto zevnitr - je to i smysluplnejsi cislo, protoze
+# rika, jak rychle odpovida INTERNET routeru, ne jak dobre je videt zvenku.
+#
+# Cil: nejdriv WAN brana (odezva prvniho hopu poskytovatele), pri neuspechu
+# verejny resolver. Bere se prumer ze tri paketu; kdyz ping neni nebo
+# neprojde, zustava null - nulou se to nenahrazuje.
+wan_latency_ms="null"
+if command -v ping >/dev/null 2>&1; then
+    for lat_target in "$wan_gateway" "1.1.1.1"; do
+        [ -z "$lat_target" ] && continue
+        lat_out=$(ping -c 3 -W 2 "$lat_target" 2>/dev/null | sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
+        if [ -n "$lat_out" ]; then
+            wan_latency_ms=$(awk -v v="$lat_out" 'BEGIN { printf "%.1f", v }')
+            break
+        fi
+    done
+fi
+
+# Rychlost WAN linky (Mbit/s) podle vyjednaneho rezimu rozhrani. Neni to
+# rychlost internetu od poskytovatele, ale strop fyzicke linky - kdyz
+# gigabitovy port spadne na 100 Mbit, je to prave tady videt.
+wan_link_mbit="null"
+if [ -n "$wan_l3_device" ]; then
+    link_dev="$wan_l3_device"
+    # U PPPoE/VLAN je l3_device virtualni (pppoe-wan, eth0.2) - rychlost ma
+    # jen fyzicky rodic, tak se odrizne pripona za teckou / prefix pred pomlckou.
+    [ ! -e "/sys/class/net/$link_dev/speed" ] && link_dev=$(echo "$wan_l3_device" | sed 's/\..*$//; s/^pppoe-//')
+    if [ -r "/sys/class/net/$link_dev/speed" ]; then
+        link_raw=$(cat "/sys/class/net/$link_dev/speed" 2>/dev/null)
+        # -1 = link down nebo neznama rychlost; to neni mereni.
+        case "$link_raw" in
+            ''|*[!0-9-]*) : ;;
+            -*) : ;;
+            0) : ;;
+            *) wan_link_mbit="$link_raw" ;;
+        esac
+    fi
+fi
+
 openvpn_tunnels="null"
 if command -v pidof >/dev/null 2>&1; then
     ovpn_pids=$(pidof openvpn 2>/dev/null)
@@ -1241,6 +1283,8 @@ payload=$(cat <<EOF
   "oom_kills": $oom_kills,
   "boot_time": $boot_time,
   "dns_latency_ms": $dns_latency_ms,
+  "wan_latency_ms": $wan_latency_ms,
+  "wan_link_mbit": $wan_link_mbit,
   "openvpn_tunnels": $openvpn_tunnels,
   "usb_devices": $usb_devices,
   "log_warnings_24h": $log_warnings_24h

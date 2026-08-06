@@ -611,10 +611,15 @@ try {
             $ifname = trim($ifitem['iface'] ?? '');
             if (!$ifname || in_array($ifname, ['lo', 'ifb0', 'ifb1'], true)) continue;
 
-            $cur_rx_b = (float)($ifitem['rx_bytes'] ?? 0);
-            $cur_tx_b = (float)($ifitem['tx_bytes'] ?? 0);
-            $cur_rx_p = (int)($ifitem['rx_packets'] ?? 0);
-            $cur_tx_p = (int)($ifitem['tx_packets'] ?? 0);
+            // Chybějící čítač NENÍ nula - z takového "měření" by vyšla
+            // nesmyslná delta (skok na plnou hodnotu při dalším reportu).
+            if (!isset($ifitem['rx_bytes'], $ifitem['tx_bytes'])) {
+                continue;
+            }
+            $cur_rx_b = (float)$ifitem['rx_bytes'];
+            $cur_tx_b = (float)$ifitem['tx_bytes'];
+            $cur_rx_p = isset($ifitem['rx_packets']) ? (int)$ifitem['rx_packets'] : 0;
+            $cur_tx_p = isset($ifitem['tx_packets']) ? (int)$ifitem['tx_packets'] : 0;
 
             try {
                 $stmt_if = $pdo->prepare("SELECT last_rx_bytes, last_tx_bytes, last_rx_packets, last_tx_packets FROM monitor_interface_traffic WHERE monitor_id = ? AND iface = ? ORDER BY date DESC LIMIT 1");
@@ -660,14 +665,22 @@ try {
     }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
-        // OpenWrt: ping na WAN IP pro reálnou odezvu (agent posílá wan_ipv4)
-        $ping_ms = 0;
+        // Odezvu si měří agent sám (wan_latency_ms) - ping z hostingu na WAN IP
+        // routeru stejně neprojde. Bez měření zůstává NULL.
+        $ping_ms = null;
         if ($monitor['type'] === 'openwrt') {
             $ping_target = $ow_wan_ipv4 ?: ($monitor['target'] ?: null);
             if ($ping_target) {
-                $ping_ms = bk_ping_host($ping_target) ?? 0;
+                // Selhaný ping není 0 ms - do logu jde NULL a UI ukáže pomlčku.
+                $ping_ms = bk_ping_host($ping_target);
             }
         }
+        // Agent v1.5.7+ posílá vlastní měření odezvy (ping z routeru na WAN
+        // bránu) - to je pro router smysluplnější číslo než ping zvenku.
+        if ($ping_ms === null && isset($data['wan_latency_ms']) && is_numeric($data['wan_latency_ms'])) {
+            $ping_ms = (float)$data['wan_latency_ms'];
+        }
+
         // Zapsat běžný log kontroly
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");
         $stmt_log->execute([$monitor_id, $new_status, $ping_ms, $error_msg]);

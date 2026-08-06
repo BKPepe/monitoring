@@ -47,20 +47,18 @@ export function InsightsPage() {
     );
   });
 
+  // Do souboje o "nejvyšší" jdou jen stroje, které tu metriku opravdu
+  // hlásí. Dřív se null převáděl na nulu a tiše soutěžil s naměřenými daty.
+  const withDisk = serverAgents.filter((m) => typeof m.hdd === 'number');
   const highDiskMonitor =
-    serverAgents.length > 0
-      ? serverAgents.reduce(
-          (prev, current) => ((current.hdd ?? 0) > (prev?.hdd ?? 0) ? current : prev),
-          serverAgents[0]
-        )
+    withDisk.length > 0
+      ? withDisk.reduce((prev, cur) => ((cur.hdd as number) > (prev.hdd as number) ? cur : prev))
       : null;
 
+  const withCpu = serverAgents.filter((m) => typeof m.cpu === 'number');
   const highCpuMonitor =
-    serverAgents.length > 0
-      ? serverAgents.reduce(
-          (prev, current) => ((current.cpu ?? 0) > (prev?.cpu ?? 0) ? current : prev),
-          serverAgents[0]
-        )
+    withCpu.length > 0
+      ? withCpu.reduce((prev, cur) => ((cur.cpu as number) > (prev.cpu as number) ? cur : prev))
       : null;
 
   const httpMonitors = monitors.filter((m) => {
@@ -275,8 +273,9 @@ export function InsightsPage() {
                 </p>
               ) : (
                 serverAgents.map((m) => {
-                  const isHighDisk = (m.hdd ?? 0) >= 70;
-                  const isHighCpu = (m.cpu ?? 0) >= 60;
+                  // null = nezměřeno, takže se nehlásí ani jako v pořádku, ani jako problém.
+                  const isHighDisk = typeof m.hdd === 'number' && m.hdd >= 70;
+                  const isHighCpu = typeof m.cpu === 'number' && m.cpu >= 60;
 
                   return (
                     <div

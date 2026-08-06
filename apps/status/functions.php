@@ -526,7 +526,7 @@ function render_vps_agent_details($details, $monitor = null) {
                                 <?php foreach ($details['top_cpu_processes'] as $tp): ?>
                                     <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
                                         <span style="color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
-                                        <strong style="color: var(--text-primary); margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['cpu'] ?? 0)); ?>%</strong>
+                                        <strong style="color: var(--text-primary); margin-left: 0.5rem; white-space: nowrap;"><?php echo bk_num($tp['cpu'] ?? null, ' %', 1); ?></strong>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -539,7 +539,7 @@ function render_vps_agent_details($details, $monitor = null) {
                                 <?php foreach ($details['top_ram_processes'] as $tp): ?>
                                     <div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
                                         <span style="color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
-                                        <strong style="color: var(--text-primary); margin-left: 0.5rem; white-space: nowrap;"><?php echo htmlspecialchars((string)($tp['ram_mb'] ?? 0)); ?> MB</strong>
+                                        <strong style="color: var(--text-primary); margin-left: 0.5rem; white-space: nowrap;"><?php echo bk_num($tp['ram_mb'] ?? null, ' MB', 1); ?></strong>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -603,6 +603,35 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
 /**
  * Zformátuje dobu trvání v minutách do čitelného řetězce (ČR/EN).
  */
+/**
+ * Vykreslení naměřené hodnoty: číslo, nebo pomlčka když se nezměřilo.
+ *
+ * Existuje proto, aby se nemuselo psát `$x ?? 0` - nula je platné měření
+ * ("disk je z 0 % plný"), takže jí nesmí nahrazovat chybějící údaj.
+ *
+ * @param mixed  $value    hodnota z details/JSON (může být null nebo chybět)
+ * @param string $unit     jednotka připojená za číslo (" %", " MB", " ms"…)
+ * @param int    $decimals počet desetinných míst
+ */
+/**
+ * Má rozhraní nenulový počet chybových paketů?
+ *
+ * Neznámý počet chyb NENÍ nula chyb - vrací false (nebarví se červeně),
+ * ale bez předstírání, že je vše v pořádku změřené.
+ */
+function bk_iface_has_errors(array $iface): bool {
+    $rx = isset($iface['rx_errors']) && is_numeric($iface['rx_errors']) ? (int)$iface['rx_errors'] : 0;
+    $tx = isset($iface['tx_errors']) && is_numeric($iface['tx_errors']) ? (int)$iface['tx_errors'] : 0;
+    return ($rx + $tx) > 0;
+}
+
+function bk_num($value, string $unit = '', int $decimals = 0): string {
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return '—';
+    }
+    return number_format((float)$value, $decimals, ',', ' ') . $unit;
+}
+
 function bk_format_duration($minutes) {
     if ($minutes < 60) return $minutes . ' min';
     $h = floor($minutes / 60);
@@ -800,13 +829,15 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
     if ($monitor && $monitor['type'] === 'openwrt' && is_array($details)) {
         $top_procs = $details['top_cpu_processes'] ?? [];
         $top_proc_name = !empty($top_procs) ? ($top_procs[0]['name'] ?? '') : '';
-        $top_proc_cpu = !empty($top_procs) ? ($top_procs[0]['cpu'] ?? 0) : 0;
+        // Bez namereneho CPU u top procesu se tip nesestavuje (viz podminky nize).
+    $top_proc_cpu = !empty($top_procs) && isset($top_procs[0]['cpu']) ? (float)$top_procs[0]['cpu'] : null;
 
         // CPU high + hostapd -> WiFi client context
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'hostapd') !== false) {
             $wifi_clients = 0;
             if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
-                foreach ($details['wifi_radios'] as $r) { $wifi_clients += (int)($r['clients'] ?? 0); }
+                // Scita se jen to, co radio opravdu nahlasilo.
+        foreach ($details['wifi_radios'] as $r) { if (isset($r['clients'])) { $wifi_clients += (int)$r['clients']; } }
             }
             $add('warn', 'knowledge_tip_ow_hostapd_cpu', $top_proc_cpu, $wifi_clients);
         }
@@ -814,7 +845,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'wireguard') !== false) {
             $wg_rx = 0; $wg_tx = 0;
             if (!empty($details['wireguard_peers']) && is_array($details['wireguard_peers'])) {
-                foreach ($details['wireguard_peers'] as $p) { $wg_rx += (int)($p['rx_bytes'] ?? 0); $wg_tx += (int)($p['tx_bytes'] ?? 0); }
+                foreach ($details['wireguard_peers'] as $p) { if (isset($p['rx_bytes'])) { $wg_rx += (int)$p['rx_bytes']; } if (isset($p['tx_bytes'])) { $wg_tx += (int)$p['tx_bytes']; } }
             }
             $add('warn', 'knowledge_tip_ow_wg_cpu', $top_proc_cpu, round($wg_rx / 1048576, 1), round($wg_tx / 1048576, 1));
         }

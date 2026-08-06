@@ -22,7 +22,8 @@ if (!$monitor) {
 $status = $monitor['status'];
 $uptime = calculate_uptime($pdo, $mid, 30);
 $details = !empty($monitor['last_details']) ? json_decode($monitor['last_details'], true) : [];
-$resp = $details['response_time'] ?? 0;
+// Nezmerena odezva zustava null; sablona nize ukaze pomlcku.
+$resp = $details['response_time'] ?? null;
 
 $dot_color = '#2ec4b6';
 $status_label = 'V PROVOZU';

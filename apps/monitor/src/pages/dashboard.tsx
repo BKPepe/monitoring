@@ -536,68 +536,66 @@ export function DashboardPage() {
   // Agregované dlaždice metrik (katalog: metric_cpu/ram/hdd) - nejvyšší
   // hodnota napříč agenty; bez jediného měření se dlaždice nevykreslí.
   const metricTile = (key: string) => {
-    const field = key === 'metric_cpu' ? 'cpu' : key === 'metric_ram' ? 'ram' : 'hdd';
-    const label = key === 'metric_cpu' ? 'CPU' : key === 'metric_ram' ? 'RAM' : 'Disk';
-    const reporting = monitors.filter((m) => typeof m[field] === 'number');
+    // Klic je bud agregovany ("metric_cpu" = nejvyssi hodnota napric stroji),
+    // nebo vazany na konkretni monitor ("metric_cpu_12").
+    const parts = key.split('_');
+    const field = parts[1] === 'cpu' ? 'cpu' : parts[1] === 'ram' ? 'ram' : 'hdd';
+    const label = parts[1] === 'cpu' ? 'CPU' : parts[1] === 'ram' ? 'RAM' : 'Disk';
+    const monitorId = parts.length > 2 ? Number(parts[2]) : null;
+
+    const pool = monitorId != null ? monitors.filter((m) => m.id === monitorId) : monitors;
+    const reporting = pool.filter((m) => typeof m[field] === 'number');
+    // Bez jedineho mereni se dlazdice nevykresli - lepsi nez prazdna karta.
     if (reporting.length === 0) return null;
+
     const worst = reporting.reduce((a, b) => ((a[field] ?? 0) >= (b[field] ?? 0) ? a : b));
     const value = worst[field] as number;
     return (
       <MetricTile
-        key={key}
-        label={t('dashboard.metric_worst', { label }, `Nejvyšší ${label}`)}
+        label={
+          monitorId != null ? `${label} — ${worst.name}` : t('dashboard.metric_worst', { label }, `Nejvyšší ${label}`)
+        }
         value={formatPercent(value)}
         icon={Activity}
         tone={value >= 90 ? 'down' : value >= 75 ? 'warning' : 'up'}
-        hint={worst.name}
+        hint={monitorId != null ? undefined : worst.name}
       />
     );
   };
 
   // Vykreslení podle uloženého pořadí; sousedící alerty+zdraví se spárují
   // do dvou sloupců, sousedící metriky do jedné řady dlaždic.
+  // Vykresleni podle ulozeneho rozlozeni: dvousloupcovy grid, kde sirka
+  // dlazdice z editoru urcuje, jestli zabere jeden sloupec ("bezna") nebo
+  // oba ("siroka"). Drive se sirka ukladala, ale nikdo ji necetl - prepinac
+  // v editoru nedelal nic.
   const orderedLayout = () => {
-    const known = ['attention', 'monitors', 'alerts', 'health', 'insights', 'uptime_history'];
-    const keys = tiles
-      .filter((tl) => tl.visible && (known.includes(tl.key) || tl.key.startsWith('metric_')))
-      .map((tl) => tl.key);
-    const out: React.ReactNode[] = [];
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      if (k.startsWith('metric_')) {
-        const run: string[] = [k];
-        while (i + 1 < keys.length && keys[i + 1].startsWith('metric_')) {
-          run.push(keys[++i]);
-        }
-        const rendered = run.map(metricTile).filter(Boolean);
-        if (rendered.length > 0) {
-          out.push(
-            <div key={`metrics-${i}`} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {rendered}
-            </div>
-          );
-        }
-        continue;
-      }
-      const next = keys[i + 1];
-      if ((k === 'alerts' && next === 'health') || (k === 'health' && next === 'alerts')) {
-        out.push(
-          <div key="alerts-health" className="grid gap-4 md:grid-cols-2">
-            {k === 'alerts' ? alertsSection : healthSection}
-            {k === 'alerts' ? healthSection : alertsSection}
+    const sectionFor = (key: string, wide: boolean): React.ReactNode => {
+      if (key === 'attention') return attentionSection;
+      if (key === 'monitors') return monitorsSection(wide);
+      if (key === 'alerts') return alertsSection;
+      if (key === 'health') return healthSection;
+      if (key === 'insights') return insightsSection;
+      if (key === 'uptime_history') return uptimeSection;
+      if (key.startsWith('metric_')) return metricTile(key);
+      return null;
+    };
+
+    const rendered = tiles
+      .filter((tl) => tl.visible)
+      .map((tl) => {
+        const wide = tl.size === 'wide';
+        const node = sectionFor(tl.key, wide);
+        if (!node) return null;
+        return (
+          <div key={tl.key} className={wide ? 'md:col-span-2' : undefined}>
+            {node}
           </div>
         );
-        i++;
-        continue;
-      }
-      if (k === 'attention') out.push(<React.Fragment key="attention">{attentionSection}</React.Fragment>);
-      else if (k === 'monitors') out.push(<React.Fragment key="monitors">{monitorsSection(true)}</React.Fragment>);
-      else if (k === 'alerts') out.push(<React.Fragment key="alerts">{alertsSection}</React.Fragment>);
-      else if (k === 'health') out.push(<React.Fragment key="health">{healthSection}</React.Fragment>);
-      else if (k === 'insights') out.push(<React.Fragment key="insights">{insightsSection}</React.Fragment>);
-      else if (k === 'uptime_history') out.push(<React.Fragment key="uptime">{uptimeSection}</React.Fragment>);
-    }
-    return out;
+      })
+      .filter(Boolean);
+
+    return <div className="grid gap-4 md:grid-cols-2">{rendered}</div>;
   };
 
   return (

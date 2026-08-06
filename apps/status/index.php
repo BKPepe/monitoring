@@ -683,7 +683,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                     </span>
                                                 <?php elseif ($m_type === 'teamspeak'): ?>
                                                     <span title="<?php echo htmlspecialchars(t('ts_clients_title') . (!empty($details['ip_version']) ? sprintf(t('measured_via_suffix'), $details['ip_version']) : '')); ?>">
-                                                        <i class="fas fa-headset"></i> <?php echo (int)($details['clients_online'] ?? 0); ?> / <?php echo (int)($details['clients_max'] ?? 0); ?>
+                                                        <i class="fas fa-headset"></i> <?php echo bk_num($details['clients_online'] ?? null); ?> / <?php echo bk_num($details['clients_max'] ?? null); ?>
                                                         <?php if (!empty($details['ip_version'])): ?>
                                                             <small style="font-size: 0.65rem; color: var(--text-muted); margin-left: 0.25rem;">(<?php echo htmlspecialchars($details['ip_version']); ?>)</small>
                                                         <?php endif; ?>
@@ -1331,7 +1331,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                      <div>
                                                          <div class="detail-section-title"><i class="fas fa-users"></i> <?php echo htmlspecialchars(t('connected_clients_heading')); ?></div>
                                                          <p style="font-size: 1.2rem; font-weight: bold; color: #fff; font-family: var(--font-header);">
-                                                             <?php echo (int)($details['clients_online'] ?? 0); ?> / <?php echo (int)($details['clients_max'] ?? 0); ?>
+                                                             <?php echo bk_num($details['clients_online'] ?? null); ?> / <?php echo bk_num($details['clients_max'] ?? null); ?>
                                                          </p>
                                                          <p style="color: var(--text-muted); margin-top: 0.25rem;">
                                                               <?php echo htmlspecialchars(t('ts_clients_desc')); ?>
@@ -1425,7 +1425,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                      <div class="ts3-quality-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                          <div class="detail-section-title"><i class="fas fa-wave-square"></i> <?php echo htmlspecialchars(t('ts3_quality_heading')); ?></div>
                                                          <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
-                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_latency')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)($ts3_check_stages['query']['time_ms'] ?? 0); ?> ms</strong></div>
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_latency')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo bk_num($ts3_check_stages['query']['time_ms'] ?? null, ' ms'); ?></strong></div>
                                                              <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
                                                                  <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_voice')); ?>:</span>
                                                                  <?php if ($ts3_voice_quality['band'] !== null): ?>
@@ -1925,9 +1925,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-green); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-check-circle"></i> Proces ts3server běží</div>
                                                         <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.25rem;">
                                                             <span><strong>PID:</strong> <?php echo (int)($p['pid'] ?? 0); ?></span>
-                                                            <span><strong>CPU:</strong> <?php echo (float)($p['cpu'] ?? 0); ?>%</span>
-                                                            <span><strong>RAM:</strong> <?php echo (float)($p['ram_mb'] ?? 0); ?> MB</span>
-                                                            <span><strong>Vlákna:</strong> <?php echo (int)($p['threads'] ?? 0); ?></span>
+                                                            <span><strong>CPU:</strong> <?php echo bk_num($p['cpu'] ?? null, ' %', 1); ?></span>
+                                                            <span><strong>RAM:</strong> <?php echo bk_num($p['ram_mb'] ?? null, ' MB', 1); ?></span>
+                                                            <span><strong>Vlákna:</strong> <?php echo bk_num($p['threads'] ?? null); ?></span>
                                                             <?php if (isset($p['open_fds'])): ?><span><strong>Otevřené FD:</strong> <?php echo (int)$p['open_fds']; ?></span><?php endif; ?>
                                                             <?php if (isset($p['uptime_sec'])): ?><span><strong>Uptime procesu:</strong> <?php echo round($p['uptime_sec'] / 3600, 1); ?> h</span><?php endif; ?>
                                                         </div>
@@ -1943,7 +1943,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                 <?php foreach ($details['top_cpu_processes'] as $tp): ?>
                                                                     <div style="display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
                                                                         <span style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
-                                                                        <span style="color: var(--color-green); font-weight: bold; font-family: monospace;"><?php echo (float)($tp['cpu'] ?? 0); ?>%</span>
+                                                                        <span style="color: var(--color-green); font-weight: bold; font-family: monospace;"><?php echo bk_num($tp['cpu'] ?? null, ' %', 1); ?></span>
                                                                     </div>
                                                                 <?php endforeach; ?>
                                                             </div>
@@ -1957,7 +1957,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                 <?php foreach ($details['top_ram_processes'] as $tp): ?>
                                                                     <div style="display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
                                                                         <span style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
-                                                                        <span style="color: #60a5fa; font-weight: bold; font-family: monospace;"><?php echo (float)($tp['ram_mb'] ?? 0); ?> MB</span>
+                                                                        <span style="color: #60a5fa; font-weight: bold; font-family: monospace;"><?php echo bk_num($tp['ram_mb'] ?? null, ' MB', 1); ?></span>
                                                                     </div>
                                                                 <?php endforeach; ?>
                                                             </div>
@@ -2010,7 +2010,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                 <span><strong><?php echo htmlspecialchars(t('ow_radio')); ?>:</strong> <?php echo htmlspecialchars($radio['radio']); ?></span>
                                                                 <span><strong><?php echo htmlspecialchars(t('ow_band')); ?>:</strong> <?php echo htmlspecialchars($radio['band'] ?? '—'); ?></span>
                                                                 <span><strong><?php echo htmlspecialchars(t('ow_channel')); ?>:</strong> <?php echo htmlspecialchars($radio['channel'] ?? '—'); ?></span>
-                                                                <span><strong><?php echo htmlspecialchars(t('ow_clients')); ?>:</strong> <?php echo htmlspecialchars($radio['clients'] ?? 0); ?></span>
+                                                                <span><strong><?php echo htmlspecialchars(t('ow_clients')); ?>:</strong> <?php echo bk_num($radio['clients'] ?? null); ?></span>
                                                                 <?php if (!empty($radio['noise'])): ?><span><strong><?php echo htmlspecialchars(t('ow_noise')); ?>:</strong> <?php echo htmlspecialchars($radio['noise']); ?> dBm</span><?php endif; ?>
                                                                 <?php if (!empty($radio['tx_power'])): ?><span><strong><?php echo htmlspecialchars(t('ow_tx_power')); ?>:</strong> <?php echo htmlspecialchars($radio['tx_power']); ?> dBm</span><?php endif; ?>
                                                             </div>
@@ -2051,10 +2051,10 @@ $portal_url = trim(get_setting('portal_url'));
                                                                 <?php foreach ($details['interfaces'] as $iface): ?>
                                                                     <tr>
                                                                         <td style="font-family: monospace;"><?php echo htmlspecialchars($iface['iface']); ?></td>
-                                                                        <td><?php echo round(($iface['rx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
-                                                                        <td><?php echo round(($iface['tx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
-                                                                        <td><?php echo $iface['rx_errors'] ?? 0; ?></td>
-                                                                        <td><?php echo $iface['tx_errors'] ?? 0; ?></td>
+                                                                        <td><?php echo bk_num(isset($iface['rx_bytes']) ? $iface['rx_bytes'] / 1048576 : null, ' MB', 1); ?></td>
+                                                                        <td><?php echo bk_num(isset($iface['tx_bytes']) ? $iface['tx_bytes'] / 1048576 : null, ' MB', 1); ?></td>
+                                                                        <td><?php echo bk_num($iface['rx_errors'] ?? null); ?></td>
+                                                                        <td><?php echo bk_num($iface['tx_errors'] ?? null); ?></td>
                                                                     </tr>
                                                                 <?php endforeach; ?>
                                                             </tbody>

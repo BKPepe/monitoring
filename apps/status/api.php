@@ -927,6 +927,36 @@ if ($action === 'dashboard_layout') {
             ];
         }
 
+        // Dlazdice pro konkretni stroj: nabizi se jen agenti, kteri opravdu
+        // posilaji metriky (jinak by slo zapnout kartu, ktera nikdy nic
+        // neukaze). Klic nese id monitoru: metric_cpu_12.
+        try {
+            $stmt_a = $pdo->query("
+                SELECT m.id, m.name,
+                       (SELECT vm.cpu_usage FROM vps_metrics vm
+                        WHERE vm.monitor_id = m.id ORDER BY vm.id DESC LIMIT 1) AS cpu_usage
+                FROM monitors m
+                WHERE LOWER(m.type) IN ('vps', 'openwrt')
+                ORDER BY m.name
+            ");
+            foreach ($stmt_a->fetchAll() as $agent) {
+                if ($agent['cpu_usage'] === null) {
+                    continue;
+                }
+                foreach (['cpu' => t('metric_label_cpu'), 'ram' => t('metric_label_ram'), 'hdd' => t('metric_label_hdd')] as $mkey => $mlabel) {
+                    $catalog[] = [
+                        'key' => 'metric_' . $mkey . '_' . (int)$agent['id'],
+                        'label' => $mlabel . ' — ' . $agent['name'],
+                        'kind' => 'metric',
+                        'available' => true,
+                        'samples' => null,
+                    ];
+                }
+            }
+        } catch (Throwable $e) {
+            // Bez per-stroj dlazdic se katalog jen zkrati.
+        }
+
         $saved = [];
         if ($uid) {
             $raw = get_setting('dashboard_layout_user_' . $uid, '');

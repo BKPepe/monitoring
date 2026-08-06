@@ -390,8 +390,10 @@ foreach ($monitors as $monitor) {
             ], JSON_UNESCAPED_UNICODE);
         } elseif ($type === 'teamspeak') {
             $details = json_encode([
-                'clients_online' => $check_result['clients_online'] ?? 0,
-                'clients_max' => $check_result['clients_max'] ?? 0,
+                // Nezjištěný počet hráčů není nula - prázdný server a
+                // neúspěšný dotaz jsou dvě různé věci.
+                'clients_online' => $check_result['clients_online'] ?? null,
+                'clients_max' => $check_result['clients_max'] ?? null,
                 'name' => $check_result['name'] ?? 'TeamSpeak Server',
                 'version' => $check_result['version'] ?? '',
                 'checked_ip' => $check_result['checked_ip'] ?? '',
@@ -404,13 +406,15 @@ foreach ($monitors as $monitor) {
             bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details);
             $ts3_process_cpu = null;
             $ts3_process_ram = null;
-            $ts3_host_cpu = 0;
-            $ts3_host_ram = 0;
-            $ts3_host_hdd = 0;
+            // Bez metrik od agenta zůstává NULL - fiktivní nuly by v přehledu
+            // vypadaly jako naprosto nezatížený stroj.
+            $ts3_host_cpu = null;
+            $ts3_host_ram = null;
+            $ts3_host_hdd = null;
             if (is_array($ts3_agent_details)) {
-                $ts3_host_cpu = $ts3_agent_details['cpu'] ?? 0;
-                $ts3_host_ram = $ts3_agent_details['ram'] ?? 0;
-                $ts3_host_hdd = $ts3_agent_details['hdd'] ?? 0;
+                $ts3_host_cpu = $ts3_agent_details['cpu'] ?? null;
+                $ts3_host_ram = $ts3_agent_details['ram'] ?? null;
+                $ts3_host_hdd = $ts3_agent_details['hdd'] ?? null;
                 if (isset($ts3_agent_details['ts3_process']) && is_array($ts3_agent_details['ts3_process'])) {
                     $ts3_process_cpu = $ts3_agent_details['ts3_process']['cpu'] ?? null;
                     $ts3_process_ram = $ts3_agent_details['ts3_process']['ram_mb'] ?? null;

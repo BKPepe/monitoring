@@ -1769,7 +1769,7 @@ function buildDynamicAsset(
               label: t('asset.ts3_clients', 'Připojení klienti TS3'),
               value: t(
                 'asset.ts3_clients_value',
-                { online: ts3Clients ?? 0, max: ts3Max ?? 0 },
+                { online: ts3Clients, max: ts3Max },
                 `${ts3Clients} / ${ts3Max} uživatelů`
               ),
               tone: 'latency' as const,
@@ -1862,7 +1862,7 @@ function buildDynamicAsset(
               label: t('asset.ts3_serverquery', 'TeamSpeak 3 ServerQuery'),
               value: t(
                 'asset.ts3_serverquery_value',
-                { online: ts3Clients ?? 0, max: ts3Max ?? 0 },
+                { online: ts3Clients, max: ts3Max },
                 `${ts3Clients} / ${ts3Max} uživatelů online (Port 9987/8200)`
               ),
             },
