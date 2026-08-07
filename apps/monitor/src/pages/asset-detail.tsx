@@ -366,7 +366,8 @@ export function AssetDetailPage() {
                       <p className="truncate font-mono text-xs font-semibold">{proc.name}</p>
                       <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono text-[11px]">
                         <span>CPU {formatPercent(proc.cpu, 1)}</span>
-                        <span>RAM {proc.memory} MB</span>
+                        {/* Nezměřená paměť = pomlčka, ne holé "MB". */}
+                        <span>RAM {proc.memory == null ? '—' : `${proc.memory} MB`}</span>
                       </div>
                     </div>
                   ))}
@@ -386,7 +387,9 @@ export function AssetDetailPage() {
                         <TableRow key={proc.name}>
                           <TableCell className="font-mono text-xs font-semibold">{proc.name}</TableCell>
                           <TableCell className="text-right font-mono">{formatPercent(proc.cpu, 1)}</TableCell>
-                          <TableCell className="text-right font-mono">{proc.memory} MB</TableCell>
+                          <TableCell className="text-right font-mono">
+                            {proc.memory == null ? '—' : `${proc.memory} MB`}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -587,7 +590,7 @@ export function AssetDetailPage() {
                   </p>
                 </div>
               </div>
-              <Timeline events={events} />
+              <FilterableTimeline events={events} />
             </Card>
           </div>
         </TabsContent>
@@ -1565,7 +1568,8 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
   const { t } = useLanguage();
   const [severity, setSeverity] = React.useState<'all' | 'down' | 'warning' | 'up' | 'info'>('all');
   const [page, setPage] = React.useState(0);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = React.useState(10);
+  const [newestFirst, setNewestFirst] = React.useState(true);
 
   const counts = {
     all: events.length,
@@ -1574,7 +1578,17 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
     up: events.filter((e) => e.severity === 'up').length,
     info: events.filter((e) => e.severity === 'info').length,
   };
-  const filtered = severity === 'all' ? events : events.filter((e) => e.severity === severity);
+  const bySeverity = severity === 'all' ? events : events.filter((e) => e.severity === severity);
+  // Řazení podle času; při neparsovatelném datu se zachová původní pořadí
+  // (server je posílá od nejnovějších), místo aby položka propadla dolů.
+  const filtered = React.useMemo(() => {
+    const withTime = bySeverity.map((e, i) => ({ e, i, ts: Date.parse(String(e.at).replace(' ', 'T')) }));
+    withTime.sort((a, b) => {
+      if (Number.isNaN(a.ts) || Number.isNaN(b.ts)) return a.i - b.i;
+      return newestFirst ? b.ts - a.ts : a.ts - b.ts;
+    });
+    return withTime.map((x) => x.e);
+  }, [bySeverity, newestFirst]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const current = Math.min(page, pageCount - 1);
   const visible = filtered.slice(current * pageSize, current * pageSize + pageSize);
@@ -1609,6 +1623,36 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
             </button>
           )
         )}
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setNewestFirst((v) => !v);
+              setPage(0);
+            }}
+            className="bg-secondary text-muted-foreground hover:text-foreground rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors"
+          >
+            {newestFirst
+              ? t('timeline.newest_first', 'Nejnovější první')
+              : t('timeline.oldest_first', 'Nejstarší první')}
+          </button>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(0);
+            }}
+            aria-label={t('timeline.page_size', 'Počet na stránku')}
+            className="border-border bg-background rounded-md border px-1.5 py-1 text-[11px]"
+          >
+            {[10, 25, 50, 100].map((n) => (
+              <option key={n} value={n}>
+                {n} / {t('timeline.page_unit', 'stránku')}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <Timeline events={visible} />

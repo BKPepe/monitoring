@@ -1477,6 +1477,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Services come from importing discovered services (Infrastructure → Discovered services) or converting a monitor to an agent check.',
   },
   'services.orphaned': { cs: 'Bez přiřazeného agenta', en: 'Without an assigned agent' },
+  'timeline.newest_first': { cs: 'Nejnovější první', en: 'Newest first' },
+  'timeline.oldest_first': { cs: 'Nejstarší první', en: 'Oldest first' },
+  'timeline.page_size': { cs: 'Počet na stránku', en: 'Rows per page' },
+  'timeline.page_unit': { cs: 'stránku', en: 'page' },
   'regions.title': { cs: 'Měřicí místa', en: 'Probe locations' },
   'regions.subtitle': {
     cs: 'Odkud se kontroly za posledních 7 dní skutečně prováděly.',

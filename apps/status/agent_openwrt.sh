@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.7"
+AGENT_VERSION="1.5.8"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -133,6 +133,19 @@ done
 
 json_str() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | tr '\n' ' '
+}
+
+# Vypise JSON hodnotu: bud null (bez uvozovek), nebo uvozovkovany retezec.
+#
+# Vzniklo kvuli LTE: prazdna hodnota se v tomhle skriptu drzi jako retezec
+# "null" a `"$(json_str "$v")"` z ni udelal RETEZEC "null", takze UI
+# poctive vypsalo `null · "null"` misto pomlcky.
+json_val() {
+    if [ -z "$1" ] || [ "$1" = "null" ]; then
+        printf 'null'
+    else
+        printf '"%s"' "$(json_str "$1")"
+    fi
 }
 
 log_message() {
@@ -593,7 +606,7 @@ if command -v top >/dev/null 2>&1; then
                 h = toupper($i);
                 if (h == "%CPU" || h == "CPU%") cpu_i = i;
                 else if (h == "%VSZ" || h == "%MEM" || h == "MEM%") mem_i = i;
-                else if (h == "VSZ" || h == "RSS") vsz_i = i;
+                else if (h == "VSZ" || h == "RSS" || h == "RES") vsz_i = i;
                 else if (h == "COMMAND" || h == "CMD" || h == "PROCESS") cmd_i = i;
                 else if (h == "PID") pid_i = i;
             }
@@ -609,9 +622,19 @@ if command -v top >/dev/null 2>&1; then
             if (raw ~ /^[0-9]+(\.[0-9]+)?[mM]$/) { sub(/[mM]$/, "", raw); mb = raw + 0; }
             else if (raw ~ /^[0-9]+(\.[0-9]+)?[gG]$/) { sub(/[gG]$/, "", raw); mb = (raw + 0) * 1024; }
             else if (raw ~ /^[0-9]+(\.[0-9]+)?[kK]?$/) { sub(/[kK]$/, "", raw); mb = (raw + 0) / 1024; }
-            name = (cmd_i ? basename($cmd_i) : "");
+            # busybox top kresli strom procesu: COMMAND zacina glyfem
+            # (`- , |- , +-) a skutecny prikaz je az za nim. Driv se proto
+            # jako jmeno ulozilo doslova "`-".
+            name = "";
+            for (c = cmd_i; c <= NF; c++) {
+                cand = $c;
+                gsub(/^[`|+\\-]+$/, "", cand);
+                if (cand == "" || cand == "`-" || cand == "|-" || cand == "+-" || cand == "-") continue;
+                name = basename(cand);
+                break;
+            }
             gsub(/[{}"\\]/, "", name);
-            if (name == "") next;
+            if (name == "" || name ~ /^[`|+-]+$/) next;
             printf "%s|%s|%s\n", name, cpu, mb;
         }' 2>/dev/null)
 
@@ -1267,8 +1290,8 @@ payload=$(cat <<EOF
   "lte_rsrp": $lte_rsrp,
   "lte_rsrq": $lte_rsrq,
   "lte_sinr": $lte_sinr,
-  "lte_band": "$(json_str "$lte_band")",
-  "lte_carrier": "$(json_str "$lte_carrier")",
+  "lte_band": $(json_val "$lte_band"),
+  "lte_carrier": $(json_val "$lte_carrier"),
   "service_restarts": $service_restarts_json,
   "wan_reconnect_count": $wan_reconnect_count,
   "wan_last_reconnect": $wan_last_reconnect,
