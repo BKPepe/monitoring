@@ -66,7 +66,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.7.3"
+AGENT_VERSION="1.7.4"
 LOG_FILE="$ScriptPath/agent.log"
 NET_STATE_FILE="$ScriptPath/agent_net.state"
 DISKIO_STATE_FILE="$ScriptPath/agent_diskio.state"
@@ -182,10 +182,12 @@ END {
     print "ram=" pct "; ram_total_mb=" total "; ram_used_mb=" used "; ram_available_mb=" avail "; ram_free_mb=" free;
 }' /proc/meminfo 2>/dev/null)
 [ -z "$ram" ] && ram="0.0"
-[ -z "$ram_total_mb" ] && ram_total_mb=0
-[ -z "$ram_used_mb" ] && ram_used_mb=0
-[ -z "$ram_available_mb" ] && ram_available_mb=0
-[ -z "$ram_free_mb" ] && ram_free_mb=0
+# Kdyz se /proc/meminfo neprecte, NENI to stroj s 0 MB pameti - hodnoty
+# zustavaji null a server i UI to zobrazi jako "nezmereno".
+[ -z "$ram_total_mb" ] && ram_total_mb="null"
+[ -z "$ram_used_mb" ] && ram_used_mb="null"
+[ -z "$ram_available_mb" ] && ram_available_mb="null"
+[ -z "$ram_free_mb" ] && ram_free_mb="null"
 
 # 2.5 Swap Usage (%)
 swap=$(awk '
@@ -823,7 +825,9 @@ fi
 oom_kills_json="null"
 if command -v dmesg >/dev/null 2>&1; then
     oom_kills_json=$(dmesg 2>/dev/null | grep -ci "oom-killer\|Out of memory")
-    [ -z "$oom_kills_json" ] && oom_kills_json=0
+    # Prazdny vystup znamena, ze dmesg nesel precist (prava, jaderna volba) -
+    # to neni "zadne OOM zabiti", to je "nevime".
+    [ -z "$oom_kills_json" ] && oom_kills_json="null"
 fi
 
 boot_time_json="null"

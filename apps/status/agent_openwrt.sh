@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.12"
+AGENT_VERSION="1.5.13"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -220,10 +220,12 @@ END {
     print "ram=" pct "; ram_total_mb=" total "; ram_used_mb=" used "; ram_available_mb=" avail "; ram_free_mb=" free;
 }' /proc/meminfo 2>/dev/null)
 [ -z "$ram" ] && ram="0.0"
-[ -z "$ram_total_mb" ] && ram_total_mb=0
-[ -z "$ram_used_mb" ] && ram_used_mb=0
-[ -z "$ram_available_mb" ] && ram_available_mb=0
-[ -z "$ram_free_mb" ] && ram_free_mb=0
+# Kdyz se /proc/meminfo neprecte, NENI to stroj s 0 MB pameti - hodnoty
+# zustavaji null a server i UI to zobrazi jako "nezmereno".
+[ -z "$ram_total_mb" ] && ram_total_mb="null"
+[ -z "$ram_used_mb" ] && ram_used_mb="null"
+[ -z "$ram_available_mb" ] && ram_available_mb="null"
+[ -z "$ram_free_mb" ] && ram_free_mb="null"
 
 # Load average 1/5/15 - primo z /proc/loadavg, ne z ubus "system info" (ktere
 # vraci stejna cisla, jen skalovana x65536 - zbytecna komplikace navic).
@@ -274,7 +276,9 @@ DISK_STATE_FILE="/tmp/status-agent-openwrt-disk.state"
 disk_io_write="null"
 if [ -f /proc/diskstats ]; then
     now_ts=$(date +%s)
-    total_written_sectors=$(awk '$3 ~ /^(mtdblock|mmcblk|sd|ubiblock|nvme)/ {sum += $10} END {print sum+0}' /proc/diskstats 2>/dev/null)
+    # Bez shodneho disku se nevypisuje nic (drive nula, kterou pak stejne
+    # odfiltroval test -gt 0 nize - ale vzor svadel k opakovani jinde).
+    total_written_sectors=$(awk '$3 ~ /^(mtdblock|mmcblk|sd|ubiblock|nvme)/ {sum += $10; n++} END {if (n>0) print sum}' /proc/diskstats 2>/dev/null)
     if [ -n "$total_written_sectors" ] && [ "$total_written_sectors" -gt 0 ]; then
         if [ -f "$DISK_STATE_FILE" ]; then
             prev_ts=$(awk '{print $1}' "$DISK_STATE_FILE" 2>/dev/null)
@@ -503,9 +507,12 @@ else
     fi
 fi
 
-wifi_clients_count=0
+# Bez iwinfo se pocet klientu NEZJISTUJE - drive tu zustala nula, takze
+# router bez iwinfo hlasil "0 pripojenych", i kdyz se na WiFi nikdo nedival.
+wifi_clients_count="null"
 if command -v iwinfo >/dev/null 2>&1; then
-    wifi_clients_count=$(iwinfo 2>/dev/null | grep -i "assoc" | awk '{sum+=$NF} END {print sum+0}')
+    wifi_clients_count=$(iwinfo 2>/dev/null | grep -i "assoc" | awk '{sum+=$NF; n++} END {if (n>0) print sum}')
+    [ -z "$wifi_clients_count" ] && wifi_clients_count="null"
 fi
 
 interfaces_json="[]"
@@ -899,7 +906,8 @@ fi
 oom_kills="null"
 if command -v dmesg >/dev/null 2>&1; then
     oom_kills=$(dmesg 2>/dev/null | grep -ci "oom-killer\|Out of memory")
-    [ -z "$oom_kills" ] && oom_kills=0
+    # Prazdny vystup = dmesg nesel precist, ne "zadne OOM zabiti".
+    [ -z "$oom_kills" ] && oom_kills="null"
 fi
 
 # Boot time = ted - uptime; UI z toho ukaze "System bezi od" bez driftu.

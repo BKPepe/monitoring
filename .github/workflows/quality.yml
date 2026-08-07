@@ -161,6 +161,17 @@ jobs:
           severity: error
           additional_files: 'agent.sh agent_openwrt.sh'
 
+      - name: Setup PHP pro lint agentů
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring
+
+      # Vymyslene nuly nevznikaji jen v PHP/TS: awk 'END{print sum+0}' hlasil
+      # "0 zahozenych paketu" na routeru, kde se firewall vubec nemeri.
+      - name: Honesty lint agentů (žádné vymyšlené nuly)
+        run: php apps/status/tests/run_agent_honesty_lint.php
+
       - name: Python agent
         run: python3 -m py_compile apps/status/agent.py
 
