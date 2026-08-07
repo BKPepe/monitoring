@@ -1814,6 +1814,49 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
     exit;
 }
 
+// 2b2m. Rozpad poslední kontroly (DNS -> TCP -> TLS -> HTTP).
+//
+// Data existují od začátku, jen se ukládala výhradně do monitor_logs a
+// žádné API je nevydávalo - v aplikaci proto nešlo zjistit, ve které fázi
+// se web zdržel. Vrací poslední kontrolu, která rozpad skutečně nese.
+if ($action === 'check_stages') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    if ($monitor_id <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT check_stages, checked_at, response_time, status
+            FROM monitor_logs
+            WHERE monitor_id = ? AND check_stages IS NOT NULL AND check_stages <> ''
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$monitor_id]);
+        $row = $stmt->fetch();
+
+        if (!$row) {
+            // Žádný rozpad zatím není - není to chyba, jen se ještě neměřilo.
+            echo json_encode(['stages' => null], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stages = json_decode($row['check_stages'], true);
+        echo json_encode([
+            'stages' => is_array($stages) ? $stages : null,
+            'checkedAt' => $row['checked_at'],
+            'responseMs' => $row['response_time'] !== null ? (int)$row['response_time'] : null,
+            'status' => $row['status'],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Rozpad kontroly se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'regions') {
     try {
         $days = max(1, min(30, (int)($_GET['days'] ?? 7)));

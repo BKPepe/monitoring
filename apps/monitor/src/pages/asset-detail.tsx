@@ -32,6 +32,7 @@ import { cn, formatPercent, formatUptime } from '@/lib/utils';
 import { RouterServices } from '@/components/router-services';
 import { DiscordCard } from '@/components/discord-card';
 import { MinecraftCard } from '@/components/minecraft-card';
+import { CheckPipeline } from '@/components/check-pipeline';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -234,6 +235,8 @@ export function AssetDetailPage() {
   const isRouter = upperKind === 'ROUTER' || upperKind === 'OPENWRT';
   const isDiscord = upperKind === 'DISCORD';
   const isMinecraft = upperKind === 'MINECRAFT';
+  // Rozpad kontroly dava smysl jen u HTTP cilu (DNS -> TCP -> TLS -> HTTP).
+  const isWeb = ['WEB', 'HTTP', 'HTTPS'].includes(upperKind);
 
   return (
     <div className="space-y-6">
@@ -441,6 +444,7 @@ export function AssetDetailPage() {
             {isRouter && <RouterServices d={asset.rawDetails ?? {}} />}
             {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
             {isMinecraft && <MinecraftCard d={asset.rawDetails ?? {}} />}
+            {isWeb && <CheckPipeline monitorId={asset.id} />}
 
             {!isRouter &&
               !isDiscord &&
