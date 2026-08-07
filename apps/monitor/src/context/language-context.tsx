@@ -1606,6 +1606,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'MOTD, hráči a výkon serveru z dotazu na herní port.',
     en: 'MOTD, players and server performance from the game-port query.',
   },
+  'asset.last_measurements': { cs: 'Posledních 5 měření', en: 'Last 5 measurements' },
+  'asset.last_measurements_desc': {
+    cs: 'Čerstvé kontroly včetně odezvy a místa měření.',
+    en: 'Recent checks including latency and probe location.',
+  },
+  'asset.no_measurements': { cs: 'Zatím neproběhla žádná kontrola.', en: 'No check has run yet.' },
   'ts3.title': { cs: 'TeamSpeak server', en: 'TeamSpeak server' },
   'ts3.subtitle': { cs: 'Stav ze ServerQuery', en: 'State from ServerQuery' },
   'ts3.version': { cs: 'Verze {version}', en: 'Version {version}' },

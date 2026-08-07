@@ -44,4 +44,6 @@ export interface TimelineEvent {
   resolution?: 'Resolved' | 'Info' | 'Open';
   location?: string;
   method?: string;
+  /** Naměřená odezva té konkrétní kontroly; null = nezměřeno. */
+  responseMs?: number | null;
 }

@@ -15,7 +15,7 @@ import {
   Gamepad2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Badge, StatusDot } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -28,7 +28,7 @@ import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useLanguage } from '@/context/language-context';
-import { cn, formatPercent, formatUptime } from '@/lib/utils';
+import { cn, formatMs, formatPercent, formatUptime } from '@/lib/utils';
 import { RouterServices } from '@/components/router-services';
 import { DiscordCard } from '@/components/discord-card';
 import { MinecraftCard } from '@/components/minecraft-card';
@@ -165,6 +165,7 @@ export function AssetDetailPage() {
             resolution: e.isDown ? 'Open' : 'Info',
             location: e.location,
             method: e.type,
+            responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
           }))
         );
       })
@@ -881,10 +882,34 @@ function OverviewTab({
 
       <Card className="xl:col-span-5">
         <CardHeader>
-          <CardTitle>{t('asset.recent_events', 'Poslední události')}</CardTitle>
+          <CardTitle>{t('asset.last_measurements', 'Posledních 5 měření')}</CardTitle>
+          <CardDescription>
+            {t('asset.last_measurements_desc', 'Čerstvé kontroly včetně odezvy a místa měření.')}
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <Timeline events={events.slice(0, 5)} />
+        <CardContent className="flex flex-col gap-1.5">
+          {events.length === 0 ? (
+            <p className="text-muted-foreground py-4 text-center text-sm">
+              {t('asset.no_measurements', 'Zatím neproběhla žádná kontrola.')}
+            </p>
+          ) : (
+            events.slice(0, 5).map((e) => (
+              <div key={e.id} className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2">
+                <StatusDot variant={e.severity === 'info' ? 'paused' : e.severity} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium">{e.title}</p>
+                  <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-[11px]">
+                    <span className="font-mono">{e.at}</span>
+                    {/* Místo měření nemusí být zaznamenané - pak se nic nepíše. */}
+                    {e.location && <span className="truncate">· {e.location}</span>}
+                  </div>
+                </div>
+                <span className="shrink-0 font-mono text-xs font-semibold">
+                  {e.responseMs == null ? '—' : formatMs(e.responseMs)}
+                </span>
+              </div>
+            ))
+          )}
         </CardContent>
       </Card>
 
