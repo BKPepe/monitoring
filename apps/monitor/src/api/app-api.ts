@@ -53,6 +53,7 @@ export interface ApiMonitor {
   maintenanceStart?: string | null;
   maintenanceEnd?: string | null;
   monitoredProcesses?: string | null;
+  presetId?: number | null;
   cpuThreshold?: number;
   ramThreshold?: number;
   hddThreshold?: number;

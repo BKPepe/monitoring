@@ -26,9 +26,11 @@ import {
   FileBarChart,
   BellRing,
   ExternalLink,
+  Layers,
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
+import { PresetManager } from '@/components/preset-manager';
 import { Link } from 'react-router';
 
 const API_BASE = '/status/api.php';
@@ -124,7 +126,7 @@ type SettingsMap = Record<string, string>;
 export function SettingsPage() {
   const { t } = useLanguage();
   const { session } = useSession();
-  const [activeTab, setActiveTab] = useState<'obecne' | 'notifikace' | 'integrace' | 'vzhled'>('obecne');
+  const [activeTab, setActiveTab] = useState<'obecne' | 'notifikace' | 'integrace' | 'vzhled' | 'presety'>('obecne');
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -360,6 +362,7 @@ export function SettingsPage() {
       icon: <Plug className="size-3.5" />,
     },
     { id: 'vzhled' as const, label: t('settings.tab_appearance', 'Vzhled'), icon: <Palette className="size-3.5" /> },
+    { id: 'presety' as const, label: t('settings.tab_presets', 'Presety'), icon: <Layers className="size-3.5" /> },
   ];
 
   return (
@@ -1039,6 +1042,13 @@ export function SettingsPage() {
                 );
               })}
             </Card>
+          </div>
+        )}
+
+        {/* TAB: Presety metrik */}
+        {activeTab === 'presety' && (
+          <div className="space-y-6 animate-in fade-in-50 duration-200">
+            <PresetManager />
           </div>
         )}
 

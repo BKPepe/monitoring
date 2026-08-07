@@ -220,7 +220,7 @@ if ($action === 'monitors') {
         try {
             $stmt2 = $pdo->query("
                 SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
-                       maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
+                       maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold, preset_id,
                        body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
                        (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
                        (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
@@ -242,6 +242,7 @@ if ($action === 'monitors') {
                 $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? 90);
                 $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
                 $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
+                $monitors[$mid]['presetId'] = $r['preset_id'] !== null ? (int)$r['preset_id'] : null;
                 $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
                 $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
                 $monitors[$mid]['sqUsername'] = $r['sq_username'];
@@ -358,10 +359,10 @@ if ($action === 'save_monitor') {
             // hodnotu - prázdné pole ve formuláři pro editaci nesmí smazat už uložené heslo.
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
             $agent_key = bin2hex(random_bytes(16));
@@ -371,10 +372,10 @@ if ($action === 'save_monitor') {
                 $asset_id = (int)$pdo->lastInsertId();
             }
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
             $new_id = (int)$pdo->lastInsertId();
             echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
@@ -1656,6 +1657,150 @@ if ($action === 'create_incident') {
 // Skupinuje monitor_logs podle checked_from (uzly zapisují svou lokalitu
 // přes node_api.php, cron nechává výchozí hodnotu). Vrací jen to, co je
 // v datech - žádná mapa s vymyšlenými body po světě.
+// 2b2l. Presety metrik: pojmenované sady „co se zobrazuje a kdy je to
+// problém", přiřaditelné monitorům. Čtení je veřejné (UI je potřebuje
+// k vykreslení), zápis jen pro přihlášeného admina.
+if ($action === 'presets') {
+    try {
+        $presets = [];
+        $stmt = $pdo->query("SELECT id, name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name");
+        foreach ($stmt->fetchAll() as $r) {
+            $metrics = json_decode($r['metrics'] ?? '', true);
+            $presets[] = [
+                'id' => (int)$r['id'],
+                'name' => $r['name'],
+                'description' => $r['description'],
+                'serviceType' => $r['service_type'],
+                'metrics' => is_array($metrics) ? $metrics : [],
+                // null = preset práh neřeší a nechá hodnotu na monitoru
+                'cpuThreshold' => $r['cpu_threshold'] !== null ? (int)$r['cpu_threshold'] : null,
+                'ramThreshold' => $r['ram_threshold'] !== null ? (int)$r['ram_threshold'] : null,
+                'hddThreshold' => $r['hdd_threshold'] !== null ? (int)$r['hdd_threshold'] : null,
+            ];
+        }
+
+        // Kolik monitorů preset používá - aby šlo poznat, co smazání ovlivní.
+        $usage = [];
+        try {
+            $stmt_u = $pdo->query("SELECT preset_id, COUNT(*) AS c FROM monitors WHERE preset_id IS NOT NULL GROUP BY preset_id");
+            foreach ($stmt_u->fetchAll() as $u) {
+                $usage[(int)$u['preset_id']] = (int)$u['c'];
+            }
+        } catch (Throwable $e) {}
+        foreach ($presets as &$p) {
+            $p['usedBy'] = $usage[$p['id']] ?? 0;
+        }
+        unset($p);
+
+        // Katalog dostupných metrik podle typu služby (zdroj: profily).
+        $catalog = [];
+        foreach (get_service_profiles() as $type => $profile) {
+            if (empty($profile['metrics'])) {
+                continue;
+            }
+            $catalog[$type] = [
+                'label' => $profile['label'],
+                'metrics' => array_map(
+                    fn($m) => ['key' => $m['key'], 'label' => $m['label'], 'recommended' => !empty($m['recommended'])],
+                    $profile['metrics']
+                ),
+            ];
+        }
+
+        echo json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Presety se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'assign_preset') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    try {
+        if ($action === 'save_preset') {
+            $name = trim((string)($input['name'] ?? ''));
+            if ($name === '') {
+                http_response_code(400);
+                echo json_encode(['error' => 'Název presetu nesmí být prázdný.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $metrics = [];
+            foreach ((array)($input['metrics'] ?? []) as $mk) {
+                $clean = preg_replace('/[^a-z0-9_]/', '', strtolower((string)$mk));
+                if ($clean !== '') {
+                    $metrics[] = $clean;
+                }
+            }
+            // Prázdný práh = preset ho neřeší; nula je platná hodnota, proto
+            // se rozlišuje '' od 0 a nedosazuje se výchozí číslo.
+            $thr = function ($v) {
+                if ($v === null || $v === '') {
+                    return null;
+                }
+                return max(0, min(100, (int)$v));
+            };
+            $id = (int)($input['id'] ?? 0);
+            $params = [
+                $name,
+                trim((string)($input['description'] ?? '')) ?: null,
+                trim((string)($input['serviceType'] ?? '')) ?: null,
+                json_encode(array_values(array_unique($metrics)), JSON_UNESCAPED_UNICODE),
+                $thr($input['cpuThreshold'] ?? null),
+                $thr($input['ramThreshold'] ?? null),
+                $thr($input['hddThreshold'] ?? null),
+            ];
+            if ($id > 0) {
+                $stmt = $pdo->prepare("UPDATE metric_presets SET name = ?, description = ?, service_type = ?, metrics = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ? WHERE id = ?");
+                $stmt->execute(array_merge($params, [$id]));
+                bk_audit_log($pdo, 'preset_updated', "Preset '{$name}' upraven", 'preset', $id);
+            } else {
+                $stmt = $pdo->prepare("INSERT INTO metric_presets (name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute($params);
+                $id = (int)$pdo->lastInsertId();
+                bk_audit_log($pdo, 'preset_created', "Preset '{$name}' vytvořen", 'preset', $id);
+            }
+            echo json_encode(['success' => true, 'id' => $id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'delete_preset') {
+            $id = (int)($input['id'] ?? 0);
+            // Monitory preset jen ztratí a vrátí se k vlastnímu nastavení -
+            // mazání presetu nesmí nikomu shodit monitorování.
+            $pdo->prepare("UPDATE monitors SET preset_id = NULL WHERE preset_id = ?")->execute([$id]);
+            $pdo->prepare("DELETE FROM metric_presets WHERE id = ?")->execute([$id]);
+            bk_audit_log($pdo, 'preset_deleted', "Preset #{$id} smazán", 'preset', $id);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // assign_preset: přiřazení jednomu nebo více monitorům (0 = odebrat)
+        $preset_id = (int)($input['presetId'] ?? 0);
+        $monitor_ids = array_values(array_filter(array_map('intval', (array)($input['monitorIds'] ?? []))));
+        if (empty($monitor_ids)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Nebyl vybrán žádný monitor.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $placeholders = implode(',', array_fill(0, count($monitor_ids), '?'));
+        $stmt = $pdo->prepare("UPDATE monitors SET preset_id = ? WHERE id IN ({$placeholders})");
+        $stmt->execute(array_merge([$preset_id > 0 ? $preset_id : null], $monitor_ids));
+        bk_audit_log($pdo, 'preset_assigned', "Preset #{$preset_id} přiřazen " . count($monitor_ids) . " monitorům", 'preset', $preset_id);
+        echo json_encode(['success' => true, 'updated' => count($monitor_ids)], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Operaci s presetem se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'regions') {
     try {
         $days = max(1, min(30, (int)($_GET['days'] ?? 7)));

@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.10"
+AGENT_VERSION="1.5.11"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -634,7 +634,15 @@ if command -v top >/dev/null 2>&1; then
                 cand = $c;
                 gsub(/^[`|+\\-]+$/, "", cand);
                 if (cand == "" || cand == "`-" || cand == "|-" || cand == "+-" || cand == "-") continue;
-                name = basename(cand);
+                # Jaderna vlakna top vypisuje v hranatych zavorkach
+                # ([kworker/u4:0-phy0]). basename() z nich delal "u4:0-phy0]",
+                # protoze rezal podle lomitka - u nich se zavorky jen odstrani.
+                if (cand ~ /^\[/) {
+                    gsub(/^\[|\]$/, "", cand);
+                    name = cand;
+                } else {
+                    name = basename(cand);
+                }
                 break;
             }
             gsub(/[{}"\\]/, "", name);

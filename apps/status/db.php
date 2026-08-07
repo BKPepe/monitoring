@@ -35,7 +35,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260806a');
+    define('BK_SCHEMA_VERSION', '20260806b');
 
     $bk_current_schema = false;
     try {
@@ -484,6 +484,24 @@ try {
         // Incidenty jako plnohodnotné objekty: vazba na monitor, převzetí
         // (acknowledge) a postmortem. NULLable - ručně založené incidenty
         // vazbu na monitor nemají.
+        // Editovatelne presety: pojmenovana sada zobrazenych metrik a prahu,
+        // kterou lze priradit vice monitorum najednou. Nahrazuje situaci, kdy
+        // sly menit jen prahy jednotlivych monitoru a sada metrik byla
+        // natvrdo v get_service_profiles().
+        "CREATE TABLE IF NOT EXISTS `metric_presets` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(80) NOT NULL,
+            `description` VARCHAR(255) DEFAULT NULL,
+            `service_type` VARCHAR(32) DEFAULT NULL,
+            `metrics` TEXT DEFAULT NULL,
+            `cpu_threshold` INT DEFAULT NULL,
+            `ram_threshold` INT DEFAULT NULL,
+            `hdd_threshold` INT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_preset_name` (`name`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        "ALTER TABLE monitors ADD COLUMN preset_id INT NULL",
         "ALTER TABLE incidents ADD COLUMN monitor_id INT NULL",
         "ALTER TABLE incidents ADD COLUMN acknowledged_by VARCHAR(64) NULL",
         "ALTER TABLE incidents ADD COLUMN acknowledged_at DATETIME NULL",

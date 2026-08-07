@@ -3329,10 +3329,70 @@ function get_service_profiles() {
  * dashboard se chová jako dřív, zobrazuje vše). Volající vždy kontrolují
  * `$enabled_metrics === null || in_array('klíč', $enabled_metrics)`.
  */
-function bk_get_enabled_metrics($monitor) {
+/**
+ * Metriky a prahy z presetu přiřazeného monitoru.
+ *
+ * Preset je pojmenovaná sada „co se u téhle služby zobrazuje a kdy je to
+ * problém". Monitor bez presetu funguje jako dřív (doporučené metriky
+ * profilu + vlastní prahy), takže zavedení presetů nic nerozbije.
+ *
+ * @return array|null ['metrics' => string[]|null, 'cpu' => ?int, 'ram' => ?int, 'hdd' => ?int]
+ */
+function bk_get_preset($pdo, $preset_id): ?array {
+    $preset_id = (int)$preset_id;
+    if ($preset_id <= 0) {
+        return null;
+    }
+    static $cache = [];
+    if (array_key_exists($preset_id, $cache)) {
+        return $cache[$preset_id];
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets WHERE id = ?");
+        $stmt->execute([$preset_id]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return $cache[$preset_id] = null;
+        }
+        $metrics = json_decode($row['metrics'] ?? '', true);
+        return $cache[$preset_id] = [
+            'metrics' => is_array($metrics) ? $metrics : null,
+            // Prahy jsou volitelné - preset může řešit jen sadu metrik.
+            'cpu' => $row['cpu_threshold'] !== null ? (int)$row['cpu_threshold'] : null,
+            'ram' => $row['ram_threshold'] !== null ? (int)$row['ram_threshold'] : null,
+            'hdd' => $row['hdd_threshold'] !== null ? (int)$row['hdd_threshold'] : null,
+        ];
+    } catch (Throwable $e) {
+        // Bez tabulky (stará DB) se preset prostě neuplatní.
+        return $cache[$preset_id] = null;
+    }
+}
+
+/**
+ * Účinný práh pro metriku: preset má přednost před hodnotou na monitoru.
+ *
+ * Vrací null, když není nastaveno ani jedno - volající pak práh neuplatní
+ * místo toho, aby si vymyslel výchozí číslo.
+ */
+function bk_effective_threshold(?array $preset, $monitor_value, string $key): ?int {
+    if ($preset !== null && $preset[$key] !== null) {
+        return $preset[$key];
+    }
+    return $monitor_value !== null && $monitor_value !== '' ? (int)$monitor_value : null;
+}
+
+function bk_get_enabled_metrics($monitor, $pdo = null) {
     $profile = get_service_profiles()[$monitor['type'] ?? ''] ?? null;
     if (!$profile || empty($profile['metrics'])) {
         return null;
+    }
+    // Preset (pokud je přiřazený) přebíjí sadu uloženou u monitoru - to je
+    // celý smysl presetu: změna na jednom místě se projeví všude.
+    if ($pdo !== null && !empty($monitor['preset_id'])) {
+        $preset = bk_get_preset($pdo, $monitor['preset_id']);
+        if ($preset !== null && is_array($preset['metrics']) && !empty($preset['metrics'])) {
+            return $preset['metrics'];
+        }
     }
     $stored = json_decode($monitor['enabled_metrics'] ?? '', true);
     if (is_array($stored) && !empty($stored)) {

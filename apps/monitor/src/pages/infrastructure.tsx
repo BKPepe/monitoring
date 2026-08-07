@@ -99,6 +99,18 @@ export function InfrastructurePage() {
   // VPS & OpenWrt Agent
   const [monitoredProcesses, setMonitoredProcesses] = React.useState('');
   const [cpuThreshold, setCpuThreshold] = React.useState('90');
+  // Preset: pojmenovaná sada metrik a prahů. Prázdné = monitor si drží
+  // vlastní hodnoty (chování před zavedením presetů).
+  const [presetId, setPresetId] = React.useState('');
+  const [presets, setPresets] = React.useState<{ id: number; name: string; serviceType: string | null }[]>([]);
+  React.useEffect(() => {
+    fetch('/status/api.php?action=presets', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (Array.isArray(d?.presets)) setPresets(d.presets);
+      })
+      .catch(() => {});
+  }, []);
   const [ramThreshold, setRamThreshold] = React.useState('95');
   const [hddThreshold, setHddThreshold] = React.useState('90');
   const [remoteActionsEnabled, setRemoteActionsEnabled] = React.useState(false);
@@ -231,6 +243,7 @@ export function InfrastructurePage() {
       );
       setMonitoredProcesses(mon.monitoredProcesses ?? '');
       setCpuThreshold(mon.cpuThreshold != null ? String(mon.cpuThreshold) : '90');
+      setPresetId(mon.presetId != null ? String(mon.presetId) : '');
       setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
       setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
       setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
@@ -364,6 +377,7 @@ export function InfrastructurePage() {
           rcon_port: rconPort ? parseInt(rconPort, 10) : 25575,
           rcon_password: rconPassword || null,
           monitored_processes: monitoredProcesses || null,
+          preset_id: presetId === '' ? null : parseInt(presetId, 10),
           cpu_threshold: parseInt(cpuThreshold, 10) || 90,
           ram_threshold: parseInt(ramThreshold, 10) || 95,
           hdd_threshold: parseInt(hddThreshold, 10) || 90,
@@ -1180,6 +1194,30 @@ export function InfrastructurePage() {
                           />
                           {t('infra.sms_on_outage', 'Zasílat SMS notifikace při výpadku')}
                         </label>
+                      </div>
+
+                      <div className="pt-2 border-t border-border">
+                        <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                          {t('infra.preset', 'Preset metrik')}
+                        </label>
+                        <select
+                          value={presetId}
+                          onChange={(e) => setPresetId(e.target.value)}
+                          className="w-full rounded-md bg-background border border-border px-3 py-2 text-sm"
+                        >
+                          <option value="">{t('infra.preset_none', 'Bez presetu (vlastní nastavení)')}</option>
+                          {presets.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          {t(
+                            'infra.preset_hint',
+                            'Preset přebíjí sadu metrik a vyplněné prahy níže. Spravuje se v Nastavení → Presety.'
+                          )}
+                        </p>
                       </div>
 
                       <div className="grid grid-cols-4 gap-3 pt-2 border-t border-border">

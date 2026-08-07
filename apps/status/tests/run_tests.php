@@ -12,7 +12,7 @@
  */
 
 require_once __DIR__ . '/assert_helpers.php';
-bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_validate_import_target', 'bk_version_is_older', 'bk_format_duration']);
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_validate_import_target', 'bk_version_is_older', 'bk_format_duration', 'bk_effective_threshold']);
 
 
 // --- bk_validate_import_target: importované cíle -------------------------
@@ -53,6 +53,21 @@ if (function_exists('bk_version_is_older')) {
 // --- bk_format_duration --------------------------------------------------
 if (function_exists('bk_format_duration')) {
     check_true('trvání je neprázdný text', is_string(bk_format_duration(1800)) && bk_format_duration(1800) !== '');
+}
+
+// --- bk_effective_threshold (presety) ------------------------------------
+// Preset ma prednost pred hodnotou monitoru, ale jen kdyz prah opravdu resi.
+if (function_exists('bk_effective_threshold')) {
+    $preset_full = ['metrics' => null, 'cpu' => 70, 'ram' => 80, 'hdd' => null];
+
+    check('preset prebiji hodnotu monitoru', bk_effective_threshold($preset_full, 90, 'cpu'), 70);
+    check('preset bez prahu nechava hodnotu monitoru', bk_effective_threshold($preset_full, 90, 'hdd'), 90);
+    check('bez presetu plati hodnota monitoru', bk_effective_threshold(null, 85, 'cpu'), 85);
+    check('nic nenastaveno = zadny prah', bk_effective_threshold(null, null, 'cpu'), null);
+    check('prazdny retezec u monitoru = zadny prah', bk_effective_threshold(null, '', 'ram'), null);
+    // Nula je platny prah (napr. "hlas cokoli"), ne "nenastaveno".
+    check('nulovy prah v presetu se respektuje', bk_effective_threshold(['metrics' => null, 'cpu' => 0, 'ram' => null, 'hdd' => null], 90, 'cpu'), 0);
+    check('nulovy prah u monitoru se respektuje', bk_effective_threshold(null, 0, 'cpu'), 0);
 }
 
 $failed = bk_test_report('čisté funkce');
