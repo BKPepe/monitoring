@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.8"
+AGENT_VERSION="1.5.9"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -697,6 +697,43 @@ if [ -f /etc/config/sqm ]; then
     fi
 fi
 
+# --- LTE/WWAN pripojeni pres ubus -----------------------------------------
+#
+# Modem nemusi byt vubec videt pres uqmi/mmcli - na Turrisu s LTE v mPCIe
+# bez ModemManageru je dostupny jen jako sitove rozhrani (interface "lte",
+# proto dhcp). Driv agent hlasil "zadne LTE", i kdyz spojeni bezelo.
+#
+# Odsud se da zjistit, jestli LTE JEDE. Sila signalu (RSRP/RSRQ/band) tudy
+# dostupna neni - ta zustava null, dokud na routeru nebude uqmi/mmcli.
+lte_up="null"
+lte_device="null"
+lte_uptime="null"
+lte_ipv4="null"
+if command -v ubus >/dev/null 2>&1; then
+    for lte_if in lte wwan wwan0 modem lte1; do
+        lte_status=$(ubus call "network.interface.${lte_if}" status 2>/dev/null)
+        [ -z "$lte_status" ] && continue
+
+        lte_up_raw=$(echo "$lte_status" | jsonfilter -e '@.up' 2>/dev/null)
+        [ "$lte_up_raw" = "true" ] || [ "$lte_up_raw" = "1" ] && lte_up="true" || lte_up="false"
+
+        lte_dev=$(echo "$lte_status" | jsonfilter -e '@.l3_device' 2>/dev/null)
+        [ -z "$lte_dev" ] && lte_dev=$(echo "$lte_status" | jsonfilter -e '@.device' 2>/dev/null)
+        [ -n "$lte_dev" ] && lte_device="$lte_dev"
+
+        lte_up_sec=$(echo "$lte_status" | jsonfilter -e '@.uptime' 2>/dev/null)
+        case "$lte_up_sec" in
+            ''|*[!0-9]*) : ;;
+            *) lte_uptime="$lte_up_sec" ;;
+        esac
+
+        lte_addr=$(echo "$lte_status" | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)
+        [ -n "$lte_addr" ] && lte_ipv4="$lte_addr"
+
+        break
+    done
+fi
+
 # --- LTE/WWAN modem ---
 lte_rsrp="null"
 lte_rsrq="null"
@@ -1287,6 +1324,10 @@ payload=$(cat <<EOF
   "sqm_upload_kbps": $sqm_upload_kbps,
   "sqm_dropped": $sqm_dropped,
   "sqm_ecn": $sqm_ecn,
+  "lte_up": $lte_up,
+  "lte_device": $(json_val "$lte_device"),
+  "lte_uptime": $lte_uptime,
+  "lte_ipv4": $(json_val "$lte_ipv4"),
   "lte_rsrp": $lte_rsrp,
   "lte_rsrq": $lte_rsrq,
   "lte_sinr": $lte_sinr,

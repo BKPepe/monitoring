@@ -29,6 +29,7 @@ import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useLanguage } from '@/context/language-context';
 import { cn, formatPercent, formatUptime } from '@/lib/utils';
+import { RouterServices } from '@/components/router-services';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -227,6 +228,8 @@ export function AssetDetailPage() {
   }
 
   const upperKind = (asset.kind || '').toUpperCase();
+  // Router má vlastní podobu sekce Služby - TLS certifikát u něj nedává smysl.
+  const isRouter = upperKind === 'ROUTER' || upperKind === 'OPENWRT';
 
   return (
     <div className="space-y-6">
@@ -406,151 +409,160 @@ export function AssetDetailPage() {
               <ShieldCheck className="size-5 text-emerald-400" />
               <div>
                 <h3 className="font-bold text-base">
-                  {t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
+                  {isRouter
+                    ? t('asset.router_services_title', 'Síťové služby routeru')
+                    : t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  {t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
+                  {isRouter
+                    ? t('asset.router_services_desc', 'Konektivita, DNS, firewall, Wi-Fi a VPN podle dat od agenta.')
+                    : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
                 </p>
               </div>
             </div>
 
-            {(() => {
-              const isNoSsl = [
-                'ROUTER',
-                'VOICE',
-                'MINECRAFT',
-                'GAME',
-                'AGENT',
-                'VPS',
-                'NODE',
-                'ICMP',
-                'TCP',
-                'TEAMSPEAK',
-              ].includes(upperKind);
-              return (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
-                    <p className="font-semibold text-sm">{t('asset.ssl_cert', 'TLS/SSL Certifikát')}</p>
-                    {isNoSsl ? (
-                      <>
-                        <p className="text-xs text-muted-foreground font-medium">N/A</p>
-                        <p className="text-[11px] text-muted-foreground font-mono">
-                          {upperKind === 'ROUTER'
-                            ? t('asset.proto_router', 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)')
-                            : upperKind === 'MINECRAFT'
-                              ? t('asset.proto_minecraft', 'Minecraft Java socket (port 25565 bez TLS vrstvy)')
-                              : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE'
-                                ? t('asset.proto_teamspeak', 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy')
-                                : t('asset.proto_none', 'Protokol nepoužívá SSL/TLS vrstvu')}
-                        </p>
-                      </>
-                    ) : asset.sslCert ? (
-                      <>
-                        <p
-                          className={cn(
-                            'text-xs font-semibold flex items-center gap-1.5',
-                            (asset.sslCert.days_remaining ?? 99) <= 14
-                              ? 'text-amber-400'
-                              : (asset.sslCert.days_remaining ?? 99) <= 0
-                                ? 'text-rose-400'
-                                : 'text-emerald-400'
-                          )}
-                        >
-                          <ShieldCheck className="size-4 shrink-0" />
-                          {asset.sslCert.days_remaining != null
-                            ? asset.sslCert.days_remaining <= 0
-                              ? t('asset.ssl_expired', '🔴 SSL Certifikát VYPRŠEL!')
-                              : t(
-                                  'asset.ssl_valid_expiry',
-                                  { days: asset.sslCert.days_remaining },
-                                  `🟢 Platný (Vyprší za ${asset.sslCert.days_remaining} dní)`
-                                )
-                            : t('asset.ssl_valid', '🟢 Platný SSL/TLS Certifikát')}
-                        </p>
-                        <div className="text-[11px] text-muted-foreground font-mono space-y-0.5 pt-1 border-t border-border/40">
-                          {asset.sslCert.issuer && (
-                            <p>
-                              {t('asset.ssl_issuer', 'Vydavatel:')} {asset.sslCert.issuer}
-                            </p>
-                          )}
-                          {asset.sslCert.valid_to && (
-                            <p>
-                              {t('asset.ssl_valid_until', 'Platnost do:')}{' '}
-                              {new Date(asset.sslCert.valid_to).toLocaleDateString('cs-CZ')}
-                            </p>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        {/* Bez dat certifikátu se nic netvrdí - dřív tu svítilo
-                            "TLS 1.3 ověřeno" i u monitoru, kde žádný certifikát
-                            neexistuje (hlášeno u OpenWrt routeru). */}
-                        <p className="text-xs font-medium text-muted-foreground">
-                          {t('asset.ssl_unknown', 'Certifikát zatím nebyl načten')}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground font-mono">
-                          {t(
-                            'asset.ssl_unknown_desc',
-                            'Kontrola certifikátu proběhne při příštím HTTPS testu tohoto cíle.'
-                          )}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                  <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
-                    <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
-                    <p
-                      className={cn(
-                        'text-xs font-medium',
-                        asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400'
-                      )}
-                    >
-                      {asset.status === 'down' ? t('common.offline', 'Offline') : t('infra.active_since', 'Aktivní')}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground font-mono">
-                      {t('common.protocol', 'Protokol')}: {asset.kind}
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
-                    <p className="font-semibold text-sm">
-                      {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
-                    </p>
-                    {(() => {
-                      // "N/A (smartctl chybí)" není zdravý stav - je to chybějící
-                      // nástroj a admin má vědět, co doinstalovat.
-                      const raw = asset.smartStatus ?? null;
-                      const missingTool = !raw || /n\/a|chyb|not available|unavailable|missing/i.test(raw);
-                      return (
+            {/* Router žádný web necertifikuje - karta s TLS certifikátem tu
+                jen zabírala místo. Místo toho se ukazuje, co router má. */}
+            {isRouter && <RouterServices d={asset.rawDetails ?? {}} />}
+
+            {!isRouter &&
+              (() => {
+                const isNoSsl = [
+                  'ROUTER',
+                  'VOICE',
+                  'MINECRAFT',
+                  'GAME',
+                  'AGENT',
+                  'VPS',
+                  'NODE',
+                  'ICMP',
+                  'TCP',
+                  'TEAMSPEAK',
+                ].includes(upperKind);
+                return (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
+                      <p className="font-semibold text-sm">{t('asset.ssl_cert', 'TLS/SSL Certifikát')}</p>
+                      {isNoSsl ? (
+                        <>
+                          <p className="text-xs text-muted-foreground font-medium">N/A</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">
+                            {upperKind === 'ROUTER'
+                              ? t('asset.proto_router', 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)')
+                              : upperKind === 'MINECRAFT'
+                                ? t('asset.proto_minecraft', 'Minecraft Java socket (port 25565 bez TLS vrstvy)')
+                                : upperKind === 'TEAMSPEAK' || upperKind === 'VOICE'
+                                  ? t('asset.proto_teamspeak', 'TeamSpeak 3 UDP Voice socket bez TLS vrstvy')
+                                  : t('asset.proto_none', 'Protokol nepoužívá SSL/TLS vrstvu')}
+                          </p>
+                        </>
+                      ) : asset.sslCert ? (
                         <>
                           <p
                             className={cn(
-                              'text-xs font-medium font-mono',
-                              missingTool
-                                ? 'text-amber-700 dark:text-amber-400'
-                                : 'text-emerald-600 dark:text-emerald-400'
+                              'text-xs font-semibold flex items-center gap-1.5',
+                              (asset.sslCert.days_remaining ?? 99) <= 14
+                                ? 'text-amber-400'
+                                : (asset.sslCert.days_remaining ?? 99) <= 0
+                                  ? 'text-rose-400'
+                                  : 'text-emerald-400'
                             )}
                           >
-                            {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
+                            <ShieldCheck className="size-4 shrink-0" />
+                            {asset.sslCert.days_remaining != null
+                              ? asset.sslCert.days_remaining <= 0
+                                ? t('asset.ssl_expired', '🔴 SSL Certifikát VYPRŠEL!')
+                                : t(
+                                    'asset.ssl_valid_expiry',
+                                    { days: asset.sslCert.days_remaining },
+                                    `🟢 Platný (Vyprší za ${asset.sslCert.days_remaining} dní)`
+                                  )
+                              : t('asset.ssl_valid', '🟢 Platný SSL/TLS Certifikát')}
+                          </p>
+                          <div className="text-[11px] text-muted-foreground font-mono space-y-0.5 pt-1 border-t border-border/40">
+                            {asset.sslCert.issuer && (
+                              <p>
+                                {t('asset.ssl_issuer', 'Vydavatel:')} {asset.sslCert.issuer}
+                              </p>
+                            )}
+                            {asset.sslCert.valid_to && (
+                              <p>
+                                {t('asset.ssl_valid_until', 'Platnost do:')}{' '}
+                                {new Date(asset.sslCert.valid_to).toLocaleDateString('cs-CZ')}
+                              </p>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* Bez dat certifikátu se nic netvrdí - dřív tu svítilo
+                            "TLS 1.3 ověřeno" i u monitoru, kde žádný certifikát
+                            neexistuje (hlášeno u OpenWrt routeru). */}
+                          <p className="text-xs font-medium text-muted-foreground">
+                            {t('asset.ssl_unknown', 'Certifikát zatím nebyl načten')}
                           </p>
                           <p className="text-[11px] text-muted-foreground font-mono">
-                            {missingTool
-                              ? t(
-                                  'asset.smart_install_hint',
-                                  'Pro sledování zdraví disku nainstalujte na cílovém stroji smartmontools (Debian/Ubuntu: apt install smartmontools, OpenWrt: opkg install smartmontools) a agent hodnoty začne hlásit sám.'
-                                )
-                              : t(
-                                  'asset.smart_desc',
-                                  'Sledování opotřebení NVMe buněk, chyb a realokovaných sektorů z rozhraní smartctl.'
-                                )}
+                            {t(
+                              'asset.ssl_unknown_desc',
+                              'Kontrola certifikátu proběhne při příštím HTTPS testu tohoto cíle.'
+                            )}
                           </p>
                         </>
-                      );
-                    })()}
+                      )}
+                    </div>
+                    <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
+                      <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
+                      <p
+                        className={cn(
+                          'text-xs font-medium',
+                          asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400'
+                        )}
+                      >
+                        {asset.status === 'down' ? t('common.offline', 'Offline') : t('infra.active_since', 'Aktivní')}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        {t('common.protocol', 'Protokol')}: {asset.kind}
+                      </p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
+                      <p className="font-semibold text-sm">
+                        {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
+                      </p>
+                      {(() => {
+                        // "N/A (smartctl chybí)" není zdravý stav - je to chybějící
+                        // nástroj a admin má vědět, co doinstalovat.
+                        const raw = asset.smartStatus ?? null;
+                        const missingTool = !raw || /n\/a|chyb|not available|unavailable|missing/i.test(raw);
+                        return (
+                          <>
+                            <p
+                              className={cn(
+                                'text-xs font-medium font-mono',
+                                missingTool
+                                  ? 'text-amber-700 dark:text-amber-400'
+                                  : 'text-emerald-600 dark:text-emerald-400'
+                              )}
+                            >
+                              {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground font-mono">
+                              {missingTool
+                                ? t(
+                                    'asset.smart_install_hint',
+                                    'Pro sledování zdraví disku nainstalujte na cílovém stroji smartmontools (Debian/Ubuntu: apt install smartmontools, OpenWrt: opkg install smartmontools) a agent hodnoty začne hlásit sám.'
+                                  )
+                                : t(
+                                    'asset.smart_desc',
+                                    'Sledování opotřebení NVMe buněk, chyb a realokovaných sektorů z rozhraní smartctl.'
+                                  )}
+                            </p>
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })()}
           </Card>
         </TabsContent>
 
@@ -1193,7 +1205,7 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
         </Section>
       )}
 
-      {(d.sqm_enabled != null || d.lte_rsrp != null) && (
+      {(d.sqm_enabled != null || d.lte_rsrp != null || d.lte_up != null) && (
         <Section title={`⚙️ ${t('net.link_title', 'SQM & LTE')}`}>
           {d.sqm_enabled != null && (
             <Row
@@ -1207,6 +1219,22 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
           )}
           <Row label={t('net.sqm_dropped', 'SQM zahozeno')} value={d.sqm_dropped} />
           <Row label="SQM ECN" value={d.sqm_ecn != null ? (d.sqm_ecn ? 'ECN' : 'noECN') : null} />
+          {/* Spojení se pozná i bez ModemManageru (ubus interface), síla
+              signálu ne - proto se hlásí zvlášť a chybějící metriky
+              zůstávají prázdné místo výmluvy. */}
+          <Row
+            label={t('net.lte_state', 'LTE spojení')}
+            value={
+              d.lte_up == null
+                ? null
+                : d.lte_up
+                  ? `${t('common.online', 'Online')}${d.lte_device ? ` · ${d.lte_device}` : ''}${
+                      d.lte_uptime != null ? ` · ${formatUptime(d.lte_uptime)}` : ''
+                    }`
+                  : t('common.offline', 'Offline')
+            }
+          />
+          <Row label={t('net.lte_ip', 'LTE adresa')} value={d.lte_ipv4} />
           <Row label="LTE RSRP" value={d.lte_rsrp != null ? `${d.lte_rsrp} dBm` : null} />
           <Row label="LTE RSRQ" value={d.lte_rsrq != null ? `${d.lte_rsrq} dB` : null} />
           <Row label="LTE SINR" value={d.lte_sinr != null ? `${d.lte_sinr} dB` : null} />
@@ -1214,6 +1242,14 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
             label={t('net.lte_band', 'Pásmo / operátor')}
             value={[d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null}
           />
+          {d.lte_up === true && d.lte_rsrp == null && (
+            <p className="text-muted-foreground col-span-full text-[11px] leading-relaxed">
+              {t(
+                'net.lte_no_signal_data',
+                'Spojení běží, ale sílu signálu router nehlásí — modem není dostupný přes ModemManager. Doinstalováním balíčku umodem-manager (nebo uqmi) začne agent hlásit i RSRP, RSRQ a pásmo.'
+              )}
+            </p>
+          )}
           <Row
             label="Tailscale"
             value={
