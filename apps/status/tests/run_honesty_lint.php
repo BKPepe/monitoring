@@ -24,6 +24,7 @@ $metric_words = [
     'temp', 'temperature', 'uptime_pct', 'uptime_percent',
     'rx_bytes', 'tx_bytes', 'rx_errors', 'tx_errors', 'rx_packets', 'tx_packets',
     'clients', 'threads', 'mbit', 'speed', 'usage', 'bytes_total',
+    'presence_count', 'members_online', 'players', 'players_online',
 ];
 
 /** Výrazy, kde nula skutečně znamená nulu (počty, identifikátory, stavy). */

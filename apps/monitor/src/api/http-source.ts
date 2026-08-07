@@ -33,6 +33,9 @@ const CHART_METRICS: {
   { key: 'swap', title: 'Využití swapu', tone: 'temperature', yMax: 100 },
   { key: 'load1', title: 'Load Average (1 min)', tone: 'cpu', yMax: null },
   { key: 'ts_clients', title: 'TeamSpeak Klienti', tone: 'memory', yMax: null },
+  // Discord: počet lidí online. Data se sbírala každou minutu, ale do
+  // historie se neukládala, takže Discord neměl žádný graf kromě odezvy.
+  { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null },
   { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: 120 },
 ];
 

@@ -378,8 +378,9 @@ foreach ($monitors as $monitor) {
     if ($details === null && $new_status === 'up') {
         if ($type === 'minecraft') {
             $details = json_encode([
-                'players_online' => $check_result['players_online'] ?? 0,
-                'players_max' => $check_result['players_max'] ?? 0,
+                // Nezjisteny pocet hracu neni nula (stejne jako u Discordu).
+                'players_online' => $check_result['players_online'] ?? null,
+                'players_max' => $check_result['players_max'] ?? null,
                 'version' => $check_result['version'] ?? '',
                 'players_list' => $check_result['players_list'] ?? [],
                 'motd' => $check_result['motd'] ?? '',
@@ -433,13 +434,28 @@ foreach ($monitors as $monitor) {
             ]);
         } elseif ($type === 'discord') {
             $details = json_encode([
-                'presence_count' => $check_result['presence_count'] ?? 0,
+                // Nezjištěný počet online NENÍ nula - selhaný dotaz a prázdný
+                // server jsou dvě různé věci.
+                'presence_count' => $check_result['presence_count'] ?? null,
                 'name' => $check_result['name'] ?? null,
                 'instant_invite' => $check_result['instant_invite'] ?? null,
                 'voice_channels' => $check_result['voice_channels'] ?? [],
                 'members' => $check_result['members'] ?? [],
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
+
+            // Počet online se dosud ukládal jen jako aktuální snímek v details,
+            // takže Discord neměl žádný graf kromě odezvy - data se sbírala
+            // každou minutu a hned zahazovala. Ukládá se do stejného sloupce,
+            // jaký používá TeamSpeak (kolik lidí je online).
+            if (isset($check_result['presence_count']) && $check_result['presence_count'] !== null) {
+                try {
+                    $stmt_dc = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, ts_clients_online) VALUES (?, ?)");
+                    $stmt_dc->execute([$id, (int)$check_result['presence_count']]);
+                } catch (Throwable $e) {
+                    error_log('[cron] Discord presence metric skipped: ' . $e->getMessage());
+                }
+            }
         } elseif ($type === 'web') {
             $details_arr = [
                 'has_ipv4' => $check_result['has_ipv4'] ?? false,

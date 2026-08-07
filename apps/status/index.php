@@ -679,7 +679,7 @@ $portal_url = trim(get_setting('portal_url'));
                                             <div class="game-info" style="margin-top: 0.25rem;">
                                                 <?php if ($m_type === 'minecraft'): ?>
                                                     <span title="<?php echo htmlspecialchars(sprintf(t('minecraft_version_title'), $details['version'] ?? '')); ?>">
-                                                        <i class="fas fa-users"></i> <?php echo (int)($details['players_online'] ?? 0); ?> / <?php echo (int)($details['players_max'] ?? 0); ?>
+                                                        <i class="fas fa-users"></i> <?php echo bk_num($details['players_online'] ?? null); ?> / <?php echo bk_num($details['players_max'] ?? null); ?>
                                                     </span>
                                                 <?php elseif ($m_type === 'teamspeak'): ?>
                                                     <span title="<?php echo htmlspecialchars(t('ts_clients_title') . (!empty($details['ip_version']) ? sprintf(t('measured_via_suffix'), $details['ip_version']) : '')); ?>">
