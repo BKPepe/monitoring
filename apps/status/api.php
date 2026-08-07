@@ -1241,7 +1241,7 @@ if ($action === 'monitor_insights') {
             if (is_array($decoded_stages)) $check_stages = $decoded_stages;
         }
 
-        $enabled_metrics = bk_get_enabled_metrics($monitor);
+        $enabled_metrics = bk_get_enabled_metrics($monitor, $pdo);
         $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics, $pdo);
         $monitor_insights = array_merge(
             bk_get_forecast_insights($pdo, $monitor),

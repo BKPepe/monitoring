@@ -70,6 +70,44 @@ if (function_exists('bk_effective_threshold')) {
     check('nulovy prah u monitoru se respektuje', bk_effective_threshold(null, 0, 'cpu'), 0);
 }
 
+// --- preset vs. vlastni sada metrik --------------------------------------
+// Volajici musi predat $pdo, jinak je vetev s presetem mrtva a prepinac
+// v UI nic nedela (presne to se stalo pri prvnim nasazeni presetu).
+// Funkce se sem nenacita (potrebuje DB), takze se cte primo ze zdroje.
+$fn_src = file_get_contents(__DIR__ . '/../functions.php');
+check_true(
+    'bk_get_enabled_metrics prijima $pdo',
+    (bool)preg_match('/function bk_get_enabled_metrics\([^)]*\$pdo/', $fn_src)
+);
+
+$callers = [
+    __DIR__ . '/../index.php',
+    __DIR__ . '/../api.php',
+    __DIR__ . '/../admin.php',
+];
+$missing_pdo = [];
+foreach ($callers as $caller_file) {
+    foreach (file($caller_file, FILE_IGNORE_NEW_LINES) as $line) {
+        $trimmed = ltrim($line);
+        // Zminka v komentari neni volani - bez tehle podminky test padal
+        // na radku "(viz bk_get_enabled_metrics())".
+        if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*')) {
+            continue;
+        }
+        if (!str_contains($line, 'bk_get_enabled_metrics(')) {
+            continue;
+        }
+        // Definice funkce se take nepocita.
+        if (str_contains($line, 'function bk_get_enabled_metrics')) {
+            continue;
+        }
+        if (!str_contains($line, '$pdo')) {
+            $missing_pdo[] = basename($caller_file);
+        }
+    }
+}
+check('vsichni volajici predavaji $pdo', $missing_pdo, []);
+
 $failed = bk_test_report('čisté funkce');
 // Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
 if (!defined('BK_COVERAGE_RUN')) {

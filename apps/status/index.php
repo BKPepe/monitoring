@@ -607,7 +607,7 @@ $portal_url = trim(get_setting('portal_url'));
                             $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
                             $is_expandable = true;
                             // Service Profiles - null = typ bez checklistu, dashboard zobrazí vše jako dřív
-                            $enabled_metrics = bk_get_enabled_metrics($monitor);
+                            $enabled_metrics = bk_get_enabled_metrics($monitor, $pdo);
 
                             // Má tento konkrétní monitor aktivně hlásícího VPS-metrics agenta? Stejná
                             // freshness logika jako souhrnný "X/Y agentů online" stat výše, jen per-monitor -

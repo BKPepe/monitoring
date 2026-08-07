@@ -2361,7 +2361,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <?php
                         $service_profiles = get_service_profiles();
                         $current_profile_type = $edit_monitor['type'] ?? 'web';
-                        $current_enabled_metrics = bk_get_enabled_metrics($edit_monitor ?: ['type' => $current_profile_type, 'enabled_metrics' => null]);
+                        $current_enabled_metrics = bk_get_enabled_metrics($edit_monitor ?: ['type' => $current_profile_type, 'enabled_metrics' => null], $pdo);
                         ?>
                         <div class="form-group">
                             <label><?php echo htmlspecialchars(t('profile_picker_heading')); ?></label>
