@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.11"
+AGENT_VERSION="1.5.12"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -557,12 +557,18 @@ fi
 fw_accepted="null"
 fw_dropped="null"
 fw_rejected="null"
+# Poznamka k "sum+0": puvodni verze vypisovala 0 i kdyz zadny radek
+# neodpovidal, takze router bez iptables (firewall4/nftables) hlasil
+# "0 zahozenych paketu" misto "nemerime". Ted se scita jen kdyz neco
+# opravdu bylo - jinak zustava null.
 if command -v iptables >/dev/null 2>&1; then
     fw_accepted=$(iptables -L FORWARD -v -n -x 2>/dev/null | awk '/^Chain/{next} NR==2{print $1}')
-    fw_dropped=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "drop" | awk '{sum+=$1} END{print sum+0}')
-    fw_rejected=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "reject" | awk '{sum+=$1} END{print sum+0}')
+    fw_dropped=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "drop" | awk '{sum+=$1; n++} END{if (n>0) print sum}')
+    fw_rejected=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "reject" | awk '{sum+=$1; n++} END{if (n>0) print sum}')
 elif command -v nft >/dev/null 2>&1; then
-    fw_dropped=$(nft list ruleset 2>/dev/null | grep -i "drop" | grep "packets" | awk '{sum+=$4} END{print sum+0}')
+    # nftables: pocitadla jsou "counter packets N bytes M" u pravidel s drop.
+    fw_dropped=$(nft -a list ruleset 2>/dev/null | awk '/drop/ && /packets/ { for (i=1;i<=NF;i++) if ($i=="packets") { sum+=$(i+1); n++ } } END{if (n>0) print sum}')
+    fw_accepted=$(nft -a list ruleset 2>/dev/null | awk '/accept/ && /packets/ { for (i=1;i<=NF;i++) if ($i=="packets") { sum+=$(i+1); n++ } } END{if (n>0) print sum}')
 fi
 [ -z "$fw_accepted" ] && fw_accepted="null"
 [ -z "$fw_dropped" ] && fw_dropped="null"
@@ -939,9 +945,18 @@ fi
 wan_link_mbit="null"
 if [ -n "$wan_l3_device" ]; then
     link_dev="$wan_l3_device"
-    # U PPPoE/VLAN je l3_device virtualni (pppoe-wan, eth0.2) - rychlost ma
-    # jen fyzicky rodic, tak se odrizne pripona za teckou / prefix pred pomlckou.
-    [ ! -e "/sys/class/net/$link_dev/speed" ] && link_dev=$(echo "$wan_l3_device" | sed 's/\..*$//; s/^pppoe-//')
+    # U PPPoE/VLAN je l3_device virtualni (pppoe-wan, eth0.2) a rychlost ma
+    # jen fyzicky rodic. Odriznuti prefixu "pppoe-" davalo "wan", coz neni
+    # nazev zarizeni - skutecny rodic je v uci konfiguraci.
+    if [ ! -e "/sys/class/net/$link_dev/speed" ]; then
+        uci_dev=$(uci get network.wan.device 2>/dev/null)
+        [ -z "$uci_dev" ] && uci_dev=$(uci get network.wan.ifname 2>/dev/null)
+        # VLAN (eth0.2) ma rychlost az na rodicovskem rozhrani.
+        [ -n "$uci_dev" ] && [ ! -e "/sys/class/net/$uci_dev/speed" ] && uci_dev=$(echo "$uci_dev" | sed 's/\..*$//')
+        [ -n "$uci_dev" ] && link_dev="$uci_dev"
+    fi
+    # Posledni pokus: odriznout jen VLAN priponu z l3_device.
+    [ ! -e "/sys/class/net/$link_dev/speed" ] && link_dev=$(echo "$wan_l3_device" | sed 's/\..*$//')
     if [ -r "/sys/class/net/$link_dev/speed" ]; then
         link_raw=$(cat "/sys/class/net/$link_dev/speed" 2>/dev/null)
         # -1 = link down nebo neznama rychlost; to neni mereni.

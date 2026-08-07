@@ -16,6 +16,12 @@ import { formatUptime } from '@/lib/utils';
  * Každá dlaždice se vykreslí jen tehdy, když pro ni agent poslal data -
  * prázdné místo je poctivější než karta s pomlčkami.
  */
+/** Velké čítače paketů se čtou lépe s oddělovači tisíců. */
+function formatCount(value: unknown): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n.toLocaleString('cs-CZ') : String(value);
+}
+
 export function RouterServices({ d }: { d: Record<string, any> }) {
   const { t } = useLanguage();
 
@@ -40,6 +46,36 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           d.wan_proto ? `${t('rsvc.protocol', 'Protokol')}: ${String(d.wan_proto).toUpperCase()}` : null,
           d.wan_ipv4 ? `IPv4: ${d.wan_ipv4}` : null,
           d.wan_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.wan_uptime)}` : null,
+          // Vyjednaná rychlost portu - gigabit spadlý na 100 Mbit je tady vidět.
+          d.wan_link_mbit != null ? `${t('rsvc.link_speed', 'Rychlost linky')}: ${d.wan_link_mbit} Mbit/s` : null,
+          d.wan_latency_ms != null ? `${t('rsvc.wan_latency', 'Odezva k bráně')}: ${d.wan_latency_ms} ms` : null,
+        ]}
+      />
+    );
+  }
+
+  // --- Multi-WAN (mwan3) ------------------------------------------------
+  // Vykreslí se jen když má router mwan3 nakonfigurované; jinak by dlaždice
+  // tvrdila zálohovanou konektivitu, která neexistuje.
+  const mwan3 = Array.isArray(d.mwan3_policies) ? d.mwan3_policies : [];
+  if (mwan3.length > 0 || d.mwan3_active_gw) {
+    const offline = mwan3.filter((p: any) => p?.status === 'offline');
+    tiles.push(
+      <Tile
+        key="mwan3"
+        icon={<Network className="size-4" />}
+        title={t('rsvc.mwan3', 'Multi-WAN (mwan3)')}
+        state={offline.length > 0 ? 'warn' : 'good'}
+        stateText={
+          offline.length > 0
+            ? t('rsvc.mwan3_degraded', { count: offline.length }, `${offline.length} mimo provoz`)
+            : t('rsvc.active', 'Aktivní')
+        }
+        lines={[
+          d.mwan3_active_gw ? `${t('rsvc.mwan3_gw', 'Aktivní brána')}: ${d.mwan3_active_gw}` : null,
+          ...mwan3.map((p: any) =>
+            p?.interface ? `${p.interface}${p.policy ? ` (${p.policy})` : ''}: ${p.status ?? '—'}` : null
+          ),
         ]}
       />
     );
@@ -118,6 +154,11 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
                 d.conntrack_pct != null ? ` (${d.conntrack_pct} %)` : ''
               }`
             : null,
+          // Čítače hlásí jen router s iptables; na firewall4/nftables
+          // mohou chybět a pak se řádek nevypisuje (dřív tu byla nula).
+          d.fw_accepted != null ? `${t('rsvc.fw_accepted', 'Propuštěno')}: ${formatCount(d.fw_accepted)}` : null,
+          d.fw_dropped != null ? `${t('rsvc.fw_dropped', 'Zahozeno')}: ${formatCount(d.fw_dropped)}` : null,
+          d.fw_rejected != null ? `${t('rsvc.fw_rejected', 'Odmítnuto')}: ${formatCount(d.fw_rejected)}` : null,
         ]}
       />
     );
