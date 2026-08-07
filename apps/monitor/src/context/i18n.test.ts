@@ -53,6 +53,22 @@ describe('i18n slovník', () => {
     expect(report).toEqual([]);
   });
 
+  it('nepoužívá dynamicky skládané klíče', () => {
+    // `t(`prefix.${x}`)` nejde staticky ověřit, takže by chybějící překlad
+    // proklouzl i testem výše. Když je taková potřeba, patří to do explicitní
+    // mapy popisků - viz voice_activity v teamspeak-card.tsx.
+    const dynamic: string[] = [];
+
+    for (const file of walk(SRC)) {
+      const source = readFileSync(file, 'utf8');
+      if (/\bt\(\s*`[^`]*\$\{/.test(source)) {
+        dynamic.push(file.slice(SRC.length + 1));
+      }
+    }
+
+    expect(dynamic).toEqual([]);
+  });
+
   it('má pro každý klíč českou i anglickou variantu', () => {
     // Tělo se čte párováním závorek, ne regexem: hodnoty obsahují
     // zástupné výrazy jako '{count}', na kterých by /\{([^}]*)\}/ skončil

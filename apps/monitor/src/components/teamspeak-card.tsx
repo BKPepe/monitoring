@@ -85,6 +85,17 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
 
   const activity = svc.voice_activity ?? null;
 
+  // Popisky se skládají explicitně, ne přes `t(\`ts3.activity_${key}\`)`:
+  // dynamický klíč nejde staticky ověřit, takže chybějící překlad by prošel
+  // testem i kódovou revizí a projevil se až anglickému uživateli.
+  // Server posílá právě tyhle čtyři stavy (functions.php: voice_activity).
+  const activityLabels: Record<string, string> = {
+    talking: t('ts3.activity_talking', 'Mluví'),
+    away: t('ts3.activity_away', 'Pryč'),
+    muted: t('ts3.activity_muted', 'Ztlumeno'),
+    recording: t('ts3.activity_recording', 'Nahrává'),
+  };
+
   return (
     <Card className="space-y-4 p-6">
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
@@ -179,7 +190,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             {Object.entries(activity).map(([key, value]) => (
               <span key={key}>
-                {t(`ts3.activity_${key}`, key)}: <strong>{value}</strong>
+                {activityLabels[key] ?? key}: <strong>{value}</strong>
               </span>
             ))}
           </div>
