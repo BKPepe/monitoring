@@ -80,6 +80,10 @@ export function InfrastructurePage() {
   const [notes, setNotes] = React.useState('');
   const [maintenance, setMaintenance] = React.useState(false);
   const [maintenanceDescription, setMaintenanceDescription] = React.useState('');
+  // Okno údržby (od-do). Prázdné = údržba platí, dokud ji někdo nevypne;
+  // vyplněné = cron ji uplatní jen uvnitř intervalu (is_in_maintenance).
+  const [maintenanceStart, setMaintenanceStart] = React.useState('');
+  const [maintenanceEnd, setMaintenanceEnd] = React.useState('');
 
   // Web
   const [cpanelStatsUrl, setCpanelStatsUrl] = React.useState('');
@@ -224,6 +228,8 @@ export function InfrastructurePage() {
       setNotes(mon.notes ?? '');
       setMaintenance(mon.maintenance ?? false);
       setMaintenanceDescription(mon.maintenanceDescription ?? '');
+      setMaintenanceStart(toLocalInput(mon.maintenanceStart));
+      setMaintenanceEnd(toLocalInput(mon.maintenanceEnd));
       setCpanelStatsUrl(mon.cpanelStatsUrl ?? '');
       setBodyKeyword(mon.bodyKeyword ?? '');
       setSqUsername(mon.sqUsername ?? 'serveradmin');
@@ -369,6 +375,8 @@ export function InfrastructurePage() {
           notes: notes || null,
           maintenance: maintenance ? 1 : 0,
           maintenance_description: maintenanceDescription || null,
+          maintenance_start: fromLocalInput(maintenanceStart),
+          maintenance_end: fromLocalInput(maintenanceEnd),
           cpanel_stats_url: cpanelStatsUrl || null,
           body_keyword: bodyKeyword || null,
           sq_username: sqUsername || null,
@@ -1281,15 +1289,51 @@ export function InfrastructurePage() {
                       </label>
 
                       {maintenance && (
-                        <div>
-                          <label className="block text-[11px] font-medium text-muted-foreground mb-1">
-                            {t('infra.maintenance_desc_label', 'Popis údržby (zobrazí se uživatelům)')}
-                          </label>
-                          <Input
-                            value={maintenanceDescription}
-                            onChange={(e) => setMaintenanceDescription(e.target.value)}
-                            placeholder={t('infra.maintenance_desc_placeholder', 'Např. Aktualizace kernelu...')}
-                          />
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                              {t('infra.maintenance_desc_label', 'Popis údržby (zobrazí se uživatelům)')}
+                            </label>
+                            <Input
+                              value={maintenanceDescription}
+                              onChange={(e) => setMaintenanceDescription(e.target.value)}
+                              placeholder={t('infra.maintenance_desc_placeholder', 'Např. Aktualizace kernelu...')}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                                {t('infra.maintenance_from', 'Údržba od')}
+                              </label>
+                              <Input
+                                type="datetime-local"
+                                value={maintenanceStart}
+                                onChange={(e) => setMaintenanceStart(e.target.value)}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                                {t('infra.maintenance_to', 'Údržba do')}
+                              </label>
+                              <Input
+                                type="datetime-local"
+                                value={maintenanceEnd}
+                                onChange={(e) => setMaintenanceEnd(e.target.value)}
+                              />
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {t(
+                              'infra.maintenance_window_hint',
+                              'Bez vyplněného okna platí údržba trvale, dokud ji nevypnete. S oknem se monitor přepne do údržby jen v zadaném intervalu a mimo něj se kontroluje normálně.'
+                            )}
+                          </p>
+                          {maintenanceStart && maintenanceEnd && maintenanceEnd <= maintenanceStart && (
+                            <p className="text-[11px] font-semibold text-down">
+                              {t('infra.maintenance_window_invalid', 'Konec údržby musí být později než začátek.')}
+                            </p>
+                          )}
                         </div>
                       )}
 
@@ -1845,4 +1889,24 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
       </div>
     </Card>
   );
+}
+
+/**
+ * MySQL datetime ("2026-08-12 02:00:00") -> hodnota pro <input type="datetime-local">.
+ *
+ * Záměrně se neparsuje přes Date(): ten by řetězec bez zóny vyložil jako
+ * lokální čas na jednom prohlížeči a jako UTC na jiném a údržba by se
+ * posunula o hodiny. Formát je pevný, takže stačí ořez a záměna mezery.
+ */
+export function toLocalInput(value?: string | null): string {
+  if (!value) return '';
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+  return match ? `${match[1]}T${match[2]}` : '';
+}
+
+/** Opačný směr; prázdné pole znamená "okno nenastaveno" (null). */
+export function fromLocalInput(value: string): string | null {
+  if (!value) return null;
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  return match ? `${match[1]} ${match[2]}:00` : null;
 }

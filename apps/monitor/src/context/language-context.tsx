@@ -1571,6 +1571,16 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Prázdné pole znamená, že preset práh neřeší a ponechá hodnotu nastavenou u monitoru.',
     en: 'An empty field means the preset does not manage that threshold and leaves the monitor’s own value.',
   },
+  'infra.maintenance_from': { cs: 'Údržba od', en: 'Maintenance from' },
+  'infra.maintenance_to': { cs: 'Údržba do', en: 'Maintenance until' },
+  'infra.maintenance_window_hint': {
+    cs: 'Bez vyplněného okna platí údržba trvale, dokud ji nevypnete. S oknem se monitor přepne do údržby jen v zadaném intervalu a mimo něj se kontroluje normálně.',
+    en: 'With no window the maintenance stays on until you switch it off. With a window the monitor is in maintenance only inside that interval and is checked normally outside it.',
+  },
+  'infra.maintenance_window_invalid': {
+    cs: 'Konec údržby musí být později než začátek.',
+    en: 'Maintenance end must be later than its start.',
+  },
   'infra.preset': { cs: 'Preset metrik', en: 'Metric preset' },
   'infra.preset_none': { cs: 'Bez presetu (vlastní nastavení)', en: 'No preset (own settings)' },
   'infra.preset_hint': {
