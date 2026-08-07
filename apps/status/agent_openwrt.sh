@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.9"
+AGENT_VERSION="1.5.10"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -596,7 +596,11 @@ fi
 top_cpu_json="[]"
 top_ram_json="[]"
 if command -v top >/dev/null 2>&1; then
-    top_out=$(top -bn1 2>/dev/null)
+    # procps-ng orezava sloupec COMMAND na sirku terminalu a useknute jmeno
+    # oznaci plusem ("pyt+", "kr+"). -w 512 sirku vynuti; busybox top prepinac
+    # nezna, proto fallback na holy beh.
+    top_out=$(COLUMNS=512 top -bn1 -w 512 2>/dev/null)
+    [ -z "$top_out" ] && top_out=$(COLUMNS=512 top -bn1 2>/dev/null)
     if [ -n "$top_out" ]; then
         top_parsed=$(echo "$top_out" | awk '
         function basename(p,   n, a) { n = split(p, a, "/"); return a[n]; }
@@ -634,6 +638,8 @@ if command -v top >/dev/null 2>&1; then
                 break;
             }
             gsub(/[{}"\\]/, "", name);
+            # Zbytkove orezani (starsi top bez -w): "pyt+" -> "pyt"
+            sub(/\+$/, "", name);
             if (name == "" || name ~ /^[`|+-]+$/) next;
             printf "%s|%s|%s\n", name, cpu, mb;
         }' 2>/dev/null)

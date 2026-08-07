@@ -224,6 +224,12 @@ $ow_lte_rsrp = (isset($data['lte_rsrp']) && $data['lte_rsrp'] !== null) ? floatv
 $ow_lte_rsrq = (isset($data['lte_rsrq']) && $data['lte_rsrq'] !== null) ? floatval($data['lte_rsrq']) : null;
 $ow_lte_sinr = (isset($data['lte_sinr']) && $data['lte_sinr'] !== null) ? floatval($data['lte_sinr']) : null;
 $ow_lte_band = (isset($data['lte_band']) && $data['lte_band'] !== null) ? $data['lte_band'] : null;
+// Spojeni pres ubus (agent 1.5.9+): modem nemusi byt videt pres mmcli/uqmi,
+// ale rozhrani "lte" v ubus ano - odtud se pozna, ze LTE opravdu jede.
+$ow_lte_up = isset($data['lte_up']) ? (bool)$data['lte_up'] : null;
+$ow_lte_device = (isset($data['lte_device']) && $data['lte_device'] !== null) ? trim((string)$data['lte_device']) : null;
+$ow_lte_uptime = (isset($data['lte_uptime']) && $data['lte_uptime'] !== null) ? (int)$data['lte_uptime'] : null;
+$ow_lte_ipv4 = (isset($data['lte_ipv4']) && $data['lte_ipv4'] !== null) ? trim((string)$data['lte_ipv4']) : null;
 $ow_lte_carrier = (isset($data['lte_carrier']) && $data['lte_carrier'] !== null) ? trim($data['lte_carrier']) : null;
 $ow_service_restarts = (isset($data['service_restarts']) && is_array($data['service_restarts'])) ? $data['service_restarts'] : null;
 $ow_auto_update = isset($data['auto_update']) ? (int)(bool)$data['auto_update'] : null;
@@ -448,6 +454,10 @@ try {
         'lte_sinr' => $ow_lte_sinr,
         'lte_band' => $ow_lte_band,
         'lte_carrier' => $ow_lte_carrier,
+        'lte_up' => $ow_lte_up,
+        'lte_device' => $ow_lte_device,
+        'lte_uptime' => $ow_lte_uptime,
+        'lte_ipv4' => $ow_lte_ipv4,
         'service_restarts' => $ow_service_restarts,
         'auto_update' => $ow_auto_update,
         'tailscale_up' => $ow_tailscale_up,
@@ -569,6 +579,16 @@ try {
     }
 
     $merged_details_arr = array_merge($old_details, $new_data);
+
+    // Uklid po starsich agentech: nez existoval json_val(), zapisovaly se
+    // zastupne hodnoty jako RETEZEC ("null", '"null"'), takze UI vypisovalo
+    // `null · "null"` misto pomlcky. Merge je sam neprepsal - novy agent uz
+    // takovy klic vubec neposila. Necha se jen to, co je skutecna hodnota.
+    foreach ($merged_details_arr as $mk => $mv) {
+        if (is_string($mv) && in_array(trim($mv, " \t\n\r\0\x0B\"'"), ['null', 'NULL', 'undefined'], true)) {
+            $merged_details_arr[$mk] = null;
+        }
+    }
     $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
 
     // Zapsat metriky do databáze - včetně TeamSpeak klientů/procesu, pokud jsou
