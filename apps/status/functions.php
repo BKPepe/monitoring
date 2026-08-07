@@ -3576,7 +3576,7 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
         'error' => null,
         'clients_online' => $real_clients_online,
         'clients_max' => $clients_max,
-        'name' => $details['virtualserver_name'] ?? 'TeamSpeak Server',
+        'name' => $details['virtualserver_name'] ?? null,
         'version' => $details['virtualserver_version'] ?? '',
         'checked_ip' => $connected_ip,
         'ip_version' => $ip_version,
@@ -3684,7 +3684,7 @@ function check_discord($guild_id, $timeout = 3) {
         'response_time' => $duration,
         'error' => null,
         'presence_count' => $presence_count,
-        'name' => $data['name'] ?? 'Discord Server',
+        'name' => $data['name'] ?? null,
         'instant_invite' => $data['instant_invite'] ?? null,
         'voice_channels' => $voice_channels,
         'members' => array_slice($members_list, 0, 15) // Zobrazit max 15 členů pro úsporu místa
@@ -4744,7 +4744,9 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         if ($biggest_incident === null || $dur > $biggest_incident['duration_sec']) {
             $biggest_incident = [
                 'monitor' => $s['name'],
-                'location' => $s['checked_from'] ?: 'Main Server',
+                // Nezaznamenane misto kontroly zustava null - "Main Server"
+                // by tvrdilo, odkud se meril, aniz to kdokoli zapsal.
+                'location' => $s['checked_from'] ?: null,
                 'reason' => $s['error_message'] ?: t('digest_unspecified_error'),
                 'duration_sec' => $dur,
                 'resolved' => $s['current_status'] !== 'down',
@@ -5377,9 +5379,15 @@ function detect_server_location() {
     if ($resp) {
         $data = json_decode($resp, true);
         if ($data && isset($data['status']) && $data['status'] === 'success') {
-            $flag = get_country_emoji($data['countryCode'] ?? 'CZ');
-            $city = $data['city'] ?? 'Praha';
-            $country = $data['countryCode'] ?? 'CZ';
+            // Chybejici udaje z geolokace se NEDOPLNUJI - driv se sem psalo
+            // "Praha, CZ", takze kazdy neuspesny lookup tvrdil ceskou
+            // lokalitu bez ohledu na to, kde server opravdu je.
+            if (empty($data['city']) || empty($data['countryCode'])) {
+                return null;
+            }
+            $flag = get_country_emoji($data['countryCode']);
+            $city = $data['city'];
+            $country = $data['countryCode'];
             
             $org = $data['org'] ?? $data['isp'] ?? '';
             $org_clean = '';

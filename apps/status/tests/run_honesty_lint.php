@@ -69,6 +69,26 @@ $targets = array_filter(
         && !str_contains($f, '.test.ts')
 );
 
+/**
+ * Datová pole, u nichž je vymyšlený ŘETĚZEC stejná lež jako vymyšlená nula.
+ *
+ * Zachytilo to `checked_from ?: 'Frankfurt am Main, DE (RackNerd, LLC)'` -
+ * 37 ze 40 událostí tvrdilo konkrétní místo měření, které nikdo nezapsal.
+ * Číselná kontrola níže takovou věc principiálně nevidí.
+ */
+$data_string_fields = [
+    'checked_from', 'location', 'region', 'country', 'city', 'isp', 'asn',
+    'hostname', 'public_ip', 'wan_ipv4', 'wan_ipv6', 'provider', 'datacenter',
+    'virtualserver_name', 'os', 'kernel', 'model', 'board', 'firmware',
+    'agent_version', 'version',
+];
+
+/** Hodnoty, které jsou poctivé zástupné texty, ne vymyšlená data. */
+$honest_placeholders = [
+    '—', '-', '', '?', 'n/a', 'N/A', 'null', 'unknown', 'neznámé', 'neznámý',
+    'neznámá', 'nezjištěno', 'není k dispozici', 'not available',
+];
+
 $violations = [];
 
 foreach ($targets as $file) {
@@ -109,14 +129,44 @@ foreach ($targets as $file) {
             'file' => str_replace(dirname(__DIR__, 3) . '/', '', $file),
             'line' => $no + 1,
             'code' => trim($line),
+            'kind' => 'nula',
         ];
+    }
+
+    // --- Vymyšlené řetězce u datových polí ------------------------------
+    // Literál se musí vázat PŘÍMO na dané pole (field ?? 'hodnota'), ne jen
+    // být kdesi na stejném řádku - jinak lint hlásil `m.category ?? 'Monitory'`
+    // jen proto, že vedle stálo `m.os`.
+    foreach ($lines as $no => $line) {
+        foreach ($data_string_fields as $field) {
+            $pattern = '/\\b' . preg_quote($field, '/') . "\\b['\"]?\\]?\\s*(\\?\\?|\\?:)\\s*'([^']{1,80})'/i";
+            if (!preg_match_all($pattern, $line, $matches, PREG_SET_ORDER)) {
+                continue;
+            }
+            foreach ($matches as $m) {
+                $literal = trim($m[2]);
+                if (in_array(mb_strtolower($literal), array_map('mb_strtolower', $honest_placeholders), true)) {
+                    continue;
+                }
+                // Klíče překladů, CSS proměnné a enum hodnoty nejsou data.
+                if (str_starts_with($literal, 'var(') || preg_match('/^[a-z0-9_]+$/', $literal)) {
+                    continue;
+                }
+                $violations[] = [
+                    'file' => str_replace(dirname(__DIR__, 3) . '/', '', $file),
+                    'line' => $no + 1,
+                    'code' => trim($line),
+                    'kind' => "vymyšlená hodnota pole {$field}",
+                ];
+            }
+        }
     }
 }
 
 if ($violations) {
-    fwrite(STDERR, "Nalezené převody nezměřené hodnoty na nulu:\n\n");
+    fwrite(STDERR, "Nalezené vymyšlené hodnoty (nezměřeno -> konkrétní údaj):\n\n");
     foreach ($violations as $v) {
-        fwrite(STDERR, sprintf("  %s:%d\n    %s\n", $v['file'], $v['line'], substr($v['code'], 0, 130)));
+        fwrite(STDERR, sprintf("  %s:%d  [%s]\n    %s\n", $v['file'], $v['line'], $v['kind'], substr($v['code'], 0, 120)));
     }
     fwrite(STDERR, "\nNezměřená veličina musí zůstat NULL a v UI se vykreslit jako pomlčka.\n");
     fwrite(STDERR, "Když je nula v daném místě opravdu správně, doplň výjimku do allowed_patterns.\n");

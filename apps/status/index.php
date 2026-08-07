@@ -2434,7 +2434,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                      <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary);">
                                                                          <td style="padding: 0.5rem 0.25rem; font-weight: 500; color: var(--text-primary); white-space: nowrap;"><?php echo $mo_time; ?></td>
                                                                          <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars($mo['error_message'] ?: t('unspecified_connection_error')); ?></td>
-                                                                         <td style="padding: 0.5rem 0.25rem; text-align: right; white-space: nowrap;"><i class="fas fa-map-marker-alt" style="font-size: 0.65rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($mo['checked_from'] ?: 'Main Server'); ?></td>
+                                                                         <td style="padding: 0.5rem 0.25rem; text-align: right; white-space: nowrap;"><i class="fas fa-map-marker-alt" style="font-size: 0.65rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($mo['checked_from'] ?: '—'); ?></td>
                                                                      </tr>
                                                                  <?php endforeach; ?>
                                                              </tbody>
@@ -2561,7 +2561,7 @@ $portal_url = trim(get_setting('portal_url'));
                                     <td><span style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);"><?php echo htmlspecialchars($inc['type']); ?></span></td>
                                     <td>
                                         <span style="font-size: 0.8rem; color: var(--text-secondary);">
-                                            <i class="fas fa-map-marker-alt" style="font-size: 0.7rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($inc['checked_from'] ?: 'Main Server'); ?>
+                                            <i class="fas fa-map-marker-alt" style="font-size: 0.7rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($inc['checked_from'] ?: '—'); ?>
                                         </span>
                                     </td>
                                     <td>

@@ -380,7 +380,7 @@ function check_teamspeak($host, $port, $timeout) {
             'status' => 'up', 'response_time' => $duration, 'error' => null,
             'clients_online' => max(0, $clients_online - $query_clients),
             'clients_max' => $clients_max,
-            'name' => $details['virtualserver_name'] ?? 'TeamSpeak Server',
+            'name' => $details['virtualserver_name'] ?? null,
             'version' => $details['virtualserver_version'] ?? ''
         ];
     }

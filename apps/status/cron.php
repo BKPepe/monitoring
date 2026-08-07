@@ -394,7 +394,9 @@ foreach ($monitors as $monitor) {
                 // neúspěšný dotaz jsou dvě různé věci.
                 'clients_online' => $check_result['clients_online'] ?? null,
                 'clients_max' => $check_result['clients_max'] ?? null,
-                'name' => $check_result['name'] ?? 'TeamSpeak Server',
+                // Nezjistene jmeno serveru zustava null - UI pak ukaze nazev monitoru,
+                // misto aby tvrdilo genericke "TeamSpeak Server".
+                'name' => $check_result['name'] ?? null,
                 'version' => $check_result['version'] ?? '',
                 'checked_ip' => $check_result['checked_ip'] ?? '',
                 'ip_version' => $check_result['ip_version'] ?? 'IPv4',
@@ -432,7 +434,7 @@ foreach ($monitors as $monitor) {
         } elseif ($type === 'discord') {
             $details = json_encode([
                 'presence_count' => $check_result['presence_count'] ?? 0,
-                'name' => $check_result['name'] ?? 'Discord Server',
+                'name' => $check_result['name'] ?? null,
                 'instant_invite' => $check_result['instant_invite'] ?? null,
                 'voice_channels' => $check_result['voice_channels'] ?? [],
                 'members' => $check_result['members'] ?? [],

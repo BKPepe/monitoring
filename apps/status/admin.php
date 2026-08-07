@@ -1750,7 +1750,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                             <td><strong><?php echo date('d.m.Y H:i:s', strtotime($ml['checked_at'])); ?></strong></td>
                                             <td data-label="Server"><span style="color: #fff; font-weight: bold;"><?php echo htmlspecialchars($ml['name']); ?></span></td>
                                             <td data-label="Popis" style="color: var(--text-secondary);"><?php echo htmlspecialchars($ml['error_message'] ?? ''); ?></td>
-                                            <td data-label="Lokace"><span style="font-size: 0.75rem; color: var(--text-muted);"><i class="fas fa-map-marker-alt" style="color: var(--color-red); margin-right: 0.15rem;"></i> <?php echo htmlspecialchars($ml['checked_from'] ?: 'Main Server'); ?></span></td>
+                                            <td data-label="Lokace"><span style="font-size: 0.75rem; color: var(--text-muted);"><i class="fas fa-map-marker-alt" style="color: var(--color-red); margin-right: 0.15rem;"></i> <?php echo htmlspecialchars($ml['checked_from'] ?: '—'); ?></span></td>
                                         </tr>
                                     <?php endforeach; ?>
                                 <?php endif; ?>
