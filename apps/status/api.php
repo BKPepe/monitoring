@@ -2140,9 +2140,12 @@ $BK_METRIC_COLUMN_MAP = [
     'net_errors' => ['col' => 'net_errors', 'unit' => '', 'label' => 'Síťové chyby'],
     'iowait' => ['col' => 'iowait_pct', 'unit' => '%', 'label' => 'Čekání na I/O'],
     'inode_usage' => ['col' => 'inode_usage_pct', 'unit' => '%', 'label' => 'Využití inodů'],
-    'ts_clients' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'TeamSpeak Klienti'],
-    // Stejný sloupec, jiný název - u Discordu jde o lidi online na serveru.
-    'discord_presence' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Online na Discordu'],
+    // Tyhle dvě řady čtou TÝŽ sloupec (kolik lidí je online) a liší se jen
+    // pojmenováním. 'only' je proto omezuje na typ monitoru, kterému dávají
+    // smysl - jinak by detail Discordu ukazoval dva identické grafy, z toho
+    // jeden nadepsaný "TeamSpeak Klienti".
+    'ts_clients' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'TeamSpeak Klienti', 'only' => ['teamspeak']],
+    'discord_presence' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Online na Discordu', 'only' => ['discord']],
     'ts_process_cpu' => ['col' => 'ts_process_cpu', 'unit' => '%', 'label' => 'CPU procesu TS3'],
     'ts_process_ram' => ['col' => 'ts_process_ram', 'unit' => 'MB', 'label' => 'RAM procesu TS3'],
     'net_ipv4' => ['col' => 'net_ipv4_kbps', 'unit' => 'KB/s', 'label' => 'IPv4 provoz'],
@@ -2222,9 +2225,11 @@ if ($action === 'metric_series_batch') {
     $hours = $period === '30d' ? 720 : ($period === '7d' ? 168 : ($period === '1h' ? 1 : ($period === '15m' ? 1 : 24)));
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
+        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
         $stmt_mon->execute([$monitor_id, $monitor_id]);
-        $real_id = $stmt_mon->fetchColumn();
+        $mon_row = $stmt_mon->fetch();
+        $real_id = $mon_row['id'] ?? null;
+        $mon_type = strtolower((string)($mon_row['type'] ?? ''));
 
         if (!$real_id) {
             echo json_encode(['series' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
@@ -2260,6 +2265,10 @@ if ($action === 'metric_series_batch') {
         $vm_rows = $stmt_vm->fetchAll();
 
         foreach ($BK_METRIC_COLUMN_MAP as $metric_key => $def) {
+            // Řada omezená na jiný typ monitoru se vůbec nenabízí.
+            if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
+                continue;
+            }
             $pts = [];
             foreach ($vm_rows as $r) {
                 if ($r[$def['col']] !== null) {

@@ -30,6 +30,7 @@ import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useLanguage } from '@/context/language-context';
 import { cn, formatPercent, formatUptime } from '@/lib/utils';
 import { RouterServices } from '@/components/router-services';
+import { DiscordCard } from '@/components/discord-card';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -230,6 +231,7 @@ export function AssetDetailPage() {
   const upperKind = (asset.kind || '').toUpperCase();
   // Router má vlastní podobu sekce Služby - TLS certifikát u něj nedává smysl.
   const isRouter = upperKind === 'ROUTER' || upperKind === 'OPENWRT';
+  const isDiscord = upperKind === 'DISCORD';
 
   return (
     <div className="space-y-6">
@@ -411,12 +413,19 @@ export function AssetDetailPage() {
                 <h3 className="font-bold text-base">
                   {isRouter
                     ? t('asset.router_services_title', 'Síťové služby routeru')
-                    : t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
+                    : isDiscord
+                      ? t('asset.discord_services_title', 'Discord server')
+                      : t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   {isRouter
                     ? t('asset.router_services_desc', 'Konektivita, DNS, firewall, Wi-Fi a VPN podle dat od agenta.')
-                    : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
+                    : isDiscord
+                      ? t(
+                          'asset.discord_services_desc',
+                          'Kdo je online, hlasové kanály a členové ze serverového widgetu.'
+                        )
+                      : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
                 </p>
               </div>
             </div>
@@ -424,8 +433,10 @@ export function AssetDetailPage() {
             {/* Router žádný web necertifikuje - karta s TLS certifikátem tu
                 jen zabírala místo. Místo toho se ukazuje, co router má. */}
             {isRouter && <RouterServices d={asset.rawDetails ?? {}} />}
+            {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
 
             {!isRouter &&
+              !isDiscord &&
               (() => {
                 const isNoSsl = [
                   'ROUTER',
