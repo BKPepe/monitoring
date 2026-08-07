@@ -2159,6 +2159,7 @@ $BK_METRIC_COLUMN_MAP = [
     // jeden nadepsaný "TeamSpeak Klienti".
     'ts_clients' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'TeamSpeak Klienti', 'only' => ['teamspeak']],
     'discord_presence' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Online na Discordu', 'only' => ['discord']],
+    'mc_players' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Hráči online', 'only' => ['minecraft']],
     'ts_process_cpu' => ['col' => 'ts_process_cpu', 'unit' => '%', 'label' => 'CPU procesu TS3'],
     'ts_process_ram' => ['col' => 'ts_process_ram', 'unit' => 'MB', 'label' => 'RAM procesu TS3'],
     'net_ipv4' => ['col' => 'net_ipv4_kbps', 'unit' => 'KB/s', 'label' => 'IPv4 provoz'],

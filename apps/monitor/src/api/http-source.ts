@@ -36,6 +36,7 @@ const CHART_METRICS: {
   // Discord: počet lidí online. Data se sbírala každou minutu, ale do
   // historie se neukládala, takže Discord neměl žádný graf kromě odezvy.
   { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null },
+  { key: 'mc_players', title: 'Hráči online', tone: 'memory', yMax: null },
   { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: 120 },
 ];
 

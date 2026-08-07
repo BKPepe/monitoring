@@ -31,6 +31,7 @@ import { useLanguage } from '@/context/language-context';
 import { cn, formatPercent, formatUptime } from '@/lib/utils';
 import { RouterServices } from '@/components/router-services';
 import { DiscordCard } from '@/components/discord-card';
+import { MinecraftCard } from '@/components/minecraft-card';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -232,6 +233,7 @@ export function AssetDetailPage() {
   // Router má vlastní podobu sekce Služby - TLS certifikát u něj nedává smysl.
   const isRouter = upperKind === 'ROUTER' || upperKind === 'OPENWRT';
   const isDiscord = upperKind === 'DISCORD';
+  const isMinecraft = upperKind === 'MINECRAFT';
 
   return (
     <div className="space-y-6">
@@ -415,7 +417,9 @@ export function AssetDetailPage() {
                     ? t('asset.router_services_title', 'Síťové služby routeru')
                     : isDiscord
                       ? t('asset.discord_services_title', 'Discord server')
-                      : t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
+                      : isMinecraft
+                        ? t('asset.mc_services_title', 'Minecraft server')
+                        : t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   {isRouter
@@ -425,7 +429,9 @@ export function AssetDetailPage() {
                           'asset.discord_services_desc',
                           'Kdo je online, hlasové kanály a členové ze serverového widgetu.'
                         )
-                      : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
+                      : isMinecraft
+                        ? t('asset.mc_services_desc', 'MOTD, hráči a výkon serveru z dotazu na herní port.')
+                        : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
                 </p>
               </div>
             </div>
@@ -434,9 +440,11 @@ export function AssetDetailPage() {
                 jen zabírala místo. Místo toho se ukazuje, co router má. */}
             {isRouter && <RouterServices d={asset.rawDetails ?? {}} />}
             {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
+            {isMinecraft && <MinecraftCard d={asset.rawDetails ?? {}} />}
 
             {!isRouter &&
               !isDiscord &&
+              !isMinecraft &&
               (() => {
                 const isNoSsl = [
                   'ROUTER',

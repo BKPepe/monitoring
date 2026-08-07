@@ -389,6 +389,22 @@ foreach ($monitors as $monitor) {
                 'tps_5m' => $check_result['tps_5m'] ?? null,
                 'tps_15m' => $check_result['tps_15m'] ?? null
             ], JSON_UNESCAPED_UNICODE);
+
+            // Pocet hracu se dosud ukladal jen jako aktualni snimek, takze
+            // Minecraft nemel graf navstevnosti - stejny problem jako mel
+            // Discord. Uklada se do sloupce pro "lidi online".
+            if (isset($check_result['players_online']) && $check_result['players_online'] !== null) {
+                try {
+                    $stmt_mc = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, ts_clients_online, ts_clients_max) VALUES (?, ?, ?)");
+                    $stmt_mc->execute([
+                        $id,
+                        (int)$check_result['players_online'],
+                        isset($check_result['players_max']) ? (int)$check_result['players_max'] : null,
+                    ]);
+                } catch (Throwable $e) {
+                    error_log('[cron] Minecraft player metric skipped: ' . $e->getMessage());
+                }
+            }
         } elseif ($type === 'teamspeak') {
             $details = json_encode([
                 // Nezjištěný počet hráčů není nula - prázdný server a

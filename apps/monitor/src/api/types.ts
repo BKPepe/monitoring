@@ -18,6 +18,7 @@
 export type MetricKey =
   | 'response_time'
   | 'discord_presence'
+  | 'mc_players'
   | 'cpu'
   | 'ram'
   | 'hdd'
