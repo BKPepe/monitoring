@@ -66,7 +66,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.7.4"
+AGENT_VERSION="1.7.5"
 LOG_FILE="$ScriptPath/agent.log"
 NET_STATE_FILE="$ScriptPath/agent_net.state"
 DISKIO_STATE_FILE="$ScriptPath/agent_diskio.state"
@@ -515,14 +515,19 @@ while read -r cline; do
     [ -z "$cline" ] && continue
     cname=$(echo "$cline" | awk '{print $1}')
     ccpu=$(echo "$cline" | awk '{print $2}')
+    crss_kb=$(echo "$cline" | awk '{print $3}')
     [ -z "$ccpu" ] && continue
     cname_clean=$(echo -n "$cname" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Obe hodnoty do obou zebricku - jinak ma kazda radka v tabulce jednu
+    # bunku prazdnou. Chybejici hodnota zustava null, ne nula.
+    cram_mb="null"
+    [ -n "$crss_kb" ] && cram_mb=$(awk -v k="$crss_kb" 'BEGIN { printf "%.1f", k/1024 }')
     if [ -n "$top_cpu_json" ]; then
         top_cpu_json="$top_cpu_json, "
     fi
-    top_cpu_json="$top_cpu_json{\"name\": \"$cname_clean\", \"cpu\": $ccpu}"
+    top_cpu_json="$top_cpu_json{\"name\": \"$cname_clean\", \"cpu\": $ccpu, \"ram_mb\": $cram_mb}"
 done <<EOF
-$(ps -eo comm,%cpu --sort=-%cpu 2>/dev/null | tail -n +2 | head -n 5)
+$(ps -eo comm,%cpu,rss --sort=-%cpu 2>/dev/null | tail -n +2 | head -n 5)
 EOF
 
 top_ram_json=""
@@ -530,15 +535,17 @@ while read -r rline; do
     [ -z "$rline" ] && continue
     rname=$(echo "$rline" | awk '{print $1}')
     rrss_kb=$(echo "$rline" | awk '{print $2}')
+    rcpu=$(echo "$rline" | awk '{print $3}')
     [ -z "$rrss_kb" ] && continue
     rname_clean=$(echo -n "$rname" | sed 's/\\/\\\\/g; s/"/\\"/g')
     rram_mb=$(awk -v k="$rrss_kb" 'BEGIN { printf "%.1f", k/1024 }')
+    [ -z "$rcpu" ] && rcpu="null"
     if [ -n "$top_ram_json" ]; then
         top_ram_json="$top_ram_json, "
     fi
-    top_ram_json="$top_ram_json{\"name\": \"$rname_clean\", \"ram_mb\": $rram_mb}"
+    top_ram_json="$top_ram_json{\"name\": \"$rname_clean\", \"ram_mb\": $rram_mb, \"cpu\": $rcpu}"
 done <<EOF
-$(ps -eo comm,rss --sort=-rss 2>/dev/null | tail -n +2 | head -n 5)
+$(ps -eo comm,rss,%cpu --sort=-rss 2>/dev/null | tail -n +2 | head -n 5)
 EOF
 
 # 7.5 Zjištění TeamSpeak statistik (telnet query na localhost)

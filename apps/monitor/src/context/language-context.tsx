@@ -1682,6 +1682,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'TPS umí vrátit jen RCON. Doplňte RCON port a heslo v nastavení monitoru a hodnoty se začnou sbírat.',
     en: 'Only RCON can report TPS. Add the RCON port and password in the monitor settings and the values will start arriving.',
   },
+  'shell.loading_page': { cs: 'Načítám stránku…', en: 'Loading page…' },
   'regions.title': { cs: 'Měřicí místa', en: 'Probe locations' },
   'regions.subtitle': {
     cs: 'Odkud se kontroly za posledních 7 dní skutečně prováděly.',

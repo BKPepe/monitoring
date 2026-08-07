@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.13"
+AGENT_VERSION="1.5.14"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -666,13 +666,17 @@ if command -v top >/dev/null 2>&1; then
         }' 2>/dev/null)
 
         if [ -n "$top_parsed" ]; then
+            # Obe hodnoty jdou do OBOU seznamu. Driv nesl zebricek podle CPU
+            # jen cpu a zebricek podle RAM jen ram_mb, takze v tabulce mela
+            # kazda radka jednu bunku prazdnou ("librespeed-cli 63,2 % / -").
+            # null se posila, kdyz hodnota u procesu opravdu chybi.
             top_cpu_json=$(echo "$top_parsed" | awk -F'|' '$2 != ""' | sort -t'|' -k2 -rn | head -5 | awk -F'|' '
                 BEGIN { printf "[" }
-                { if (NR > 1) printf ", "; printf "{\"name\":\"%s\",\"cpu\":%.1f}", $1, $2 }
+                { if (NR > 1) printf ", "; printf "{\"name\":\"%s\",\"cpu\":%.1f,\"ram_mb\":%s}", $1, $2, ($3 != "" ? sprintf("%.1f", $3) : "null") }
                 END { printf "]" }')
             top_ram_json=$(echo "$top_parsed" | awk -F'|' '$3 != ""' | sort -t'|' -k3 -rn | head -5 | awk -F'|' '
                 BEGIN { printf "[" }
-                { if (NR > 1) printf ", "; printf "{\"name\":\"%s\",\"ram_mb\":%.1f}", $1, $3 }
+                { if (NR > 1) printf ", "; printf "{\"name\":\"%s\",\"ram_mb\":%.1f,\"cpu\":%s}", $1, $3, ($2 != "" ? sprintf("%.1f", $2) : "null") }
                 END { printf "]" }')
         fi
     fi

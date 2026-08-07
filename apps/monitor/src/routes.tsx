@@ -2,19 +2,25 @@ import * as React from 'react';
 import { createBrowserRouter } from 'react-router';
 import { AppShell } from '@/components/layout/app-shell';
 import { DashboardPage } from '@/pages/dashboard';
-import { InfrastructurePage } from '@/pages/infrastructure';
-import { AssetDetailPage } from '@/pages/asset-detail';
-import { UsersPage } from '@/pages/users';
-import { SetupPage } from '@/pages/setup';
-import { WebsitesPage } from '@/pages/websites';
-import { ServicesPage } from '@/pages/services';
-import { StatusPagesPage } from '@/pages/status-pages';
-import { IncidentsPage } from '@/pages/incidents';
-import { ReportsPage } from '@/pages/reports';
-import { InsightsPage } from '@/pages/insights';
-import { SettingsPage } from '@/pages/settings';
-import { ApiAgentsPage } from '@/pages/api-agents';
 import { NotFoundPage } from '@/pages/not-found';
+
+// Dashboard a 404 se nacitaji rovnou (prvni obrazovka a fallback), zbytek
+// az pri navstive. Cely balik mel 1,5 MB a musel se stahnout a rozparsovat,
+// nez uzivatel uvidel cokoli - i kdyz otevrel jen dashboard.
+const InfrastructurePage = React.lazy(() =>
+  import('@/pages/infrastructure').then((m) => ({ default: m.InfrastructurePage }))
+);
+const AssetDetailPage = React.lazy(() => import('@/pages/asset-detail').then((m) => ({ default: m.AssetDetailPage })));
+const UsersPage = React.lazy(() => import('@/pages/users').then((m) => ({ default: m.UsersPage })));
+const SetupPage = React.lazy(() => import('@/pages/setup').then((m) => ({ default: m.SetupPage })));
+const WebsitesPage = React.lazy(() => import('@/pages/websites').then((m) => ({ default: m.WebsitesPage })));
+const ServicesPage = React.lazy(() => import('@/pages/services').then((m) => ({ default: m.ServicesPage })));
+const StatusPagesPage = React.lazy(() => import('@/pages/status-pages').then((m) => ({ default: m.StatusPagesPage })));
+const IncidentsPage = React.lazy(() => import('@/pages/incidents').then((m) => ({ default: m.IncidentsPage })));
+const ReportsPage = React.lazy(() => import('@/pages/reports').then((m) => ({ default: m.ReportsPage })));
+const InsightsPage = React.lazy(() => import('@/pages/insights').then((m) => ({ default: m.InsightsPage })));
+const SettingsPage = React.lazy(() => import('@/pages/settings').then((m) => ({ default: m.SettingsPage })));
+const ApiAgentsPage = React.lazy(() => import('@/pages/api-agents').then((m) => ({ default: m.ApiAgentsPage })));
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';

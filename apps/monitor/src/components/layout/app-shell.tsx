@@ -198,7 +198,18 @@ export function AppShell() {
           {/* The 12-column grid is available to pages inside; the shell just
               holds the max width and padding. */}
           <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:px-0 print:py-0 print:max-w-none">
-            <Outlet />
+            {/* Stránky se načítají až při návštěvě (React.lazy v routes.tsx),
+                takže mezi kliknutím a vykreslením je krátká pauza na stažení
+                jejich kódu. Bez tohohle boundary by React vyhodil chybu. */}
+            <React.Suspense
+              fallback={
+                <p className="text-muted-foreground py-16 text-center text-sm" role="status">
+                  {t('shell.loading_page', 'Načítám stránku…')}
+                </p>
+              }
+            >
+              <Outlet />
+            </React.Suspense>
           </div>
         </main>
 
