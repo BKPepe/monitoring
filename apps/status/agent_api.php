@@ -482,6 +482,53 @@ try {
         'agent_alert_sent' => false,
         'agent_last_seen' => time()
     ];
+
+    // --- Propuštění neznámých klíčů od agenta -----------------------------
+    //
+    // Výše je explicitní seznam polí, která server umí (typová kontrola,
+    // přepočty, výchozí hodnoty). Cokoli mimo něj se dosud TIŠE ZAHODILO:
+    // agent poslal novou metriku, ta se nikde neobjevila a přišlo se na to
+    // až při ručním hledání (naposledy LTE přes ubus). Chyba se navíc nedá
+    // odhalit v UI - chybějící údaj vypadá stejně jako "zatím nezměřeno".
+    //
+    // Neznámé skalární klíče a malá pole se proto propustí beze změny.
+    // Explicitní seznam zůstává tam, kde je potřeba převod nebo validace,
+    // a má přednost - hodnota z něj se propuštěním nikdy nepřepíše.
+    $bk_passthrough_skip = [
+        // Autentizace a řízení - do details nepatří.
+        'agent_key', 'api_key', 'token', 'secret', 'password',
+        // Zpracováno vlastní cestou (round-trip akcí, kontrol služeb).
+        'action_result', 'service_check_results', 'pending_action',
+    ];
+    $bk_passthrough_added = 0;
+    foreach ($data as $bk_key => $bk_val) {
+        if (!is_string($bk_key) || $bk_key === '') {
+            continue;
+        }
+        // Klíč, který server zná, se nepřepisuje - jeho verze je typovaná.
+        if (array_key_exists($bk_key, $new_data) || in_array($bk_key, $bk_passthrough_skip, true)) {
+            continue;
+        }
+        if (!preg_match('/^[a-z][a-z0-9_]{0,63}$/i', $bk_key)) {
+            continue;
+        }
+        if (is_scalar($bk_val) || $bk_val === null) {
+            $new_data[$bk_key] = $bk_val;
+            $bk_passthrough_added++;
+        } elseif (is_array($bk_val)) {
+            // Strop na velikost: details se ukládají do jednoho sloupce
+            // a agent nesmí umět nafouknout řádek libovolně.
+            $encoded = json_encode($bk_val, JSON_UNESCAPED_UNICODE);
+            if ($encoded !== false && strlen($encoded) <= 8192) {
+                $new_data[$bk_key] = $bk_val;
+                $bk_passthrough_added++;
+            }
+        }
+        // Strop na počet nových klíčů - tentýž důvod.
+        if ($bk_passthrough_added >= 64) {
+            break;
+        }
+    }
     
     // Zpracování TeamSpeak statistik z agenta (pokud je poslal)
     if (isset($data['teamspeak_servers']) && is_array($data['teamspeak_servers'])) {

@@ -108,6 +108,29 @@ foreach ($callers as $caller_file) {
 }
 check('vsichni volajici predavaji $pdo', $missing_pdo, []);
 
+// --- Anonymni odpoved nesmi nest sitovou identitu ------------------------
+//
+// agent_api dnes propousti i klice, o kterych server predem nevi (jinak nova
+// metrika tise zmizi). Vycet citlivych klicu by je nepokryl, takze filtr jede
+// i podle nazvu - tenhle test hlida, ze vzor zabira a zaroven nesmaze
+// agregaty, kvuli kterym verejny status existuje.
+$api_src = file_get_contents(__DIR__ . '/../api.php');
+if (preg_match("/preg_match\('(\/\(ipv4\|.*?)',/", $api_src, $re_m)) {
+    $anon_re = $re_m[1];
+
+    foreach (['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint',
+              'device_mac', 'board_serial', 'hostname', 'agent_key', 'api_token'] as $secret_key) {
+        check_true("anonym neuvidi {$secret_key}", (bool)preg_match($anon_re, $secret_key));
+    }
+
+    foreach (['cpu', 'ram', 'hdd', 'dns_latency_ms', 'conntrack_pct', 'lte_up', 'lte_uptime',
+              'presence_count', 'uptime_seconds', 'wifi_clients_total'] as $public_key) {
+        check_false("agregat {$public_key} zustava", (bool)preg_match($anon_re, $public_key));
+    }
+} else {
+    check_true('filtr citlivych klicu je v api.php k nalezeni', false);
+}
+
 $failed = bk_test_report('čisté funkce');
 // Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
 if (!defined('BK_COVERAGE_RUN')) {

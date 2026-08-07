@@ -182,6 +182,54 @@ if (function_exists('bk_latency_score')) {
         bk_latency_score(20) > bk_latency_score(2000));
 }
 
+// --- Nova metrika od agenta nesmi tise zmizet ----------------------------
+//
+// agent_api.php dlouho skladal details z pevneho seznamu poli a cokoli mimo
+// nej zahodil. Chyba se pozna az rucnim hledanim - v UI vypada chybejici
+// udaj stejne jako "zatim nezmereno". Tenhle test cte pravidla propousteni
+// primo ze zdroje a overuje je na modelovych datech.
+$agent_src = file_get_contents(__DIR__ . '/../agent_api.php');
+
+check_true(
+    'agent_api propousti neznama pole',
+    str_contains($agent_src, '$bk_passthrough_added') && str_contains($agent_src, 'foreach ($data as $bk_key')
+);
+
+// Simulace stejnych pravidel, jaka ma agent_api: co projde a co ne.
+$passthrough = function (array $data, array $known) {
+    $skip = ['agent_key', 'api_key', 'token', 'secret', 'password', 'action_result', 'service_check_results', 'pending_action'];
+    $out = $known;
+    $added = 0;
+    foreach ($data as $k => $v) {
+        if (!is_string($k) || $k === '' || array_key_exists($k, $known) || in_array($k, $skip, true)) continue;
+        if (!preg_match('/^[a-z][a-z0-9_]{0,63}$/i', $k)) continue;
+        if (is_scalar($v) || $v === null) { $out[$k] = $v; $added++; }
+        elseif (is_array($v)) {
+            $enc = json_encode($v, JSON_UNESCAPED_UNICODE);
+            if ($enc !== false && strlen($enc) <= 8192) { $out[$k] = $v; $added++; }
+        }
+        if ($added >= 64) break;
+    }
+    return $out;
+};
+
+$known = ['cpu' => 12.5, 'ram' => 40.0];
+$result = $passthrough([
+    'cpu' => 99.0,                    // znamy klic - server si drzi svou verzi
+    'brand_new_metric' => 42,         // presne to, co drive mizelo
+    'nested' => ['a' => 1],           // male pole projde
+    'agent_key' => 'tajne',           // nikdy do details
+    'bad key!' => 1,                  // nevalidni nazev
+    'huge' => array_fill(0, 5000, 'xxxxxxxxxx'), // pres limit velikosti
+], $known);
+
+check('nova metrika projde', $result['brand_new_metric'] ?? null, 42);
+check('male pole projde', $result['nested']['a'] ?? null, 1);
+check('typovany klic serveru se neprepise', $result['cpu'], 12.5);
+check_false('agent_key se neuklada', array_key_exists('agent_key', $result));
+check_false('nevalidni nazev se neuklada', array_key_exists('bad key!', $result));
+check_false('prilis velke pole se neuklada', array_key_exists('huge', $result));
+
 $failed = bk_test_report('sběr, e-maily, notifikace');
 // Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
 if (!defined('BK_COVERAGE_RUN')) {

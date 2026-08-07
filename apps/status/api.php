@@ -176,6 +176,19 @@ if ($action === 'monitors') {
                 foreach (['wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'lan_subnet', 'wifi_radios', 'wireguard_peers', 'interfaces', 'dns_servers', 'mwan3_policies', 'service_restarts', 'public_ip', 'asn', 'asn_name'] as $priv_key) {
                     unset($details_out[$priv_key]);
                 }
+
+                // Seznam výše je výčet ZNÁMÝCH klíčů, jenže agent_api dnes
+                // propouští i klíče, o kterých server předem neví - výčet by
+                // je nepokryl a nová metrika s adresou by unikla anonymnímu
+                // návštěvníkovi. Proto se navíc filtruje podle názvu.
+                //
+                // Vzory míří na síťovou identitu a tajemství. Agregáty
+                // (počty, procenta, latence) sem záměrně nespadají.
+                foreach (array_keys($details_out) as $priv_key) {
+                    if (preg_match('/(ipv4|ipv6|(^|_)ip($|_)|addr|gateway|subnet|ssid|(^|_)mac($|_)|endpoint|peer|serial|hostname|token|secret|passw|_key$|^key$)/i', (string)$priv_key)) {
+                        unset($details_out[$priv_key]);
+                    }
+                }
             }
             $last_change_ts = $r['last_status_change'] ? strtotime($r['last_status_change']) : null;
             $monitors[(int)$r['id']] = [
