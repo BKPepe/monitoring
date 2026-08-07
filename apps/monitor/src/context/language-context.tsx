@@ -1500,6 +1500,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'rsvc.mwan3': { cs: 'Multi-WAN (mwan3)', en: 'Multi-WAN (mwan3)' },
   'rsvc.mwan3_gw': { cs: 'Aktivní brána', en: 'Active gateway' },
   'rsvc.mwan3_degraded': { cs: '{count} mimo provoz', en: '{count} offline' },
+  'rsvc.bandwidth': { cs: 'Šířka pásma', en: 'Bandwidth' },
+  'rsvc.signal_excellent': { cs: 'výborný', en: 'excellent' },
+  'rsvc.signal_good': { cs: 'dobrý', en: 'good' },
+  'rsvc.signal_fair': { cs: 'slabší', en: 'fair' },
+  'rsvc.signal_poor': { cs: 'slabý', en: 'poor' },
   'rsvc.wan': { cs: 'Připojení WAN', en: 'WAN connection' },
   'rsvc.lte': { cs: 'LTE / mobilní záloha', en: 'LTE / mobile backup' },
   'rsvc.dns': { cs: 'DNS resolver', en: 'DNS resolver' },
@@ -1525,8 +1530,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'The agent has not reported any router network service data yet.',
   },
   'rsvc.lte_no_signal': {
-    cs: 'Sílu signálu router nehlásí — modem není dostupný přes ModemManager.',
-    en: 'The router reports no signal strength — the modem is not exposed through ModemManager.',
+    cs: 'Sílu signálu se nepodařilo zjistit — modem nemá ModemManager ani HTTP API na své bráně.',
+    en: 'Signal strength could not be read — the modem exposes neither ModemManager nor an HTTP API on its gateway.',
   },
   'rsvc.sqm_off_hint': {
     cs: 'Bez SQM se při plném vytížení linky zhoršuje odezva (bufferbloat).',

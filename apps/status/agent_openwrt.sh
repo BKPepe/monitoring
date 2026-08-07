@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.14"
+AGENT_VERSION="1.5.15"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -765,6 +765,75 @@ if command -v ubus >/dev/null 2>&1; then
     done
 fi
 
+# --- Signal LTE z HiLink API modemu ----------------------------------------
+#
+# Modemy Huawei/Brovi v rezimu HiLink vystavuji na sve brane HTTP API se
+# silou signalu. Je to jedina cesta, jak signal zjistit bez mmcli/uqmi -
+# ubus u dhcp rozhrani zna jen to, ze spojeni jede.
+#
+# Dotaz jde vylucne na branu LTE rozhrani (odvozenou z jeho vlastni adresy),
+# s kratkym timeoutem, a jen kdyz LTE opravdu bezi. Kdyz modem API nema,
+# hodnoty zustavaji null - nic se nedopocitava.
+lte_rssi="null"
+lte_pci="null"
+lte_cell_id="null"
+lte_bandwidth="null"
+lte_plmn="null"
+
+if [ "$lte_up" = "true" ] && [ "$lte_ipv4" != "null" ] && [ -n "$lte_ipv4" ]; then
+    lte_api_host=$(echo "$lte_ipv4" | sed 's/\.[0-9]*$/.1/')
+    lte_sig_xml=""
+    if command -v curl >/dev/null 2>&1; then
+        lte_sig_xml=$(curl -s -m 2 "http://${lte_api_host}/api/device/signal" 2>/dev/null)
+    elif command -v uclient-fetch >/dev/null 2>&1; then
+        lte_sig_xml=$(uclient-fetch -q -T 2 -O - "http://${lte_api_host}/api/device/signal" 2>/dev/null)
+    elif command -v wget >/dev/null 2>&1; then
+        lte_sig_xml=$(wget -q -T 2 -O - "http://${lte_api_host}/api/device/signal" 2>/dev/null)
+    fi
+
+    if echo "$lte_sig_xml" | grep -q "<rsrp>"; then
+        # Hodnoty nesou jednotky primo v textu ("-83dBm", "-6.0dB"), tak se
+        # necha jen cislo. Prazdny tag = udaj modem nehlasi -> null.
+        bk_xml_num() {
+            _v=$(echo "$lte_sig_xml" | sed -n "s|.*<$1>\([^<]*\)</$1>.*|\1|p" | head -1)
+            _v=$(echo "$_v" | sed 's/[^0-9.-]//g')
+            case "$_v" in
+                ''|-|.|--) printf 'null' ;;
+                *) printf '%s' "$_v" ;;
+            esac
+        }
+        bk_xml_str() {
+            _v=$(echo "$lte_sig_xml" | sed -n "s|.*<$1>\([^<]*\)</$1>.*|\1|p" | head -1)
+            [ -z "$_v" ] && printf 'null' || printf '"%s"' "$(json_str "$_v")"
+        }
+
+        lte_rsrp=$(bk_xml_num rsrp)
+        lte_rsrq=$(bk_xml_num rsrq)
+        lte_sinr=$(bk_xml_num sinr)
+        lte_rssi=$(bk_xml_num rssi)
+        lte_pci=$(bk_xml_num pci)
+        lte_cell_id=$(bk_xml_num cell_id)
+        lte_plmn=$(bk_xml_str plmn)
+        lte_bandwidth=$(bk_xml_str dlbandwidth)
+
+        # Pasmo hlasi modem jako cislo (1 = B1); ve zbytku systemu je to text.
+        _band=$(echo "$lte_sig_xml" | sed -n 's|.*<band>\([^<]*\)</band>.*|\1|p' | head -1)
+        [ -n "$_band" ] && lte_band="B${_band}"
+
+        # Jmeno operatora ma jiny endpoint; bez nej zustava to, co uz mame.
+        if command -v curl >/dev/null 2>&1; then
+            lte_plmn_xml=$(curl -s -m 2 "http://${lte_api_host}/api/net/current-plmn" 2>/dev/null)
+        elif command -v uclient-fetch >/dev/null 2>&1; then
+            lte_plmn_xml=$(uclient-fetch -q -T 2 -O - "http://${lte_api_host}/api/net/current-plmn" 2>/dev/null)
+        else
+            lte_plmn_xml=""
+        fi
+        _carrier=$(echo "$lte_plmn_xml" | sed -n 's|.*<FullName>\([^<]*\)</FullName>.*|\1|p' | head -1)
+        [ -z "$_carrier" ] && _carrier=$(echo "$lte_plmn_xml" | sed -n 's|.*<ShortName>\([^<]*\)</ShortName>.*|\1|p' | head -1)
+        [ -n "$_carrier" ] && lte_carrier="$_carrier"
+    fi
+fi
+
 # --- LTE/WWAN modem ---
 lte_rsrp="null"
 lte_rsrq="null"
@@ -1369,6 +1438,11 @@ payload=$(cat <<EOF
   "lte_device": $(json_val "$lte_device"),
   "lte_uptime": $lte_uptime,
   "lte_ipv4": $(json_val "$lte_ipv4"),
+  "lte_rssi": $lte_rssi,
+  "lte_pci": $lte_pci,
+  "lte_cell_id": $lte_cell_id,
+  "lte_bandwidth": $lte_bandwidth,
+  "lte_plmn": $lte_plmn,
   "lte_rsrp": $lte_rsrp,
   "lte_rsrq": $lte_rsrq,
   "lte_sinr": $lte_sinr,

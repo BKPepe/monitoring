@@ -16,6 +16,19 @@ import { formatUptime } from '@/lib/utils';
  * Každá dlaždice se vykreslí jen tehdy, když pro ni agent poslal data -
  * prázdné místo je poctivější než karta s pomlčkami.
  */
+/**
+ * Slovní hodnocení RSRP podle běžně používaných pásem u LTE.
+ *
+ * Samotné "-83 dBm" nikomu nic neřekne; hranice jsou standardní
+ * (nad -80 výborný, do -90 dobrý, do -100 slabý, níž na hraně použitelnosti).
+ */
+function rsrpQuality(rsrp: number, t: (k: string, f?: string) => string): string {
+  if (rsrp >= -80) return t('rsvc.signal_excellent', 'výborný');
+  if (rsrp >= -90) return t('rsvc.signal_good', 'dobrý');
+  if (rsrp >= -100) return t('rsvc.signal_fair', 'slabší');
+  return t('rsvc.signal_poor', 'slabý');
+}
+
 /** Velké čítače paketů se čtou lépe s oddělovači tisíců. */
 function formatCount(value: unknown): string {
   const n = typeof value === 'number' ? value : Number(value);
@@ -100,12 +113,19 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           d.lte_device ? `${t('rsvc.device', 'Rozhraní')}: ${d.lte_device}` : null,
           d.lte_ipv4 ? `IPv4: ${d.lte_ipv4}` : null,
           d.lte_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.lte_uptime)}` : null,
-          d.lte_rsrp != null ? `RSRP: ${d.lte_rsrp} dBm` : null,
           [d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null,
+          // Sila signalu z HiLink API modemu; bez nej zustava prazdno.
+          d.lte_rsrp != null ? `RSRP: ${d.lte_rsrp} dBm (${rsrpQuality(d.lte_rsrp, t)})` : null,
+          d.lte_rsrq != null ? `RSRQ: ${d.lte_rsrq} dB` : null,
+          d.lte_sinr != null ? `SINR: ${d.lte_sinr} dB` : null,
+          d.lte_bandwidth ? `${t('rsvc.bandwidth', 'Šířka pásma')}: ${d.lte_bandwidth}` : null,
         ]}
         note={
           d.lte_up === true && d.lte_rsrp == null
-            ? t('rsvc.lte_no_signal', 'Sílu signálu router nehlásí — modem není dostupný přes ModemManager.')
+            ? t(
+                'rsvc.lte_no_signal',
+                'Sílu signálu se nepodařilo zjistit — modem nemá ModemManager ani HTTP API na své bráně.'
+              )
             : null
         }
       />

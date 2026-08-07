@@ -227,6 +227,12 @@ $ow_lte_band = (isset($data['lte_band']) && $data['lte_band'] !== null) ? $data[
 // Spojeni pres ubus (agent 1.5.9+): modem nemusi byt videt pres mmcli/uqmi,
 // ale rozhrani "lte" v ubus ano - odtud se pozna, ze LTE opravdu jede.
 $ow_lte_up = isset($data['lte_up']) ? (bool)$data['lte_up'] : null;
+// Signal z HiLink API modemu (agent 1.5.15+) - bez nej zustavaji null.
+$ow_lte_rssi = (isset($data['lte_rssi']) && $data['lte_rssi'] !== null) ? floatval($data['lte_rssi']) : null;
+$ow_lte_pci = (isset($data['lte_pci']) && $data['lte_pci'] !== null) ? (int)$data['lte_pci'] : null;
+$ow_lte_cell_id = (isset($data['lte_cell_id']) && $data['lte_cell_id'] !== null) ? (string)$data['lte_cell_id'] : null;
+$ow_lte_bandwidth = (isset($data['lte_bandwidth']) && $data['lte_bandwidth'] !== null) ? trim((string)$data['lte_bandwidth']) : null;
+$ow_lte_plmn = (isset($data['lte_plmn']) && $data['lte_plmn'] !== null) ? trim((string)$data['lte_plmn']) : null;
 $ow_lte_device = (isset($data['lte_device']) && $data['lte_device'] !== null) ? trim((string)$data['lte_device']) : null;
 $ow_lte_uptime = (isset($data['lte_uptime']) && $data['lte_uptime'] !== null) ? (int)$data['lte_uptime'] : null;
 $ow_lte_ipv4 = (isset($data['lte_ipv4']) && $data['lte_ipv4'] !== null) ? trim((string)$data['lte_ipv4']) : null;
@@ -455,6 +461,11 @@ try {
         'lte_band' => $ow_lte_band,
         'lte_carrier' => $ow_lte_carrier,
         'lte_up' => $ow_lte_up,
+        'lte_rssi' => $ow_lte_rssi,
+        'lte_pci' => $ow_lte_pci,
+        'lte_cell_id' => $ow_lte_cell_id,
+        'lte_bandwidth' => $ow_lte_bandwidth,
+        'lte_plmn' => $ow_lte_plmn,
         'lte_device' => $ow_lte_device,
         'lte_uptime' => $ow_lte_uptime,
         'lte_ipv4' => $ow_lte_ipv4,
