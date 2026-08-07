@@ -33,6 +33,7 @@ import { RouterServices } from '@/components/router-services';
 import { DiscordCard } from '@/components/discord-card';
 import { MinecraftCard } from '@/components/minecraft-card';
 import { CheckPipeline } from '@/components/check-pipeline';
+import { TeamspeakCard } from '@/components/teamspeak-card';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -237,6 +238,7 @@ export function AssetDetailPage() {
   const isMinecraft = upperKind === 'MINECRAFT';
   // Rozpad kontroly dava smysl jen u HTTP cilu (DNS -> TCP -> TLS -> HTTP).
   const isWeb = ['WEB', 'HTTP', 'HTTPS'].includes(upperKind);
+  const isTeamspeak = ['TEAMSPEAK', 'VOICE'].includes(upperKind);
 
   return (
     <div className="space-y-6">
@@ -445,6 +447,7 @@ export function AssetDetailPage() {
             {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
             {isMinecraft && <MinecraftCard d={asset.rawDetails ?? {}} />}
             {isWeb && <CheckPipeline monitorId={asset.id} />}
+            {isTeamspeak && <TeamspeakCard monitorId={asset.id} />}
 
             {!isRouter &&
               !isDiscord &&
