@@ -910,6 +910,7 @@ if ($action === 'dashboard_layout') {
             'alerts' => t('tile_alerts'),
             'insights' => t('tile_insights'),
             'uptime_history' => t('tile_uptime_history'),
+            'regions' => t('tile_regions'),
         ];
 
         $catalog = [];
@@ -1182,7 +1183,10 @@ if ($action === 'events') {
                 'monitorName' => $r['monitor_name'],
                 'target' => $r['target'],
                 'type' => strtoupper($r['type']),
-                'location' => $r['checked_from'] ?: '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)',
+                // Neznámé místo kontroly zůstává null. Dřív se sem doplňovala
+                // natvrdo konkrétní lokalita (Frankfurt/RackNerd) - u 37 ze 40
+                // událostí to bylo vymyšlené, protože sloupec byl prázdný.
+                'location' => $r['checked_from'] ?: null,
                 'status' => $r['status'] === 'down' ? 'VÝPADEK' : ($r['status'] === 'warning' ? 'VAROVÁNÍ' : 'OK'),
                 'rawStatus' => $r['status'],
                 'errorMsg' => $r['error_message'] ?: ($r['status'] === 'down' ? 'Cílový server neodpovídá.' : 'Kontrola proběhla v pořádku.'),
@@ -1648,6 +1652,56 @@ if ($action === 'create_incident') {
 // 2b2j. Přehled SLA pro stránku webů: dostupnost 7/30/365 dní na monitor.
 // sla_report trvá i 3,7 s (detailní výpadky, MTTR) - stránka webů potřebuje
 // jen procenta, takže se počítají jedním oknovaným dotazem a cachují 10 minut.
+// 2b2k. Přehled měřicích míst: odkud se kontroly opravdu prováděly.
+// Skupinuje monitor_logs podle checked_from (uzly zapisují svou lokalitu
+// přes node_api.php, cron nechává výchozí hodnotu). Vrací jen to, co je
+// v datech - žádná mapa s vymyšlenými body po světě.
+if ($action === 'regions') {
+    try {
+        $days = max(1, min(30, (int)($_GET['days'] ?? 7)));
+        $stmt = $pdo->prepare("
+            SELECT checked_from,
+                   COUNT(*) AS checks,
+                   SUM(status = 'up') AS up_checks,
+                   SUM(status = 'down') AS down_checks,
+                   AVG(NULLIF(response_time, 0)) AS avg_response,
+                   MIN(checked_at) AS first_seen,
+                   MAX(checked_at) AS last_seen,
+                   COUNT(DISTINCT monitor_id) AS monitors
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              AND status IN ('up', 'down', 'warning')
+            GROUP BY checked_from
+            ORDER BY checks DESC
+        ");
+        $stmt->execute([$days]);
+
+        $regions = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $checks = (int)$r['checks'];
+            $regions[] = [
+                // null = uzel svou lokalitu nehlásí; UI to řekne narovinu.
+                'location' => $r['checked_from'] !== null && $r['checked_from'] !== '' ? $r['checked_from'] : null,
+                'checks' => $checks,
+                'upChecks' => (int)$r['up_checks'],
+                'downChecks' => (int)$r['down_checks'],
+                'successRate' => $checks > 0 ? round(((int)$r['up_checks'] / $checks) * 100, 2) : null,
+                // Průměr přes NULLIF(...,0): nulová odezva není měření.
+                'avgResponseMs' => $r['avg_response'] !== null ? round((float)$r['avg_response']) : null,
+                'monitors' => (int)$r['monitors'],
+                'firstSeen' => $r['first_seen'],
+                'lastSeen' => $r['last_seen'],
+            ];
+        }
+
+        echo json_encode(['days' => $days, 'regions' => $regions], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Přehled měřicích míst se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'websites_overview') {
     try {
         $cache_raw = get_setting('websites_overview_cache', '');

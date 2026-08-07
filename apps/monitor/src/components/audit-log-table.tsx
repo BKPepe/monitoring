@@ -144,7 +144,48 @@ export function AuditLogTable() {
         </button>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* Mobil: pet sloupcu auditu se na telefonu necte, tak karty. */}
+      <div className="flex flex-col gap-2 md:hidden">
+        {loading ? (
+          <p className="text-muted-foreground py-6 text-center text-xs">
+            {t('audit_log.loading', 'Načítám auditní logy...')}
+          </p>
+        ) : visibleLogs.length === 0 ? (
+          <p className="text-muted-foreground py-6 text-center text-xs">
+            {logs.length === 0
+              ? t('audit_log.no_logs', 'Žádné auditní záznamy nebyly nalezeny.')
+              : t('audit_log.no_logs_filtered', 'Tomuto filtru neodpovídá žádný záznam.')}
+          </p>
+        ) : (
+          visibleLogs.map((row) => (
+            <div key={row.id} className="rounded-lg border border-border p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <span className="font-mono font-bold text-[11px]">{row.action}</span>
+                <Badge
+                  variant={row.status === 'down' ? 'down' : row.status === 'warning' ? 'warning' : 'up'}
+                  className="shrink-0 font-bold"
+                >
+                  {row.status === 'down'
+                    ? t('audit_log.status_error', 'CHYBA')
+                    : row.status === 'warning'
+                      ? t('audit_log.status_warning', 'VAROVÁNÍ')
+                      : 'OK'}
+                </Badge>
+              </div>
+              <p className="text-muted-foreground mt-1 leading-snug">{row.details}</p>
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+                <span className="inline-flex items-center gap-1">
+                  <UserCheck className="size-3 text-primary" />
+                  {row.user}
+                </span>
+                <span className="font-mono">{row.time}</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[11px]">

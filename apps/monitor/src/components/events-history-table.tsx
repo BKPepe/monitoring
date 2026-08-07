@@ -157,7 +157,47 @@ export function EventsHistoryTable() {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* Mobil: sest sloupcu udalosti se na telefonu necte, tak karty. */}
+      <div className="flex flex-col gap-2 md:hidden">
+        {paginatedEvents.length === 0 ? (
+          <p className="text-muted-foreground py-6 text-center text-xs">
+            {events.length === 0
+              ? t('events.no_events_db', 'V databázi monitor_logs nebyly nalezeny žádné události.')
+              : t('events.no_events_filter', 'Žádné události neodpovídají zvolenému filtru.')}
+          </p>
+        ) : (
+          paginatedEvents.map((row) => (
+            <div key={row.id} className="rounded-lg border border-border p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-bold">{row.monitorName}</p>
+                  <p className="text-muted-foreground truncate font-mono text-[10px]">{row.target}</p>
+                </div>
+                <Badge
+                  variant={row.isDown ? 'down' : row.rawStatus === 'warning' ? 'warning' : 'up'}
+                  className="shrink-0 font-bold"
+                >
+                  {row.status}
+                </Badge>
+              </div>
+              {row.errorMsg && <p className="text-muted-foreground mt-1 leading-snug">{row.errorMsg}</p>}
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+                <span className="font-mono">{row.time}</span>
+                <span className="font-mono">{row.type}</span>
+                {/* Lokalita muze chybet - misto se nedomysli. */}
+                {row.location && (
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="size-3 shrink-0 text-rose-400" />
+                    {row.location}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[11px]">
@@ -189,8 +229,14 @@ export function EventsHistoryTable() {
                   <td className="py-3 px-3 font-mono text-[11px] text-muted-foreground">{row.type}</td>
                   <td className="py-3 px-3 whitespace-nowrap">
                     <span className="inline-flex items-center gap-1 text-[11px]">
-                      <MapPin className="size-3 text-rose-400 shrink-0" />
-                      <span>{row.location}</span>
+                      {row.location ? (
+                        <>
+                          <MapPin className="size-3 text-rose-400 shrink-0" />
+                          <span>{row.location}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </span>
                   </td>
                   <td className="py-3 px-3 whitespace-nowrap">

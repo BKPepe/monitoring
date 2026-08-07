@@ -74,6 +74,7 @@ return [
     'tile_monitors' => 'Seznam monitorů',
     'tile_alerts' => 'Poslední výstrahy',
     'tile_insights' => 'System Insights',
+    'tile_regions' => 'Měřicí místa',
     'tile_uptime_history' => 'Historie dostupnosti',
     'day_no_data' => 'Bez naměřených dat pro tento den.',
     'day_maintenance' => 'Plánovaná údržba tento den.',

@@ -73,6 +73,7 @@ return [
     'tile_monitors' => 'Monitor list',
     'tile_alerts' => 'Recent alerts',
     'tile_insights' => 'System Insights',
+    'tile_regions' => 'Probe locations',
     'tile_uptime_history' => 'Availability history',
     'day_no_data' => 'No measured data for this day.',
     'day_maintenance' => 'Scheduled maintenance this day.',

@@ -30,6 +30,7 @@ import { HealthDonut } from '@/components/health-donut';
 import { UptimeHeatmap } from '@/components/uptime-heatmap';
 import { Sparkline } from '@/components/sparkline';
 import { DashboardLayoutEditor, type DashboardTile } from '@/components/dashboard-layout-editor';
+import { RegionsPanel } from '@/components/regions-panel';
 import { LayoutGrid } from 'lucide-react';
 import type { UptimeHistoryRow } from '@/data/model';
 import { appApi, type ApiMonitor } from '@/api/app-api';
@@ -577,6 +578,7 @@ export function DashboardPage() {
       if (key === 'health') return healthSection;
       if (key === 'insights') return insightsSection;
       if (key === 'uptime_history') return uptimeSection;
+      if (key === 'regions') return <RegionsPanel />;
       if (key.startsWith('metric_')) return metricTile(key);
       return null;
     };

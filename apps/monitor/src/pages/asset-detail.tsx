@@ -358,24 +358,41 @@ export function AssetDetailPage() {
                 </p>
               )
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('asset.proc_name', 'Název procesů')}</TableHead>
-                    <TableHead className="text-right">{t('common.cpu', 'Využití CPU')}</TableHead>
-                    <TableHead className="text-right">{t('asset.mem_usage', 'Spotřeba RAM')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <>
+                {/* Mobil: proces na řádek s hodnotami pod názvem. */}
+                <div className="flex flex-col gap-1.5 md:hidden">
                   {asset.processes.map((proc) => (
-                    <TableRow key={proc.name}>
-                      <TableCell className="font-mono text-xs font-semibold">{proc.name}</TableCell>
-                      <TableCell className="text-right font-mono">{formatPercent(proc.cpu, 1)}</TableCell>
-                      <TableCell className="text-right font-mono">{proc.memory} MB</TableCell>
-                    </TableRow>
+                    <div key={proc.name} className="rounded-lg border border-border px-3 py-2">
+                      <p className="truncate font-mono text-xs font-semibold">{proc.name}</p>
+                      <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono text-[11px]">
+                        <span>CPU {formatPercent(proc.cpu, 1)}</span>
+                        <span>RAM {proc.memory} MB</span>
+                      </div>
+                    </div>
                   ))}
-                </TableBody>
-              </Table>
+                </div>
+
+                <div className="hidden md:block">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t('asset.proc_name', 'Název procesů')}</TableHead>
+                        <TableHead className="text-right">{t('common.cpu', 'Využití CPU')}</TableHead>
+                        <TableHead className="text-right">{t('asset.mem_usage', 'Spotřeba RAM')}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {asset.processes.map((proc) => (
+                        <TableRow key={proc.name}>
+                          <TableCell className="font-mono text-xs font-semibold">{proc.name}</TableCell>
+                          <TableCell className="text-right font-mono">{formatPercent(proc.cpu, 1)}</TableCell>
+                          <TableCell className="text-right font-mono">{proc.memory} MB</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
           </Card>
         </TabsContent>
