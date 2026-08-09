@@ -1857,6 +1857,116 @@ if ($action === 'check_stages') {
     exit;
 }
 
+// 2b2n. Veřejné status stránky: vlastní výběr monitorů pod vlastním slugem.
+//
+// Čtení je veřejné (stránka má být veřejná), ale skryté stránky vidí jen
+// admin a monitory se vrací jen ty, které stránka opravdu obsahuje.
+if ($action === 'status_pages') {
+    $is_admin_sp = !empty($_SESSION['admin_logged_in']);
+    try {
+        $stmt = $pdo->query("SELECT id, title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title");
+        $pages = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $public = (int)$r['is_public'] === 1;
+            if (!$public && !$is_admin_sp) {
+                continue;
+            }
+            $ids = json_decode($r['monitor_ids'] ?? '', true);
+            $pages[] = [
+                'id' => (int)$r['id'],
+                'title' => $r['title'],
+                'slug' => $r['slug'],
+                'description' => $r['description'],
+                'isPublic' => $public,
+                // Prázdný seznam = stránka ukazuje všechny monitory.
+                'monitorIds' => is_array($ids) ? array_values(array_map('intval', $ids)) : [],
+            ];
+        }
+        echo json_encode(['pages' => $pages], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Status stránky se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'save_status_page' || $action === 'delete_status_page') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    try {
+        if ($action === 'delete_status_page') {
+            $pdo->prepare("DELETE FROM status_pages WHERE id = ?")->execute([(int)($input['id'] ?? 0)]);
+            bk_audit_log($pdo, 'status_page_deleted', 'Status stránka smazána', 'status_page', (int)($input['id'] ?? 0));
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $title = trim((string)($input['title'] ?? ''));
+        if ($title === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'Název stránky nesmí být prázdný.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // Slug jde do URL, proto jen bezpečné znaky. Z názvu se odvodí,
+        // když ho uživatel nevyplní.
+        $slug = strtolower(trim((string)($input['slug'] ?? '')));
+        if ($slug === '') {
+            $slug = $title;
+        }
+        $slug = preg_replace('/[^a-z0-9]+/', '-', bk_slug_ascii($slug));
+        $slug = trim((string)$slug, '-');
+        if ($slug === '') {
+            $slug = 'stranka-' . time();
+        }
+
+        $ids = [];
+        foreach ((array)($input['monitorIds'] ?? []) as $mid) {
+            $mid = (int)$mid;
+            if ($mid > 0) {
+                $ids[] = $mid;
+            }
+        }
+
+        $params = [
+            $title,
+            $slug,
+            trim((string)($input['description'] ?? '')) ?: null,
+            !empty($input['isPublic']) ? 1 : 0,
+            json_encode(array_values(array_unique($ids))),
+        ];
+        $id = (int)($input['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $pdo->prepare("UPDATE status_pages SET title = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ? WHERE id = ?");
+            $stmt->execute(array_merge($params, [$id]));
+            bk_audit_log($pdo, 'status_page_updated', "Status stránka '{$title}' upravena", 'status_page', $id);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO status_pages (title, slug, description, is_public, monitor_ids) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute($params);
+            $id = (int)$pdo->lastInsertId();
+            bk_audit_log($pdo, 'status_page_created', "Status stránka '{$title}' vytvořena", 'status_page', $id);
+        }
+        echo json_encode(['success' => true, 'id' => $id, 'slug' => $slug], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        // Duplicitní slug je chyba uživatele, ne serveru - řekni to srozumitelně.
+        $duplicate = str_contains($e->getMessage(), 'uniq_status_page_slug') || $e->getCode() === '23000';
+        http_response_code($duplicate ? 400 : 500);
+        echo json_encode([
+            'error' => $duplicate
+                ? 'Stránka s tímto slugem už existuje — zvolte jiný.'
+                : 'Status stránku se nepodařilo uložit.',
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Status stránku se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'regions') {
     try {
         $days = max(1, min(30, (int)($_GET['days'] ?? 7)));

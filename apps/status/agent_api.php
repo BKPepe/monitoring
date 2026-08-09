@@ -665,8 +665,8 @@ try {
                 disk_io_read_kbps, disk_io_write_kbps, net_errors,
                 ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
                 iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c,
-                wifi_clients_total, conntrack_pct, net_ipv4_kbps, net_ipv6_kbps
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                wifi_clients_total, conntrack_pct, net_ipv4_kbps, net_ipv6_kbps, lte_rsrp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt_metrics->execute([
             $monitor_id, $cpu, $ram, $hdd, $net,
@@ -674,7 +674,7 @@ try {
             $disk_io_read, $disk_io_write, $net_errors,
             $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
             $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
-            $ow_wifi_clients_count, $ow_conntrack_pct, $ow_net_ipv4_kbps, $ow_net_ipv6_kbps,
+            $ow_wifi_clients_count, $ow_conntrack_pct, $ow_net_ipv4_kbps, $ow_net_ipv6_kbps, $ow_lte_rsrp,
         ]);
     } catch (PDOException $e) {
         $metrics_error = $e->getMessage();

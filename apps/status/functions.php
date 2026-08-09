@@ -653,6 +653,24 @@ function bk_iface_has_errors(array $iface): bool {
     return ($rx + $tx) > 0;
 }
 
+/**
+ * Odstraní diakritiku, aby šel z názvu udělat slug do URL.
+ *
+ * iconv//TRANSLIT je na různých systémech nekonzistentní (a na některých
+ * OpenWrt/Alpine buildech chybí úplně), takže se česká písmena mapují
+ * explicitně - "Veřejný přehled" -> "verejny prehled".
+ */
+function bk_slug_ascii(string $text): string {
+    $map = [
+        'á'=>'a','č'=>'c','ď'=>'d','é'=>'e','ě'=>'e','í'=>'i','ň'=>'n','ó'=>'o','ř'=>'r',
+        'š'=>'s','ť'=>'t','ú'=>'u','ů'=>'u','ý'=>'y','ž'=>'z',
+        'Á'=>'a','Č'=>'c','Ď'=>'d','É'=>'e','Ě'=>'e','Í'=>'i','Ň'=>'n','Ó'=>'o','Ř'=>'r',
+        'Š'=>'s','Ť'=>'t','Ú'=>'u','Ů'=>'u','Ý'=>'y','Ž'=>'z',
+        'ä'=>'a','ö'=>'o','ü'=>'u','ß'=>'ss','ł'=>'l','ą'=>'a','ę'=>'e','ś'=>'s','ć'=>'c','ź'=>'z','ż'=>'z',
+    ];
+    return strtolower(strtr($text, $map));
+}
+
 function bk_num($value, string $unit = '', int $decimals = 0): string {
     if ($value === null || $value === '' || !is_numeric($value)) {
         return '—';

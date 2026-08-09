@@ -45,6 +45,44 @@ $stmt_monitors = $pdo->query("
 ");
 $monitors = $stmt_monitors->fetchAll();
 
+// --- Vlastní status stránka (?page=slug) ---------------------------------
+//
+// Stránka se svým výběrem monitorů; prázdný výběr znamená "všechny".
+// Skrytá stránka je dostupná jen přihlášenému adminovi - anonymní návštěvník
+// dostane stejnou odpověď jako u neexistujícího slugu, aby se existence
+// skrytých stránek nedala zjistit zkoušením adres.
+$bk_page_title_override = null;
+$bk_page_slug = trim((string)($_GET['page'] ?? ''));
+if ($bk_page_slug !== '') {
+    try {
+        $stmt_page = $pdo->prepare("SELECT title, description, is_public, monitor_ids FROM status_pages WHERE slug = ? LIMIT 1");
+        $stmt_page->execute([$bk_page_slug]);
+        $bk_page = $stmt_page->fetch();
+
+        if (!$bk_page || ((int)$bk_page['is_public'] !== 1 && !$is_admin)) {
+            http_response_code(404);
+            echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8">'
+                . '<title>' . htmlspecialchars(t('sp_not_found_title')) . '</title></head><body '
+                . 'style="background:#0f0f13;color:#fff;font-family:sans-serif;display:flex;'
+                . 'align-items:center;justify-content:center;height:100vh;margin:0">'
+                . '<div style="text-align:center"><h1>' . htmlspecialchars(t('sp_not_found_title')) . '</h1>'
+                . '<p style="color:#888">' . htmlspecialchars(t('sp_not_found_desc')) . '</p>'
+                . '<p><a href="./" style="color:#e61e2a">' . htmlspecialchars(t('sp_back_to_main')) . '</a></p>'
+                . '</div></body></html>';
+            exit;
+        }
+
+        $bk_page_title_override = $bk_page['title'];
+        $bk_page_ids = json_decode($bk_page['monitor_ids'] ?? '', true);
+        if (is_array($bk_page_ids) && !empty($bk_page_ids)) {
+            $bk_page_ids = array_map('intval', $bk_page_ids);
+            $monitors = array_values(array_filter($monitors, fn($m) => in_array((int)$m['id'], $bk_page_ids, true)));
+        }
+    } catch (Throwable $e) {
+        // Bez tabulky (stará DB) se parametr ignoruje a zobrazí se vše.
+    }
+}
+
 // Level 3 Metric Detail (?view=metric&monitor=X&metric=Y) - samostatná
 // stránka, vykreslí se a skončí request dřív, než začne cokoliv z běžného
 // dashboardu níže (drahé 30denní agregace apod. by se pro ni vůbec nehodily).
@@ -227,6 +265,11 @@ $avg_uptime_known = !empty($uptime_pct);
 $avg_uptime = $avg_uptime_known ? round(array_sum($uptime_pct) / count($uptime_pct), 2) : 0.0;
 
 $site_title = get_setting('site_title', 'Blood Kings');
+// Vlastní status stránka se hlásí svým názvem, ať návštěvník pozná, na co
+// se dívá (a nemyslí si, že vidí celou infrastrukturu).
+if ($bk_page_title_override !== null && $bk_page_title_override !== '') {
+    $site_title = $bk_page_title_override;
+}
 
 // Vlastní branding z nastavení administrace
 $custom_logo_url = trim(get_setting('custom_logo_url'));

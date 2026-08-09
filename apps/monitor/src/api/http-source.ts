@@ -37,6 +37,8 @@ const CHART_METRICS: {
   // historie se neukládala, takže Discord neměl žádný graf kromě odezvy.
   { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null },
   { key: 'mc_players', title: 'Hráči online', tone: 'memory', yMax: null },
+  // RSRP je v záporných dBm, takže žádný yMax - graf si rozsah určí z dat.
+  { key: 'lte_rsrp', title: 'Síla LTE signálu (RSRP)', tone: 'latency', yMax: null },
   { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: 120 },
 ];
 

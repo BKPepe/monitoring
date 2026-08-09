@@ -22,7 +22,8 @@
     "lint:sql": "php apps/status/tests/run_query_lint.php",
     "deadcode": "php apps/status/tests/find_dead_code.php",
     "perf": "php apps/status/tests/run_perf_check.php",
-    "test:react": "npm run test -w apps/monitor"
+    "test:react": "npm run test -w apps/monitor",
+    "check:bundle": "node apps/monitor/scripts/check-bundle-size.mjs"
   },
   "overrides": {
     "sharp": "^0.35.0",

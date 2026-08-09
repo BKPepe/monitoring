@@ -35,7 +35,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260806b');
+    define('BK_SCHEMA_VERSION', '20260808a');
 
     $bk_current_schema = false;
     try {
@@ -322,6 +322,9 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN zombie_count INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN fork_rate INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN temperature_c FLOAT DEFAULT NULL",
+        // Sila LTE signalu v case: ukazuje, jestli se spojeni zhorsuje
+        // (posunuta antena, pretizena bunka, pocasi). Driv byl jen snimek.
+        "ALTER TABLE vps_metrics ADD COLUMN lte_rsrp FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_total INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN conntrack_pct FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN net_ipv4_kbps FLOAT DEFAULT NULL",
@@ -500,6 +503,20 @@ try {
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE KEY `uniq_preset_name` (`name`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        // Verejne status stranky: vlastni vyber monitoru, slug a viditelnost.
+        // Drive existovala jedna natvrdo slozena stranka bez moznosti neco
+        // vybrat - odkaz na /status/ a nic vic.
+        "CREATE TABLE IF NOT EXISTS `status_pages` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `title` VARCHAR(120) NOT NULL,
+            `slug` VARCHAR(60) NOT NULL,
+            `description` VARCHAR(255) DEFAULT NULL,
+            `is_public` TINYINT(1) NOT NULL DEFAULT 1,
+            `monitor_ids` TEXT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_status_page_slug` (`slug`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "ALTER TABLE monitors ADD COLUMN preset_id INT NULL",
         "ALTER TABLE incidents ADD COLUMN monitor_id INT NULL",

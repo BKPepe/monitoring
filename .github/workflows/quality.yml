@@ -42,6 +42,12 @@ jobs:
       - name: Build všech workspace aplikací
         run: npm run build
 
+      # Prvni nacteni aplikace hlida rozpocet velikosti: jeden import na
+      # urovni modulu dokaze vratit knihovnu do vstupniho balíku a nikdo
+      # by si toho nevsiml, dokud si uzivatel nestezuje na pomale nacitani.
+      - name: Rozpočet velikosti buildu
+        run: npm run check:bundle
+
   php:
     name: PHP (testy, coverage, lint, mrtvý kód)
     runs-on: ubuntu-latest
