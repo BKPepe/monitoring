@@ -54,6 +54,8 @@ export interface ApiMonitor {
   maintenanceEnd?: string | null;
   monitoredProcesses?: string | null;
   presetId?: number | null;
+  latencyThresholdMs?: number | null;
+  latencyThresholdMins?: number;
   cpuThreshold?: number;
   ramThreshold?: number;
   hddThreshold?: number;

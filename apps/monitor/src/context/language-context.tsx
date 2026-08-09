@@ -1587,6 +1587,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Konec údržby musí být později než začátek.',
     en: 'Maintenance end must be later than its start.',
   },
+  'infra.latency_alert': { cs: 'Upozornit na zpomalení', en: 'Alert on slowdown' },
+  'infra.latency_off': { cs: 'vypnuto', en: 'off' },
+  'infra.latency_alert_hint': {
+    cs: 'Odezva v ms a doba v minutách. Upozornění přijde, až budou VŠECHNY kontroly v tom okně nad limitem — jedna pomalá odpověď je šum, ne incident. Prázdné pole = vypnuto.',
+    en: 'Latency in ms and a duration in minutes. The alert fires once EVERY check in that window is above the limit — a single slow response is noise, not an incident. Empty field = off.',
+  },
   'infra.preset': { cs: 'Preset metrik', en: 'Metric preset' },
   'infra.preset_none': { cs: 'Bez presetu (vlastní nastavení)', en: 'No preset (own settings)' },
   'infra.preset_hint': {

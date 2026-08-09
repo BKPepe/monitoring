@@ -106,6 +106,9 @@ export function InfrastructurePage() {
   // Preset: pojmenovaná sada metrik a prahů. Prázdné = monitor si drží
   // vlastní hodnoty (chování před zavedením presetů).
   const [presetId, setPresetId] = React.useState('');
+  // Prázdný práh = upozorňování na zpomalení vypnuté.
+  const [latencyThresholdMs, setLatencyThresholdMs] = React.useState('');
+  const [latencyThresholdMins, setLatencyThresholdMins] = React.useState('5');
   const [presets, setPresets] = React.useState<{ id: number; name: string; serviceType: string | null }[]>([]);
   React.useEffect(() => {
     fetch('/status/api.php?action=presets', { credentials: 'include' })
@@ -250,6 +253,8 @@ export function InfrastructurePage() {
       setMonitoredProcesses(mon.monitoredProcesses ?? '');
       setCpuThreshold(mon.cpuThreshold != null ? String(mon.cpuThreshold) : '90');
       setPresetId(mon.presetId != null ? String(mon.presetId) : '');
+      setLatencyThresholdMs(mon.latencyThresholdMs != null ? String(mon.latencyThresholdMs) : '');
+      setLatencyThresholdMins(mon.latencyThresholdMins != null ? String(mon.latencyThresholdMins) : '5');
       setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
       setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
       setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
@@ -386,6 +391,8 @@ export function InfrastructurePage() {
           rcon_password: rconPassword || null,
           monitored_processes: monitoredProcesses || null,
           preset_id: presetId === '' ? null : parseInt(presetId, 10),
+          latency_threshold_ms: latencyThresholdMs === '' ? null : parseInt(latencyThresholdMs, 10),
+          latency_threshold_mins: latencyThresholdMins,
           cpu_threshold: parseInt(cpuThreshold, 10) || 90,
           ram_threshold: parseInt(ramThreshold, 10) || 95,
           hdd_threshold: parseInt(hddThreshold, 10) || 90,
@@ -1202,6 +1209,36 @@ export function InfrastructurePage() {
                           />
                           {t('infra.sms_on_outage', 'Zasílat SMS notifikace při výpadku')}
                         </label>
+                      </div>
+
+                      <div className="pt-2 border-t border-border">
+                        <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                          {t('infra.latency_alert', 'Upozornit na zpomalení')}
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Input
+                            type="number"
+                            min={1}
+                            value={latencyThresholdMs}
+                            onChange={(e) => setLatencyThresholdMs(e.target.value)}
+                            placeholder={t('infra.latency_off', 'vypnuto')}
+                          />
+                          <Input
+                            type="number"
+                            min={1}
+                            max={1440}
+                            value={latencyThresholdMins}
+                            onChange={(e) => setLatencyThresholdMins(e.target.value)}
+                            disabled={latencyThresholdMs === ''}
+                            placeholder="5"
+                          />
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          {t(
+                            'infra.latency_alert_hint',
+                            'Odezva v ms a doba v minutách. Upozornění přijde, až budou VŠECHNY kontroly v tom okně nad limitem — jedna pomalá odpověď je šum, ne incident. Prázdné pole = vypnuto.'
+                          )}
+                        </p>
                       </div>
 
                       <div className="pt-2 border-t border-border">

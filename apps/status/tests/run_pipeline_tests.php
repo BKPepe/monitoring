@@ -284,6 +284,43 @@ check(
     96.667
 );
 
+// --- Upozorneni na zhorsenou odezvu --------------------------------------
+//
+// Prah je zamerne prisny: nad limitem musi byt KAZDA kontrola v okne, ne jen
+// prumer. Alert, ktery houka na jednu pomalou odpoved, se nauci kazdy
+// ignorovat - a pak prehlédne i ten skutecny.
+$lat_src = file_get_contents(__DIR__ . '/../functions.php');
+
+check_true(
+    'vyhodnoceni bere minimum, ne jen prumer',
+    str_contains($lat_src, '$degraded = $min > $threshold')
+);
+check_true(
+    'do okna jdou jen uspesne kontroly se zmerenou odezvou',
+    str_contains($lat_src, "status = 'up'") && str_contains($lat_src, 'response_time > 0')
+);
+
+// Model stejneho rozhodovani, jake dela SQL + PHP dohromady.
+$decide = function (array $samples, int $threshold, bool $alert_sent): string {
+    $samples = array_values(array_filter($samples, fn($v) => $v !== null && $v > 0));
+    if (count($samples) < 2) {
+        return 'ok';
+    }
+    $degraded = min($samples) > $threshold;
+    if ($degraded && !$alert_sent) return 'degraded';
+    if (!$degraded && $alert_sent) return 'recovered';
+    return 'ok';
+};
+
+check('trvale pomale = upozorneni', $decide([900, 950, 880], 500, false), 'degraded');
+check('jedna pomala odpoved neposila nic', $decide([80, 900, 75], 500, false), 'ok');
+check('jedno mereni na rozhodnuti nestaci', $decide([900], 500, false), 'ok');
+check('opakovane se nehlasi znovu', $decide([900, 950], 500, true), 'ok');
+check('navrat pod limit se ohlasi', $decide([90, 85], 500, true), 'recovered');
+check('bez odeslaneho alertu se navrat nehlasi', $decide([90, 85], 500, false), 'ok');
+// Prah presne na hranici: rovnost neni prekroceni.
+check('hodnota rovna prahu neni zpomaleni', $decide([500, 500], 500, false), 'ok');
+
 $failed = bk_test_report('sběr, e-maily, notifikace');
 // Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
 if (!defined('BK_COVERAGE_RUN')) {

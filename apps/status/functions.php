@@ -644,6 +644,70 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
  *                  a včerejšek, což stačí při běhu každou minutu).
  * @return int Počet zapsaných/aktualizovaných dnů.
  */
+/**
+ * Vyhodnotí, jestli je odezva monitoru trvale zhoršená.
+ *
+ * Monitoring dosud uměl říct jen „služba je dole". Web, který zpomalil
+ * z 80 ms na 900 ms a tam zůstal, byl přitom pořád „up" a nikdo se to
+ * nedozvěděl.
+ *
+ * Podmínka je záměrně přísná: PRŮMĚR i VŠECHNY kontroly ve sledovaném okně
+ * musí být nad prahem. Jedna pomalá odpověď (přetížený DNS resolver,
+ * náhodný packet loss) je šum, ne incident - a alert, který houká na šum,
+ * se během týdne naučí každý ignorovat.
+ *
+ * @return array{state: string, avg_ms: ?float, checks: int}
+ *         state: 'degraded' | 'recovered' | 'ok'
+ */
+function bk_evaluate_latency(PDO $pdo, array $monitor, bool $alert_already_sent): array {
+    $threshold = isset($monitor['latency_threshold_ms']) && $monitor['latency_threshold_ms'] !== null
+        ? (int)$monitor['latency_threshold_ms']
+        : 0;
+    if ($threshold <= 0) {
+        return ['state' => 'ok', 'avg_ms' => null, 'checks' => 0];
+    }
+
+    $window = max(1, (int)($monitor['latency_threshold_mins'] ?? 5));
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) AS checks,
+                   AVG(response_time) AS avg_ms,
+                   MIN(response_time) AS min_ms
+            FROM monitor_logs
+            WHERE monitor_id = ?
+              AND status = 'up'
+              AND response_time IS NOT NULL
+              AND response_time > 0
+              AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+        ");
+        $stmt->execute([(int)$monitor['id'], $window]);
+        $row = $stmt->fetch();
+    } catch (Throwable $e) {
+        return ['state' => 'ok', 'avg_ms' => null, 'checks' => 0];
+    }
+
+    $checks = (int)($row['checks'] ?? 0);
+    // Aspoň dvě měření - z jednoho se trvalost poznat nedá.
+    if ($checks < 2) {
+        return ['state' => 'ok', 'avg_ms' => null, 'checks' => $checks];
+    }
+
+    $avg = (float)$row['avg_ms'];
+    $min = (float)$row['min_ms'];
+    $degraded = $min > $threshold;
+
+    if ($degraded && !$alert_already_sent) {
+        return ['state' => 'degraded', 'avg_ms' => round($avg, 1), 'checks' => $checks];
+    }
+    if (!$degraded && $alert_already_sent) {
+        // Zotavení se hlásí, jakmile se aspoň jedna kontrola vejde pod práh -
+        // jinak by upozornění „trvá to dál" viselo i po návratu do normálu.
+        return ['state' => 'recovered', 'avg_ms' => round($avg, 1), 'checks' => $checks];
+    }
+    return ['state' => 'ok', 'avg_ms' => round($avg, 1), 'checks' => $checks];
+}
+
 function bk_rollup_daily_uptime(PDO $pdo, int $days = 2): int {
     $days = max(1, min(400, $days));
     try {
@@ -4125,6 +4189,13 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     } elseif ($new_status === 'vps_warning') {
         $status_text = 'VPS METRIKY - VAROVÁNÍ';
         $emoji = '⚠️';
+    } elseif ($new_status === 'latency_degraded') {
+        // Služba běží, jen pomalu - proto varování, ne výpadek.
+        $status_text = 'ZPOMALENÍ (služba odpovídá pomalu)';
+        $emoji = '🐢';
+    } elseif ($new_status === 'latency_recovered') {
+        $status_text = 'ODEZVA ZPĚT V NORMÁLU';
+        $emoji = '🟢';
     }
     // Načtení všech příjemců notifikací (odběratelé + administrátoři bez přímého nastavení odběru)
     $stmt = $pdo->prepare("

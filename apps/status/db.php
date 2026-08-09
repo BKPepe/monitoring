@@ -35,7 +35,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260809a');
+    define('BK_SCHEMA_VERSION', '20260809b');
 
     $bk_current_schema = false;
     try {
@@ -540,6 +540,14 @@ try {
             UNIQUE KEY `uniq_status_page_slug` (`slug`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "ALTER TABLE monitors ADD COLUMN preset_id INT NULL",
+
+        // Upozorneni na zhorsenou odezvu: dosud slo poznat jen vypadek, ne
+        // to, ze se sluzba vlece. NULL = vypnuto (vychozi), aby se stavajici
+        // monitory nezacaly hlasit samy od sebe.
+        "ALTER TABLE monitors ADD COLUMN latency_threshold_ms INT NULL",
+        // Kolik minut musi zhorseni trvat, nez se posle upozorneni - jedna
+        // pomala kontrola je sum, ne problem.
+        "ALTER TABLE monitors ADD COLUMN latency_threshold_mins INT NOT NULL DEFAULT 5",
         "ALTER TABLE incidents ADD COLUMN monitor_id INT NULL",
         "ALTER TABLE incidents ADD COLUMN acknowledged_by VARCHAR(64) NULL",
         "ALTER TABLE incidents ADD COLUMN acknowledged_at DATETIME NULL",

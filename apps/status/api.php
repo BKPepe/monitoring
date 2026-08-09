@@ -234,6 +234,7 @@ if ($action === 'monitors') {
             $stmt2 = $pdo->query("
                 SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
                        maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold, preset_id,
+                       latency_threshold_ms, latency_threshold_mins,
                        body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
                        (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
                        (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
@@ -256,6 +257,9 @@ if ($action === 'monitors') {
                 $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
                 $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
                 $monitors[$mid]['presetId'] = $r['preset_id'] !== null ? (int)$r['preset_id'] : null;
+                // null = upozornovani na zpomaleni je vypnute
+                $monitors[$mid]['latencyThresholdMs'] = $r['latency_threshold_ms'] !== null ? (int)$r['latency_threshold_ms'] : null;
+                $monitors[$mid]['latencyThresholdMins'] = (int)($r['latency_threshold_mins'] ?? 5);
                 $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
                 $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
                 $monitors[$mid]['sqUsername'] = $r['sq_username'];
@@ -337,6 +341,18 @@ if ($action === 'save_monitor') {
     $maintenance_end = ($maintenance === 1 && !empty($input['maintenance_end'])) ? $input['maintenance_end'] : null;
 
     $monitored_processes = !empty($input['monitored_processes']) ? trim($input['monitored_processes']) : null;
+    // Preset i prahy zpomaleni: prazdna hodnota znamena "nenastaveno" (NULL),
+    // ne nulu. $preset_id se driv vubec neprirazoval, takze kazde ulozeni
+    // monitoru jeho preset tise smazalo.
+    $preset_id = isset($input['preset_id']) && $input['preset_id'] !== null && $input['preset_id'] !== ''
+        ? (int)$input['preset_id']
+        : null;
+    $latency_threshold_ms = isset($input['latency_threshold_ms']) && $input['latency_threshold_ms'] !== null && $input['latency_threshold_ms'] !== ''
+        ? max(1, (int)$input['latency_threshold_ms'])
+        : null;
+    $latency_threshold_mins = isset($input['latency_threshold_mins']) && $input['latency_threshold_mins'] !== ''
+        ? max(1, min(1440, (int)$input['latency_threshold_mins']))
+        : 5;
     $cpu_threshold = !empty($input['cpu_threshold']) ? (int)$input['cpu_threshold'] : 90;
     $ram_threshold = !empty($input['ram_threshold']) ? (int)$input['ram_threshold'] : 95;
     $hdd_threshold = !empty($input['hdd_threshold']) ? (int)$input['hdd_threshold'] : 90;
@@ -372,10 +388,10 @@ if ($action === 'save_monitor') {
             // hodnotu - prázdné pole ve formuláři pro editaci nesmí smazat už uložené heslo.
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, latency_threshold_ms = ?, latency_threshold_mins = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
             $agent_key = bin2hex(random_bytes(16));
@@ -385,10 +401,10 @@ if ($action === 'save_monitor') {
                 $asset_id = (int)$pdo->lastInsertId();
             }
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, latency_threshold_ms, latency_threshold_mins, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
             $new_id = (int)$pdo->lastInsertId();
             echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }

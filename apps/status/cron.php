@@ -643,6 +643,48 @@ foreach ($monitors as $monitor) {
         $stmt_up->execute([$details, $id]);
         echo strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
     }
+
+    // --- Trvale zhoršená odezva ------------------------------------------
+    //
+    // Běží až po zápisu logu, aby do okna spadla i právě proběhlá kontrola.
+    // Vyhodnocuje se jen u běžících služeb - u těch, co jsou dole, je
+    // "pomalá odpověď" nesmysl a upozornění na výpadek už odešlo.
+    if ($new_status === 'up') {
+        $lat_details = json_decode($details ?: '{}', true);
+        if (!is_array($lat_details)) {
+            $lat_details = [];
+        }
+        $lat_alert_sent = !empty($lat_details['latency_alert_sent']);
+        $lat = bk_evaluate_latency($pdo, $monitor, $lat_alert_sent);
+
+        if ($lat['state'] === 'degraded' || $lat['state'] === 'recovered') {
+            $lat_details['latency_alert_sent'] = ($lat['state'] === 'degraded');
+            // Sem se dostaneme jen s nastavenym prahem (bk_evaluate_latency
+            // vraci 'ok', kdyz je NULL), takze zadny fallback nema smysl.
+            $threshold_ms = (int)$monitor['latency_threshold_ms'];
+            $window_mins = (int)($monitor['latency_threshold_mins'] ?? 5);
+
+            if ($lat['state'] === 'degraded') {
+                $lat_msg = sprintf(
+                    "Odezva '%s' je %s ms a drží se nad limitem %d ms už %d minut (%d kontrol). Služba odpovídá, ale výrazně pomaleji než obvykle.",
+                    $name, $lat['avg_ms'], $threshold_ms, $window_mins, $lat['checks']
+                );
+                log_monitor_event($pdo, $id, $name, $type, 'latency_degraded', $lat_msg);
+            } else {
+                $lat_msg = sprintf(
+                    "Odezva '%s' se vrátila pod limit %d ms (aktuálně průměr %s ms).",
+                    $name, $threshold_ms, $lat['avg_ms']
+                );
+                log_monitor_event($pdo, $id, $name, $type, 'latency_recovered', $lat_msg);
+            }
+
+            trigger_notifications($pdo, $monitor, 'latency_' . $lat['state'], $lat_msg);
+
+            $stmt_lat = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
+            $stmt_lat->execute([json_encode($lat_details, JSON_UNESCAPED_UNICODE), $id]);
+            echo "  ODEZVA -> " . strtoupper($lat['state']) . " ({$lat['avg_ms']} ms)\n";
+        }
+    }
 }
 
 // Denní souhrny se musí přepočítat PŘED mazáním - jinak by se data, která
