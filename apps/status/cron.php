@@ -645,6 +645,26 @@ foreach ($monitors as $monitor) {
     }
 }
 
+// Denní souhrny se musí přepočítat PŘED mazáním - jinak by se data, která
+// se za okamžik smažou, do dlouhodobé historie nikdy nedostala.
+//
+// Poprvé se prochází celá dosavadní retence (31 dní), aby se nezahodila
+// historie, která v DB už je; potom stačí posledních 5 dnů, což pokryje
+// i výpadek cronu na pár dní. Příznak drží v settings, ne v db.php -
+// tam funkce ještě není načtená (functions.php se includuje až po něm).
+$backfill_done = get_setting('uptime_daily_backfilled', '');
+$rollup_days = $backfill_done === '1' ? 5 : 31;
+$rolled = bk_rollup_daily_uptime($pdo, $rollup_days);
+if ($backfill_done !== '1') {
+    try {
+        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('uptime_daily_backfilled', '1') ON DUPLICATE KEY UPDATE key_value = '1'")
+            ->execute();
+    } catch (Throwable $e) {
+        // Bez priznaku se backfill priste zopakuje - je idempotentni.
+    }
+}
+echo "Denní souhrny dostupnosti: {$rolled} zápisů (okno {$rollup_days} dní).\n";
+
 // Vyčištění starých logů (starších než 30 dní) kvůli úspoře místa v DB
 try {
     $pdo->exec("DELETE FROM monitor_logs WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");

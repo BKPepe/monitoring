@@ -230,6 +230,60 @@ check_false('agent_key se neuklada', array_key_exists('agent_key', $result));
 check_false('nevalidni nazev se neuklada', array_key_exists('bad key!', $result));
 check_false('prilis velke pole se neuklada', array_key_exists('huge', $result));
 
+// --- Denni agregace dostupnosti ------------------------------------------
+//
+// SLA za dlouha obdobi se pocita z uptime_daily, protoze monitor_logs se
+// mazou po 30 dnech. Testuje se samotny vypocet a poradi zdroju - bez DB,
+// nad modelovymi souhrny.
+$agg_src = file_get_contents(__DIR__ . '/../functions.php');
+
+check_true(
+    'rollup bezi pred mazanim logu',
+    (function () {
+        $cron = file_get_contents(__DIR__ . '/../cron.php');
+        $rollup_pos = strpos($cron, 'bk_rollup_daily_uptime');
+        $delete_pos = strpos($cron, 'DELETE FROM monitor_logs');
+        // Kdyby se mazalo driv, prisla by se data prave o ten den, ktery
+        // se chysta zmizet - presne tomu ma agregace zabranit.
+        return $rollup_pos !== false && $delete_pos !== false && $rollup_pos < $delete_pos;
+    })()
+);
+
+check_true(
+    'rollup ignoruje udrzbu a neznamy stav',
+    str_contains($agg_src, "AND status IN ('up', 'down', 'warning')")
+);
+
+check_true(
+    'rollup je idempotentni (ON DUPLICATE KEY UPDATE)',
+    str_contains($agg_src, 'ON DUPLICATE KEY UPDATE')
+);
+
+// Vypocet dostupnosti ze souhrnu: stejna matematika jako v SQL.
+$uptime_from_days = function (array $days): ?float {
+    $total = array_sum(array_column($days, 'total'));
+    if ($total <= 0) {
+        return null;
+    }
+    return round(array_sum(array_column($days, 'up')) / $total * 100, 3);
+};
+
+check('bez dat je dostupnost null, ne 100 %', $uptime_from_days([]), null);
+check('same nuly = null, ne delení nulou', $uptime_from_days([['total' => 0, 'up' => 0]]), null);
+check(
+    'soucet pres dny odpovida podilu kontrol',
+    $uptime_from_days([['total' => 1440, 'up' => 1440], ['total' => 1440, 'up' => 1430]]),
+    99.653
+);
+check(
+    'cely den vypadku snizi mesic spravne',
+    $uptime_from_days(array_merge(
+        array_fill(0, 29, ['total' => 1440, 'up' => 1440]),
+        [['total' => 1440, 'up' => 0]]
+    )),
+    96.667
+);
+
 $failed = bk_test_report('sběr, e-maily, notifikace');
 // Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
 if (!defined('BK_COVERAGE_RUN')) {

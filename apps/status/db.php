@@ -35,7 +35,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260808a');
+    define('BK_SCHEMA_VERSION', '20260809a');
 
     $bk_current_schema = false;
     try {
@@ -325,6 +325,27 @@ try {
         // Sila LTE signalu v case: ukazuje, jestli se spojeni zhorsuje
         // (posunuta antena, pretizena bunka, pocasi). Driv byl jen snimek.
         "ALTER TABLE vps_metrics ADD COLUMN lte_rsrp FLOAT DEFAULT NULL",
+
+        // Denni souhrn dostupnosti: jeden radek na monitor a den.
+        //
+        // monitor_logs se maze po 30 dnech (~3 miliony radku za rok by na
+        // sdilenem hostingu neunesla), takze SLA za delsi obdobi nemelo z ceho
+        // pocitat - sloupec "rok" ukazoval totez co "30 dni". Agregace prezije
+        // mazani a pro SLA nese presne to, co je potreba: pomer uspesnych
+        // kontrol. Podrobnosti o vypadcich zustavaji v monitor_events, ktere se
+        // nemazou vubec.
+        "CREATE TABLE IF NOT EXISTS `uptime_daily` (
+            `monitor_id` INT NOT NULL,
+            `day` DATE NOT NULL,
+            `checks_total` INT NOT NULL DEFAULT 0,
+            `checks_up` INT NOT NULL DEFAULT 0,
+            `checks_down` INT NOT NULL DEFAULT 0,
+            `checks_warning` INT NOT NULL DEFAULT 0,
+            `avg_response_ms` FLOAT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`monitor_id`, `day`),
+            KEY `idx_uptime_daily_day` (`day`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_total INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN conntrack_pct FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN net_ipv4_kbps FLOAT DEFAULT NULL",

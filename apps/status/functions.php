@@ -627,6 +627,87 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
  * volaly funkci calculate_uptime(), která v kódu vůbec neexistovala, a obě
  * stránky proto končily fatální chybou.
  */
+/**
+ * Přepočte denní souhrny dostupnosti z monitor_logs.
+ *
+ * Volá se z cronu TĚSNĚ PŘED mazáním starých logů - jinak by se data, která
+ * se právě chystají zmizet, do souhrnu nikdy nedostala.
+ *
+ * Přepisuje celé dny (INSERT ... ON DUPLICATE KEY UPDATE), takže opakované
+ * spuštění nic nezdvojí a dnešek se v průběhu dne postupně zpřesňuje.
+ *
+ * Do jmenovatele jdou jen skutečná měření - 'maintenance' a 'unknown' se
+ * nepočítají, protože plánovaná odstávka není výpadek a nezměřený stav
+ * není měření.
+ *
+ * @param int $days Kolik posledních dnů přepočítat (výchozí 2 = dnešek
+ *                  a včerejšek, což stačí při běhu každou minutu).
+ * @return int Počet zapsaných/aktualizovaných dnů.
+ */
+function bk_rollup_daily_uptime(PDO $pdo, int $days = 2): int {
+    $days = max(1, min(400, $days));
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO uptime_daily (monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms)
+            SELECT monitor_id,
+                   DATE(checked_at) AS day,
+                   COUNT(*) AS checks_total,
+                   SUM(status = 'up') AS checks_up,
+                   SUM(status = 'down') AS checks_down,
+                   SUM(status = 'warning') AS checks_warning,
+                   AVG(NULLIF(response_time, 0)) AS avg_response_ms
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+              AND status IN ('up', 'down', 'warning')
+            GROUP BY monitor_id, DATE(checked_at)
+            ON DUPLICATE KEY UPDATE
+                checks_total = VALUES(checks_total),
+                checks_up = VALUES(checks_up),
+                checks_down = VALUES(checks_down),
+                checks_warning = VALUES(checks_warning),
+                avg_response_ms = VALUES(avg_response_ms)
+        ");
+        $stmt->execute([$days]);
+        return $stmt->rowCount();
+    } catch (Throwable $e) {
+        // Bez tabulky (stará DB) se souhrn přeskočí; SLA pak stále funguje
+        // nad syrovými logy v rámci jejich retence.
+        error_log('[rollup] uptime_daily skipped: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Dostupnost za období z denních souhrnů.
+ *
+ * Vrací null, když pro dané okno neexistuje ani jedno měření - to je něco
+ * jiného než 100 % a UI to musí umět odlišit.
+ *
+ * @return array{pct: ?float, checks: int, since: ?string}
+ */
+function bk_uptime_from_rollup(PDO $pdo, int $monitor_id, int $days): array {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT SUM(checks_total) AS total, SUM(checks_up) AS up_count, MIN(day) AS since
+            FROM uptime_daily
+            WHERE monitor_id = ? AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+        ");
+        $stmt->execute([$monitor_id, max(1, $days)]);
+        $row = $stmt->fetch();
+        $total = (int)($row['total'] ?? 0);
+        if ($total <= 0) {
+            return ['pct' => null, 'checks' => 0, 'since' => null];
+        }
+        return [
+            'pct' => round(((int)$row['up_count'] / $total) * 100, 3),
+            'checks' => $total,
+            'since' => $row['since'],
+        ];
+    } catch (Throwable $e) {
+        return ['pct' => null, 'checks' => 0, 'since' => null];
+    }
+}
+
 function bk_uptime_30d(PDO $pdo, int $monitor_id, int $days = 30): ?float {
     try {
         $stmt = $pdo->prepare("

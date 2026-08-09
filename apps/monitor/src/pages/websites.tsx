@@ -31,7 +31,17 @@ export function WebsitesPage() {
   const [saving, setSaving] = useState(false);
   const [slaGoal, setSlaGoal] = useState<number | null>(null);
   const [slaByMonitor, setSlaByMonitor] = useState<
-    Record<number, { sla7: number | null; sla30: number | null; sla365: number | null; measuredSince: string | null }>
+    Record<
+      number,
+      {
+        sla7: number | null;
+        sla30: number | null;
+        sla365: number | null;
+        measuredSince: string | null;
+        /** Kolik dní historie denních souhrnů skutečně existuje. */
+        longTermDays?: number;
+      }
+    >
   >({});
 
   // SLA okna se berou z lehkého cachovaného endpointu - sla_report s plnými
@@ -464,7 +474,14 @@ export function WebsitesPage() {
                         <div className="grid grid-cols-3 gap-1.5 mt-0.5">
                           {cell(t('websites.sla_7d', '7 dní'), sla.sla7)}
                           {cell(t('websites.sla_30d', '30 dní'), sla.sla30)}
-                          {cell(t('websites.sla_365d', 'rok'), sla.sla365)}
+                          {/* Dokud není historie delší než rok, píše se skutečný
+                              rozsah - "rok" u 47 dnů dat by byl výmysl. */}
+                          {cell(
+                            sla.longTermDays != null && sla.longTermDays > 0 && sla.longTermDays < 365
+                              ? t('websites.sla_since', { days: sla.longTermDays }, `${sla.longTermDays} dní`)
+                              : t('websites.sla_365d', 'rok'),
+                            sla.sla365
+                          )}
                         </div>
                       </div>
                     );

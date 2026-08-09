@@ -2024,34 +2024,63 @@ if ($action === 'websites_overview') {
             }
         }
 
-        // Jediný průchod ročním oknem; kratší okna přes podmíněné sumy.
-        // 'unknown'/'paused' se nepočítají ani do jmenovatele - nejsou to
-        // měření, jen přiznaná díra ve sběru.
+        // Krátká okna ze syrových logů (přesná, data tam jsou), dlouhá okna
+        // z denních souhrnů - monitor_logs se maže po 30 dnech, takže roční
+        // hodnota z nich dřív vycházela shodná s třicetidenní a tvrdila
+        // dostupnost za rok, kterou nikdo neměřil.
         $stmt = $pdo->query("
             SELECT monitor_id,
                    SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS up7,
                    SUM(status IN ('up','down','warning') AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS tot7,
                    SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))  AS up30,
                    SUM(status IN ('up','down','warning') AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))  AS tot30,
-                   SUM(status = 'up')                                                     AS up365,
-                   SUM(status IN ('up','down','warning'))                                 AS tot365,
                    MIN(checked_at)                                                        AS measured_since
             FROM monitor_logs
-            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 365 DAY)
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+              AND status IN ('up','down','warning')
             GROUP BY monitor_id
         ");
         $sla = [];
+        $pct = function ($up, $tot) {
+            // Okno bez jediného měření = null, ne vymyšlených 100 %.
+            return (int)$tot > 0 ? round((int)$up / (int)$tot * 100, 3) : null;
+        };
         while ($row = $stmt->fetch()) {
-            $pct = function ($up, $tot) {
-                // Okno bez jediného měření = null, ne vymyšlených 100 %.
-                return (int)$tot > 0 ? round((int)$up / (int)$tot * 100, 3) : null;
-            };
             $sla[(int)$row['monitor_id']] = [
                 'sla7' => $pct($row['up7'], $row['tot7']),
                 'sla30' => $pct($row['up30'], $row['tot30']),
-                'sla365' => $pct($row['up365'], $row['tot365']),
+                'sla365' => null,
                 'measuredSince' => $row['measured_since'],
+                'longTermDays' => 0,
             ];
+        }
+
+        // Dlouhá okna z uptime_daily. Vrací se i skutečná délka historie,
+        // aby UI mohlo říct "za 47 dní" místo aby předstíralo rok.
+        try {
+            $stmt_long = $pdo->query("
+                SELECT monitor_id,
+                       SUM(checks_total) AS total,
+                       SUM(checks_up) AS up_count,
+                       MIN(day) AS since,
+                       DATEDIFF(CURDATE(), MIN(day)) + 1 AS days_covered
+                FROM uptime_daily
+                WHERE day >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                GROUP BY monitor_id
+            ");
+            foreach ($stmt_long->fetchAll() as $lrow) {
+                $mid = (int)$lrow['monitor_id'];
+                if (!isset($sla[$mid])) {
+                    $sla[$mid] = ['sla7' => null, 'sla30' => null, 'sla365' => null, 'measuredSince' => null, 'longTermDays' => 0];
+                }
+                $sla[$mid]['sla365'] = $pct($lrow['up_count'], $lrow['total']);
+                $sla[$mid]['longTermDays'] = (int)$lrow['days_covered'];
+                if (empty($sla[$mid]['measuredSince']) && !empty($lrow['since'])) {
+                    $sla[$mid]['measuredSince'] = $lrow['since'];
+                }
+            }
+        } catch (Throwable $e) {
+            // Bez tabulky souhrnů zůstává dlouhé okno null - viditelně prázdné.
         }
 
         $data = [
