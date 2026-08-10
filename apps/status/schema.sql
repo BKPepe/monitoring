@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS `users` (
   `whatsapp_apikey` VARCHAR(100) DEFAULT NULL,
   `sms_notifications` TINYINT(1) DEFAULT 0,
   `whatsapp_notifications` TINYINT(1) DEFAULT 0,
+  `email_lang` VARCHAR(5) DEFAULT NULL,
+  `alerts_read_log_id` INT DEFAULT 0, -- do kterého monitor_logs.id má uživatel upozornění přečtená -- 'cs'/'en'; NULL = globální nastavení email_lang
   `role` VARCHAR(20) DEFAULT 'user',
   `oauth_provider` VARCHAR(50) DEFAULT NULL,
   `oauth_id` VARCHAR(100) DEFAULT NULL,
@@ -119,9 +121,9 @@ CREATE TABLE IF NOT EXISTS `monitor_logs` (
 CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `monitor_id` INT NOT NULL,
-  `cpu_usage` FLOAT NOT NULL, -- v %
-  `ram_usage` FLOAT NOT NULL, -- v %
-  `hdd_usage` FLOAT NOT NULL, -- v %
+  `cpu_usage` FLOAT DEFAULT NULL, -- v %; NULL = zdroj hodnotu nevrací (žádné vymyšlené nuly)
+  `ram_usage` FLOAT DEFAULT NULL, -- v %
+  `hdd_usage` FLOAT DEFAULT NULL, -- v %
   `net_usage` FLOAT DEFAULT NULL, -- v KB/s (RX+TX), NULL pokud agent síť nehlásí
   `load_avg_1` FLOAT DEFAULT NULL, -- Load average (1 min)
   `load_avg_5` FLOAT DEFAULT NULL, -- Load average (5 min)
@@ -253,6 +255,7 @@ CREATE TABLE IF NOT EXISTS `agent_actions` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `monitor_id` INT NOT NULL,
   `action_type` VARCHAR(50) NOT NULL,
+  `service_name` VARCHAR(64) DEFAULT NULL, -- jen pro restart_service
   `status` VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'sent', 'executed', 'failed'
   `result_message` TEXT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

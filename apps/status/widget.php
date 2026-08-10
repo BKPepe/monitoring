@@ -20,9 +20,13 @@ if (!$monitor) {
 }
 
 $status = $monitor['status'];
-$uptime = calculate_uptime($pdo, $mid, 30);
+
+// Dřív se tu volala calculate_uptime(), která v kódu vůbec neexistovala -
+// widget proto vracel fatální chybu pro každý existující monitor.
+$uptime = bk_uptime_30d($pdo, $mid);
 $details = !empty($monitor['last_details']) ? json_decode($monitor['last_details'], true) : [];
-$resp = $details['response_time'] ?? 0;
+// Nezmerena odezva zustava null; sablona nize ukaze pomlcku.
+$resp = $details['response_time'] ?? null;
 
 $dot_color = '#2ec4b6';
 $status_label = 'V PROVOZU';
@@ -57,11 +61,11 @@ if ($status === 'down') {
             <div class="dot"></div>
             <div>
                 <div class="title"><?php echo htmlspecialchars($monitor['name']); ?></div>
-                <div class="subtitle"><?php echo $status_label; ?> • <?php echo $resp; ?> ms</div>
+                <div class="subtitle"><?php echo $status_label; ?> • <?php echo bk_num($resp, ' ms'); ?></div>
             </div>
         </div>
         <div class="stat">
-            <div class="val"><?php echo number_format($uptime, 2, ',', ' '); ?>%</div>
+            <div class="val"><?php echo $uptime === null ? '—' : number_format($uptime, 2, ',', ' ') . '%'; ?></div>
             <div class="label">30d Uptime</div>
         </div>
     </div>

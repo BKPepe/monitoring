@@ -14,10 +14,11 @@ export function InsightsPage() {
   useEffect(() => {
     let active = true;
 
-    appApi.getMonitors()
+    appApi
+      .getMonitors()
       .then((rows) => {
         if (!active) return;
-        const list = Array.isArray(rows) ? rows : (rows as any)?.monitors ?? [];
+        const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
         setMonitors(list);
       })
       .catch(() => {})
@@ -25,7 +26,9 @@ export function InsightsPage() {
         if (active) setLoading(false);
       });
 
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   const serverAgents = monitors.filter((m) => {
@@ -44,13 +47,19 @@ export function InsightsPage() {
     );
   });
 
-  const highDiskMonitor = serverAgents.length > 0
-    ? serverAgents.reduce((prev, current) => ((current.hdd ?? 0) > (prev?.hdd ?? 0) ? current : prev), serverAgents[0])
-    : null;
+  // Do souboje o "nejvyšší" jdou jen stroje, které tu metriku opravdu
+  // hlásí. Dřív se null převáděl na nulu a tiše soutěžil s naměřenými daty.
+  const withDisk = serverAgents.filter((m) => typeof m.hdd === 'number');
+  const highDiskMonitor =
+    withDisk.length > 0
+      ? withDisk.reduce((prev, cur) => ((cur.hdd as number) > (prev.hdd as number) ? cur : prev))
+      : null;
 
-  const highCpuMonitor = serverAgents.length > 0
-    ? serverAgents.reduce((prev, current) => ((current.cpu ?? 0) > (prev?.cpu ?? 0) ? current : prev), serverAgents[0])
-    : null;
+  const withCpu = serverAgents.filter((m) => typeof m.cpu === 'number');
+  const highCpuMonitor =
+    withCpu.length > 0
+      ? withCpu.reduce((prev, cur) => ((cur.cpu as number) > (prev.cpu as number) ? cur : prev))
+      : null;
 
   const httpMonitors = monitors.filter((m) => {
     const type = (m.type || '').toLowerCase();
@@ -61,13 +70,19 @@ export function InsightsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('insights.title', 'AI & Inteligentní Analýza (Insights)')}</h1>
-          <p className="text-muted-foreground text-sm">{t('insights.subtitle', 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.')}</p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {t('insights.title', 'AI & Inteligentní Analýza (Insights)')}
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            {t('insights.subtitle', 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.')}
+          </p>
         </div>
       </div>
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">{t('insights.loading', 'Analytický engine vyhodnocuje metriky infrastruktury...')}</p>
+        <p className="text-muted-foreground text-sm">
+          {t('insights.loading', 'Analytický engine vyhodnocuje metriky infrastruktury...')}
+        </p>
       ) : (
         <>
           <div className="grid gap-4 md:grid-cols-3">
@@ -81,11 +96,15 @@ export function InsightsPage() {
                     </div>
                     <div>
                       <h3 className="font-bold text-sm">{t('insights.disk_pred', 'Predikce Disku (Servery & VPS)')}</h3>
-                      <p className="text-xs text-muted-foreground">{t('insights.disk_pred_desc', 'Lineární regrese (7 dnů)')}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {t('insights.disk_pred_desc', 'Lineární regrese (7 dnů)')}
+                      </p>
                     </div>
                   </div>
-                  <Badge variant={highDiskMonitor && highDiskMonitor.hdd >= 75 ? "warning" : "up"}>
-                    {highDiskMonitor && highDiskMonitor.hdd >= 75 ? t('common.warning', 'Varování') : t('common.healthy', 'V pořádku')}
+                  <Badge variant={highDiskMonitor && highDiskMonitor.hdd >= 75 ? 'warning' : 'up'}>
+                    {highDiskMonitor && highDiskMonitor.hdd >= 75
+                      ? t('common.warning', 'Varování')
+                      : t('common.healthy', 'V pořádku')}
                   </Badge>
                 </div>
 
@@ -93,18 +112,31 @@ export function InsightsPage() {
                   <div className="space-y-2 text-xs">
                     <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
                       <p className="font-semibold text-foreground text-sm mb-0.5">{highDiskMonitor.name}</p>
-                      <p className="text-muted-foreground font-mono">{t('common.target', 'Cíl')}: {highDiskMonitor.target} · {t('common.hdd', 'Využití disku')}: <strong className="text-amber-400">{highDiskMonitor.hdd} %</strong></p>
+                      <p className="text-muted-foreground font-mono">
+                        {t('common.target', 'Cíl')}: {highDiskMonitor.target} · {t('common.hdd', 'Využití disku')}:{' '}
+                        <strong className="text-amber-400">{highDiskMonitor.hdd} %</strong>
+                      </p>
                     </div>
                     <p className="text-muted-foreground leading-relaxed">
-                      {t('insights.disk_over_75', { name: highDiskMonitor.name }, `Využití hlavního diskového oddílu na serveru ${highDiskMonitor.name} přesáhlo hranici 75 %. Doporučujeme zkontrolovat zaplnění logů.`)}
+                      {t(
+                        'insights.disk_over_75',
+                        { name: highDiskMonitor.name },
+                        `Využití hlavního diskového oddílu na serveru ${highDiskMonitor.name} přesáhlo hranici 75 %. Doporučujeme zkontrolovat zaplnění logů.`
+                      )}
                     </p>
                   </div>
                 ) : (
                   <div className="p-3 rounded-lg bg-secondary/30 text-xs text-muted-foreground space-y-1">
-                    <p className="font-semibold text-foreground text-sm">{t('insights.disk_healthy', 'Diskový prostor v pořádku')}</p>
+                    <p className="font-semibold text-foreground text-sm">
+                      {t('insights.disk_healthy', 'Diskový prostor v pořádku')}
+                    </p>
                     <p>
                       {highDiskMonitor
-                        ? t('insights.disk_healthy_detail', { hdd: highDiskMonitor.hdd, name: highDiskMonitor.name }, `Všechny serverové agenty mají dostatek volného diskového prostoru (nejvyšší využití disku je ${highDiskMonitor.hdd} % u ${highDiskMonitor.name}).`)
+                        ? t(
+                            'insights.disk_healthy_detail',
+                            { hdd: highDiskMonitor.hdd, name: highDiskMonitor.name },
+                            `Všechny serverové agenty mají dostatek volného diskového prostoru (nejvyšší využití disku je ${highDiskMonitor.hdd} % u ${highDiskMonitor.name}).`
+                          )
                         : t('insights.disk_healthy_no_agents', 'Všechny sledované uzly mají diskový prostor v normě.')}
                     </p>
                   </div>
@@ -116,7 +148,8 @@ export function InsightsPage() {
                   to={`/infrastructure/${highDiskMonitor.id}`}
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline pt-2 border-t border-border"
                 >
-                  {t('insights.view_disk_detail', 'Detail disku')} {highDiskMonitor.name} <ArrowRight className="size-3.5" />
+                  {t('insights.view_disk_detail', 'Detail disku')} {highDiskMonitor.name}{' '}
+                  <ArrowRight className="size-3.5" />
                 </Link>
               )}
             </Card>
@@ -130,8 +163,12 @@ export function InsightsPage() {
                       <Cpu className="size-6" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-sm font-sans">{t('insights.cpu_card_title', 'Výkon Procesoru & RAM')}</h3>
-                      <p className="text-xs text-muted-foreground">{t('insights.cpu_card_subtitle', 'Stresové metriky agentů')}</p>
+                      <h3 className="font-bold text-sm font-sans">
+                        {t('insights.cpu_card_title', 'Výkon Procesoru & RAM')}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        {t('insights.cpu_card_subtitle', 'Stresové metriky agentů')}
+                      </p>
                     </div>
                   </div>
                   <Badge variant="up">{t('common.healthy', 'V pořádku')}</Badge>
@@ -141,10 +178,17 @@ export function InsightsPage() {
                   <div className="space-y-2 text-xs">
                     <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
                       <p className="font-semibold text-foreground text-sm mb-0.5">{highCpuMonitor.name}</p>
-                      <p className="text-muted-foreground font-mono">CPU: <strong className="text-foreground">{highCpuMonitor.cpu} %</strong> · RAM: <strong className="text-foreground">{highCpuMonitor.ram} %</strong></p>
+                      <p className="text-muted-foreground font-mono">
+                        CPU: <strong className="text-foreground">{highCpuMonitor.cpu} %</strong> · RAM:{' '}
+                        <strong className="text-foreground">{highCpuMonitor.ram} %</strong>
+                      </p>
                     </div>
                     <p className="text-muted-foreground leading-relaxed">
-                      {t('insights.cpu_stable', { name: highCpuMonitor.name }, `Spotřeba paměti a zátež procesoru u serveru ${highCpuMonitor.name} vykazuje stabilní hodnoty.`)}
+                      {t(
+                        'insights.cpu_stable',
+                        { name: highCpuMonitor.name },
+                        `Spotřeba paměti a zátež procesoru u serveru ${highCpuMonitor.name} vykazuje stabilní hodnoty.`
+                      )}
                     </p>
                   </div>
                 ) : (
@@ -159,7 +203,8 @@ export function InsightsPage() {
                   to={`/infrastructure/${highCpuMonitor.id}`}
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline pt-2 border-t border-border"
                 >
-                  {t('insights.view_cpu_detail', 'Detail vytížení')} {highCpuMonitor.name} <ArrowRight className="size-3.5" />
+                  {t('insights.view_cpu_detail', 'Detail vytížení')} {highCpuMonitor.name}{' '}
+                  <ArrowRight className="size-3.5" />
                 </Link>
               )}
             </Card>
@@ -174,7 +219,9 @@ export function InsightsPage() {
                     </div>
                     <div>
                       <h3 className="font-bold text-sm">{t('insights.web_card_title', 'Sledované Webové Služby')}</h3>
-                      <p className="text-xs text-muted-foreground">{t('insights.web_card_subtitle', 'SSL & Odezva HTTP')}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {t('insights.web_card_subtitle', 'SSL & Odezva HTTP')}
+                      </p>
                     </div>
                   </div>
                   <Badge variant="up">{t('insights.ssl_valid_badge', 'SSL Platný')}</Badge>
@@ -183,7 +230,13 @@ export function InsightsPage() {
                 <div className="space-y-2 text-xs">
                   <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
                     <p className="font-semibold text-emerald-400 text-sm mb-0.5">TLS 1.3 & Web Uptime</p>
-                    <p className="text-muted-foreground font-mono">{t('insights.monitored_prefix', { count: httpMonitors.length }, `Sledováno ${httpMonitors.length} webových domén/API`)}</p>
+                    <p className="text-muted-foreground font-mono">
+                      {t(
+                        'insights.monitored_prefix',
+                        { count: httpMonitors.length },
+                        `Sledováno ${httpMonitors.length} webových domén/API`
+                      )}
+                    </p>
                   </div>
                   <p className="text-muted-foreground leading-relaxed">
                     {t('insights.web_all_ok', 'Všechny webové stránky a HTTP endpointy odpovídají v pořádku.')}
@@ -195,7 +248,8 @@ export function InsightsPage() {
                 to="/websites"
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline pt-2 border-t border-border"
               >
-                {t('insights.go_to_websites', 'Přejít na Sledované weby')} ({httpMonitors.length}) <ArrowRight className="size-3.5" />
+                {t('insights.go_to_websites', 'Přejít na Sledované weby')} ({httpMonitors.length}){' '}
+                <ArrowRight className="size-3.5" />
               </Link>
             </Card>
           </div>
@@ -204,19 +258,30 @@ export function InsightsPage() {
           <Card className="p-6 space-y-4">
             <div className="flex items-center gap-2.5 border-b border-border pb-3">
               <Lightbulb className="size-5 text-amber-400" />
-              <h3 className="font-bold text-base">{t('insights.recommendations', 'Automatické analýzy a doporučení pro servery a infrastrukturu')}</h3>
+              <h3 className="font-bold text-base">
+                {t('insights.recommendations', 'Automatické analýzy a doporučení pro servery a infrastrukturu')}
+              </h3>
             </div>
 
             <div className="space-y-3">
               {serverAgents.length === 0 ? (
-                <p className="text-xs text-muted-foreground">{t('insights.no_agents', 'Zatím nebyly připojeni žádní systémoví agenti. Pro diskovou analytiku nainstalujte agenta ze sekce API & Agenti.')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'insights.no_agents',
+                    'Zatím nebyly připojeni žádní systémoví agenti. Pro diskovou analytiku nainstalujte agenta ze sekce API & Agenti.'
+                  )}
+                </p>
               ) : (
                 serverAgents.map((m) => {
-                  const isHighDisk = (m.hdd ?? 0) >= 70;
-                  const isHighCpu = (m.cpu ?? 0) >= 60;
+                  // null = nezměřeno, takže se nehlásí ani jako v pořádku, ani jako problém.
+                  const isHighDisk = typeof m.hdd === 'number' && m.hdd >= 70;
+                  const isHighCpu = typeof m.cpu === 'number' && m.cpu >= 60;
 
                   return (
-                    <div key={m.id} className="p-4 rounded-lg bg-secondary/30 border border-border flex items-start justify-between gap-4 flex-wrap sm:flex-nowrap">
+                    <div
+                      key={m.id}
+                      className="p-4 rounded-lg bg-secondary/30 border border-border flex items-start justify-between gap-4 flex-wrap sm:flex-nowrap"
+                    >
                       <div className="flex items-start gap-3">
                         <Server className="size-5 text-primary shrink-0 mt-0.5" />
                         <div>
@@ -226,10 +291,33 @@ export function InsightsPage() {
                           </div>
                           <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                             {isHighDisk
-                              ? t('insights.rec_high_disk', { hdd: m.hdd }, `Doporučujeme promazat staré logy v /var/log nebo rozšířit diskový oddíl (aktuálně zaplněno ${m.hdd} %).`)
+                              ? t(
+                                  'insights.rec_high_disk',
+                                  { hdd: m.hdd },
+                                  `Doporučujeme promazat staré logy v /var/log nebo rozšířit diskový oddíl (aktuálně zaplněno ${m.hdd} %).`
+                                )
                               : isHighCpu
-                              ? t('insights.rec_high_cpu', { cpu: m.cpu }, `Zaznamenáno vyšší vytížení procesoru (${m.cpu} %). Zkontrolujte spuštěné procesy.`)
-                              : t('insights.rec_optimal', { ms: m.responseMs ?? 0, extra: `${m.cpu != null ? `, CPU ${m.cpu} %` : ''}${m.ram != null ? `, RAM ${m.ram} %` : ''}${m.hdd != null ? `, HDD ${m.hdd} %` : ''}` }, `Provoz zařízení je v optimálním stavu. Odezva ${m.responseMs ?? 0} ms${m.cpu != null ? `, CPU ${m.cpu} %` : ''}${m.ram != null ? `, RAM ${m.ram} %` : ''}${m.hdd != null ? `, HDD ${m.hdd} %` : ''}.`)}
+                                ? t(
+                                    'insights.rec_high_cpu',
+                                    { cpu: m.cpu },
+                                    `Zaznamenáno vyšší vytížení procesoru (${m.cpu} %). Zkontrolujte spuštěné procesy.`
+                                  )
+                                : t(
+                                    'insights.rec_optimal',
+                                    {
+                                      extra: (() => {
+                                        // Jen skutečně naměřené hodnoty - žádná "Odezva 0 ms" pro monitor bez měření.
+                                        const parts: string[] = [];
+                                        if (m.responseMs != null)
+                                          parts.push(`${t('insights.part_latency', 'Odezva')} ${m.responseMs} ms`);
+                                        if (m.cpu != null) parts.push(`CPU ${m.cpu} %`);
+                                        if (m.ram != null) parts.push(`RAM ${m.ram} %`);
+                                        if (m.hdd != null) parts.push(`HDD ${m.hdd} %`);
+                                        return parts.length > 0 ? ` ${parts.join(', ')}.` : '';
+                                      })(),
+                                    },
+                                    'Provoz zařízení je v optimálním stavu.{extra}'
+                                  )}
                           </p>
                         </div>
                       </div>

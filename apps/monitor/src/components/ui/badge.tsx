@@ -28,9 +28,7 @@ const badgeVariants = cva(
   }
 );
 
-export interface BadgeProps
-  extends React.ComponentProps<'span'>,
-    VariantProps<typeof badgeVariants> {
+export interface BadgeProps extends React.ComponentProps<'span'>, VariantProps<typeof badgeVariants> {
   /** Zobrazí tečku před textem — používá se u živých stavů monitoru. */
   dot?: boolean;
   /** Tečka pulzuje. Jen pro stavy, které se opravdu mění v reálném čase. */
@@ -68,9 +66,7 @@ export function StatusDot({
     primary: 'bg-primary',
     neutral: 'bg-muted-foreground',
   };
-  return (
-    <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', color[variant], className)} />
-  );
+  return <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', color[variant], className)} />;
 }
 
 export { badgeVariants };

@@ -20,9 +20,14 @@ export function NotFoundPage() {
 
         <div className="space-y-2">
           <BadgeText>{t('not_found.badge', 'CHYBA 404 — STRÁNKA NENALEZENA')}</BadgeText>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">{t('not_found.title', 'Požadovaná stránka neexistuje')}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            {t('not_found.title', 'Požadovaná stránka neexistuje')}
+          </h1>
           <p className="text-sm text-muted-foreground leading-relaxed max-w-md mx-auto">
-            {t('not_found.desc', 'Adresa, kterou jste zadali, pravděpodobně nebyla nalezena, byla přejmenována nebo přesunuta.')}
+            {t(
+              'not_found.desc',
+              'Adresa, kterou jste zadali, pravděpodobně nebyla nalezena, byla přejmenována nebo přesunuta.'
+            )}
           </p>
         </div>
 

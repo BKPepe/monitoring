@@ -200,6 +200,37 @@ if (!$stats['memory']) {
     }
 }
 
+// Fallback pro CPU: položku 'cpuusage' vrací StatsBar jen na CloudLinux/LVE
+// hostech. Jinde použijeme load average celého stroje vztažený k počtu jader -
+// je to reálné číslo o zdraví serveru (byť ne per-účet), a jako takové je
+// označené přes 'source' i ve 'formatted'. Percent záměrně nestropujeme na 100,
+// přetížení > 100 % je právě ta informace, kterou chceme vidět.
+if (empty($stats['cpu'])) {
+    $load1 = null;
+    if (function_exists('sys_getloadavg')) {
+        $la = @sys_getloadavg();
+        if (is_array($la) && isset($la[0])) $load1 = floatval($la[0]);
+    }
+    if ($load1 === null && @is_readable('/proc/loadavg')) {
+        $la_raw = @file_get_contents('/proc/loadavg');
+        if ($la_raw !== false) $load1 = floatval(strtok($la_raw, ' '));
+    }
+    if ($load1 !== null) {
+        $cores = 0;
+        $cpuinfo = @file_get_contents('/proc/cpuinfo');
+        if ($cpuinfo) $cores = preg_match_all('/^processor\s*:/m', $cpuinfo);
+        if ($cores > 0) {
+            $stats['cpu'] = [
+                'used' => $load1,
+                'limit' => $cores,
+                'percent' => round(($load1 / $cores) * 100, 2),
+                'formatted' => "load {$load1} / {$cores} jader (celý server)",
+                'source' => 'loadavg'
+            ];
+        }
+    }
+}
+
 // Pokud nejsou dostupné detailní metriky o procesech a databázích, necháme je jako null,
 // což status stránka rozpozná a nezobrazí graficky.
 

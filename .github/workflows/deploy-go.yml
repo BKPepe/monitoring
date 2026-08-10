@@ -9,6 +9,10 @@ on:
       - 'apps/monitor/**'
       - '.github/workflows/deploy-go.yml'
 
+  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
+  # Actions zrovna nezareagovaly na push).
+  workflow_dispatch:
+
 jobs:
   build-and-deploy:
     name: Build Go Server & React SPA, Deploy via FTP
@@ -98,3 +102,46 @@ jobs:
           exclude: |
             **/.git*
             status/**
+
+      # FTP-Deploy-Action umí dotfiles v kořeni local-dir tiše přeskočit
+      # (stavový diff) - a bez .htaccess vrací F5 na /app/<route> 404.
+      # Soubor se proto nahrává ještě explicitně přes curl, ať tam JE.
+      - name: Upload SPA .htaccess explicitly
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+        run: |
+          curl --silent --show-error --ssl-reqd --insecure \
+            --user "$FTP_USER:$FTP_PASS" \
+            -T apps/monitor/dist/.htaccess \
+            "ftp://$FTP_HOST/public_html/app/.htaccess"
+          echo ".htaccess nahran."
+
+      # Deep link se MUSI dat obnovit (F5). Kontrola po kazdem deployi -
+      # regrese rewrite pravidla shodi workflow, ne az uzivatele.
+      # Deep link se MUSI dat obnovit (F5). Blokujici: kdyz se rozbije,
+      # ma spadnout deploy, ne az uzivatel. Historicky to shodila registrace
+      # aplikace na URL /app v cPanelu (Passenger context ignoroval
+      # .htaccess) - prvni misto, kam se pri selhani podivat.
+      - name: Verify SPA deep-link refresh works
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+        run: |
+          sleep 5
+          code=$(curl -s -o /tmp/deeplink.html -w "%{http_code}" "https://bloodkings.eu/app/infrastructure/1")
+          if [ "$code" != "200" ] || ! grep -q "id=.root." /tmp/deeplink.html; then
+            echo "Deep link /app/infrastructure/1 vraci $code misto SPA (ocekavano 200 + aplikace)."
+            echo ""
+            echo "Nejcastejsi pricina: v cPanel -> Application Manager je aplikace"
+            echo "registrovana na Base Application URL '/app'. Passenger si to URI"
+            echo "vezme a .htaccess se v nem neprocesuje. Prereguistruj ji na jine URL."
+            echo ""
+            echo "--- obsah .htaccess na serveru ---"
+            curl --silent --ssl-reqd --insecure --user "$FTP_USER:$FTP_PASS" \
+              "ftp://$FTP_HOST/public_html/app/.htaccess" || echo "(soubor nejde stahnout)"
+            exit 1
+          fi
+          echo "SPA fallback OK (HTTP $code)."

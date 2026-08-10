@@ -10,7 +10,7 @@ import type { MetricsSource } from './types';
  * to musí být v UI vidět. Dashboard, který mlčky ukazuje vymyšlená čísla,
  * je horší než dashboard, který nefunguje.
  */
-export const useMockByDefault = import.meta.env.VITE_USE_MOCK === '1';
+const useMockByDefault = import.meta.env.VITE_USE_MOCK === '1';
 
 export interface SourceState {
   source: MetricsSource;
@@ -37,10 +37,11 @@ export async function resolveSource(): Promise<SourceState> {
   }
 
   try {
-    // Krátký timeout: když backend neodpovídá do 4 s, nemá smysl kvůli
-    // němu držet prázdnou obrazovku.
+    // Timeout 12 s: sdílený hosting umí při zátěži odpovídat i 5-8 s a
+    // dřívější 4s limit hlásil "API nedostupné" u serveru, který jen
+    // pomalu odpovídal (hlášeno uživatelem: "signal is aborted without reason").
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    const timer = setTimeout(() => controller.abort(), 12000);
     const res = await fetch(`${STATUS_API}/api.php?action=public_status`, {
       signal: controller.signal,
     });
@@ -55,7 +56,9 @@ export async function resolveSource(): Promise<SourceState> {
       isMock: true,
       fallbackReason:
         err instanceof Error
-          ? `${STATUS_API} nedostupné (${err.message})`
+          ? err.name === 'AbortError'
+            ? `${STATUS_API} neodpovědělo do 12 s`
+            : `${STATUS_API}: ${err.message}`
           : `${STATUS_API} nedostupné`,
     };
   }

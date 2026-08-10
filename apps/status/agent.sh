@@ -66,7 +66,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.7.1"
+AGENT_VERSION="1.7.5"
 LOG_FILE="$ScriptPath/agent.log"
 NET_STATE_FILE="$ScriptPath/agent_net.state"
 DISKIO_STATE_FILE="$ScriptPath/agent_diskio.state"
@@ -182,10 +182,12 @@ END {
     print "ram=" pct "; ram_total_mb=" total "; ram_used_mb=" used "; ram_available_mb=" avail "; ram_free_mb=" free;
 }' /proc/meminfo 2>/dev/null)
 [ -z "$ram" ] && ram="0.0"
-[ -z "$ram_total_mb" ] && ram_total_mb=0
-[ -z "$ram_used_mb" ] && ram_used_mb=0
-[ -z "$ram_available_mb" ] && ram_available_mb=0
-[ -z "$ram_free_mb" ] && ram_free_mb=0
+# Kdyz se /proc/meminfo neprecte, NENI to stroj s 0 MB pameti - hodnoty
+# zustavaji null a server i UI to zobrazi jako "nezmereno".
+[ -z "$ram_total_mb" ] && ram_total_mb="null"
+[ -z "$ram_used_mb" ] && ram_used_mb="null"
+[ -z "$ram_available_mb" ] && ram_available_mb="null"
+[ -z "$ram_free_mb" ] && ram_free_mb="null"
 
 # 2.5 Swap Usage (%)
 swap=$(awk '
@@ -513,14 +515,19 @@ while read -r cline; do
     [ -z "$cline" ] && continue
     cname=$(echo "$cline" | awk '{print $1}')
     ccpu=$(echo "$cline" | awk '{print $2}')
+    crss_kb=$(echo "$cline" | awk '{print $3}')
     [ -z "$ccpu" ] && continue
     cname_clean=$(echo -n "$cname" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Obe hodnoty do obou zebricku - jinak ma kazda radka v tabulce jednu
+    # bunku prazdnou. Chybejici hodnota zustava null, ne nula.
+    cram_mb="null"
+    [ -n "$crss_kb" ] && cram_mb=$(awk -v k="$crss_kb" 'BEGIN { printf "%.1f", k/1024 }')
     if [ -n "$top_cpu_json" ]; then
         top_cpu_json="$top_cpu_json, "
     fi
-    top_cpu_json="$top_cpu_json{\"name\": \"$cname_clean\", \"cpu\": $ccpu}"
+    top_cpu_json="$top_cpu_json{\"name\": \"$cname_clean\", \"cpu\": $ccpu, \"ram_mb\": $cram_mb}"
 done <<EOF
-$(ps -eo comm,%cpu --sort=-%cpu 2>/dev/null | tail -n +2 | head -n 5)
+$(ps -eo comm,%cpu,rss --sort=-%cpu 2>/dev/null | tail -n +2 | head -n 5)
 EOF
 
 top_ram_json=""
@@ -528,15 +535,17 @@ while read -r rline; do
     [ -z "$rline" ] && continue
     rname=$(echo "$rline" | awk '{print $1}')
     rrss_kb=$(echo "$rline" | awk '{print $2}')
+    rcpu=$(echo "$rline" | awk '{print $3}')
     [ -z "$rrss_kb" ] && continue
     rname_clean=$(echo -n "$rname" | sed 's/\\/\\\\/g; s/"/\\"/g')
     rram_mb=$(awk -v k="$rrss_kb" 'BEGIN { printf "%.1f", k/1024 }')
+    [ -z "$rcpu" ] && rcpu="null"
     if [ -n "$top_ram_json" ]; then
         top_ram_json="$top_ram_json, "
     fi
-    top_ram_json="$top_ram_json{\"name\": \"$rname_clean\", \"ram_mb\": $rram_mb}"
+    top_ram_json="$top_ram_json{\"name\": \"$rname_clean\", \"ram_mb\": $rram_mb, \"cpu\": $rcpu}"
 done <<EOF
-$(ps -eo comm,rss --sort=-rss 2>/dev/null | tail -n +2 | head -n 5)
+$(ps -eo comm,rss,%cpu --sort=-rss 2>/dev/null | tail -n +2 | head -n 5)
 EOF
 
 # 7.5 Zjištění TeamSpeak statistik (telnet query na localhost)
@@ -786,6 +795,75 @@ detect_svc "WireGuard" "wireguard" 51820 "" "/etc/wireguard"
 detect_svc "Mosquitto" "mosquitto" 1883 "mosquitto" "/etc/mosquitto/mosquitto.conf"
 
 # 8. Sestavení JSON payloadu
+
+# --- Tailscale / ZeroTier / UPS (NUT) - vse null-safe, bez nastroje se neposila nic ---
+tailscale_up_json="null"
+tailscale_peers_json="null"
+if command -v tailscale >/dev/null 2>&1; then
+    ts_json=$(tailscale status --json 2>/dev/null)
+    if [ -n "$ts_json" ]; then
+        echo "$ts_json" | grep -q '"BackendState":"Running"' && tailscale_up_json=true || tailscale_up_json=false
+        tailscale_peers_json=$(echo "$ts_json" | grep -c '"TailscaleIPs"')
+        # Self je v JSONu taky - odecist
+        [ "$tailscale_peers_json" -gt 0 ] 2>/dev/null && tailscale_peers_json=$((tailscale_peers_json - 1))
+    fi
+fi
+
+zerotier_networks_json="null"
+if command -v zerotier-cli >/dev/null 2>&1; then
+    zerotier_networks_json=$(zerotier-cli listnetworks 2>/dev/null | grep -c " OK ")
+    [ -z "$zerotier_networks_json" ] && zerotier_networks_json=0
+fi
+
+ups_status_json="null"
+ups_battery_json="null"
+if command -v upsc >/dev/null 2>&1; then
+    ups_name=$(upsc -l 2>/dev/null | head -1)
+    if [ -n "$ups_name" ]; then
+        ups_data=$(upsc "$ups_name" 2>/dev/null)
+        ups_st=$(echo "$ups_data" | sed -n 's/^ups.status: //p' | head -1)
+        ups_bat=$(echo "$ups_data" | sed -n 's/^battery.charge: //p' | head -1 | tr -cd '0-9')
+        [ -n "$ups_st" ] && ups_status_json="\"$ups_st\""
+        [ -n "$ups_bat" ] && ups_battery_json="$ups_bat"
+    fi
+fi
+
+# --- Parita s OpenWrt agentem v1.5.4: OOM, boot time, DNS latence, OpenVPN, USB ---
+oom_kills_json="null"
+if command -v dmesg >/dev/null 2>&1; then
+    oom_kills_json=$(dmesg 2>/dev/null | grep -ci "oom-killer\|Out of memory")
+    # Prazdny vystup znamena, ze dmesg nesel precist (prava, jaderna volba) -
+    # to neni "zadne OOM zabiti", to je "nevime".
+    [ -z "$oom_kills_json" ] && oom_kills_json="null"
+fi
+
+boot_time_json="null"
+[ -n "$uptime" ] && [ "$uptime" -gt 0 ] 2>/dev/null && boot_time_json=$(( $(date +%s) - uptime ))
+
+# DNS latence pres lokalni resolver (getent/nslookup s time); bez naradi null.
+dns_latency_ms_json="null"
+if command -v nslookup >/dev/null 2>&1; then
+    dns_t0=$(date +%s%N 2>/dev/null)
+    case "$dns_t0" in *N) dns_t0="";; esac
+    if [ -n "$dns_t0" ]; then
+        nslookup example.com >/dev/null 2>&1
+        dns_t1=$(date +%s%N)
+        dns_latency_ms_json=$(( (dns_t1 - dns_t0) / 1000000 ))
+    fi
+fi
+
+openvpn_tunnels_json="null"
+if command -v pidof >/dev/null 2>&1; then
+    openvpn_tunnels_json=$(pidof openvpn 2>/dev/null | wc -w | tr -d '[:space:]')
+    [ -z "$openvpn_tunnels_json" ] && openvpn_tunnels_json=0
+fi
+
+usb_devices_json="null"
+if [ -d /sys/bus/usb/devices ]; then
+    usb_devices_json=$(ls /sys/bus/usb/devices 2>/dev/null | grep -c '^[0-9]*-[0-9]')
+    [ -z "$usb_devices_json" ] && usb_devices_json=0
+fi
+
 payload=$(cat <<EOF
 {
   "agent_key": "$AGENT_KEY",
@@ -831,6 +909,17 @@ payload=$(cat <<EOF
   "disk_read_kb": $disk_io_read,
   "disk_write_kb": $disk_io_write,
   "virtualization": $virtualization_json,
+  "tailscale_up": $tailscale_up_json,
+  "tailscale_peers": $tailscale_peers_json,
+  "zerotier_networks": $zerotier_networks_json,
+  "ups_status": $ups_status_json,
+  "ups_battery_pct": $ups_battery_json,
+  "auto_update": $([ "$AUTO_UPDATE" = "1" ] && echo 1 || echo 0),
+  "oom_kills": $oom_kills_json,
+  "boot_time": $boot_time_json,
+  "dns_latency_ms": $dns_latency_ms_json,
+  "openvpn_tunnels": $openvpn_tunnels_json,
+  "usb_devices": $usb_devices_json,
   "discovered_services": [$discovered_json]
 }
 EOF

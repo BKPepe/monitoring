@@ -1,9 +1,11 @@
 # apps/monitor — monitorovací aplikace
 
-React SPA pro `monitor.bloodkings.eu`. Nahrazuje `apps/status/admin.php`
-a `index.php` — dashboard, infrastruktura, incidenty, reporty.
+React SPA nasazená na `bloodkings.eu/app/`. Nahrazuje `apps/status/admin.php`
+a `index.php` — dashboard, infrastruktura, incidenty, reporty, SLA výkazy.
 
-Stav: **Sprint 4** (grafy v ECharts). Data pořád z mocku — napojení na API je Sprint 5.
+Stav: **v produkci.** Data jdou výhradně z živého `apps/status/api.php`
+(mock zdroj byl odstraněn; `VITE_USE_MOCK` jen přepne banner o nedostupném API).
+Aplikace je dvojjazyčná (CS/EN) a sdílí stavové barvy s landing page.
 
 ```bash
 npm run dev:monitor      # http://localhost:5273

@@ -9,20 +9,22 @@ import (
 	"github.com/BKPepe/monitoring/apps/server/internal/metrics"
 )
 
+// Všechny řady i agregace jsou nullable: NULL v DB znamená "nezměřeno"
+// (zdroj metriku nevrací) a v grafu má být mezera / pomlčka, ne nula.
 type MetricsHistoryResult struct {
 	Labels []string   `json:"labels"`
-	CPU    []float64  `json:"cpu"`
-	RAM    []float64  `json:"ram"`
-	HDD    []float64  `json:"hdd"`
+	CPU    []*float64 `json:"cpu"`
+	RAM    []*float64 `json:"ram"`
+	HDD    []*float64 `json:"hdd"`
 	Net    []*float64 `json:"net"`
-	CPUAvg float64    `json:"cpu_avg"`
-	RAMAvg float64    `json:"ram_avg"`
-	HDDAvg float64    `json:"hdd_avg"`
-	NetAvg float64    `json:"net_avg"`
-	CPUMax float64    `json:"cpu_max"`
-	RAMMax float64    `json:"ram_max"`
-	HDDMax float64    `json:"hdd_max"`
-	NetMax float64    `json:"net_max"`
+	CPUAvg *float64   `json:"cpu_avg"`
+	RAMAvg *float64   `json:"ram_avg"`
+	HDDAvg *float64   `json:"hdd_avg"`
+	NetAvg *float64   `json:"net_avg"`
+	CPUMax *float64   `json:"cpu_max"`
+	RAMMax *float64   `json:"ram_max"`
+	HDDMax *float64   `json:"hdd_max"`
+	NetMax *float64   `json:"net_max"`
 }
 
 type TimelineEvent struct {
@@ -51,7 +53,7 @@ func (s *Store) GetMetricsHistory(ctx context.Context, monitorID int64, period s
 
 	query := fmt.Sprintf(`
 		SELECT recorded_at,
-		       COALESCE(cpu_usage, 0), COALESCE(ram_usage, 0), COALESCE(hdd_usage, 0), net_usage
+		       cpu_usage, ram_usage, hdd_usage, net_usage
 		FROM vps_metrics
 		WHERE monitor_id = $1 AND recorded_at >= now() - INTERVAL '%s'
 		ORDER BY recorded_at ASC`, interval)
@@ -64,19 +66,38 @@ func (s *Store) GetMetricsHistory(ctx context.Context, monitorID int64, period s
 
 	res := &MetricsHistoryResult{
 		Labels: []string{},
-		CPU:    []float64{},
-		RAM:    []float64{},
-		HDD:    []float64{},
+		CPU:    []*float64{},
+		RAM:    []*float64{},
+		HDD:    []*float64{},
 		Net:    []*float64{},
 	}
 
-	var cpuSum, ramSum, hddSum, netSum float64
-	var netCount int
+	// Jeden průchod pro všechny čtyři řady: NULL bod zůstává nil,
+	// průměry a maxima se počítají jen ze skutečně naměřených hodnot.
+	type agg struct {
+		sum   float64
+		count int
+		max   float64
+	}
+	var cpuAgg, ramAgg, hddAgg, netAgg agg
+
+	appendPoint := func(series *[]*float64, a *agg, val *float64) {
+		if val == nil {
+			*series = append(*series, nil)
+			return
+		}
+		rounded := math.Round(*val*10) / 10
+		*series = append(*series, &rounded)
+		a.sum += *val
+		a.count++
+		if rounded > a.max {
+			a.max = rounded
+		}
+	}
 
 	for rows.Next() {
 		var recAt time.Time
-		var cpu, ram, hdd float64
-		var netVal *float64
+		var cpu, ram, hdd, netVal *float64
 
 		if err := rows.Scan(&recAt, &cpu, &ram, &hdd, &netVal); err != nil {
 			return nil, err
@@ -88,50 +109,24 @@ func (s *Store) GetMetricsHistory(ctx context.Context, monitorID int64, period s
 		}
 		res.Labels = append(res.Labels, recAt.Format(labelFormat))
 
-		cpuRounded := math.Round(cpu*10) / 10
-		ramRounded := math.Round(ram*10) / 10
-		hddRounded := math.Round(hdd*10) / 10
-
-		res.CPU = append(res.CPU, cpuRounded)
-		res.RAM = append(res.RAM, ramRounded)
-		res.HDD = append(res.HDD, hddRounded)
-
-		cpuSum += cpu
-		ramSum += ram
-		hddSum += hdd
-
-		if cpuRounded > res.CPUMax {
-			res.CPUMax = cpuRounded
-		}
-		if ramRounded > res.RAMMax {
-			res.RAMMax = ramRounded
-		}
-		if hddRounded > res.HDDMax {
-			res.HDDMax = hddRounded
-		}
-
-		if netVal != nil {
-			netRounded := math.Round(*netVal*10) / 10
-			res.Net = append(res.Net, &netRounded)
-			netSum += *netVal
-			netCount++
-			if netRounded > res.NetMax {
-				res.NetMax = netRounded
-			}
-		} else {
-			res.Net = append(res.Net, nil)
-		}
+		appendPoint(&res.CPU, &cpuAgg, cpu)
+		appendPoint(&res.RAM, &ramAgg, ram)
+		appendPoint(&res.HDD, &hddAgg, hdd)
+		appendPoint(&res.Net, &netAgg, netVal)
 	}
 
-	totalCount := float64(len(res.CPU))
-	if totalCount > 0 {
-		res.CPUAvg = math.Round((cpuSum/totalCount)*10) / 10
-		res.RAMAvg = math.Round((ramSum/totalCount)*10) / 10
-		res.HDDAvg = math.Round((hddSum/totalCount)*10) / 10
+	finish := func(a agg) (*float64, *float64) {
+		if a.count == 0 {
+			return nil, nil
+		}
+		avg := math.Round((a.sum/float64(a.count))*10) / 10
+		maxV := a.max
+		return &avg, &maxV
 	}
-	if netCount > 0 {
-		res.NetAvg = math.Round((netSum/float64(netCount))*10) / 10
-	}
+	res.CPUAvg, res.CPUMax = finish(cpuAgg)
+	res.RAMAvg, res.RAMMax = finish(ramAgg)
+	res.HDDAvg, res.HDDMax = finish(hddAgg)
+	res.NetAvg, res.NetMax = finish(netAgg)
 
 	return res, nil
 }

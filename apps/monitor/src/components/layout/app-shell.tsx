@@ -1,10 +1,9 @@
 import * as React from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useNavigate } from 'react-router';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { Footer } from './footer';
 import { UserMenu } from './user-menu';
-import { searchIndex, appVersion } from '@/data/mock';
 import { cn } from '@/lib/utils';
 
 /**
@@ -16,19 +15,135 @@ import { cn } from '@/lib/utils';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 
-import { usePublicStatus } from '@/api/use-asset-charts';
-
 export function AppShell() {
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const { session } = useSession();
-  const { data: statusData } = usePublicStatus();
+
+  // Index globálního vyhledávání (⌘K): stránky + skutečné monitory.
+  // Dřív tu byl statický seznam čtyř stránek a klik nikam nevedl.
+  const [monitorResults, setMonitorResults] = React.useState<
+    { id: string; label: string; group: string; hint?: string }[]
+  >([]);
+  React.useEffect(() => {
+    let active = true;
+    fetch('/status/api.php?action=monitors', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!active || !Array.isArray(data?.monitors)) return;
+        setMonitorResults(
+          data.monitors.map((m: any) => ({
+            id: `m-${m.id}`,
+            label: m.name,
+            group: t('search.group_monitors', 'Monitory'),
+            hint: m.target,
+          }))
+        );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [session, t]);
+
+  const searchIndex = React.useMemo(
+    () => [
+      { id: 'p-/', label: t('nav.dashboard', 'Dashboard'), group: t('search.group_pages', 'Stránky'), hint: '/' },
+      {
+        id: 'p-/infrastructure',
+        label: t('nav.infrastructure', 'Infrastruktura'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/infrastructure',
+      },
+      {
+        id: 'p-/websites',
+        label: t('nav.websites', 'Weby'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/websites',
+      },
+      {
+        id: 'p-/services',
+        label: t('nav.services', 'Služby'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/services',
+      },
+      {
+        id: 'p-/incidents',
+        label: t('nav.incidents', 'Incidenty'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/incidents',
+      },
+      {
+        id: 'p-/insights',
+        label: t('nav.insights', 'Insights'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/insights',
+      },
+      {
+        id: 'p-/reports',
+        label: t('nav.reports', 'Výkazy a SLA'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/reports',
+      },
+      {
+        id: 'p-/settings',
+        label: t('nav.settings', 'Nastavení'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/settings',
+      },
+      {
+        id: 'p-/api-agents',
+        label: t('nav.api-agents', 'API & Agenti'),
+        group: t('search.group_pages', 'Stránky'),
+        hint: '/api-agents',
+      },
+      ...monitorResults,
+    ],
+    [t, monitorResults]
+  );
+
+  const onSearchSelect = React.useCallback(
+    (result: { id: string; hint?: string }) => {
+      if (result.id.startsWith('p-')) {
+        navigate(result.id.slice(2));
+      } else if (result.id.startsWith('m-')) {
+        navigate(`/infrastructure/${result.id.slice(2)}`);
+      }
+    },
+    [navigate]
+  );
 
   const isLoggedOut = !(session?.authenticated && session.user);
-  const userName = session?.authenticated && session.user ? session.user.username : t('user_menu.logged_out', 'Nepřihlášen');
-  const userRole = session?.authenticated && session.user ? session.user.role : t('user_menu.please_login', 'Přihlaste se');
-  const realAlertCount = statusData?.downMonitors ?? 0;
+  const userName =
+    session?.authenticated && session.user ? session.user.username : t('user_menu.logged_out', 'Nepřihlášen');
+  const userRole =
+    session?.authenticated && session.user ? session.user.role : t('user_menu.please_login', 'Přihlaste se');
+  // Odznak u Incidentů musí počítat TOTÉŽ, co stránka incidentů ukazuje -
+  // dřív bral downMonitors z public_status a ukazoval "2", zatímco stránka
+  // (otevřené incidenty z DB + monitory v problému) žádné neměla.
+  // Jediný zdroj: endpoint incidents už v sobě má i právě padlé monitory,
+  // takže se nic nesčítá (jinak by se výpadek počítal dvakrát).
+  const [realAlertCount, setRealAlertCount] = React.useState(0);
+  React.useEffect(() => {
+    let active = true;
+    const load = () =>
+      fetch('/status/api.php?action=incidents', { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (active && Array.isArray(data?.incidents)) {
+            setRealAlertCount(data.incidents.filter((i: any) => (i.status ?? 'investigating') !== 'resolved').length);
+          }
+        })
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 60000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   // Escape closes the mobile nav - otherwise there's no way out of it
   // on a touch device with a keyboard.
@@ -74,6 +189,7 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col print:block print:w-full">
         <Header
           searchResults={searchIndex}
+          onSearchSelect={onSearchSelect}
           alertCount={realAlertCount}
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
@@ -82,11 +198,22 @@ export function AppShell() {
           {/* The 12-column grid is available to pages inside; the shell just
               holds the max width and padding. */}
           <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:px-0 print:py-0 print:max-w-none">
-            <Outlet />
+            {/* Stránky se načítají až při návštěvě (React.lazy v routes.tsx),
+                takže mezi kliknutím a vykreslením je krátká pauza na stažení
+                jejich kódu. Bez tohohle boundary by React vyhodil chybu. */}
+            <React.Suspense
+              fallback={
+                <p className="text-muted-foreground py-16 text-center text-sm" role="status">
+                  {t('shell.loading_page', 'Načítám stránku…')}
+                </p>
+              }
+            >
+              <Outlet />
+            </React.Suspense>
           </div>
         </main>
 
-        <Footer version={appVersion} />
+        <Footer version={__APP_VERSION__} />
       </div>
     </div>
   );

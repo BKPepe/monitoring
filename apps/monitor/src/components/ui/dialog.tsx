@@ -41,32 +41,14 @@ export function DialogHeader({ className, ...props }: React.ComponentProps<'div'
   return <div className={cn('flex flex-col gap-1 px-5 pt-5 pb-3', className)} {...props} />;
 }
 
-export function DialogTitle({
-  className,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Title>) {
-  return (
-    <DialogPrimitive.Title className={cn('text-base font-semibold', className)} {...props} />
-  );
+export function DialogTitle({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Title>) {
+  return <DialogPrimitive.Title className={cn('text-base font-semibold', className)} {...props} />;
 }
 
-export function DialogDescription({
-  className,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Description>) {
-  return (
-    <DialogPrimitive.Description
-      className={cn('text-muted-foreground text-sm', className)}
-      {...props}
-    />
-  );
+export function DialogDescription({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Description>) {
+  return <DialogPrimitive.Description className={cn('text-muted-foreground text-sm', className)} {...props} />;
 }
 
 export function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      className={cn('flex justify-end gap-2 border-t border-border px-5 py-3', className)}
-      {...props}
-    />
-  );
+  return <div className={cn('flex justify-end gap-2 border-t border-border px-5 py-3', className)} {...props} />;
 }

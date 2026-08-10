@@ -456,7 +456,7 @@ foreach ($timeline as $ev) {
                                 </div>
                                 <div style="font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.2rem;">
                                     <span><strong>Radio / Kanál:</strong> <?php echo htmlspecialchars($radio['radio']); ?> (Ch <?php echo htmlspecialchars($radio['channel'] ?? '0'); ?>)</span>
-                                    <span><strong>Připojení klienti:</strong> <strong style="color: #fff;"><?php echo htmlspecialchars($radio['clients'] ?? 0); ?></strong></span>
+                                    <span><strong>Připojení klienti:</strong> <strong style="color: #fff;"><?php echo bk_num($radio['clients'] ?? null); ?></strong></span>
                                     <?php if (!empty($radio['noise'])): ?><span><strong>Šum (Noise):</strong> <?php echo htmlspecialchars($radio['noise']); ?> dBm</span><?php endif; ?>
                                     <?php if (!empty($radio['tx_power'])): ?><span><strong>Vysílací výkon:</strong> <?php echo htmlspecialchars($radio['tx_power']); ?> dBm</span><?php endif; ?>
                                 </div>
@@ -469,11 +469,12 @@ foreach ($timeline as $ev) {
                     <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">IPv4 vs IPv6 Provoz (aktuální rychlost)</div>
                     <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem;">
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
-                            <div style="font-size: 1.2rem; font-weight: 700; color: var(--color-blue, #58a6ff);"><?php echo (float)($details['net_ipv4_kbps'] ?? 0); ?> KB/s</div>
+                            <?php // Chybějící hodnota = pomlčka, ne vymyšlených "0 KB/s" (agent hlásí třeba jen jednu rodinu). ?>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: var(--color-blue, #58a6ff);"><?php echo isset($details['net_ipv4_kbps']) ? (float)$details['net_ipv4_kbps'] . ' KB/s' : '—'; ?></div>
                             <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.2rem;"><i class="fas fa-network-wired"></i> IPv4 Provoz</div>
                         </div>
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
-                            <div style="font-size: 1.2rem; font-weight: 700; color: #8b5cf6;"><?php echo (float)($details['net_ipv6_kbps'] ?? 0); ?> KB/s</div>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: #8b5cf6;"><?php echo isset($details['net_ipv6_kbps']) ? (float)$details['net_ipv6_kbps'] . ' KB/s' : '—'; ?></div>
                             <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.2rem;"><i class="fas fa-globe"></i> IPv6 Provoz</div>
                         </div>
                     </div>
@@ -495,9 +496,9 @@ foreach ($timeline as $ev) {
                                 <?php foreach ($details['interfaces'] as $iface): ?>
                                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
                                         <td style="padding: 0.4rem; font-family: monospace; font-weight: 600; color: var(--text-primary);"><?php echo htmlspecialchars($iface['iface']); ?></td>
-                                        <td style="padding: 0.4rem;"><?php echo round(($iface['rx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
-                                        <td style="padding: 0.4rem;"><?php echo round(($iface['tx_bytes'] ?? 0) / 1048576, 1); ?> MB</td>
-                                        <td style="padding: 0.4rem; color: <?php echo (($iface['rx_errors'] ?? 0) + ($iface['tx_errors'] ?? 0)) > 0 ? 'var(--color-red)' : 'var(--text-muted)'; ?>;"><?php echo ($iface['rx_errors'] ?? 0) . ' / ' . ($iface['tx_errors'] ?? 0); ?></td>
+                                        <td style="padding: 0.4rem;"><?php echo bk_num(isset($iface['rx_bytes']) ? $iface['rx_bytes'] / 1048576 : null, ' MB', 1); ?></td>
+                                        <td style="padding: 0.4rem;"><?php echo bk_num(isset($iface['tx_bytes']) ? $iface['tx_bytes'] / 1048576 : null, ' MB', 1); ?></td>
+                                        <td style="padding: 0.4rem; color: <?php echo bk_iface_has_errors($iface) ? 'var(--color-red)' : 'var(--text-muted)'; ?>;"><?php echo bk_num($iface['rx_errors'] ?? null) . ' / ' . bk_num($iface['tx_errors'] ?? null); ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -593,10 +594,12 @@ foreach ($timeline as $ev) {
                     <?php if (!empty($details['kernel'])): ?><div class="ao-sidebar-row"><span class="k">Kernel</span><span class="v"><?php echo htmlspecialchars($details['kernel']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['model'])): ?><div class="ao-sidebar-row"><span class="k">Model</span><span class="v"><?php echo htmlspecialchars($details['model']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['architecture'])): ?><div class="ao-sidebar-row"><span class="k">Arch</span><span class="v"><?php echo htmlspecialchars($details['architecture']); ?></span></div><?php endif; ?>
-                    <?php if (!empty($details['ram_total_mb'])): ?>
+                    <?php // ram_used_mb chodí vždy spolu s total; bez něj by "0 MB / X MB" byla vymyšlená hodnota. ?>
+                    <?php if (!empty($details['ram_total_mb']) && isset($details['ram_used_mb'])): ?>
                         <?php
                         $r_tot = (int)$details['ram_total_mb'];
-                        $r_used = (int)($details['ram_used_mb'] ?? 0);
+                        // Nezmerena obsazena RAM zustava null - vypocet nize ji preskoci.
+                    $r_used = isset($details['ram_used_mb']) ? (int)$details['ram_used_mb'] : null;
                         $r_avail = (int)($details['ram_available_mb'] ?? max(0, $r_tot - $r_used));
                         $r_str = ($r_tot >= 1024)
                             ? round($r_used / 1024, 1) . ' GB / ' . round($r_tot / 1024, 1) . ' GB (volné: ' . round($r_avail / 1024, 1) . ' GB)'
@@ -659,9 +662,9 @@ foreach ($timeline as $ev) {
                         <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-green); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-check-circle"></i> Proces ts3server běží</div>
                         <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.25rem;">
                             <span><strong>PID:</strong> <?php echo (int)($p['pid'] ?? 0); ?></span>
-                            <span><strong>CPU:</strong> <?php echo (float)($p['cpu'] ?? 0); ?>%</span>
-                            <span><strong>RAM:</strong> <?php echo (float)($p['ram_mb'] ?? 0); ?> MB</span>
-                            <span><strong>Vlákna:</strong> <?php echo (int)($p['threads'] ?? 0); ?></span>
+                            <span><strong>CPU:</strong> <?php echo bk_num($p['cpu'] ?? null, ' %', 1); ?></span>
+                            <span><strong>RAM:</strong> <?php echo bk_num($p['ram_mb'] ?? null, ' MB', 1); ?></span>
+                            <span><strong>Vlákna:</strong> <?php echo bk_num($p['threads'] ?? null); ?></span>
                         </div>
                     </div>
                     <?php else: ?>

@@ -60,6 +60,45 @@ if (isset($data['action_result']) && is_array($data['action_result']) && !isset(
     exit;
 }
 
+// --- Výsledky agent-side kontrol služeb (OpenWrt v1.5.3+) ---
+// Samostatný mini-request stejně jako action_result: agent po hlavním
+// reportu lokálně ověří služby ze seznamu service_checks v odpovědi
+// a pošle výsledky. Výsledek se smí zapsat jen do 'agent_service'
+// monitorů STEJNÉHO assetu, jakému patří agent_key.
+if (isset($data['service_check_results']) && is_array($data['service_check_results']) && !isset($data['cpu'])) {
+    $sc_agent_key = trim($data['agent_key'] ?? '');
+    if (empty($sc_agent_key)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
+        exit;
+    }
+    $stmt_sc_mon = $pdo->prepare("SELECT id, asset_id FROM monitors WHERE agent_key = ? LIMIT 1");
+    $stmt_sc_mon->execute([$sc_agent_key]);
+    $sc_agent = $stmt_sc_mon->fetch();
+    if (!$sc_agent) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
+        exit;
+    }
+    require_once __DIR__ . '/lang.php';
+    $sc_applied = 0;
+    foreach (array_slice($data['service_check_results'], 0, 50) as $res) {
+        if (!is_array($res)) continue;
+        $sc_id = (int)($res['monitor_id'] ?? 0);
+        if ($sc_id <= 0 || $sc_agent['asset_id'] === null) continue;
+        $stmt_svc = $pdo->prepare("SELECT * FROM monitors WHERE id = ? AND asset_id = ? AND type = 'agent_service' LIMIT 1");
+        $stmt_svc->execute([$sc_id, $sc_agent['asset_id']]);
+        $svc_row = $stmt_svc->fetch();
+        if (!$svc_row) continue;
+        $sc_running = !empty($res['running']);
+        $sc_detail = mb_substr(trim((string)($res['detail'] ?? '')), 0, 255);
+        bk_apply_agent_service_result($pdo, $svc_row, $sc_running, $sc_detail);
+        $sc_applied++;
+    }
+    echo json_encode(['success' => true, 'applied' => $sc_applied]);
+    exit;
+}
+
 // --- Zpracování automatické registrace agenta ---
 if (isset($data['action']) && $data['action'] === 'register') {
     $token = trim($data['token'] ?? '');
@@ -185,8 +224,31 @@ $ow_lte_rsrp = (isset($data['lte_rsrp']) && $data['lte_rsrp'] !== null) ? floatv
 $ow_lte_rsrq = (isset($data['lte_rsrq']) && $data['lte_rsrq'] !== null) ? floatval($data['lte_rsrq']) : null;
 $ow_lte_sinr = (isset($data['lte_sinr']) && $data['lte_sinr'] !== null) ? floatval($data['lte_sinr']) : null;
 $ow_lte_band = (isset($data['lte_band']) && $data['lte_band'] !== null) ? $data['lte_band'] : null;
+// Spojeni pres ubus (agent 1.5.9+): modem nemusi byt videt pres mmcli/uqmi,
+// ale rozhrani "lte" v ubus ano - odtud se pozna, ze LTE opravdu jede.
+$ow_lte_up = isset($data['lte_up']) ? (bool)$data['lte_up'] : null;
+// Signal z HiLink API modemu (agent 1.5.15+) - bez nej zustavaji null.
+$ow_lte_rssi = (isset($data['lte_rssi']) && $data['lte_rssi'] !== null) ? floatval($data['lte_rssi']) : null;
+$ow_lte_pci = (isset($data['lte_pci']) && $data['lte_pci'] !== null) ? (int)$data['lte_pci'] : null;
+$ow_lte_cell_id = (isset($data['lte_cell_id']) && $data['lte_cell_id'] !== null) ? (string)$data['lte_cell_id'] : null;
+$ow_lte_bandwidth = (isset($data['lte_bandwidth']) && $data['lte_bandwidth'] !== null) ? trim((string)$data['lte_bandwidth']) : null;
+$ow_lte_plmn = (isset($data['lte_plmn']) && $data['lte_plmn'] !== null) ? trim((string)$data['lte_plmn']) : null;
+$ow_lte_device = (isset($data['lte_device']) && $data['lte_device'] !== null) ? trim((string)$data['lte_device']) : null;
+$ow_lte_uptime = (isset($data['lte_uptime']) && $data['lte_uptime'] !== null) ? (int)$data['lte_uptime'] : null;
+$ow_lte_ipv4 = (isset($data['lte_ipv4']) && $data['lte_ipv4'] !== null) ? trim((string)$data['lte_ipv4']) : null;
 $ow_lte_carrier = (isset($data['lte_carrier']) && $data['lte_carrier'] !== null) ? trim($data['lte_carrier']) : null;
 $ow_service_restarts = (isset($data['service_restarts']) && is_array($data['service_restarts'])) ? $data['service_restarts'] : null;
+$ow_auto_update = isset($data['auto_update']) ? (int)(bool)$data['auto_update'] : null;
+$ow_tailscale_up = isset($data['tailscale_up']) && $data['tailscale_up'] !== null ? (bool)$data['tailscale_up'] : null;
+$ow_tailscale_peers = (isset($data['tailscale_peers']) && $data['tailscale_peers'] !== null) ? intval($data['tailscale_peers']) : null;
+$ow_zerotier_networks = (isset($data['zerotier_networks']) && $data['zerotier_networks'] !== null) ? intval($data['zerotier_networks']) : null;
+$ow_ups_status = (isset($data['ups_status']) && $data['ups_status'] !== null && $data['ups_status'] !== '') ? trim($data['ups_status']) : null;
+$ow_ups_battery = (isset($data['ups_battery_pct']) && $data['ups_battery_pct'] !== null) ? intval($data['ups_battery_pct']) : null;
+$ow_oom_kills = (isset($data['oom_kills']) && $data['oom_kills'] !== null) ? intval($data['oom_kills']) : null;
+$ow_boot_time = (isset($data['boot_time']) && $data['boot_time'] !== null) ? intval($data['boot_time']) : null;
+$ow_dns_latency_ms = (isset($data['dns_latency_ms']) && $data['dns_latency_ms'] !== null) ? floatval($data['dns_latency_ms']) : null;
+$ow_openvpn_tunnels = (isset($data['openvpn_tunnels']) && $data['openvpn_tunnels'] !== null) ? intval($data['openvpn_tunnels']) : null;
+$ow_usb_devices = (isset($data['usb_devices']) && $data['usb_devices'] !== null) ? intval($data['usb_devices']) : null;
 $ow_wan_reconnect_count = (isset($data['wan_reconnect_count']) && $data['wan_reconnect_count'] !== null) ? intval($data['wan_reconnect_count']) : null;
 $ow_wan_last_reconnect = (isset($data['wan_last_reconnect']) && $data['wan_last_reconnect'] !== null) ? intval($data['wan_last_reconnect']) : null;
 $ow_installed_packages = (isset($data['installed_packages']) && $data['installed_packages'] !== null) ? intval($data['installed_packages']) : null;
@@ -347,6 +409,9 @@ try {
         'virtualization' => $virtualization,
         'missing_processes' => $missing_processes,
         'version' => isset($data['version']) ? trim($data['version']) : null,
+        // Explicitní klíč: 'version' se při slučování detailů (TS3 apod.)
+        // přepisuje verzí SLUŽBY - verze agenta musí přežít pod vlastním jménem.
+        'agent_version' => isset($data['version']) ? trim($data['version']) : null,
         'uptime' => isset($data['uptime']) ? intval($data['uptime']) : null,
         'smart' => isset($data['smart']) ? trim($data['smart']) : null,
         'ports' => isset($data['ports']) && is_array($data['ports']) ? $data['ports'] : [],
@@ -395,7 +460,27 @@ try {
         'lte_sinr' => $ow_lte_sinr,
         'lte_band' => $ow_lte_band,
         'lte_carrier' => $ow_lte_carrier,
+        'lte_up' => $ow_lte_up,
+        'lte_rssi' => $ow_lte_rssi,
+        'lte_pci' => $ow_lte_pci,
+        'lte_cell_id' => $ow_lte_cell_id,
+        'lte_bandwidth' => $ow_lte_bandwidth,
+        'lte_plmn' => $ow_lte_plmn,
+        'lte_device' => $ow_lte_device,
+        'lte_uptime' => $ow_lte_uptime,
+        'lte_ipv4' => $ow_lte_ipv4,
         'service_restarts' => $ow_service_restarts,
+        'auto_update' => $ow_auto_update,
+        'tailscale_up' => $ow_tailscale_up,
+        'tailscale_peers' => $ow_tailscale_peers,
+        'zerotier_networks' => $ow_zerotier_networks,
+        'ups_status' => $ow_ups_status,
+        'ups_battery_pct' => $ow_ups_battery,
+        'oom_kills' => $ow_oom_kills,
+        'boot_time' => $ow_boot_time,
+        'dns_latency_ms' => $ow_dns_latency_ms,
+        'openvpn_tunnels' => $ow_openvpn_tunnels,
+        'usb_devices' => $ow_usb_devices,
         'wan_reconnect_count' => $ow_wan_reconnect_count,
         'wan_last_reconnect' => $ow_wan_last_reconnect,
         'installed_packages' => $ow_installed_packages,
@@ -408,6 +493,53 @@ try {
         'agent_alert_sent' => false,
         'agent_last_seen' => time()
     ];
+
+    // --- Propuštění neznámých klíčů od agenta -----------------------------
+    //
+    // Výše je explicitní seznam polí, která server umí (typová kontrola,
+    // přepočty, výchozí hodnoty). Cokoli mimo něj se dosud TIŠE ZAHODILO:
+    // agent poslal novou metriku, ta se nikde neobjevila a přišlo se na to
+    // až při ručním hledání (naposledy LTE přes ubus). Chyba se navíc nedá
+    // odhalit v UI - chybějící údaj vypadá stejně jako "zatím nezměřeno".
+    //
+    // Neznámé skalární klíče a malá pole se proto propustí beze změny.
+    // Explicitní seznam zůstává tam, kde je potřeba převod nebo validace,
+    // a má přednost - hodnota z něj se propuštěním nikdy nepřepíše.
+    $bk_passthrough_skip = [
+        // Autentizace a řízení - do details nepatří.
+        'agent_key', 'api_key', 'token', 'secret', 'password',
+        // Zpracováno vlastní cestou (round-trip akcí, kontrol služeb).
+        'action_result', 'service_check_results', 'pending_action',
+    ];
+    $bk_passthrough_added = 0;
+    foreach ($data as $bk_key => $bk_val) {
+        if (!is_string($bk_key) || $bk_key === '') {
+            continue;
+        }
+        // Klíč, který server zná, se nepřepisuje - jeho verze je typovaná.
+        if (array_key_exists($bk_key, $new_data) || in_array($bk_key, $bk_passthrough_skip, true)) {
+            continue;
+        }
+        if (!preg_match('/^[a-z][a-z0-9_]{0,63}$/i', $bk_key)) {
+            continue;
+        }
+        if (is_scalar($bk_val) || $bk_val === null) {
+            $new_data[$bk_key] = $bk_val;
+            $bk_passthrough_added++;
+        } elseif (is_array($bk_val)) {
+            // Strop na velikost: details se ukládají do jednoho sloupce
+            // a agent nesmí umět nafouknout řádek libovolně.
+            $encoded = json_encode($bk_val, JSON_UNESCAPED_UNICODE);
+            if ($encoded !== false && strlen($encoded) <= 8192) {
+                $new_data[$bk_key] = $bk_val;
+                $bk_passthrough_added++;
+            }
+        }
+        // Strop na počet nových klíčů - tentýž důvod.
+        if ($bk_passthrough_added >= 64) {
+            break;
+        }
+    }
     
     // Zpracování TeamSpeak statistik z agenta (pokud je poslal)
     if (isset($data['teamspeak_servers']) && is_array($data['teamspeak_servers'])) {
@@ -462,7 +594,59 @@ try {
         }
     }
 
+    // --- Události pro rolling-window Network Insights ---
+    // Čítač reconnectů agenta je kumulativní od jeho startu; delta mezi
+    // reporty se zapisuje jako událost, aby šla WAN stabilita hodnotit
+    // v klouzavém okně ("odpojila se 14× za 7 dní"), ne jen snapshotem.
+    try {
+        $prev_wr = isset($old_details['wan_reconnect_count']) ? (int)$old_details['wan_reconnect_count'] : null;
+        $new_wr = isset($new_data['wan_reconnect_count']) ? (int)$new_data['wan_reconnect_count'] : null;
+        if ($prev_wr !== null && $new_wr !== null && $new_wr > $prev_wr) {
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'wan_reconnected', 'WAN reconnect (' . $prev_wr . ' -> ' . $new_wr . ')');
+        }
+        // Změna IPv6 prefixu (/64): časté střídání = nestabilní delegace od ISP.
+        $prev_v6 = (string)($old_details['wan_ipv6'] ?? '');
+        $new_v6 = (string)($new_data['wan_ipv6'] ?? '');
+        if ($prev_v6 !== '' && $new_v6 !== '' && $prev_v6 !== $new_v6) {
+            $pfx = function ($ip) {
+                $bin = @inet_pton($ip);
+                return $bin !== false ? substr(bin2hex($bin), 0, 16) : null;
+            };
+            if ($pfx($prev_v6) !== null && $pfx($prev_v6) !== $pfx($new_v6)) {
+                log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'ipv6_prefix_changed', $prev_v6 . ' -> ' . $new_v6);
+            }
+        }
+    } catch (Throwable $e) {}
+
+    // --- Veřejná IP + ASN agenta (server-side, žádná externí HTTP API) ---
+    // Veřejnou adresu server VIDÍ přímo na spojení (REMOTE_ADDR) - agent
+    // nikam ven volat nemusí. ASN se zjišťuje DNS TXT dotazem na Team Cymru
+    // a cachuje 24 h / do změny IP, ať se neptáme každou minutu.
+    $agent_public_ip = $_SERVER['REMOTE_ADDR'] ?? null;
+    if ($agent_public_ip) {
+        $new_data['public_ip'] = $agent_public_ip;
+        $prev_ip = $old_details['public_ip'] ?? null;
+        $prev_checked = (int)($old_details['asn_checked_at'] ?? 0);
+        if ($agent_public_ip !== $prev_ip || (time() - $prev_checked) > 86400) {
+            [$asn_code, $asn_label] = bk_lookup_asn($agent_public_ip);
+            $new_data['asn'] = $asn_code;
+            $new_data['asn_name'] = $asn_label;
+            $new_data['asn_checked_at'] = time();
+        }
+        // beze změny: staré asn/asn_name/asn_checked_at přežijí merge
+    }
+
     $merged_details_arr = array_merge($old_details, $new_data);
+
+    // Uklid po starsich agentech: nez existoval json_val(), zapisovaly se
+    // zastupne hodnoty jako RETEZEC ("null", '"null"'), takze UI vypisovalo
+    // `null · "null"` misto pomlcky. Merge je sam neprepsal - novy agent uz
+    // takovy klic vubec neposila. Necha se jen to, co je skutecna hodnota.
+    foreach ($merged_details_arr as $mk => $mv) {
+        if (is_string($mv) && in_array(trim($mv, " \t\n\r\0\x0B\"'"), ['null', 'NULL', 'undefined'], true)) {
+            $merged_details_arr[$mk] = null;
+        }
+    }
     $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
 
     // Zapsat metriky do databáze - včetně TeamSpeak klientů/procesu, pokud jsou
@@ -481,8 +665,8 @@ try {
                 disk_io_read_kbps, disk_io_write_kbps, net_errors,
                 ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram,
                 iowait_pct, inode_usage_pct, zombie_count, fork_rate, temperature_c,
-                wifi_clients_total, conntrack_pct, net_ipv4_kbps, net_ipv6_kbps
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                wifi_clients_total, conntrack_pct, net_ipv4_kbps, net_ipv6_kbps, lte_rsrp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt_metrics->execute([
             $monitor_id, $cpu, $ram, $hdd, $net,
@@ -490,7 +674,7 @@ try {
             $disk_io_read, $disk_io_write, $net_errors,
             $ts3_clients_online, $ts3_clients_max, $ts3_process_cpu, $ts3_process_ram,
             $iowait, $inode_usage, $zombie_count, $fork_rate, $temperature,
-            $ow_wifi_clients_count, $ow_conntrack_pct, $ow_net_ipv4_kbps, $ow_net_ipv6_kbps,
+            $ow_wifi_clients_count, $ow_conntrack_pct, $ow_net_ipv4_kbps, $ow_net_ipv6_kbps, $ow_lte_rsrp,
         ]);
     } catch (PDOException $e) {
         $metrics_error = $e->getMessage();
@@ -505,10 +689,15 @@ try {
             $ifname = trim($ifitem['iface'] ?? '');
             if (!$ifname || in_array($ifname, ['lo', 'ifb0', 'ifb1'], true)) continue;
 
-            $cur_rx_b = (float)($ifitem['rx_bytes'] ?? 0);
-            $cur_tx_b = (float)($ifitem['tx_bytes'] ?? 0);
-            $cur_rx_p = (int)($ifitem['rx_packets'] ?? 0);
-            $cur_tx_p = (int)($ifitem['tx_packets'] ?? 0);
+            // Chybějící čítač NENÍ nula - z takového "měření" by vyšla
+            // nesmyslná delta (skok na plnou hodnotu při dalším reportu).
+            if (!isset($ifitem['rx_bytes'], $ifitem['tx_bytes'])) {
+                continue;
+            }
+            $cur_rx_b = (float)$ifitem['rx_bytes'];
+            $cur_tx_b = (float)$ifitem['tx_bytes'];
+            $cur_rx_p = isset($ifitem['rx_packets']) ? (int)$ifitem['rx_packets'] : 0;
+            $cur_tx_p = isset($ifitem['tx_packets']) ? (int)$ifitem['tx_packets'] : 0;
 
             try {
                 $stmt_if = $pdo->prepare("SELECT last_rx_bytes, last_tx_bytes, last_rx_packets, last_tx_packets FROM monitor_interface_traffic WHERE monitor_id = ? AND iface = ? ORDER BY date DESC LIMIT 1");
@@ -554,14 +743,22 @@ try {
     }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
-        // OpenWrt: ping na WAN IP pro reálnou odezvu (agent posílá wan_ipv4)
-        $ping_ms = 0;
+        // Odezvu si měří agent sám (wan_latency_ms) - ping z hostingu na WAN IP
+        // routeru stejně neprojde. Bez měření zůstává NULL.
+        $ping_ms = null;
         if ($monitor['type'] === 'openwrt') {
             $ping_target = $ow_wan_ipv4 ?: ($monitor['target'] ?: null);
             if ($ping_target) {
-                $ping_ms = bk_ping_host($ping_target) ?? 0;
+                // Selhaný ping není 0 ms - do logu jde NULL a UI ukáže pomlčku.
+                $ping_ms = bk_ping_host($ping_target);
             }
         }
+        // Agent v1.5.7+ posílá vlastní měření odezvy (ping z routeru na WAN
+        // bránu) - to je pro router smysluplnější číslo než ping zvenku.
+        if ($ping_ms === null && isset($data['wan_latency_ms']) && is_numeric($data['wan_latency_ms'])) {
+            $ping_ms = (float)$data['wan_latency_ms'];
+        }
+
         // Zapsat běžný log kontroly
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");
         $stmt_log->execute([$monitor_id, $new_status, $ping_ms, $error_msg]);
@@ -612,13 +809,57 @@ try {
     // Kontrola nevyřízených akcí ve frontě pro tohoto agenta. Souhlas se
     // ověřuje znovu tady (ne jen při zařazení v admin.php) - monitor mohl být
     // mezitím překonfigurován a konkrétní akci už nemusí povolovat.
+    // --- Agent-side kontroly služeb ---
+    // 'agent_service' monitory stejného assetu: agenti, kteří v reportu
+    // posílají živé seznamy portů/procesů (agent.sh, agent.py), se vyhodnotí
+    // rovnou tady; ostatním (OpenWrt) se v odpovědi pošle seznam kontrol
+    // a výsledky dorazí vzápětí jako service_check_results.
+    try {
+        if ($monitor['asset_id'] !== null) {
+            $stmt_svcs = $pdo->prepare("SELECT * FROM monitors WHERE asset_id = ? AND type = 'agent_service' AND id != ?");
+            $stmt_svcs->execute([$monitor['asset_id'], $monitor_id]);
+            $agent_services = $stmt_svcs->fetchAll();
+
+            if (!empty($agent_services)) {
+                $report_ports = isset($data['ports']) && is_array($data['ports']) ? array_map('intval', $data['ports']) : null;
+                $report_procs = isset($data['processes']) && is_array($data['processes']) ? array_map('strval', $data['processes']) : null;
+
+                if ($report_ports !== null || $report_procs !== null) {
+                    foreach ($agent_services as $svc_row) {
+                        $svc_port = $svc_row['port'] !== null ? (int)$svc_row['port'] : null;
+                        $svc_proc = trim((string)$svc_row['target']);
+                        $port_ok = $svc_port !== null && $report_ports !== null ? in_array($svc_port, $report_ports, true) : null;
+                        $proc_ok = $svc_proc !== '' && $report_procs !== null ? in_array($svc_proc, $report_procs, true) : null;
+                        // Bez jediného ověřitelného signálu se nezapisuje nic -
+                        // "nevíme" není měření.
+                        if ($port_ok === null && $proc_ok === null) continue;
+                        $running = ($port_ok === true) || ($proc_ok === true);
+                        $detail = $running ? '' : sprintf(
+                            'Agent nehlásí %s.',
+                            $svc_port !== null && $svc_proc !== ''
+                                ? "proces '{$svc_proc}' ani otevřený port {$svc_port}"
+                                : ($svc_port !== null ? "otevřený port {$svc_port}" : "proces '{$svc_proc}'")
+                        );
+                        bk_apply_agent_service_result($pdo, $svc_row, $running, $detail);
+                    }
+                } else {
+                    $response_payload['service_checks'] = array_map(fn($s) => [
+                        'monitor_id' => (int)$s['id'],
+                        'process' => (string)$s['target'],
+                        'port' => $s['port'] !== null ? (int)$s['port'] : 0,
+                    ], $agent_services);
+                }
+            }
+        }
+    } catch (PDOException $e) {}
+
     try {
         $ra_allowed_here = !empty($monitor['remote_actions_enabled'])
             ? array_filter(explode(',', (string)($monitor['allowed_actions'] ?? '')))
             : [];
 
         if (!empty($ra_allowed_here)) {
-            $stmt_pact = $pdo->prepare("SELECT id, action_type FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1");
+            $stmt_pact = $pdo->prepare("SELECT id, action_type, service_name FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1");
             $stmt_pact->execute([$monitor_id]);
             $pending_act = $stmt_pact->fetch();
 
@@ -639,6 +880,12 @@ try {
                     'nonce' => $nonce,
                     'signature' => $signature
                 ];
+                // service_name jede mimo podepsaný řetězec - rozšíření podpisu
+                // by rozbilo už nasazené agenty (počítají HMAC z action|ts|nonce).
+                // Agenti jméno validují regexem [A-Za-z0-9_.@-] a transport je HTTPS.
+                if (!empty($pending_act['service_name'])) {
+                    $response_payload['pending_action']['service_name'] = $pending_act['service_name'];
+                }
 
                 // Označit jako 'sent' HNED, ne až po potvrzení agentem - jinak
                 // by stejná (stále 'pending') akce byla znovu podepsána a

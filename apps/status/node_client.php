@@ -380,7 +380,7 @@ function check_teamspeak($host, $port, $timeout) {
             'status' => 'up', 'response_time' => $duration, 'error' => null,
             'clients_online' => max(0, $clients_online - $query_clients),
             'clients_max' => $clients_max,
-            'name' => $details['virtualserver_name'] ?? 'TeamSpeak Server',
+            'name' => $details['virtualserver_name'] ?? null,
             'version' => $details['virtualserver_version'] ?? ''
         ];
     }
@@ -404,10 +404,11 @@ function check_discord($guild_id, $timeout) {
         }
     }
     $duration = round((microtime(true) - $start) * 1000);
-    if ($http_code !== 200 || !$response) return ['status' => 'down', 'response_time' => 0, 'error' => 'API error', 'presence_count' => 0];
+    // Selhany dotaz nema zadny pocet online ani zmerenou odezvu.
+    if ($http_code !== 200 || !$response) return ['status' => 'down', 'response_time' => null, 'error' => 'API error', 'presence_count' => null];
     $data = json_decode($response, true);
-    if (!$data || isset($data['code'])) return ['status' => 'down', 'response_time' => 0, 'error' => $data['message'] ?? 'JSON error', 'presence_count' => 0];
-    $presence_count = isset($data['presence_count']) ? (int)$data['presence_count'] : 0;
+    if (!$data || isset($data['code'])) return ['status' => 'down', 'response_time' => null, 'error' => $data['message'] ?? 'JSON error', 'presence_count' => null];
+    $presence_count = isset($data['presence_count']) ? (int)$data['presence_count'] : null;
     $channels_with_users = []; $members_list = [];
     if (isset($data['members']) && is_array($data['members'])) {
         foreach ($data['members'] as $m) {

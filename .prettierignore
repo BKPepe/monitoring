@@ -1,0 +1,8 @@
+dist
+node_modules
+.astro
+.wrangler
+apps/status
+apps/server
+agents
+package-lock.json

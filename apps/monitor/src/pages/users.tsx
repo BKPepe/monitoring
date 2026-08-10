@@ -63,16 +63,8 @@ export function UsersPage() {
         </Button>
       </div>
 
-      {notice && (
-        <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">
-          {notice}
-        </div>
-      )}
-      {error && (
-        <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">
-          {error}
-        </div>
-      )}
+      {notice && <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">{notice}</div>}
+      {error && <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">{error}</div>}
 
       <Card>
         <CardHeader>
@@ -84,55 +76,46 @@ export function UsersPage() {
           ) : users.length === 0 ? (
             <p className="text-muted-foreground py-10 text-center text-sm">{t('users.none', 'Žádní uživatelé.')}</p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">{t('users.col_user', 'Uživatel')}</TableHead>
-                  <TableHead>{t('users.col_role', 'Role')}</TableHead>
-                  <TableHead>{t('users.col_security', 'Zabezpečení')}</TableHead>
-                  <TableHead className="pr-5 text-right">{t('users.col_actions', 'Akce')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              {/* Mobil: karty misto tabulky - ctyri sloupce s akcemi se na
+                  uzkem displeji nedaji obsluhovat. */}
+              <div className="flex flex-col gap-2 px-4 pb-4 md:hidden">
                 {users.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell className="pl-5">
-                      <div className="leading-tight">
-                        <p className="font-medium">
+                  <div key={user.id} className="rounded-lg border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 leading-tight">
+                        <p className="truncate text-sm font-semibold">
                           {user.username}
                           {user.isSelf && (
                             <span className="text-muted-foreground ml-2 text-xs">{t('users.you_suffix', '(vy)')}</span>
                           )}
                         </p>
-                        <p className="text-muted-foreground text-xs">{user.email}</p>
+                        <p className="text-muted-foreground truncate text-xs">{user.email}</p>
                       </div>
-                    </TableCell>
-                    <TableCell>
                       <Badge variant={user.role === 'admin' ? 'primary' : 'neutral'}>
-                        {user.role === 'admin' ? t('users.role_admin', 'Administrátor') : t('users.role_user', 'Uživatel')}
+                        {user.role === 'admin'
+                          ? t('users.role_admin', 'Administrátor')
+                          : t('users.role_user', 'Uživatel')}
                       </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {user.totpEnabled && (
-                          <Badge variant="up">
-                            <ShieldCheck className="size-3" />
-                            2FA
-                          </Badge>
-                        )}
-                        {user.oauthProvider && (
-                          <Badge variant="info">
-                            <KeyRound className="size-3" />
-                            {user.oauthProvider}
-                          </Badge>
-                        )}
-                        {!user.totpEnabled && !user.oauthProvider && (
-                          <span className="text-muted-foreground text-xs">{t('users.password_only', 'jen heslo')}</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="pr-5">
-                      <div className="flex justify-end gap-1">
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {user.totpEnabled && (
+                        <Badge variant="up">
+                          <ShieldCheck className="size-3" />
+                          2FA
+                        </Badge>
+                      )}
+                      {user.oauthProvider && (
+                        <Badge variant="info">
+                          <KeyRound className="size-3" />
+                          {user.oauthProvider}
+                        </Badge>
+                      )}
+                      {!user.totpEnabled && !user.oauthProvider && (
+                        <span className="text-muted-foreground text-xs">{t('users.password_only', 'jen heslo')}</span>
+                      )}
+                      <div className="ml-auto flex gap-1">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -144,8 +127,6 @@ export function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          // A self-account cannot be deleted - the server rejects it
-                          // anyway, this button just signals that upfront.
                           disabled={user.isSelf}
                           onClick={() => setDeleting(user)}
                           aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
@@ -153,11 +134,94 @@ export function UsersPage() {
                           <Trash2 />
                         </Button>
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </div>
+                  </div>
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-5">{t('users.col_user', 'Uživatel')}</TableHead>
+                      <TableHead>{t('users.col_role', 'Role')}</TableHead>
+                      <TableHead>{t('users.col_security', 'Zabezpečení')}</TableHead>
+                      <TableHead className="pr-5 text-right">{t('users.col_actions', 'Akce')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {users.map((user) => (
+                      <TableRow key={user.id}>
+                        <TableCell className="pl-5">
+                          <div className="leading-tight">
+                            <p className="font-medium">
+                              {user.username}
+                              {user.isSelf && (
+                                <span className="text-muted-foreground ml-2 text-xs">
+                                  {t('users.you_suffix', '(vy)')}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-muted-foreground text-xs">{user.email}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={user.role === 'admin' ? 'primary' : 'neutral'}>
+                            {user.role === 'admin'
+                              ? t('users.role_admin', 'Administrátor')
+                              : t('users.role_user', 'Uživatel')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {user.totpEnabled && (
+                              <Badge variant="up">
+                                <ShieldCheck className="size-3" />
+                                2FA
+                              </Badge>
+                            )}
+                            {user.oauthProvider && (
+                              <Badge variant="info">
+                                <KeyRound className="size-3" />
+                                {user.oauthProvider}
+                              </Badge>
+                            )}
+                            {!user.totpEnabled && !user.oauthProvider && (
+                              <span className="text-muted-foreground text-xs">
+                                {t('users.password_only', 'jen heslo')}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="pr-5">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setEditing(user)}
+                              aria-label={t('users.edit_aria', { name: user.username }, `Upravit ${user.username}`)}
+                            >
+                              <Pencil />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              // A self-account cannot be deleted - the server rejects it
+                              // anyway, this button just signals that upfront.
+                              disabled={user.isSelf}
+                              onClick={() => setDeleting(user)}
+                              aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
+                            >
+                              <Trash2 />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -180,7 +244,9 @@ export function UsersPage() {
           user={deleting}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
-            setNotice(t('users.deleted_notice', { name: deleting.username }, `Uživatel ${deleting.username} byl smazán.`));
+            setNotice(
+              t('users.deleted_notice', { name: deleting.username }, `Uživatel ${deleting.username} byl smazán.`)
+            );
             setDeleting(null);
             reload();
           }}
@@ -229,13 +295,25 @@ function UserDialog({
       if (user) {
         onSaved(t('users.save_updated', { name: username }, `Uživatel ${username} byl upraven.`));
       } else if (result.invited) {
-        onSaved(t('users.save_invited', { name: username, email }, `Účet ${username} byl vytvořen, pozvánka odeslána na ${email}.`));
+        onSaved(
+          t(
+            'users.save_invited',
+            { name: username, email },
+            `Účet ${username} byl vytvořen, pozvánka odeslána na ${email}.`
+          )
+        );
       } else if (password) {
         onSaved(t('users.save_created', { name: username }, `Účet ${username} byl vytvořen.`));
       } else {
         // Account was created but the email failed to send - the admin needs
         // to know, otherwise the user will wait for an invite that never arrives.
-        onSaved(t('users.save_created_no_invite', { name: username }, `Účet ${username} byl vytvořen, ale pozvánku se nepodařilo odeslat.`));
+        onSaved(
+          t(
+            'users.save_created_no_invite',
+            { name: username },
+            `Účet ${username} byl vytvořen, ale pozvánku se nepodařilo odeslat.`
+          )
+        );
       }
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : t('users.save_failed', 'Uložení selhalo.'));
@@ -249,7 +327,11 @@ function UserDialog({
       <DialogContent>
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>{user ? t('users.edit_title', { name: user.username }, `Upravit ${user.username}`) : t('users.new_user_title', 'Nový uživatel')}</DialogTitle>
+            <DialogTitle>
+              {user
+                ? t('users.edit_title', { name: user.username }, `Upravit ${user.username}`)
+                : t('users.new_user_title', 'Nový uživatel')}
+            </DialogTitle>
             <DialogDescription>
               {user
                 ? t('users.edit_desc', 'Heslo nechte prázdné, pokud ho nechcete měnit.')
@@ -262,12 +344,7 @@ function UserDialog({
               <Input value={username} onChange={(e) => setUsername(e.target.value)} required />
             </Field>
             <Field label={t('users.field_email', 'E-mail')} required>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             </Field>
             <Field label={t('users.field_phone', 'Telefon')}>
               <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -289,7 +366,11 @@ function UserDialog({
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={8}
                 autoComplete="new-password"
-                placeholder={user ? t('users.password_unchanged', 'Beze změny') : t('users.password_invite', 'Prázdné = poslat pozvánku')}
+                placeholder={
+                  user
+                    ? t('users.password_unchanged', 'Beze změny')
+                    : t('users.password_invite', 'Prázdné = poslat pozvánku')
+                }
               />
             </Field>
 
@@ -311,15 +392,7 @@ function UserDialog({
   );
 }
 
-function DeleteDialog({
-  user,
-  onClose,
-  onDeleted,
-}: {
-  user: ApiUser;
-  onClose: () => void;
-  onDeleted: () => void;
-}) {
+function DeleteDialog({ user, onClose, onDeleted }: { user: ApiUser; onClose: () => void; onDeleted: () => void }) {
   const { t } = useLanguage();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -343,7 +416,8 @@ function DeleteDialog({
         <DialogHeader>
           <DialogTitle>{t('users.delete_confirm_title', 'Smazat uživatele?')}</DialogTitle>
           <DialogDescription>
-            {t('users.delete_confirm_prefix', 'Účet')} <strong>{user.username}</strong> ({user.email}) {t('users.delete_confirm_suffix', 'bude nenávratně odstraněn.')}
+            {t('users.delete_confirm_prefix', 'Účet')} <strong>{user.username}</strong> ({user.email}){' '}
+            {t('users.delete_confirm_suffix', 'bude nenávratně odstraněn.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -363,15 +437,7 @@ function DeleteDialog({
   );
 }
 
-function Field({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
+function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-muted-foreground text-xs font-medium">

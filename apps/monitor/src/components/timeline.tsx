@@ -1,5 +1,5 @@
 import { Badge, StatusDot } from '@/components/ui/badge';
-import type { TimelineEvent } from '@/data/mock';
+import type { TimelineEvent } from '@/data/model';
 import { Clock, MapPin, Globe } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 
@@ -18,7 +18,9 @@ const resolutionVariant = {
 export function Timeline({ events }: { events: TimelineEvent[] }) {
   const { t } = useLanguage();
   if (events.length === 0) {
-    return <p className="text-muted-foreground py-6 text-center text-sm">{t('timeline.no_events', 'Žádné události.')}</p>;
+    return (
+      <p className="text-muted-foreground py-6 text-center text-sm">{t('timeline.no_events', 'Žádné události.')}</p>
+    );
   }
 
   return (
@@ -42,9 +44,7 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
                   </span>
                 )}
               </div>
-              {event.resolution && (
-                <Badge variant={resolutionVariant[event.resolution]}>{event.resolution}</Badge>
-              )}
+              {event.resolution && <Badge variant={resolutionVariant[event.resolution]}>{event.resolution}</Badge>}
             </div>
 
             <p className="text-muted-foreground text-xs leading-relaxed">{event.detail}</p>
@@ -54,13 +54,18 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
                 {event.method && (
                   <span className="inline-flex items-center gap-1.5 font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border">
                     <Globe className="size-3 text-sky-400 shrink-0" />
-                    <span>{t('timeline.method_label', 'Metoda / Test:')} <strong className="text-foreground">{event.method}</strong></span>
+                    <span>
+                      {t('timeline.method_label', 'Metoda / Test:')}{' '}
+                      <strong className="text-foreground">{event.method}</strong>
+                    </span>
                   </span>
                 )}
                 {event.location && (
                   <span className="inline-flex items-center gap-1.5 font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border">
                     <MapPin className="size-3 text-rose-400 shrink-0" />
-                    <span>{t('timeline.node_label', 'Uzel:')} <strong className="text-foreground">{event.location}</strong></span>
+                    <span>
+                      {t('timeline.node_label', 'Uzel:')} <strong className="text-foreground">{event.location}</strong>
+                    </span>
                   </span>
                 )}
               </div>

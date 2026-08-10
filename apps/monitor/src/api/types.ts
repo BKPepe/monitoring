@@ -3,7 +3,8 @@
  *
  * Jediné místo, kde je definované rozhraní mezi UI a zdrojem dat.
  * Implementace jsou dvě: `http-source.ts` (dnešní PHP `api.php`) a
- * `mock-source.ts` (vymyšlená data pro vývoj bez serveru).
+ * `mock-source.ts` (dnes jen deleguje na http-source; vymyšlená data
+ * negeneruje - UI přes `isMock` jen hlásí, že API bylo nedostupné).
  *
  * Typy odpovídají tomu, co `apps/status/api.php` reálně vrací —
  * viz `apps/server/API-CONTRACT.md`.
@@ -16,6 +17,9 @@
  */
 export type MetricKey =
   | 'response_time'
+  | 'discord_presence'
+  | 'mc_players'
+  | 'lte_rsrp'
   | 'cpu'
   | 'ram'
   | 'hdd'

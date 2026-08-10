@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="148 0 344 230" role="img" aria-label="Blood Kings">
+  <!--
+    Samostatný znak (koruna s mečem) z bk-logo.svg - pro sidebar, favicony
+    a malé plochy, kde by textová část loga byla nečitelná.
+  -->
+  <defs>
+    <linearGradient id="bkredm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d31b2c"/>
+      <stop offset="1" stop-color="#8f0e1a"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#bkredm)">
+    <path d="M320 10 L332 44 L332 120 L308 120 L308 44 Z"/>
+    <rect x="290" y="118" width="60" height="10" rx="3"/>
+    <path d="M312 128 L328 128 L330 150 L310 150 Z"/>
+    <path d="M245 52 L262 122 L232 158 L226 96 Z"/>
+    <path d="M395 52 L378 122 L408 158 L414 96 Z"/>
+    <path d="M158 78 L206 148 L196 178 L170 132 L178 130 Z"/>
+    <path d="M482 78 L434 148 L444 178 L470 132 L462 130 Z"/>
+    <path d="M170 132 L226 96 L232 158 L310 150 L330 150 L408 158 L414 96 L470 132 L452 196 L188 196 Z"/>
+    <path d="M182 204 Q320 224 458 204 L455 216 Q320 236 185 216 Z"/>
+  </g>
+</svg>

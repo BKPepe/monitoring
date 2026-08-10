@@ -42,32 +42,30 @@ export function HealthDonut({
 }) {
   const total = segments.reduce((sum, s) => sum + s.value, 0);
 
-  // Offsety segmentů se skládají postupně; každý začíná tam, kde skončil předchozí.
-  let cursor = 0;
-  const arcs = segments.map((segment) => {
+  // Offsety segmentů se skládají postupně; každý začíná tam, kde skončil
+  // předchozí. Průběžný součet se počítá dopředu místo mutace proměnné
+  // během renderu - render má být čistá funkce vstupů.
+  const offsets = segments.reduce<number[]>((acc, _segment, i) => {
+    const prevFraction = i === 0 ? 0 : total === 0 ? 0 : segments[i - 1].value / total;
+    acc.push((acc[i - 1] ?? 0) + prevFraction);
+    return acc;
+  }, []);
+
+  const arcs = segments.map((segment, i) => {
     const fraction = total === 0 ? 0 : segment.value / total;
-    const arc = {
+    return {
       ...segment,
       fraction,
       dash: fraction * CIRCUMFERENCE,
-      offset: -cursor * CIRCUMFERENCE,
+      offset: -offsets[i] * CIRCUMFERENCE,
     };
-    cursor += fraction;
-    return arc;
   });
 
   return (
     <div className={cn('flex flex-wrap items-center justify-center gap-6', className)}>
       <div className="relative shrink-0">
         <svg viewBox="0 0 140 140" className="size-36 -rotate-90" role="presentation">
-          <circle
-            cx="70"
-            cy="70"
-            r={RADIUS}
-            fill="none"
-            strokeWidth="14"
-            className="stroke-muted"
-          />
+          <circle cx="70" cy="70" r={RADIUS} fill="none" strokeWidth="14" className="stroke-muted" />
           {arcs.map((arc) => (
             <circle
               key={arc.label}

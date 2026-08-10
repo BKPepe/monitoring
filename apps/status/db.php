@@ -20,7 +20,11 @@ try {
         $db_port = defined('DB_PORT') ? DB_PORT : 5432;
         $dsn = "pgsql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME;
     } else {
-        $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+        // DB_PORT se dřív používal jen u Postgresu, takže MySQL na jiném
+        // než výchozím portu se nepřipojila a uživatel viděl jen obecnou
+        // hlášku "Chyba připojení k databázi".
+        $db_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
+        $dsn = "mysql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME . ";charset=utf8mb4";
     }
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
@@ -31,7 +35,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260731');
+    define('BK_SCHEMA_VERSION', '20260809b');
 
     $bk_current_schema = false;
     try {
@@ -318,6 +322,30 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN zombie_count INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN fork_rate INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN temperature_c FLOAT DEFAULT NULL",
+        // Sila LTE signalu v case: ukazuje, jestli se spojeni zhorsuje
+        // (posunuta antena, pretizena bunka, pocasi). Driv byl jen snimek.
+        "ALTER TABLE vps_metrics ADD COLUMN lte_rsrp FLOAT DEFAULT NULL",
+
+        // Denni souhrn dostupnosti: jeden radek na monitor a den.
+        //
+        // monitor_logs se maze po 30 dnech (~3 miliony radku za rok by na
+        // sdilenem hostingu neunesla), takze SLA za delsi obdobi nemelo z ceho
+        // pocitat - sloupec "rok" ukazoval totez co "30 dni". Agregace prezije
+        // mazani a pro SLA nese presne to, co je potreba: pomer uspesnych
+        // kontrol. Podrobnosti o vypadcich zustavaji v monitor_events, ktere se
+        // nemazou vubec.
+        "CREATE TABLE IF NOT EXISTS `uptime_daily` (
+            `monitor_id` INT NOT NULL,
+            `day` DATE NOT NULL,
+            `checks_total` INT NOT NULL DEFAULT 0,
+            `checks_up` INT NOT NULL DEFAULT 0,
+            `checks_down` INT NOT NULL DEFAULT 0,
+            `checks_warning` INT NOT NULL DEFAULT 0,
+            `avg_response_ms` FLOAT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`monitor_id`, `day`),
+            KEY `idx_uptime_daily_day` (`day`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_total INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN conntrack_pct FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN net_ipv4_kbps FLOAT DEFAULT NULL",
@@ -440,6 +468,100 @@ try {
         }
     } catch (PDOException $e) {
         // Tabulka monitors/assets ještě neexistuje (čerstvá instalace před importem schema.sql) - ignorujeme
+    }
+
+    // Per-user jazyk e-mailů: NULL = řídí se globálním nastavením email_lang
+    try {
+        $pdo->exec("ALTER TABLE users ADD COLUMN email_lang VARCHAR(5) DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+
+    // Metriky ve vps_metrics smí být NULL - když zdroj (StatsBar bez CloudLinux,
+    // agent bez čidla) hodnotu nevrací, ukládá se NULL místo vymyšlené nuly
+    try {
+        $pdo->exec("ALTER TABLE vps_metrics MODIFY COLUMN cpu_usage FLOAT NULL, MODIFY COLUMN ram_usage FLOAT NULL, MODIFY COLUMN hdd_usage FLOAT NULL");
+    } catch (PDOException $e) {
+        // Tabulka ještě neexistuje (čerstvá instalace) - ignorujeme
+    }
+
+    // restart_service potřebuje vědět KTEROU službu restartovat - bez sloupce
+    // se jméno nikdy nepřeneslo a akce u všech agentů končila "failed".
+    try {
+        $pdo->exec("ALTER TABLE agent_actions ADD COLUMN service_name VARCHAR(64) DEFAULT NULL");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+
+    // Přečtená upozornění se drží na uživateli, ne v localStorage prohlížeče -
+    // jinak "označit vše jako přečtené" platí jen na jednom počítači.
+    try {
+        $pdo->exec("ALTER TABLE users ADD COLUMN alerts_read_log_id INT DEFAULT 0");
+    } catch (PDOException $e) {
+        // Sloupec už existuje, ignorujeme
+    }
+
+    // Výkon: seznam monitorů se ptá na POSLEDNÍ řádek podle id pro každý
+    // monitor (odezva z logů, metriky z agenta). Bez indexu (monitor_id, id)
+    // to znamenalo scan - endpoint monitors trval ~0,7 s a brzdil celou appku.
+    foreach ([
+        // Incidenty jako plnohodnotné objekty: vazba na monitor, převzetí
+        // (acknowledge) a postmortem. NULLable - ručně založené incidenty
+        // vazbu na monitor nemají.
+        // Editovatelne presety: pojmenovana sada zobrazenych metrik a prahu,
+        // kterou lze priradit vice monitorum najednou. Nahrazuje situaci, kdy
+        // sly menit jen prahy jednotlivych monitoru a sada metrik byla
+        // natvrdo v get_service_profiles().
+        "CREATE TABLE IF NOT EXISTS `metric_presets` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(80) NOT NULL,
+            `description` VARCHAR(255) DEFAULT NULL,
+            `service_type` VARCHAR(32) DEFAULT NULL,
+            `metrics` TEXT DEFAULT NULL,
+            `cpu_threshold` INT DEFAULT NULL,
+            `ram_threshold` INT DEFAULT NULL,
+            `hdd_threshold` INT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_preset_name` (`name`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        // Verejne status stranky: vlastni vyber monitoru, slug a viditelnost.
+        // Drive existovala jedna natvrdo slozena stranka bez moznosti neco
+        // vybrat - odkaz na /status/ a nic vic.
+        "CREATE TABLE IF NOT EXISTS `status_pages` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `title` VARCHAR(120) NOT NULL,
+            `slug` VARCHAR(60) NOT NULL,
+            `description` VARCHAR(255) DEFAULT NULL,
+            `is_public` TINYINT(1) NOT NULL DEFAULT 1,
+            `monitor_ids` TEXT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_status_page_slug` (`slug`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        "ALTER TABLE monitors ADD COLUMN preset_id INT NULL",
+
+        // Upozorneni na zhorsenou odezvu: dosud slo poznat jen vypadek, ne
+        // to, ze se sluzba vlece. NULL = vypnuto (vychozi), aby se stavajici
+        // monitory nezacaly hlasit samy od sebe.
+        "ALTER TABLE monitors ADD COLUMN latency_threshold_ms INT NULL",
+        // Kolik minut musi zhorseni trvat, nez se posle upozorneni - jedna
+        // pomala kontrola je sum, ne problem.
+        "ALTER TABLE monitors ADD COLUMN latency_threshold_mins INT NOT NULL DEFAULT 5",
+        "ALTER TABLE incidents ADD COLUMN monitor_id INT NULL",
+        "ALTER TABLE incidents ADD COLUMN acknowledged_by VARCHAR(64) NULL",
+        "ALTER TABLE incidents ADD COLUMN acknowledged_at DATETIME NULL",
+        "ALTER TABLE incidents ADD COLUMN postmortem TEXT NULL",
+        "CREATE INDEX idx_logs_monitor_id_desc ON monitor_logs (monitor_id, id)",
+        // Okenní SLA agregace (websites_overview) filtruje rok logů podle času.
+        "CREATE INDEX idx_logs_checked_at ON monitor_logs (checked_at)",
+        "CREATE INDEX idx_vpsm_monitor_id_desc ON vps_metrics (monitor_id, id)",
+    ] as $idx_sql) {
+        try {
+            $pdo->exec($idx_sql);
+        } catch (PDOException $e) {
+            // Index už existuje (nebo tabulka ještě ne) - ignorujeme
+        }
     }
 
     // Uložení aktuální verze schématu - migrace se příště přeskočí

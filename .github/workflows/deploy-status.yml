@@ -8,6 +8,10 @@ on:
       - 'apps/status/**'
       - '.github/workflows/deploy-status.yml'
 
+  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
+  # Actions zrovna nezareagovaly na push).
+  workflow_dispatch:
+
 jobs:
   deploy:
     name: Build and Deploy Status App
@@ -16,6 +20,30 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
+
+      - name: Run PHP unit tests (pure functions)
+        run: php apps/status/tests/run_tests.php
+
+      - name: Run pipeline tests (collection, e-mail, notifications)
+        run: php apps/status/tests/run_pipeline_tests.php
+
+      - name: PHP syntax check
+        run: |
+          set -e
+          for f in apps/status/*.php apps/status/lang/*.php; do
+            php -l "$f" > /dev/null
+          done
+          echo "All PHP files parse cleanly."
+
+      - name: Agent script syntax check
+        run: |
+          set -e
+          # agent.sh má shebang #!/bin/bash a bashismy používá záměrně;
+          # agent_openwrt.sh musí být čistý POSIX (routery mají ash/dash).
+          bash -n apps/status/agent.sh
+          dash -n apps/status/agent_openwrt.sh
+          python3 -m py_compile apps/status/agent.py
+          echo "Agent scripts parse cleanly."
 
       - name: Inject Status Database Config
         env:
@@ -58,3 +86,18 @@ jobs:
             **/.git*/**
             **/node_modules/**
             .github/**
+
+      # Po nasazeni se kazda verejna stranka pozada, jestli neupadla.
+      # widget.php a badge.php takhle mesice vracely 500 (volaly funkci,
+      # ktera v kodu nebyla) a nikdo si toho nevsiml - php -l chybu za
+      # behu nevidi a nikdo ty stranky neotviral.
+      - name: Setup PHP pro smoke test
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring
+
+      - name: Smoke test nasazených stránek
+        run: |
+          sleep 5
+          php apps/status/tests/run_page_smoke.php

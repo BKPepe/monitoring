@@ -7,6 +7,7 @@ import {
   LegendComponent,
   MarkAreaComponent,
   MarkLineComponent,
+  ToolboxComponent,
   TooltipComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
@@ -32,6 +33,7 @@ echarts.use([
   DataZoomComponent,
   MarkLineComponent,
   MarkAreaComponent,
+  ToolboxComponent,
   CanvasRenderer,
 ]);
 
@@ -50,16 +52,14 @@ export interface ChartProps {
   className?: string;
   /** Vypne animace (respekt k prefers-reduced-motion řeší volající). */
   animate?: boolean;
+  /**
+   * Grafy se stejnou skupinou sdílí kurzor tooltopu i zoom
+   * (echarts.connect) - hover na CPU ukáže tentýž okamžik i v RAM grafu.
+   */
+  group?: string;
 }
 
-export function Chart({
-  option,
-  ariaLabel,
-  summary,
-  height = 200,
-  className,
-  animate = true,
-}: ChartProps) {
+export function Chart({ option, ariaLabel, summary, height = 200, className, animate = true, group }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
 
@@ -73,6 +73,11 @@ export function Chart({
     });
     instanceRef.current = instance;
 
+    if (group) {
+      instance.group = group;
+      echarts.connect(group);
+    }
+
     // ECharts se sám nepřekresluje při změně velikosti kontejneru; sleduje
     // se jen window.resize. V gridu, který mění šířku bez změny okna
     // (sbalení sidebaru), je proto potřeba ResizeObserver.
@@ -84,7 +89,7 @@ export function Chart({
       instance.dispose();
       instanceRef.current = null;
     };
-  }, []);
+  }, [group]);
 
   React.useEffect(() => {
     instanceRef.current?.setOption(option, {
@@ -97,13 +102,7 @@ export function Chart({
 
   return (
     <figure className={cn('relative', className)}>
-      <div
-        ref={containerRef}
-        style={{ height }}
-        role="img"
-        aria-label={ariaLabel}
-        className="w-full"
-      />
+      <div ref={containerRef} style={{ height }} role="img" aria-label={ariaLabel} className="w-full" />
       {summary && <figcaption className="sr-only">{summary}</figcaption>}
     </figure>
   );

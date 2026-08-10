@@ -11,9 +11,30 @@ import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
  * sparkline v health kartě. To je záměr: uživatel má poznat metriku podle
  * barvy, ne podle legendy.
  */
-export function MetricChart({ data, height = 200 }: { data: ChartData; height?: number }) {
+export function MetricChart({ data, height = 200, group }: { data: ChartData; height?: number; group?: string }) {
   const theme = useChartTheme();
   const reducedMotion = usePrefersReducedMotion();
+
+  // CSV export: přesně ty body, které graf kreslí (včetně null jako
+  // prázdné buňky - díra v měření zůstává dírou i v exportu).
+  const exportCsv = React.useCallback(() => {
+    const rows: string[] = ['time,' + data.series.map((s) => `"${s.label} (${s.unit})"`).join(',')];
+    const times = data.series[0]?.points.map((p) => p.t) ?? [];
+    times.forEach((tms, i) => {
+      const cells = data.series.map((s) => {
+        const v = s.points[i]?.v;
+        return v == null ? '' : String(v);
+      });
+      rows.push(new Date(tms).toISOString() + ',' + cells.join(','));
+    });
+    const blob = new Blob(['\ufeff' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${data.id}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [data]);
 
   const option = React.useMemo<EChartsCoreOption>(() => {
     const unit = data.series[0]?.unit ?? '';
@@ -21,7 +42,31 @@ export function MetricChart({ data, height = 200 }: { data: ChartData; height?: 
     return {
       animation: !reducedMotion,
       animationDuration: 300,
-      grid: { top: 16, right: 12, bottom: 24, left: 44 },
+      grid: { top: 28, right: 12, bottom: 24, left: 44 },
+      // Zoom: tažením v grafu (inside) i výběrem oblasti (toolbox lupa).
+      // Grafy ve skupině se zoomují společně (echarts.connect).
+      dataZoom: [{ type: 'inside', throttle: 50, zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false }],
+      toolbox: {
+        show: true,
+        top: 0,
+        right: 0,
+        itemSize: 13,
+        iconStyle: { borderColor: theme.textMuted },
+        emphasis: { iconStyle: { borderColor: theme.text } },
+        feature: {
+          dataZoom: { yAxisIndex: 'none', title: { zoom: 'Zoom výběrem', back: 'Zpět' } },
+          restore: { title: 'Obnovit' },
+          saveAsImage: { title: 'Uložit PNG', name: data.id, backgroundColor: theme.tooltipBg },
+          myCsv: {
+            show: true,
+            title: 'Export CSV',
+            // Ikona dokumentu se šipkou (jednoduchá SVG cesta, ať se nemusí
+            // tahat ikonový balík do canvasu).
+            icon: 'path://M4 2h10l6 6v14H4V2z M14 2v6h6 M9 13h6 M12 10v6',
+            onclick: exportCsv,
+          },
+        },
+      },
       tooltip: {
         trigger: 'axis',
         backgroundColor: theme.tooltipBg,
@@ -29,8 +74,7 @@ export function MetricChart({ data, height = 200 }: { data: ChartData; height?: 
         borderWidth: 1,
         textStyle: { color: theme.text, fontSize: 12 },
         axisPointer: { type: 'line', lineStyle: { color: theme.grid } },
-        valueFormatter: (value: unknown) =>
-          value == null ? '—' : `${value} ${unit}`,
+        valueFormatter: (value: unknown) => (value == null ? '—' : `${value} ${unit}`),
       },
       legend:
         data.series.length > 1
@@ -63,11 +107,11 @@ export function MetricChart({ data, height = 200 }: { data: ChartData; height?: 
         },
         splitLine: { lineStyle: { color: theme.grid } },
       },
-        series: data.series.map((s, i) =>
+      series: data.series.map((s, i) =>
         buildSeries(s, theme.series[s.tone], data.series.length, i === 0 ? data.events : undefined, theme.textMuted)
       ),
     };
-  }, [data, theme, reducedMotion]);
+  }, [data, theme, reducedMotion, exportCsv]);
 
   return (
     <Chart
@@ -77,6 +121,7 @@ export function MetricChart({ data, height = 200 }: { data: ChartData; height?: 
       option={option}
       height={height}
       animate={!reducedMotion}
+      group={group}
       ariaLabel={`${data.title} v čase`}
       summary={describe(data)}
     />
@@ -113,13 +158,21 @@ function buildSeries(
         : undefined,
     connectNulls: false,
     // Události (výpadek, restart, změna konfigurace) jako svislé čáry.
+    // silent: false - najetí na čáru ukáže, CO se v tu chvíli stalo.
     markLine: events?.length
       ? {
           symbol: 'none',
-          silent: true,
-          lineStyle: { color: eventColor, type: 'dotted' as const, width: 1 },
+          silent: false,
+          lineStyle: { color: eventColor, type: 'dotted' as const, width: 1.2 },
           label: { show: false },
-          data: events.map((e) => ({ xAxis: e.t })),
+          emphasis: { lineStyle: { width: 2 } },
+          tooltip: {
+            formatter: (params: { name?: string }) => params.name ?? '',
+          },
+          data: events.map((e) => ({
+            xAxis: e.t,
+            name: `${new Date(e.t).toLocaleString('cs-CZ')} — ${e.label}`,
+          })),
         }
       : undefined,
   };
@@ -128,9 +181,14 @@ function buildSeries(
 /** Přidá alfa kanál k hex barvě z tokenu. */
 function withAlpha(color: string, alpha: number): string {
   if (!color.startsWith('#')) return color;
-  const hex = color.length === 4
-    ? color.slice(1).split('').map((c) => c + c).join('')
-    : color.slice(1);
+  const hex =
+    color.length === 4
+      ? color
+          .slice(1)
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : color.slice(1);
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
   const b = parseInt(hex.slice(4, 6), 16);

@@ -85,7 +85,7 @@ if [ "$1" = "--register" ] || [ "$1" = "--auto-register" ]; then
     fi
 fi
 
-AGENT_VERSION="1.5.2"
+AGENT_VERSION="1.5.15"
 LOG_FILE="/tmp/status-agent-openwrt.log"
 CPU_STATE_FILE="/tmp/status-agent-openwrt-cpu.state"
 NET_STATE_FILE="/tmp/status-agent-openwrt-net.state"
@@ -133,6 +133,19 @@ done
 
 json_str() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | tr '\n' ' '
+}
+
+# Vypise JSON hodnotu: bud null (bez uvozovek), nebo uvozovkovany retezec.
+#
+# Vzniklo kvuli LTE: prazdna hodnota se v tomhle skriptu drzi jako retezec
+# "null" a `"$(json_str "$v")"` z ni udelal RETEZEC "null", takze UI
+# poctive vypsalo `null · "null"` misto pomlcky.
+json_val() {
+    if [ -z "$1" ] || [ "$1" = "null" ]; then
+        printf 'null'
+    else
+        printf '"%s"' "$(json_str "$1")"
+    fi
 }
 
 log_message() {
@@ -207,10 +220,12 @@ END {
     print "ram=" pct "; ram_total_mb=" total "; ram_used_mb=" used "; ram_available_mb=" avail "; ram_free_mb=" free;
 }' /proc/meminfo 2>/dev/null)
 [ -z "$ram" ] && ram="0.0"
-[ -z "$ram_total_mb" ] && ram_total_mb=0
-[ -z "$ram_used_mb" ] && ram_used_mb=0
-[ -z "$ram_available_mb" ] && ram_available_mb=0
-[ -z "$ram_free_mb" ] && ram_free_mb=0
+# Kdyz se /proc/meminfo neprecte, NENI to stroj s 0 MB pameti - hodnoty
+# zustavaji null a server i UI to zobrazi jako "nezmereno".
+[ -z "$ram_total_mb" ] && ram_total_mb="null"
+[ -z "$ram_used_mb" ] && ram_used_mb="null"
+[ -z "$ram_available_mb" ] && ram_available_mb="null"
+[ -z "$ram_free_mb" ] && ram_free_mb="null"
 
 # Load average 1/5/15 - primo z /proc/loadavg, ne z ubus "system info" (ktere
 # vraci stejna cisla, jen skalovana x65536 - zbytecna komplikace navic).
@@ -261,7 +276,9 @@ DISK_STATE_FILE="/tmp/status-agent-openwrt-disk.state"
 disk_io_write="null"
 if [ -f /proc/diskstats ]; then
     now_ts=$(date +%s)
-    total_written_sectors=$(awk '$3 ~ /^(mtdblock|mmcblk|sd|ubiblock|nvme)/ {sum += $10} END {print sum+0}' /proc/diskstats 2>/dev/null)
+    # Bez shodneho disku se nevypisuje nic (drive nula, kterou pak stejne
+    # odfiltroval test -gt 0 nize - ale vzor svadel k opakovani jinde).
+    total_written_sectors=$(awk '$3 ~ /^(mtdblock|mmcblk|sd|ubiblock|nvme)/ {sum += $10; n++} END {if (n>0) print sum}' /proc/diskstats 2>/dev/null)
     if [ -n "$total_written_sectors" ] && [ "$total_written_sectors" -gt 0 ]; then
         if [ -f "$DISK_STATE_FILE" ]; then
             prev_ts=$(awk '{print $1}' "$DISK_STATE_FILE" 2>/dev/null)
@@ -490,9 +507,12 @@ else
     fi
 fi
 
-wifi_clients_count=0
+# Bez iwinfo se pocet klientu NEZJISTUJE - drive tu zustala nula, takze
+# router bez iwinfo hlasil "0 pripojenych", i kdyz se na WiFi nikdo nedival.
+wifi_clients_count="null"
 if command -v iwinfo >/dev/null 2>&1; then
-    wifi_clients_count=$(iwinfo 2>/dev/null | grep -i "assoc" | awk '{sum+=$NF} END {print sum+0}')
+    wifi_clients_count=$(iwinfo 2>/dev/null | grep -i "assoc" | awk '{sum+=$NF; n++} END {if (n>0) print sum}')
+    [ -z "$wifi_clients_count" ] && wifi_clients_count="null"
 fi
 
 interfaces_json="[]"
@@ -522,62 +542,8 @@ if [ -f /proc/net/dev ]; then
     END { printf "]" }' /proc/net/dev 2>/dev/null)
 fi
 
-# --- WiFi per-radio detail (iwinfo) ---
-wifi_radios_json="[]"
-if command -v iwinfo >/dev/null 2>&1; then
-    wifi_radios_json=$(for radio in $(iwinfo 2>/dev/null | awk '/^[a-z0-9]/ {print $1}'); do
-        info=$(iwinfo "$radio" info 2>/dev/null)
-        ssid=$(echo "$info" | grep -i "essid" | sed 's/.*ESSID: "\([^"]*\)".*/\1/' | sed 's/["\\]//g')
-        channel=$(echo "$info" | grep -i "channel" | awk '{print $2}' | tr -cd '0-9')
-        freq=$(echo "$info" | grep -i "frequency" | awk '{print $2}' | tr -cd '0-9')
-        tx_power=$(echo "$info" | grep -i "tx-power" | awk '{print $2}' | tr -cd '0-9-')
-        noise=$(echo "$info" | grep -i "noise" | awk '{print $2}' | tr -cd '0-9-')
-        clients=$(iwinfo "$radio" assoclist 2>/dev/null | grep -c "Address:" | tr -cd '0-9')
-        # Band detection from frequency
-        band="2.4GHz"
-        [ -n "$freq" ] && [ "$freq" -ge 5000 ] 2>/dev/null && band="5GHz"
-        [ -n "$freq" ] && [ "$freq" -ge 6000 ] 2>/dev/null && band="6GHz"
-        
-        [ -n "$ssid" ] || ssid="unknown"
-        [ -n "$channel" ] || channel="0"
-        [ -n "$tx_power" ] || tx_power="0"
-        [ -n "$noise" ] || noise="0"
-        [ -n "$clients" ] || clients="0"
-
-        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%d,\"tx_power\":%d,\"noise\":%d,\"clients\":%d}, " \
-            "$radio" "$ssid" "$band" "$channel" "$tx_power" "$noise" "$clients"
-    done | sed 's/, $//')
-    [ -n "$wifi_radios_json" ] && wifi_radios_json="[$wifi_radios_json]" || wifi_radios_json="[]"
-fi
-
-# --- LAN / DHCP ---
-lan_subnet=""
-lan_json=$(ubus call network.interface.lan status 2>/dev/null)
-if [ -n "$lan_json" ]; then
-    json_load "$lan_json"
-    json_get_keys lan_v4_keys "ipv4-address"
-    for k in $lan_v4_keys; do
-        json_select "ipv4-address"
-        json_select "$k"
-        lan_addr=""; lan_mask=""
-        json_get_var lan_addr address
-        json_get_var lan_mask mask
-        if [ -n "$lan_addr" ] && [ -n "$lan_mask" ]; then
-            lan_subnet="$lan_addr/$lan_mask"
-        fi
-        json_select ..
-        json_select ..
-        break
-    done
-fi
-dhcp_leases_count=0
-if [ -f /tmp/dhcp.leases ]; then
-    dhcp_leases_count=$(wc -l < /tmp/dhcp.leases 2>/dev/null | xargs)
-fi
-dhcp_reservations_count=0
-if command -v uci >/dev/null 2>&1; then
-    dhcp_reservations_count=$(uci show dhcp 2>/dev/null | grep -c "=host$")
-fi
+# (Starší duplicitní bloky WiFi a LAN/DHCP odstraněny 2026-08-05 - jejich
+#  výsledky vždy přepsala vylepšená verze níže, jen stály CPU navíc.)
 
 # --- DNS (dnsmasq stats) ---
 dns_queries="null"
@@ -598,12 +564,18 @@ fi
 fw_accepted="null"
 fw_dropped="null"
 fw_rejected="null"
+# Poznamka k "sum+0": puvodni verze vypisovala 0 i kdyz zadny radek
+# neodpovidal, takze router bez iptables (firewall4/nftables) hlasil
+# "0 zahozenych paketu" misto "nemerime". Ted se scita jen kdyz neco
+# opravdu bylo - jinak zustava null.
 if command -v iptables >/dev/null 2>&1; then
     fw_accepted=$(iptables -L FORWARD -v -n -x 2>/dev/null | awk '/^Chain/{next} NR==2{print $1}')
-    fw_dropped=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "drop" | awk '{sum+=$1} END{print sum+0}')
-    fw_rejected=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "reject" | awk '{sum+=$1} END{print sum+0}')
+    fw_dropped=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "drop" | awk '{sum+=$1; n++} END{if (n>0) print sum}')
+    fw_rejected=$(iptables -L FORWARD -v -n -x 2>/dev/null | grep -i "reject" | awk '{sum+=$1; n++} END{if (n>0) print sum}')
 elif command -v nft >/dev/null 2>&1; then
-    fw_dropped=$(nft list ruleset 2>/dev/null | grep -i "drop" | grep "packets" | awk '{sum+=$4} END{print sum+0}')
+    # nftables: pocitadla jsou "counter packets N bytes M" u pravidel s drop.
+    fw_dropped=$(nft -a list ruleset 2>/dev/null | awk '/drop/ && /packets/ { for (i=1;i<=NF;i++) if ($i=="packets") { sum+=$(i+1); n++ } } END{if (n>0) print sum}')
+    fw_accepted=$(nft -a list ruleset 2>/dev/null | awk '/accept/ && /packets/ { for (i=1;i<=NF;i++) if ($i=="packets") { sum+=$(i+1); n++ } } END{if (n>0) print sum}')
 fi
 [ -z "$fw_accepted" ] && fw_accepted="null"
 [ -z "$fw_dropped" ] && fw_dropped="null"
@@ -631,60 +603,82 @@ if command -v wg >/dev/null 2>&1; then
 fi
 
 # --- Top CPU & RAM processes ---
+# Sloupce se hledaji podle HLAVICKY topu (busybox i procps maji jine poradi).
+# Drivejsi verze "hadala" CPU jako nejvetsi cislo <= 100 v radku, takze
+# hlasila u vsech procesu stejnou nesmyslnou hodnotu (20.0 %) a nulovou RAM.
 top_cpu_json="[]"
 top_ram_json="[]"
 if command -v top >/dev/null 2>&1; then
-    top_out=$(top -bn1 2>/dev/null)
+    # procps-ng orezava sloupec COMMAND na sirku terminalu a useknute jmeno
+    # oznaci plusem ("pyt+", "kr+"). -w 512 sirku vynuti; busybox top prepinac
+    # nezna, proto fallback na holy beh.
+    top_out=$(COLUMNS=512 top -bn1 -w 512 2>/dev/null)
+    [ -z "$top_out" ] && top_out=$(COLUMNS=512 top -bn1 2>/dev/null)
     if [ -n "$top_out" ]; then
-        top_cpu_json=$(echo "$top_out" | awk '
-        BEGIN { printf "["; count=0 }
-        $1 ~ /^[0-9]+$/ && count < 5 {
-            pid = $1 + 0;
-            name = $NF;
-            if (!name || name ~ /^[0-9]/) name = "proc";
-            gsub(/["\\]/, "", name);
-            gsub(/\+$/, "", name);
-            
-            cpu = 0;
-            for (i = 2; i < NF; i++) {
-                val = $i;
-                gsub(/%/, "", val);
-                if (val ~ /^[0-9]+(\.[0-9]+)?$/) {
-                    num = val + 0;
-                    if (num <= 100 && num > cpu) cpu = num;
-                }
+        top_parsed=$(echo "$top_out" | awk '
+        function basename(p,   n, a) { n = split(p, a, "/"); return a[n]; }
+        # Hlavicka: najdeme indexy sloupcu podle nazvu
+        !found && /PID/ && (/%CPU/ || /CPU%/ || /COMMAND/) {
+            for (i = 1; i <= NF; i++) {
+                h = toupper($i);
+                if (h == "%CPU" || h == "CPU%") cpu_i = i;
+                else if (h == "%VSZ" || h == "%MEM" || h == "MEM%") mem_i = i;
+                else if (h == "VSZ" || h == "RSS" || h == "RES") vsz_i = i;
+                else if (h == "COMMAND" || h == "CMD" || h == "PROCESS") cmd_i = i;
+                else if (h == "PID") pid_i = i;
             }
-            if (count > 0) printf ", ";
-            printf "{\"pid\":%d,\"name\":\"%s\",\"cpu\":%.1f}", pid, name, cpu;
-            count++;
+            found = 1; next;
         }
-        END { printf "]" }' 2>/dev/null)
-
-        top_ram_json=$(echo "$top_out" | awk '
-        BEGIN { printf "["; count=0 }
-        $1 ~ /^[0-9]+$/ && count < 5 {
-            pid = $1 + 0;
-            name = $NF;
-            if (!name || name ~ /^[0-9]/) name = "proc";
-            gsub(/["\\]/, "", name);
-            gsub(/\+$/, "", name);
-
-            vsz = 0;
-            for (i = 2; i < NF; i++) {
-                val = $i;
-                gsub(/[kK]/, "", val);
-                if (val ~ /^[0-9]+$/ && val + 0 > vsz) {
-                    vsz = val + 0;
+        found && $pid_i ~ /^[0-9]+$/ {
+            cpu = (cpu_i ? $cpu_i : "");
+            gsub(/%/, "", cpu);
+            if (cpu !~ /^[0-9]+(\.[0-9]+)?$/) cpu = "";
+            # Pamet: VSZ/RSS je v kB (busybox pouziva pripony m/g)
+            raw = (vsz_i ? $vsz_i : "");
+            mb = "";
+            if (raw ~ /^[0-9]+(\.[0-9]+)?[mM]$/) { sub(/[mM]$/, "", raw); mb = raw + 0; }
+            else if (raw ~ /^[0-9]+(\.[0-9]+)?[gG]$/) { sub(/[gG]$/, "", raw); mb = (raw + 0) * 1024; }
+            else if (raw ~ /^[0-9]+(\.[0-9]+)?[kK]?$/) { sub(/[kK]$/, "", raw); mb = (raw + 0) / 1024; }
+            # busybox top kresli strom procesu: COMMAND zacina glyfem
+            # (`- , |- , +-) a skutecny prikaz je az za nim. Driv se proto
+            # jako jmeno ulozilo doslova "`-".
+            name = "";
+            for (c = cmd_i; c <= NF; c++) {
+                cand = $c;
+                gsub(/^[`|+\\-]+$/, "", cand);
+                if (cand == "" || cand == "`-" || cand == "|-" || cand == "+-" || cand == "-") continue;
+                # Jaderna vlakna top vypisuje v hranatych zavorkach
+                # ([kworker/u4:0-phy0]). basename() z nich delal "u4:0-phy0]",
+                # protoze rezal podle lomitka - u nich se zavorky jen odstrani.
+                if (cand ~ /^\[/) {
+                    gsub(/^\[|\]$/, "", cand);
+                    name = cand;
+                } else {
+                    name = basename(cand);
                 }
+                break;
             }
-            ram_mb = int(vsz / 1024);
-            if (ram_mb < 0) ram_mb = 0;
+            gsub(/[{}"\\]/, "", name);
+            # Zbytkove orezani (starsi top bez -w): "pyt+" -> "pyt"
+            sub(/\+$/, "", name);
+            if (name == "" || name ~ /^[`|+-]+$/) next;
+            printf "%s|%s|%s\n", name, cpu, mb;
+        }' 2>/dev/null)
 
-            if (count > 0) printf ", ";
-            printf "{\"pid\":%d,\"name\":\"%s\",\"ram_mb\":%d}", pid, name, ram_mb;
-            count++;
-        }
-        END { printf "]" }' 2>/dev/null)
+        if [ -n "$top_parsed" ]; then
+            # Obe hodnoty jdou do OBOU seznamu. Driv nesl zebricek podle CPU
+            # jen cpu a zebricek podle RAM jen ram_mb, takze v tabulce mela
+            # kazda radka jednu bunku prazdnou ("librespeed-cli 63,2 % / -").
+            # null se posila, kdyz hodnota u procesu opravdu chybi.
+            top_cpu_json=$(echo "$top_parsed" | awk -F'|' '$2 != ""' | sort -t'|' -k2 -rn | head -5 | awk -F'|' '
+                BEGIN { printf "[" }
+                { if (NR > 1) printf ", "; printf "{\"name\":\"%s\",\"cpu\":%.1f,\"ram_mb\":%s}", $1, $2, ($3 != "" ? sprintf("%.1f", $3) : "null") }
+                END { printf "]" }')
+            top_ram_json=$(echo "$top_parsed" | awk -F'|' '$3 != ""' | sort -t'|' -k3 -rn | head -5 | awk -F'|' '
+                BEGIN { printf "[" }
+                { if (NR > 1) printf ", "; printf "{\"name\":\"%s\",\"ram_mb\":%.1f,\"cpu\":%s}", $1, $3, ($2 != "" ? sprintf("%.1f", $2) : "null") }
+                END { printf "]" }')
+        fi
     fi
 fi
 [ -z "$top_cpu_json" ] && top_cpu_json="[]"
@@ -734,6 +728,112 @@ if [ -f /etc/config/sqm ]; then
     fi
 fi
 
+# --- LTE/WWAN pripojeni pres ubus -----------------------------------------
+#
+# Modem nemusi byt vubec videt pres uqmi/mmcli - na Turrisu s LTE v mPCIe
+# bez ModemManageru je dostupny jen jako sitove rozhrani (interface "lte",
+# proto dhcp). Driv agent hlasil "zadne LTE", i kdyz spojeni bezelo.
+#
+# Odsud se da zjistit, jestli LTE JEDE. Sila signalu (RSRP/RSRQ/band) tudy
+# dostupna neni - ta zustava null, dokud na routeru nebude uqmi/mmcli.
+lte_up="null"
+lte_device="null"
+lte_uptime="null"
+lte_ipv4="null"
+if command -v ubus >/dev/null 2>&1; then
+    for lte_if in lte wwan wwan0 modem lte1; do
+        lte_status=$(ubus call "network.interface.${lte_if}" status 2>/dev/null)
+        [ -z "$lte_status" ] && continue
+
+        lte_up_raw=$(echo "$lte_status" | jsonfilter -e '@.up' 2>/dev/null)
+        [ "$lte_up_raw" = "true" ] || [ "$lte_up_raw" = "1" ] && lte_up="true" || lte_up="false"
+
+        lte_dev=$(echo "$lte_status" | jsonfilter -e '@.l3_device' 2>/dev/null)
+        [ -z "$lte_dev" ] && lte_dev=$(echo "$lte_status" | jsonfilter -e '@.device' 2>/dev/null)
+        [ -n "$lte_dev" ] && lte_device="$lte_dev"
+
+        lte_up_sec=$(echo "$lte_status" | jsonfilter -e '@.uptime' 2>/dev/null)
+        case "$lte_up_sec" in
+            ''|*[!0-9]*) : ;;
+            *) lte_uptime="$lte_up_sec" ;;
+        esac
+
+        lte_addr=$(echo "$lte_status" | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)
+        [ -n "$lte_addr" ] && lte_ipv4="$lte_addr"
+
+        break
+    done
+fi
+
+# --- Signal LTE z HiLink API modemu ----------------------------------------
+#
+# Modemy Huawei/Brovi v rezimu HiLink vystavuji na sve brane HTTP API se
+# silou signalu. Je to jedina cesta, jak signal zjistit bez mmcli/uqmi -
+# ubus u dhcp rozhrani zna jen to, ze spojeni jede.
+#
+# Dotaz jde vylucne na branu LTE rozhrani (odvozenou z jeho vlastni adresy),
+# s kratkym timeoutem, a jen kdyz LTE opravdu bezi. Kdyz modem API nema,
+# hodnoty zustavaji null - nic se nedopocitava.
+lte_rssi="null"
+lte_pci="null"
+lte_cell_id="null"
+lte_bandwidth="null"
+lte_plmn="null"
+
+if [ "$lte_up" = "true" ] && [ "$lte_ipv4" != "null" ] && [ -n "$lte_ipv4" ]; then
+    lte_api_host=$(echo "$lte_ipv4" | sed 's/\.[0-9]*$/.1/')
+    lte_sig_xml=""
+    if command -v curl >/dev/null 2>&1; then
+        lte_sig_xml=$(curl -s -m 2 "http://${lte_api_host}/api/device/signal" 2>/dev/null)
+    elif command -v uclient-fetch >/dev/null 2>&1; then
+        lte_sig_xml=$(uclient-fetch -q -T 2 -O - "http://${lte_api_host}/api/device/signal" 2>/dev/null)
+    elif command -v wget >/dev/null 2>&1; then
+        lte_sig_xml=$(wget -q -T 2 -O - "http://${lte_api_host}/api/device/signal" 2>/dev/null)
+    fi
+
+    if echo "$lte_sig_xml" | grep -q "<rsrp>"; then
+        # Hodnoty nesou jednotky primo v textu ("-83dBm", "-6.0dB"), tak se
+        # necha jen cislo. Prazdny tag = udaj modem nehlasi -> null.
+        bk_xml_num() {
+            _v=$(echo "$lte_sig_xml" | sed -n "s|.*<$1>\([^<]*\)</$1>.*|\1|p" | head -1)
+            _v=$(echo "$_v" | sed 's/[^0-9.-]//g')
+            case "$_v" in
+                ''|-|.|--) printf 'null' ;;
+                *) printf '%s' "$_v" ;;
+            esac
+        }
+        bk_xml_str() {
+            _v=$(echo "$lte_sig_xml" | sed -n "s|.*<$1>\([^<]*\)</$1>.*|\1|p" | head -1)
+            [ -z "$_v" ] && printf 'null' || printf '"%s"' "$(json_str "$_v")"
+        }
+
+        lte_rsrp=$(bk_xml_num rsrp)
+        lte_rsrq=$(bk_xml_num rsrq)
+        lte_sinr=$(bk_xml_num sinr)
+        lte_rssi=$(bk_xml_num rssi)
+        lte_pci=$(bk_xml_num pci)
+        lte_cell_id=$(bk_xml_num cell_id)
+        lte_plmn=$(bk_xml_str plmn)
+        lte_bandwidth=$(bk_xml_str dlbandwidth)
+
+        # Pasmo hlasi modem jako cislo (1 = B1); ve zbytku systemu je to text.
+        _band=$(echo "$lte_sig_xml" | sed -n 's|.*<band>\([^<]*\)</band>.*|\1|p' | head -1)
+        [ -n "$_band" ] && lte_band="B${_band}"
+
+        # Jmeno operatora ma jiny endpoint; bez nej zustava to, co uz mame.
+        if command -v curl >/dev/null 2>&1; then
+            lte_plmn_xml=$(curl -s -m 2 "http://${lte_api_host}/api/net/current-plmn" 2>/dev/null)
+        elif command -v uclient-fetch >/dev/null 2>&1; then
+            lte_plmn_xml=$(uclient-fetch -q -T 2 -O - "http://${lte_api_host}/api/net/current-plmn" 2>/dev/null)
+        else
+            lte_plmn_xml=""
+        fi
+        _carrier=$(echo "$lte_plmn_xml" | sed -n 's|.*<FullName>\([^<]*\)</FullName>.*|\1|p' | head -1)
+        [ -z "$_carrier" ] && _carrier=$(echo "$lte_plmn_xml" | sed -n 's|.*<ShortName>\([^<]*\)</ShortName>.*|\1|p' | head -1)
+        [ -n "$_carrier" ] && lte_carrier="$_carrier"
+    fi
+fi
+
 # --- LTE/WWAN modem ---
 lte_rsrp="null"
 lte_rsrq="null"
@@ -757,6 +857,27 @@ elif command -v mmcli >/dev/null 2>&1; then
         lte_sinr=$(echo "$mm_out" | grep -i "sinr" | awk -F: '{gsub(/[^0-9.-]/, "", $2); print $2}')
     fi
 fi
+# Fallback: Turris/OpenWrt s ModemManager pres ubus, kdyz uqmi/mmcli chybi
+if [ "$lte_rsrp" = "null" ] || [ -z "$lte_rsrp" ]; then
+    if command -v mmcli >/dev/null 2>&1; then
+        mm_id=$(mmcli -L 2>/dev/null | sed -n 's#.*/Modem/\([0-9]*\).*#\1#p' | head -1)
+        if [ -n "$mm_id" ]; then
+            mmcli -m "$mm_id" --signal-setup=5 >/dev/null 2>&1
+            mm_sig=$(mmcli -m "$mm_id" --signal-get 2>/dev/null)
+            [ -n "$mm_sig" ] && {
+                lte_rsrp=$(echo "$mm_sig" | sed -n 's/.*rsrp:[[:space:]]*\(-\?[0-9.]*\).*/\1/p' | head -1)
+                lte_rsrq=$(echo "$mm_sig" | sed -n 's/.*rsrq:[[:space:]]*\(-\?[0-9.]*\).*/\1/p' | head -1)
+                lte_sinr=$(echo "$mm_sig" | sed -n 's/.*snr:[[:space:]]*\(-\?[0-9.]*\).*/\1/p' | head -1)
+            }
+            mm_info=$(mmcli -m "$mm_id" 2>/dev/null)
+            [ -n "$mm_info" ] && {
+                lte_carrier=$(echo "$mm_info" | sed -n "s/.*operator name:[[:space:]]*'\?\([^'|]*\).*/\1/p" | head -1 | sed 's/[[:space:]]*$//')
+                lte_band=$(echo "$mm_info" | sed -n 's/.*bands:[[:space:]]*\([^|]*\).*/\1/p' | head -1 | sed 's/[[:space:]]*$//')
+            }
+        fi
+    fi
+fi
+
 [ -z "$lte_rsrp" ] && lte_rsrp="null"
 [ -z "$lte_rsrq" ] && lte_rsrq="null"
 [ -z "$lte_sinr" ] && lte_sinr="null"
@@ -800,13 +921,149 @@ if [ -n "$wan_uptime" ] && [ "$wan_uptime" != "null" ] && [ "$wan_uptime" -gt 0 
 fi
 
 # --- Logs stats ---
+# Log: busybox logread pouziva "<err>"/"<warn>", syslog-ng (Turris) pise
+# uroven slovem ("err:", "error", "warning"). Drivejsi grep na "<err>"
+# proto na Turrisu hlasil vzdycky nulu. Bez citelneho logu zustava null.
 log_errors_24h="null"
 log_warnings_24h="null"
+log_buf=""
 if command -v logread >/dev/null 2>&1; then
-    log_errors_24h=$(logread -l 500 2>/dev/null | grep -ci "<err>" 2>/dev/null)
-    log_warnings_24h=$(logread -l 500 2>/dev/null | grep -ci "<warn>" 2>/dev/null)
+    log_buf=$(logread -l 500 2>/dev/null)
+fi
+if [ -z "$log_buf" ] && command -v journalctl >/dev/null 2>&1; then
+    log_buf=$(journalctl --since "24 hours ago" --no-pager -n 500 2>/dev/null)
+fi
+if [ -z "$log_buf" ] && [ -r /var/log/messages ]; then
+    log_buf=$(tail -n 500 /var/log/messages 2>/dev/null)
+fi
+if [ -n "$log_buf" ]; then
+    log_errors_24h=$(echo "$log_buf" | grep -c -i -E '<err>|(^| )err(or)?[: ]|daemon\.err|kern\.err|critical|fatal|panic')
+    log_warnings_24h=$(echo "$log_buf" | grep -c -i -E '<warn>|(^| )warn(ing)?[: ]|daemon\.warn|kern\.warn')
     [ -z "$log_errors_24h" ] && log_errors_24h=0
     [ -z "$log_warnings_24h" ] && log_warnings_24h=0
+fi
+
+# --- Tailscale / ZeroTier / UPS (NUT) - vse null-safe, bez nastroje se neposila nic ---
+tailscale_up_json="null"
+tailscale_peers_json="null"
+if command -v tailscale >/dev/null 2>&1; then
+    ts_json=$(tailscale status --json 2>/dev/null)
+    if [ -n "$ts_json" ]; then
+        echo "$ts_json" | grep -q '"BackendState":"Running"' && tailscale_up_json=true || tailscale_up_json=false
+        tailscale_peers_json=$(echo "$ts_json" | grep -c '"TailscaleIPs"')
+        # Self je v JSONu taky - odecist
+        [ "$tailscale_peers_json" -gt 0 ] 2>/dev/null && tailscale_peers_json=$((tailscale_peers_json - 1))
+    fi
+fi
+
+zerotier_networks_json="null"
+if command -v zerotier-cli >/dev/null 2>&1; then
+    zerotier_networks_json=$(zerotier-cli listnetworks 2>/dev/null | grep -c " OK ")
+    [ -z "$zerotier_networks_json" ] && zerotier_networks_json=0
+fi
+
+ups_status_json="null"
+ups_battery_json="null"
+if command -v upsc >/dev/null 2>&1; then
+    ups_name=$(upsc -l 2>/dev/null | head -1)
+    if [ -n "$ups_name" ]; then
+        ups_data=$(upsc "$ups_name" 2>/dev/null)
+        ups_st=$(echo "$ups_data" | sed -n 's/^ups.status: //p' | head -1)
+        ups_bat=$(echo "$ups_data" | sed -n 's/^battery.charge: //p' | head -1 | tr -cd '0-9')
+        [ -n "$ups_st" ] && ups_status_json="\"$ups_st\""
+        [ -n "$ups_bat" ] && ups_battery_json="$ups_bat"
+    fi
+fi
+
+# --- OOM kills, boot time, DNS latence, OpenVPN, USB (wishlist dodelavky) ---
+oom_kills="null"
+if command -v dmesg >/dev/null 2>&1; then
+    oom_kills=$(dmesg 2>/dev/null | grep -ci "oom-killer\|Out of memory")
+    # Prazdny vystup = dmesg nesel precist, ne "zadne OOM zabiti".
+    [ -z "$oom_kills" ] && oom_kills="null"
+fi
+
+# Boot time = ted - uptime; UI z toho ukaze "System bezi od" bez driftu.
+boot_time="null"
+[ -n "$uptime_sec" ] && [ "$uptime_sec" -gt 0 ] 2>/dev/null && boot_time=$((now_sec - uptime_sec))
+
+# DNS latence: realny dotaz pres lokalni resolver. Busybox time vypisuje
+# "real 0m 0.03s" na stderr; bez time/nslookup zustava null.
+dns_latency_ms="null"
+if command -v nslookup >/dev/null 2>&1 && command -v time >/dev/null 2>&1; then
+    dns_t=$( { time nslookup example.com 127.0.0.1 >/dev/null 2>&1; } 2>&1 | sed -n 's/.*real[[:space:]]*\([0-9]*\)m[[:space:]]*\([0-9.]*\)s.*/\1 \2/p')
+    if [ -n "$dns_t" ]; then
+        dns_min=$(echo "$dns_t" | awk '{print $1}')
+        dns_sec=$(echo "$dns_t" | awk '{print $2}')
+        dns_latency_ms=$(awk -v m="$dns_min" -v s="$dns_sec" 'BEGIN { printf "%.0f", (m*60+s)*1000 }')
+    fi
+fi
+
+# --- Odezva a rychlost linky ---------------------------------------------
+#
+# Server odezvu routeru zmerit nedokaze: ping z hostingu na WAN IP router
+# zahodi. Merime ji proto zevnitr - je to i smysluplnejsi cislo, protoze
+# rika, jak rychle odpovida INTERNET routeru, ne jak dobre je videt zvenku.
+#
+# Cil: nejdriv WAN brana (odezva prvniho hopu poskytovatele), pri neuspechu
+# verejny resolver. Bere se prumer ze tri paketu; kdyz ping neni nebo
+# neprojde, zustava null - nulou se to nenahrazuje.
+wan_latency_ms="null"
+if command -v ping >/dev/null 2>&1; then
+    for lat_target in "$wan_gateway" "1.1.1.1"; do
+        [ -z "$lat_target" ] && continue
+        lat_out=$(ping -c 3 -W 2 "$lat_target" 2>/dev/null | sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
+        if [ -n "$lat_out" ]; then
+            wan_latency_ms=$(awk -v v="$lat_out" 'BEGIN { printf "%.1f", v }')
+            break
+        fi
+    done
+fi
+
+# Rychlost WAN linky (Mbit/s) podle vyjednaneho rezimu rozhrani. Neni to
+# rychlost internetu od poskytovatele, ale strop fyzicke linky - kdyz
+# gigabitovy port spadne na 100 Mbit, je to prave tady videt.
+wan_link_mbit="null"
+if [ -n "$wan_l3_device" ]; then
+    link_dev="$wan_l3_device"
+    # U PPPoE/VLAN je l3_device virtualni (pppoe-wan, eth0.2) a rychlost ma
+    # jen fyzicky rodic. Odriznuti prefixu "pppoe-" davalo "wan", coz neni
+    # nazev zarizeni - skutecny rodic je v uci konfiguraci.
+    if [ ! -e "/sys/class/net/$link_dev/speed" ]; then
+        uci_dev=$(uci get network.wan.device 2>/dev/null)
+        [ -z "$uci_dev" ] && uci_dev=$(uci get network.wan.ifname 2>/dev/null)
+        # VLAN (eth0.2) ma rychlost az na rodicovskem rozhrani.
+        [ -n "$uci_dev" ] && [ ! -e "/sys/class/net/$uci_dev/speed" ] && uci_dev=$(echo "$uci_dev" | sed 's/\..*$//')
+        [ -n "$uci_dev" ] && link_dev="$uci_dev"
+    fi
+    # Posledni pokus: odriznout jen VLAN priponu z l3_device.
+    [ ! -e "/sys/class/net/$link_dev/speed" ] && link_dev=$(echo "$wan_l3_device" | sed 's/\..*$//')
+    if [ -r "/sys/class/net/$link_dev/speed" ]; then
+        link_raw=$(cat "/sys/class/net/$link_dev/speed" 2>/dev/null)
+        # -1 = link down nebo neznama rychlost; to neni mereni.
+        case "$link_raw" in
+            ''|*[!0-9-]*) : ;;
+            -*) : ;;
+            0) : ;;
+            *) wan_link_mbit="$link_raw" ;;
+        esac
+    fi
+fi
+
+openvpn_tunnels="null"
+if command -v pidof >/dev/null 2>&1; then
+    ovpn_pids=$(pidof openvpn 2>/dev/null)
+    openvpn_tunnels=$(echo "$ovpn_pids" | wc -w | tr -d '[:space:]')
+    [ -z "$openvpn_tunnels" ] && openvpn_tunnels=0
+fi
+
+# USB: pocitaji se jen skutecna ZARIZENI - polozky s ':' jsou rozhrani
+# jednoho zarizeni (1-1:1.0) a 'usbN' jsou root huby radice, takze drivejsi
+# prosty vypis hlasil treba 16 "zarizeni" u routeru s jedinym flash diskem.
+usb_devices="null"
+if [ -d /sys/bus/usb/devices ]; then
+    usb_devices=$(ls /sys/bus/usb/devices 2>/dev/null | grep -E '^[0-9]+-[0-9]+(\.[0-9]+)*$' | wc -l | tr -d '[:space:]')
+    [ -z "$usb_devices" ] && usb_devices=0
 fi
 
 # --- WiFi per-radio detail (iwinfo) ---
@@ -846,8 +1103,20 @@ if command -v iwinfo >/dev/null 2>&1; then
         [ -n "$channel" ] || channel="0"
         [ -n "$clients" ] || clients="0"
 
-        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%d,\"tx_power\":%d,\"noise\":%d,\"clients\":%d}, " \
-            "$radio" "$ssid" "$band" "$channel" "$tx_power" "$noise" "$clients"
+        # Vytizeni kanalu: pomer busy/active z iwinfo survey - ne kazdy driver
+        # to umi, pak zustava busy_pct null (zadna vymyslena nula).
+        busy_pct="null"
+        survey=$(iwinfo "$radio" survey 2>/dev/null | grep -i -A4 "in use")
+        if [ -n "$survey" ]; then
+            s_active=$(echo "$survey" | sed -n 's/.*[Aa]ctive time:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+            s_busy=$(echo "$survey" | sed -n 's/.*[Bb]usy time:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+            if [ -n "$s_active" ] && [ -n "$s_busy" ] && [ "$s_active" -gt 0 ] 2>/dev/null; then
+                busy_pct=$(awk -v b="$s_busy" -v a="$s_active" 'BEGIN { printf "%.0f", (b/a)*100 }')
+            fi
+        fi
+
+        printf "{\"radio\":\"%s\",\"ssid\":\"%s\",\"band\":\"%s\",\"channel\":%d,\"tx_power\":%d,\"noise\":%d,\"clients\":%d,\"busy_pct\":%s}, " \
+            "$radio" "$ssid" "$band" "$channel" "$tx_power" "$noise" "$clients" "$busy_pct"
     done | sed 's/, $//')
     [ -n "$wifi_radios_json" ] && wifi_radios_json="[$wifi_radios_json]" || wifi_radios_json="[]"
 fi
@@ -886,26 +1155,61 @@ dns_engine="Dnsmasq"
 dns_encryption="Nešifrované DNS (UDP/53)"
 dns_servers="$wan_dns"
 
+# Sifrovani se URCUJE Z DUKAZU, netvrdi se podle jmena resolveru:
+#  1) aktivni spojeni na port 853 (DoT) nebo 443 na znamy DoH endpoint,
+#  2) az potom konfigurace. Bez dukazu se hlasi "nelze urcit", ne DoT.
+dns_active_853=0
+dns_active_443=0
+if command -v netstat >/dev/null 2>&1; then
+    netstat -tn 2>/dev/null | grep -q ':853 .*ESTABLISHED' && dns_active_853=1
+elif command -v ss >/dev/null 2>&1; then
+    ss -tn state established 2>/dev/null | grep -q ':853' && dns_active_853=1
+fi
+
 if pidof kresd >/dev/null 2>&1 || [ -f /etc/config/resolver ]; then
     dns_engine="Knot Resolver (kresd)"
-    if grep -qi -E '853|tls|pin' /etc/config/resolver 2>/dev/null || (netstat -tunlp 2>/dev/null | grep -q ':853'); then
-        dns_encryption="DoT (DNS-over-TLS / port 853)"
+    res_fwd=$(uci -q get resolver.common.forward_custom 2>/dev/null)
+    res_tls=$(uci -q get resolver.common.forward_upstream 2>/dev/null)
+    if [ "$dns_active_853" = "1" ]; then
+        dns_encryption="DoT - ověřeno (aktivní spojení na port 853)"
+    elif [ -n "$res_fwd" ] && [ "$res_tls" = "1" ]; then
+        dns_encryption="DoT dle konfigurace (forwarding: $res_fwd)"
+    elif grep -qi -E '853|tls_|ca_file|hostname' /etc/config/resolver 2>/dev/null; then
+        dns_encryption="DoT dle konfigurace resolveru"
     else
-        dns_encryption="DoT (Knot Resolver TLS Upstream)"
+        dns_encryption="Nešifrované DNS (UDP/53) - v konfiguraci není TLS upstream"
     fi
 elif pidof AdGuardHome >/dev/null 2>&1; then
     dns_engine="AdGuard Home"
-    if grep -qi -E 'tls|doh|dot' /etc/AdGuardHome/AdGuardHome.yaml 2>/dev/null; then
-        dns_encryption="DoT / DoH (AdGuard Encrypted DNS)"
+    agh_cfg=$(cat /etc/AdGuardHome/AdGuardHome.yaml /opt/AdGuardHome/AdGuardHome.yaml 2>/dev/null)
+    if echo "$agh_cfg" | grep -qi 'https://'; then
+        dns_encryption="DoH dle konfigurace (upstream https://)"
+    elif echo "$agh_cfg" | grep -qi 'tls://'; then
+        dns_encryption="DoT dle konfigurace (upstream tls://)"
+    elif echo "$agh_cfg" | grep -qi 'quic://'; then
+        dns_encryption="DoQ dle konfigurace (upstream quic://)"
+    elif [ "$dns_active_853" = "1" ]; then
+        dns_encryption="DoT - ověřeno (aktivní spojení na port 853)"
+    else
+        dns_encryption="Nelze určit (konfigurace AdGuard Home nepřečtena)"
     fi
 elif pidof unbound >/dev/null 2>&1; then
     dns_engine="Unbound"
-    if grep -qi -E '853|tls' /etc/unbound/unbound.conf 2>/dev/null; then
-        dns_encryption="DoT (DNS-over-TLS)"
+    if grep -rqi -E 'tls-upstream:[[:space:]]*yes|forward-tls-upstream:[[:space:]]*yes' /etc/unbound/ 2>/dev/null; then
+        dns_encryption="DoT dle konfigurace (tls-upstream: yes)"
+    elif [ "$dns_active_853" = "1" ]; then
+        dns_encryption="DoT - ověřeno (aktivní spojení na port 853)"
+    else
+        dns_encryption="Nešifrované DNS (UDP/53)"
     fi
 elif pidof stubby >/dev/null 2>&1; then
     dns_engine="Stubby"
-    dns_encryption="DoT (DNS-over-TLS)"
+    dns_encryption="DoT (Stubby je DoT-only resolver)"
+elif pidof https_dns_proxy >/dev/null 2>&1 || pidof cloudflared >/dev/null 2>&1 || pidof dnscrypt-proxy >/dev/null 2>&1; then
+    dns_engine="DoH proxy"
+    dns_encryption="DoH - běží DoH proxy (https_dns_proxy/cloudflared/dnscrypt)"
+elif [ "$dns_active_853" = "1" ]; then
+    dns_encryption="DoT - ověřeno (aktivní spojení na port 853)"
 fi
 
 if [ -f /tmp/resolv.conf.auto ]; then
@@ -993,7 +1297,7 @@ else
             _missing=$(echo "$_missing" | sed 's/,$//')
             _desc_esc=$(json_str "$_desc")
             [ -n "$disc_list" ] && disc_list="$disc_list, "
-            disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"description\":\"$_desc_esc\",\"evidence\":[$_evidence],\"missing\":[$_missing]}"
+            disc_list="${disc_list}{\"name\":\"$_name\",\"type\":\"$_type\",\"process\":\"$_proc\",\"port\":${_portdec:-0},\"confidence\":$_conf,\"description\":\"$_desc_esc\",\"evidence\":[$_evidence],\"missing\":[$_missing]}"
         fi
     }
 
@@ -1130,16 +1434,38 @@ payload=$(cat <<EOF
   "sqm_upload_kbps": $sqm_upload_kbps,
   "sqm_dropped": $sqm_dropped,
   "sqm_ecn": $sqm_ecn,
+  "lte_up": $lte_up,
+  "lte_device": $(json_val "$lte_device"),
+  "lte_uptime": $lte_uptime,
+  "lte_ipv4": $(json_val "$lte_ipv4"),
+  "lte_rssi": $lte_rssi,
+  "lte_pci": $lte_pci,
+  "lte_cell_id": $lte_cell_id,
+  "lte_bandwidth": $lte_bandwidth,
+  "lte_plmn": $lte_plmn,
   "lte_rsrp": $lte_rsrp,
   "lte_rsrq": $lte_rsrq,
   "lte_sinr": $lte_sinr,
-  "lte_band": "$(json_str "$lte_band")",
-  "lte_carrier": "$(json_str "$lte_carrier")",
+  "lte_band": $(json_val "$lte_band"),
+  "lte_carrier": $(json_val "$lte_carrier"),
   "service_restarts": $service_restarts_json,
   "wan_reconnect_count": $wan_reconnect_count,
   "wan_last_reconnect": $wan_last_reconnect,
   "installed_packages": $installed_packages,
   "log_errors_24h": $log_errors_24h,
+  "tailscale_up": $tailscale_up_json,
+  "tailscale_peers": $tailscale_peers_json,
+  "zerotier_networks": $zerotier_networks_json,
+  "ups_status": $ups_status_json,
+  "ups_battery_pct": $ups_battery_json,
+  "auto_update": $([ "$AUTO_UPDATE" = "1" ] && echo 1 || echo 0),
+  "oom_kills": $oom_kills,
+  "boot_time": $boot_time,
+  "dns_latency_ms": $dns_latency_ms,
+  "wan_latency_ms": $wan_latency_ms,
+  "wan_link_mbit": $wan_link_mbit,
+  "openvpn_tunnels": $openvpn_tunnels,
+  "usb_devices": $usb_devices,
   "log_warnings_24h": $log_warnings_24h
 }
 EOF
@@ -1268,6 +1594,58 @@ if [ "$http_code" = "200" ]; then
             fi
         fi
     fi
+    # --- 5c. Agent-side kontroly sluzeb (LAN cile nedosazitelne z hostingu) ---
+    # Server v odpovedi posila seznam 'agent_service' monitoru tohoto assetu.
+    # Agent kazdy overi lokalne - bezici proces (pidof) a naslouchajici port
+    # (/proc/net/tcp, tcp6 i udp) - a vysledky posle zpet jako
+    # service_check_results. Zadna latence se nemeri; posila se jen fakt,
+    # jestli sluzba bezi (vymyslene 0 ms by bylo horsi nez nic).
+    if echo "$body" | grep -q '"service_checks":\['; then
+        sc_list=$(echo "$body" | sed -n 's/.*"service_checks":\[\(.*\)\].*/\1/p' | sed 's/}[[:space:]]*,[[:space:]]*{/}|{/g')
+        sc_results=""
+        SC_OLD_IFS=$IFS
+        IFS='|'
+        for sc_obj in $sc_list; do
+            sc_id=$(echo "$sc_obj" | sed -n 's/.*"monitor_id":\([0-9]*\).*/\1/p')
+            sc_proc=$(echo "$sc_obj" | sed -n 's/.*"process":"\([^"]*\)".*/\1/p')
+            sc_port=$(echo "$sc_obj" | sed -n 's/.*"port":\([0-9]*\).*/\1/p')
+            [ -z "$sc_id" ] && continue
+            sc_running=0
+            sc_detail=""
+            if [ -n "$sc_proc" ] && pidof "$sc_proc" >/dev/null 2>&1; then
+                sc_running=1
+                sc_detail="Proces $sc_proc bezi"
+            fi
+            if [ "$sc_running" = "0" ] && [ -n "$sc_port" ] && [ "$sc_port" != "0" ]; then
+                sc_hex=$(printf ':%04X' "$sc_port" 2>/dev/null)
+                if grep -qi "$sc_hex" /proc/net/tcp 2>/dev/null || grep -qi "$sc_hex" /proc/net/tcp6 2>/dev/null || grep -qi "$sc_hex" /proc/net/udp 2>/dev/null; then
+                    sc_running=1
+                    sc_detail="Port $sc_port nasloucha"
+                fi
+            fi
+            if [ "$sc_running" = "0" ]; then
+                sc_detail="Na routeru nebezi proces '${sc_proc:-?}' ani nenasloucha port ${sc_port:-0}"
+            fi
+            sc_bool="false"
+            [ "$sc_running" = "1" ] && sc_bool="true"
+            [ -n "$sc_results" ] && sc_results="$sc_results, "
+            sc_results="${sc_results}{\"monitor_id\":$sc_id,\"running\":$sc_bool,\"detail\":\"$(json_str "$sc_detail")\"}"
+        done
+        IFS=$SC_OLD_IFS
+
+        if [ -n "$sc_results" ]; then
+            sc_payload="{\"agent_key\":\"$(json_str "$AGENT_KEY")\",\"service_check_results\":[$sc_results]}"
+            if command -v curl >/dev/null 2>&1; then
+                curl -s -m 10 -X POST -H "Content-Type: application/json" -d "$sc_payload" "$API_URL" >/dev/null 2>&1
+            elif command -v uclient-fetch >/dev/null 2>&1; then
+                uclient-fetch -q -T 10 -O /dev/null --post-data="$sc_payload" --header="Content-Type: application/json" "$API_URL" >/dev/null 2>&1
+            elif command -v wget >/dev/null 2>&1; then
+                wget -T 10 --post-data="$sc_payload" --header="Content-Type: application/json" -q -O /dev/null "$API_URL" >/dev/null 2>&1
+            fi
+            log_debug "Odeslany vysledky agent-side kontrol sluzeb."
+        fi
+    fi
+
     # --- 6. Automatická aktualizace agenta (opt-in přes AUTO_UPDATE=1) ---
     # Server v odpovědi oznámí novější verzi včetně SHA-256 checksumu. Nová verze
     # se stáhne do dočasného souboru, ověří se checksum i syntaxe (sh -n) a teprve

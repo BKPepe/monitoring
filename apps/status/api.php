@@ -150,21 +150,46 @@ if ($action === 'monitors') {
             SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
                    m.last_checked, m.last_status_change, m.last_details,
                    (SELECT l.response_time FROM monitor_logs l
-                    WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL
+                    WHERE l.monitor_id = m.id AND l.response_time > 0
                     ORDER BY l.id DESC LIMIT 1) AS response_time,
                    vm.cpu_usage, vm.ram_usage, vm.hdd_usage
             FROM monitors m
-            LEFT JOIN (
-                SELECT vm1.monitor_id, vm1.cpu_usage, vm1.ram_usage, vm1.hdd_usage
-                FROM vps_metrics vm1
-                INNER JOIN (
-                    SELECT monitor_id, MAX(id) AS max_id FROM vps_metrics GROUP BY monitor_id
-                ) latest ON latest.monitor_id = vm1.monitor_id AND latest.max_id = vm1.id
-            ) vm ON vm.monitor_id = m.id
+            LEFT JOIN vps_metrics vm
+                   ON vm.id = (SELECT vm2.id FROM vps_metrics vm2
+                               WHERE vm2.monitor_id = m.id
+                               ORDER BY vm2.id DESC LIMIT 1)
             ORDER BY m.id ASC
         ");
+        $agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         foreach ($stmt->fetchAll() as $r) {
             $details = json_decode($r['last_details'] ?? '', true) ?: [];
+            // Provozní diagnostika (chybové hlášky sběru, hinty s názvy
+            // konfiguračních souborů) patří administrátorovi, ne veřejnému
+            // dashboardu - veřejná odpověď ji neobsahuje vůbec.
+            $details_out = $details;
+            if (!$is_admin) {
+                unset($details_out['cpanel_stats_error']);
+                // Síťová identita infrastruktury (WAN adresy, brána, vnitřní
+                // subnet, SSID, WireGuard endpointy, výpis rozhraní) je mapa
+                // pro útočníka - anonymní odpověď nese jen agregáty (počty,
+                // procenta), ne adresy. Stará status stránka to gatuje stejně.
+                foreach (['wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'lan_subnet', 'wifi_radios', 'wireguard_peers', 'interfaces', 'dns_servers', 'mwan3_policies', 'service_restarts', 'public_ip', 'asn', 'asn_name'] as $priv_key) {
+                    unset($details_out[$priv_key]);
+                }
+
+                // Seznam výše je výčet ZNÁMÝCH klíčů, jenže agent_api dnes
+                // propouští i klíče, o kterých server předem neví - výčet by
+                // je nepokryl a nová metrika s adresou by unikla anonymnímu
+                // návštěvníkovi. Proto se navíc filtruje podle názvu.
+                //
+                // Vzory míří na síťovou identitu a tajemství. Agregáty
+                // (počty, procenta, latence) sem záměrně nespadají.
+                foreach (array_keys($details_out) as $priv_key) {
+                    if (preg_match('/(ipv4|ipv6|(^|_)ip($|_)|addr|gateway|subnet|ssid|(^|_)mac($|_)|endpoint|peer|serial|hostname|token|secret|passw|_key$|^key$)/i', (string)$priv_key)) {
+                        unset($details_out[$priv_key]);
+                    }
+                }
+            }
             $last_change_ts = $r['last_status_change'] ? strtotime($r['last_status_change']) : null;
             $monitors[(int)$r['id']] = [
                 'id' => (int)$r['id'],
@@ -187,7 +212,11 @@ if ($action === 'monitors') {
                 'agentLastSeen' => $details['agent_last_seen'] ?? null,
                 'hostname' => $details['hostname'] ?? $r['target'],
                 'os' => $details['os'] ?? $r['type'],
-                'details' => $details,
+                'details' => $details_out,
+                // Výpadky SBĚRU dat (ne služby) - frontend je MUSÍ zobrazit,
+                // tiché zahazování dat je zakázané (viz bk_get_collection_issues).
+                // Jen pro admina: je to provozní diagnostika, ne veřejný stav služeb.
+                'collectionIssues' => $is_admin ? bk_get_collection_issues($r, $details, $agent_offline_secs) : [],
             ];
         }
     } catch (Exception $e) {
@@ -204,7 +233,8 @@ if ($action === 'monitors') {
         try {
             $stmt2 = $pdo->query("
                 SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
-                       maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
+                       maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold, preset_id,
+                       latency_threshold_ms, latency_threshold_mins,
                        body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
                        (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
                        (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
@@ -226,6 +256,10 @@ if ($action === 'monitors') {
                 $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? 90);
                 $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
                 $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
+                $monitors[$mid]['presetId'] = $r['preset_id'] !== null ? (int)$r['preset_id'] : null;
+                // null = upozornovani na zpomaleni je vypnute
+                $monitors[$mid]['latencyThresholdMs'] = $r['latency_threshold_ms'] !== null ? (int)$r['latency_threshold_ms'] : null;
+                $monitors[$mid]['latencyThresholdMins'] = (int)($r['latency_threshold_mins'] ?? 5);
                 $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
                 $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
                 $monitors[$mid]['sqUsername'] = $r['sq_username'];
@@ -236,6 +270,42 @@ if ($action === 'monitors') {
                 $monitors[$mid]['enabledMetrics'] = $r['enabled_metrics'] ? (json_decode($r['enabled_metrics'], true) ?: []) : [];
                 $monitors[$mid]['remoteActionsEnabled'] = (bool)$r['remote_actions_enabled'];
                 $monitors[$mid]['allowedActions'] = $r['allowed_actions'] ? explode(',', $r['allowed_actions']) : [];
+                // Nabídka aktualizace agenta: srovnání verze z posledního reportu
+                // s verzí souboru agenta na serveru. Jen když obě známe.
+                // Ochrana proti "věčně offline" monitorům: aktivní kontrola
+                // z hostingu na cíl v privátní síti nikdy neuspěje. Když má
+                // asset agenta, nabídneme převod na agent-side kontrolu
+                // místo tichého generování falešných výpadků.
+                // POZOR: $r je řádek z dotazu na rozšířená pole, který
+                // asset_id/type/target NEVYBÍRÁ - čtení z něj bylo tiché
+                // "undefined array key" a podmínka nikdy neplatila, takže se
+                // upozornění na nedosažitelný cíl nikdy nezobrazilo.
+                // Základní údaje už jsou složené výš v $monitors[$mid].
+                $base_row = $monitors[$mid];
+                if (
+                    ($base_row['assetId'] ?? null) !== null
+                    && in_array(strtolower((string)($base_row['type'] ?? '')), ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'dns'], true)
+                ) {
+                    if (bk_validate_import_target((string)($base_row['target'] ?? '')) !== null) {
+                        $monitors[$mid]['unreachableTarget'] = true;
+                    }
+                }
+
+                $agent_ver = $details['agent_version'] ?? null;
+                $agent_type_key = $details['agent_type'] ?? null;
+                if ($agent_ver && $agent_type_key && function_exists('bk_get_agent_latest_version')) {
+                    $latest_agent = bk_get_agent_latest_version($agent_type_key);
+                    if ($latest_agent !== null) {
+                        // Verze SOUBORU agenta na serveru - jediný zdroj pravdy.
+                        // Frontend dřív porovnával proti natvrdo zapsané '3.13.8'
+                        // (což je verze TeamSpeak serveru, ne agenta) a stringovým
+                        // '<', takže hlásil "neaktuální" i u čerstvě nasazeného agenta.
+                        $monitors[$mid]['agentLatestVersion'] = $latest_agent;
+                        if (bk_version_is_older($agent_ver, $latest_agent)) {
+                            $monitors[$mid]['agentUpdateAvailable'] = $latest_agent;
+                        }
+                    }
+                }
             }
         } catch (Throwable $t) {
             error_log('[api.php action=monitors] Extended fields query failed: ' . $t->getMessage());
@@ -280,6 +350,18 @@ if ($action === 'save_monitor') {
     $maintenance_end = ($maintenance === 1 && !empty($input['maintenance_end'])) ? $input['maintenance_end'] : null;
 
     $monitored_processes = !empty($input['monitored_processes']) ? trim($input['monitored_processes']) : null;
+    // Preset i prahy zpomaleni: prazdna hodnota znamena "nenastaveno" (NULL),
+    // ne nulu. $preset_id se driv vubec neprirazoval, takze kazde ulozeni
+    // monitoru jeho preset tise smazalo.
+    $preset_id = isset($input['preset_id']) && $input['preset_id'] !== null && $input['preset_id'] !== ''
+        ? (int)$input['preset_id']
+        : null;
+    $latency_threshold_ms = isset($input['latency_threshold_ms']) && $input['latency_threshold_ms'] !== null && $input['latency_threshold_ms'] !== ''
+        ? max(1, (int)$input['latency_threshold_ms'])
+        : null;
+    $latency_threshold_mins = isset($input['latency_threshold_mins']) && $input['latency_threshold_mins'] !== ''
+        ? max(1, min(1440, (int)$input['latency_threshold_mins']))
+        : 5;
     $cpu_threshold = !empty($input['cpu_threshold']) ? (int)$input['cpu_threshold'] : 90;
     $ram_threshold = !empty($input['ram_threshold']) ? (int)$input['ram_threshold'] : 95;
     $hdd_threshold = !empty($input['hdd_threshold']) ? (int)$input['hdd_threshold'] : 90;
@@ -315,10 +397,10 @@ if ($action === 'save_monitor') {
             // hodnotu - prázdné pole ve formuláři pro editaci nesmí smazat už uložené heslo.
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, latency_threshold_ms = ?, latency_threshold_mins = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $id]);
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
             $agent_key = bin2hex(random_bytes(16));
@@ -328,10 +410,10 @@ if ($action === 'save_monitor') {
                 $asset_id = (int)$pdo->lastInsertId();
             }
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, latency_threshold_ms, latency_threshold_mins, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id]);
             $new_id = (int)$pdo->lastInsertId();
             echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
@@ -378,7 +460,19 @@ if ($action === 'discovered_services') {
         exit;
     }
     try {
-        $stmt = $pdo->query("SELECT id, name, asset_id, last_details FROM monitors WHERE last_details IS NOT NULL");
+        // Už monitorované služby se nenavrhují znovu - jinak importovaná
+        // služba zůstala v panelu viset jako "nesledovaná" (hlášeno: kresd 2×).
+        $existing_names = [];
+        $existing_port_asset = [];
+        $stmt_ex = $pdo->query("SELECT LOWER(name) AS lname, port, asset_id FROM monitors");
+        while ($ex = $stmt_ex->fetch()) {
+            $existing_names[$ex['lname']] = true;
+            if ($ex['port'] !== null && $ex['asset_id'] !== null) {
+                $existing_port_asset[$ex['asset_id'] . ':' . $ex['port']] = true;
+            }
+        }
+
+        $stmt = $pdo->query("SELECT id, name, type, target, asset_id, last_details FROM monitors WHERE last_details IS NOT NULL");
         $services = [];
         while ($row = $stmt->fetch()) {
             $details = json_decode($row['last_details'] ?? '', true);
@@ -387,14 +481,67 @@ if ($action === 'discovered_services') {
             }
             foreach ($details['discovered_services'] as $svc) {
                 if (empty($svc['name'])) continue;
+
+                $asset_id = $row['asset_id'] !== null ? (int)$row['asset_id'] : null;
+                $port = isset($svc['port']) && $svc['port'] !== '' ? (int)$svc['port'] : null;
+                if (isset($existing_names[strtolower((string)$svc['name'])])) continue;
+                if ($port !== null && $asset_id !== null && isset($existing_port_asset[$asset_id . ':' . $port])) continue;
+
+                // Cíl budoucí kontroly: adresa od agenta, jinak hostname
+                // z jeho reportu, jinak target zdrojového monitoru. Dřív se
+                // tu dosazovalo JMÉNO monitoru ("Router - Praha"), které
+                // pak import po právu odmítl jako nevalidní adresu.
+                $resolved_target = trim((string)($svc['target'] ?? ''));
+                if ($resolved_target === '' || $resolved_target === '127.0.0.1' || $resolved_target === 'localhost') {
+                    $resolved_target = trim((string)($details['hostname'] ?? ''));
+                }
+                if ($resolved_target === '') {
+                    $resolved_target = trim((string)($row['target'] ?? ''));
+                }
+                // Předběžná validace: služba, kterou z hostingu nelze
+                // kontrolovat (privátní adresa, žádná adresa), se u agentních
+                // monitorů (vps/openwrt) nabídne jako agent-side kontrola -
+                // ověří ji lokálně sám agent. Blokace zůstává jen tam, kde
+                // není agent, který by kontrolu převzal.
+                $import_blocked = $resolved_target === ''
+                    ? 'Agent nehlásí žádnou adresu, přes kterou by šla služba z hostingu testovat.'
+                    : bk_validate_import_target($resolved_target);
+                // Volba režimu kontroly:
+                //  - aktivní (z hostingu) jen když má služba veřejně dosažitelný
+                //    cíl A typ/port, který cron umí testovat,
+                //  - jinak agent-side, pokud zdrojový monitor JE agent a služba
+                //    má název procesu nebo port (agent ověří lokálně) - sem
+                //    patří i démoni bez portu (Turris Sentinel apod.),
+                //  - blokace zůstává jen tam, kde nezbývá žádná cesta.
+                $src_is_agent = in_array(strtolower((string)($row['type'] ?? '')), ['vps', 'openwrt'], true);
+                $svc_proc = isset($svc['process']) && $svc['process'] !== '' ? (string)$svc['process'] : null;
+                $cron_checkable_types = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord'];
+                $svc_type_lc = strtolower((string)($svc['type'] ?? 'web'));
+                $active_possible = $import_blocked === null
+                    && (in_array($svc_type_lc, $cron_checkable_types, true) || ($port !== null && $port > 0));
+
+                $import_mode = 'active';
+                if (!$active_possible) {
+                    if ($src_is_agent && ($svc_proc !== null || ($port !== null && $port > 0))) {
+                        $import_mode = 'agent';
+                        $import_blocked = null;
+                    } elseif ($import_blocked === null) {
+                        $import_blocked = 'Službu nelze kontrolovat z hostingu (neznámý typ bez portu) a zdrojový monitor není agent, který by kontrolu převzal.';
+                    }
+                }
+
                 $services[] = [
                     'sourceMonitorId' => (int)$row['id'],
                     'sourceMonitorName' => $row['name'],
-                    'sourceAssetId' => $row['asset_id'] !== null ? (int)$row['asset_id'] : null,
+                    'sourceHostname' => $details['hostname'] ?? null,
+                    'sourceAssetId' => $asset_id,
                     'name' => (string)$svc['name'],
                     'type' => (string)($svc['type'] ?? 'web'),
-                    'port' => isset($svc['port']) && $svc['port'] !== '' ? (int)$svc['port'] : null,
-                    'target' => (string)($svc['target'] ?? $row['name']),
+                    'port' => $port,
+                    'target' => $resolved_target !== '' ? $resolved_target : null,
+                    'process' => isset($svc['process']) && $svc['process'] !== '' ? (string)$svc['process'] : null,
+                    'mode' => $import_mode,
+                    'importBlocked' => $import_blocked,
                     'confidence' => (int)($svc['confidence'] ?? 0),
                     'evidence' => is_array($svc['evidence'] ?? null) ? array_values($svc['evidence']) : [],
                     'missing' => is_array($svc['missing'] ?? null) ? array_values($svc['missing']) : [],
@@ -432,19 +579,80 @@ if ($action === 'import_discovered_service') {
         exit;
     }
 
+    // Režim 'agent': službu na privátní síti kontroluje lokálně sám agent
+    // (proces + port), server jen přijímá výsledky. Cíl monitoru je pak
+    // NÁZEV PROCESU, ne síťová adresa - veřejná validace cíle se přeskočí.
+    $s_mode = ($input['mode'] ?? '') === 'agent' ? 'agent' : 'active';
+    $s_process = trim((string)($input['process'] ?? ''));
+    if ($s_mode === 'agent') {
+        $s_type = 'agent_service';
+        $s_target = $s_process !== '' && preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $s_process) ? $s_process : '';
+        if ($s_target === '' && !$s_port) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Agent-side kontrola potřebuje aspoň název procesu nebo port služby - agent nehlásí ani jedno.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+
+    // Cron umí aktivně kontrolovat jen tyhle typy. Cokoli jiného (dns, smtp,
+    // samba...) se importuje jako kontrola portu - jinak monitor jen každou
+    // minutu generoval neměřitelné 'unknown' záznamy (takhle dostal kresd
+    // 0 % SLA, ačkoli ho nikdy žádná kontrola netestovala).
+    $cron_checkable = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord', 'vps', 'openwrt', 'agent_service'];
+    if (!in_array($s_type, $cron_checkable, true)) {
+        if (!$s_port) {
+            http_response_code(400);
+            echo json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $s_type = 'port';
+    }
+
     try {
         // Objevující monitor běží na stejném fyzickém stroji, takže nový
-        // monitor rovnou dostane jeho asset - jediné místo v appce, kde má
-        // smysl assetId odhadovat automaticky (signál je spolehlivý).
+        // monitor rovnou dostane jeho asset I kategorii - bez kategorie by
+        // import skončil ve skupině "Ostatní", což mate (hlášeno uživatelem).
         $discovered_asset_id = null;
+        $discovered_category = null;
         if ($source_monitor_id) {
-            $stmt_src = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+            $stmt_src = $pdo->prepare("SELECT asset_id, category, target, last_details FROM monitors WHERE id = ?");
             $stmt_src->execute([$source_monitor_id]);
-            $src_asset_id = $stmt_src->fetchColumn();
-            if ($src_asset_id) {
-                $discovered_asset_id = (int)$src_asset_id;
+            $src_row = $stmt_src->fetch();
+            if ($src_row) {
+                if (!empty($src_row['asset_id'])) {
+                    $discovered_asset_id = (int)$src_row['asset_id'];
+                }
+                if (!empty($src_row['category'])) {
+                    $discovered_category = $src_row['category'];
+                }
+                // Kontrola běží z hostingu, takže cíl musí být adresa stroje,
+                // na kterém agent službu objevil - ne localhost ani jméno
+                // monitoru. Bez použitelného cíle se vezme target zdrojového
+                // monitoru, případně hostname z jeho posledního reportu.
+                if ($s_target === '' || $s_target === '127.0.0.1' || $s_target === 'localhost') {
+                    $src_details = json_decode($src_row['last_details'] ?? '{}', true) ?: [];
+                    $fallback_target = trim((string)($src_row['target'] ?? ''));
+                    if ($fallback_target === '') {
+                        $fallback_target = trim((string)($src_details['hostname'] ?? ''));
+                    }
+                    if ($fallback_target !== '') {
+                        $s_target = $fallback_target;
+                    }
+                }
             }
         }
+        // Finální cíl (ať přišel z discovery payloadu agenta, nebo z fallbacku
+        // výše) se validuje VŽDY - agent je nižší úroveň důvěry než admin
+        // a kontroly běží z hostingu, kam privátní/interní cíle nepatří.
+        // Validace běží před založením assetu, aby po odmítnutí nezůstal sirotek.
+        // Výjimka: agent-side kontrola žádnou veřejnou adresu nemá (cíl = proces).
+        $target_error = $s_mode === 'agent' ? null : bk_validate_import_target($s_target);
+        if ($target_error !== null) {
+            http_response_code(400);
+            echo json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         if ($discovered_asset_id === null) {
             $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
             $stmt_new_asset->execute([$s_name]);
@@ -453,10 +661,10 @@ if ($action === 'import_discovered_service') {
 
         $agent_key = bin2hex(random_bytes(16));
         $stmt = $pdo->prepare("
-            INSERT INTO monitors (name, type, target, port, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
-            VALUES (?, ?, ?, ?, 'unknown', ?, 90, 90, 95, ?)
+            INSERT INTO monitors (name, type, target, port, category, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
+            VALUES (?, ?, ?, ?, ?, 'unknown', ?, 90, 90, 95, ?)
         ");
-        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key, $discovered_asset_id]);
+        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $discovered_category, $agent_key, $discovered_asset_id]);
         $new_id = (int)$pdo->lastInsertId();
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
         bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
@@ -464,6 +672,344 @@ if ($action === 'import_discovered_service') {
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2d. Upload vlastního loga (admin-only). Přijímá jen rastrové formáty
+// ověřené přes getimagesize (magic bytes, ne příponu) - SVG je záměrně
+// odmítnuté: umí nést skripty a přímé otevření nahrané URL by je spustilo
+// na naší doméně. Soubor se ukládá pod pevným jménem do uploads/ a URL se
+// rovnou zapíše do nastavení custom_logo_url.
+if ($action === 'upload_logo') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if (empty($_FILES['logo']) || !is_array($_FILES['logo'])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí soubor (pole "logo").'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $f = $_FILES['logo'];
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Nahrání selhalo (kód ' . (int)$f['error'] . ').'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ((int)$f['size'] > 2 * 1024 * 1024) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Soubor je příliš velký (max 2 MB).'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $info = @getimagesize($f['tmp_name']);
+    $allowed = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_WEBP => 'webp'];
+    if (!$info || !isset($allowed[$info[2]])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Podporované formáty: PNG, JPG, WebP. SVG z bezpečnostních důvodů nahrát nelze — vložte na něj URL ručně.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $ext = $allowed[$info[2]];
+        $dir = __DIR__ . '/uploads';
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+            throw new RuntimeException('Adresář uploads/ nejde vytvořit.');
+        }
+        foreach ((glob($dir . '/custom-logo.*') ?: []) as $old) {
+            @unlink($old);
+        }
+        $dest = $dir . '/custom-logo.' . $ext;
+        if (!move_uploaded_file($f['tmp_name'], $dest)) {
+            throw new RuntimeException('Soubor se nepodařilo uložit.');
+        }
+        // Cache-bust přes mtime, aby výměna loga nebyla rukojmím browser cache.
+        $url = '/status/uploads/custom-logo.' . $ext . '?v=' . filemtime($dest);
+        $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('custom_logo_url', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+        $stmt->execute([$url]);
+        bk_audit_log($pdo, 'setting_changed', 'custom_logo_url (upload loga, ' . strtoupper($ext) . ', ' . round($f['size'] / 1024) . ' kB)');
+        echo json_encode(['success' => true, 'url' => $url], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Logo se nepodařilo uložit: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2e. Veřejná konfigurace vzhledu pro React app - stejná data, která už
+// veřejně renderuje index.php (titulek, logo, vlastní odkazy v menu).
+if ($action === 'ui_config') {
+    $links_raw = json_decode(get_setting('custom_nav_links'), true);
+    $links = [];
+    if (is_array($links_raw)) {
+        foreach ($links_raw as $l) {
+            $l_name = trim((string)($l['name'] ?? ''));
+            $l_url = trim((string)($l['url'] ?? ''));
+            if ($l_name !== '' && preg_match('#^https?://#i', $l_url)) {
+                $links[] = ['name' => $l_name, 'url' => $l_url];
+            }
+        }
+    }
+    echo json_encode([
+        'siteTitle' => trim((string)get_setting('site_title', 'Blood Kings Monitoring')),
+        'customLogoUrl' => trim((string)get_setting('custom_logo_url')),
+        'customNavLinks' => $links,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 2b2f. Zařazení Remote Action do fronty (admin-only) - JSON obdoba
+// formuláře v admin.php, pro Actions dropdown v React detailu zařízení.
+// Stejná dvojitá kontrola souhlasu: globální seznam typů + per-monitor
+// allowed_actions; restart_service navíc vyžaduje validní název služby.
+if ($action === 'trigger_remote_action') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $ra_mid = (int)($input['monitorId'] ?? 0);
+    $ra_action = trim((string)($input['action'] ?? ''));
+    $ra_service = trim((string)($input['serviceName'] ?? ''));
+
+    $ra_allowed_types = ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe'];
+    try {
+        $stmt_ra = $pdo->prepare("SELECT remote_actions_enabled, allowed_actions, name FROM monitors WHERE id = ?");
+        $stmt_ra->execute([$ra_mid]);
+        $ra_monitor = $stmt_ra->fetch();
+        $ra_monitor_allowed = $ra_monitor ? array_filter(explode(',', (string)($ra_monitor['allowed_actions'] ?? ''))) : [];
+
+        if (!$ra_monitor || empty($ra_monitor['remote_actions_enabled'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Remote Actions nejsou pro tento monitor povolené - nejdřív je zapněte v jeho nastavení.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if (!in_array($ra_action, $ra_allowed_types, true) || !in_array($ra_action, $ra_monitor_allowed, true)) {
+            http_response_code(400);
+            echo json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($ra_action === 'restart_service' && !preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $ra_service)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Akce restart_service vyžaduje název služby (povolené znaky: písmena, číslice, _.@-).'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (?, ?, ?, 'pending')");
+        $stmt->execute([$ra_mid, $ra_action, $ra_action === 'restart_service' ? $ra_service : null]);
+        bk_audit_log($pdo, 'remote_action_triggered', $ra_action . ($ra_action === 'restart_service' ? " ({$ra_service})" : '') . ' na ' . $ra_monitor['name'], 'monitor', $ra_mid);
+        echo json_encode(['success' => true, 'queued' => $ra_action], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Akci se nepodařilo zařadit do fronty.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2g. Převod monitoru na agent-side kontrolu (admin-only). Používá se
+// u monitorů, jejichž cíl leží v privátní síti - aktivní kontrola z
+// hostingu u nich nikdy neuspěje a jen generuje falešné výpadky.
+if ($action === 'convert_to_agent_check') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $cv_id = (int)($input['id'] ?? 0);
+    $cv_proc = trim((string)($input['process'] ?? ''));
+    if (!preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $cv_proc)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Zadejte název procesu (písmena, číslice, _.@-), který má agent kontrolovat.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt_cv = $pdo->prepare("SELECT m.id, m.name, m.asset_id FROM monitors m WHERE m.id = ?");
+        $stmt_cv->execute([$cv_id]);
+        $cv_mon = $stmt_cv->fetch();
+        if (!$cv_mon || $cv_mon['asset_id'] === null) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Monitor nenalezen nebo nemá přiřazené zařízení (asset).'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // Na assetu musí být agent, který kontrolu převezme.
+        $stmt_ag = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ? AND type IN ('vps', 'openwrt')");
+        $stmt_ag->execute([$cv_mon['asset_id']]);
+        if ((int)$stmt_ag->fetchColumn() === 0) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Na tomto zařízení není agent, který by kontrolu převzal.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // Historie zůstává (měníme jen typ a cíl), stav se resetuje na
+        // 'unknown' - do prvního výsledku od agenta nic netvrdíme.
+        $stmt_up = $pdo->prepare("UPDATE monitors SET type = 'agent_service', target = ?, status = 'unknown', last_status_change = NOW() WHERE id = ?");
+        $stmt_up->execute([$cv_proc, $cv_id]);
+        log_monitor_event($pdo, $cv_id, $cv_mon['name'], 'agent_service', 'monitor_updated', 'Převedeno na kontrolu agentem (proces ' . $cv_proc . ')');
+        bk_audit_log($pdo, 'monitor_updated', $cv_mon['name'] . ' → agent-side kontrola (' . $cv_proc . ')', 'monitor', $cv_id);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Převod se nepodařil.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2h. Stav přečtených upozornění (per uživatel, ne per prohlížeč).
+// GET vrací poslední přečtené monitor_logs.id, POST ho posune.
+if ($action === 'alerts_read_state') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        echo json_encode(['readUpToId' => 0], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $uid = (int)($_SESSION['admin_id'] ?? 0);
+    try {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+            $up_to = max(0, (int)($input['readUpToId'] ?? 0));
+            $stmt = $pdo->prepare("UPDATE users SET alerts_read_log_id = GREATEST(COALESCE(alerts_read_log_id, 0), ?) WHERE id = ?");
+            $stmt->execute([$up_to, $uid]);
+            echo json_encode(['success' => true, 'readUpToId' => $up_to], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $stmt = $pdo->prepare("SELECT COALESCE(alerts_read_log_id, 0) FROM users WHERE id = ?");
+        $stmt->execute([$uid]);
+        echo json_encode(['readUpToId' => (int)$stmt->fetchColumn()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        echo json_encode(['readUpToId' => 0], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2i. Katalog dostupných dlaždic dashboardu + uživatelské rozložení.
+// Odpovídá na "co vlastně sbíráme": katalog se odvozuje z REÁLNÝCH dat
+// (mapa metrik ve vps_metrics + klíče, které agenti opravdu poslali), ne
+// z pevného seznamu - dlaždice, pro kterou nikdo nikdy nic nezměřil, se
+// nenabízí.
+if ($action === 'dashboard_layout') {
+    $uid = (int)($_SESSION['admin_id'] ?? 0);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (!$uid) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Rozložení lze uložit jen přihlášenému uživateli.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $input = json_decode(file_get_contents('php://input'), true) ?: [];
+        $tiles = [];
+        foreach (($input['tiles'] ?? []) as $t) {
+            $key = preg_replace('/[^a-z0-9_]/', '', strtolower((string)($t['key'] ?? '')));
+            if ($key === '') continue;
+            $tiles[] = [
+                'key' => $key,
+                'visible' => !empty($t['visible']),
+                'size' => in_array($t['size'] ?? 'normal', ['normal', 'wide'], true) ? $t['size'] : 'normal',
+            ];
+        }
+        try {
+            $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+            $stmt->execute(['dashboard_layout_user_' . $uid, json_encode($tiles, JSON_UNESCAPED_UNICODE)]);
+            echo json_encode(['success' => true, 'tiles' => $tiles], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Rozložení se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    try {
+        // 1. Co se skutečně měří: sloupce vps_metrics, které mají alespoň
+        //    jednu nenulovou hodnotu za posledních 7 dní.
+        // Katalog nabízí jen metriky, které dashboard umí vykreslit z dat,
+        // co endpoint monitors reálně vrací (cpu/ram/hdd na řádku monitoru).
+        // Další metriky (teplota, load, wifi klienti…) sem přibudou až s
+        // vykreslením - nabízet přepínač bez implementace je mrtvý spínač.
+        $metric_defs = [
+            'cpu' => ['col' => 'cpu_usage', 'label' => t('metric_label_cpu'), 'unit' => '%'],
+            'ram' => ['col' => 'ram_usage', 'label' => t('metric_label_ram'), 'unit' => '%'],
+            'hdd' => ['col' => 'hdd_usage', 'label' => t('metric_label_hdd'), 'unit' => '%'],
+        ];
+        $measured = [];
+        foreach ($metric_defs as $key => $def) {
+            try {
+                $stmt_m = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE `{$def['col']}` IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
+                $stmt_m->execute();
+                $count = (int)$stmt_m->fetchColumn();
+            } catch (Throwable $e) {
+                $count = 0;
+            }
+            $measured[$key] = ['label' => $def['label'], 'unit' => $def['unit'], 'samples' => $count];
+        }
+
+        // 2. Pevné panely dashboardu (nejsou metrika, ale sekce stránky).
+        $panels = [
+            'health' => t('tile_health'),
+            'attention' => t('tile_attention'),
+            'monitors' => t('tile_monitors'),
+            'alerts' => t('tile_alerts'),
+            'insights' => t('tile_insights'),
+            'uptime_history' => t('tile_uptime_history'),
+            'regions' => t('tile_regions'),
+        ];
+
+        $catalog = [];
+        foreach ($panels as $key => $label) {
+            $catalog[] = ['key' => $key, 'label' => $label, 'kind' => 'panel', 'available' => true, 'samples' => null];
+        }
+        foreach ($measured as $key => $info) {
+            $catalog[] = [
+                'key' => 'metric_' . $key,
+                'label' => $info['label'] . ($info['unit'] !== '' ? " ({$info['unit']})" : ''),
+                'kind' => 'metric',
+                // Dlaždice metriky, kterou nikdo neměří, by ukazovala jen pomlčky.
+                'available' => $info['samples'] > 0,
+                'samples' => $info['samples'],
+            ];
+        }
+
+        // Dlazdice pro konkretni stroj: nabizi se jen agenti, kteri opravdu
+        // posilaji metriky (jinak by slo zapnout kartu, ktera nikdy nic
+        // neukaze). Klic nese id monitoru: metric_cpu_12.
+        try {
+            $stmt_a = $pdo->query("
+                SELECT m.id, m.name,
+                       (SELECT vm.cpu_usage FROM vps_metrics vm
+                        WHERE vm.monitor_id = m.id ORDER BY vm.id DESC LIMIT 1) AS cpu_usage
+                FROM monitors m
+                WHERE LOWER(m.type) IN ('vps', 'openwrt')
+                ORDER BY m.name
+            ");
+            foreach ($stmt_a->fetchAll() as $agent) {
+                if ($agent['cpu_usage'] === null) {
+                    continue;
+                }
+                foreach (['cpu' => t('metric_label_cpu'), 'ram' => t('metric_label_ram'), 'hdd' => t('metric_label_hdd')] as $mkey => $mlabel) {
+                    $catalog[] = [
+                        'key' => 'metric_' . $mkey . '_' . (int)$agent['id'],
+                        'label' => $mlabel . ' — ' . $agent['name'],
+                        'kind' => 'metric',
+                        'available' => true,
+                        'samples' => null,
+                    ];
+                }
+            }
+        } catch (Throwable $e) {
+            // Bez per-stroj dlazdic se katalog jen zkrati.
+        }
+
+        $saved = [];
+        if ($uid) {
+            $raw = get_setting('dashboard_layout_user_' . $uid, '');
+            if ($raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) $saved = $decoded;
+            }
+        }
+
+        echo json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Katalog dlaždic se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -591,8 +1137,11 @@ if ($action === 'generate_metrics_token') {
 
     try {
         $new_token = bin2hex(random_bytes(16));
-        $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE setting_value = ?");
-        $stmt->execute([$new_token, $new_token]);
+        // Tabulka settings má sloupce key_name/key_value - dřívější
+        // setting_key/setting_value tu shazovalo INSERT a tlačítko
+        // "Aktivovat token" končilo pětistovkou.
+        $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+        $stmt->execute([$new_token]);
 
         echo json_encode(['success' => true, 'metricsToken' => $new_token], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
@@ -608,28 +1157,44 @@ if ($action === 'events') {
         $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
 
-        if ($monitor_id > 0) {
-            $stmt = $pdo->prepare("
-                SELECT l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time,
-                       m.id as monitor_id, m.name as monitor_name, m.target, m.type
-                FROM monitor_logs l
-                JOIN monitors m ON l.monitor_id = m.id
-                WHERE l.monitor_id = ?
-                ORDER BY l.id DESC
-                LIMIT $limit
-            ");
-            $stmt->execute([$monitor_id]);
-        } else {
-            $stmt = $pdo->query("
-                SELECT l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time,
-                       m.id as monitor_id, m.name as monitor_name, m.target, m.type
-                FROM monitor_logs l
-                JOIN monitors m ON l.monitor_id = m.id
-                ORDER BY l.id DESC
-                LIMIT $limit
-            ");
+        // Posledních N řádků POKRYJE JEN PÁR DESÍTEK MINUT (cron zapisuje každou
+        // minutu za každý monitor), takže výpadky starší než okno v odpovědi
+        // vůbec nebyly a UI tvrdilo "vše pass", i když historie výpadky má.
+        // Proto se k čerstvému oknu vždy přimíchají i poslední down/warning
+        // záznamy bez ohledu na stáří - stejný princip, jakým veřejná status
+        // stránka plní svůj seznam incidentů (filtrovaný dotaz, ne tail logu).
+        $where_monitor = $monitor_id > 0 ? 'AND l.monitor_id = ?' : '';
+        $select_cols = "l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time,
+                       m.id as monitor_id, m.name as monitor_name, m.target, m.type";
+
+        $stmt = $pdo->prepare("
+            SELECT $select_cols
+            FROM monitor_logs l
+            JOIN monitors m ON l.monitor_id = m.id
+            WHERE 1=1 $where_monitor
+            ORDER BY l.id DESC
+            LIMIT $limit
+        ");
+        $stmt->execute($monitor_id > 0 ? [$monitor_id] : []);
+        $recent_rows = $stmt->fetchAll();
+
+        $fail_limit = min(50, $limit);
+        $stmt_fails = $pdo->prepare("
+            SELECT $select_cols
+            FROM monitor_logs l
+            JOIN monitors m ON l.monitor_id = m.id
+            WHERE l.status IN ('down', 'warning') $where_monitor
+            ORDER BY l.id DESC
+            LIMIT $fail_limit
+        ");
+        $stmt_fails->execute($monitor_id > 0 ? [$monitor_id] : []);
+
+        $rows_by_id = [];
+        foreach (array_merge($recent_rows, $stmt_fails->fetchAll()) as $mr) {
+            $rows_by_id[(int)$mr['id']] = $mr;
         }
-        $rows = $stmt->fetchAll();
+        krsort($rows_by_id);
+        $rows = array_values($rows_by_id);
         $events = [];
 
         // Vypočítat dobu výpadku: pro down záznamy najít nejbližší up záznam po něm
@@ -657,7 +1222,10 @@ if ($action === 'events') {
                 'monitorName' => $r['monitor_name'],
                 'target' => $r['target'],
                 'type' => strtoupper($r['type']),
-                'location' => $r['checked_from'] ?: '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)',
+                // Neznámé místo kontroly zůstává null. Dřív se sem doplňovala
+                // natvrdo konkrétní lokalita (Frankfurt/RackNerd) - u 37 ze 40
+                // událostí to bylo vymyšlené, protože sloupec byl prázdný.
+                'location' => $r['checked_from'] ?: null,
                 'status' => $r['status'] === 'down' ? 'VÝPADEK' : ($r['status'] === 'warning' ? 'VAROVÁNÍ' : 'OK'),
                 'rawStatus' => $r['status'],
                 'errorMsg' => $r['error_message'] ?: ($r['status'] === 'down' ? 'Cílový server neodpovídá.' : 'Kontrola proběhla v pořádku.'),
@@ -674,11 +1242,144 @@ if ($action === 'events') {
     exit;
 }
 
+// 2c1a2. Executive Summary + Timeline pro jeden monitor. Tahle logika (health
+// score, knowledge tips, forecast/anomaly/network insights, textový souhrn)
+// v PHP existuje a běží na veřejné status stránce (index.php/monitor.php) už
+// dlouho - React SPA ji ale nikdy nevolala a místo toho si na klientovi
+// skládala vlastní obecnou šablonovou větu ("Monitor X (typ) běží na cíli Y...").
+// Tenhle endpoint vystavuje tu samou serverovou logiku jako JSON.
+if ($action === 'monitor_insights') {
+    $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
+    if ($monitor_id <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt_mon = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
+        $stmt_mon->execute([$monitor_id]);
+        $monitor = $stmt_mon->fetch();
+        if (!$monitor) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $details = json_decode($monitor['last_details'] ?? '', true);
+        if (!is_array($details)) $details = [];
+        bk_enrich_monitor_details($pdo, $monitor, $details);
+
+        $stmt_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        $stmt_last_log->execute([$monitor_id]);
+        $last_log = $stmt_last_log->fetch();
+        $status = $last_log['status'] ?? ($monitor['status'] ?? 'unknown');
+        $check_stages = null;
+        if (!empty($last_log['check_stages'])) {
+            $decoded_stages = json_decode($last_log['check_stages'], true);
+            if (is_array($decoded_stages)) $check_stages = $decoded_stages;
+        }
+
+        $enabled_metrics = bk_get_enabled_metrics($monitor, $pdo);
+        $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics, $pdo);
+        $monitor_insights = array_merge(
+            bk_get_forecast_insights($pdo, $monitor),
+            bk_get_anomaly_insights($pdo, $monitor),
+            bk_get_network_insights($pdo, $monitor, $details)
+        );
+
+        // Health score se dnes počítá jen pro TeamSpeak (build_teamspeak_health_areas) -
+        // stejné omezení jako na veřejné status stránce, ne nedopatření tady.
+        $health_score = null;
+        if (strtolower($monitor['type'] ?? '') === 'teamspeak') {
+            $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details);
+            $health_score = bk_compute_health_score($health_areas);
+        }
+
+        $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
+        $summary = bk_build_executive_summary($monitor, $health_score, $knowledge_tips, $monitor_insights, array_slice($timeline, 0, 5));
+
+        echo json_encode([
+            'summary' => $summary,
+            'healthScore' => $health_score,
+            'tips' => array_map(fn($t) => ['severity' => $t['severity'], 'text' => $t['text']], $knowledge_tips),
+            'insights' => array_map(fn($i) => ['text' => $i['text'] ?? ''], $monitor_insights),
+            'timeline' => array_map(fn($e) => [
+                'type' => $e['event_type'],
+                'description' => $e['description'],
+                'at' => $e['ts'],
+                'relative' => bk_relative_time_label($e['ts']),
+            ], $timeline),
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Nepodařilo se sestavit souhrn monitoru.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2c1c. Agregované postřehy pro dashboard (mockup: "System Insights" řada).
+// Reuse stejných per-monitor builderů jako monitor_insights - forecast
+// (regrese disku/RAM), anomálie latence a síťové postřehy - jen posbírané
+// přes všechny monitory. Prázdné pole je legitimní odpověď: žádné vymyšlené
+// "vše v pořádku" karty se negenerují.
+if ($action === 'dashboard_insights') {
+    try {
+        $limit = min(8, max(1, (int)($_GET['limit'] ?? 4)));
+
+        // Analýzy běží nad historií všech monitorů (regrese, baseline,
+        // rolling okna) - na sdíleném hostingu to trvá jednotky sekund a
+        // dashboard na to čekal při každém načtení. Výsledek se proto
+        // cachuje 5 minut; data se stejně mění v řádu minut, ne sekund.
+        $cache_key = 'dashboard_insights_cache';
+        $cached_raw = get_setting($cache_key, '');
+        if ($cached_raw !== '') {
+            $cached = json_decode($cached_raw, true);
+            if (is_array($cached) && (time() - (int)($cached['at'] ?? 0)) < 300 && isset($cached['insights'])) {
+                echo json_encode(['insights' => array_slice($cached['insights'], 0, $limit), 'cachedAt' => (int)$cached['at']], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+        }
+
+        $stmt = $pdo->query("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') ORDER BY id ASC");
+        $items = [];
+        while ($monitor = $stmt->fetch()) {
+            $details = json_decode($monitor['last_details'] ?? '', true);
+            if (!is_array($details)) $details = [];
+            $found = array_merge(
+                bk_get_forecast_insights($pdo, $monitor),
+                bk_get_anomaly_insights($pdo, $monitor),
+                bk_get_network_insights($pdo, $monitor, $details)
+            );
+            foreach ($found as $i) {
+                $items[] = [
+                    'monitorId' => (int)$monitor['id'],
+                    'monitorName' => $monitor['name'],
+                    'kind' => (string)($i['type'] ?? 'trend'),
+                    'text' => (string)($i['text'] ?? ''),
+                    'detail' => (string)($i['detail'] ?? ''),
+                ];
+            }
+        }
+        // Kritičtější druhy dopředu: síť/anomálie před dlouhodobými trendy.
+        $rank = ['network' => 0, 'anomaly' => 1, 'forecast' => 2, 'trend' => 3];
+        usort($items, fn($a, $b) => ($rank[$a['kind']] ?? 4) <=> ($rank[$b['kind']] ?? 4));
+        try {
+            $stmt_cache = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+            $stmt_cache->execute([$cache_key, json_encode(['at' => time(), 'insights' => array_slice($items, 0, 8)], JSON_UNESCAPED_UNICODE)]);
+        } catch (Throwable $ce) { /* cache je volitelná */ }
+        echo json_encode(['insights' => array_slice($items, 0, $limit)], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Nepodařilo se sestavit postřehy.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // 2c1b. Denní rozpad dostupnosti za posledních N dní (pro heatmapu na dashboardu) -
 // skutečné agregace z monitor_logs, ne odhad z aktuálního stavu monitoru.
 if ($action === 'daily_uptime') {
     try {
-        $days = min(90, max(1, (int)($_GET['days'] ?? 30)));
+        $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
 
         $stmt_mon = $pdo->query("SELECT id, name FROM monitors WHERE type NOT IN ('node', 'probe') ORDER BY id ASC");
         $mon_rows = $stmt_mon->fetchAll();
@@ -715,31 +1416,35 @@ if ($action === 'daily_uptime') {
                 $day_display = date('j.n.', strtotime($day_key));
                 $d = $by_monitor[$mid][$day_key] ?? null;
 
-                if (!$d || (int)$d['total_count'] === 0) {
-                    $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => 0.0, 'detail' => 'Bez naměřených dat pro tento den.'];
+                // 'unknown' záznamy (typy bez aktivní kontroly) nejsou měření -
+                // do dostupnosti se nepočítají vůbec, jinak by monitor, který
+                // nikdy nikdo netestoval, vykazoval falešné výpadky.
+                $up = $d ? (int)$d['up_count'] : 0;
+                $down = $d ? (int)$d['down_count'] : 0;
+                $warn = $d ? (int)$d['warning_count'] : 0;
+                $maint = $d ? (int)$d['maint_count'] : 0;
+                $measured = $up + $down + $warn;
+
+                if ($measured === 0 && $maint === 0) {
+                    // Den bez jediné měřené kontroly nemá 0% uptime - nemá žádný.
+                    $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => null, 'detail' => t('day_no_data')];
                     continue;
                 }
 
-                $total = (int)$d['total_count'];
-                $up = (int)$d['up_count'];
-                $down = (int)$d['down_count'];
-                $warn = (int)$d['warning_count'];
-                $maint = (int)$d['maint_count'];
-                $nonMaint = max(1, $total - $maint);
-                $uptimePct = round(($up / $nonMaint) * 100, 1);
+                $uptimePct = $measured > 0 ? round(($up / $measured) * 100, 1) : null;
 
-                if ($maint > 0 && $maint >= $total - $maint) {
+                if ($maint > 0 && $maint >= $measured) {
                     $status = 'maintenance';
-                    $detail = 'Plánovaná údržba tento den.';
+                    $detail = t('day_maintenance');
                 } elseif ($down > 0) {
                     $status = 'down';
-                    $detail = "$down z $total kontrol selhalo ($uptimePct % dostupnost).";
+                    $detail = sprintf(t('day_down_detail'), $down, $measured, $uptimePct);
                 } elseif ($warn > 0) {
                     $status = 'warning';
-                    $detail = "$warn z $total kontrol hlásilo zhoršenou odezvu.";
+                    $detail = sprintf(t('day_warning_detail'), $warn, $measured);
                 } else {
                     $status = 'up';
-                    $detail = "Všech $total kontrol proběhlo v pořádku.";
+                    $detail = sprintf(t('day_up_detail'), $measured);
                 }
 
                 $day_list[] = ['date' => $day_display, 'status' => $status, 'uptimePct' => $uptimePct, 'detail' => $detail];
@@ -793,10 +1498,25 @@ if ($action === 'incidents') {
                 LIMIT 50
             ");
             $log_rows = $stmt_logs ? $stmt_logs->fetchAll() : [];
+
+            // Otevřené DB incidenty podle monitoru - živý výpadek se na ně
+            // naváže, aby šel z UI převzít/uzavřít (lifecycle je zakládá
+            // automaticky při přechodu na down).
+            $open_by_monitor = [];
+            try {
+                $stmt_open = $pdo->query("SELECT id, acknowledged_by, acknowledged_at FROM incidents WHERE status != 'resolved' AND monitor_id IS NOT NULL");
+                foreach ($stmt_open->fetchAll() as $oi) {
+                    $open_by_monitor[(int)$oi['monitor_id']] = $oi;
+                }
+            } catch (Throwable $t) {}
+
             foreach ($log_rows as $r) {
                 $start_ts = strtotime($r['checked_at']);
+                $open_inc = $open_by_monitor[(int)$r['monitor_id']] ?? null;
                 $incidents[] = [
                     'id' => (int)$r['id'],
+                    'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
+                    'acknowledgedBy' => $open_inc ? $open_inc['acknowledged_by'] : null,
                     'monitor_id' => (int)$r['monitor_id'],
                     'monitor_name' => $r['monitor_name'],
                     'target' => $r['target'],
@@ -816,7 +1536,8 @@ if ($action === 'incidents') {
         $manual_incidents = [];
         try {
             $stmt_inc = $pdo->query("
-                SELECT id, title, impact, status, created_at, updated_at, resolved_at
+                SELECT id, title, impact, status, created_at, updated_at, resolved_at,
+                       monitor_id, acknowledged_by, acknowledged_at, postmortem
                 FROM incidents
                 ORDER BY id DESC
                 LIMIT 50
@@ -838,6 +1559,10 @@ if ($action === 'incidents') {
                     'title' => $r['title'],
                     'impact' => $r['impact'],
                     'status' => $r['status'],
+                    'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
+                    'acknowledgedBy' => $r['acknowledged_by'],
+                    'acknowledgedAt' => $r['acknowledged_at'] ? date('d.m.Y H:i:s', strtotime($r['acknowledged_at'])) : null,
+                    'postmortem' => $r['postmortem'],
                     'createdAt' => date('d.m.Y H:i:s', $start_ts),
                     'resolvedAt' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
                     'durationText' => bk_duration_text($end_ts - $start_ts),
@@ -849,6 +1574,78 @@ if ($action === 'incidents') {
         echo json_encode(['incidents' => $incidents, 'manualIncidents' => $manual_incidents], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['incidents' => [], 'manualIncidents' => []], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2c2x. Akce nad incidentem (admin-only): převzetí, poznámka/změna stavu,
+// vyřešení s poznámkou, postmortem. Každý krok se zapisuje do
+// incident_updates - timeline je tak úplná bez ohledu na to, kdo co udělal.
+if ($action === 'incident_action') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $incident_id = (int)($input['id'] ?? 0);
+    $op = (string)($input['op'] ?? '');
+    $username = $_SESSION['admin_username'] ?? 'admin';
+
+    try {
+        $stmt = $pdo->prepare("SELECT id, status FROM incidents WHERE id = ?");
+        $stmt->execute([$incident_id]);
+        $incident = $stmt->fetch();
+        if (!$incident) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Incident nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $add_update = function (string $status, string $message) use ($pdo, $incident_id) {
+            $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)")
+                ->execute([$incident_id, $status, $message]);
+        };
+
+        if ($op === 'ack') {
+            $pdo->prepare("UPDATE incidents SET acknowledged_by = ?, acknowledged_at = NOW() WHERE id = ?")
+                ->execute([$username, $incident_id]);
+            $add_update((string)$incident['status'], "Incident převzal: {$username}");
+            bk_audit_log($pdo, 'incident_ack', "Incident #{$incident_id} převzat", 'incident', $incident_id);
+        } elseif ($op === 'note') {
+            $message = trim((string)($input['message'] ?? ''));
+            if ($message === '') {
+                http_response_code(400);
+                echo json_encode(['error' => 'Poznámka nesmí být prázdná.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $status = in_array($input['status'] ?? '', ['investigating', 'identified', 'monitoring'], true)
+                ? $input['status'] : (string)$incident['status'];
+            $pdo->prepare("UPDATE incidents SET status = ? WHERE id = ?")->execute([$status, $incident_id]);
+            $add_update($status, "[{$username}] " . $message);
+            bk_audit_log($pdo, 'incident_note', "Incident #{$incident_id}: poznámka", 'incident', $incident_id);
+        } elseif ($op === 'resolve') {
+            $note = trim((string)($input['note'] ?? ''));
+            $pdo->prepare("UPDATE incidents SET status = 'resolved', resolved_at = NOW() WHERE id = ?")
+                ->execute([$incident_id]);
+            $add_update('resolved', "[{$username}] " . ($note !== '' ? $note : 'Incident uzavřen ručně.'));
+            bk_audit_log($pdo, 'incident_resolve', "Incident #{$incident_id} uzavřen", 'incident', $incident_id);
+        } elseif ($op === 'postmortem') {
+            $text = trim((string)($input['postmortem'] ?? ''));
+            $pdo->prepare("UPDATE incidents SET postmortem = ? WHERE id = ?")
+                ->execute([$text !== '' ? $text : null, $incident_id]);
+            $add_update((string)$incident['status'], "[{$username}] Postmortem " . ($text !== '' ? 'doplněn.' : 'odstraněn.'));
+            bk_audit_log($pdo, 'incident_postmortem', "Incident #{$incident_id}: postmortem", 'incident', $incident_id);
+        } else {
+            http_response_code(400);
+            echo json_encode(['error' => 'Neznámá operace.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Akci se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -891,9 +1688,519 @@ if ($action === 'create_incident') {
 }
 
 // 2d. SLA Report — reálná uptime a outage data z monitor_logs za posledních 30 dní
+// 2b2j. Přehled SLA pro stránku webů: dostupnost 7/30/365 dní na monitor.
+// sla_report trvá i 3,7 s (detailní výpadky, MTTR) - stránka webů potřebuje
+// jen procenta, takže se počítají jedním oknovaným dotazem a cachují 10 minut.
+// 2b2k. Přehled měřicích míst: odkud se kontroly opravdu prováděly.
+// Skupinuje monitor_logs podle checked_from (uzly zapisují svou lokalitu
+// přes node_api.php, cron nechává výchozí hodnotu). Vrací jen to, co je
+// v datech - žádná mapa s vymyšlenými body po světě.
+// 2b2l. Presety metrik: pojmenované sady „co se zobrazuje a kdy je to
+// problém", přiřaditelné monitorům. Čtení je veřejné (UI je potřebuje
+// k vykreslení), zápis jen pro přihlášeného admina.
+if ($action === 'presets') {
+    try {
+        $presets = [];
+        $stmt = $pdo->query("SELECT id, name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name");
+        foreach ($stmt->fetchAll() as $r) {
+            $metrics = json_decode($r['metrics'] ?? '', true);
+            $presets[] = [
+                'id' => (int)$r['id'],
+                'name' => $r['name'],
+                'description' => $r['description'],
+                'serviceType' => $r['service_type'],
+                'metrics' => is_array($metrics) ? $metrics : [],
+                // null = preset práh neřeší a nechá hodnotu na monitoru
+                'cpuThreshold' => $r['cpu_threshold'] !== null ? (int)$r['cpu_threshold'] : null,
+                'ramThreshold' => $r['ram_threshold'] !== null ? (int)$r['ram_threshold'] : null,
+                'hddThreshold' => $r['hdd_threshold'] !== null ? (int)$r['hdd_threshold'] : null,
+            ];
+        }
+
+        // Kolik monitorů preset používá - aby šlo poznat, co smazání ovlivní.
+        $usage = [];
+        try {
+            $stmt_u = $pdo->query("SELECT preset_id, COUNT(*) AS c FROM monitors WHERE preset_id IS NOT NULL GROUP BY preset_id");
+            foreach ($stmt_u->fetchAll() as $u) {
+                $usage[(int)$u['preset_id']] = (int)$u['c'];
+            }
+        } catch (Throwable $e) {}
+        foreach ($presets as &$p) {
+            $p['usedBy'] = $usage[$p['id']] ?? 0;
+        }
+        unset($p);
+
+        // Katalog dostupných metrik podle typu služby (zdroj: profily).
+        $catalog = [];
+        foreach (get_service_profiles() as $type => $profile) {
+            if (empty($profile['metrics'])) {
+                continue;
+            }
+            $catalog[$type] = [
+                'label' => $profile['label'],
+                'metrics' => array_map(
+                    fn($m) => ['key' => $m['key'], 'label' => $m['label'], 'recommended' => !empty($m['recommended'])],
+                    $profile['metrics']
+                ),
+            ];
+        }
+
+        echo json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Presety se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'assign_preset') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    try {
+        if ($action === 'save_preset') {
+            $name = trim((string)($input['name'] ?? ''));
+            if ($name === '') {
+                http_response_code(400);
+                echo json_encode(['error' => 'Název presetu nesmí být prázdný.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $metrics = [];
+            foreach ((array)($input['metrics'] ?? []) as $mk) {
+                $clean = preg_replace('/[^a-z0-9_]/', '', strtolower((string)$mk));
+                if ($clean !== '') {
+                    $metrics[] = $clean;
+                }
+            }
+            // Prázdný práh = preset ho neřeší; nula je platná hodnota, proto
+            // se rozlišuje '' od 0 a nedosazuje se výchozí číslo.
+            $thr = function ($v) {
+                if ($v === null || $v === '') {
+                    return null;
+                }
+                return max(0, min(100, (int)$v));
+            };
+            $id = (int)($input['id'] ?? 0);
+            $params = [
+                $name,
+                trim((string)($input['description'] ?? '')) ?: null,
+                trim((string)($input['serviceType'] ?? '')) ?: null,
+                json_encode(array_values(array_unique($metrics)), JSON_UNESCAPED_UNICODE),
+                $thr($input['cpuThreshold'] ?? null),
+                $thr($input['ramThreshold'] ?? null),
+                $thr($input['hddThreshold'] ?? null),
+            ];
+            if ($id > 0) {
+                $stmt = $pdo->prepare("UPDATE metric_presets SET name = ?, description = ?, service_type = ?, metrics = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ? WHERE id = ?");
+                $stmt->execute(array_merge($params, [$id]));
+                bk_audit_log($pdo, 'preset_updated', "Preset '{$name}' upraven", 'preset', $id);
+            } else {
+                $stmt = $pdo->prepare("INSERT INTO metric_presets (name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute($params);
+                $id = (int)$pdo->lastInsertId();
+                bk_audit_log($pdo, 'preset_created', "Preset '{$name}' vytvořen", 'preset', $id);
+            }
+            echo json_encode(['success' => true, 'id' => $id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'delete_preset') {
+            $id = (int)($input['id'] ?? 0);
+            // Monitory preset jen ztratí a vrátí se k vlastnímu nastavení -
+            // mazání presetu nesmí nikomu shodit monitorování.
+            $pdo->prepare("UPDATE monitors SET preset_id = NULL WHERE preset_id = ?")->execute([$id]);
+            $pdo->prepare("DELETE FROM metric_presets WHERE id = ?")->execute([$id]);
+            bk_audit_log($pdo, 'preset_deleted', "Preset #{$id} smazán", 'preset', $id);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // assign_preset: přiřazení jednomu nebo více monitorům (0 = odebrat)
+        $preset_id = (int)($input['presetId'] ?? 0);
+        $monitor_ids = array_values(array_filter(array_map('intval', (array)($input['monitorIds'] ?? []))));
+        if (empty($monitor_ids)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Nebyl vybrán žádný monitor.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $placeholders = implode(',', array_fill(0, count($monitor_ids), '?'));
+        $stmt = $pdo->prepare("UPDATE monitors SET preset_id = ? WHERE id IN ({$placeholders})");
+        $stmt->execute(array_merge([$preset_id > 0 ? $preset_id : null], $monitor_ids));
+        bk_audit_log($pdo, 'preset_assigned', "Preset #{$preset_id} přiřazen " . count($monitor_ids) . " monitorům", 'preset', $preset_id);
+        echo json_encode(['success' => true, 'updated' => count($monitor_ids)], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Operaci s presetem se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2m. Rozpad poslední kontroly (DNS -> TCP -> TLS -> HTTP).
+//
+// Data existují od začátku, jen se ukládala výhradně do monitor_logs a
+// žádné API je nevydávalo - v aplikaci proto nešlo zjistit, ve které fázi
+// se web zdržel. Vrací poslední kontrolu, která rozpad skutečně nese.
+if ($action === 'check_stages') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    if ($monitor_id <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT check_stages, checked_at, response_time, status
+            FROM monitor_logs
+            WHERE monitor_id = ? AND check_stages IS NOT NULL AND check_stages <> ''
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$monitor_id]);
+        $row = $stmt->fetch();
+
+        if (!$row) {
+            // Žádný rozpad zatím není - není to chyba, jen se ještě neměřilo.
+            echo json_encode(['stages' => null], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stages = json_decode($row['check_stages'], true);
+        echo json_encode([
+            'stages' => is_array($stages) ? $stages : null,
+            'checkedAt' => $row['checked_at'],
+            'responseMs' => $row['response_time'] !== null ? (int)$row['response_time'] : null,
+            'status' => $row['status'],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Rozpad kontroly se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2b2n. Veřejné status stránky: vlastní výběr monitorů pod vlastním slugem.
+//
+// Čtení je veřejné (stránka má být veřejná), ale skryté stránky vidí jen
+// admin a monitory se vrací jen ty, které stránka opravdu obsahuje.
+// 2b2o. Export konfigurace (admin-only).
+//
+// Self-hosted nastroj na sdilenem hostingu: kdyz se ucet rusi nebo stehuje,
+// mel by si clovek odnest, co si nastavil - monitory, presety, status
+// stranky a nastaveni. Bez toho je jedina zaloha rucni vypis z phpMyAdminu.
+//
+// Zamerne se NEEXPORTUJI: hesla, tokeny, klice agentu ani namerena data.
+// Tajemstvi v souboru ke stazeni je uniku na pockani; historie merenі je
+// desitky MB a pro obnovu nastaveni k nicemu.
+if ($action === 'export_config') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $export = [
+            'exportedAt' => date('c'),
+            'schemaVersion' => defined('BK_SCHEMA_VERSION') ? BK_SCHEMA_VERSION : null,
+            'monitors' => [],
+            'presets' => [],
+            'statusPages' => [],
+            'settings' => [],
+        ];
+
+        $stmt = $pdo->query("
+            SELECT name, type, target, port, category, timeout, notes,
+                   email_notifications, sms_notifications,
+                   monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
+                   latency_threshold_ms, latency_threshold_mins,
+                   body_keyword, cpanel_stats_url, enabled_metrics,
+                   remote_actions_enabled, allowed_actions
+            FROM monitors ORDER BY id
+        ");
+        $export['monitors'] = $stmt->fetchAll();
+
+        try {
+            $export['presets'] = $pdo->query("SELECT name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name")->fetchAll();
+        } catch (Throwable $e) {
+            // Stara DB bez tabulky presetu - export ostatniho ma stale smysl.
+        }
+        try {
+            $export['statusPages'] = $pdo->query("SELECT title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title")->fetchAll();
+        } catch (Throwable $e) {
+        }
+
+        // Nastaveni: vse krome tajemstvi. Radeji seznam zakazanych vzoru nez
+        // vycet povolenych - novy klic s heslem by se jinak v exportu objevil
+        // hned, jak ho nekdo prida.
+        $secret_pattern = '/(pass|secret|token|key|hash|credential|webhook|_url$|dsn)/i';
+        foreach ($pdo->query("SELECT key_name, key_value FROM settings ORDER BY key_name")->fetchAll() as $row) {
+            $k = (string)$row['key_name'];
+            if (preg_match($secret_pattern, $k) || str_ends_with($k, '_cache')) {
+                continue;
+            }
+            $export['settings'][$k] = $row['key_value'];
+        }
+
+        bk_audit_log($pdo, 'config_exported', 'Export konfigurace stažen', 'system', null);
+
+        $filename = 'bloodkings-config-' . date('Y-m-d') . '.json';
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        echo json_encode($export, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Export se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'status_pages') {
+    $is_admin_sp = !empty($_SESSION['admin_logged_in']);
+    try {
+        $stmt = $pdo->query("SELECT id, title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title");
+        $pages = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $public = (int)$r['is_public'] === 1;
+            if (!$public && !$is_admin_sp) {
+                continue;
+            }
+            $ids = json_decode($r['monitor_ids'] ?? '', true);
+            $pages[] = [
+                'id' => (int)$r['id'],
+                'title' => $r['title'],
+                'slug' => $r['slug'],
+                'description' => $r['description'],
+                'isPublic' => $public,
+                // Prázdný seznam = stránka ukazuje všechny monitory.
+                'monitorIds' => is_array($ids) ? array_values(array_map('intval', $ids)) : [],
+            ];
+        }
+        echo json_encode(['pages' => $pages], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Status stránky se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'save_status_page' || $action === 'delete_status_page') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    try {
+        if ($action === 'delete_status_page') {
+            $pdo->prepare("DELETE FROM status_pages WHERE id = ?")->execute([(int)($input['id'] ?? 0)]);
+            bk_audit_log($pdo, 'status_page_deleted', 'Status stránka smazána', 'status_page', (int)($input['id'] ?? 0));
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $title = trim((string)($input['title'] ?? ''));
+        if ($title === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'Název stránky nesmí být prázdný.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // Slug jde do URL, proto jen bezpečné znaky. Z názvu se odvodí,
+        // když ho uživatel nevyplní.
+        $slug = strtolower(trim((string)($input['slug'] ?? '')));
+        if ($slug === '') {
+            $slug = $title;
+        }
+        $slug = preg_replace('/[^a-z0-9]+/', '-', bk_slug_ascii($slug));
+        $slug = trim((string)$slug, '-');
+        if ($slug === '') {
+            $slug = 'stranka-' . time();
+        }
+
+        $ids = [];
+        foreach ((array)($input['monitorIds'] ?? []) as $mid) {
+            $mid = (int)$mid;
+            if ($mid > 0) {
+                $ids[] = $mid;
+            }
+        }
+
+        $params = [
+            $title,
+            $slug,
+            trim((string)($input['description'] ?? '')) ?: null,
+            !empty($input['isPublic']) ? 1 : 0,
+            json_encode(array_values(array_unique($ids))),
+        ];
+        $id = (int)($input['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $pdo->prepare("UPDATE status_pages SET title = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ? WHERE id = ?");
+            $stmt->execute(array_merge($params, [$id]));
+            bk_audit_log($pdo, 'status_page_updated', "Status stránka '{$title}' upravena", 'status_page', $id);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO status_pages (title, slug, description, is_public, monitor_ids) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute($params);
+            $id = (int)$pdo->lastInsertId();
+            bk_audit_log($pdo, 'status_page_created', "Status stránka '{$title}' vytvořena", 'status_page', $id);
+        }
+        echo json_encode(['success' => true, 'id' => $id, 'slug' => $slug], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        // Duplicitní slug je chyba uživatele, ne serveru - řekni to srozumitelně.
+        $duplicate = str_contains($e->getMessage(), 'uniq_status_page_slug') || $e->getCode() === '23000';
+        http_response_code($duplicate ? 400 : 500);
+        echo json_encode([
+            'error' => $duplicate
+                ? 'Stránka s tímto slugem už existuje — zvolte jiný.'
+                : 'Status stránku se nepodařilo uložit.',
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Status stránku se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'regions') {
+    try {
+        $days = max(1, min(30, (int)($_GET['days'] ?? 7)));
+        $stmt = $pdo->prepare("
+            SELECT checked_from,
+                   COUNT(*) AS checks,
+                   SUM(status = 'up') AS up_checks,
+                   SUM(status = 'down') AS down_checks,
+                   AVG(NULLIF(response_time, 0)) AS avg_response,
+                   MIN(checked_at) AS first_seen,
+                   MAX(checked_at) AS last_seen,
+                   COUNT(DISTINCT monitor_id) AS monitors
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              AND status IN ('up', 'down', 'warning')
+            GROUP BY checked_from
+            ORDER BY checks DESC
+        ");
+        $stmt->execute([$days]);
+
+        $regions = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $checks = (int)$r['checks'];
+            $regions[] = [
+                // null = uzel svou lokalitu nehlásí; UI to řekne narovinu.
+                'location' => $r['checked_from'] !== null && $r['checked_from'] !== '' ? $r['checked_from'] : null,
+                'checks' => $checks,
+                'upChecks' => (int)$r['up_checks'],
+                'downChecks' => (int)$r['down_checks'],
+                'successRate' => $checks > 0 ? round(((int)$r['up_checks'] / $checks) * 100, 2) : null,
+                // Průměr přes NULLIF(...,0): nulová odezva není měření.
+                'avgResponseMs' => $r['avg_response'] !== null ? round((float)$r['avg_response']) : null,
+                'monitors' => (int)$r['monitors'],
+                'firstSeen' => $r['first_seen'],
+                'lastSeen' => $r['last_seen'],
+            ];
+        }
+
+        echo json_encode(['days' => $days, 'regions' => $regions], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Přehled měřicích míst se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'websites_overview') {
+    try {
+        $cache_raw = get_setting('websites_overview_cache', '');
+        if ($cache_raw !== '') {
+            $cached = json_decode($cache_raw, true);
+            if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
+                echo json_encode($cached['data'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+        }
+
+        // Krátká okna ze syrových logů (přesná, data tam jsou), dlouhá okna
+        // z denních souhrnů - monitor_logs se maže po 30 dnech, takže roční
+        // hodnota z nich dřív vycházela shodná s třicetidenní a tvrdila
+        // dostupnost za rok, kterou nikdo neměřil.
+        $stmt = $pdo->query("
+            SELECT monitor_id,
+                   SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS up7,
+                   SUM(status IN ('up','down','warning') AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS tot7,
+                   SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))  AS up30,
+                   SUM(status IN ('up','down','warning') AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))  AS tot30,
+                   MIN(checked_at)                                                        AS measured_since
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+              AND status IN ('up','down','warning')
+            GROUP BY monitor_id
+        ");
+        $sla = [];
+        $pct = function ($up, $tot) {
+            // Okno bez jediného měření = null, ne vymyšlených 100 %.
+            return (int)$tot > 0 ? round((int)$up / (int)$tot * 100, 3) : null;
+        };
+        while ($row = $stmt->fetch()) {
+            $sla[(int)$row['monitor_id']] = [
+                'sla7' => $pct($row['up7'], $row['tot7']),
+                'sla30' => $pct($row['up30'], $row['tot30']),
+                'sla365' => null,
+                'measuredSince' => $row['measured_since'],
+                'longTermDays' => 0,
+            ];
+        }
+
+        // Dlouhá okna z uptime_daily. Vrací se i skutečná délka historie,
+        // aby UI mohlo říct "za 47 dní" místo aby předstíralo rok.
+        try {
+            $stmt_long = $pdo->query("
+                SELECT monitor_id,
+                       SUM(checks_total) AS total,
+                       SUM(checks_up) AS up_count,
+                       MIN(day) AS since,
+                       DATEDIFF(CURDATE(), MIN(day)) + 1 AS days_covered
+                FROM uptime_daily
+                WHERE day >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                GROUP BY monitor_id
+            ");
+            foreach ($stmt_long->fetchAll() as $lrow) {
+                $mid = (int)$lrow['monitor_id'];
+                if (!isset($sla[$mid])) {
+                    $sla[$mid] = ['sla7' => null, 'sla30' => null, 'sla365' => null, 'measuredSince' => null, 'longTermDays' => 0];
+                }
+                $sla[$mid]['sla365'] = $pct($lrow['up_count'], $lrow['total']);
+                $sla[$mid]['longTermDays'] = (int)$lrow['days_covered'];
+                if (empty($sla[$mid]['measuredSince']) && !empty($lrow['since'])) {
+                    $sla[$mid]['measuredSince'] = $lrow['since'];
+                }
+            }
+        } catch (Throwable $e) {
+            // Bez tabulky souhrnů zůstává dlouhé okno null - viditelně prázdné.
+        }
+
+        $data = [
+            'slaGoal' => (float)get_setting('sla_goal_pct', '99.95'),
+            'monitors' => $sla,
+        ];
+        try {
+            $stmt2 = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('websites_overview_cache', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+            $stmt2->execute([json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE)]);
+        } catch (Throwable $e) {
+            // Cache je optimalizace - když se neuloží, endpoint jen počítá častěji.
+        }
+        echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Přehled SLA se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'sla_report') {
     try {
-        $days = min(90, max(1, (int)($_GET['days'] ?? 30)));
+        $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
 
         // Per-monitor uptime a výpadky
         $stmt = $pdo->prepare("
@@ -901,7 +2208,7 @@ if ($action === 'sla_report') {
                    COUNT(l.id) as total_checks,
                    SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_checks,
                    SUM(CASE WHEN l.status = 'down' THEN 1 ELSE 0 END) as down_checks,
-                   SUM(CASE WHEN l.status != 'maintenance' THEN 1 ELSE 0 END) as non_maint_checks
+                   SUM(CASE WHEN l.status IN ('up','down','warning') THEN 1 ELSE 0 END) as non_maint_checks
             FROM monitors m
             LEFT JOIN monitor_logs l ON l.monitor_id = m.id AND l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
             WHERE m.type NOT IN ('node', 'probe')
@@ -917,7 +2224,9 @@ if ($action === 'sla_report') {
             $non_maint = (int)$m['non_maint_checks'];
             $up = (int)$m['up_checks'];
             $down = (int)$m['down_checks'];
-            $uptimePct = $non_maint > 0 ? round(($up / $non_maint) * 100, 3) : 100.0;
+            // Monitor bez jediné měřené kontroly v okně nemá SLA - null,
+            // ne dokonalých 100.0 do reportu, který nikdo nenaměřil.
+            $uptimePct = $non_maint > 0 ? round(($up / $non_maint) * 100, 3) : null;
 
             // Rychlé načtení posledního výpadku přímo z DB (monitor_logs) - konec výpadku
             // dohledáme jako nejbližší následující 'up' záznam, stejně jako u action=events,
@@ -1003,14 +2312,22 @@ if ($action === 'sla_report') {
         }
 
         $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
-        $overall_uptime = count($report) > 0
-            ? round(array_sum(array_column($report, 'uptimePercent')) / count($report), 3)
-            : 100.0;
+        // Průměr jen z monitorů, které mají skutečně naměřené SLA; bez
+        // jediného takového je výsledek null, ne vymyšlených 100 %.
+        $uptime_vals = array_filter(array_column($report, 'uptimePercent'), fn($v) => $v !== null);
+        $overall_uptime = count($uptime_vals) > 0
+            ? round(array_sum($uptime_vals) / count($uptime_vals), 3)
+            : null;
         $total_outage = array_sum(array_column($report, 'outageMinutes'));
         $mttr_values = array_filter(array_column($report, 'mttrSec'), fn($v) => $v !== null);
         $overall_mttr = !empty($mttr_values) ? round(array_sum($mttr_values) / count($mttr_values)) : null;
 
-        $metrics_token = trim((string)get_setting('metrics_token'));
+        // Prometheus token je credential - do odpovědi patří JEN pro
+        // přihlášeného administrátora. sla_report je jinak veřejný endpoint,
+        // takže bez téhle podmínky si token mohl přečíst kdokoli, kdo
+        // otevřel /app/reports (a metrics.php by mu pak reálně odpovídalo).
+        $is_admin_session = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
+        $metrics_token = $is_admin_session ? trim((string)get_setting('metrics_token')) : '';
         $site_title = trim((string)get_setting('site_title', 'Blood Kings Monitoring'));
         $custom_logo_url = trim((string)get_setting('custom_logo_url', ''));
 
@@ -1025,7 +2342,10 @@ if ($action === 'sla_report') {
             'customLogoUrl' => $custom_logo_url,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['slaGoal' => 99.95, 'overallUptime' => 100, 'totalOutageMinutes' => 0, 'overallMttrSec' => null, 'monitors' => [], 'metricsToken' => '', 'siteTitle' => 'Blood Kings Monitoring', 'customLogoUrl' => ''], JSON_UNESCAPED_UNICODE);
+        // Dřív se tu při chybě DB vracelo 100% uptime a 0 minut výpadků -
+        // dokonalé SLA přesně ve chvíli, kdy o skutečném stavu nevíme nic.
+        http_response_code(500);
+        echo json_encode(['error' => 'Nepodařilo se sestavit SLA report.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -1034,8 +2354,14 @@ if ($action === 'sla_report') {
 if ($action === 'audit_logs') {
     try {
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
+
+        // Stejný problém jako u action=events: tail logu pokryje jen pár
+        // desítek minut, starší chybové záznamy z okna vypadnou a protokol
+        // pak lže, že je vše OK. Poslední down/warning řádky se proto
+        // přimíchávají vždy.
+        $audit_cols = "l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, m.name as monitor_name, m.type as monitor_type";
         $stmt = $pdo->prepare("
-            SELECT l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, m.name as monitor_name, m.type as monitor_type
+            SELECT $audit_cols
             FROM monitor_logs l
             LEFT JOIN monitors m ON m.id = l.monitor_id
             ORDER BY l.id DESC
@@ -1043,20 +2369,40 @@ if ($action === 'audit_logs') {
         ");
         $stmt->bindValue(1, $limit, PDO::PARAM_INT);
         $stmt->execute();
-        $rows = $stmt->fetchAll();
+        $recent_rows = $stmt->fetchAll();
+
+        $stmt_fails = $pdo->prepare("
+            SELECT $audit_cols
+            FROM monitor_logs l
+            LEFT JOIN monitors m ON m.id = l.monitor_id
+            WHERE l.status IN ('down', 'warning')
+            ORDER BY l.id DESC
+            LIMIT ?
+        ");
+        $stmt_fails->bindValue(1, min(50, $limit), PDO::PARAM_INT);
+        $stmt_fails->execute();
+
+        $rows_by_id = [];
+        foreach (array_merge($recent_rows, $stmt_fails->fetchAll()) as $mr) {
+            $rows_by_id[(int)$mr['id']] = $mr;
+        }
+        krsort($rows_by_id);
+        $rows = array_values($rows_by_id);
 
         $logs = [];
         foreach ($rows as $r) {
-            $isDown = strtolower($r['status'] ?? '') === 'down';
+            $row_status = strtolower($r['status'] ?? '');
+            $isDown = $row_status === 'down';
+            $isWarn = $row_status === 'warning';
             $mName = $r['monitor_name'] ?: "Monitor #{$r['monitor_id']}";
             $mType = strtoupper($r['monitor_type'] ?: 'HTTP');
 
             $logs[] = [
                 'id' => (int)$r['id'],
                 'time' => date('d.m.Y H:i:s', strtotime($r['time'])),
-                'action' => $isDown ? "VÝPADEK: {$mName}" : "KONTROLA OK: {$mName}",
+                'action' => $isDown ? "VÝPADEK: {$mName}" : ($isWarn ? "VAROVÁNÍ: {$mName}" : "KONTROLA OK: {$mName}"),
                 'details' => $r['error_message'] ?: ($isDown ? "[{$mName}] {$mType} neodpovídá na test" : "[{$mName}] {$mType} test OK (Odezva {$r['response_time']} ms)"),
-                'status' => $isDown ? 'down' : 'up',
+                'status' => $isDown ? 'down' : ($isWarn ? 'warning' : 'up'),
                 'user' => 'Systémový Agent (Cron)',
             ];
         }
@@ -1086,12 +2432,23 @@ $BK_METRIC_COLUMN_MAP = [
     'net_errors' => ['col' => 'net_errors', 'unit' => '', 'label' => 'Síťové chyby'],
     'iowait' => ['col' => 'iowait_pct', 'unit' => '%', 'label' => 'Čekání na I/O'],
     'inode_usage' => ['col' => 'inode_usage_pct', 'unit' => '%', 'label' => 'Využití inodů'],
-    'ts_clients' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'TeamSpeak Klienti'],
+    // Tyhle dvě řady čtou TÝŽ sloupec (kolik lidí je online) a liší se jen
+    // pojmenováním. 'only' je proto omezuje na typ monitoru, kterému dávají
+    // smysl - jinak by detail Discordu ukazoval dva identické grafy, z toho
+    // jeden nadepsaný "TeamSpeak Klienti".
+    'ts_clients' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'TeamSpeak Klienti', 'only' => ['teamspeak']],
+    'discord_presence' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Online na Discordu', 'only' => ['discord']],
+    'mc_players' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Hráči online', 'only' => ['minecraft']],
     'ts_process_cpu' => ['col' => 'ts_process_cpu', 'unit' => '%', 'label' => 'CPU procesu TS3'],
     'ts_process_ram' => ['col' => 'ts_process_ram', 'unit' => 'MB', 'label' => 'RAM procesu TS3'],
     'net_ipv4' => ['col' => 'net_ipv4_kbps', 'unit' => 'KB/s', 'label' => 'IPv4 provoz'],
     'net_ipv6' => ['col' => 'net_ipv6_kbps', 'unit' => 'KB/s', 'label' => 'IPv6 provoz'],
     'temperature_c' => ['col' => 'temperature_c', 'unit' => '°C', 'label' => 'Teplota CPU'],
+    // Sloupce, které se roky ukládaly, ale žádný graf je nečetl (audit 2026-08-05):
+    'zombie_count' => ['col' => 'zombie_count', 'unit' => '', 'label' => 'Zombie procesy'],
+    'fork_rate' => ['col' => 'fork_rate', 'unit' => '/s', 'label' => 'Fork rate'],
+    'wifi_clients' => ['col' => 'wifi_clients_total', 'unit' => '', 'label' => 'Wi-Fi klienti'],
+    'conntrack' => ['col' => 'conntrack_pct', 'unit' => '%', 'label' => 'Conntrack tabulka'],
 ];
 
 if ($action === 'metric_series') {
@@ -1161,9 +2518,11 @@ if ($action === 'metric_series_batch') {
     $hours = $period === '30d' ? 720 : ($period === '7d' ? 168 : ($period === '1h' ? 1 : ($period === '15m' ? 1 : 24)));
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
+        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
         $stmt_mon->execute([$monitor_id, $monitor_id]);
-        $real_id = $stmt_mon->fetchColumn();
+        $mon_row = $stmt_mon->fetch();
+        $real_id = $mon_row['id'] ?? null;
+        $mon_type = strtolower((string)($mon_row['type'] ?? ''));
 
         if (!$real_id) {
             echo json_encode(['series' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
@@ -1199,6 +2558,10 @@ if ($action === 'metric_series_batch') {
         $vm_rows = $stmt_vm->fetchAll();
 
         foreach ($BK_METRIC_COLUMN_MAP as $metric_key => $def) {
+            // Řada omezená na jiný typ monitoru se vůbec nenabízí.
+            if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
+                continue;
+            }
             $pts = [];
             foreach ($vm_rows as $r) {
                 if ($r[$def['col']] !== null) {
@@ -1356,16 +2719,6 @@ if ($action === 'metrics_history') {
     ];
 
     try {
-        // cpu_usage/ram_usage/hdd_usage/response_time nejsou sloupce monitors -
-        // poslední hodnoty se berou z vps_metrics (agent) a monitor_logs (kontrola).
-        $stmt_mon = $pdo->prepare("
-            SELECT vm.cpu_usage, vm.ram_usage, vm.hdd_usage,
-                   (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = ? AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
-            FROM vps_metrics vm WHERE vm.monitor_id = ? ORDER BY vm.id DESC LIMIT 1
-        ");
-        $stmt_mon->execute([$monitor_id, $monitor_id]);
-        $mon_data = $stmt_mon->fetch() ?: ['cpu_usage' => null, 'ram_usage' => null, 'hdd_usage' => null, 'response_time' => null];
-
         if ($period === '7d') {
             $stmt = $pdo->prepare("
                 SELECT DATE_FORMAT(checked_at, '%d.%m. %H:00') AS label,
@@ -1383,7 +2736,7 @@ if ($action === 'metrics_history') {
             $stmt = $pdo->prepare("
                 SELECT DATE_FORMAT(checked_at, '%d.%m.') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
-                       ram_usage AS ram, MAX(ram_usage) AS ram_peak,
+                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
                        AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
                        AVG(net_usage) AS net, MAX(net_usage) AS net_peak
                 FROM vps_metrics
@@ -1407,68 +2760,29 @@ if ($action === 'metrics_history') {
         }
         $rows = $stmt->fetchAll();
 
-        if (empty($rows)) {
-            // Pokud vps_metrics ještě nemá uloženy historické zápisy, vygenerujeme řadu podle naměřených metrik z agenta
-            $base_cpu = (float)($mon_data['cpu_usage'] ?? 24.0);
-            $base_ram = (float)($mon_data['ram_usage'] ?? 48.0);
-            $base_hdd = (float)($mon_data['hdd_usage'] ?? 3.0);
-            $base_net = (float)($mon_data['response_time'] ?? 8.0);
-
-            $hours = $period === '7d' ? 7 : ($period === '30d' ? 30 : 24);
-            for ($i = $hours; $i >= 0; $i--) {
-                $label = $period === '24h'
-                    ? date('H:i', strtotime("-$i hours"))
-                    : date('d.m.', strtotime("-$i days"));
-                
-                // Jemné kolísání ±5% pro přirozený průběh vytížení
-                $var = (sin($i * 0.5) * 3);
-                $cpu_val = max(1.0, min(100.0, round($base_cpu + $var, 1)));
-                $ram_val = max(1.0, min(100.0, round($base_ram + ($var * 0.5), 1)));
-                $hdd_val = max(0.5, min(100.0, round($base_hdd, 1)));
-                $net_val = max(1.0, round($base_net + abs($var), 1));
-
-                $result['labels'][] = $label;
-                $result['cpu'][] = $cpu_val;
-                $result['ram'][] = $ram_val;
-                $result['hdd'][] = $hdd_val;
-                $result['net'][] = $net_val;
-            }
-        } else {
-            $cpu_sum = $ram_sum = $hdd_sum = $net_sum = 0;
-            $net_count = 0;
-            foreach ($rows as $r) {
-                $result['labels'][] = $r['label'];
-                $result['cpu'][] = round((float)$r['cpu'], 1);
-                $result['ram'][] = round((float)$r['ram'], 1);
-                $result['hdd'][] = round((float)$r['hdd'], 1);
-                $result['net'][] = $r['net'] !== null ? round((float)$r['net'], 1) : null;
-                $cpu_sum += (float)$r['cpu'];
-                $ram_sum += (float)$r['ram'];
-                $hdd_sum += (float)$r['hdd'];
-                $result['cpu_max'] = max($result['cpu_max'], round((float)$r['cpu_peak'], 1));
-                $result['ram_max'] = max($result['ram_max'], round((float)$r['ram_peak'], 1));
-                $result['hdd_max'] = max($result['hdd_max'], round((float)$r['hdd_peak'], 1));
-                if ($r['net'] !== null) {
-                    $net_sum += (float)$r['net'];
-                    $net_count++;
-                    $result['net_max'] = max($result['net_max'], round((float)$r['net_peak'], 1));
-                }
-            }
+        // Žádné řádky = žádný graf. Dřív se tu generovala syntetická sinusová
+        // řada "pro přirozený průběh" - tedy vymyšlená data vydávaná za měření.
+        // Prázdné pole nechá frontend říct "žádná data", což je pravda.
+        foreach ($rows as $r) {
+            $result['labels'][] = $r['label'];
+            // NULL v metrice (např. cpuusage bez CloudLinux) zůstává NULL -
+            // graf ukáže mezeru, ne falešnou nulu.
+            $result['cpu'][] = $r['cpu'] !== null ? round((float)$r['cpu'], 1) : null;
+            $result['ram'][] = $r['ram'] !== null ? round((float)$r['ram'], 1) : null;
+            $result['hdd'][] = $r['hdd'] !== null ? round((float)$r['hdd'], 1) : null;
+            $result['net'][] = $r['net'] !== null ? round((float)$r['net'], 1) : null;
         }
 
-        if (count($result['cpu']) > 0) {
-            $result['cpu_avg'] = round(array_sum($result['cpu']) / count($result['cpu']), 1);
-            $result['cpu_max'] = max($result['cpu']);
-            $result['ram_avg'] = round(array_sum($result['ram']) / count($result['ram']), 1);
-            $result['ram_max'] = max($result['ram']);
-            $result['hdd_avg'] = round(array_sum($result['hdd']) / count($result['hdd']), 1);
-            $result['hdd_max'] = max($result['hdd']);
-            if (!empty($result['net'])) {
-                $valid_net = array_filter($result['net'], fn($v) => $v !== null);
-                if (!empty($valid_net)) {
-                    $result['net_avg'] = round(array_sum($valid_net) / count($valid_net), 1);
-                    $result['net_max'] = max($valid_net);
-                }
+        // Průměry/maxima jen ze skutečně naměřených hodnot; bez jediné hodnoty
+        // zůstává null a frontend vypíše pomlčku místo nuly.
+        foreach (['cpu', 'ram', 'hdd', 'net'] as $mk) {
+            $valid = array_filter($result[$mk], fn($v) => $v !== null);
+            if (!empty($valid)) {
+                $result["{$mk}_avg"] = round(array_sum($valid) / count($valid), 1);
+                $result["{$mk}_max"] = max($valid);
+            } else {
+                $result["{$mk}_avg"] = null;
+                $result["{$mk}_max"] = null;
             }
         }
     } catch (Exception $e) { /* empty */ }
@@ -1500,7 +2814,7 @@ if ($action === 'public_status') {
             $stmt_upt = $pdo->query("
                 SELECT monitor_id,
                        SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-                       SUM(CASE WHEN status != 'maintenance' THEN 1 ELSE 0 END) as total_count
+                       SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
                 FROM monitor_logs
                 WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                 GROUP BY monitor_id
@@ -1594,7 +2908,8 @@ try {
         $details = json_decode($ts['last_details'] ?? '', true);
         if ($details && isset($details['clients_online'])) {
             $response['teamspeak']['clients_online'] = (int)$details['clients_online'];
-            $response['teamspeak']['clients_max'] = (int)($details['clients_max'] ?? 100);
+            // Neznámá kapacita zůstává null - "X / 100" s vymyšleným limitem neukazujeme.
+            $response['teamspeak']['clients_max'] = isset($details['clients_max']) ? (int)$details['clients_max'] : null;
         }
     }
 

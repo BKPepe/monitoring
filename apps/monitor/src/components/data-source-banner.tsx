@@ -20,7 +20,10 @@ export function DataSourceBanner() {
 
     if (error || !status) {
       return (
-        <div role="status" className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/12 text-warning px-3 py-2 text-xs">
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/12 text-warning px-3 py-2 text-xs"
+        >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div>
             <p className="font-medium">{t('banner.load_failed', 'Stav infrastruktury se nepodařilo načíst')}</p>
@@ -54,15 +57,33 @@ export function DataSourceBanner() {
     );
   }
 
+  // Aplikace nemá žádná ukázková data - když API neodpoví, prostě data
+  // nejsou. Dřívější text "Ukázková data" tedy lhal a hlavně neříkal,
+  // co má admin dělat (hlášeno uživatelem).
   return (
     <div
-      role="status"
-      className="border-warning/30 bg-warning/12 text-warning flex items-start gap-2 rounded-lg border px-3 py-2 text-xs"
+      role="alert"
+      className="border-down/40 bg-down/10 text-down flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs"
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-      <div>
-        <p className="font-medium">{t('banner.mock_data', 'Ukázková data — nejde o naměřené hodnoty')}</p>
-        {state.fallbackReason && <p className="opacity-80">{state.fallbackReason}</p>}
+      <div className="space-y-1">
+        <p className="font-bold">
+          {t('banner.api_down_title', 'Monitorovací API neodpovídá — zobrazená data mohou chybět nebo být zastaralá')}
+        </p>
+        {state.fallbackReason && <p className="font-mono opacity-80">{state.fallbackReason}</p>}
+        <p className="text-foreground/80">
+          {t(
+            'banner.api_down_help',
+            'Co dělat: obnovte stránku (server mohl být chvíli přetížený). Pokud potíž trvá, zkontrolujte dostupnost /status na hostingu, běh cronu a chybový log PHP.'
+          )}
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-0.5 inline-flex items-center gap-1.5 rounded-md bg-down px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90 transition-opacity"
+        >
+          {t('banner.api_down_retry', 'Zkusit znovu')}
+        </button>
       </div>
     </div>
   );

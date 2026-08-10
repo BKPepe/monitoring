@@ -41,10 +41,15 @@ func (s *Server) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	out := fmt.Sprintf("# HELP monitoring_uptime_percent Uptime percentage over 30 days\n"+
-		"# TYPE monitoring_uptime_percent gauge\n"+
-		"monitoring_uptime_percent %.2f\n\n"+
-		"# HELP monitoring_monitors_total Total configured monitors\n"+
+	// Nezměřené gauge se vynechají - chybějící metrika je v Prometheu korektní
+	// stav, nula/na tvrdo dosazená hodnota by byla lež v časové řadě.
+	out := ""
+	if statusRes.UptimePercent != nil {
+		out += fmt.Sprintf("# HELP monitoring_uptime_percent Uptime percentage over 30 days\n"+
+			"# TYPE monitoring_uptime_percent gauge\n"+
+			"monitoring_uptime_percent %.2f\n\n", *statusRes.UptimePercent)
+	}
+	out += fmt.Sprintf("# HELP monitoring_monitors_total Total configured monitors\n"+
 		"# TYPE monitoring_monitors_total gauge\n"+
 		"monitoring_monitors_total %d\n\n"+
 		"# HELP monitoring_monitors_down Total down monitors\n"+
@@ -52,11 +57,13 @@ func (s *Server) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request)
 		"monitoring_monitors_down %d\n\n"+
 		"# HELP monitoring_agents_online Total online agents\n"+
 		"# TYPE monitoring_agents_online gauge\n"+
-		"monitoring_agents_online %d\n\n"+
-		"# HELP monitoring_avg_latency_ms Average latency in milliseconds\n"+
-		"# TYPE monitoring_avg_latency_ms gauge\n"+
-		"monitoring_avg_latency_ms %d\n",
-		statusRes.UptimePercent, statusRes.TotalMonitors, statusRes.DownMonitors, statusRes.AgentsOnline, statusRes.AvgLatencyMs)
+		"monitoring_agents_online %d\n",
+		statusRes.TotalMonitors, statusRes.DownMonitors, statusRes.AgentsOnline)
+	if statusRes.AvgLatencyMs != nil {
+		out += fmt.Sprintf("\n# HELP monitoring_avg_latency_ms Average latency in milliseconds\n"+
+			"# TYPE monitoring_avg_latency_ms gauge\n"+
+			"monitoring_avg_latency_ms %d\n", *statusRes.AvgLatencyMs)
+	}
 
 	_, _ = w.Write([]byte(out))
 }
@@ -68,16 +75,28 @@ func (s *Server) handleBadge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statusRes, _ := s.store.GetPublicStatus(r.Context())
-	statusText := "online"
-	color := "#1ec773"
+	// Neznámý stav (store selhal) je "unknown" v šedé - badge dřív v té
+	// situaci tvrdil zelené "online".
+	statusText := "unknown"
+	color := "#9ca3af"
 
-	if statusRes != nil && statusRes.Status == "degraded" {
-		statusText = "degraded"
-		color = "#f39c12"
+	if statusRes != nil {
+		if statusRes.Status == "degraded" {
+			statusText = "degraded"
+			color = "#f39c12"
+		} else {
+			statusText = "online"
+			color = "#1ec773"
+		}
 	}
 
-	if badgeType == "uptime" && statusRes != nil {
-		statusText = fmt.Sprintf("%.1f%%", statusRes.UptimePercent)
+	if badgeType == "uptime" {
+		if statusRes != nil && statusRes.UptimePercent != nil {
+			statusText = fmt.Sprintf("%.1f%%", *statusRes.UptimePercent)
+		} else {
+			statusText = "n/a"
+			color = "#9ca3af"
+		}
 	}
 
 	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="110" height="20">
@@ -104,12 +123,18 @@ func (s *Server) handleBadge(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWidget(w http.ResponseWriter, r *http.Request) {
 	statusRes, _ := s.store.GetPublicStatus(r.Context())
-	statusText := "VŠECHNY SYSTÉMY V PROVOZU"
-	bgColor := "#1ec773"
+	// Bez dat ze store se nehraje na "vše v provozu" - widget řekne, že stav nezná.
+	statusText := "STAV NEZNÁMÝ"
+	bgColor := "#9ca3af"
 
-	if statusRes != nil && statusRes.Status == "degraded" {
-		statusText = "ČÁSTEČNÝ VÝPADEK"
-		bgColor = "#e74c3c"
+	if statusRes != nil {
+		if statusRes.Status == "degraded" {
+			statusText = "ČÁSTEČNÝ VÝPADEK"
+			bgColor = "#e74c3c"
+		} else {
+			statusText = "VŠECHNY SYSTÉMY V PROVOZU"
+			bgColor = "#1ec773"
+		}
 	}
 
 	html := fmt.Sprintf(`<!DOCTYPE html>
@@ -125,14 +150,14 @@ body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Rob
 <body>
 <div class="card">
   <div class="badge">%s</div>
-  <p style="margin-top:8px;font-size:14px;color:#94a3b8;">Uptime (30 dní): %.2f%%</p>
+  <p style="margin-top:8px;font-size:14px;color:#94a3b8;">Uptime (30 dní): %s</p>
 </div>
 </body>
-</html>`, bgColor, statusText, func() float64 {
-		if statusRes != nil {
-			return statusRes.UptimePercent
+</html>`, bgColor, statusText, func() string {
+		if statusRes != nil && statusRes.UptimePercent != nil {
+			return fmt.Sprintf("%.2f%%", *statusRes.UptimePercent)
 		}
-		return 100.0
+		return "bez naměřených dat"
 	}())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -145,14 +170,30 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	monitorIDStr := r.URL.Query().Get("monitor_id")
 	monitorID, _ := strconv.ParseInt(monitorIDStr, 10, 64)
 
-	if format == "csv" {
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", "attachment; filename=\"sla_report.csv\"")
-		_, _ = w.Write([]byte("monitor_id,period,uptime_percent\n"))
-		_, _ = w.Write([]byte(fmt.Sprintf("%d,30d,99.9\n", monitorID)))
+	// Skutečný uptime z monitor_logs; dřív endpoint vracel natvrdo 99.9 %
+	// bez ohledu na realitu. Prázdná hodnota / "bez dat" = nic se nenaměřilo.
+	uptime, err := s.store.MonitorUptimePercent30d(r.Context(), monitorID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "store_error", "Chyba při výpočtu SLA reportu.")
 		return
 	}
 
+	if format == "csv" {
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"sla_report.csv\"")
+		val := ""
+		if uptime != nil {
+			val = fmt.Sprintf("%.2f", *uptime)
+		}
+		_, _ = w.Write([]byte("monitor_id,period,uptime_percent\n"))
+		_, _ = w.Write([]byte(fmt.Sprintf("%d,30d,%s\n", monitorID, val)))
+		return
+	}
+
+	uptimeText := "bez naměřených dat"
+	if uptime != nil {
+		uptimeText = fmt.Sprintf("%.2f %%", *uptime)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(fmt.Sprintf("<html><body><h1>SLA Report (Monitor #%d)</h1><p>Uptime 30d: 99.9%%</p></body></html>", monitorID)))
+	_, _ = w.Write([]byte(fmt.Sprintf("<html><body><h1>SLA Report (Monitor #%d)</h1><p>Uptime 30d: %s</p></body></html>", monitorID, uptimeText)))
 }

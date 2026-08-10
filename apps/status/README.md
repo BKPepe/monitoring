@@ -75,9 +75,9 @@ Install lightweight telemetry agents on target machines:
 ```bash
 python3 agent.py --interval 60 --url https://your-server.com/status/agent_api.php --key YOUR_AGENT_KEY
 ```
-Or run auto-registration:
+Or run auto-registration (positional arguments, as implemented in the script):
 ```bash
-./agent.sh --register --token="YOUR_REGISTRATION_TOKEN" --url="https://your-server.com/status/agent_api.php"
+./agent.sh --register YOUR_REGISTRATION_TOKEN https://your-server.com/status/agent_api.php
 ```
 
 ### OpenWrt Router Agent (`agent_openwrt.sh`)

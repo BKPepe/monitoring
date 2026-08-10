@@ -1,6 +1,6 @@
 import { Card } from '@/components/ui/card';
 import { Sparkline } from '@/components/sparkline';
-import type { HealthMetric } from '@/data/mock';
+import type { HealthMetric } from '@/data/model';
 import { cn } from '@/lib/utils';
 
 /**

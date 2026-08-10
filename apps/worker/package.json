@@ -8,11 +8,11 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
-    "hono": "^4.12.31"
+    "hono": "^4.12.34"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260731.1",
     "typescript": "^7.0.2",
-    "wrangler": "^4.116.0"
+    "wrangler": "^4.119.0"
   }
 }

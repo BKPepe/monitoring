@@ -115,6 +115,25 @@ foreach ($monitors as $monitor) {
         continue;
     }
     
+    // Agent-side kontrola (služby na LAN, z hostingu nedosažitelné): stav
+    // zapisuje agent_api při reportu agenta. Cron tu hlídá jen čerstvost -
+    // když výsledky přestanou chodit (agent mlčí), monitor nesmí věčně
+    // svítit poslední známou barvou. 'unknown' se do SLA nepočítá.
+    if ($type === 'agent_service') {
+        $offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
+        $last_checked_ts = $monitor['last_checked'] ? strtotime($monitor['last_checked']) : 0;
+        if ($offline_secs > 0 && (time() - $last_checked_ts) > $offline_secs && $monitor['status'] !== 'unknown') {
+            $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'unknown', last_status_change = NOW() WHERE id = ?");
+            $stmt_up->execute([$id]);
+            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, 'unknown', NULL, ?, 'Agent')");
+            $stmt_log->execute([$id, 'Zdrojový agent přestal posílat výsledky kontroly - stav služby není známý.']);
+            echo "UNKNOWN (agent-side kontrola bez čerstvých výsledků)\n";
+        } else {
+            echo "OK (kontrolu provádí agent)\n";
+        }
+        continue;
+    }
+
     $check_result = [
         'status' => 'unknown',
         'response_time' => 0,
@@ -216,8 +235,67 @@ foreach ($monitors as $monitor) {
         case 'discord':
             $check_result = check_discord($target, $timeout);
             break;
+
+        default:
+            // Typ bez aktivní kontroly (např. starší import z Service
+            // Discovery s typem 'dns'). Dřív tudy každou minutu propadl
+            // výchozí 'unknown' výsledek až do monitor_logs a SLA report
+            // pak monitoru ukazoval 0 % uptime, přestože ho nikdy nikdo
+            // nekontroloval. Bez měření žádný zápis.
+            $stmt_skip = $pdo->prepare("UPDATE monitors SET last_checked = NOW() WHERE id = ?");
+            $stmt_skip->execute([$id]);
+            echo "SKIP (typ '{$type}' nemá aktivní kontrolu)\n";
+            continue 2;
     }
-    
+
+    // Okamžitý druhý pokus při selhání - jediný přechodný 5s timeout (síťový
+    // hiccup, chvilkové přetížení sdíleného hostingu) dřív okamžitě překlopil
+    // stav na down a vystřelil notifikace (WhatsApp/SMS/e-mail), aby se za
+    // minutu vše vrátilo s druhou notifikací. Skutečný výpadek selže i
+    // napodruhé; blip tímhle zmizí úplně a žádná notifikace neodejde.
+    if (($check_result['status'] ?? '') === 'down') {
+        sleep(2);
+        $retry_result = null;
+        switch ($type) {
+            case 'web':
+                $retry_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
+                break;
+            case 'cpanel':
+                $retry_result = check_cpanel($target, $timeout);
+                break;
+            case 'port':
+                $retry_result = check_socket($target, $port ?: 80, $timeout);
+                break;
+            case 'minecraft':
+                $retry_result = check_minecraft($target, $port ?: 25565, $timeout, $monitor['rcon_port'] ?? null, $monitor['rcon_password'] ?? null);
+                break;
+            case 'teamspeak':
+                $retry_result = check_teamspeak($target, $port ?: 10011, $timeout, $monitor['sq_username'] ?? null, $monitor['sq_password'] ?? null, $monitor['ts3_filetransfer_port'] ?? null);
+                break;
+            case 'discord':
+                $retry_result = check_discord($target, $timeout);
+                break;
+        }
+        if ($retry_result !== null && ($retry_result['status'] ?? '') === 'up') {
+            echo "RETRY OK (první pokus selhal: " . ($check_result['error'] ?? '?') . ")\n";
+            $check_result = $retry_result;
+        }
+    }
+
+    // cPanel fallback pro web monitory: když HTTP kontrola selže i napodruhé,
+    // ale cPanel exporter na stejném hostingu normálně odpovídá, server žije -
+    // problém je v HTTP cestě (Cloudflare, PHP-FPM apod.), ne v celém stroji.
+    // Zapíše se down s doplněnou informací, ale stejná logika jako agent
+    // fallback níže se tady záměrně NEaplikuje - web, který nevrací stránky,
+    // JE nedostupný pro návštěvníky, jen chceme do notifikace přesnější kontext.
+    if (($check_result['status'] ?? '') === 'down' && $type === 'web' && !empty($monitor['cpanel_stats_url'])) {
+        $cp_probe = check_cpanel($monitor['cpanel_stats_url'], min($timeout, 5));
+        if (($cp_probe['status'] ?? '') === 'up') {
+            $check_result['error'] = ($check_result['error'] ?? 'Web nedostupný')
+                . ' | Server samotný běží (cPanel exporter odpovídá) - problém je pravděpodobně v HTTP vrstvě/CDN, ne ve stroji.';
+        }
+    }
+
     $new_status = $check_result['status'];
     $response_time = $check_result['response_time'];
     $error_msg = $check_result['error'];
@@ -300,8 +378,9 @@ foreach ($monitors as $monitor) {
     if ($details === null && $new_status === 'up') {
         if ($type === 'minecraft') {
             $details = json_encode([
-                'players_online' => $check_result['players_online'] ?? 0,
-                'players_max' => $check_result['players_max'] ?? 0,
+                // Nezjisteny pocet hracu neni nula (stejne jako u Discordu).
+                'players_online' => $check_result['players_online'] ?? null,
+                'players_max' => $check_result['players_max'] ?? null,
                 'version' => $check_result['version'] ?? '',
                 'players_list' => $check_result['players_list'] ?? [],
                 'motd' => $check_result['motd'] ?? '',
@@ -310,11 +389,31 @@ foreach ($monitors as $monitor) {
                 'tps_5m' => $check_result['tps_5m'] ?? null,
                 'tps_15m' => $check_result['tps_15m'] ?? null
             ], JSON_UNESCAPED_UNICODE);
+
+            // Pocet hracu se dosud ukladal jen jako aktualni snimek, takze
+            // Minecraft nemel graf navstevnosti - stejny problem jako mel
+            // Discord. Uklada se do sloupce pro "lidi online".
+            if (isset($check_result['players_online']) && $check_result['players_online'] !== null) {
+                try {
+                    $stmt_mc = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, ts_clients_online, ts_clients_max) VALUES (?, ?, ?)");
+                    $stmt_mc->execute([
+                        $id,
+                        (int)$check_result['players_online'],
+                        isset($check_result['players_max']) ? (int)$check_result['players_max'] : null,
+                    ]);
+                } catch (Throwable $e) {
+                    error_log('[cron] Minecraft player metric skipped: ' . $e->getMessage());
+                }
+            }
         } elseif ($type === 'teamspeak') {
             $details = json_encode([
-                'clients_online' => $check_result['clients_online'] ?? 0,
-                'clients_max' => $check_result['clients_max'] ?? 0,
-                'name' => $check_result['name'] ?? 'TeamSpeak Server',
+                // Nezjištěný počet hráčů není nula - prázdný server a
+                // neúspěšný dotaz jsou dvě různé věci.
+                'clients_online' => $check_result['clients_online'] ?? null,
+                'clients_max' => $check_result['clients_max'] ?? null,
+                // Nezjistene jmeno serveru zustava null - UI pak ukaze nazev monitoru,
+                // misto aby tvrdilo genericke "TeamSpeak Server".
+                'name' => $check_result['name'] ?? null,
                 'version' => $check_result['version'] ?? '',
                 'checked_ip' => $check_result['checked_ip'] ?? '',
                 'ip_version' => $check_result['ip_version'] ?? 'IPv4',
@@ -326,13 +425,15 @@ foreach ($monitors as $monitor) {
             bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details);
             $ts3_process_cpu = null;
             $ts3_process_ram = null;
-            $ts3_host_cpu = 0;
-            $ts3_host_ram = 0;
-            $ts3_host_hdd = 0;
+            // Bez metrik od agenta zůstává NULL - fiktivní nuly by v přehledu
+            // vypadaly jako naprosto nezatížený stroj.
+            $ts3_host_cpu = null;
+            $ts3_host_ram = null;
+            $ts3_host_hdd = null;
             if (is_array($ts3_agent_details)) {
-                $ts3_host_cpu = $ts3_agent_details['cpu'] ?? 0;
-                $ts3_host_ram = $ts3_agent_details['ram'] ?? 0;
-                $ts3_host_hdd = $ts3_agent_details['hdd'] ?? 0;
+                $ts3_host_cpu = $ts3_agent_details['cpu'] ?? null;
+                $ts3_host_ram = $ts3_agent_details['ram'] ?? null;
+                $ts3_host_hdd = $ts3_agent_details['hdd'] ?? null;
                 if (isset($ts3_agent_details['ts3_process']) && is_array($ts3_agent_details['ts3_process'])) {
                     $ts3_process_cpu = $ts3_agent_details['ts3_process']['cpu'] ?? null;
                     $ts3_process_ram = $ts3_agent_details['ts3_process']['ram_mb'] ?? null;
@@ -349,13 +450,28 @@ foreach ($monitors as $monitor) {
             ]);
         } elseif ($type === 'discord') {
             $details = json_encode([
-                'presence_count' => $check_result['presence_count'] ?? 0,
-                'name' => $check_result['name'] ?? 'Discord Server',
+                // Nezjištěný počet online NENÍ nula - selhaný dotaz a prázdný
+                // server jsou dvě různé věci.
+                'presence_count' => $check_result['presence_count'] ?? null,
+                'name' => $check_result['name'] ?? null,
                 'instant_invite' => $check_result['instant_invite'] ?? null,
                 'voice_channels' => $check_result['voice_channels'] ?? [],
                 'members' => $check_result['members'] ?? [],
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
+
+            // Počet online se dosud ukládal jen jako aktuální snímek v details,
+            // takže Discord neměl žádný graf kromě odezvy - data se sbírala
+            // každou minutu a hned zahazovala. Ukládá se do stejného sloupce,
+            // jaký používá TeamSpeak (kolik lidí je online).
+            if (isset($check_result['presence_count']) && $check_result['presence_count'] !== null) {
+                try {
+                    $stmt_dc = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, ts_clients_online) VALUES (?, ?)");
+                    $stmt_dc->execute([$id, (int)$check_result['presence_count']]);
+                } catch (Throwable $e) {
+                    error_log('[cron] Discord presence metric skipped: ' . $e->getMessage());
+                }
+            }
         } elseif ($type === 'web') {
             $details_arr = [
                 'has_ipv4' => $check_result['has_ipv4'] ?? false,
@@ -405,13 +521,43 @@ foreach ($monitors as $monitor) {
                         'postgresql' => $cp_res['postgresql'] ?? null,
                         'cpu' => $cp_res['cpu'] ?? null
                     ];
-                    
-                    // Uložit do vps_metrics pro historii grafů
-                    $cpu_val = isset($cp_res['cpu']['percent']) ? floatval($cp_res['cpu']['percent']) : 0.0;
-                    $ram_val = isset($cp_res['memory']['percent']) ? floatval($cp_res['memory']['percent']) : 0.0;
-                    $hdd_val = isset($cp_res['disk']['percent']) ? floatval($cp_res['disk']['percent']) : 0.0;
+                    $details_arr['cpanel_stats_error'] = null;
+
+                    // Uložit do vps_metrics pro historii grafů. Chybějící metrika
+                    // se ukládá jako NULL, ne 0.0 - nula je reálná hodnota a
+                    // vymyšlená nula by v grafech vypadala jako "server se fláká"
+                    // (StatsBar bez CloudLinux např. cpuusage vůbec nevrací).
+                    $cpu_val = isset($cp_res['cpu']['percent']) ? floatval($cp_res['cpu']['percent']) : null;
+                    $ram_val = isset($cp_res['memory']['percent']) ? floatval($cp_res['memory']['percent']) : null;
+                    $hdd_val = isset($cp_res['disk']['percent']) ? floatval($cp_res['disk']['percent']) : null;
                     $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
                     $stmt_metrics->execute([$id, $cpu_val, $ram_val, $hdd_val]);
+                } else {
+                    // Selhání sběru cPanel statistik dřív jen tiše přeskočilo zápis -
+                    // data zmizela bez jediné stopy (přesně tak umřel sběr 21.7.,
+                    // když deploy přepsal na serveru ručně vložený STATS_KEY).
+                    // Chyba se teď ukládá do details, aby byla vidět v UI/API;
+                    // `since` drží začátek výpadku napříč běhy cronu a `hint`
+                    // říká adminovi, jak KONKRÉTNĚ tenhle druh selhání opravit.
+                    $cp_http = $cp_res['http_code'] ?? null;
+                    if ($cp_http === 404) {
+                        $cp_hint = t('cpanel_hint_404');
+                    } elseif ($cp_http === 403) {
+                        $cp_hint = t('cpanel_hint_403');
+                    } elseif ($cp_http === 0) {
+                        $cp_hint = t('cpanel_hint_conn');
+                    } elseif ($cp_http === 200) {
+                        $cp_hint = t('cpanel_hint_json');
+                    } else {
+                        $cp_hint = null;
+                    }
+                    $prev_cp_details = json_decode($monitor['last_details'] ?? '{}', true);
+                    $prev_cp_since = is_array($prev_cp_details) ? ($prev_cp_details['cpanel_stats_error']['since'] ?? null) : null;
+                    $details_arr['cpanel_stats_error'] = [
+                        'error' => $cp_res['error'] ?? 'Neznámá chyba',
+                        'hint' => $cp_hint,
+                        'since' => $prev_cp_since ?? date('c'),
+                    ];
                 }
             }
             
@@ -428,9 +574,10 @@ foreach ($monitors as $monitor) {
             ], JSON_UNESCAPED_UNICODE);
             
             if ($new_status === 'up') {
-                $cpu_val = isset($check_result['cpu']['percent']) ? floatval($check_result['cpu']['percent']) : 0.0;
-                $ram_val = isset($check_result['memory']['percent']) ? floatval($check_result['memory']['percent']) : 0.0;
-                $hdd_val = isset($check_result['disk']['percent']) ? floatval($check_result['disk']['percent']) : 0.0;
+                // NULL pro chybějící metriky - stejný důvod jako u web monitorů výše.
+                $cpu_val = isset($check_result['cpu']['percent']) ? floatval($check_result['cpu']['percent']) : null;
+                $ram_val = isset($check_result['memory']['percent']) ? floatval($check_result['memory']['percent']) : null;
+                $hdd_val = isset($check_result['disk']['percent']) ? floatval($check_result['disk']['percent']) : null;
                 $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
                 $stmt_metrics->execute([$id, $cpu_val, $ram_val, $hdd_val]);
             }
@@ -446,6 +593,13 @@ foreach ($monitors as $monitor) {
         $new_details_arr = json_decode($details, true);
         if (is_array($new_details_arr)) {
             $merged_details_arr = array_merge($old_details, $new_details_arr);
+            // Otisk verze nasazení do details - diagnostika, KTERÝ soubor cron.php
+            // reálně běží. FTP deploy porovnává jen proti vlastnímu stavovému
+            // souboru, takže ručně přepsaný soubor na serveru (nebo cron job
+            // mířící na starou kopii mimo public_html/status/) z gitu nepoznáme
+            // jinak než touhle stopou v datech.
+            @include_once __DIR__ . '/version.php';
+            $merged_details_arr['cron_version'] = defined('APP_VERSION_HASH') ? APP_VERSION_HASH : 'dev';
             $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
         }
     } else {
@@ -489,7 +643,69 @@ foreach ($monitors as $monitor) {
         $stmt_up->execute([$details, $id]);
         echo strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
     }
+
+    // --- Trvale zhoršená odezva ------------------------------------------
+    //
+    // Běží až po zápisu logu, aby do okna spadla i právě proběhlá kontrola.
+    // Vyhodnocuje se jen u běžících služeb - u těch, co jsou dole, je
+    // "pomalá odpověď" nesmysl a upozornění na výpadek už odešlo.
+    if ($new_status === 'up') {
+        $lat_details = json_decode($details ?: '{}', true);
+        if (!is_array($lat_details)) {
+            $lat_details = [];
+        }
+        $lat_alert_sent = !empty($lat_details['latency_alert_sent']);
+        $lat = bk_evaluate_latency($pdo, $monitor, $lat_alert_sent);
+
+        if ($lat['state'] === 'degraded' || $lat['state'] === 'recovered') {
+            $lat_details['latency_alert_sent'] = ($lat['state'] === 'degraded');
+            // Sem se dostaneme jen s nastavenym prahem (bk_evaluate_latency
+            // vraci 'ok', kdyz je NULL), takze zadny fallback nema smysl.
+            $threshold_ms = (int)$monitor['latency_threshold_ms'];
+            $window_mins = (int)($monitor['latency_threshold_mins'] ?? 5);
+
+            if ($lat['state'] === 'degraded') {
+                $lat_msg = sprintf(
+                    "Odezva '%s' je %s ms a drží se nad limitem %d ms už %d minut (%d kontrol). Služba odpovídá, ale výrazně pomaleji než obvykle.",
+                    $name, $lat['avg_ms'], $threshold_ms, $window_mins, $lat['checks']
+                );
+                log_monitor_event($pdo, $id, $name, $type, 'latency_degraded', $lat_msg);
+            } else {
+                $lat_msg = sprintf(
+                    "Odezva '%s' se vrátila pod limit %d ms (aktuálně průměr %s ms).",
+                    $name, $threshold_ms, $lat['avg_ms']
+                );
+                log_monitor_event($pdo, $id, $name, $type, 'latency_recovered', $lat_msg);
+            }
+
+            trigger_notifications($pdo, $monitor, 'latency_' . $lat['state'], $lat_msg);
+
+            $stmt_lat = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
+            $stmt_lat->execute([json_encode($lat_details, JSON_UNESCAPED_UNICODE), $id]);
+            echo "  ODEZVA -> " . strtoupper($lat['state']) . " ({$lat['avg_ms']} ms)\n";
+        }
+    }
 }
+
+// Denní souhrny se musí přepočítat PŘED mazáním - jinak by se data, která
+// se za okamžik smažou, do dlouhodobé historie nikdy nedostala.
+//
+// Poprvé se prochází celá dosavadní retence (31 dní), aby se nezahodila
+// historie, která v DB už je; potom stačí posledních 5 dnů, což pokryje
+// i výpadek cronu na pár dní. Příznak drží v settings, ne v db.php -
+// tam funkce ještě není načtená (functions.php se includuje až po něm).
+$backfill_done = get_setting('uptime_daily_backfilled', '');
+$rollup_days = $backfill_done === '1' ? 5 : 31;
+$rolled = bk_rollup_daily_uptime($pdo, $rollup_days);
+if ($backfill_done !== '1') {
+    try {
+        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('uptime_daily_backfilled', '1') ON DUPLICATE KEY UPDATE key_value = '1'")
+            ->execute();
+    } catch (Throwable $e) {
+        // Bez priznaku se backfill priste zopakuje - je idempotentni.
+    }
+}
+echo "Denní souhrny dostupnosti: {$rolled} zápisů (okno {$rollup_days} dní).\n";
 
 // Vyčištění starých logů (starších než 30 dní) kvůli úspoře místa v DB
 try {

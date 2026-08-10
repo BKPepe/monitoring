@@ -1,21 +1,17 @@
-# LiteSpeed / Apache SPA fallback configuration for Blood Kings SPA under /app/
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-  RewriteBase /app/
-  RewriteRule ^index\.html$ - [L]
-  RewriteCond %{REQUEST_FILENAME} !-f
-  RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule . /app/index.html [L]
-</IfModule>
+# SPA fallback pro React Router (BrowserRouter s base /app/).
+# Bez něj F5 na /app/<route> hledá soubor na disku a vrací 404.
+#
+# Historie (08/2026): pravidla tu dlouho neměla ŽÁDNÝ efekt, protože v
+# cPanel Application Manageru byla na URL /app zaregistrovaná aplikace -
+# Passenger si to URI vzal a .htaccess se v jeho kontextu neprocesuje.
+# Přeregistrováním aplikace na jiné URL se to vyřešilo. Kdyby se F5 na
+# route zase rozbilo, tohle je první místo, kam se podívat.
+RewriteEngine On
 
-<IfModule !mod_rewrite.c>
-  FallbackResource /app/index.html
-</IfModule>
+# Skutečné soubory a adresáře buildu se servírují beze změny.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . index.html [L]
 
-# Fix PHP session.gc_divisor warning
-<IfModule mod_php7.c>
-  php_value session.gc_divisor 100
-</IfModule>
-<IfModule mod_php.c>
-  php_value session.gc_divisor 100
-</IfModule>
+# Výpis adresáře nemá u buildových assetů co dělat.
+Options -Indexes

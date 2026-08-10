@@ -55,8 +55,8 @@ export function EventsHistoryTable() {
   }, [fetchEvents]);
 
   const filteredEvents = useMemo(() => {
-    if (filter === 'down') return events.filter(e => e.isDown);
-    if (filter === 'up') return events.filter(e => !e.isDown);
+    if (filter === 'down') return events.filter((e) => e.isDown);
+    if (filter === 'up') return events.filter((e) => !e.isDown);
     return events;
   }, [events, filter]);
 
@@ -73,33 +73,50 @@ export function EventsHistoryTable() {
         <div className="flex items-center gap-3">
           <History className="size-5 text-rose-500" />
           <div>
-            <h3 className="font-bold text-base">{t('events.table_title', 'Historie posledních událostí & Auditní Protokol')}</h3>
-            <p className="text-xs text-muted-foreground">{t('events.table_desc', 'Reálné záznamy kontrol z databáze (monitor_logs)')}</p>
+            <h3 className="font-bold text-base">
+              {t('events.table_title', 'Historie posledních událostí & Auditní Protokol')}
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              {t('events.table_desc', 'Reálné záznamy kontrol z databáze (monitor_logs)')}
+            </p>
           </div>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <div role="group" aria-label={t('events.filter_aria', 'Filtr stavu')} className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5 text-xs font-semibold">
+          <div
+            role="group"
+            aria-label={t('events.filter_aria', 'Filtr stavu')}
+            className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5 text-xs font-semibold"
+          >
             <button
               type="button"
-              onClick={() => { setFilter('all'); setPage(1); }}
+              onClick={() => {
+                setFilter('all');
+                setPage(1);
+              }}
               className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
               {t('common.all', 'Vše')} ({events.length})
             </button>
             <button
               type="button"
-              onClick={() => { setFilter('up'); setPage(1); }}
+              onClick={() => {
+                setFilter('up');
+                setPage(1);
+              }}
               className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'up' ? 'bg-background text-emerald-400 shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
-              {t('events.filter_passed', 'Passed')} ({events.filter(e => !e.isDown).length})
+              {t('events.filter_passed', 'Passed')} ({events.filter((e) => !e.isDown).length})
             </button>
             <button
               type="button"
-              onClick={() => { setFilter('down'); setPage(1); }}
+              onClick={() => {
+                setFilter('down');
+                setPage(1);
+              }}
               className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'down' ? 'bg-background text-rose-400 shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
-              {t('events.filter_failed', 'Failed')} ({events.filter(e => e.isDown).length})
+              {t('events.filter_failed', 'Failed')} ({events.filter((e) => e.isDown).length})
             </button>
           </div>
 
@@ -107,7 +124,10 @@ export function EventsHistoryTable() {
             <span>{t('events.page_size_label', 'Zobrazit')}:</span>
             <select
               value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setPage(1);
+              }}
               className="rounded bg-secondary/80 border border-input px-2 py-1 text-xs text-foreground cursor-pointer"
             >
               <option value={10}>10</option>
@@ -129,11 +149,55 @@ export function EventsHistoryTable() {
           >
             <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
-          {lastUpdated && <span className="text-[10px] text-muted-foreground font-mono">{t('events.updated_at', 'Aktualizováno')}: {lastUpdated}</span>}
+          {lastUpdated && (
+            <span className="text-[10px] text-muted-foreground font-mono">
+              {t('events.updated_at', 'Aktualizováno')}: {lastUpdated}
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* Mobil: sest sloupcu udalosti se na telefonu necte, tak karty. */}
+      <div className="flex flex-col gap-2 md:hidden">
+        {paginatedEvents.length === 0 ? (
+          <p className="text-muted-foreground py-6 text-center text-xs">
+            {events.length === 0
+              ? t('events.no_events_db', 'V databázi monitor_logs nebyly nalezeny žádné události.')
+              : t('events.no_events_filter', 'Žádné události neodpovídají zvolenému filtru.')}
+          </p>
+        ) : (
+          paginatedEvents.map((row) => (
+            <div key={row.id} className="rounded-lg border border-border p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-bold">{row.monitorName}</p>
+                  <p className="text-muted-foreground truncate font-mono text-[10px]">{row.target}</p>
+                </div>
+                <Badge
+                  variant={row.isDown ? 'down' : row.rawStatus === 'warning' ? 'warning' : 'up'}
+                  className="shrink-0 font-bold"
+                >
+                  {row.status}
+                </Badge>
+              </div>
+              {row.errorMsg && <p className="text-muted-foreground mt-1 leading-snug">{row.errorMsg}</p>}
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+                <span className="font-mono">{row.time}</span>
+                <span className="font-mono">{row.type}</span>
+                {/* Lokalita muze chybet - misto se nedomysli. */}
+                {row.location && (
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="size-3 shrink-0 text-rose-400" />
+                    {row.location}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[11px]">
@@ -149,7 +213,9 @@ export function EventsHistoryTable() {
             {paginatedEvents.length === 0 ? (
               <tr>
                 <td colSpan={6} className="py-8 text-center text-muted-foreground text-xs">
-                  {events.length === 0 ? t('events.no_events_db', 'V databázi monitor_logs nebyly nalezeny žádné události.') : t('events.no_events_filter', 'Žádné události neodpovídají zvolenému filtru.')}
+                  {events.length === 0
+                    ? t('events.no_events_db', 'V databázi monitor_logs nebyly nalezeny žádné události.')
+                    : t('events.no_events_filter', 'Žádné události neodpovídají zvolenému filtru.')}
                 </td>
               </tr>
             ) : (
@@ -163,12 +229,21 @@ export function EventsHistoryTable() {
                   <td className="py-3 px-3 font-mono text-[11px] text-muted-foreground">{row.type}</td>
                   <td className="py-3 px-3 whitespace-nowrap">
                     <span className="inline-flex items-center gap-1 text-[11px]">
-                      <MapPin className="size-3 text-rose-400 shrink-0" />
-                      <span>{row.location}</span>
+                      {row.location ? (
+                        <>
+                          <MapPin className="size-3 text-rose-400 shrink-0" />
+                          <span>{row.location}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </span>
                   </td>
                   <td className="py-3 px-3 whitespace-nowrap">
-                    <Badge variant={row.isDown ? 'down' : 'up'} className="font-bold">
+                    <Badge
+                      variant={row.isDown ? 'down' : row.rawStatus === 'warning' ? 'warning' : 'up'}
+                      className="font-bold"
+                    >
                       {row.status}
                     </Badge>
                   </td>
@@ -198,7 +273,13 @@ export function EventsHistoryTable() {
           >
             <ChevronLeft className="size-3.5" /> {t('events.prev_page', 'Předchozí')}
           </button>
-          <span className="text-muted-foreground font-medium font-mono px-2">{t('events.page_indicator', { current: currentPage, total: totalPages }, `Strana ${currentPage} / ${totalPages}`)}</span>
+          <span className="text-muted-foreground font-medium font-mono px-2">
+            {t(
+              'events.page_indicator',
+              { current: currentPage, total: totalPages },
+              `Strana ${currentPage} / ${totalPages}`
+            )}
+          </span>
           <button
             type="button"
             disabled={currentPage >= totalPages}

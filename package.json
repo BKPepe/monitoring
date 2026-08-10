@@ -13,9 +13,28 @@
     "build:site": "npm run build -w apps/site",
     "build:worker": "npm run build -w apps/worker",
     "build:monitor": "npm run build -w apps/monitor",
-    "build": "npm run build -w apps/site && npm run build -w apps/worker && npm run build -w apps/monitor"
+    "build": "npm run build -w apps/site && npm run build -w apps/worker && npm run build -w apps/monitor",
+    "lint": "eslint apps/monitor/src apps/worker/src",
+    "format:check": "prettier --check \"apps/{monitor,worker,site}/src/**/*.{ts,tsx,js,json,css}\"",
+    "format": "prettier --write \"apps/{monitor,worker,site}/src/**/*.{ts,tsx,js,json,css}\"",
+    "typecheck": "tsc --noEmit -p apps/monitor/tsconfig.json",
+    "test:php": "php apps/status/tests/run_tests.php && php apps/status/tests/run_pipeline_tests.php",
+    "lint:sql": "php apps/status/tests/run_query_lint.php",
+    "deadcode": "php apps/status/tests/find_dead_code.php",
+    "perf": "php apps/status/tests/run_perf_check.php",
+    "test:react": "npm run test -w apps/monitor",
+    "check:bundle": "node apps/monitor/scripts/check-bundle-size.mjs"
   },
   "overrides": {
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.0",
+    "undici": "^7.29.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
   }
 }

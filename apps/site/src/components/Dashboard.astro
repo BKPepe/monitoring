@@ -112,8 +112,9 @@ const t = isCs ? {
         statusLine.textContent = data.status === 'degraded' ? degraded : allOperational;
         statusLine.className = 'dash-status-line ' + (data.status === 'degraded' ? 'status-degraded' : 'status-ok');
       }
-      if (uptimeEl) uptimeEl.textContent = `${Number(data.uptimePercent ?? 0).toFixed(2)}%`;
-      if (latencyEl) latencyEl.textContent = `${data.avgLatencyMs ?? 0} ms`;
+      // null z API = nikdo nic nenaměřil; pomlčka místo vymyšlené nuly.
+      if (uptimeEl) uptimeEl.textContent = data.uptimePercent != null ? `${Number(data.uptimePercent).toFixed(2)}%` : '—';
+      if (latencyEl) latencyEl.textContent = data.avgLatencyMs != null ? `${data.avgLatencyMs} ms` : '—';
       if (monitorsEl) monitorsEl.textContent = `${data.totalMonitors ?? 0}`;
       if (agentsEl) agentsEl.textContent = `${data.agentsOnline ?? 0} / ${data.agentsTotal ?? 0}`;
 

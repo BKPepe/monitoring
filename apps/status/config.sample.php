@@ -50,14 +50,11 @@ define('DB_NAME', 'bloodkings_status');
 define('DB_USER', 'bloodkings');
 define('DB_PASS', 'heslo_databaze');
 
-// --- SMTP CONFIGURATION (OPTIONAL) ---
-// If uncommented, these values take precedence over database settings.
-// Useful for deployments using secrets (e.g. GitHub Actions STATUS_CONFIG_PHP).
-// define('SMTP_HOST', 'smtp.yourdomain.com');
-// define('SMTP_PORT', 465);
-// define('SMTP_USER', 'status@yourdomain.com');
-// define('SMTP_PASS', 'your_email_password');
-// define('SMTP_SECURE', 'ssl'); // 'ssl', 'tls', or 'none'
+// --- SMTP ---
+// SMTP se NEnastavuje tady: kompletní konfigurace (host, port, účet, heslo,
+// šifrování) žije v databázi a spravuje se v Admin -> Nastavení -> SMTP.
+// Dřívější zakomentované SMTP_* konstanty tu slibovaly přednost před databází,
+// ale žádný kód je nikdy nečetl - byla to mrtvá (a matoucí) dokumentace.
 
 // --- OTHER SETTINGS ---
 // Default admin credentials after schema.sql import: admin / BloodKingsAdmin123!
