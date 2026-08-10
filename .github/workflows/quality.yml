@@ -100,7 +100,7 @@ jobs:
           php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
 
       - name: Upload coverage artefaktu
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: php-coverage
@@ -208,7 +208,7 @@ jobs:
         working-directory: apps/server
         run: go test ./... -coverprofile=coverage.out -covermode=atomic
       - name: Upload Go coverage
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: go-coverage
