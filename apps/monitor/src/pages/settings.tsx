@@ -1045,6 +1045,31 @@ export function SettingsPage() {
           </div>
         )}
 
+        {/* TAB: Zálohy a export */}
+        {activeTab === 'presety' && (
+          <div className="mb-6">
+            <Card className="p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className={sectionTitle}>{t('settings.export_title', 'Export konfigurace')}</h3>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-xl leading-relaxed">
+                    {t(
+                      'settings.export_desc',
+                      'Stáhne monitory, presety, status stránky a nastavení jako JSON. Hesla, tokeny, klíče agentů ani naměřená data v souboru nejsou — záloha ke stažení není místo na tajemství.'
+                    )}
+                  </p>
+                </div>
+                <a
+                  href="/status/api.php?action=export_config"
+                  className="shrink-0 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  {t('settings.export_btn', 'Stáhnout zálohu')}
+                </a>
+              </div>
+            </Card>
+          </div>
+        )}
+
         {/* TAB: Presety metrik */}
         {activeTab === 'presety' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">

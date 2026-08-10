@@ -1538,6 +1538,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Bez SQM se při plném vytížení linky zhoršuje odezva (bufferbloat).',
     en: 'Without SQM, latency degrades when the link saturates (bufferbloat).',
   },
+  'settings.export_title': { cs: 'Export konfigurace', en: 'Configuration export' },
+  'settings.export_desc': {
+    cs: 'Stáhne monitory, presety, status stránky a nastavení jako JSON. Hesla, tokeny, klíče agentů ani naměřená data v souboru nejsou — záloha ke stažení není místo na tajemství.',
+    en: 'Downloads monitors, presets, status pages and settings as JSON. Passwords, tokens, agent keys and measured data are not included — a downloadable backup is no place for secrets.',
+  },
+  'settings.export_btn': { cs: 'Stáhnout zálohu', en: 'Download backup' },
   'settings.tab_presets': { cs: 'Presety', en: 'Presets' },
   'presets.title': { cs: 'Presety metrik', en: 'Metric presets' },
   'presets.subtitle': {

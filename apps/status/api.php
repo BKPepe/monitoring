@@ -276,8 +276,17 @@ if ($action === 'monitors') {
                 // z hostingu na cíl v privátní síti nikdy neuspěje. Když má
                 // asset agenta, nabídneme převod na agent-side kontrolu
                 // místo tichého generování falešných výpadků.
-                if ($r['asset_id'] !== null && in_array(strtolower($r['type'] ?? ''), ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'dns'], true)) {
-                    if (bk_validate_import_target((string)$r['target']) !== null) {
+                // POZOR: $r je řádek z dotazu na rozšířená pole, který
+                // asset_id/type/target NEVYBÍRÁ - čtení z něj bylo tiché
+                // "undefined array key" a podmínka nikdy neplatila, takže se
+                // upozornění na nedosažitelný cíl nikdy nezobrazilo.
+                // Základní údaje už jsou složené výš v $monitors[$mid].
+                $base_row = $monitors[$mid];
+                if (
+                    ($base_row['assetId'] ?? null) !== null
+                    && in_array(strtolower((string)($base_row['type'] ?? '')), ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'dns'], true)
+                ) {
+                    if (bk_validate_import_target((string)($base_row['target'] ?? '')) !== null) {
                         $monitors[$mid]['unreachableTarget'] = true;
                     }
                 }
@@ -1877,6 +1886,78 @@ if ($action === 'check_stages') {
 //
 // Čtení je veřejné (stránka má být veřejná), ale skryté stránky vidí jen
 // admin a monitory se vrací jen ty, které stránka opravdu obsahuje.
+// 2b2o. Export konfigurace (admin-only).
+//
+// Self-hosted nastroj na sdilenem hostingu: kdyz se ucet rusi nebo stehuje,
+// mel by si clovek odnest, co si nastavil - monitory, presety, status
+// stranky a nastaveni. Bez toho je jedina zaloha rucni vypis z phpMyAdminu.
+//
+// Zamerne se NEEXPORTUJI: hesla, tokeny, klice agentu ani namerena data.
+// Tajemstvi v souboru ke stazeni je uniku na pockani; historie merenі je
+// desitky MB a pro obnovu nastaveni k nicemu.
+if ($action === 'export_config') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $export = [
+            'exportedAt' => date('c'),
+            'schemaVersion' => defined('BK_SCHEMA_VERSION') ? BK_SCHEMA_VERSION : null,
+            'monitors' => [],
+            'presets' => [],
+            'statusPages' => [],
+            'settings' => [],
+        ];
+
+        $stmt = $pdo->query("
+            SELECT name, type, target, port, category, timeout, notes,
+                   email_notifications, sms_notifications,
+                   monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
+                   latency_threshold_ms, latency_threshold_mins,
+                   body_keyword, cpanel_stats_url, enabled_metrics,
+                   remote_actions_enabled, allowed_actions
+            FROM monitors ORDER BY id
+        ");
+        $export['monitors'] = $stmt->fetchAll();
+
+        try {
+            $export['presets'] = $pdo->query("SELECT name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name")->fetchAll();
+        } catch (Throwable $e) {
+            // Stara DB bez tabulky presetu - export ostatniho ma stale smysl.
+        }
+        try {
+            $export['statusPages'] = $pdo->query("SELECT title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title")->fetchAll();
+        } catch (Throwable $e) {
+        }
+
+        // Nastaveni: vse krome tajemstvi. Radeji seznam zakazanych vzoru nez
+        // vycet povolenych - novy klic s heslem by se jinak v exportu objevil
+        // hned, jak ho nekdo prida.
+        $secret_pattern = '/(pass|secret|token|key|hash|credential|webhook|_url$|dsn)/i';
+        foreach ($pdo->query("SELECT key_name, key_value FROM settings ORDER BY key_name")->fetchAll() as $row) {
+            $k = (string)$row['key_name'];
+            if (preg_match($secret_pattern, $k) || str_ends_with($k, '_cache')) {
+                continue;
+            }
+            $export['settings'][$k] = $row['key_value'];
+        }
+
+        bk_audit_log($pdo, 'config_exported', 'Export konfigurace stažen', 'system', null);
+
+        $filename = 'bloodkings-config-' . date('Y-m-d') . '.json';
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        echo json_encode($export, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Export se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'status_pages') {
     $is_admin_sp = !empty($_SESSION['admin_logged_in']);
     try {

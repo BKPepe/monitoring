@@ -139,6 +139,45 @@ function api_get(string $base, string $query): array {
     return [$code, json_decode((string)$body, true), (string)$body];
 }
 
+/** Cookie jar drží PHP session mezi požadavky (přihlášení admina). */
+$cookie_jar = tempnam(sys_get_temp_dir(), 'bk_test_cookies');
+register_shutdown_function(function () use ($cookie_jar) {
+    if ($cookie_jar && file_exists($cookie_jar)) {
+        unlink($cookie_jar);
+    }
+});
+
+/** POST s JSON tělem; sdílí session přes cookie jar. */
+function api_post(string $base, string $query, array $payload, string $jar): array {
+    $ch = curl_init($base . '/api.php?' . $query);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_COOKIEJAR => $jar,
+        CURLOPT_COOKIEFILE => $jar,
+        CURLOPT_TIMEOUT => 15,
+    ]);
+    $body = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return [$code, json_decode((string)$body, true), (string)$body];
+}
+
+/** GET se session - pro endpointy, které vrací víc přihlášenému. */
+function api_get_auth(string $base, string $query, string $jar): array {
+    $ch = curl_init($base . '/api.php?' . $query);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_COOKIEJAR => $jar,
+        CURLOPT_COOKIEFILE => $jar,
+        CURLOPT_TIMEOUT => 15,
+    ]);
+    $body = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return [$code, json_decode((string)$body, true), (string)$body];
+}
+
 // =======================================================================
 // 1. monitors - páteřní endpoint, volá ho každá stránka aplikace
 // =======================================================================
@@ -247,6 +286,183 @@ check_true('nesmyslný rozsah SLA nekončí chybou serveru', $code < 500);
 check_true('SLA report neobsahuje fatální chybu', !str_contains($raw, 'Fatal error'));
 
 // =======================================================================
+// =======================================================================
+// 7. ZAPISOVACÍ ENDPOINTY
+//
+// Tahle část vznikla poté, co se ukázalo, že save_monitor používal
+// $preset_id, který se nikde nepřiřazoval - každé uložení monitoru tiše
+// smazalo jeho preset. Čtecí testy takovou chybu nevidí; pozná ji jedině
+// uložení a následné přečtení.
+// =======================================================================
+
+[$code, $login] = api_post($base, 'action=login', [
+    'username' => 'admin',
+    'password' => 'BloodKingsAdmin123!',
+], $cookie_jar);
+$logged_in = $code === 200 && !empty($login['success']);
+check_true('přihlášení admina projde', $logged_in);
+
+if ($logged_in) {
+    // --- Preset ---------------------------------------------------------
+    [$code, $res] = api_post($base, 'action=save_preset', [
+        'name' => 'Testovací preset',
+        'serviceType' => 'web',
+        'metrics' => ['ssl_card', 'headers'],
+        'cpuThreshold' => 70,
+        'ramThreshold' => '',
+        'hddThreshold' => 0,
+    ], $cookie_jar);
+    check('save_preset vrací 200', $code, 200);
+    $preset_id = (int)($res['id'] ?? 0);
+    check_true('preset dostal id', $preset_id > 0);
+
+    [$code, $plist] = api_get_auth($base, 'action=presets', $cookie_jar);
+    $saved_preset = null;
+    foreach (($plist['presets'] ?? []) as $p) {
+        if ((int)$p['id'] === $preset_id) {
+            $saved_preset = $p;
+        }
+    }
+    check_true('preset je vidět v seznamu', $saved_preset !== null);
+    check('preset si drží vybrané metriky', $saved_preset['metrics'] ?? null, ['ssl_card', 'headers']);
+    check('vyplněný práh se uloží', $saved_preset['cpuThreshold'] ?? 'chybí', 70);
+    // Prázdné pole znamená "preset ten práh neřeší" - není to nula.
+    check_true('prázdný práh zůstává null', array_key_exists('ramThreshold', $saved_preset) && $saved_preset['ramThreshold'] === null);
+    check('nulový práh se uloží jako nula', $saved_preset['hddThreshold'] ?? 'chybí', 0);
+
+    // --- Monitor: preset a prahy zpomalení musí přežít uložení ----------
+    [$code, $res] = api_post($base, 'action=save_monitor', [
+        'name' => 'Zápisový test',
+        'type' => 'web',
+        'target' => 'https://example.com',
+        'category' => 'Testy',
+        'preset_id' => $preset_id,
+        'latency_threshold_ms' => 750,
+        'latency_threshold_mins' => 3,
+    ], $cookie_jar);
+    check('save_monitor vrací 200', $code, 200);
+    $new_monitor_id = (int)($res['id'] ?? 0);
+    check_true('monitor dostal id', $new_monitor_id > 0);
+
+    [$code, $mlist] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $saved_monitor = null;
+    foreach (($mlist['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            $saved_monitor = $m;
+        }
+    }
+    check_true('nový monitor je v seznamu', $saved_monitor !== null);
+    // Přesně tohle byla ta chyba: preset se ztrácel při každém uložení.
+    check('preset zůstane přiřazený', $saved_monitor['presetId'] ?? 'chybí', $preset_id);
+    check('práh zpomalení se uloží', $saved_monitor['latencyThresholdMs'] ?? 'chybí', 750);
+    check('okno zpomalení se uloží', $saved_monitor['latencyThresholdMins'] ?? 'chybí', 3);
+
+    // Úprava nesmí ostatní nastavení shodit.
+    [$code] = api_post($base, 'action=save_monitor', [
+        'id' => $new_monitor_id,
+        'name' => 'Zápisový test (upraveno)',
+        'type' => 'web',
+        'target' => 'https://example.com',
+        'category' => 'Testy',
+        'preset_id' => $preset_id,
+        'latency_threshold_ms' => 750,
+        'latency_threshold_mins' => 3,
+    ], $cookie_jar);
+    check('úprava monitoru vrací 200', $code, 200);
+
+    [, $mlist2] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $edited = null;
+    foreach (($mlist2['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            $edited = $m;
+        }
+    }
+    check('přejmenování se projeví', $edited['name'] ?? 'chybí', 'Zápisový test (upraveno)');
+    check('preset přežil i úpravu', $edited['presetId'] ?? 'chybí', $preset_id);
+
+    // Vypnutí upozornění: prázdná hodnota = null, ne nula.
+    api_post($base, 'action=save_monitor', [
+        'id' => $new_monitor_id,
+        'name' => 'Zápisový test (upraveno)',
+        'type' => 'web',
+        'target' => 'https://example.com',
+        'category' => 'Testy',
+        'latency_threshold_ms' => '',
+    ], $cookie_jar);
+    [, $mlist3] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    foreach (($mlist3['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            check_true('vypnuté upozornění je null, ne 0', array_key_exists('latencyThresholdMs', $m) && $m['latencyThresholdMs'] === null);
+        }
+    }
+
+    // --- Status stránky -------------------------------------------------
+    [$code, $sp] = api_post($base, 'action=save_status_page', [
+        'title' => 'Veřejný přehled',
+        'isPublic' => true,
+        'monitorIds' => [$new_monitor_id],
+    ], $cookie_jar);
+    check('save_status_page vrací 200', $code, 200);
+    check('slug se odvodí bez diakritiky', $sp['slug'] ?? 'chybí', 'verejny-prehled');
+
+    // Druhá stránka se stejným slugem musí skončit srozumitelnou chybou,
+    // ne pádem na databázovém indexu.
+    [$code, $dup] = api_post($base, 'action=save_status_page', [
+        'title' => 'Jiný název',
+        'slug' => 'verejny-prehled',
+    ], $cookie_jar);
+    check('duplicitní slug vrací 400', $code, 400);
+    check_true('duplicita má srozumitelnou hlášku', !empty($dup['error']));
+
+    // Skrytá stránka nesmí být vidět nepřihlášenému.
+    api_post($base, 'action=save_status_page', [
+        'title' => 'Interní',
+        'slug' => 'interni',
+        'isPublic' => false,
+    ], $cookie_jar);
+    [, $anon_pages] = api_get($base, 'action=status_pages');
+    $anon_slugs = array_column($anon_pages['pages'] ?? [], 'slug');
+    check_false('skrytá stránka není vidět anonymně', in_array('interni', $anon_slugs, true));
+    check_true('veřejná stránka vidět je', in_array('verejny-prehled', $anon_slugs, true));
+
+    // --- Export konfigurace ---------------------------------------------
+    [$code, , $raw_export] = api_get_auth($base, 'action=export_config', $cookie_jar);
+    check('export vrací 200', $code, 200);
+    $export = json_decode($raw_export, true);
+    check_true('export je platný JSON', is_array($export));
+    check_true('export obsahuje monitory', !empty($export['monitors']));
+    check_true('export obsahuje nastavení', isset($export['settings']));
+
+    // Tajemství v souboru ke stažení je únik na počkání - hlídá se to,
+    // protože stačí přidat nový klíč s heslem a bez testu si toho nikdo
+    // nevšimne.
+    $leaked = [];
+    foreach (array_keys($export['settings'] ?? []) as $k) {
+        if (preg_match('/(pass|secret|token|key|hash|webhook)/i', $k)) {
+            $leaked[] = $k;
+        }
+    }
+    check('export neobsahuje tajemství', $leaked, []);
+    check_false('export neobsahuje klíče agentů', str_contains($raw_export, 'agent_key'));
+    check_false('export neobsahuje hesla ServerQuery', str_contains($raw_export, 'sq_password'));
+
+    // Bez přihlášení nesmí export projít vůbec.
+    [$anon_code] = api_get($base, 'action=export_config');
+    check_true('export bez přihlášení je odmítnut', in_array($anon_code, [401, 403], true));
+
+    // --- Úklid ----------------------------------------------------------
+    [$code] = api_post($base, 'action=delete_preset', ['id' => $preset_id], $cookie_jar);
+    check('smazání presetu vrací 200', $code, 200);
+
+    [, $mlist4] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    foreach (($mlist4['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            // Smazání presetu nesmí monitor rozbít - jen se vrátí ke svému.
+            check_true('monitor po smazání presetu zůstává', array_key_exists('presetId', $m) && $m['presetId'] === null);
+        }
+    }
+}
+
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {
     exit($failed > 0 ? 1 : 0);
