@@ -49,11 +49,14 @@ export function PublicMonitorCard({
   monitor,
   uptime,
   uptimePct,
+  statusOnly = false,
 }: {
   monitor: PublicMonitor;
   uptime: UptimeDay[];
   /** 30denní dostupnost ze sla_report; null = zatím nezměřeno -> pomlčka. */
   uptimePct: number | null;
+  /** Stránka s detailLevel 'status': žádné rozbalování, jen stav a čísla. */
+  statusOnly?: boolean;
 }) {
   const { t } = useLanguage();
   const [open, setOpen] = React.useState(false);
@@ -90,7 +93,7 @@ export function PublicMonitorCard({
           {liveBadge(monitor, d, t)}
         </span>
         <span className="flex items-center gap-3">
-          <UptimeStrip days={uptime} />
+          {uptime.length > 0 && <UptimeStrip days={uptime} />}
           {/* Barva podle výše: pod 99 % už stojí za pozornost, pod 95 % je
               to problém - stejné prahy jako uptime-pct třídy na legacy. */}
           <span
@@ -110,19 +113,21 @@ export function PublicMonitorCard({
           <span className="text-muted-foreground w-14 text-right text-xs tabular-nums">
             {monitor.responseMs === null ? '—' : `${monitor.responseMs} ms`}
           </span>
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            aria-expanded={open}
-            aria-label={t('public.toggle_detail', 'Rozbalit detail')}
-            className="text-muted-foreground hover:text-foreground -m-1 p-1 transition-colors"
-          >
-            <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
-          </button>
+          {!statusOnly && (
+            <button
+              type="button"
+              onClick={() => setOpen((o) => !o)}
+              aria-expanded={open}
+              aria-label={t('public.toggle_detail', 'Rozbalit detail')}
+              className="text-muted-foreground hover:text-foreground -m-1 p-1 transition-colors"
+            >
+              <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
+            </button>
+          )}
         </span>
       </div>
 
-      {open && (
+      {open && !statusOnly && (
         <div className="mt-3 space-y-2.5 pl-5">
           {/* Vytížení serveru - jen kde agent měří. */}
           {(monitor.cpu !== null || monitor.ram !== null || monitor.hdd !== null) && (

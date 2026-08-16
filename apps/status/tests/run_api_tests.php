@@ -461,6 +461,48 @@ if ($logged_in) {
     [$code] = api_get($base, 'action=status_page');
     check('chybějící slug vrací 400', $code, 400);
 
+    // --- Volby zobrazení status stránky ---------------------------------
+    //
+    // NULL v databázi = "ukázat všechno". Stránka založená před touto volbou
+    // se nesmí změnit, proto se výchozí hodnoty doplňují při čtení a testují
+    // se dřív než cokoliv jiného.
+    [, $sp_default] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    check('stránka bez voleb dostane výchozí showRegions', $sp_default['displayOptions']['showRegions'] ?? null, true);
+    check('a detailLevel full', $sp_default['displayOptions']['detailLevel'] ?? null, 'full');
+
+    [$code] = api_post($base, 'action=save_status_page', [
+        'id' => 0,
+        'title' => 'Jen stavy',
+        'slug' => 'jen-stavy',
+        'isPublic' => true,
+        'displayOptions' => [
+            'showRegions' => false,
+            'showEvents' => false,
+            'showIncidents' => true,
+            'showUptime' => true,
+            'detailLevel' => 'status',
+        ],
+    ], $cookie_jar);
+    check('stránka s volbami se uloží', $code, 200);
+
+    [, $sp_opts] = api_get($base, 'action=status_page&slug=jen-stavy');
+    check('vypnuté sekce se vrátí vypnuté', $sp_opts['displayOptions']['showRegions'] ?? null, false);
+    check('showEvents taky', $sp_opts['displayOptions']['showEvents'] ?? null, false);
+    check('zapnuté zůstávají zapnuté', $sp_opts['displayOptions']['showIncidents'] ?? null, true);
+    check('detailLevel status se drží', $sp_opts['displayOptions']['detailLevel'] ?? null, 'status');
+
+    // Neznámý klíč se nesmí uložit - do databáze jde jen whitelist.
+    api_post($base, 'action=save_status_page', [
+        'id' => 0,
+        'title' => 'Podvržená',
+        'slug' => 'podvrzena',
+        'isPublic' => true,
+        'displayOptions' => ['showRegions' => false, 'evil' => '<script>'],
+    ], $cookie_jar);
+    [, $sp_evil, $raw_evil] = api_get($base, 'action=status_page&slug=podvrzena');
+    check_false('neznámý klíč se nevrací', str_contains($raw_evil, 'evil'));
+    check('známý klíč z téhož požadavku ano', $sp_evil['displayOptions']['showRegions'] ?? null, false);
+
     // --- Export konfigurace ---------------------------------------------
     [$code, , $raw_export] = api_get_auth($base, 'action=export_config', $cookie_jar);
     check('export vrací 200', $code, 200);

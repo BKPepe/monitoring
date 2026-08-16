@@ -459,6 +459,10 @@ CREATE TABLE IF NOT EXISTS `status_pages` (
   `description` VARCHAR(255) DEFAULT NULL,
   `is_public` TINYINT(1) NOT NULL DEFAULT 1,
   `monitor_ids` TEXT DEFAULT NULL, -- JSON pole ID; prázdné = stránka ukazuje všechny monitory
+  -- JSON s volbami zobrazení (showRegions, showEvents, showIncidents,
+  -- showUptime, detailLevel). NULL = výchozí, tedy ukázat všechno - stránky
+  -- založené před touto volbou se nesmí změnit.
+  `display_options` TEXT DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY `uniq_status_page_slug` (`slug`)

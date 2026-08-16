@@ -8,6 +8,22 @@ import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 
+export interface DisplayOptions {
+  showRegions: boolean;
+  showEvents: boolean;
+  showIncidents: boolean;
+  showUptime: boolean;
+  detailLevel: 'full' | 'status';
+}
+
+const DEFAULT_DISPLAY: DisplayOptions = {
+  showRegions: true,
+  showEvents: true,
+  showIncidents: true,
+  showUptime: true,
+  detailLevel: 'full',
+};
+
 interface StatusPage {
   id: number;
   title: string;
@@ -16,6 +32,7 @@ interface StatusPage {
   isPublic: boolean;
   /** Prázdné pole = stránka ukazuje všechny monitory. */
   monitorIds: number[];
+  displayOptions?: DisplayOptions;
 }
 
 /**
@@ -73,7 +90,10 @@ export function StatusPagesPage() {
     }
   };
 
-  const pageUrl = (slug: string) => `${window.location.origin}/status/?page=${encodeURIComponent(slug)}`;
+  // Odkaz míří na novou React stránku. Do přepnutí /status/ vedl na legacy
+  // PHP, takže si člověk vytvořil stránku tady a proklik ho poslal do staré
+  // aplikace.
+  const pageUrl = (slug: string) => `${window.location.origin}/app/public?page=${encodeURIComponent(slug)}`;
 
   return (
     <div className="space-y-6">
@@ -208,6 +228,7 @@ function PageDialog({
   const [description, setDescription] = React.useState(page?.description ?? '');
   const [isPublic, setIsPublic] = React.useState(page?.isPublic ?? true);
   const [selected, setSelected] = React.useState<number[]>(page?.monitorIds ?? []);
+  const [display, setDisplay] = React.useState<DisplayOptions>(page?.displayOptions ?? DEFAULT_DISPLAY);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -223,7 +244,15 @@ function PageDialog({
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: page?.id ?? 0, title, slug, description, isPublic, monitorIds: selected }),
+        body: JSON.stringify({
+          id: page?.id ?? 0,
+          title,
+          slug,
+          description,
+          isPublic,
+          monitorIds: selected,
+          displayOptions: display,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
@@ -268,7 +297,7 @@ function PageDialog({
             placeholder={t('sp.slug_placeholder', 'odvodí se z názvu')}
           />
           <span className="text-muted-foreground mt-1 block text-[11px]">
-            {t('sp.slug_hint', 'Použije se v adrese /status/?page=…. Bez vyplnění se vytvoří z názvu.')}
+            {t('sp.slug_hint', 'Použije se v adrese stránky (?page=…). Bez vyplnění se vytvoří z názvu.')}
           </span>
         </label>
 
@@ -288,6 +317,47 @@ function PageDialog({
           />
           {t('sp.field_public', 'Veřejně přístupná')}
         </label>
+
+        {/* Co stránka ukáže. Výchozí je všechno - vypíná se, ne zapíná,
+            aby stránky založené před touto volbou vypadaly stejně. */}
+        <div>
+          <span className="text-muted-foreground mb-1 block text-xs font-medium">
+            {t('sp.field_display', 'Zobrazené sekce')}
+          </span>
+          <div className="space-y-1.5">
+            {(
+              [
+                ['showRegions', t('sp.opt_regions', 'Místa měření')],
+                ['showEvents', t('sp.opt_events', 'Poslední události')],
+                ['showIncidents', t('sp.opt_incidents', 'Incidenty')],
+                ['showUptime', t('sp.opt_uptime', 'Pásy dostupnosti (30 dní)')],
+              ] as const
+            ).map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={display[key]}
+                  onChange={(e) => setDisplay((d) => ({ ...d, [key]: e.target.checked }))}
+                  className="size-4"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <label className="mt-2 block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.opt_detail_level', 'Detail služeb')}
+            </span>
+            <select
+              value={display.detailLevel}
+              onChange={(e) => setDisplay((d) => ({ ...d, detailLevel: e.target.value as 'full' | 'status' }))}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="full">{t('sp.detail_full', 'Stav + rozbalovací detail a vytížení')}</option>
+              <option value="status">{t('sp.detail_status', 'Jen stav a dostupnost')}</option>
+            </select>
+          </label>
+        </div>
 
         <div>
           <span className="text-muted-foreground mb-1 block text-xs font-medium">

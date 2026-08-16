@@ -47,7 +47,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260814a');
+    define('BK_SCHEMA_VERSION', '20260817a');
 
     $bk_current_schema = false;
     try {
@@ -604,6 +604,10 @@ try {
           UNIQUE KEY `uniq_speedtest_measurement` (`monitor_id`, `measured_at`),
           KEY `idx_speedtest_measured` (`measured_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Volby zobrazení status stránky - které sekce veřejná stránka ukáže.
+        // NULL = všechno, aby se stránky založené dřív nezměnily.
+        "ALTER TABLE status_pages ADD COLUMN display_options TEXT DEFAULT NULL",
 
         // Historie procesů - kdo v danou chvíli žral CPU a paměť.
         //

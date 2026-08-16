@@ -72,7 +72,17 @@ export function PublicStatusPage() {
   // title. A hidden page 404s for anonymous visitors exactly like a
   // nonexistent slug - that behaviour lives on the server, not here.
   const pageSlug = params.get('page');
-  const [pageMeta, setPageMeta] = React.useState<{ title: string; monitorIds: number[] } | null>(null);
+  const [pageMeta, setPageMeta] = React.useState<{
+    title: string;
+    monitorIds: number[];
+    displayOptions: {
+      showRegions: boolean;
+      showEvents: boolean;
+      showIncidents: boolean;
+      showUptime: boolean;
+      detailLevel: 'full' | 'status';
+    };
+  } | null>(null);
   const [pageError, setPageError] = React.useState(false);
   React.useEffect(() => {
     if (!pageSlug) {
@@ -84,7 +94,20 @@ export function PublicStatusPage() {
     fetch(`/status/api.php?action=status_page&slug=${encodeURIComponent(pageSlug)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setPageMeta({ title: d.title ?? '', monitorIds: d.monitorIds ?? [] });
+        if (active)
+          setPageMeta({
+            title: d.title ?? '',
+            monitorIds: d.monitorIds ?? [],
+            // Server posílá volby vždy kompletní; tohle je jen pojistka pro
+            // starší nasazení bez endpointu s volbami.
+            displayOptions: d.displayOptions ?? {
+              showRegions: true,
+              showEvents: true,
+              showIncidents: true,
+              showUptime: true,
+              detailLevel: 'full',
+            },
+          });
       })
       .catch(() => {
         if (active) setPageError(true);
@@ -197,6 +220,13 @@ export function PublicStatusPage() {
   }, [monitors, pageMeta]);
 
   const filtered = pageMeta !== null && pageMeta.monitorIds.length > 0;
+  const opts = pageMeta?.displayOptions ?? {
+    showRegions: true,
+    showEvents: true,
+    showIncidents: true,
+    showUptime: true,
+    detailLevel: 'full' as const,
+  };
   // Stránkování po deseti. Endpoint vrací až 200 posledních kontrol; po
   // odfiltrování na výpadky a zhoršení jich může zbýt od nuly po desítky -
   // ukazovat všechny najednou by na klidné flotile nevadilo, po hektickém
@@ -331,7 +361,7 @@ export function PublicStatusPage() {
 
       {/* The measurement locations - where the checks come FROM. This answers
           "is the service down, or can one vantage point just not see it". */}
-      {regions !== null && regions.length > 0 && !filtered && (
+      {opts.showRegions && regions !== null && regions.length > 0 && !filtered && (
         <Card className="space-y-3 p-5">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Radio className="size-4 text-primary" />
@@ -366,8 +396,9 @@ export function PublicStatusPage() {
                 <PublicMonitorCard
                   key={m.id}
                   monitor={m}
-                  uptime={uptime[String(m.id)] ?? []}
+                  uptime={opts.showUptime ? (uptime[String(m.id)] ?? []) : []}
                   uptimePct={uptimeById[m.id] ?? null}
+                  statusOnly={opts.detailLevel === 'status'}
                 />
               ))}
             </ul>
@@ -378,7 +409,7 @@ export function PublicStatusPage() {
       {/* Recent events - the same Timeline the device detail uses (day groups,
           severity dots, location), not a bare text list. Only failures and
           degradations: a wall of "check passed" rows tells a visitor nothing. */}
-      {publicTimeline.length > 0 && (
+      {opts.showEvents && publicTimeline.length > 0 && (
         <Card className="space-y-3 p-5">
           <h2 className="text-sm font-semibold">{t('public.recent_events', 'Poslední události')}</h2>
           <Timeline events={publicTimeline} />
@@ -398,7 +429,7 @@ export function PublicStatusPage() {
         </Card>
       )}
 
-      {incidents !== null && incidents.length > 0 && (
+      {opts.showIncidents && incidents !== null && incidents.length > 0 && (
         <Card className="space-y-3 p-5">
           <h2 className="text-sm font-semibold">{t('public.incidents', 'Incidenty')}</h2>
           <ul className="space-y-2">

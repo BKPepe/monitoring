@@ -2089,7 +2089,7 @@ if ($action === 'status_page') {
         exit;
     }
     try {
-        $stmt_sp = $pdo->prepare("SELECT title, description, is_public, monitor_ids FROM status_pages WHERE slug = ? LIMIT 1");
+        $stmt_sp = $pdo->prepare("SELECT title, description, is_public, monitor_ids, display_options FROM status_pages WHERE slug = ? LIMIT 1");
         $stmt_sp->execute([$sp_slug]);
         $sp_row = $stmt_sp->fetch();
         $sp_is_admin = !empty($_SESSION['admin_logged_in']);
@@ -2101,11 +2101,21 @@ if ($action === 'status_page') {
         }
 
         $sp_ids = json_decode($sp_row['monitor_ids'] ?? '', true);
+        // Volby se vrací VŽDY kompletní s doplněnými výchozími hodnotami -
+        // klient pak nemusí vědět, co znamená chybějící klíč.
+        $sp_opts = json_decode($sp_row['display_options'] ?? '', true) ?: [];
         echo json_encode([
             'title' => $sp_row['title'],
             'description' => $sp_row['description'],
             // Prazdny vyber znamena "vsechny monitory" - stejne jako legacy.
             'monitorIds' => is_array($sp_ids) ? array_map('intval', $sp_ids) : [],
+            'displayOptions' => [
+                'showRegions' => $sp_opts['showRegions'] ?? true,
+                'showEvents' => $sp_opts['showEvents'] ?? true,
+                'showIncidents' => $sp_opts['showIncidents'] ?? true,
+                'showUptime' => $sp_opts['showUptime'] ?? true,
+                'detailLevel' => ($sp_opts['detailLevel'] ?? 'full') === 'status' ? 'status' : 'full',
+            ],
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         // Bez tabulky (stara DB) se stranka tvari jako neexistujici.
@@ -2118,7 +2128,7 @@ if ($action === 'status_page') {
 if ($action === 'status_pages') {
     $is_admin_sp = !empty($_SESSION['admin_logged_in']);
     try {
-        $stmt = $pdo->query("SELECT id, title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title");
+        $stmt = $pdo->query("SELECT id, title, slug, description, is_public, monitor_ids, display_options FROM status_pages ORDER BY title");
         $pages = [];
         foreach ($stmt->fetchAll() as $r) {
             $public = (int)$r['is_public'] === 1;
@@ -2134,6 +2144,16 @@ if ($action === 'status_pages') {
                 'isPublic' => $public,
                 // Prázdný seznam = stránka ukazuje všechny monitory.
                 'monitorIds' => is_array($ids) ? array_values(array_map('intval', $ids)) : [],
+                'displayOptions' => (function () use ($r) {
+                    $o = json_decode($r['display_options'] ?? '', true) ?: [];
+                    return [
+                        'showRegions' => $o['showRegions'] ?? true,
+                        'showEvents' => $o['showEvents'] ?? true,
+                        'showIncidents' => $o['showIncidents'] ?? true,
+                        'showUptime' => $o['showUptime'] ?? true,
+                        'detailLevel' => ($o['detailLevel'] ?? 'full') === 'status' ? 'status' : 'full',
+                    ];
+                })(),
             ];
         }
         echo json_encode(['pages' => $pages], JSON_UNESCAPED_UNICODE);
@@ -2186,20 +2206,39 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
             }
         }
 
+        // Volby zobrazení: jen známé klíče, aby se do databáze nedal uložit
+        // libovolný JSON. Když jsou všechny na výchozí hodnotě, ukládá se
+        // NULL - stránka bez konfigurace a stránka "ukázat vše" jsou totéž.
+        $display = null;
+        if (isset($input['displayOptions']) && is_array($input['displayOptions'])) {
+            $opts = [];
+            foreach (['showRegions', 'showEvents', 'showIncidents', 'showUptime'] as $flag) {
+                if (array_key_exists($flag, $input['displayOptions']) && !$input['displayOptions'][$flag]) {
+                    $opts[$flag] = false;
+                }
+            }
+            $lvl = $input['displayOptions']['detailLevel'] ?? null;
+            if ($lvl === 'status') {
+                $opts['detailLevel'] = 'status';
+            }
+            $display = $opts ? json_encode($opts) : null;
+        }
+
         $params = [
             $title,
             $slug,
             trim((string)($input['description'] ?? '')) ?: null,
             !empty($input['isPublic']) ? 1 : 0,
             json_encode(array_values(array_unique($ids))),
+            $display,
         ];
         $id = (int)($input['id'] ?? 0);
         if ($id > 0) {
-            $stmt = $pdo->prepare("UPDATE status_pages SET title = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ? WHERE id = ?");
+            $stmt = $pdo->prepare("UPDATE status_pages SET title = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ?, display_options = ? WHERE id = ?");
             $stmt->execute(array_merge($params, [$id]));
             bk_audit_log($pdo, 'status_page_updated', "Status stránka '{$title}' upravena", 'status_page', $id);
         } else {
-            $stmt = $pdo->prepare("INSERT INTO status_pages (title, slug, description, is_public, monitor_ids) VALUES (?, ?, ?, ?, ?)");
+            $stmt = $pdo->prepare("INSERT INTO status_pages (title, slug, description, is_public, monitor_ids, display_options) VALUES (?, ?, ?, ?, ?, ?)");
             $stmt->execute($params);
             $id = (int)$pdo->lastInsertId();
             bk_audit_log($pdo, 'status_page_created', "Status stránka '{$title}' vytvořena", 'status_page', $id);
