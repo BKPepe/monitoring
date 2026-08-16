@@ -1,5 +1,17 @@
 import * as React from 'react';
-import { ChevronDown, LineChart } from 'lucide-react';
+import {
+  Activity,
+  ChevronDown,
+  Gamepad2,
+  Globe,
+  HeartPulse,
+  LineChart,
+  MessageCircle,
+  Mic,
+  Plug,
+  Router,
+  Server,
+} from 'lucide-react';
 import { Link } from 'react-router';
 import { Badge } from '@/components/ui/badge';
 import { UptimeStrip, type UptimeDay } from './uptime-strip';
@@ -19,6 +31,8 @@ export interface PublicMonitor {
   assetId: number | null;
   /** null = agent CPU nehlásí; podle toho se pozná, jestli existují grafy. */
   cpu: number | null;
+  ram: number | null;
+  hdd: number | null;
 }
 
 /**
@@ -31,7 +45,16 @@ export interface PublicMonitor {
  * value produces no row rather than a dash-filled skeleton, because on a
  * public page an empty grid reads as broken.
  */
-export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor; uptime: UptimeDay[] }) {
+export function PublicMonitorCard({
+  monitor,
+  uptime,
+  uptimePct,
+}: {
+  monitor: PublicMonitor;
+  uptime: UptimeDay[];
+  /** 30denní dostupnost ze sla_report; null = zatím nezměřeno -> pomlčka. */
+  uptimePct: number | null;
+}) {
   const { t } = useLanguage();
   const [open, setOpen] = React.useState(false);
   const d = (monitor.details ?? {}) as Record<string, any>;
@@ -52,6 +75,7 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
               monitor.status === 'up' ? 'bg-up' : monitor.status === 'down' ? 'bg-down' : 'bg-warning'
             )}
           />
+          <TypeIcon type={monitor.type} />
           {monitor.assetId !== null ? (
             <Link
               to={`/infrastructure/${monitor.assetId}`}
@@ -67,6 +91,22 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
         </span>
         <span className="flex items-center gap-3">
           <UptimeStrip days={uptime} />
+          {/* Barva podle výše: pod 99 % už stojí za pozornost, pod 95 % je
+              to problém - stejné prahy jako uptime-pct třídy na legacy. */}
+          <span
+            className={cn(
+              'w-16 text-right text-xs font-semibold tabular-nums',
+              uptimePct === null
+                ? 'text-muted-foreground'
+                : uptimePct >= 99
+                  ? 'text-up'
+                  : uptimePct >= 95
+                    ? 'text-warning'
+                    : 'text-down'
+            )}
+          >
+            {uptimePct === null ? '—' : `${uptimePct.toFixed(2)} %`}
+          </span>
           <span className="text-muted-foreground w-14 text-right text-xs tabular-nums">
             {monitor.responseMs === null ? '—' : `${monitor.responseMs} ms`}
           </span>
@@ -84,6 +124,33 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
 
       {open && (
         <div className="mt-3 space-y-2.5 pl-5">
+          {/* Vytížení serveru - jen kde agent měří. */}
+          {(monitor.cpu !== null || monitor.ram !== null || monitor.hdd !== null) && (
+            <div className="space-y-1.5">
+              <UsageBar label="CPU" percent={monitor.cpu} />
+              <UsageBar label="RAM" percent={monitor.ram} />
+              <UsageBar label={t('public.disk', 'Disk')} percent={monitor.hdd} />
+            </div>
+          )}
+          {/* Čerpání limitů hostingu (cPanel) - s formatted hodnotou
+              ("1.45 GB / 50 GB"), protože samotné procento u limitů neříká,
+              kolik místa doopravdy zbývá. */}
+          {(() => {
+            const cp = d.cpanel_stats;
+            if (!cp || typeof cp !== 'object') return null;
+            const bars = CPANEL_KEYS.filter(([k]) => cp[k] && typeof cp[k].percent === 'number');
+            if (bars.length === 0) return null;
+            return (
+              <div className="space-y-1.5">
+                <p className="text-muted-foreground text-[11px] font-medium">
+                  {t('public.hosting_limits', 'Čerpání limitů hostingu')}
+                </p>
+                {bars.map(([k, label]) => (
+                  <UsageBar key={k} label={label} percent={cp[k].percent} detail={cp[k].formatted} />
+                ))}
+              </div>
+            );
+          })()}
           {rows.length > 0 && (
             <dl className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
               {rows.map(([label, value]) => (
@@ -113,6 +180,29 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
   );
 }
 
+/**
+ * Type icon - the legacy page had one per service (font-awesome) and it made
+ * the list scannable. Same idea with the app's icon set; unknown types fall
+ * back to a generic activity mark rather than nothing, so a new monitor type
+ * never renders as a bare dot.
+ */
+const TYPE_ICONS: Record<string, typeof Globe> = {
+  web: Globe,
+  minecraft: Gamepad2,
+  teamspeak: Mic,
+  discord: MessageCircle,
+  openwrt: Router,
+  vps: Server,
+  port: Plug,
+  heartbeat: HeartPulse,
+  agent_service: Activity,
+};
+
+function TypeIcon({ type }: { type: string }) {
+  const Icon = TYPE_ICONS[type] ?? Activity;
+  return <Icon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />;
+}
+
 /** The one live number worth showing collapsed - players online, people in voice. */
 function liveBadge(
   monitor: PublicMonitor,
@@ -133,6 +223,45 @@ function liveBadge(
   }
   return null;
 }
+
+/**
+ * The legacy page's "mini chart": a horizontal usage bar with the value.
+ * Colour by pressure - green under 70, amber under 90, red above - matching
+ * the legacy chart-bar-fill classes. null renders nothing, never an empty bar
+ * pretending to be a measured zero.
+ */
+function UsageBar({ label, percent, detail }: { label: string; percent: number | null; detail?: string }) {
+  if (percent === null || percent === undefined || !Number.isFinite(percent)) return null;
+  const clamped = Math.min(100, Math.max(0, percent));
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-muted-foreground w-20 shrink-0">{label}</span>
+      <span className="bg-muted h-1.5 min-w-0 flex-1 overflow-hidden rounded-full">
+        <span
+          className={cn(
+            'block h-full rounded-full',
+            clamped >= 90 ? 'bg-down' : clamped >= 70 ? 'bg-warning' : 'bg-up'
+          )}
+          style={{ width: `${clamped}%` }}
+        />
+      </span>
+      <span className="w-24 shrink-0 text-right tabular-nums" title={detail}>
+        {detail ?? `${percent} %`}
+      </span>
+    </div>
+  );
+}
+
+/** Klíče cpanel_stats v pořadí, v jakém je ukazuje legacy stránka. */
+const CPANEL_KEYS: [string, string][] = [
+  ['disk', 'Disk'],
+  ['memory', 'RAM'],
+  ['database', 'DB'],
+  ['bandwidth', 'Přenos'],
+  ['inodes', 'Inody'],
+  ['processes', 'Procesy'],
+  ['cpu', 'CPU'],
+];
 
 type Row = [string, string];
 

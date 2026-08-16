@@ -1,11 +1,14 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, CheckCircle2, Radio, Rss } from 'lucide-react';
+import { Activity, CheckCircle2, Moon, Radio, Rss, Sun } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { PublicMonitorCard, type PublicMonitor } from '@/components/public/monitor-card';
+import { Timeline } from '@/components/timeline';
+import type { TimelineEvent } from '@/data/model';
 import type { UptimeDay } from '@/components/public/uptime-strip';
 import { useLanguage } from '@/context/language-context';
+import { useTheme } from '@/lib/use-theme';
 import { cn } from '@/lib/utils';
 
 interface Region {
@@ -21,15 +24,21 @@ interface PublicEvent {
   isDown: boolean;
   rawStatus: string;
   errorMsg: string | null;
+  location: string | null;
+  type: string | null;
+  responseTime: number | null;
+  outageDurationSec: number | null;
 }
 
 interface Incident {
   id: number;
   title: string;
+  /** 'open' | 'investigating' | 'resolved' - rozhoduje stav, ne domněnka. */
   status: string;
   impact: string | null;
-  created_at: string;
-  resolved_at: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+  durationText: string | null;
 }
 
 /**
@@ -47,6 +56,7 @@ interface Incident {
  */
 export function PublicStatusPage() {
   const { t, lang, setLang } = useLanguage();
+  const { theme, toggle: toggleTheme } = useTheme();
   const [params] = useSearchParams();
   const { data: status, error } = usePublicStatus();
 
@@ -87,6 +97,8 @@ export function PublicStatusPage() {
   const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]>>({});
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
   const [regions, setRegions] = React.useState<Region[] | null>(null);
+  const [branding, setBranding] = React.useState<{ siteTitle: string; customLogoUrl: string } | null>(null);
+  const [uptimeById, setUptimeById] = React.useState<Record<number, number | null>>({});
   const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
 
   React.useEffect(() => {
@@ -106,6 +118,26 @@ export function PublicStatusPage() {
         if (active && d.series && typeof d.series === 'object') setUptime(d.series);
       })
       .catch(() => {});
+    // Per-monitor 30-day availability - the number next to the strip, same as
+    // the legacy card's "Uptime (30 dní)". Computed server-side by sla_report;
+    // null stays null and renders as a dash, never as 100 %.
+    fetch('/status/api.php?action=sla_report&days=30')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (!active || !Array.isArray(d.monitors)) return;
+        const map: Record<number, number | null> = {};
+        for (const m of d.monitors) map[m.id] = typeof m.uptimePercent === 'number' ? m.uptimePercent : null;
+        setUptimeById(map);
+      })
+      .catch(() => {});
+    // Branding from the admin settings - the same title and logo the legacy
+    // page shows. An empty customLogoUrl means no logo, not a broken image.
+    fetch('/status/api.php?action=ui_config')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (active) setBranding({ siteTitle: d.siteTitle ?? '', customLogoUrl: d.customLogoUrl ?? '' });
+      })
+      .catch(() => {});
     // The real measurement locations - regions, not nodes. The first version
     // labelled the `nodes` list "measurement locations", but nodes are the
     // MONITORED SERVERS; verified against production, the locations live in
@@ -119,7 +151,7 @@ export function PublicStatusPage() {
         if (active) setRegions([]);
       });
     // Recent events - the "what happened lately" strip the legacy page had.
-    fetch('/status/api.php?action=events&limit=30')
+    fetch('/status/api.php?action=events&limit=200')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (active) setEvents(Array.isArray(d.events) ? d.events : []);
@@ -165,6 +197,37 @@ export function PublicStatusPage() {
   }, [monitors, pageMeta]);
 
   const filtered = pageMeta !== null && pageMeta.monitorIds.length > 0;
+  // Stránkování po deseti. Endpoint vrací až 200 posledních kontrol; po
+  // odfiltrování na výpadky a zhoršení jich může zbýt od nuly po desítky -
+  // ukazovat všechny najednou by na klidné flotile nevadilo, po hektickém
+  // týdnu by to byla zeď.
+  const [eventsShown, setEventsShown] = React.useState(10);
+  const allFailureEvents = React.useMemo(
+    () => (events ?? []).filter((e) => e.isDown || e.rawStatus === 'warning'),
+    [events]
+  );
+  const publicTimeline = React.useMemo<TimelineEvent[]>(() => {
+    return allFailureEvents.slice(0, eventsShown).map((e, i) => ({
+      id: i,
+      title: e.monitorName,
+      detail:
+        (e.errorMsg || (e.isDown ? t('public.event_down', 'Výpadek') : t('public.event_warn', 'Zhoršení'))) +
+        (e.outageDurationSec
+          ? t(
+              'public.event_duration',
+              { min: Math.round(e.outageDurationSec / 60) },
+              ` (trvání ${Math.round(e.outageDurationSec / 60)} min)`
+            )
+          : ''),
+      at: e.time,
+      severity: e.isDown ? ('down' as const) : ('warning' as const),
+      resolution: e.isDown ? ('Open' as const) : ('Info' as const),
+      location: e.location ?? undefined,
+      method: e.type ?? undefined,
+      responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
+    }));
+  }, [allFailureEvents, eventsShown, t]);
+
   const down = filtered
     ? (visibleMonitors ?? []).filter((m) => m.status === 'down').length
     : (status?.downMonitors ?? 0);
@@ -173,22 +236,40 @@ export function PublicStatusPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">{pageMeta?.title || t('public.title', 'Stav služeb')}</h1>
-          {status?.lastUpdated && (
-            <p className="text-muted-foreground text-xs">
-              {t('public.updated', { at: status.lastUpdated }, `Aktualizováno ${status.lastUpdated}`)}
-            </p>
+        <div className="flex min-w-0 items-center gap-3">
+          {branding?.customLogoUrl && (
+            <img src={branding.customLogoUrl} alt="" className="size-10 shrink-0 rounded-md object-contain" />
           )}
+          <div className="min-w-0 space-y-1">
+            <h1 className="truncate text-2xl font-bold tracking-tight">
+              {pageMeta?.title || branding?.siteTitle || t('public.title', 'Stav služeb')}
+            </h1>
+            {status?.lastUpdated && (
+              <p className="text-muted-foreground text-xs">
+                {t('public.updated', { at: status.lastUpdated }, `Aktualizováno ${status.lastUpdated}`)}
+              </p>
+            )}
+          </div>
         </div>
-        {/* Language toggle: the first thing an anonymous visitor may need. */}
-        <button
-          type="button"
-          onClick={() => setLang(lang === 'cs' ? 'en' : 'cs')}
-          className="text-muted-foreground hover:text-foreground rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors"
-        >
-          {lang === 'cs' ? 'EN' : 'CS'}
-        </button>
+        {/* Language and theme toggles - the two things an anonymous visitor
+            may actually need from a header. */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setLang(lang === 'cs' ? 'en' : 'cs')}
+            className="text-muted-foreground hover:text-foreground rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors"
+          >
+            {lang === 'cs' ? 'EN' : 'CS'}
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={t('public.theme_toggle', 'Přepnout motiv')}
+            className="text-muted-foreground hover:text-foreground rounded-md border border-border p-1.5 transition-colors"
+          >
+            {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+          </button>
+        </div>
       </header>
 
       {/* An unknown or hidden page is indistinguishable from a missing one -
@@ -282,32 +363,38 @@ export function PublicStatusPage() {
             <h2 className="text-sm font-semibold">{category}</h2>
             <ul>
               {items.map((m) => (
-                <PublicMonitorCard key={m.id} monitor={m} uptime={uptime[String(m.id)] ?? []} />
+                <PublicMonitorCard
+                  key={m.id}
+                  monitor={m}
+                  uptime={uptime[String(m.id)] ?? []}
+                  uptimePct={uptimeById[m.id] ?? null}
+                />
               ))}
             </ul>
           </Card>
         ))
       )}
 
-      {/* Recent events - only state changes and failures are worth a public
-          visitor's attention; a wall of "check passed" rows says nothing. */}
-      {events !== null && events.filter((e) => e.isDown || e.rawStatus === 'warning').length > 0 && (
+      {/* Recent events - the same Timeline the device detail uses (day groups,
+          severity dots, location), not a bare text list. Only failures and
+          degradations: a wall of "check passed" rows tells a visitor nothing. */}
+      {publicTimeline.length > 0 && (
         <Card className="space-y-3 p-5">
           <h2 className="text-sm font-semibold">{t('public.recent_events', 'Poslední události')}</h2>
-          <ul className="space-y-1.5">
-            {events
-              .filter((e) => e.isDown || e.rawStatus === 'warning')
-              .slice(0, 8)
-              .map((e, i) => (
-                <li key={`${e.time}-${i}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs">
-                  <span className="text-muted-foreground shrink-0 tabular-nums">{e.time}</span>
-                  <span className="font-medium">{e.monitorName}</span>
-                  <span className={e.isDown ? 'text-down' : 'text-warning'}>
-                    {e.errorMsg || (e.isDown ? t('public.event_down', 'Výpadek') : t('public.event_warn', 'Zhoršení'))}
-                  </span>
-                </li>
-              ))}
-          </ul>
+          <Timeline events={publicTimeline} />
+          {allFailureEvents.length > eventsShown && (
+            <button
+              type="button"
+              onClick={() => setEventsShown((n) => n + 10)}
+              className="text-muted-foreground hover:text-foreground w-full rounded-md border border-border py-1.5 text-xs font-medium transition-colors"
+            >
+              {t(
+                'public.show_more_events',
+                { n: allFailureEvents.length - eventsShown },
+                `Zobrazit další (${allFailureEvents.length - eventsShown})`
+              )}
+            </button>
+          )}
         </Card>
       )}
 
@@ -316,11 +403,22 @@ export function PublicStatusPage() {
           <h2 className="text-sm font-semibold">{t('public.incidents', 'Incidenty')}</h2>
           <ul className="space-y-2">
             {incidents.slice(0, 10).map((inc) => (
+              // "Probíhá" se odvozuje ze STAVU, ne z chybějícího pole.
+              // První verze četla resolved_at (snake_case), API posílá
+              // resolvedAt - vyřešený incident z 8. 8. se tak ukazoval jako
+              // probíhající. Ověřeno proti skutečné odpovědi.
               <li key={inc.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
-                <span className="font-medium">{inc.title}</span>
+                <span className="flex items-center gap-2 font-medium">
+                  <span
+                    className={cn('size-2 rounded-full', inc.status === 'resolved' ? 'bg-up' : 'bg-down animate-pulse')}
+                  />
+                  {inc.title}
+                </span>
                 <span className="text-muted-foreground tabular-nums">
-                  {inc.created_at}
-                  {inc.resolved_at ? ` → ${inc.resolved_at}` : ` · ${t('public.incident_open', 'probíhá')}`}
+                  {inc.createdAt}
+                  {inc.status === 'resolved' && inc.resolvedAt
+                    ? ` → ${inc.resolvedAt}${inc.durationText ? ` (${inc.durationText})` : ''}`
+                    : ` · ${t('public.incident_open', 'probíhá')}`}
                 </span>
               </li>
             ))}
