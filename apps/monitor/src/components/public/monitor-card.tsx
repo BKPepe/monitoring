@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, LineChart } from 'lucide-react';
+import { Link } from 'react-router';
 import { Badge } from '@/components/ui/badge';
 import { UptimeStrip, type UptimeDay } from './uptime-strip';
 import { useLanguage } from '@/context/language-context';
@@ -15,6 +16,9 @@ export interface PublicMonitor {
   lastCheck: string | null;
   lastStatusChange: string | null;
   details: Record<string, unknown> | null;
+  assetId: number | null;
+  /** null = agent CPU nehlásí; podle toho se pozná, jestli existují grafy. */
+  cpu: number | null;
 }
 
 /**
@@ -61,15 +65,32 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
         </span>
       </button>
 
-      {open && rows.length > 0 && (
-        <dl className="mt-3 grid gap-x-6 gap-y-1.5 pl-5 sm:grid-cols-2">
-          {rows.map(([label, value]) => (
-            <div key={label} className="flex items-baseline justify-between gap-3 text-xs">
-              <dt className="text-muted-foreground shrink-0">{label}</dt>
-              <dd className="truncate text-right font-medium">{value}</dd>
-            </div>
-          ))}
-        </dl>
+      {open && (
+        <div className="mt-3 space-y-2.5 pl-5">
+          {rows.length > 0 && (
+            <dl className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+              {rows.map(([label, value]) => (
+                <div key={label} className="flex items-baseline justify-between gap-3 text-xs">
+                  <dt className="text-muted-foreground shrink-0">{label}</dt>
+                  <dd className="truncate text-right font-medium">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {/* Charts live in the app's metric detail; the link only appears
+              where an agent actually reports metrics (cpu !== null), so it
+              never leads into an empty page. Verified: monitors 4 and 5 have
+              no agent and get no link. */}
+          {monitor.cpu !== null && monitor.assetId !== null && (
+            <Link
+              to={`/infrastructure/${monitor.assetId}/metric/${monitor.id}/cpu`}
+              className="text-primary inline-flex items-center gap-1.5 text-xs font-medium hover:underline"
+            >
+              <LineChart className="size-3.5" />
+              {t('public.view_charts', 'Zobrazit grafy metrik')}
+            </Link>
+          )}
+        </div>
       )}
     </li>
   );
@@ -106,6 +127,10 @@ function buildRows(
   const rows: Row[] = [];
   const add = (label: string, value: unknown) => {
     if (value === null || value === undefined || value === '') return;
+    // Jen skalary. `members` z Discordu je POLE OBJEKTU a String() z nej
+    // udela "[object Object],[object Object]" - presne to se ukazalo na
+    // produkci. Objekt, ktery neumime zobrazit, radek proste nevytvori.
+    if (typeof value === 'object') return;
     rows.push([label, String(value)]);
   };
 
@@ -127,11 +152,13 @@ function buildRows(
       break;
     }
     case 'discord':
-      add(t('public.f_members', 'Členů'), d.members);
-      add(
-        t('public.f_voice_channels', 'Hlasových kanálů'),
-        Array.isArray(d.voice_channels) ? d.voice_channels.length : d.voice_channels
-      );
+      // members je seznam online lidi (jmeno + stav), ne cislo.
+      if (Array.isArray(d.members)) {
+        add(t('public.f_members_online', 'Online členů'), d.members.length);
+      }
+      if (Array.isArray(d.voice_channels) && d.voice_channels.length > 0) {
+        add(t('public.f_voice_channels', 'Hlasových kanálů'), d.voice_channels.length);
+      }
       break;
     case 'openwrt':
       add(t('public.f_model', 'Model'), d.model);

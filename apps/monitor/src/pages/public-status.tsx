@@ -8,6 +8,21 @@ import type { UptimeDay } from '@/components/public/uptime-strip';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 
+interface Region {
+  location: string;
+  checks: number;
+  successRate: number | null;
+  avgResponseMs: number | null;
+}
+
+interface PublicEvent {
+  time: string;
+  monitorName: string;
+  isDown: boolean;
+  rawStatus: string;
+  errorMsg: string | null;
+}
+
 interface Incident {
   id: number;
   title: string;
@@ -71,6 +86,8 @@ export function PublicStatusPage() {
   const [monitors, setMonitors] = React.useState<PublicMonitor[] | null>(null);
   const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]>>({});
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
+  const [regions, setRegions] = React.useState<Region[] | null>(null);
+  const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -89,6 +106,27 @@ export function PublicStatusPage() {
         if (active && d.series && typeof d.series === 'object') setUptime(d.series);
       })
       .catch(() => {});
+    // The real measurement locations - regions, not nodes. The first version
+    // labelled the `nodes` list "measurement locations", but nodes are the
+    // MONITORED SERVERS; verified against production, the locations live in
+    // action=regions (Frankfurt, Cloudflare POPs, GitHub runners).
+    fetch('/status/api.php?action=regions&days=30')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (active) setRegions(Array.isArray(d.regions) ? d.regions : []);
+      })
+      .catch(() => {
+        if (active) setRegions([]);
+      });
+    // Recent events - the "what happened lately" strip the legacy page had.
+    fetch('/status/api.php?action=events&limit=30')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (active) setEvents(Array.isArray(d.events) ? d.events : []);
+      })
+      .catch(() => {
+        if (active) setEvents([]);
+      });
     // Incidents arrive as JSON and paginate client-side. The legacy page
     // shipped all 200 rows as styled HTML - a third of its 1.1 MB.
     fetch('/status/api.php?action=incidents')
@@ -210,24 +248,25 @@ export function PublicStatusPage() {
         />
       </div>
 
-      {/* Measurement locations - the answer to "is the service down, or can our
-          server just not see it". */}
-      {status && status.nodes.length > 0 && (
+      {/* The measurement locations - where the checks come FROM. This answers
+          "is the service down, or can one vantage point just not see it". */}
+      {regions !== null && regions.length > 0 && !filtered && (
         <Card className="space-y-3 p-5">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Radio className="size-4 text-primary" />
             {t('public.regions', 'Místa měření')}
           </h2>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {status.nodes.map((n) => (
+            {regions.slice(0, 9).map((r) => (
               <div
-                key={n.name}
+                key={r.location}
                 className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs"
               >
-                <span className="truncate font-medium">{n.name}</span>
-                <span className="text-muted-foreground tabular-nums">
-                  {/* A dash, not a zero: no measurement is not zero latency. */}
-                  {n.latencyMs === null ? '—' : `${n.latencyMs} ms`}
+                <span className="truncate font-medium" title={r.location}>
+                  {r.location}
+                </span>
+                <span className="text-muted-foreground shrink-0 tabular-nums">
+                  {r.successRate === null ? '—' : `${r.successRate} %`}
                 </span>
               </div>
             ))}
@@ -248,6 +287,28 @@ export function PublicStatusPage() {
             </ul>
           </Card>
         ))
+      )}
+
+      {/* Recent events - only state changes and failures are worth a public
+          visitor's attention; a wall of "check passed" rows says nothing. */}
+      {events !== null && events.filter((e) => e.isDown || e.rawStatus === 'warning').length > 0 && (
+        <Card className="space-y-3 p-5">
+          <h2 className="text-sm font-semibold">{t('public.recent_events', 'Poslední události')}</h2>
+          <ul className="space-y-1.5">
+            {events
+              .filter((e) => e.isDown || e.rawStatus === 'warning')
+              .slice(0, 8)
+              .map((e, i) => (
+                <li key={`${e.time}-${i}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs">
+                  <span className="text-muted-foreground shrink-0 tabular-nums">{e.time}</span>
+                  <span className="font-medium">{e.monitorName}</span>
+                  <span className={e.isDown ? 'text-down' : 'text-warning'}>
+                    {e.errorMsg || (e.isDown ? t('public.event_down', 'Výpadek') : t('public.event_warn', 'Zhoršení'))}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        </Card>
       )}
 
       {incidents !== null && incidents.length > 0 && (
