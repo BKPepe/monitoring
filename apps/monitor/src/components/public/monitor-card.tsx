@@ -40,12 +40,11 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
 
   return (
     <li className="border-b border-border/50 py-3 last:border-0">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="flex w-full flex-wrap items-center justify-between gap-3 text-left"
-      >
+      {/* Hlavicka je DIV, ne button: jmeno je odkaz na plny detail a <a>
+          uvnitr <button> je stejne neplatne HTML jako ty vnorene buttony,
+          ktere odhalil prohlizec u pasu dostupnosti. Rozbaleni ma vlastni
+          tlacitko - sipku. */}
+      <div className="flex w-full flex-wrap items-center justify-between gap-3">
         <span className="flex min-w-0 items-center gap-2.5">
           <span
             className={cn(
@@ -53,7 +52,17 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
               monitor.status === 'up' ? 'bg-up' : monitor.status === 'down' ? 'bg-down' : 'bg-warning'
             )}
           />
-          <span className="truncate text-sm font-medium">{monitor.name}</span>
+          {monitor.assetId !== null ? (
+            <Link
+              to={`/infrastructure/${monitor.assetId}`}
+              className="truncate text-sm font-medium hover:underline"
+              title={t('public.open_detail', 'Otevřít detail služby')}
+            >
+              {monitor.name}
+            </Link>
+          ) : (
+            <span className="truncate text-sm font-medium">{monitor.name}</span>
+          )}
           {liveBadge(monitor, d, t)}
         </span>
         <span className="flex items-center gap-3">
@@ -61,9 +70,17 @@ export function PublicMonitorCard({ monitor, uptime }: { monitor: PublicMonitor;
           <span className="text-muted-foreground w-14 text-right text-xs tabular-nums">
             {monitor.responseMs === null ? '—' : `${monitor.responseMs} ms`}
           </span>
-          <ChevronDown className={cn('text-muted-foreground size-4 transition-transform', open && 'rotate-180')} />
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            aria-label={t('public.toggle_detail', 'Rozbalit detail')}
+            className="text-muted-foreground hover:text-foreground -m-1 p-1 transition-colors"
+          >
+            <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
+          </button>
         </span>
-      </button>
+      </div>
 
       {open && (
         <div className="mt-3 space-y-2.5 pl-5">

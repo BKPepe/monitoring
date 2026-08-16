@@ -282,6 +282,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.event_down': { cs: 'Výpadek', en: 'Outage' },
   'public.event_warn': { cs: 'Zhoršení', en: 'Degraded' },
   'public.view_charts': { cs: 'Zobrazit grafy metrik', en: 'View metric charts' },
+  'public.open_detail': { cs: 'Otevřít detail služby', en: 'Open service detail' },
+  'public.toggle_detail': { cs: 'Rozbalit detail', en: 'Toggle detail' },
   'public.page_not_found': { cs: 'Stránka nenalezena', en: 'Page not found' },
   'public.page_not_found_desc': {
     cs: 'Tato status stránka neexistuje nebo není veřejná.',
