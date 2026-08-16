@@ -17,6 +17,7 @@ const MetricDetailPage = React.lazy(() =>
 const PublicStatusPage = React.lazy(() =>
   import('@/pages/public-status').then((m) => ({ default: m.PublicStatusPage }))
 );
+const SetPasswordPage = React.lazy(() => import('@/pages/set-password').then((m) => ({ default: m.SetPasswordPage })));
 const UsersPage = React.lazy(() => import('@/pages/users').then((m) => ({ default: m.UsersPage })));
 const SetupPage = React.lazy(() => import('@/pages/setup').then((m) => ({ default: m.SetupPage })));
 const WebsitesPage = React.lazy(() => import('@/pages/websites').then((m) => ({ default: m.WebsitesPage })));
@@ -121,6 +122,17 @@ export const router = createBrowserRouter(
       element: (
         <GlobalErrorBoundary>
           <SetupPage />
+        </GlobalErrorBoundary>
+      ),
+      errorElement: <RouteErrorFallback />,
+    },
+    {
+      // Nastaveni hesla z pozvanky - clovek sem prichazi z e-mailu, jeste
+      // nema ucet aktivni, takze zadny AppShell.
+      path: 'set-password',
+      element: (
+        <GlobalErrorBoundary>
+          <SetPasswordPage />
         </GlobalErrorBoundary>
       ),
       errorElement: <RouteErrorFallback />,

@@ -7167,9 +7167,10 @@ function bk_password_reset_request(PDO $pdo, string $email, string $site_title):
 
     $raw_token = bk_issue_password_reset_token($pdo, $user['id'], 7200);
 
+    // Odkaz míří do React aplikace. Stará adresa admin.php?action=set_password
+    // zůstává funkční kvůli e-mailům, které už odešly.
     $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
-    $dir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/status/admin.php'), '/');
-    $set_link = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . $dir . '/admin.php?action=set_password&token=' . $raw_token;
+    $set_link = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . '/app/set-password?token=' . $raw_token;
 
     $subject = 'Obnovení hesla - ' . $site_title;
     $body = '<h1>Obnovení hesla</h1>'

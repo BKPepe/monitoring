@@ -10,7 +10,7 @@ import { STATUS_API } from './http-source';
 
 export interface SessionInfo {
   authenticated: boolean;
-  user: { id: number; username: string; email: string; role: string } | null;
+  user: { id: number; username: string; email: string; role: string; totpEnabled?: boolean | null } | null;
   csrfToken: string | null;
   loginUrl: string;
 }

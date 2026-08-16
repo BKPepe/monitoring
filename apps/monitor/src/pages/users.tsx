@@ -15,6 +15,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { appApi, ApiError, type ApiUser } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
+import { TotpSection } from '@/components/totp-section';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
 import { AuditLogTable } from '@/components/audit-log-table';
@@ -22,7 +23,7 @@ import { UserAuditLog } from '@/components/user-audit-log';
 
 export function UsersPage() {
   const { t } = useLanguage();
-  const { session, loading: sessionLoading, isAdmin } = useSession();
+  const { session, loading: sessionLoading, isAdmin, refetchSession } = useSession();
   const [users, setUsers] = React.useState<ApiUser[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<ApiUser | 'new' | null>(null);
@@ -66,6 +67,10 @@ export function UsersPage() {
 
       {notice && <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">{notice}</div>}
       {error && <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">{error}</div>}
+
+      {/* 2FA pro přihlášeného - dřív jen v legacy administraci; React uměl
+          odznak ukázat, ale zapnout to neuměl. */}
+      <TotpSection enabled={session?.user?.totpEnabled ?? null} onChanged={refetchSession} />
 
       <Card>
         <CardHeader>

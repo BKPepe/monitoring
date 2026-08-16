@@ -1326,6 +1326,72 @@ if (function_exists('bk_top_process_in_window')) {
     check('mimo okno se nehádá', bk_top_process_in_window($pdo, 2, time() - 86400 * 5, time() - 86400 * 4, 'cpu'), null);
 }
 
+// --- Set password from an invite token -----------------------------------
+//
+// The React page /app/set-password posts here. The token is consumed on first
+// success, and an invalid token gets the same answer as an expired one.
+bk_test_load_functions($root . '/functions.php', ['bk_totp_calculate']);
+
+$invite_token = bin2hex(random_bytes(24));
+$pdo->prepare("UPDATE users SET password_reset_token_hash = ?, password_reset_expires = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = 1")
+    ->execute([hash('sha256', $invite_token)]);
+
+[$code] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'kratke'], $cookie_jar);
+check('krátké heslo vrací 400', $code, 400);
+
+[$code] = api_post($base, 'action=set_password', ['token' => 'neexistujici-token', 'password' => 'NoveHeslo123!'], $cookie_jar);
+check('cizí token vrací 400', $code, 400);
+
+[$code, $sp_ok] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'NoveHeslo123!'], $cookie_jar);
+check('platný token nastaví heslo', $code, 200);
+check_true('a hlásí úspěch', !empty($sp_ok['success']));
+
+// Token se spotřeboval - druhé použití musí selhat.
+[$code] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'JineHeslo123!'], $cookie_jar);
+check('spotřebovaný token vrací 400', $code, 400);
+
+// A novým heslem se jde přihlásit (do nové session, ať nerozbijeme tu adminovu).
+$login_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_c2');
+[$code, $relog] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'NoveHeslo123!'], $login_jar2);
+check_true('nové heslo funguje pro přihlášení', $code === 200 && !empty($relog['success']));
+// Vratit puvodni heslo, dalsi testy s nim pocitaji.
+$pdo->prepare("UPDATE users SET password_hash = ? WHERE id = 1")
+    ->execute([password_hash('BloodKingsAdmin123!', PASSWORD_BCRYPT)]);
+@unlink($login_jar2);
+
+// --- TOTP enrollment ------------------------------------------------------
+//
+// Two steps like the legacy admin: the secret lives in the session until a
+// code proves the QR scanned. The test computes a real code with the same
+// bk_totp_calculate the server verifies with.
+if (function_exists('bk_totp_calculate')) {
+    [$code, $ts] = api_post($base, 'action=totp_setup', [], $cookie_jar);
+    check('totp_setup vrací 200', $code, 200);
+    check_true('a secret', !empty($ts['secret']));
+    check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
+
+    // Špatný kód nesmí 2FA zapnout.
+    [$code] = api_post($base, 'action=totp_confirm', ['code' => '000000'], $cookie_jar);
+    check('špatný kód vrací 400', $code, 400);
+    $totp_row = $pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn();
+    check('a 2FA zůstává vypnuté', (int)$totp_row, 0);
+
+    // Správný kód spočítaný z téhož secretu.
+    $valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
+    [$code] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
+    check('správný kód 2FA zapne', $code, 200);
+    check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+
+    // Vypnutí bez hesla neprojde - ukradená session nesmí 2FA tiše sundat.
+    [$code] = api_post($base, 'action=totp_disable', ['password' => 'spatne-heslo'], $cookie_jar);
+    check('vypnutí se špatným heslem vrací 400', $code, 400);
+    check('2FA drží', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+
+    [$code] = api_post($base, 'action=totp_disable', ['password' => 'BloodKingsAdmin123!'], $cookie_jar);
+    check('se správným heslem se vypne', $code, 200);
+    check('a v databázi je vypnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 0);
+}
+
 // --- Retention for process history --------------------------------------
 //
 // The two-stage prune is the part that can quietly destroy data, so it is

@@ -818,7 +818,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                     $new_user_id = (int)$pdo->lastInsertId();
 
                     $raw_token = bk_issue_password_reset_token($pdo, $new_user_id);
-                    $set_link = bk_current_admin_url() . '?action=set_password&token=' . $raw_token;
+                    // Novy uzivatel zacina v React aplikaci, ne ve stare administraci.
+                    $set_link = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http')
+                        . '://' . ($_SERVER['HTTP_HOST'] ?? '') . '/app/set-password?token=' . $raw_token;
                     $site_title_mail = get_setting('site_title', 'Blood Kings');
                     $subject = 'Nastavení hesla - ' . $site_title_mail;
                     $body = '<h1>Vítejte v ' . htmlspecialchars($site_title_mail) . '</h1>'

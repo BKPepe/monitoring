@@ -49,7 +49,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
  * Keeping that list correct is not left to memory - run_session_lock_lint.php
  * re-derives it from the code and fails the build when the two disagree.
  */
-$bk_session_writers = ['login', 'logout', 'setup'];
+$bk_session_writers = ['login', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
 if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SESSION_ACTIVE) {
     session_write_close();
 }
@@ -62,11 +62,15 @@ if ($action === 'session') {
         // E-mail se dřív vracel natvrdo jako 'admin@bloodkings.eu' bez ohledu
         // na to, kdo je přihlášený. Kdo měl jiný, viděl cizí adresu jako svou.
         $u_email = null;
+        $u_totp = null;
         try {
-            $stmt_me = $pdo->prepare("SELECT email FROM users WHERE id = ? LIMIT 1");
+            $stmt_me = $pdo->prepare("SELECT email, totp_enabled FROM users WHERE id = ? LIMIT 1");
             $stmt_me->execute([(int)($_SESSION['admin_id'] ?? 0)]);
-            $found = $stmt_me->fetchColumn();
-            $u_email = $found !== false && $found !== '' ? $found : null;
+            $me_row = $stmt_me->fetch();
+            if ($me_row) {
+                $u_email = ($me_row['email'] ?? '') !== '' ? $me_row['email'] : null;
+                $u_totp = !empty($me_row['totp_enabled']);
+            }
         } catch (PDOException $e) {
             error_log('[api] session: e-mail uživatele se nepodařilo načíst: ' . $e->getMessage());
         }
@@ -77,6 +81,8 @@ if ($action === 'session') {
             // NULL = adresu neznáme; vymyslet ji je horší než ji neukázat.
             'email' => $u_email,
             'role' => $_SESSION['admin_role'] ?? 'admin',
+            // NULL = nepodařilo se zjistit; false by tvrdilo "vypnuto".
+            'totpEnabled' => $u_totp,
         ];
     }
 
@@ -2072,6 +2078,128 @@ if ($action === 'export_config') {
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Export se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// Nastaveni hesla z pozvanky / resetu - pro React stranku /app/set-password.
+//
+// Zrcadli bk_render_set_password_page z admin.php: token se hashuje, plati
+// jen do expirace a spotrebuje se prvnim uspesnym nastavenim. Neplatny token
+// dostane stejnou odpoved jako expirovany - z chyby se neda poznat, jestli
+// token nekdy existoval.
+if ($action === 'set_password') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $sp_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $sp_token = trim((string)($sp_input['token'] ?? ''));
+    $sp_pass = (string)($sp_input['password'] ?? '');
+
+    if ($sp_token === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí token.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if (strlen($sp_pass) < 8) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Heslo musí mít alespoň 8 znaků.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $sp_hash = hash('sha256', $sp_token);
+        $stmt_sp = $pdo->prepare("SELECT id, username FROM users WHERE password_reset_token_hash = ? AND password_reset_expires > NOW() LIMIT 1");
+        $stmt_sp->execute([$sp_hash]);
+        $sp_user = $stmt_sp->fetch();
+        if (!$sp_user) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Odkaz je neplatný nebo už vypršel. Požádejte o nový.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $stmt_up = $pdo->prepare("UPDATE users SET password_hash = ?, password_reset_token_hash = NULL, password_reset_expires = NULL WHERE id = ?");
+        $stmt_up->execute([password_hash($sp_pass, PASSWORD_BCRYPT), (int)$sp_user['id']]);
+        bk_audit_log($pdo, 'password_set_via_link', '', 'user', (int)$sp_user['id'], (int)$sp_user['id'], $sp_user['username']);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[set_password] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Heslo se nepodařilo nastavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// 2FA pro prihlaseneho uzivatele. Stejny dvoukrokovy postup jako admin.php:
+// secret zije jen v session, dokud uzivatel kodem nepotvrdi, ze se mu QR
+// opravdu naskenoval - jinak by sel ucet zamknout neoverenym secretem.
+if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable') {
+    if (empty($_SESSION['admin_logged_in']) || empty($_SESSION['admin_id'])) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $totp_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $totp_uid = (int)$_SESSION['admin_id'];
+
+    try {
+        if ($action === 'totp_setup') {
+            $totp_secret = bk_totp_generate_secret();
+            $_SESSION['totp_pending_secret'] = $totp_secret;
+            $totp_issuer = rawurlencode(get_setting('site_title', 'Blood Kings'));
+            $totp_account = rawurlencode((string)($_SESSION['admin_user'] ?? 'admin'));
+            echo json_encode([
+                'secret' => $totp_secret,
+                'otpauthUri' => "otpauth://totp/{$totp_issuer}:{$totp_account}?secret={$totp_secret}&issuer={$totp_issuer}&algorithm=SHA1&digits=6&period=30",
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'totp_confirm') {
+            $totp_pending = $_SESSION['totp_pending_secret'] ?? '';
+            $totp_code = trim((string)($totp_input['code'] ?? ''));
+            if ($totp_pending === '') {
+                http_response_code(400);
+                echo json_encode(['error' => '2FA nastavení vypršelo, začněte prosím znovu.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            if (!bk_totp_verify_code($totp_pending, $totp_code)) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Neplatný kód z autentikační aplikace.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?");
+            $stmt_t->execute([$totp_pending, $totp_uid]);
+            unset($_SESSION['totp_pending_secret']);
+            bk_audit_log($pdo, 'totp_enabled', '', 'user', $totp_uid);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // totp_disable: vypnuti chce aktualni heslo - ukradena session bez
+        // znalosti hesla 2FA tise nevypne.
+        $stmt_me = $pdo->prepare("SELECT password_hash FROM users WHERE id = ? LIMIT 1");
+        $stmt_me->execute([$totp_uid]);
+        $totp_me = $stmt_me->fetch();
+        if (!$totp_me || !password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Nesprávné heslo - 2FA zůstává zapnuté.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
+        $stmt_t->execute([$totp_uid]);
+        bk_audit_log($pdo, 'totp_disabled', '', 'user', $totp_uid);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[totp] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Operace se nepodařila.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
