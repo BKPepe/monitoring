@@ -2391,6 +2391,25 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
 if ($action === 'regions') {
     try {
         $days = max(1, min(30, (int)($_GET['days'] ?? 7)));
+
+        // Server-side cache, stejny vzorec jako websites_overview o kus niz.
+        //
+        // Agregace 30 dni monitor_logs bezi na tomhle hostingu ~5 s I S krycim
+        // indexem - casovani skaluje linearne s oknem (0,45 s pro den, 5 s pro
+        // mesic), takze index se pouziva a pomale je proste secteni ctvrt
+        // milionu radku. Mista mereni se pritom meni jen kdyz pribude sonda
+        // nebo lokalita Cloudflare - 10 minut stara odpoved je porad pravdiva,
+        // a `cachedAt` to odpovedi priznava.
+        $regions_cache_key = 'regions_cache_' . $days . 'd';
+        $cache_raw = get_setting($regions_cache_key, '');
+        if ($cache_raw !== '') {
+            $cached = json_decode($cache_raw, true);
+            if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
+                echo json_encode($cached['data'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+        }
+
         $stmt = $pdo->prepare("
             SELECT checked_from,
                    COUNT(*) AS checks,
@@ -2426,7 +2445,14 @@ if ($action === 'regions') {
             ];
         }
 
-        echo json_encode(['days' => $days, 'regions' => $regions], JSON_UNESCAPED_UNICODE);
+        $regions_payload = ['days' => $days, 'regions' => $regions, 'cachedAt' => date('c')];
+        try {
+            $stmt_c = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+            $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
+        } catch (Throwable $e) {
+            // Cache je optimalizace - kdyz se nezapise, odpoved stejne odejde.
+        }
+        echo json_encode($regions_payload, JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Přehled měřicích míst se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);

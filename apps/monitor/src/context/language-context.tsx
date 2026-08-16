@@ -271,6 +271,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.hosting_limits': { cs: 'Čerpání limitů hostingu', en: 'Hosting limit usage' },
   'public.show_more_events': { cs: 'Zobrazit další ({n})', en: 'Show more ({n})' },
   'sp.field_display': { cs: 'Zobrazené sekce', en: 'Visible sections' },
+  'sp.main_page': { cs: 'Hlavní veřejná stránka', en: 'Main public page' },
+  'sp.main_page_desc': {
+    cs: 'Všechny služby, bez filtru - to, co uvidí návštěvník.',
+    en: 'All services, unfiltered - what a visitor sees.',
+  },
   'sp.opt_regions': { cs: 'Místa měření', en: 'Measurement locations' },
   'sp.opt_events': { cs: 'Poslední události', en: 'Recent events' },
   'sp.opt_incidents': { cs: 'Incidenty', en: 'Incidents' },

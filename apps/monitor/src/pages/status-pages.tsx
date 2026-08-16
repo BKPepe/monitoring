@@ -116,6 +116,26 @@ export function StatusPagesPage() {
       {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
       {notice && <p className="text-up text-xs font-semibold">{notice}</p>}
 
+      {/* Hlavní veřejná stránka existuje vždy - bez tohohle odkazu se k ní
+          nešlo z aplikace prokliknout, dokud člověk nevytvořil vlastní
+          stránku (a i pak jen na tu vlastní). */}
+      <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">{t('sp.main_page', 'Hlavní veřejná stránka')}</p>
+          <p className="text-muted-foreground text-xs">
+            {t('sp.main_page_desc', 'Všechny služby, bez filtru - to, co uvidí návštěvník.')}
+          </p>
+        </div>
+        <a
+          href="/app/public"
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
+        >
+          /app/public <ExternalLink className="size-3.5" />
+        </a>
+      </Card>
+
       {pages === null ? (
         <p className="text-muted-foreground text-sm">{t('sp.loading', 'Načítám…')}</p>
       ) : pages.length === 0 ? (
