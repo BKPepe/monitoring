@@ -1,0 +1,15 @@
+node_modules
+
+# apps/status (self-hosted PHP status dashboard) - secrets and generated files
+apps/status/config.php
+apps/status/cpanel_config.php
+apps/status/version.php
+apps/status/cache/
+__pycache__/
+
+# Agenti bydli v submodulu `agents`; do apps/status je pri nasazeni
+# kopiruje CI (deploy-status.yml), aby je routery nasly na stejne URL.
+apps/status/agent.sh
+apps/status/agent.py
+apps/status/agent.ps1
+apps/status/agent_openwrt.sh

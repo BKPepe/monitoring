@@ -1,0 +1,320 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="O Projektu | Blood Kings Monitoring" description="Příběh a filozofie projektu Blood Kings Monitoring. Zjistěte více o vývojářích a open source licenci MIT.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Náš příběh</span>
+      <h1>O projektu Blood Kings</h1>
+      <p class="section-subtitle">Chceme vytvořit špičkový monitorovací nástroj dostupný všem bez umělých limitů a předplatného.</p>
+    </div>
+  </section>
+
+  <!-- Story Section -->
+  <section class="section bg-dim">
+    <div class="container story-layout">
+      <div class="story-text">
+        <h2>Jak to celé vzniklo</h2>
+        <p>
+          Projekt <strong>Blood Kings Monitoring</strong> vznikl jako reakce na stále se zvyšující ceny a omezování bezplatných tarifů komerčních cloudových služeb. Věříme, že monitoring serverů a aplikací je základní stavební kámen každého projektu a neměl by být zatížen drahými poplatky za každou přidanou kontrolu.
+        </p>
+        <p>
+          Rozhodli jsme se postavit systém, který kombinuje jednoduchost UptimeRobota s flexibilitou a zabezpečením self-hosted řešení. Naším cílem je umožnit komukoliv sledovat celou svou síťovou infrastrukturu na vlastním hardwaru.
+        </p>
+        
+        <h3 class="margin-top">Naše Hodnoty</h3>
+        <ul class="values-list">
+          <li><strong>Absolutní Soukromí:</strong> Vaše monitorovací logy, IP adresy a chybové stavy nikdy neopustí váš vlastní server.</li>
+          <li><strong>Mimořádný výkon:</strong> Žádný těžký JavaScript na klientovi, žádné zatěžování procesoru na monitorovaných serverech.</li>
+          <li><strong>Otevřenost:</strong> Kód je a navždy zůstane 100% open source s licencí MIT. Můžete si ho upravit dle libosti.</li>
+        </ul>
+      </div>
+
+      <!-- Quick stats column -->
+      <div class="story-aside">
+        <div class="card card-glow project-meta-box">
+          <h4>Detaily Projektu</h4>
+          <div class="meta-item">
+            <span>Licence:</span>
+            <strong>MIT License</strong>
+          </div>
+          <div class="meta-item">
+            <span>Technologie:</span>
+            <strong>PHP / SQLite / JS</strong>
+          </div>
+          <div class="meta-item">
+            <span>Poslední Verze:</span>
+            <strong>v0.1.0-alpha</strong>
+          </div>
+          <div class="meta-item font-mono-link">
+            <span>GitHub:</span>
+            <strong><a href="https://github.com/BKPepe/monitoring" target="_blank" rel="noopener">BKPepe/bloodkings</a></strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Contributors Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header text-center">
+        <h2>Vývojáři a přispěvatelé</h2>
+        <p class="section-subtitle">Děkujeme všem, kteří pomáhají vylepšovat Blood Kings Monitoring.</p>
+      </div>
+
+      <!-- Loading spinners for contributors -->
+      <div id="contributors-loading" class="contributors-loading">
+        <svg class="spinner" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3"></circle></svg>
+      </div>
+
+      <!-- Contributors Grid -->
+      <div class="contributors-grid is-hidden" id="contributors-grid">
+        <!-- Hydrated dynamically -->
+      </div>
+    </div>
+  </section>
+
+  <script>
+    import { fetchContributors, escapeHtml, initials, type Contributor } from '../../lib/github';
+
+    // Data jdou přes worker (token + hodinová cache), ne přímo z api.github.com.
+    async function loadContributors() {
+      const loader = document.getElementById('contributors-loading');
+      const grid = document.getElementById('contributors-grid');
+
+      try {
+        const contributors = await fetchContributors();
+        if (contributors.length > 0) {
+          renderContributors(contributors);
+        } else {
+          showFallbackContributors();
+        }
+      } catch (e) {
+        console.warn('Nepodařilo se načíst přispěvatele, používám statický seznam.', e);
+        showFallbackContributors();
+      } finally {
+        loader?.classList.add('is-hidden');
+        grid?.classList.remove('is-hidden');
+      }
+    }
+
+    function renderContributors(list: Contributor[]) {
+      const grid = document.getElementById('contributors-grid');
+      if (!grid) return;
+
+      grid.innerHTML = '';
+      list.forEach((user) => {
+        const userCard = document.createElement('a');
+        userCard.href = user.url;
+        userCard.target = '_blank';
+        userCard.rel = 'noopener';
+        userCard.className = 'contributor-card card';
+
+        // Monogram místo avataru z githubusercontent.com — obrázek by byl
+        // další third-party request z prohlížeče návštěvníka.
+        userCard.innerHTML = `
+          <span class="contrib-avatar" aria-hidden="true">${escapeHtml(initials(user.login))}</span>
+          <h5>${escapeHtml(user.login)}</h5>
+          <span class="contrib-commits">${escapeHtml(user.contributions)} příspěvků</span>
+        `;
+        grid.appendChild(userCard);
+      });
+    }
+
+    function showFallbackContributors() {
+      const grid = document.getElementById('contributors-grid');
+      if (!grid) return;
+
+      grid.innerHTML = `
+        <a href="https://github.com/BKPepe" target="_blank" rel="noopener" class="contributor-card card">
+          <span class="contrib-avatar" aria-hidden="true">BK</span>
+          <h5>BKPepe</h5>
+          <span class="contrib-commits">Autor / správce</span>
+        </a>
+      `;
+    }
+
+    loadContributors();
+  </script>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--surface-1) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  .story-layout {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
+    gap: 4rem;
+    align-items: flex-start;
+  }
+
+  .story-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .story-text h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .story-text p {
+    font-size: 1.05rem;
+    line-height: 1.7;
+  }
+
+  .margin-top {
+    margin-top: 1.5rem;
+  }
+
+  .values-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .values-list li {
+    position: relative;
+    padding-left: 1.5rem;
+    font-size: 1rem;
+    color: var(--text-mid);
+  }
+
+  .values-list li::before {
+    content: '👑';
+    position: absolute;
+    left: 0;
+    font-size: 0.95rem;
+  }
+
+  /* Aside details */
+  .project-meta-box {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .project-meta-box h4 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.8rem;
+  }
+
+  .meta-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.95rem;
+  }
+
+  .meta-item span {
+    color: var(--text-low);
+  }
+
+  .font-mono-link strong a {
+    color: var(--brand-500);
+  }
+
+  /* Contributor styles */
+  .contributors-loading {
+    display: flex;
+    justify-content: center;
+    padding: 3rem 0;
+  }
+
+  .spinner {
+    animation: spin 0.8s linear infinite;
+    width: 32px;
+    height: 32px;
+    color: var(--brand-500);
+  }
+
+  .spinner circle {
+    stroke-dasharray: 42, 38;
+    stroke-linecap: round;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .contributors-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+  }
+
+  .contributor-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.8rem;
+    padding: 2rem 1.5rem;
+  }
+
+  /* Monogram nahrazuje avatar z GitHubu — stejná plocha, žádný externí obrázek. */
+  .contrib-avatar {
+    display: grid;
+    place-items: center;
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--surface-2);
+    font-family: var(--font-heading);
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-hi);
+    transition: border-color var(--transition-fast);
+  }
+
+  .contributor-card:hover .contrib-avatar {
+    border-color: var(--brand-500);
+  }
+
+  .contributor-card h5 {
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
+
+  .contrib-commits {
+    font-size: 0.8rem;
+    color: var(--text-low);
+  }
+
+  @media (max-width: 992px) {
+    .story-layout {
+      grid-template-columns: 1fr;
+      gap: 3rem;
+    }
+    .contributors-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  @media (max-width: 600px) {
+    .contributors-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 400px) {
+    .contributors-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

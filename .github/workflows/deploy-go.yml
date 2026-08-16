@@ -1,0 +1,147 @@
+name: Deploy Go Backend & Monitor SPA to cPanel
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/server/**'
+      - 'apps/monitor/**'
+      - '.github/workflows/deploy-go.yml'
+
+  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
+  # Actions zrovna nezareagovaly na push).
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    name: Build Go Server & React SPA, Deploy via FTP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: 'apps/server/go.sum'
+
+      - name: Build Go Server & CLI Binaries (Linux amd64)
+        run: |
+          mkdir -p bin
+          cd apps/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../bin/server ./cmd/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../bin/bkctl ./cmd/bkctl
+          cp ../../bin/server ../../server
+          cp ../../bin/bkctl ../../bkctl
+          echo "Go server and bkctl CLI binaries built successfully into bin/ directory."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+
+      - name: Build React Monitor Frontend & Astro Main Portal
+        run: |
+          npm ci
+          npm run build --workspace=apps/monitor
+          npm run build --workspace=apps/site
+          echo "Frontends built successfully."
+
+      - name: Generate .env Configuration File
+        env:
+          BK_DB_URL: ${{ secrets.BK_DATABASE_URL || secrets.POSTGRES_DB_URL }}
+          BK_SEC_KEY: ${{ secrets.BK_SECRET_KEY }}
+        run: |
+          if [ -n "$BK_DB_URL" ]; then
+            echo "Generating .env file from GitHub Secrets..."
+            echo "BK_DATABASE_URL=$BK_DB_URL" > .env
+            if [ -n "$BK_SEC_KEY" ]; then
+              echo "BK_SECRET_KEY=$BK_SEC_KEY" >> .env
+            else
+              echo "BK_SECRET_KEY=$(openssl rand -hex 32)" >> .env
+            fi
+            echo "BK_ENV=production" >> .env
+            echo "BK_ADDR=:8090" >> .env
+            cp .env bin/.env
+          else
+            echo "No BK_DATABASE_URL secret set in GitHub. Skipping .env generation."
+          fi
+
+      - name: FTP Deploy Go Backend Subdirectory (bin/) for cPanel Application Manager
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./bin/
+          server-dir: bin/
+          protocol: ftps
+          timeout: 60000
+          security: loose
+
+
+
+
+
+      - name: FTP Deploy React Dashboard to public_html/app/
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./apps/monitor/dist/
+          server-dir: public_html/app/
+          protocol: ftps
+          timeout: 60000
+          security: loose
+          exclude: |
+            **/.git*
+            status/**
+
+      # FTP-Deploy-Action umí dotfiles v kořeni local-dir tiše přeskočit
+      # (stavový diff) - a bez .htaccess vrací F5 na /app/<route> 404.
+      # Soubor se proto nahrává ještě explicitně přes curl, ať tam JE.
+      - name: Upload SPA .htaccess explicitly
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+        run: |
+          curl --silent --show-error --ssl-reqd --insecure \
+            --user "$FTP_USER:$FTP_PASS" \
+            -T apps/monitor/dist/.htaccess \
+            "ftp://$FTP_HOST/public_html/app/.htaccess"
+          echo ".htaccess nahran."
+
+      # Deep link se MUSI dat obnovit (F5). Kontrola po kazdem deployi -
+      # regrese rewrite pravidla shodi workflow, ne az uzivatele.
+      # Deep link se MUSI dat obnovit (F5). Blokujici: kdyz se rozbije,
+      # ma spadnout deploy, ne az uzivatel. Historicky to shodila registrace
+      # aplikace na URL /app v cPanelu (Passenger context ignoroval
+      # .htaccess) - prvni misto, kam se pri selhani podivat.
+      - name: Verify SPA deep-link refresh works
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+        run: |
+          sleep 5
+          code=$(curl -s -o /tmp/deeplink.html -w "%{http_code}" "https://bloodkings.eu/app/infrastructure/1")
+          if [ "$code" != "200" ] || ! grep -q "id=.root." /tmp/deeplink.html; then
+            echo "Deep link /app/infrastructure/1 vraci $code misto SPA (ocekavano 200 + aplikace)."
+            echo ""
+            echo "Nejcastejsi pricina: v cPanel -> Application Manager je aplikace"
+            echo "registrovana na Base Application URL '/app'. Passenger si to URI"
+            echo "vezme a .htaccess se v nem neprocesuje. Prereguistruj ji na jine URL."
+            echo ""
+            echo "--- obsah .htaccess na serveru ---"
+            curl --silent --ssl-reqd --insecure --user "$FTP_USER:$FTP_PASS" \
+              "ftp://$FTP_HOST/public_html/app/.htaccess" || echo "(soubor nejde stahnout)"
+            exit 1
+          fi
+          echo "SPA fallback OK (HTTP $code)."

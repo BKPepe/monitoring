@@ -1,0 +1,2853 @@
+<?php
+/**
+ * Veřejný status dashboard (Blood Kings Status)
+ */
+
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @session_start();
+}
+
+require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/lang.php';
+
+$is_admin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+
+// Získání celkových statistik
+$stmt_stats = $pdo->query("
+    SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+        SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
+        SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) as maintenance_count,
+        MAX(last_checked) as last_checked
+    FROM monitors
+");
+$stats = $stmt_stats->fetch();
+
+$total_monitors = (int)($stats['total'] ?? 0);
+$up_monitors = (int)($stats['up_count'] ?? 0);
+$down_monitors = (int)($stats['down_count'] ?? 0);
+$maintenance_monitors_count = (int)($stats['maintenance_count'] ?? 0);
+$last_checked_global = $stats['last_checked'] ?? null;
+
+// Načtení všech monitorů - včetně jména assetu, ke kterému patří (Phase 4).
+// Po migraci má každý monitor svůj vlastní 1:1 asset, takže se navenek nic
+// nemění, dokud ho admin ručně nesloučí s jiným (asset_member_count > 1).
+// Řazení podle asset_name (ne jen category/name) drží monitory patřící pod
+// stejný asset vedle sebe, aby je šlo v render loopu vizuálně seskupit bez
+// přestavby celé té smyčky.
+$stmt_monitors = $pdo->query("
+    SELECT m.*, a.name AS asset_name,
+           (SELECT COUNT(*) FROM monitors m2 WHERE m2.asset_id = m.asset_id) AS asset_member_count
+    FROM monitors m
+    LEFT JOIN assets a ON a.id = m.asset_id
+    ORDER BY m.category, COALESCE(a.name, m.name), m.name
+");
+$monitors = $stmt_monitors->fetchAll();
+
+// --- Vlastní status stránka (?page=slug) ---------------------------------
+//
+// Stránka se svým výběrem monitorů; prázdný výběr znamená "všechny".
+// Skrytá stránka je dostupná jen přihlášenému adminovi - anonymní návštěvník
+// dostane stejnou odpověď jako u neexistujícího slugu, aby se existence
+// skrytých stránek nedala zjistit zkoušením adres.
+$bk_page_title_override = null;
+$bk_page_slug = trim((string)($_GET['page'] ?? ''));
+if ($bk_page_slug !== '') {
+    try {
+        $stmt_page = $pdo->prepare("SELECT title, description, is_public, monitor_ids FROM status_pages WHERE slug = ? LIMIT 1");
+        $stmt_page->execute([$bk_page_slug]);
+        $bk_page = $stmt_page->fetch();
+
+        if (!$bk_page || ((int)$bk_page['is_public'] !== 1 && !$is_admin)) {
+            http_response_code(404);
+            echo '<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8">'
+                . '<title>' . htmlspecialchars(t('sp_not_found_title')) . '</title></head><body '
+                . 'style="background:#0f0f13;color:#fff;font-family:sans-serif;display:flex;'
+                . 'align-items:center;justify-content:center;height:100vh;margin:0">'
+                . '<div style="text-align:center"><h1>' . htmlspecialchars(t('sp_not_found_title')) . '</h1>'
+                . '<p style="color:#888">' . htmlspecialchars(t('sp_not_found_desc')) . '</p>'
+                . '<p><a href="./" style="color:#e61e2a">' . htmlspecialchars(t('sp_back_to_main')) . '</a></p>'
+                . '</div></body></html>';
+            exit;
+        }
+
+        $bk_page_title_override = $bk_page['title'];
+        $bk_page_ids = json_decode($bk_page['monitor_ids'] ?? '', true);
+        if (is_array($bk_page_ids) && !empty($bk_page_ids)) {
+            $bk_page_ids = array_map('intval', $bk_page_ids);
+            $monitors = array_values(array_filter($monitors, fn($m) => in_array((int)$m['id'], $bk_page_ids, true)));
+        }
+    } catch (Throwable $e) {
+        // Bez tabulky (stará DB) se parametr ignoruje a zobrazí se vše.
+    }
+}
+
+// Level 3 Metric Detail (?view=metric&monitor=X&metric=Y) - samostatná
+// stránka, vykreslí se a skončí request dřív, než začne cokoliv z běžného
+// dashboardu níže (drahé 30denní agregace apod. by se pro ni vůbec nehodily).
+if (($_GET['view'] ?? '') === 'metric') {
+    $vm_id = (int)($_GET['monitor'] ?? 0);
+    $vm_metric = (string)($_GET['metric'] ?? '');
+    $vm_monitor = null;
+    foreach ($monitors as $m) {
+        if ((int)$m['id'] === $vm_id) { $vm_monitor = $m; break; }
+    }
+    render_metric_detail_page($pdo, $vm_monitor, $vm_metric, $is_admin);
+    // render_metric_detail_page() vždy končí exit; - řádek níže je jen pojistka.
+    exit;
+}
+
+// Seskupení monitorů podle kategorií
+$categories = [];
+foreach ($monitors as $m) {
+    $cat = $m['category'] ?: t('default_category');
+    $categories[$cat][] = $m;
+}
+
+// Počet aktivně hlásících VPS/host agentů (stejná logika jako detekce v cron.php).
+// agent_key se automaticky generuje pro VŠECHNY monitory (viz migrace v db.php),
+// i ty bez jakéhokoli nainstalovaného agenta - takže "má agent_key" neznamená
+// "má nasazeného agenta". Počítáme proto jen monitory, u kterých se agent někdy
+// reálně ozval (agent_last_seen je vyplněné), ne jen ty s (nevyužitým) klíčem.
+$agent_offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
+$online_agents_count = 0;
+$total_agents_count = 0;
+foreach ($monitors as $m) {
+    if (empty($m['agent_key'])) continue;
+    $det = json_decode($m['last_details'] ?? '', true);
+    $last_seen = $det['agent_last_seen'] ?? 0;
+    if ($last_seen <= 0) continue;
+    $total_agents_count++;
+    // Časový limit 0 = detekce neaktivity vypnuta - agent, který se kdy ozval, počítá jako online
+    if ($agent_offline_timeout_secs === 0 || (time() - (int)$last_seen) < $agent_offline_timeout_secs) {
+        $online_agents_count++;
+    }
+}
+
+// Načtení 30denní historie pro vizualizaci sloupců (HetrixTools styl)
+$past_30_days = [];
+for ($i = 29; $i >= 0; $i--) {
+    $past_30_days[] = date('Y-m-d', strtotime("-$i days"));
+}
+
+// Agregace nad monitor_logs jsou nejdražší dotazy na stránce a data se mění
+// jen s během cronu - výsledek se proto drží v souborové cache (TTL 60 s),
+// aby nápor návštěvníků nespouštěl 30denní GROUP BY při každém requestu.
+$bk_cache_dir = __DIR__ . '/cache';
+$bk_cache_file = $bk_cache_dir . '/dashboard_agg.json';
+$bk_agg = null;
+if (is_readable($bk_cache_file) && (time() - (int)@filemtime($bk_cache_file)) < 60) {
+    $bk_agg = json_decode((string)@file_get_contents($bk_cache_file), true);
+}
+
+if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'], $bk_agg['history_uptime'], $bk_agg['incidents'], $bk_agg['regions'])) {
+    // Výpočet 30-denního uptime procenta pro každý monitor
+    $stmt_upt = $pdo->query("
+        SELECT monitor_id,
+               SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY monitor_id
+    ");
+    $uptime_pct = [];
+    while ($row = $stmt_upt->fetch()) {
+        // total_count počítá jen ne-maintenance kontroly. Monitor, který byl
+        // celé okno v údržbě, žádnou měřenou dostupnost nemá - vynecháním
+        // (místo dřívějších vymyšlených 100.00) se nepočítá do průměrů
+        // a isset() checky ho zobrazí jako "bez dat".
+        if ((int)$row['total_count'] > 0) {
+            $uptime_pct[$row['monitor_id']] = round(($row['up_count'] / $row['total_count']) * 100, 2);
+        }
+    }
+
+    $stmt_hist = $pdo->query("
+        SELECT monitor_id, DATE(checked_at) as log_date,
+               SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
+               SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
+               SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) as maintenance_count,
+               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY monitor_id, DATE(checked_at)
+    ");
+    $history_data = [];
+    $history_uptime = [];
+    while ($row = $stmt_hist->fetch()) {
+        $mid = $row['monitor_id'];
+        $date = $row['log_date'];
+        // total_count = ne-maintenance kontroly. Den strávený celý v údržbě
+        // (total 0, maintenance > 0) je údržba - stará podmínka
+        // maintenance == total ho kvůli vyloučení údržby z totalu nikdy
+        // netrefila a den se tvářil jako "nodata".
+        if ($row['down_count'] > 0) {
+            $history_data[$mid][$date] = 'down';
+        } elseif ((int)$row['total_count'] === 0 && $row['maintenance_count'] > 0) {
+            $history_data[$mid][$date] = 'maintenance';
+        } elseif ($row['total_count'] > 0) {
+            $history_data[$mid][$date] = 'up';
+        } else {
+            $history_data[$mid][$date] = 'nodata';
+        }
+
+        // Bez měřených kontrol není denní uptime - klíč se nezaloží
+        // (dřív se dosazovalo vymyšlených 100.00).
+        if ((int)$row['total_count'] > 0) {
+            $history_uptime[$mid][$date] = round(($row['up_count'] / $row['total_count']) * 100, 2);
+        }
+    }
+
+    // Načtení posledních incidentů – pouze výpadky a zprávy při návratu (ne každý úspěšný ping)
+    $stmt_inc = $pdo->query("
+        SELECT l.*, m.name, m.type, m.target
+        FROM monitor_logs l
+        JOIN monitors m ON l.monitor_id = m.id
+        WHERE l.status = 'down'
+           OR (l.status = 'up' AND l.error_message IS NOT NULL AND l.error_message != '')
+        ORDER BY l.checked_at DESC
+        LIMIT 200
+    ");
+    $incidents = $stmt_inc->fetchAll();
+
+    // Distribuovaní agenti/uzly, kteří v posledních 24h hlásili měření (veřejná
+    // "Global Agent Map" - stejná logika jako admin diagnostika, bez citlivých detailů).
+    // Hlavní server (lokální cron.php) zapisuje své vlastní kontroly do stejného
+    // sloupce checked_from jako vzdálení agenti - bez vyloučení by se "hub" tvářil
+    // jako distribuovaný uzel, což zkresluje počet i smysl téhle sekce.
+    $hub_location = trim(get_setting('cron_location', ''));
+    if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
+        $hub_location = trim(get_setting('ip_loc_local', ''));
+    }
+    $stmt_regions = $pdo->prepare("
+        SELECT checked_from, COUNT(*) as cnt, MAX(checked_at) as last_seen,
+               ROUND(AVG(response_time)) as avg_latency
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND checked_from IS NOT NULL
+              AND checked_from != 'Main Server'" . ($hub_location !== '' ? " AND checked_from != ?" : "") . "
+        GROUP BY checked_from
+        ORDER BY last_seen DESC
+        LIMIT 24
+    ");
+    $stmt_regions->execute($hub_location !== '' ? [$hub_location] : []);
+    $regions = $stmt_regions->fetchAll();
+
+    $bk_agg = [
+        'uptime_pct' => $uptime_pct,
+        'history_data' => $history_data,
+        'history_uptime' => $history_uptime,
+        'incidents' => $incidents,
+        'regions' => $regions,
+    ];
+
+    if (!is_dir($bk_cache_dir)) {
+        @mkdir($bk_cache_dir, 0775, true);
+        @file_put_contents($bk_cache_dir . '/.htaccess', "Require all denied\n");
+    }
+    // Atomický zápis, aby souběžné requesty nečetly rozepsaný soubor
+    $bk_tmp = $bk_cache_file . '.' . getmypid() . '.tmp';
+    if (@file_put_contents($bk_tmp, json_encode($bk_agg, JSON_UNESCAPED_UNICODE)) !== false) {
+        @rename($bk_tmp, $bk_cache_file);
+    }
+} else {
+    $uptime_pct = $bk_agg['uptime_pct'];
+    $history_data = $bk_agg['history_data'];
+    $history_uptime = $bk_agg['history_uptime'];
+    $incidents = $bk_agg['incidents'];
+    $regions = $bk_agg['regions'];
+}
+
+// Celková průměrná 30denní dostupnost napříč všemi monitory. Prázdné
+// $uptime_pct znamená, že žádný monitor zatím nemá kontrolu za posledních
+// 30 dní (nová instalace nebo mrtvý cron) - fabrikovat "100 %" by to
+// vydávalo za ověřený perfektní stav, který ve skutečnosti nikdo nezměřil.
+$avg_uptime_known = !empty($uptime_pct);
+$avg_uptime = $avg_uptime_known ? round(array_sum($uptime_pct) / count($uptime_pct), 2) : 0.0;
+
+$site_title = get_setting('site_title', 'Blood Kings');
+// Vlastní status stránka se hlásí svým názvem, ať návštěvník pozná, na co
+// se dívá (a nemyslí si, že vidí celou infrastrukturu).
+if ($bk_page_title_override !== null && $bk_page_title_override !== '') {
+    $site_title = $bk_page_title_override;
+}
+
+// Vlastní branding z nastavení administrace
+$custom_logo_url = trim(get_setting('custom_logo_url'));
+$custom_color = trim(get_setting('custom_color_theme'));
+// Barvu vkládáme do <style>, proto povolíme jen validní hex zápis
+if (!preg_match('/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/', $custom_color)) {
+    $custom_color = '';
+}
+$custom_nav_links = json_decode(get_setting('custom_nav_links'), true);
+if (!is_array($custom_nav_links)) {
+    $custom_nav_links = [];
+}
+// Odkaz na nadřazený portál (např. hlavní web provozovatele) - prázdné = skrýt.
+// Bez tohoto nastavení by referenční self-hosted nasazení mělo natvrdo odkaz
+// na cizí "../index.html", který u samostatné instalace nikam nevede.
+$portal_url = trim(get_setting('portal_url'));
+
+?>
+<!DOCTYPE html>
+<html lang="<?php echo htmlspecialchars($GLOBALS['BK_LANG']); ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+    <title><?php echo htmlspecialchars($site_title); ?></title>
+    <?php
+    // Odkaz na RSS musí být v hlavičce, jinak ho čtečky samy nenajdou a
+    // odběr závisí na tom, že návštěvník trefí správnou adresu ručně.
+    // U vlastní stránky se do kanálu propíše její slug, aby odběratel
+    // dostával jen to, co je na ní vidět.
+    $bk_rss_href = 'rss.php' . ($bk_page_slug !== '' ? '?page=' . urlencode($bk_page_slug) : '');
+    ?>
+    <link rel="alternate" type="application/rss+xml" title="<?php echo htmlspecialchars($site_title . ' - ' . t('rss_channel_suffix')); ?>" href="<?php echo htmlspecialchars($bk_rss_href); ?>">
+    <link rel="stylesheet" href="assets/style.css?v=<?php echo filemtime('assets/style.css'); ?>">
+    <?php if ($custom_color !== ''): ?>
+    <style>:root { --color-red: <?php echo $custom_color; ?>; }</style>
+    <?php endif; ?>
+    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
+    <script src="<?php echo BK_CDN_ECHARTS; ?>" integrity="<?php echo BK_CDN_ECHARTS_SRI; ?>" crossorigin="anonymous"></script>
+    <script>
+        if (localStorage.getItem('theme') === 'light') {
+            document.documentElement.classList.add('light-theme');
+        }
+    </script>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="container header-wrapper">
+            <a href="<?php echo $portal_url !== '' ? htmlspecialchars($portal_url) : 'index.php'; ?>" class="logo">
+                <?php if ($custom_logo_url !== ''): ?>
+                    <img src="<?php echo htmlspecialchars($custom_logo_url); ?>" alt="<?php echo htmlspecialchars($site_title); ?>" style="height: 28px; vertical-align: middle;">
+                    <span><?php echo htmlspecialchars($site_title); ?></span>
+                <?php else: ?>
+                    <i class="fas fa-server" style="color: var(--color-red);"></i> <?php echo htmlspecialchars($site_title); ?>
+                <?php endif; ?>
+            </a>
+            <div class="nav-links">
+                <?php if ($portal_url !== ''): ?>
+                    <a href="<?php echo htmlspecialchars($portal_url); ?>"><i class="fas fa-home"></i> <?php echo htmlspecialchars(t('nav_portal')); ?></a>
+                <?php endif; ?>
+                <a href="index.php" class="active"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('nav_monitoring')); ?></a>
+                <?php foreach ($custom_nav_links as $nav_link):
+                    $nl_name = trim((string)($nav_link['name'] ?? ''));
+                    $nl_url = trim((string)($nav_link['url'] ?? ''));
+                    if ($nl_name === '' || !preg_match('#^https?://#i', $nl_url)) continue;
+                ?>
+                    <a href="<?php echo htmlspecialchars($nl_url); ?>" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i> <?php echo htmlspecialchars($nl_name); ?></a>
+                <?php endforeach; ?>
+                <?php if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true): ?>
+                    <a href="admin.php" class="btn btn-secondary btn-sm" style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.3); color: var(--color-green);"><i class="fas fa-user-shield"></i> <?php echo htmlspecialchars(t('nav_admin_prefix')); ?> (<?php echo htmlspecialchars($_SESSION['admin_username'] ?? 'Admin'); ?>)</a>
+                    <a href="admin.php?action=logout" class="btn btn-secondary btn-sm" style="background: rgba(193, 18, 31, 0.1); border: 1px solid rgba(193, 18, 31, 0.3); color: var(--color-red);" onclick="return confirm('<?php echo htmlspecialchars(t('nav_logout_confirm')); ?>')"><i class="fas fa-sign-out-alt"></i> <?php echo htmlspecialchars(t('nav_logout')); ?></a>
+                <?php else: ?>
+                    <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-lock"></i> <?php echo htmlspecialchars(t('nav_admin')); ?></a>
+                <?php endif; ?>
+                <a href="?lang=<?php echo $GLOBALS['BK_LANG'] === 'cs' ? 'en' : 'cs'; ?>" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px; font-weight: 700; font-size: 0.75rem;" title="<?php echo htmlspecialchars(t('lang_toggle_title')); ?>"><?php echo $GLOBALS['BK_LANG'] === 'cs' ? 'EN' : 'CS'; ?></a>
+                <button id="theme-toggle" class="btn btn-secondary btn-sm" style="padding: 0.4rem 0.6rem; margin-left: 0.25rem; border-radius: 4px;" title="<?php echo htmlspecialchars(t('theme_toggle_title')); ?>"><i class="fas fa-sun"></i></button>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        
+        <!-- Celkový stav systému -->
+        <?php
+        $hero_class = 'all-ok';
+        if ($down_monitors > 0) {
+            $hero_class = '';
+        } elseif ($maintenance_monitors_count > 0) {
+            $hero_class = 'has-maintenance';
+        }
+        // Načtení aktivních (nevyřešených) incidentů
+        try {
+            $stmt_inc = $pdo->query("SELECT * FROM incidents WHERE status != 'resolved' ORDER BY created_at DESC");
+            $active_incidents = $stmt_inc->fetchAll();
+            foreach ($active_incidents as $inc):
+                $stmt_updates = $pdo->prepare("SELECT * FROM incident_updates WHERE incident_id = ? ORDER BY created_at DESC");
+                $stmt_updates->execute([$inc['id']]);
+                $updates = $stmt_updates->fetchAll();
+                
+                $border_color = 'var(--color-yellow)';
+                $bg_glow = 'rgba(243, 156, 18, 0.1)';
+                if ($inc['impact'] === 'critical') {
+                    $border_color = 'var(--color-red)';
+                    $bg_glow = 'rgba(176, 0, 32, 0.15)';
+                }
+        ?>
+            <div style="background: <?php echo $bg_glow; ?>; border-left: 4px solid <?php echo $border_color; ?>; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; border-top: 1px solid rgba(255,255,255,0.05); border-right: 1px solid rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <strong style="color: #fff; font-size: 1.05rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-exclamation-circle" style="color: <?php echo $border_color; ?>;"></i>
+                        <?php echo htmlspecialchars($inc['title']); ?>
+                    </strong>
+                    <span class="category-badge" style="background: <?php echo $border_color; ?>; color: #fff; text-transform: uppercase; font-size: 0.7rem; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 4px;">
+                        <?php echo htmlspecialchars($inc['status']); ?>
+                    </span>
+                </div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem;">
+                    <?php foreach ($updates as $up): ?>
+                        <div style="margin-bottom: 0.4rem; padding-left: 0.75rem; border-left: 2px solid rgba(255,255,255,0.1);">
+                            <span style="font-size: 0.75rem; color: var(--text-muted);"><?php echo date('d.m.Y H:i', strtotime($up['created_at'])); ?> [<?php echo strtoupper($up['status']); ?>]:</span>
+                            <span style="color: #fff; margin-left: 0.3rem;"><?php echo htmlspecialchars($up['message']); ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php 
+            endforeach;
+        } catch (PDOException $e) {}
+        ?>
+        <div class="overall-status <?php echo $hero_class; ?>">
+            <div class="overall-info">
+                <?php if ($down_monitors > 0): ?>
+                    <h2><i class="fas fa-exclamation-triangle" style="color: var(--color-red);"></i> <?php echo htmlspecialchars(t('hero_down_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(sprintf(t('hero_down_desc'), $down_monitors, $total_monitors)); ?></p>
+                <?php elseif ($maintenance_monitors_count > 0): ?>
+                    <h2><i class="fas fa-tools" style="color: var(--color-yellow, #f39c12);"></i> <?php echo htmlspecialchars(t('hero_maintenance_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(sprintf(t('hero_maintenance_desc'), $maintenance_monitors_count)); ?></p>
+                <?php else: ?>
+                    <h2><i class="fas fa-check-circle" style="color: var(--color-green);"></i> <?php echo htmlspecialchars(t('hero_ok_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(sprintf(t('hero_ok_desc'), $total_monitors)); ?></p>
+                <?php endif; ?>
+                <?php if ($last_checked_global): ?>
+                    <p class="last-update-line"><i class="fas fa-clock"></i> <?php echo htmlspecialchars(t('hero_last_check')); ?> <?php echo date('d.m.Y H:i:s', strtotime($last_checked_global)); ?></p>
+                <?php endif; ?>
+            </div>
+
+            <div class="overall-stats">
+                <div class="stat-item">
+                    <div class="stat-value up"><?php echo $up_monitors; ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_online')); ?></div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value down"><?php echo $down_monitors; ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_down')); ?></div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value <?php echo $maintenance_monitors_count > 0 ? 'warn' : 'total'; ?>"><?php echo $maintenance_monitors_count; ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_maintenance')); ?></div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value <?php echo !$avg_uptime_known ? 'nodata' : ($avg_uptime >= 99 ? 'up' : ($avg_uptime >= 95 ? 'warn' : 'down')); ?>"><?php echo $avg_uptime_known ? number_format($avg_uptime, 2, ',', ' ') . '%' : t('uptime_no_data'); ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_uptime_30d')); ?></div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value total"><?php echo $total_monitors; ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_total')); ?></div>
+                </div>
+                <?php if ($total_agents_count > 0): ?>
+                <div class="stat-item">
+                    <div class="stat-value <?php echo $online_agents_count === $total_agents_count ? 'up' : ($online_agents_count > 0 ? 'warn' : 'down'); ?>"><?php echo $online_agents_count; ?>/<?php echo $total_agents_count; ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_agents_online')); ?></div>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($regions)): ?>
+                <div class="stat-item">
+                    <div class="stat-value total"><?php echo count($regions); ?></div>
+                    <div class="stat-label"><?php echo htmlspecialchars(t('stat_regions')); ?></div>
+                </div>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <?php
+        // Výpadky SBĚRU dat (ne služeb) - stejná zásada jako v React appce:
+        // když se data přestanou sbírat, stránka to musí říct nahlas. Dva
+        // týdny neviditelně mrtvého cpanel sběru (07/2026) se nesmí opakovat.
+        // JEN PRO PŘIHLÁŠENÉHO ADMINA - je to provozní diagnostika s detaily
+        // konfigurace (STATS_KEY, cesty k souborům), ne veřejný stav služeb.
+        $bk_collection_rows = [];
+        if (!empty($_SESSION['admin_logged_in'])) {
+            $bk_agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
+            foreach ($monitors as $bk_ci_mon) {
+                $bk_ci_details = json_decode($bk_ci_mon['last_details'] ?? '', true) ?: [];
+                foreach (bk_get_collection_issues($bk_ci_mon, $bk_ci_details, $bk_agent_offline_secs) as $bk_ci) {
+                    $bk_collection_rows[] = ['name' => $bk_ci_mon['name'], 'issue' => $bk_ci];
+                }
+            }
+        }
+        ?>
+        <?php if (!empty($bk_collection_rows)): ?>
+            <div role="alert" style="background: rgba(193, 18, 31, 0.12); border: 2px solid rgba(193, 18, 31, 0.55); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;">
+                <div style="font-weight: 700; color: var(--color-red); margin-bottom: 0.35rem;">
+                    <i class="fas fa-triangle-exclamation"></i> <?php echo htmlspecialchars(t('collection_issues_heading')); ?> (<?php echo count($bk_collection_rows); ?>)
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.6rem;"><?php echo htmlspecialchars(t('collection_issues_intro')); ?></div>
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <?php foreach ($bk_collection_rows as $bk_cr): ?>
+                        <div style="font-size: 0.8rem; background: rgba(0,0,0,0.25); border-radius: 6px; padding: 0.4rem 0.65rem;">
+                            <strong><?php echo htmlspecialchars($bk_cr['name']); ?></strong>
+                            <span style="color: var(--color-red); margin-left: 0.4rem;"><?php echo htmlspecialchars($bk_cr['issue']['message']); ?></span>
+                            <?php if (!empty($bk_cr['issue']['since'])): ?>
+                                <span style="color: var(--text-muted); font-family: monospace; font-size: 0.72rem; margin-left: 0.4rem;">(<?php echo htmlspecialchars(t('collection_issue_since')); ?> <?php echo htmlspecialchars(date('d.m.Y H:i', strtotime($bk_cr['issue']['since']))); ?>)</span>
+                            <?php endif; ?>
+                            <?php if (!empty($bk_cr['issue']['hint'])): ?>
+                                <div style="color: var(--text-muted); font-size: 0.74rem; margin-top: 0.2rem;">💡 <?php echo htmlspecialchars($bk_cr['issue']['hint']); ?></div>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <?php
+        // Recent Events - napříč celou flotilou monitorů (Level 1 Dashboard).
+        // Čte se přímo z monitor_events, ne přes plný Insights výpočet pro každý
+        // monitor - to by na hlavní stránce znamenalo N+1 dotazů navíc.
+        $stmt_fleet_events = $pdo->query("SELECT me.monitor_id, COALESCE(m.name, me.monitor_name) AS monitor_name, me.monitor_type, me.event_type, me.description, me.occurred_at FROM monitor_events me LEFT JOIN monitors m ON m.id = me.monitor_id ORDER BY me.occurred_at DESC LIMIT 8");
+        $fleet_events = $stmt_fleet_events->fetchAll();
+        ?>
+        <?php if (!empty($fleet_events)): ?>
+            <div class="fleet-events-section" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;">
+                <div class="detail-section-title" style="margin-bottom: 0.75rem;"><i class="fas fa-stream"></i> <?php echo htmlspecialchars(t('recent_events_heading')); ?></div>
+                <div style="display: flex; flex-direction: column; gap: 0.45rem;">
+                    <?php foreach ($fleet_events as $fe):
+                        $fe_label_key = 'timeline_event_' . $fe['event_type'];
+                        $fe_label = t($fe_label_key);
+                        if ($fe_label === $fe_label_key) { $fe_label = $fe['description'] ?: $fe['event_type']; }
+                    ?>
+                        <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
+                            <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo htmlspecialchars(bk_relative_time_label($fe['occurred_at'])); ?></span>
+                            <a href="monitor.php?id=<?php echo (int)$fe['monitor_id']; ?>" style="color: var(--text-primary); font-weight: 500; text-decoration: none;"><?php echo htmlspecialchars($fe['monitor_name']); ?></a>
+                            <span style="color: var(--text-secondary);"><?php echo htmlspecialchars($fe_label); ?></span>
+                            <?php if (!empty($fe['description']) && $fe_label !== $fe['description']): ?>
+                                <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($fe['description']); ?></span>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <?php
+        $maintenance_monitors = [];
+        foreach ($monitors as $m) {
+            if ($m['status'] === 'maintenance' && is_in_maintenance($m)) {
+                $maintenance_monitors[] = $m;
+            }
+        }
+        if (!empty($maintenance_monitors)):
+        ?>
+            <div class="maintenance-banner" style="background: rgba(243, 156, 18, 0.1); border: 1px solid rgba(243, 156, 18, 0.2); border-left: 4px solid #f39c12; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                <div style="font-weight: bold; color: #f39c12; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem;">
+                    <i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_banner_title')); ?>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <?php foreach ($maintenance_monitors as $mm):
+                        $desc = $mm['maintenance_description'] ?: t('maintenance_default_desc');
+                        $time_str = '';
+                        if (!empty($mm['maintenance_start']) && !empty($mm['maintenance_end'])) {
+                            $time_str = ' (' . sprintf(t('maintenance_duration_range'), date('d.m.Y H:i', strtotime($mm['maintenance_start'])), date('d.m.Y H:i', strtotime($mm['maintenance_end']))) . ')';
+                        }
+                    ?>
+                        <div style="font-size: 0.85rem; color: #e1e1e6;">
+                            <strong><?php echo htmlspecialchars($mm['name']); ?></strong>: <?php echo htmlspecialchars($desc); ?><span style="color: #a0a0b0; font-size: 0.82rem; margin-left: 0.35rem; font-weight: 500;"><?php echo $time_str; ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- Global Agent Map - přehled distribuovaných měřicích uzlů/agentů -->
+        <?php if (!empty($regions)): ?>
+            <section class="regions-section">
+                <h2 class="category-title"><i class="fas fa-satellite-dish"></i> <?php echo htmlspecialchars(t('regions_title')); ?></h2>
+                <div class="regions-grid">
+                    <?php foreach ($regions as $rg):
+                        $r_diff_min = round((time() - strtotime($rg['last_seen'])) / 60);
+                        if ($r_diff_min < 15) {
+                            $r_state = 'online'; $r_label = t('region_state_online');
+                        } elseif ($r_diff_min < 60) {
+                            $r_state = 'warn'; $r_label = t('region_state_warn');
+                        } else {
+                            $r_state = 'offline'; $r_label = t('region_state_offline');
+                        }
+                        $r_ago = $r_diff_min < 2 ? t('time_just_now') : ($r_diff_min < 60 ? sprintf(t('time_ago_min'), $r_diff_min) : sprintf(t('time_ago_hours'), round($r_diff_min / 60)));
+                    ?>
+                        <div class="region-card region-<?php echo $r_state; ?>">
+                            <div class="region-dot"></div>
+                            <div class="region-info">
+                                <div class="region-name"><?php echo htmlspecialchars($rg['checked_from']); ?></div>
+                                <div class="region-meta">
+                                    <?php echo $r_label; ?> · <?php echo $r_ago; ?>
+                                    <?php if ($rg['avg_latency'] !== null): ?>
+                                        · <?php echo (int)$rg['avg_latency']; ?>&nbsp;ms
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+        <?php endif; ?>
+
+        <!-- Sekce s kategoriemi a monitory -->
+        <?php if (empty($categories)): ?>
+            <div class="admin-card" style="text-align: center; padding: 3rem;">
+                <i class="fas fa-info-circle" style="font-size: 3rem; color: var(--text-muted); margin-bottom: 1rem;"></i>
+                <h2><?php echo htmlspecialchars(t('empty_title')); ?></h2>
+                <p><?php echo htmlspecialchars(t('empty_desc')); ?></p>
+                <a href="admin.php" class="btn" style="margin-top: 1.5rem;"><i class="fas fa-plus"></i> <?php echo htmlspecialchars(t('empty_cta')); ?></a>
+            </div>
+        <?php else: ?>
+            
+            <?php foreach ($categories as $category_name => $monitor_list): ?>
+                <section class="category-section">
+                    <h2 class="category-title">
+                        <?php
+                        // Zobrazení odpovídající ikony podle názvu kategorie
+                        $icon = 'fa-server';
+                        $low_cat = mb_strtolower($category_name);
+                        if (strpos($low_cat, 'web') !== false) $icon = 'fa-globe';
+                        elseif (strpos($low_cat, 'vps') !== false || strpos($low_cat, 'server') !== false) $icon = 'fa-hdd';
+                        elseif (strpos($low_cat, 'hra') !== false || strpos($low_cat, 'game') !== false) $icon = 'fa-gamepad';
+                        elseif (strpos($low_cat, 'komunit') !== false || strpos($low_cat, 'social') !== false) $icon = 'fa-users';
+                        ?>
+                        <i class="fas <?php echo $icon; ?>"></i> <?php echo htmlspecialchars($category_name); ?>
+                    </h2>
+                    
+                    <div class="monitors-grid">
+                        <?php
+                        // Asset seskupení (Phase 4) - $monitor_list je seřazený podle asset_name,
+                        // takže monitory patřící pod stejný (víc-monitorový) asset jsou vedle sebe.
+                        // Po migraci má každý monitor svůj vlastní 1:1 asset (asset_member_count=1),
+                        // takže tahle větev je dnes typicky no-op - vizuální wrapper se objeví jen
+                        // u assetů, které admin ručně sloučil (viz admin.php).
+                        $open_asset_group_id = null;
+                        ?>
+                        <?php foreach ($monitor_list as $monitor):
+                            $mid = $monitor['id'];
+                            $is_asset_grouped = ((int)($monitor['asset_member_count'] ?? 1)) > 1;
+                            if ($open_asset_group_id !== null && (!$is_asset_grouped || $monitor['asset_id'] != $open_asset_group_id)) {
+                                echo '</div>';
+                                $open_asset_group_id = null;
+                            }
+                            if ($is_asset_grouped && $open_asset_group_id === null) {
+                                // SLA by asset: průměrný uptime všech monitorů v assetu, které už
+                                // mají alespoň jednu kontrolu za posledních 30 dní - monitory bez dat
+                                // se do průměru nepočítají, aby ho uměle nenatahovaly na 100 %.
+                                $asset_sla_vals = [];
+                                foreach ($monitor_list as $_am) {
+                                    if ((int)$_am['asset_id'] === (int)$monitor['asset_id'] && isset($uptime_pct[$_am['id']])) {
+                                        $asset_sla_vals[] = $uptime_pct[$_am['id']];
+                                    }
+                                }
+                                $asset_sla_known = !empty($asset_sla_vals);
+                                $asset_sla = $asset_sla_known ? round(array_sum($asset_sla_vals) / count($asset_sla_vals), 2) : 0.0;
+                                $asset_sla_class = !$asset_sla_known ? 'nodata' : ($asset_sla >= 99 ? 'up' : ($asset_sla >= 95 ? 'warn' : 'down'));
+                                $asset_sla_display = $asset_sla_known ? number_format($asset_sla, 2) . '% SLA' : t('uptime_no_data');
+                                echo '<div class="asset-group" style="border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0.6rem; margin-bottom: 0.75rem;">';
+                                echo '<div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); padding: 0 0.25rem 0.5rem; display: flex; align-items: center; justify-content: space-between;"><span><i class="fas fa-layer-group"></i> ' . htmlspecialchars($monitor['asset_name'] ?: $monitor['name']) . '</span><span class="' . $asset_sla_class . '" style="font-weight:600;">' . htmlspecialchars($asset_sla_display) . '</span></div>';
+                                $open_asset_group_id = $monitor['asset_id'];
+                            }
+                            $status = $monitor['status'];
+                            if ($status === 'maintenance' && !is_in_maintenance($monitor)) {
+                                $status = 'unknown';
+                            }
+                            $m_type = $monitor['type'];
+                            // A monitor with no rows in $uptime_pct simply hasn't been
+                            // checked in the last 30 days (e.g. just added) - defaulting
+                            // that to 100.00 would fabricate a perfect SLA it never
+                            // earned. Track whether we actually have data instead.
+                            $uptime_known = isset($uptime_pct[$mid]);
+                            $uptime = $uptime_pct[$mid] ?? 0.0;
+                            $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
+                            $is_expandable = true;
+                            // Service Profiles - null = typ bez checklistu, dashboard zobrazí vše jako dřív
+                            $enabled_metrics = bk_get_enabled_metrics($monitor, $pdo);
+
+                            // Má tento konkrétní monitor aktivně hlásícího VPS-metrics agenta? Stejná
+                            // freshness logika jako souhrnný "X/Y agentů online" stat výše, jen per-monitor -
+                            // aby bylo veřejně vidět, KTERÝ monitor tu statistiku tvoří (agent_key samotný
+                            // zůstává admin-only, viz linked_agent_heading sekce níže).
+                            $has_live_agent = false;
+                            if (!empty($monitor['agent_key'])) {
+                                $agent_last_seen = $details['agent_last_seen'] ?? 0;
+                                if ($agent_last_seen && ($agent_offline_timeout_secs === 0 || (time() - (int)$agent_last_seen) < $agent_offline_timeout_secs)) {
+                                    $has_live_agent = true;
+                                }
+                            }
+
+                            // Třída pro barvu uptime textu
+                            if (!$uptime_known) {
+                                $uptime_class = 'nodata';
+                            } else {
+                                $uptime_class = 'up';
+                                if ($uptime < 95) $uptime_class = 'down';
+                                elseif ($uptime < 99) $uptime_class = 'warn';
+                            }
+                            $uptime_display = $uptime_known ? number_format($uptime, 2, ',', ' ') . '%' : t('uptime_no_data');
+                        ?>
+                            <div class="monitor-item" id="monitor-item-<?php echo $mid; ?>">
+                                <div class="monitor-card" <?php if ($is_expandable): ?>onclick="toggleDetails(<?php echo $mid; ?>)"<?php endif; ?>>
+                                    
+                                    <!-- Sloupec 1: Název a typ -->
+                                    <div class="monitor-info">
+                                        <div class="status-dot <?php echo $status; ?>"></div>
+                                        <div class="monitor-details">
+                                            <h3 style="display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;">
+                                                <?php echo monitor_type_icon($m_type, $monitor['target']); ?>
+                                                <a href="monitor.php?id=<?php echo $mid; ?>" class="monitor-name-link" title="<?php echo htmlspecialchars(t('mp_detail_page')); ?>" onclick="event.stopPropagation();"><?php echo htmlspecialchars($monitor['name']); ?></a>
+                                                <a href="monitor.php?id=<?php echo $mid; ?>" class="monitor-detail-arrow" onclick="event.stopPropagation();" title="<?php echo htmlspecialchars(t('mp_detail_page')); ?>"><i class="fas fa-arrow-up-right-from-square"></i></a>
+                                                <?php if ($status === 'maintenance'): ?>
+                                                    <span style="background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.25); color: #f39c12; font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="<?php echo htmlspecialchars(t('maintenance_badge_title')); ?>"><i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_badge')); ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($has_live_agent): ?>
+                                                    <span style="background: rgba(30, 199, 115, 0.1); border: 1px solid rgba(30, 199, 115, 0.2); color: var(--color-green); font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: bold; text-transform: uppercase;" title="<?php echo htmlspecialchars(t('agent_badge_title')); ?>"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('agent_badge')); ?></span>
+                                                <?php endif; ?>
+                                            </h3>
+                                            <span>
+                                                <?php 
+                                                if ($m_type === 'discord') {
+                                                    echo htmlspecialchars(t('type_discord_server'));
+                                                } elseif ($m_type === 'teamspeak') {
+                                                    $ts_host = $monitor['target'];
+                                                    $ts_voice_port = 9987;
+                                                    $parts = explode(':', $ts_host);
+                                                    if (count($parts) === 2) {
+                                                        $ts_host = $parts[0];
+                                                        $ts_voice_port = intval($parts[1]);
+                                                    }
+                                                    echo '<a href="ts3server://' . htmlspecialchars($ts_host) . '?port=' . htmlspecialchars($ts_voice_port) . '" class="ts-connect-link" title="' . htmlspecialchars(t('ts_connect_title')) . '"><i class="fas fa-external-link-alt" style="font-size: 0.75rem; margin-right: 0.25rem;"></i> ' . htmlspecialchars($monitor['target']) . '</a>';
+                                                } else {
+                                                    echo htmlspecialchars($monitor['target']) . ($monitor['port'] ? ':'.$monitor['port'] : ''); 
+                                                }
+                                                ?>
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Sloupec 2: Typ badge -->
+                                    <div>
+                                        <div class="monitor-type-badge"><?php echo htmlspecialchars($m_type); ?></div>
+                                        
+                                        <!-- Speciální doplňkové texty pod typem (hráči u her, zátěž u VPS) -->
+                                        <?php if ($status === 'up' && $details): ?>
+                                            <div class="game-info" style="margin-top: 0.25rem;">
+                                                <?php if ($m_type === 'minecraft'): ?>
+                                                    <span title="<?php echo htmlspecialchars(sprintf(t('minecraft_version_title'), $details['version'] ?? '')); ?>">
+                                                        <i class="fas fa-users"></i> <?php echo bk_num($details['players_online'] ?? null); ?> / <?php echo bk_num($details['players_max'] ?? null); ?>
+                                                    </span>
+                                                <?php elseif ($m_type === 'teamspeak'): ?>
+                                                    <span title="<?php echo htmlspecialchars(t('ts_clients_title') . (!empty($details['ip_version']) ? sprintf(t('measured_via_suffix'), $details['ip_version']) : '')); ?>">
+                                                        <i class="fas fa-headset"></i> <?php echo bk_num($details['clients_online'] ?? null); ?> / <?php echo bk_num($details['clients_max'] ?? null); ?>
+                                                        <?php if (!empty($details['ip_version'])): ?>
+                                                            <small style="font-size: 0.65rem; color: var(--text-muted); margin-left: 0.25rem;">(<?php echo htmlspecialchars($details['ip_version']); ?>)</small>
+                                                        <?php endif; ?>
+                                                    </span>
+                                                <?php elseif ($m_type === 'discord'): ?>
+                                                    <span>
+                                                        <i class="fab fa-discord"></i> <?php echo (int)($details['presence_count'] ?? 0); ?> <?php echo htmlspecialchars(t('discord_online_suffix')); ?>
+                                                    </span>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <!-- Sloupec 3: Historie a grafy (HetrixTools styl nebo VPS grafy) -->
+                                    <div>
+                                        <?php if (($m_type === 'vps' || $m_type === 'openwrt' || $m_type === 'cpanel') && $status === 'up' && (isset($details['cpu']) || isset($details['disk']))): ?>
+                                            <!-- Pokud jde o VPS, OpenWrt nebo cPanel, ukážeme rychlé grafy vytížení -->
+                                            <div class="metrics-charts">
+                                                <?php
+                                                // Nezměřená metrika (null/chybějící klíč) graf vůbec nevykreslí -
+                                                // dřívější "?? 0" tu kreslilo zelené 0% pruhy pro hodnoty,
+                                                // které nikdo nezměřil (např. processes bez CloudLinux).
+                                                if ($m_type === 'vps' || $m_type === 'openwrt') {
+                                                    $mini_cpu_label = t('chart_cpu');
+                                                    $mini_cpu_val = $details['cpu'] ?? null;
+                                                } else {
+                                                    $mini_cpu_label = t('chart_processes');
+                                                    $mini_cpu_val = $details['processes']['percent'] ?? null;
+                                                }
+                                                $mini_ram_val = ($m_type === 'vps' || $m_type === 'openwrt') ? ($details['ram'] ?? null) : ($details['memory']['percent'] ?? null);
+                                                $mini_hdd_val = ($m_type === 'vps' || $m_type === 'openwrt') ? ($details['hdd'] ?? null) : ($details['disk']['percent'] ?? null);
+                                                ?>
+                                                <?php if ($mini_cpu_val !== null): ?>
+                                                    <div class="mini-chart">
+                                                        <div class="chart-title"><?php echo htmlspecialchars($mini_cpu_label); ?></div>
+                                                        <div class="chart-bar-container">
+                                                            <?php $cpu_color = ($mini_cpu_val > 80) ? 'red' : (($mini_cpu_val > 50) ? 'yellow' : 'green'); ?>
+                                                            <div class="chart-bar-fill <?php echo $cpu_color; ?>" style="width: <?php echo min(100, $mini_cpu_val); ?>%"></div>
+                                                        </div>
+                                                        <div class="chart-value"><?php echo $mini_cpu_val; ?>%</div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if ($mini_ram_val !== null): ?>
+                                                <div class="mini-chart">
+                                                    <div class="chart-title"><?php echo htmlspecialchars(t('chart_ram')); ?></div>
+                                                    <div class="chart-bar-container">
+                                                        <?php $ram_color = ($mini_ram_val > 85) ? 'red' : (($mini_ram_val > 60) ? 'yellow' : 'green'); ?>
+                                                        <div class="chart-bar-fill <?php echo $ram_color; ?>" style="width: <?php echo min(100, $mini_ram_val); ?>%"></div>
+                                                    </div>
+                                                    <div class="chart-value"><?php echo $mini_ram_val; ?>%</div>
+                                                </div>
+                                                <?php endif; ?>
+
+                                                <?php if ($mini_hdd_val !== null): ?>
+                                                <div class="mini-chart">
+                                                    <div class="chart-title"><?php echo htmlspecialchars(t('chart_disk')); ?></div>
+                                                    <div class="chart-bar-container">
+                                                        <?php $hdd_color = ($mini_hdd_val > 90) ? 'red' : (($mini_hdd_val > 70) ? 'yellow' : 'green'); ?>
+                                                        <div class="chart-bar-fill <?php echo $hdd_color; ?>" style="width: <?php echo min(100, $mini_hdd_val); ?>%"></div>
+                                                    </div>
+                                                    <div class="chart-value"><?php echo $mini_hdd_val; ?>%</div>
+                                                </div>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <!-- Standardní 30denní historie sloupců -->
+                                            <div class="uptime-history">
+                                                <div class="history-bar">
+                                                    <?php foreach ($past_30_days as $day): 
+                                                         $day_status = $history_data[$mid][$day] ?? 'nodata';
+                                                         $date_formatted = date('d.m.Y', strtotime($day));
+                                                         
+                                                         if ($day_status === 'up') {
+                                                             $day_class = 'up';
+                                                             $day_text = t('history_tooltip_up');
+                                                         } elseif ($day_status === 'down') {
+                                                             $day_class = 'down';
+                                                             // Den se statusem down má vždy měřené kontroly, takže klíč existuje;
+                                                             // kdyby ne, radši bez procenta než s vymyšleným.
+                                                             $day_uptime = $history_uptime[$mid][$day] ?? null;
+                                                             $day_text = $day_uptime !== null
+                                                                 ? sprintf(t('history_tooltip_down'), number_format($day_uptime, 2, ',', ' '))
+                                                                 : t('history_tooltip_down_nopct');
+                                                         } elseif ($day_status === 'maintenance') {
+                                                             $day_class = 'maintenance';
+                                                             $day_text = t('history_tooltip_maintenance');
+                                                         } else {
+                                                             $day_class = 'nodata';
+                                                             $day_text = t('history_tooltip_nodata');
+                                                         }
+                                                         
+                                                         $tooltip = "$date_formatted: $day_text";
+                                                     ?>
+                                                         <div class="history-day <?php echo $day_class; ?>" data-tooltip="<?php echo $tooltip; ?>"></div>
+                                                     <?php endforeach; ?>
+                                                </div>
+                                                <div class="history-labels">
+                                                    <span><?php echo htmlspecialchars(t('history_30_days_ago')); ?></span>
+                                                    <span><?php echo htmlspecialchars(t('history_today')); ?></span>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <!-- Sloupec 4: Uptime, Odezva a Chevron -->
+                                    <div class="monitor-meta" style="display: flex; align-items: center; justify-content: flex-end; gap: 1rem;">
+                                        <div style="text-align: right;">
+                                            <div class="uptime-pct <?php echo $uptime_class; ?>"><?php echo $uptime_display; ?></div>
+                                            <div class="resp-time">
+                                                <?php 
+                                                if ($status === 'down') {
+                                                    echo '<span style="color: var(--color-red);">' . htmlspecialchars(t('resp_unavailable')) . '</span>';
+                                                } elseif ($status === 'maintenance') {
+                                                    echo '<span style="color: var(--color-yellow);">' . htmlspecialchars(t('resp_maintenance')) . '</span>';
+                                                } elseif ($m_type === 'vps') {
+                                                    echo '<span style="color: var(--color-green);">' . htmlspecialchars(t('resp_online')) . '</span>';
+                                                } else {
+                                                    // Zobrazíme odezvu z posledního logu
+                                                    $stmt_last_log = $pdo->prepare("SELECT response_time FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
+                                                    $stmt_last_log->execute([$mid]);
+                                                    $last_log = $stmt_last_log->fetch();
+                                                    if ($last_log && $last_log['response_time'] > 0) {
+                                                        echo $last_log['response_time'] . ' ms';
+                                                    } else {
+                                                        echo htmlspecialchars(t('na'));
+                                                    }
+                                                }
+                                                ?>
+                                            </div>
+                                        </div>
+                                        <?php if ($is_expandable): ?>
+                                            <i class="fas fa-chevron-down expand-indicator"></i>
+                                        <?php endif; ?>
+                                    </div>
+
+                                </div>
+
+                                <!-- Collapsible panel pro detaily -->
+                                <?php if ($is_expandable): ?>
+                                    <div class="monitor-details-panel" id="details-panel-<?php echo $mid; ?>">
+                                        <div class="details-content-inner">
+                                            <?php
+                                            // Načtení posledních logů pro historii a výpočet frekvence (zabraňuje duplicitním SQL dotazům)
+                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
+                                            $stmt_last_logs->execute([$mid]);
+                                            $last_logs = $stmt_last_logs->fetchAll();
+
+                                            // Knowledge layer - vysvětlení aktuálně překročených prahů (viz
+                                            // bk_get_knowledge_tips() ve functions.php). Vlastní decode check_stages,
+                                            // nezávislý na $pipeline/$ts3_check_stages níže, aby fungoval pro
+                                            // jakýkoli typ bez ohledu na to, kde se v šabloně zrovna nacházíme.
+                                            $check_stages_shared = null;
+                                            if (!empty($last_logs[0]['check_stages'])) {
+                                                $decoded_check_stages_shared = json_decode($last_logs[0]['check_stages'], true);
+                                                if (is_array($decoded_check_stages_shared)) {
+                                                    $check_stages_shared = $decoded_check_stages_shared;
+                                                }
+                                            }
+                                            $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages_shared, $status, $enabled_metrics, $pdo);
+
+                                            // Insights a health score se počítají tady nahoře jednou (ne znovu níže u
+                                            // Insights panelu / TS3 Health Score sekce), aby to mohl použít i Executive
+                                            // Summary a aby se stejné SQL dotazy neopakovaly dvakrát na jednom requestu.
+                                            $monitor_insights = array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor), bk_get_network_insights($pdo, $monitor, $details));
+                                            
+                                            // Cross-link: Automaticky propojí detaily z VPS agenta (ts3_process, discovered_services atd.)
+                                            bk_enrich_monitor_details($pdo, $monitor, $details);
+                                            
+                                            $health_areas = null;
+                                            $health_score = null;
+                                            $ts3_clients_labels = [];
+                                            $ts3_clients_data = [];
+                                            if ($m_type === 'teamspeak') {
+                                                $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details);
+                                                $health_score = bk_compute_health_score($health_areas);
+
+                                                // Přesunuto sem nahoru (dřív se počítalo až u samotné sekce grafu) -
+                                                // panel tabů níže potřebuje vědět předem, jestli je dost dat na graf,
+                                                // aby vykreslil tlačítko "Historie klientů" jen když má co ukázat.
+                                                $stmt_ts3_clients_hist = $pdo->prepare("
+                                                    SELECT checked_at, ts_clients_online
+                                                    FROM vps_metrics
+                                                    WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND ts_clients_online IS NOT NULL
+                                                    ORDER BY checked_at ASC
+                                                ");
+                                                $stmt_ts3_clients_hist->execute([$mid]);
+                                                foreach ($stmt_ts3_clients_hist->fetchAll() as $ch) {
+                                                    $ts3_clients_labels[] = date('H:i', strtotime($ch['checked_at']));
+                                                    $ts3_clients_data[] = (int)$ch['ts_clients_online'];
+                                                }
+                                            }
+                                            $monitor_timeline = bk_get_monitor_timeline($pdo, $mid);
+                                            $exec_summary_text = bk_build_executive_summary($monitor, $health_score, $knowledge_tips, $monitor_insights, $monitor_timeline, $pdo, is_array($details) ? $details : []);
+                                            ?>
+                                            <?php if ($exec_summary_text !== ''): ?>
+                                            <div class="exec-summary" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary);">
+                                                <i class="fas fa-file-lines" style="color: var(--text-muted); margin-right: 0.4rem;"></i><?php echo htmlspecialchars($exec_summary_text); ?>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php
+                                            $stmt_outages = $pdo->prepare("SELECT checked_at, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? AND status = 'down' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at DESC LIMIT 5");
+                                            $stmt_outages->execute([$mid]);
+                                            $monitor_outages = $stmt_outages->fetchAll();
+
+                                            // Distributed View - nejnovější měření z každé lokace zvlášť (posledních 24h)
+                                            $stmt_dist = $pdo->prepare("
+                                                SELECT l.checked_from, l.response_time, l.status
+                                                FROM monitor_logs l
+                                                INNER JOIN (
+                                                    SELECT checked_from, MAX(checked_at) as max_checked_at
+                                                    FROM monitor_logs
+                                                    WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND checked_from IS NOT NULL
+                                                    GROUP BY checked_from
+                                                ) latest ON latest.checked_from = l.checked_from AND latest.max_checked_at = l.checked_at
+                                                WHERE l.monitor_id = ?
+                                                ORDER BY l.response_time ASC
+                                            ");
+                                            $stmt_dist->execute([$mid, $mid]);
+                                            $distributed_view = $stmt_dist->fetchAll();
+
+                                            $freq_text = 'N/A';
+                                            if (count($last_logs) >= 2) {
+                                                $t1 = strtotime($last_logs[0]['checked_at']);
+                                                $t2 = strtotime($last_logs[1]['checked_at']);
+                                                $diff_sec = abs($t1 - $t2);
+                                                if ($diff_sec > 0) {
+                                                    $mins = round($diff_sec / 60);
+                                                    if ($mins < 1) {
+                                                        $freq_text = $diff_sec . ' s';
+                                                    } else {
+                                                        $freq_text = $mins . ' min';
+                                                    }
+                                                }
+                                            }
+                                            // Check pipeline (DNS/TCP/TLS/HTTP/body fáze) - jen u typu 'web', z posledního logu.
+                                            // Confidence Score kombinuje podíl úspěšných fází s konsensem mezi regiony
+                                            // (Distributed View výše) - nikdy nenahrazuje status-dot, jen ho doplňuje.
+                                            $pipeline = null;
+                                            $confidence_score = null;
+                                            if ($m_type === 'web' && !empty($last_logs[0]['check_stages'])) {
+                                                $decoded_pipeline = json_decode($last_logs[0]['check_stages'], true);
+                                                if (is_array($decoded_pipeline)) {
+                                                    $pipeline = $decoded_pipeline;
+                                                }
+                                            }
+                                            $pipeline_stage_order = ['dns', 'tcp', 'tls', 'http', 'body'];
+                                            $stage_labels = [
+                                                'dns' => t('pipeline_stage_dns'),
+                                                'tcp' => t('pipeline_stage_tcp'),
+                                                'tls' => t('pipeline_stage_tls'),
+                                                'http' => t('pipeline_stage_http'),
+                                                'body' => t('pipeline_stage_body'),
+                                            ];
+                                            if ($pipeline !== null) {
+                                                $stages_present = 0;
+                                                $stages_ok = 0;
+                                                foreach ($pipeline_stage_order as $sk) {
+                                                    if (isset($pipeline[$sk])) {
+                                                        $stages_present++;
+                                                        if (!empty($pipeline[$sk]['ok'])) $stages_ok++;
+                                                    }
+                                                }
+                                                $stage_health = $stages_present > 0 ? ($stages_ok / $stages_present) * 100 : null;
+
+                                                $region_consensus = null;
+                                                if (!empty($distributed_view)) {
+                                                    $region_up = 0;
+                                                    foreach ($distributed_view as $dv) {
+                                                        if ($dv['status'] === 'up') $region_up++;
+                                                    }
+                                                    $region_consensus = ($region_up / count($distributed_view)) * 100;
+                                                }
+
+                                                if ($stage_health !== null && $region_consensus !== null) {
+                                                    $confidence_score = round(($stage_health * 0.6) + ($region_consensus * 0.4), 2);
+                                                } elseif ($stage_health !== null) {
+                                                    $confidence_score = round($stage_health, 2);
+                                                } elseif ($region_consensus !== null) {
+                                                    $confidence_score = round($region_consensus, 2);
+                                                }
+                                            }
+                                            $agent_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.py";
+                                            $agent_url = str_replace('\\', '/', $agent_url); // Normalize paths for Windows/Mac
+                                            $agent_sh_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.sh";
+                                            $agent_sh_url = str_replace('\\', '/', $agent_sh_url); // Normalize paths for Windows/Mac
+                                            ?>
+
+                                            <?php
+                                            // Panel tabů (Overview/Health Score/Ports/...). Tlačítko se vykreslí jen
+                                            // tehdy, když by se za ním reálně něco zobrazilo - používá stejné podmínky
+                                            // jako samotná sekce níže, jen o kousek dřív, protože v tuhle chvíli ještě
+                                            // nevstupujeme do type-větve.
+                                            $mtabs_teamspeak = $m_type === 'teamspeak';
+                                            $mtabs_openwrt = $m_type === 'openwrt';
+                                            ?>
+                                            <div class="monitor-tabs" data-monitor="<?php echo $mid; ?>">
+                                                <button type="button" data-tab="overview" class="active"><?php echo htmlspecialchars(t('mtab_overview')); ?></button>
+                                                <?php if ($pipeline !== null): ?>
+                                                    <?php if ($enabled_metrics === null || in_array('check_pipeline', $enabled_metrics)): ?><button type="button" data-tab="check_pipeline"><?php echo htmlspecialchars(t('mtab_check_pipeline')); ?></button><?php endif; ?>
+                                                    <?php if ($enabled_metrics === null || in_array('response_breakdown', $enabled_metrics)): ?><button type="button" data-tab="response_breakdown"><?php echo htmlspecialchars(t('mtab_response_breakdown')); ?></button><?php endif; ?>
+                                                    <?php if (!empty($pipeline['tls']['cert']) && ($enabled_metrics === null || in_array('ssl_card', $enabled_metrics))): ?><button type="button" data-tab="ssl_card"><?php echo htmlspecialchars(t('mtab_ssl_card')); ?></button><?php endif; ?>
+                                                    <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?><button type="button" data-tab="headers"><?php echo htmlspecialchars(t('mtab_headers')); ?></button><?php endif; ?>
+                                                <?php endif; ?>
+                                                <?php
+                                                $has_proc_data = !empty($details['ts3_process']) || !empty($details['top_cpu_processes']) || !empty($details['top_ram_processes']) || !empty($monitor['monitored_processes']) || !empty($details['processes']);
+                                                $has_svc_data = ($check_stages_shared !== null && !empty($check_stages_shared['service'])) || !empty($details['discovered_services']);
+                                                ?>
+                                                <?php if ($has_proc_data && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?><button type="button" data-tab="process"><?php echo htmlspecialchars(t('mtab_process')); ?></button><?php endif; ?>
+                                                <?php if ($has_svc_data && ($enabled_metrics === null || in_array('service', $enabled_metrics))): ?><button type="button" data-tab="service"><?php echo htmlspecialchars(t('mtab_service')); ?></button><?php endif; ?>
+                                                <?php if ($mtabs_teamspeak): ?>
+                                                    <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?><button type="button" data-tab="health_score"><?php echo htmlspecialchars(t('mtab_health_score')); ?></button><?php endif; ?>
+                                                    <?php if ($check_stages_shared !== null && ($enabled_metrics === null || in_array('quality', $enabled_metrics))): ?><button type="button" data-tab="quality"><?php echo htmlspecialchars(t('mtab_quality')); ?></button><?php endif; ?>
+                                                    <?php if (($check_stages_shared !== null || !empty($details['ports'])) && ($enabled_metrics === null || in_array('ports', $enabled_metrics))): ?><button type="button" data-tab="ports"><?php echo htmlspecialchars(t('mtab_ports')); ?></button><?php endif; ?>
+                                                    <?php if ($check_stages_shared !== null && ($enabled_metrics === null || in_array('license_version', $enabled_metrics))): ?><button type="button" data-tab="license_version"><?php echo htmlspecialchars(t('mtab_license_version')); ?></button><?php endif; ?>
+                                                    <?php if (count($ts3_clients_data) > 1 && ($enabled_metrics === null || in_array('clients_chart', $enabled_metrics))): ?><button type="button" data-tab="clients_chart"><?php echo htmlspecialchars(t('mtab_clients_chart')); ?></button><?php endif; ?>
+                                                <?php endif; ?>
+                                                <?php if ($mtabs_openwrt): ?>
+                                                    <?php if (!empty($details['wifi_radios'])): ?><button type="button" data-tab="wifi"><?php echo htmlspecialchars(t('mtab_wifi')); ?></button><?php endif; ?>
+                                                    <?php if (!empty($details['wireguard_peers']) || !empty($details['interfaces'])): ?><button type="button" data-tab="network"><?php echo htmlspecialchars(t('mtab_network')); ?></button><?php endif; ?>
+                                                    <?php if (isset($details['conntrack_pct']) || isset($details['fw_dropped'])): ?><button type="button" data-tab="firewall"><?php echo htmlspecialchars(t('mtab_firewall')); ?></button><?php endif; ?>
+                                                    <?php if (isset($details['dhcp_leases_count']) || isset($details['dns_queries'])): ?><button type="button" data-tab="dhcp_dns"><?php echo htmlspecialchars(t('mtab_dhcp_dns')); ?></button><?php endif; ?>
+                                                <?php endif; ?>
+                                                <?php if (!empty($knowledge_tips) || !empty($monitor_insights)): ?><button type="button" data-tab="insights"><?php echo htmlspecialchars(t('mtab_insights')); ?></button><?php endif; ?>
+                                                <?php if (!empty($monitor_outages) || !empty($monitor_timeline)): ?><button type="button" data-tab="timeline"><?php echo htmlspecialchars(t('mtab_timeline')); ?></button><?php endif; ?>
+                                                <?php if ($is_asset_grouped): ?><button type="button" data-tab="asset_timeline"><?php echo htmlspecialchars(t('mtab_asset_timeline')); ?></button><?php endif; ?>
+                                            </div>
+                                            <div class="monitor-tab-panel active" data-tab="overview">
+
+                                            <?php if (!empty($monitor['maintenance_start']) && !empty($monitor['maintenance_end']) && strtotime($monitor['maintenance_end']) > time()): ?>
+                                                <div style="background: rgba(243, 156, 18, 0.1); border-left: 4px solid #f39c12; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.25rem; font-size: 0.82rem; border: 1px solid rgba(243, 156, 18, 0.15);">
+                                                    <strong style="color: #f39c12; display: flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; margin-bottom: 0.35rem;">
+                                                        <i class="fas fa-tools"></i> <?php echo htmlspecialchars(t('maintenance_heading')); ?>
+                                                    </strong>
+                                                    <div style="color: #e1e1e6; margin-bottom: 0.35rem;">
+                                                        <strong><?php echo htmlspecialchars(t('maintenance_duration')); ?></strong> <?php echo htmlspecialchars(sprintf(t('maintenance_duration_range'), date('d.m.Y H:i', strtotime($monitor['maintenance_start'])), date('d.m.Y H:i', strtotime($monitor['maintenance_end'])))); ?>
+                                                    </div>
+                                                    <?php if (!empty($monitor['maintenance_description'])): ?>
+                                                        <div style="color: var(--text-secondary); line-height: 1.4;"><?php echo htmlspecialchars($monitor['maintenance_description']); ?></div>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+
+                                            <?php if (count($distributed_view) > 1): ?>
+                                                <div class="distributed-view" style="margin-bottom: 1.25rem;">
+                                                    <div class="detail-section-title"><i class="fas fa-globe-europe"></i> Distributed View</div>
+                                                    <div class="distributed-view-chips">
+                                                        <?php foreach ($distributed_view as $dv): ?>
+                                                            <div class="dv-chip dv-<?php echo $dv['status'] === 'up' ? 'up' : 'down'; ?>">
+                                                                <span class="dv-dot"></span>
+                                                                <span class="dv-location"><?php echo htmlspecialchars($dv['checked_from']); ?></span>
+                                                                <?php if ($dv['response_time'] !== null): ?>
+                                                                    <span class="dv-latency"><?php echo (int)$dv['response_time']; ?>&nbsp;ms</span>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                            </div>
+
+                                            <?php if ($pipeline !== null): ?>
+                                                <?php if ($enabled_metrics === null || in_array('check_pipeline', $enabled_metrics)): ?>
+                                                <div class="monitor-tab-panel" data-tab="check_pipeline">
+                                                <div class="check-pipeline-section" style="margin-bottom: 1.25rem;">
+                                                    <div class="detail-section-title">
+                                                        <i class="fas fa-route"></i> <?php echo htmlspecialchars(t('pipeline_heading')); ?>
+                                                        <?php if ($confidence_score !== null): ?>
+                                                            <span style="font-weight: normal; font-size: 0.78rem; color: var(--text-muted); margin-left: 0.5rem;">
+                                                                &middot; <?php echo htmlspecialchars(t('confidence_score_label')); ?>:
+                                                                <strong style="color: <?php echo $confidence_score >= 90 ? 'var(--color-green)' : ($confidence_score >= 70 ? 'var(--color-yellow)' : 'var(--color-red)'); ?>;"><?php echo number_format($confidence_score, 2, ',', ' '); ?>%</strong>
+                                                            </span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
+                                                        <?php $pipeline_first = true; ?>
+                                                        <?php foreach ($pipeline_stage_order as $sk): ?>
+                                                            <?php if (!isset($pipeline[$sk])) continue; ?>
+                                                            <?php
+                                                                $stage_ok = !empty($pipeline[$sk]['ok']);
+                                                                $chip_title = '';
+                                                                if ($sk === 'http' && isset($pipeline[$sk]['status_code'])) {
+                                                                    $chip_title = 'HTTP ' . $pipeline[$sk]['status_code'];
+                                                                } elseif ($sk === 'tls' && isset($pipeline[$sk]['cert']['days_remaining'])) {
+                                                                    $chip_title = $pipeline[$sk]['cert']['days_remaining'] . 'd';
+                                                                }
+                                                            ?>
+                                                            <?php if (!$pipeline_first): ?><i class="fas fa-arrow-right" style="color: var(--text-muted); font-size: 0.65rem;"></i><?php endif; ?>
+                                                            <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $stage_ok ? 'rgba(30, 199, 115, 0.08)' : 'rgba(239, 35, 60, 0.08)'; ?>; border: 1px solid <?php echo $stage_ok ? 'rgba(30, 199, 115, 0.2)' : 'rgba(239, 35, 60, 0.2)'; ?>;" <?php if ($chip_title !== ''): ?>title="<?php echo htmlspecialchars($chip_title); ?>"<?php endif; ?>>
+                                                                <i class="fas <?php echo $stage_ok ? 'fa-check-circle' : 'fa-times-circle'; ?>" style="color: <?php echo $stage_ok ? 'var(--color-green)' : 'var(--color-red)'; ?>;"></i>
+                                                                <span><?php echo htmlspecialchars($stage_labels[$sk]); ?></span>
+                                                            </div>
+                                                            <?php $pipeline_first = false; ?>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                                </div>
+                                                <?php endif; ?>
+
+                                                <?php if ($enabled_metrics === null || in_array('response_breakdown', $enabled_metrics)): ?>
+                                                <div class="monitor-tab-panel" data-tab="response_breakdown">
+                                                <div class="response-breakdown-section" style="margin-bottom: 1.25rem;">
+                                                    <div class="detail-section-title"><i class="fas fa-stopwatch"></i> <?php echo htmlspecialchars(t('response_breakdown_heading')); ?></div>
+                                                    <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                        <?php foreach ($pipeline_stage_order as $sk): ?>
+                                                            <?php if (!isset($pipeline[$sk]['time_ms'])) continue; ?>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                <span style="color: var(--text-muted);"><?php echo htmlspecialchars($stage_labels[$sk]); ?>:</span>
+                                                                <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$pipeline[$sk]['time_ms']; ?>&nbsp;ms</strong>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                        <?php if (isset($pipeline['total_time_ms'])): ?>
+                                                            <div style="background: rgba(193, 18, 31, 0.06); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(193, 18, 31, 0.15);">
+                                                                <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('response_total')); ?>:</span>
+                                                                <strong style="color: #fff; margin-left: 0.25rem;"><?php echo (int)$pipeline['total_time_ms']; ?>&nbsp;ms</strong>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                                </div>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($pipeline['tls']['cert']) && ($enabled_metrics === null || in_array('ssl_card', $enabled_metrics))): $cert = $pipeline['tls']['cert']; ?>
+                                                    <div class="monitor-tab-panel" data-tab="ssl_card">
+                                                    <div class="ssl-card-section" style="margin-bottom: 1.25rem;">
+                                                        <div class="detail-section-title"><i class="fas fa-lock"></i> <?php echo htmlspecialchars(t('ssl_card_heading')); ?></div>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                            <?php if (!empty($cert['issuer'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_issuer')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($cert['issuer']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($cert['algo'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_algo')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($cert['algo']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($cert['valid_to'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_valid_until')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(date('d.m.Y', strtotime($cert['valid_to']))); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($cert['days_remaining'])): ?>
+                                                                <?php $days_color = $cert['days_remaining'] < 14 ? 'var(--color-red)' : ($cert['days_remaining'] < 30 ? 'var(--color-yellow)' : 'var(--color-green)'); ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ssl_days_remaining')); ?>:</span>
+                                                                    <strong style="color: <?php echo $days_color; ?>; margin-left: 0.25rem;"><?php echo (int)$cert['days_remaining']; ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?>
+                                                    <div class="monitor-tab-panel" data-tab="headers">
+                                                    <details class="headers-section" style="margin-bottom: 1.25rem;">
+                                                        <summary class="detail-section-title" style="cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem;"><i class="fas fa-list"></i> <?php echo htmlspecialchars(t('headers_heading')); ?></summary>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                            <?php $ph = $pipeline['http']['headers'] ?? []; ?>
+                                                            <?php if (!empty($ph['server'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_server')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ph['server']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($ph['cache_control'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_cache_control')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ph['cache_control']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($ph['content_encoding'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_content_encoding')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ph['content_encoding']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($details['http_version'])): ?>
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('header_http_version')); ?>:</span>
+                                                                    <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($details['http_version']); ?></strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </details>
+                                                    </div>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
+
+                                            <?php if ($m_type === 'minecraft'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="game-details-grid">
+                                                    <div>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('server_info_heading')); ?></div>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_version')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['version'] ?? t('unknown')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_motd')); ?></strong> <span style="color: #fff; font-style: italic; font-weight: 500;"><?php echo htmlspecialchars($details['motd'] ?? t('no_description')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo $uptime_display; ?></span></p>
+                                                        <?php 
+                                                        $mc_ll = $last_logs[0] ?? null;
+                                                        if ($mc_ll && $mc_ll['checked_from']): 
+                                                        ?>
+                                                        <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);"><i class="fas fa-map-marker-alt" style="color:var(--color-red);font-size:0.7rem;"></i> <?php echo htmlspecialchars(t('measured_from')); ?> <strong><?php echo htmlspecialchars($mc_ll['checked_from']); ?></strong></p>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if (isset($details['cpu'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
+                                                            <?php echo render_vps_agent_details($details, $monitor); ?>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
+                                                                <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
+                                                                <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+                                                                
+                                                                <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                        <?php endif; ?>
+
+                                                        <?php if (isset($details['tps_1m']) && $details['tps_1m'] !== null): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-tachometer-alt"></i> <?php echo htmlspecialchars(t('mc_tps_heading')); ?></div>
+                                                            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                                                                <?php
+                                                                $tps_items = [
+                                                                    ['label' => t('mc_tps_1m'), 'val' => $details['tps_1m']],
+                                                                    ['label' => t('mc_tps_5m'), 'val' => $details['tps_5m'] ?? null],
+                                                                    ['label' => t('mc_tps_15m'), 'val' => $details['tps_15m'] ?? null],
+                                                                ];
+                                                                foreach ($tps_items as $ti):
+                                                                    if ($ti['val'] === null) continue;
+                                                                    $val = (float)$ti['val'];
+                                                                    $tps_color = 'var(--color-green)';
+                                                                    if ($val < 15.0) {
+                                                                        $tps_color = 'var(--color-red)';
+                                                                    } elseif ($val < 19.0) {
+                                                                        $tps_color = 'var(--color-yellow)';
+                                                                    }
+                                                                ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 0.5rem 0.75rem; border-radius: 6px; flex: 1; min-width: 80px; text-align: center;">
+                                                                        <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.2rem;"><?php echo htmlspecialchars($ti['label']); ?></div>
+                                                                        <div style="font-size: 1.1rem; font-weight: 700; font-family: monospace; color: <?php echo $tps_color; ?>;"><?php echo number_format($val, 2, '.', ''); ?> <span style="font-size: 0.68rem; font-weight: normal; color: var(--text-muted);">/ 20</span></div>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+
+                                                        <?php
+                                                        // Načtení latence z geografických měřících uzlů
+                                                        try {
+                                                            $stmt_nodes = $pdo->prepare("
+                                                                SELECT checked_from, AVG(response_time) as avg_resp, COUNT(*) as cnt 
+                                                                FROM monitor_logs 
+                                                                WHERE monitor_id = ? AND checked_from IS NOT NULL AND checked_from != '' AND checked_at >= NOW() - INTERVAL 7 DAY 
+                                                                GROUP BY checked_from
+                                                            ");
+                                                            $stmt_nodes->execute([$mid]);
+                                                            $node_locs = $stmt_nodes->fetchAll();
+                                                            if (!empty($node_locs)):
+                                                        ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-globe"></i> Odezva z geografických uzlů</div>
+                                                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                                                                <?php foreach ($node_locs as $nl): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 0.4rem 0.65rem; border-radius: 6px; flex: 1; min-width: 100px; text-align: center;">
+                                                                        <div style="color: var(--text-muted); font-size: 0.68rem; font-weight: 600;"><i class="fas fa-server" style="color: var(--color-red); font-size: 0.65rem;"></i> <?php echo htmlspecialchars($nl['checked_from']); ?></div>
+                                                                        <div style="font-weight: bold; color: #fff; font-family: monospace; margin-top: 0.15rem; font-size: 0.95rem;"><?php echo round($nl['avg_resp'], 1); ?> ms</div>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php 
+                                                            endif;
+                                                        } catch (PDOException $e) {}
+                                                        ?>
+
+                                                    </div>
+                                                    <div>
+                                                        <div class="detail-section-title">
+                                                            <span><i class="fas fa-users"></i> <?php echo htmlspecialchars(t('online_players_heading')); ?></span>
+                                                            <span class="category-badge"><?php echo count($details['players_list'] ?? []); ?> <?php echo htmlspecialchars(t('discord_online_suffix')); ?></span>
+                                                        </div>
+                                                        <?php if (empty($details['players_list'])): ?>
+                                                            <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_players_online')); ?></p>
+                                                        <?php else: ?>
+                                                            <div class="players-badge-grid">
+                                                                <?php foreach ($details['players_list'] as $player): ?>
+                                                                    <span class="player-badge"><i class="fas fa-user" style="font-size: 0.7rem; color: var(--color-red);"></i> <?php echo htmlspecialchars($player); ?></span>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                                </div>
+                                            <?php elseif ($m_type === 'teamspeak'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="game-details-grid">
+                                                    <div>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('server_info_heading')); ?></div>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_ts_server_name')); ?></strong> <span style="color: #fff; font-weight: 600;"><?php echo htmlspecialchars($details['name'] ?? t('default_ts_server_name')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong>Verze serveru:</strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['version'] ?? t('unknown')); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo $uptime_display; ?></span></p>
+                                                        <?php 
+                                                        $ts_ll = $last_logs[0] ?? null;
+                                                        if ($ts_ll): 
+                                                        ?>
+                                                        <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);">
+                                                             <i class="fas fa-stopwatch" style="color:var(--color-green);font-size:0.7rem;"></i>
+                                                             <?php echo htmlspecialchars(t('ping_prefix')); ?> <?php echo (int)($ts_ll['response_time']); ?> ms
+                                                             <?php if ($ts_ll['checked_from']): ?>
+                                                                 &nbsp;<i class="fas fa-map-marker-alt" style="color:var(--color-red);font-size:0.7rem;"></i>
+                                                                 <?php echo htmlspecialchars(t('ping_from')); ?> <strong><?php echo htmlspecialchars($ts_ll['checked_from']); ?></strong>
+                                                             <?php endif; ?>
+                                                         </p>
+                                                         <p style="font-size:0.73rem;color:var(--text-muted);margin-top:0.2rem;">
+                                                             <i class="fas fa-info-circle"></i>
+                                                             <?php echo htmlspecialchars(t('ping_explanation')); ?>
+                                                             <?php if ($ts_ll['response_time'] > 500): ?>
+                                                             <?php echo htmlspecialchars(t('ping_high_warning')); ?>
+                                                             <?php endif; ?>
+                                                         </p>
+                                                         <?php endif; ?>
+                                                         
+                                                         <?php if (isset($details['cpu'])): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
+                                                             <?php echo render_vps_agent_details($details, $monitor); ?>
+                                                         <?php endif; ?>
+                                                         
+                                                         <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
+                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
+                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+                                                                 
+                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                         <?php endif; ?>
+
+                                                     </div>
+                                                     <div>
+                                                         <div class="detail-section-title"><i class="fas fa-users"></i> <?php echo htmlspecialchars(t('connected_clients_heading')); ?></div>
+                                                         <p style="font-size: 1.2rem; font-weight: bold; color: #fff; font-family: var(--font-header);">
+                                                             <?php echo bk_num($details['clients_online'] ?? null); ?> / <?php echo bk_num($details['clients_max'] ?? null); ?>
+                                                         </p>
+                                                         <p style="color: var(--text-muted); margin-top: 0.25rem;">
+                                                              <?php echo htmlspecialchars(t('ts_clients_desc')); ?>
+                                                              <?php if (!empty($details['ip_version'])): ?>
+                                                                  <br><span style="font-size: 0.72rem; color: var(--color-green);"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('measured_via')); ?> <?php echo htmlspecialchars($details['ip_version']); ?><?php echo ($is_admin && !empty($details['checked_ip'])) ? ' (' . htmlspecialchars($details['checked_ip']) . ')' : ''; ?></span>
+                                                              <?php endif; ?>
+                                                          </p>
+                                                     </div>
+                                                 </div>
+                                                 </div>
+
+                                                 <?php
+                                                 // --- TeamSpeak Health Score + hloubkový monitoring (Service Profile) ---
+                                                 // $health_areas/$health_score/$check_stages_shared už spočítané nahoře
+                                                 // (viz Executive Summary) - jen přejmenováno, ať zbytek šablony beze
+                                                 // změny funguje dál pod původními jmény.
+                                                 $ts3_check_stages = $check_stages_shared;
+                                                 $ts3_health_areas = $health_areas;
+                                                 $ts3_health = $health_score;
+                                                 $ts3_voice_quality = bk_ts3_voice_quality($pdo, $mid);
+                                                 $ts3_status_labels = [
+                                                     'ok' => t('ts3_health_status_ok'),
+                                                     'warn' => t('ts3_health_status_warn'),
+                                                     'fail' => t('ts3_health_status_fail'),
+                                                     'na' => t('ts3_health_status_na'),
+                                                 ];
+                                                 $ts3_status_colors = [
+                                                     'ok' => 'var(--color-green)',
+                                                     'warn' => 'var(--color-yellow)',
+                                                     'fail' => 'var(--color-red)',
+                                                     'na' => 'var(--text-muted)',
+                                                 ];
+                                                 $ts3_score_color = $ts3_health['score'] >= 90 ? 'var(--color-green)' : ($ts3_health['score'] >= 70 ? 'var(--color-yellow)' : 'var(--color-red)');
+                                                 ?>
+
+                                                 <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?>
+                                                 <div class="monitor-tab-panel" data-tab="health_score">
+                                                 <div class="ts3-health-score-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                     <div class="detail-section-title">
+                                                         <i class="fas fa-heartbeat"></i> <?php echo htmlspecialchars(t('ts3_health_score_heading')); ?>
+                                                         <span style="font-weight: normal; font-size: 0.9rem; margin-left: 0.5rem; color: <?php echo $ts3_score_color; ?>;"><strong><?php echo $ts3_health['score']; ?></strong> / 100</span>
+                                                     </div>
+                                                     <div style="overflow-x: auto; margin-top: 0.6rem;">
+                                                         <table class="report-table" style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">
+                                                             <thead>
+                                                                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
+                                                                     <th style="padding: 0.4rem 0.5rem; text-align: left;"><?php echo htmlspecialchars(t('ts3_health_area_column')); ?></th>
+                                                                     <th style="padding: 0.4rem 0.5rem; text-align: right;"><?php echo htmlspecialchars(t('ts3_health_weight_column')); ?></th>
+                                                                     <th style="padding: 0.4rem 0.5rem; text-align: right;"><?php echo htmlspecialchars(t('ts3_health_status_column')); ?></th>
+                                                                 </tr>
+                                                             </thead>
+                                                             <tbody>
+                                                                 <?php
+                                                                 $ts3_area_label_keys = [
+                                                                     'availability' => 'ts3_health_area_availability',
+                                                                     'process' => 'ts3_health_area_process',
+                                                                     'serverquery' => 'ts3_health_area_serverquery',
+                                                                     'ports' => 'ts3_health_area_ports',
+                                                                     'vps' => 'ts3_health_area_vps',
+                                                                     'clients' => 'ts3_health_area_clients',
+                                                                     'version' => 'ts3_health_area_version',
+                                                                 ];
+                                                                 // Napoveda k tomu, CO konkretne "warn"/"na" u dane oblasti znamena - stejne
+                                                                 // texty jako Knowledge tips, jen zpristupnene i tady jako tooltip radku.
+                                                                 $ts3_area_hint_keys = [
+                                                                     'availability' => ['fail' => 'knowledge_tip_ts3_availability'],
+                                                                     'process' => ['fail' => 'knowledge_tip_ts3_process'],
+                                                                     'serverquery' => ['fail' => 'knowledge_tip_ts3_serverquery'],
+                                                                     'ports' => ['warn' => 'knowledge_tip_ts3_ports'],
+                                                                     'vps' => ['warn' => 'knowledge_tip_ts3_vps'],
+                                                                     'clients' => ['warn' => 'knowledge_tip_ts3_clients'],
+                                                                     'version' => ['warn' => 'knowledge_tip_ts3_version', 'na' => 'ts3_health_na_version_hint'],
+                                                                 ];
+                                                                 ?>
+                                                                 <?php foreach ($ts3_health_areas as $area): ?>
+                                                                     <?php $ts3_hint_key = $ts3_area_hint_keys[$area['key']][$area['status']] ?? null; ?>
+                                                                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);" <?php if ($ts3_hint_key): ?>title="<?php echo htmlspecialchars(t($ts3_hint_key)); ?>"<?php endif; ?>>
+                                                                         <td style="padding: 0.4rem 0.5rem;"><?php echo htmlspecialchars(t($ts3_area_label_keys[$area['key']] ?? $area['label'])); ?></td>
+                                                                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: var(--text-muted);"><?php echo (int)$area['weight_pct']; ?>%</td>
+                                                                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: <?php echo $ts3_status_colors[$area['status']] ?? '#fff'; ?>;"><?php echo htmlspecialchars($ts3_status_labels[$area['status']] ?? $area['status']); ?><?php if ($ts3_hint_key): ?> <i class="fas fa-info-circle" style="font-size: 0.7rem; opacity: 0.6;"></i><?php endif; ?></td>
+                                                                     </tr>
+                                                                 <?php endforeach; ?>
+                                                             </tbody>
+                                                         </table>
+                                                     </div>
+                                                 </div>
+                                                     <?php endif; ?>
+
+                                                     <?php if ($enabled_metrics === null || in_array('quality', $enabled_metrics)): ?>
+                                                     <div class="monitor-tab-panel" data-tab="quality">
+                                                     <div class="ts3-quality-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-wave-square"></i> <?php echo htmlspecialchars(t('ts3_quality_heading')); ?></div>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_latency')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo bk_num($ts3_check_stages['query']['time_ms'] ?? null, ' ms'); ?></strong></div>
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                 <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_quality_voice')); ?>:</span>
+                                                                 <?php if ($ts3_voice_quality['band'] !== null): ?>
+                                                                     <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_voice_quality['band']); ?></strong>
+                                                                 <?php else: ?>
+                                                                     <strong style="color: var(--text-muted); margin-left: 0.25rem;"><?php echo htmlspecialchars(t('ts3_quality_insufficient_data')); ?></strong>
+                                                                 <?php endif; ?>
+                                                             </div>
+                                                         </div>
+                                                         <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('ts3_quality_estimate_note')); ?></p>
+                                                     </div>
+                                                     </div>
+                                                     <?php endif; ?>
+
+                                                     <?php if ($enabled_metrics === null || in_array('ports', $enabled_metrics)): ?>
+                                                     <div class="monitor-tab-panel" data-tab="ports">
+                                                     <div class="ts3-ports-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-plug"></i> <?php echo htmlspecialchars(t('ts3_ports_heading')); ?></div>
+                                                         <?php $ts3_ports = $ts3_check_stages['ports'] ?? []; ?>
+                                                         <?php if (!empty($ts3_ports)): ?>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
+                                                             <?php foreach (['query' => 'ts3_port_query', 'filetransfer' => 'ts3_port_filetransfer', 'voice' => 'ts3_port_voice'] as $pk => $pl): ?>
+                                                                 <?php $pinfo = $ts3_ports[$pk] ?? null; if ($pinfo === null) continue; $pok = $pinfo['ok']; $pport = $pinfo['port'] ?? null; ?>
+                                                                 <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $pok === true ? 'rgba(30, 199, 115, 0.08)' : ($pok === false ? 'rgba(239, 35, 60, 0.08)' : 'rgba(255,255,255,0.03)'); ?>; border: 1px solid <?php echo $pok === true ? 'rgba(30, 199, 115, 0.2)' : ($pok === false ? 'rgba(239, 35, 60, 0.2)' : 'rgba(255,255,255,0.08)'); ?>;" <?php if ($pport): ?>title="Port: <?php echo (int)$pport; ?><?php echo $pok === false ? ' - ' . htmlspecialchars(t('knowledge_tip_ts3_ports')) : ''; ?>"<?php endif; ?>>
+                                                                     <i class="fas <?php echo $pok === true ? 'fa-check-circle' : ($pok === false ? 'fa-times-circle' : 'fa-question-circle'); ?>" style="color: <?php echo $pok === true ? 'var(--color-green)' : ($pok === false ? 'var(--color-red)' : 'var(--text-muted)'); ?>;"></i>
+                                                                     <span><?php echo htmlspecialchars(t($pl)); ?></span>
+                                                                 </div>
+                                                             <?php endforeach; ?>
+                                                         </div>
+                                                         <?php elseif (!empty($details['ports'])): ?>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem;">
+                                                             <?php
+                                                             $agent_ports = $details['ports'];
+                                                             $ts3_known_ports = [9987 => 'Voice', 10011 => 'ServerQuery', 30033 => 'FileTransfer'];
+                                                             foreach ($ts3_known_ports as $kp => $kl):
+                                                                 $kp_ok = in_array($kp, $agent_ports);
+                                                             ?>
+                                                                 <div style="display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.78rem; background: <?php echo $kp_ok ? 'rgba(30, 199, 115, 0.08)' : 'rgba(255,255,255,0.03)'; ?>; border: 1px solid <?php echo $kp_ok ? 'rgba(30, 199, 115, 0.2)' : 'rgba(255,255,255,0.08)'; ?>;" title="Port: <?php echo $kp; ?>">
+                                                                     <i class="fas <?php echo $kp_ok ? 'fa-check-circle' : 'fa-question-circle'; ?>" style="color: <?php echo $kp_ok ? 'var(--color-green)' : 'var(--text-muted)'; ?>;"></i>
+                                                                     <span><?php echo htmlspecialchars($kl); ?> (<?php echo $kp; ?>)</span>
+                                                                 </div>
+                                                             <?php endforeach; ?>
+                                                         </div>
+                                                         <?php else: ?>
+                                                             <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin-top: 0.6rem;"><?php echo htmlspecialchars(t('ts3_ports_no_data')); ?></p>
+                                                         <?php endif; ?>
+                                                     </div>
+                                                     </div>
+                                                     <?php endif; ?>
+
+                                                     <?php if ($ts3_check_stages !== null && ($enabled_metrics === null || in_array('license_version', $enabled_metrics))): ?>
+                                                     <div class="monitor-tab-panel" data-tab="license_version">
+                                                     <div class="ts3-license-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                         <div class="detail-section-title"><i class="fas fa-id-badge"></i> <?php echo htmlspecialchars(t('ts3_license_heading')); ?></div>
+                                                         <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; font-size: 0.78rem;">
+                                                             <?php if (!empty($ts3_check_stages['license'])): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_license_label')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_check_stages['license']); ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php
+                                                             $ts3_current_version = $ts3_check_stages['version'] ?? '';
+                                                             $ts3_latest_version = trim((string)get_setting('ts3_latest_version', ''));
+                                                             ?>
+                                                             <?php if ($ts3_current_version !== ''): ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_version_current')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_current_version); ?></strong></div>
+                                                             <?php endif; ?>
+                                                             <?php if ($ts3_latest_version !== '' && $ts3_current_version !== ''): ?>
+                                                                 <?php $ts3_up_to_date = version_compare($ts3_current_version, $ts3_latest_version, '>='); ?>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                     <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ts3_version_latest')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars($ts3_latest_version); ?></strong>
+                                                                     <?php if (!$ts3_up_to_date): ?>
+                                                                         <span style="color: var(--color-yellow); margin-left: 0.4rem;"><i class="fas fa-arrow-up"></i> <?php echo htmlspecialchars(t('ts3_version_update_available')); ?></span>
+                                                                     <?php else: ?>
+                                                                         <span style="color: var(--color-green); margin-left: 0.4rem;"><i class="fas fa-check"></i> <?php echo htmlspecialchars(t('ts3_version_up_to_date')); ?></span>
+                                                                     <?php endif; ?>
+                                                                 </div>
+                                                             <?php endif; ?>
+                                                         </div>
+                                                     </div>
+                                                     </div>
+                                                     <?php endif; ?>
+
+                                                     <?php
+                                                     // $ts3_clients_labels/$ts3_clients_data už spočítané nahoře (viz sdílené
+                                                     // nastavení na začátku panelu) - potřeboval to i panel s tlačítky tabů.
+                                                     ?>
+                                                     <?php if (count($ts3_clients_data) > 1 && ($enabled_metrics === null || in_array('clients_chart', $enabled_metrics))): ?>
+                                                         <div class="monitor-tab-panel" data-tab="clients_chart">
+                                                         <div class="ts3-clients-chart-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                             <div class="detail-section-title"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('ts3_clients_chart_heading')); ?></div>
+                                                            <div style="position: relative; height: 180px; width: 100%; margin-top: 0.6rem;">
+                                                                <div id="ts3ClientsChart-<?php echo $mid; ?>" style="position: absolute; inset: 0;"></div>
+                                                            </div>
+                                                        </div>
+                                                        </div>
+                                                        <script>
+                                                        document.addEventListener("DOMContentLoaded", function() {
+                                                            const el = document.getElementById('ts3ClientsChart-<?php echo $mid; ?>');
+                                                            if (!el) return;
+                                                            window.bkTs3ClientsCharts = window.bkTs3ClientsCharts || {};
+                                                            const chart = echarts.init(el, (localStorage.getItem('theme') === 'light') ? null : 'dark');
+                                                            chart.setOption({
+                                                                backgroundColor: 'transparent',
+                                                                grid: { left: 34, right: 10, top: 8, bottom: 22 },
+                                                                tooltip: { trigger: 'axis' },
+                                                                xAxis: {
+                                                                    type: 'category',
+                                                                    data: <?php echo json_encode($ts3_clients_labels); ?>,
+                                                                    axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                                    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+                                                                    splitLine: { show: false }
+                                                                },
+                                                                yAxis: {
+                                                                    type: 'value',
+                                                                    min: 0,
+                                                                    axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                                    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.03)' } }
+                                                                },
+                                                                series: [{
+                                                                    type: 'line',
+                                                                    data: <?php echo json_encode($ts3_clients_data); ?>,
+                                                                    showSymbol: false,
+                                                                    smooth: 0.3,
+                                                                    lineStyle: { color: '#1ec773', width: 2 },
+                                                                    areaStyle: { color: '#1ec773', opacity: 0.08 }
+                                                                }]
+                                                            });
+                                                            window.bkTs3ClientsCharts[<?php echo $mid; ?>] = chart;
+                                                        });
+                                                        </script>
+                                                     <?php endif; ?>
+                                            <?php elseif ($m_type === 'discord'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="game-details-grid">
+                                                    <div>
+                                                        <div class="detail-section-title"><i class="fas fa-volume-up"></i> <?php echo htmlspecialchars(t('voice_channels_heading')); ?></div>
+                                                        <?php if (empty($details['voice_channels'])): ?>
+                                                            <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_voice_activity')); ?></p>
+                                                        <?php else: ?>
+                                                            <?php foreach ($details['voice_channels'] as $chan): ?>
+                                                                <div class="voice-channel-item">
+                                                                    <div class="voice-channel-name"><?php echo htmlspecialchars($chan['name']); ?></div>
+                                                                    <div class="voice-channel-users">
+                                                                        <?php foreach ($chan['users'] as $user): ?>
+                                                                            <span class="player-badge" style="background: rgba(30,199,115,0.1); border-color: rgba(30,199,115,0.15);"><i class="fas fa-microphone" style="font-size: 0.7rem; color: var(--color-green);"></i> <?php echo htmlspecialchars($user); ?></span>
+                                                                        <?php endforeach; ?>
+                                                                    </div>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
+                                                                <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
+                                                                <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+                                                                
+                                                                <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                        <?php endif; ?>
+
+                                                    </div>
+                                                    <div>
+                                                        <div class="detail-section-title">
+                                                            <span><i class="fab fa-discord"></i> <?php echo htmlspecialchars(t('online_users_heading')); ?></span>
+                                                            <?php if (!empty($details['instant_invite'])): ?>
+                                                                <a href="<?php echo htmlspecialchars($details['instant_invite']); ?>" target="_blank" class="category-badge" style="color: var(--color-green); border-color: rgba(30,199,115,0.3); background: rgba(30,199,115,0.05); font-size: 0.7rem;"><i class="fas fa-external-link-alt"></i> <?php echo htmlspecialchars(t('join_invite')); ?></a>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <?php if (empty($details['members'])): ?>
+                                                            <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_members_online')); ?></p>
+                                                        <?php else: ?>
+                                                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; max-height: 180px; overflow-y: auto; padding-right: 0.5rem;">
+                                                                <?php foreach ($details['members'] as $m): 
+                                                                    $status_class = $m['status'] ?? 'online';
+                                                                    $game_text = !empty($m['game']) ? sprintf(t('playing_suffix'), htmlspecialchars($m['game'])) : '';
+                                                                ?>
+                                                                    <div class="discord-member-item">
+                                                                        <span class="discord-member-status <?php echo htmlspecialchars($status_class); ?>"></span>
+                                                                        <span style="color: #fff; font-weight: 500; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="<?php echo htmlspecialchars($m['username']) . $game_text; ?>">
+                                                                            <?php echo htmlspecialchars($m['username']); ?>
+                                                                            <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: normal;"><?php echo $game_text; ?></span>
+                                                                        </span>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                                </div>
+                                            <?php elseif ($m_type === 'cpanel' || ($m_type === 'web' && isset($details['cpanel_stats']))): ?>
+                                                 <div class="monitor-tab-panel active" data-tab="overview">
+                                                 <?php
+                                                 $cp_details = ($m_type === 'web') ? ($details['cpanel_stats'] ?? null) : $details;
+                                                 ?>
+                                                 <div class="game-details-grid" style="grid-template-columns: 1fr 1fr;">
+                                                     <div>
+                                                         <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('hosting_info_heading')); ?></div>
+                                                          <?php 
+                                                          $parsed_url = parse_url($monitor['target']);
+                                                          $display_target = ($parsed_url['host'] ?? $monitor['target']);
+                                                          ?>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_target')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo htmlspecialchars($display_target); ?></span></p>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                         <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo $uptime_display; ?></span></p>
+                                                         
+                                                         <?php if ($m_type === 'web' && $status === 'up' && $details): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('web_network_params_heading')); ?></div>
+                                                             <div class="network-params-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.8rem;">
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                     <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_protocol_version')); ?></div>
+                                                                     <strong style="color: #fff;"><?php echo htmlspecialchars(($details['scheme'] ?? 'HTTP') . '/' . ($details['http_version'] ?? '1.1')); ?></strong>
+                                                                 </div>
+                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                     <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_website_ip')); ?></div>
+                                                                     <strong style="color: #fff;"><?php echo htmlspecialchars($details['primary_ip'] ?? 'N/A'); ?></strong>
+                                                                 </div>
+                                                             </div>
+                                                         <?php endif; ?>
+
+                                                         <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
+                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
+                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+
+                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                         <?php endif; ?>
+
+                                                     </div>
+                                                     <div>
+                                                         <div class="detail-section-title"><i class="fas fa-chart-pie"></i> <?php echo htmlspecialchars(t('hosting_limits_heading')); ?></div>
+                                                         <?php if ($status === 'up' && $cp_details): ?>
+                                                             <div style="display: flex; flex-direction: column; gap: 0.85rem; margin-top: 0.5rem;">
+                                                                 <?php 
+                                                                 $resources = [
+                                                                     t('resource_cpu') => $cp_details['cpu'] ?? null,
+                                                                     t('resource_memory') => $cp_details['memory'] ?? null,
+                                                                     t('resource_disk') => $cp_details['disk'] ?? null,
+                                                                     t('resource_processes') => $cp_details['processes'] ?? null,
+                                                                     t('resource_bandwidth') => $cp_details['bandwidth'] ?? null,
+                                                                     t('resource_mysql') => $cp_details['database'] ?? null,
+                                                                     t('resource_postgresql') => $cp_details['postgresql'] ?? null,
+                                                                 ];
+                                                                 foreach ($resources as $res_label => $res_data): 
+                                                                     if (!$res_data) continue;
+                                                                     $val = $res_data['percent'] ?? 0;
+                                                                     $color = ($val > 85) ? 'red' : (($val > 60) ? 'yellow' : 'green');
+                                                                 ?>
+                                                                     <div>
+                                                                         <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.25rem;">
+                                                                             <span style="color: var(--text-secondary);"><?php echo htmlspecialchars($res_label); ?></span>
+                                                                             <strong style="color: #fff;" class="stat-val"><?php echo htmlspecialchars($res_data['formatted'] ?? ($val . '%')); ?> (<?php echo $val; ?>%)</strong>
+                                                                         </div>
+                                                                         <div class="chart-bar-container" style="height: 6px;">
+                                                                             <div class="chart-bar-fill <?php echo $color; ?>" style="width: <?php echo $val; ?>%"></div>
+                                                                         </div>
+                                                                     </div>
+                                                                 <?php endforeach; ?>
+                                                             </div>
+                                                         <?php else: ?>
+                                                             <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('hosting_unavailable_during_outage')); ?></p>
+                                                         <?php endif; ?>
+                                                         
+                                                         <?php if (!empty($last_logs)): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-history"></i> <?php echo htmlspecialchars(t('last_5_measurements_heading')); ?></div>
+                                                             <div class="mini-logs-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                                                 <?php foreach ($last_logs as $ll): 
+                                                                     $ll_status = $ll['status'];
+                                                                     $ll_time = date('H:i:s (d.m.)', strtotime($ll['checked_at']));
+                                                                     $ll_badge_class = ($ll_status === 'up') ? 'log-status up' : 'log-status down';
+                                                                     $ll_badge_text = ($ll_status === 'up') ? t('resp_online') : t('stat_down');
+                                                                 ?>
+                                                                     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.25rem;">
+                                                                         <div style="display: flex; flex-direction: column;">
+                                                                             <span style="color: var(--text-secondary); font-size: 0.8rem;"><?php echo $ll_time; ?></span>
+                                                                             <?php if (!empty($ll['checked_from'])): ?>
+                                                                                 <span style="font-size: 0.65rem; color: var(--text-muted);"><i class="fas fa-map-marker-alt" style="font-size: 0.6rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($ll['checked_from']); ?></span>
+                                                                             <?php endif; ?>
+                                                                         </div>
+                                                                         <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                                                             <span class="<?php echo $ll_badge_class; ?>" style="font-size: 0.7rem; padding: 0.15rem 0.35rem; border-radius: 4px;"><?php echo $ll_badge_text; ?></span>
+                                                                             <span style="color: #fff; font-size: 0.8rem; font-weight: 500; min-width: 50px; text-align: right;">
+                                                                                 <?php echo ($ll_status === 'up' && $ll['response_time'] > 0) ? $ll['response_time'] . ' ms' : 'N/A'; ?>
+                                                                             </span>
+                                                                         </div>
+                                                                     </div>
+                                                                 <?php endforeach; ?>
+                                                             </div>
+                                                         <?php endif; ?>
+                                                     </div>
+                                                 </div>
+                                                 </div>
+                                            <?php elseif ($m_type === 'vps'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="game-details-grid">
+                                                    <div>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('agent_info_heading')); ?></div>
+                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_update')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                    </div>
+                                                    <div>
+                                                        <?php if (isset($details['cpu'])): ?>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
+                                                            <?php echo render_vps_agent_details($details, $monitor); ?>
+                                                        <?php else: ?>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_agent_heading')); ?></div>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
+                                                                <?php echo htmlspecialchars(t('vps_waiting_for_data')); ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($is_admin): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
+                                                            <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+                                                            
+                                                            <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                                </div>
+                                            <?php elseif ($m_type === 'openwrt'): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="game-details-grid">
+                                                    <div>
+                                                        <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('agent_info_heading')); ?></div>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                        <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_update')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                        <p><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+
+                                                        <?php if (!empty($details['model']) || !empty($details['board_name'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-microchip"></i> <?php echo htmlspecialchars(t('openwrt_router_heading')); ?></div>
+                                                            <?php if (!empty($details['model'])): ?>
+                                                                <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('openwrt_model')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['model']); ?></span></p>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($details['board_name'])): ?>
+                                                                <p><strong><?php echo htmlspecialchars(t('openwrt_board')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($details['board_name']); ?></span></p>
+                                                            <?php endif; ?>
+                                                        <?php endif; ?>
+
+                                                        <?php if (isset($details['wan_up'])): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-globe-europe"></i> <?php echo htmlspecialchars(t('openwrt_wan_heading')); ?></div>
+                                                            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.78rem;">
+                                                                <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                    <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_status')); ?>:</span>
+                                                                    <strong style="color: <?php echo $details['wan_up'] ? 'var(--color-green)' : 'var(--color-red)'; ?>; margin-left: 0.25rem;"><?php echo $details['wan_up'] ? htmlspecialchars(t('openwrt_wan_up')) : htmlspecialchars(t('openwrt_wan_down')); ?></strong>
+                                                                </div>
+                                                                <?php if (!empty($details['wan_proto'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_proto')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(strtoupper($details['wan_proto'])); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php // IP adresy/brána/DNS jsou identifikující údaje o síti uživatele -
+                                                                // zobrazují se jen přihlášenému adminovi, ne veřejně. ?>
+                                                                <?php if ($is_admin && !empty($details['wan_ipv4'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);" title="<?php echo htmlspecialchars(t('openwrt_wan_ipv4_hint')); ?>"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv4')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv4']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if ($is_admin && !empty($details['wan_ipv6'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv6')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv6']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if ($is_admin && !empty($details['wan_gateway'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_gateway')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_gateway']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if ($is_admin && !empty($details['wan_dns'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_dns')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_dns']); ?></strong></div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($details['wan_uptime'])): ?>
+                                                                    <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_uptime')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(format_uptime_cz((int)$details['wan_uptime'])); ?></strong></div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div>
+                                                        <?php if (isset($details['cpu'])): ?>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
+                                                            <?php echo render_vps_agent_details($details, $monitor); ?>
+                                                        <?php else: ?>
+                                                            <div class="detail-section-title"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_agent_heading')); ?></div>
+                                                            <div style="background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
+                                                                <?php echo htmlspecialchars(t('vps_waiting_for_data')); ?>
+                                                            </div>
+                                                        <?php endif; ?>
+
+                                                        <?php if ($is_admin): ?>
+                                                            <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-key"></i> <?php echo htmlspecialchars(t('agent_unique_key_heading')); ?></div>
+                                                            <code style="background: rgba(0,0,0,0.5); padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+
+                                                            <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                                </div>
+                                            <?php else: ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="game-details-grid">
+                                                     <div>
+                                                          <div class="detail-section-title"><i class="fas fa-info-circle"></i> <?php echo htmlspecialchars(t('monitor_stats_heading')); ?></div>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_target')); ?></strong> <span style="color: #fff;"><?php echo htmlspecialchars($monitor['target']) . ($monitor['type'] !== 'teamspeak' && $monitor['port'] ? ':'.$monitor['port'] : ''); ?></span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_check_frequency')); ?></strong> <span style="color: #fff;" class="stat-val"><?php echo $freq_text; ?></span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_check')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never'); ?></span></p>
+                                                          <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span style="color: #fff;"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
+                                                          <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight: bold;"><?php echo $uptime_display; ?></span></p>
+                                                          
+                                                          <?php 
+                                                          if ($monitor['type'] === 'web'): 
+                                                              $web_det = json_decode($monitor['last_details'] ?? '', true);
+                                                              if (!empty($web_det)):
+                                                          ?>
+                                                              <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('web_network_params_heading')); ?></div>
+                                                              <div class="network-params-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.8rem;">
+                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_protocol')); ?></div>
+                                                                      <strong style="color: var(--color-green);"><?php echo htmlspecialchars($web_det['scheme'] ?? 'HTTP'); ?> (<?php echo htmlspecialchars($web_det['http_version'] ?? 'HTTP/1.1'); ?>)</strong>
+                                                                  </div>
+                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_primary_ip')); ?></div>
+                                                                      <strong style="color: #fff; font-size: 0.7rem; word-break: break-all;"><?php echo htmlspecialchars($web_det['primary_ip'] ?? 'N/A'); ?></strong>
+                                                                  </div>
+                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_ipv4')); ?></div>
+                                                                      <strong style="color: <?php echo (!empty($web_det['has_ipv4']) ? 'var(--color-green)' : 'var(--text-muted)'); ?>;">
+                                                                          <?php echo (!empty($web_det['has_ipv4']) ? '<i class="fas fa-check-circle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('yes')) : '<i class="fas fa-times-circle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('no'))); ?>
+                                                                      </strong>
+                                                                  </div>
+                                                                  <div style="background: rgba(255,255,255,0.03); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                                                                      <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('field_ipv6')); ?></div>
+                                                                      <strong style="color: <?php echo (!empty($web_det['has_ipv6']) ? 'var(--color-green)' : 'var(--color-yellow)'); ?>;">
+                                                                          <?php echo (!empty($web_det['has_ipv6']) ? '<i class="fas fa-check-circle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('yes')) : '<i class="fas fa-exclamation-triangle" style="font-size: 0.75rem;"></i> ' . htmlspecialchars(t('missing'))); ?>
+                                                                      </strong>
+                                                                  </div>
+                                                              </div>
+                                                          <?php 
+                                                              endif;
+                                                          endif; 
+                                                          ?>
+                                                          
+                                                          <?php if (isset($details['cpu'])): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-server"></i> <?php echo htmlspecialchars(t('vps_load_heading')); ?></div>
+                                                             <?php echo render_vps_agent_details($details, $monitor); ?>
+                                                         <?php endif; ?>
+                                                          
+                                                          <?php if ($is_admin && !empty($monitor['agent_key'])): ?>
+                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('linked_agent_heading')); ?></div>
+                                                             <div style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem;">
+                                                                 <div style="color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.25rem;"><?php echo htmlspecialchars(t('agent_key_label')); ?></div>
+                                                                 <code style="background: rgba(0,0,0,0.5); padding: 0.2rem 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--color-green); font-size: 0.75rem; display: block; word-break: break-all; font-family: monospace; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($monitor['agent_key']); ?></code>
+                                                                 
+                                                                 <a href="admin.php?show_agent=<?php echo $mid; ?>" class="btn-install-agent" style="background: rgba(30,199,115,0.1); border: 1px solid rgba(30,199,115,0.2); color: var(--color-green); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.75rem; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%; box-sizing: border-box;"><i class="fas fa-terminal"></i> <?php echo htmlspecialchars(t('agent_install_guide')); ?></a></div>
+                                                         <?php endif; ?>
+
+                                                     </div>
+                                                     <div>
+                                                         <div class="detail-section-title"><i class="fas fa-history"></i> <?php echo htmlspecialchars(t('last_5_measurements_heading')); ?></div>
+                                                         <?php if (empty($last_logs)): ?>
+                                                             <p style="color: var(--text-muted); font-style: italic;"><?php echo htmlspecialchars(t('no_measurements_yet')); ?></p>
+                                                         <?php else: ?>
+                                                             <div class="mini-logs-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                                                 <?php foreach ($last_logs as $ll): 
+                                                                     $ll_status = $ll['status'];
+                                                                     $ll_time = date('H:i:s (d.m.)', strtotime($ll['checked_at']));
+                                                                     $ll_badge_class = ($ll_status === 'up') ? 'log-status up' : 'log-status down';
+                                                                     $ll_badge_text = ($ll_status === 'up') ? t('resp_online') : t('stat_down');
+                                                                 ?>
+                                                                     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.25rem;">
+                                                                         <div style="display: flex; flex-direction: column;">
+                                                                             <span style="color: var(--text-secondary); font-size: 0.8rem;"><?php echo $ll_time; ?></span>
+                                                                             <?php if (!empty($ll['checked_from'])): ?>
+                                                                                 <span style="font-size: 0.65rem; color: var(--text-muted);"><i class="fas fa-map-marker-alt" style="font-size: 0.6rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($ll['checked_from']); ?></span>
+                                                                             <?php endif; ?>
+                                                                         </div>
+                                                                         <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                                                             <span class="<?php echo $ll_badge_class; ?>" style="font-size: 0.7rem; padding: 0.15rem 0.35rem; border-radius: 4px;"><?php echo $ll_badge_text; ?></span>
+                                                                             <span style="color: #fff; font-size: 0.8rem; font-weight: 500; min-width: 50px; text-align: right;">
+                                                                                 <?php echo ($ll_status === 'up' && $ll['response_time'] > 0) ? $ll['response_time'] . ' ms' : 'N/A'; ?>
+                                                                             </span>
+                                                                         </div>
+                                                                     </div>
+                                                                     <?php if ($ll_status === 'down' && $ll['error_message']): ?>
+                                                                         <div style="color: var(--color-red); font-size: 0.75rem; margin-top: -0.2rem; margin-bottom: 0.2rem; padding-left: 0.5rem; border-left: 2px solid var(--color-red); font-style: italic;">
+                                                                             <?php echo htmlspecialchars($ll['error_message']); ?>
+                                                                         </div>
+                                                                     <?php endif; ?>
+                                                                 <?php endforeach; ?>
+                                                             </div>
+                                                         <?php endif; ?>
+                                                     </div>
+                                                 </div>
+                                                 </div>
+                                            <?php endif; ?>
+
+                                            <?php // Process tab panel ?>
+                                            <?php if ($has_proc_data && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?>
+                                            <div class="monitor-tab-panel" data-tab="process">
+                                                <?php if (!empty($details['ts3_process'])): ?>
+                                                    <?php $p = $details['ts3_process']; ?>
+                                                    <div class="detail-section-title"><i class="fas fa-headset"></i> TeamSpeak 3 Proces</div>
+                                                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem;">
+                                                        <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-green); text-transform: uppercase; margin-bottom: 0.4rem;"><i class="fas fa-check-circle"></i> Proces ts3server běží</div>
+                                                        <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.25rem;">
+                                                            <span><strong>PID:</strong> <?php echo (int)($p['pid'] ?? 0); ?></span>
+                                                            <span><strong>CPU:</strong> <?php echo bk_num($p['cpu'] ?? null, ' %', 1); ?></span>
+                                                            <span><strong>RAM:</strong> <?php echo bk_num($p['ram_mb'] ?? null, ' MB', 1); ?></span>
+                                                            <span><strong>Vlákna:</strong> <?php echo bk_num($p['threads'] ?? null); ?></span>
+                                                            <?php if (isset($p['open_fds'])): ?><span><strong>Otevřené FD:</strong> <?php echo (int)$p['open_fds']; ?></span><?php endif; ?>
+                                                            <?php if (isset($p['uptime_sec'])): ?><span><strong>Uptime procesu:</strong> <?php echo round($p['uptime_sec'] / 3600, 1); ?> h</span><?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes'])): ?>
+                                                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                                                        <?php if (!empty($details['top_cpu_processes'])): ?>
+                                                        <div>
+                                                            <div class="detail-section-title"><i class="fas fa-microchip"></i> TOP CPU Procesy</div>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem;">
+                                                                <?php foreach ($details['top_cpu_processes'] as $tp): ?>
+                                                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                                                        <span style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                                                        <span style="color: var(--color-green); font-weight: bold; font-family: monospace;"><?php echo bk_num($tp['cpu'] ?? null, ' %', 1); ?></span>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </div>
+                                                        <?php endif; ?>
+
+                                                        <?php if (!empty($details['top_ram_processes'])): ?>
+                                                        <div>
+                                                            <div class="detail-section-title"><i class="fas fa-memory"></i> TOP RAM Procesy</div>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem;">
+                                                                <?php foreach ($details['top_ram_processes'] as $tp): ?>
+                                                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                                                        <span style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;"><?php echo htmlspecialchars($tp['name'] ?? '?'); ?></span>
+                                                                        <span style="color: #60a5fa; font-weight: bold; font-family: monospace;"><?php echo bk_num($tp['ram_mb'] ?? null, ' MB', 1); ?></span>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php endif; ?>
+
+                                            <?php // Service tab panel ?>
+                                            <?php if ($has_svc_data && ($enabled_metrics === null || in_array('service', $enabled_metrics))): ?>
+                                            <div class="monitor-tab-panel" data-tab="service">
+                                                <?php if (!empty($details['discovered_services'])): ?>
+                                                    <div class="detail-section-title"><i class="fas fa-cubes"></i> Detekované Služby (Service Discovery)</div>
+                                                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.65rem;">
+                                                        <?php foreach ($details['discovered_services'] as $svc):
+                                                            $conf = (int)($svc['confidence'] ?? 0);
+                                                            $sc = $conf >= 70 ? 'var(--color-green)' : ($conf >= 40 ? 'var(--color-yellow)' : 'var(--text-secondary)');
+                                                            $svc_desc = $svc['description'] ?? '';
+                                                        ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                                                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                                                <span><i class="fas fa-cube" style="color: <?php echo $sc; ?>;"></i> <strong style="color: var(--text-primary);"><?php echo htmlspecialchars($svc['name'] ?? '?'); ?></strong></span>
+                                                                <span style="color: <?php echo $sc; ?>; font-weight: bold; font-size: 0.7rem; background: rgba(255,255,255,0.04); padding: 0.1rem 0.4rem; border-radius: 4px;"><?php echo $conf; ?>%</span>
+                                                            </div>
+                                                            <?php if (!empty($svc['port'])): ?><div style="font-family: monospace; color: var(--text-muted); font-size: 0.7rem;">Port: :<?php echo (int)$svc['port']; ?></div><?php endif; ?>
+                                                            <?php if ($svc_desc): ?>
+                                                                <div style="font-size: 0.72rem; color: var(--text-secondary); line-height: 1.35; margin-top: 0.1rem;"><?php echo htmlspecialchars($svc_desc); ?></div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php endif; ?>
+
+                                            <?php // OpenWrt WiFi tab ?>
+                                            <?php if ($mtabs_openwrt && !empty($details['wifi_radios'])): ?>
+                                            <div class="monitor-tab-panel" data-tab="wifi">
+                                                <div class="detail-section-title"><i class="fas fa-wifi"></i> <?php echo htmlspecialchars(t('ow_wifi_heading')); ?></div>
+                                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem;">
+                                                    <?php foreach ($details['wifi_radios'] as $radio): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
+                                                            <div style="font-weight: 600; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem;">
+                                                                <i class="fas fa-broadcast-tower" style="color: var(--color-green);"></i>
+                                                                <?php echo htmlspecialchars($radio['ssid'] ?? $radio['radio']); ?>
+                                                            </div>
+                                                            <div style="font-size: 0.78rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.25rem;">
+                                                                <span><strong><?php echo htmlspecialchars(t('ow_radio')); ?>:</strong> <?php echo htmlspecialchars($radio['radio']); ?></span>
+                                                                <span><strong><?php echo htmlspecialchars(t('ow_band')); ?>:</strong> <?php echo htmlspecialchars($radio['band'] ?? '—'); ?></span>
+                                                                <span><strong><?php echo htmlspecialchars(t('ow_channel')); ?>:</strong> <?php echo htmlspecialchars($radio['channel'] ?? '—'); ?></span>
+                                                                <span><strong><?php echo htmlspecialchars(t('ow_clients')); ?>:</strong> <?php echo bk_num($radio['clients'] ?? null); ?></span>
+                                                                <?php if (!empty($radio['noise'])): ?><span><strong><?php echo htmlspecialchars(t('ow_noise')); ?>:</strong> <?php echo htmlspecialchars($radio['noise']); ?> dBm</span><?php endif; ?>
+                                                                <?php if (!empty($radio['tx_power'])): ?><span><strong><?php echo htmlspecialchars(t('ow_tx_power')); ?>:</strong> <?php echo htmlspecialchars($radio['tx_power']); ?> dBm</span><?php endif; ?>
+                                                            </div>
+                                                        </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php // OpenWrt Network tab ?>
+                                            <?php if ($mtabs_openwrt && (!empty($details['wireguard_peers']) || !empty($details['interfaces']))): ?>
+                                            <div class="monitor-tab-panel" data-tab="network">
+                                                <?php if (!empty($details['wireguard_peers'])): ?>
+                                                    <div class="detail-section-title"><i class="fas fa-shield-halved"></i> WireGuard</div>
+                                                    <div style="overflow-x: auto; margin-bottom: 1rem;">
+                                                        <table class="admin-table" style="width: 100%; font-size: 0.8rem;">
+                                                            <thead><tr><th>Interface</th><th>Peer</th><th>Endpoint</th><th>Handshake</th><th>RX</th><th>TX</th></tr></thead>
+                                                            <tbody>
+                                                                <?php foreach ($details['wireguard_peers'] as $peer): ?>
+                                                                    <tr>
+                                                                        <td><?php echo htmlspecialchars($peer['interface'] ?? '—'); ?></td>
+                                                                        <td style="font-family: monospace; font-size: 0.72rem;"><?php echo htmlspecialchars($peer['public_key'] ?? '—'); ?></td>
+                                                                        <td><?php echo htmlspecialchars($peer['endpoint'] ?? '—'); ?></td>
+                                                                        <td><?php echo !empty($peer['latest_handshake']) ? date('d.m. H:i', $peer['latest_handshake']) : '—'; ?></td>
+                                                                        <td><?php echo !empty($peer['rx_bytes']) ? round($peer['rx_bytes'] / 1048576, 1) . ' MB' : '—'; ?></td>
+                                                                        <td><?php echo !empty($peer['tx_bytes']) ? round($peer['tx_bytes'] / 1048576, 1) . ' MB' : '—'; ?></td>
+                                                                    </tr>
+                                                                <?php endforeach; ?>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php if (!empty($details['interfaces'])): ?>
+                                                    <div class="detail-section-title"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('ow_interfaces_heading')); ?></div>
+                                                    <div style="overflow-x: auto;">
+                                                        <table class="admin-table" style="width: 100%; font-size: 0.8rem;">
+                                                            <thead><tr><th><?php echo htmlspecialchars(t('ow_iface')); ?></th><th>RX</th><th>TX</th><th>RX Err</th><th>TX Err</th></tr></thead>
+                                                            <tbody>
+                                                                <?php foreach ($details['interfaces'] as $iface): ?>
+                                                                    <tr>
+                                                                        <td style="font-family: monospace;"><?php echo htmlspecialchars($iface['iface']); ?></td>
+                                                                        <td><?php echo bk_num(isset($iface['rx_bytes']) ? $iface['rx_bytes'] / 1048576 : null, ' MB', 1); ?></td>
+                                                                        <td><?php echo bk_num(isset($iface['tx_bytes']) ? $iface['tx_bytes'] / 1048576 : null, ' MB', 1); ?></td>
+                                                                        <td><?php echo bk_num($iface['rx_errors'] ?? null); ?></td>
+                                                                        <td><?php echo bk_num($iface['tx_errors'] ?? null); ?></td>
+                                                                    </tr>
+                                                                <?php endforeach; ?>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php // mwan3 multi-WAN ?>
+                                                <?php if (!empty($details['mwan3_policies'])): ?>
+                                                    <div class="detail-section-title" style="margin-top:1rem;"><i class="fas fa-route"></i> Multi-WAN (mwan3)</div>
+                                                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                                        <?php if (!empty($details['mwan3_active_gw'])): ?>
+                                                            <span style="background: rgba(46,204,113,0.1); border: 1px solid rgba(46,204,113,0.3); border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.78rem; color: var(--color-green);"><i class="fas fa-check-circle"></i> Active GW: <?php echo htmlspecialchars($details['mwan3_active_gw']); ?></span>
+                                                        <?php endif; ?>
+                                                        <?php foreach ($details['mwan3_policies'] as $pol): ?>
+                                                            <span style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.78rem; color: <?php echo ($pol['status'] ?? '') === 'online' ? 'var(--color-green)' : 'var(--color-red)'; ?>;"><?php echo htmlspecialchars($pol['interface'] ?? ''); ?> (<?php echo htmlspecialchars($pol['status'] ?? ''); ?>)</span>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php // SQM / CAKE ?>
+                                                <?php if (!empty($details['sqm_enabled'])): ?>
+                                                    <div class="detail-section-title" style="margin-top:1rem;"><i class="fas fa-gauge-high"></i> SQM (CAKE)</div>
+                                                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0.6rem; margin-bottom: 0.75rem;">
+                                                        <?php if (isset($details['sqm_download_kbps'])): ?>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                                <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);"><?php echo number_format($details['sqm_download_kbps']); ?></div>
+                                                                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">Download kbps</div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <?php if (isset($details['sqm_upload_kbps'])): ?>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                                <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);"><?php echo number_format($details['sqm_upload_kbps']); ?></div>
+                                                                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">Upload kbps</div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <?php if (isset($details['sqm_dropped'])): ?>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                                <div style="font-size: 1.1rem; font-weight: 700; color: var(--color-yellow, #f39c12);"><?php echo number_format($details['sqm_dropped']); ?></div>
+                                                                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">Dropped</div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <?php if (isset($details['sqm_ecn'])): ?>
+                                                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                                <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);"><?php echo number_format($details['sqm_ecn']); ?></div>
+                                                                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">ECN marked</div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php // LTE/WWAN ?>
+                                                <?php if (isset($details['lte_rsrp']) && $details['lte_rsrp'] !== null): ?>
+                                                    <div class="detail-section-title" style="margin-top:1rem;"><i class="fas fa-signal"></i> LTE Modem</div>
+                                                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.6rem; margin-bottom: 0.75rem;">
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                            <div style="font-size: 1.1rem; font-weight: 700; color: <?php echo $details['lte_rsrp'] > -100 ? 'var(--color-green)' : 'var(--color-red)'; ?>;"><?php echo $details['lte_rsrp']; ?> dBm</div>
+                                                            <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">RSRP</div>
+                                                        </div>
+                                                        <?php if (isset($details['lte_rsrq'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);"><?php echo $details['lte_rsrq']; ?> dB</div>
+                                                            <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">RSRQ</div>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                        <?php if (isset($details['lte_sinr'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);"><?php echo $details['lte_sinr']; ?> dB</div>
+                                                            <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">SINR</div>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($details['lte_band'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">B<?php echo htmlspecialchars($details['lte_band']); ?></div>
+                                                            <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">Band</div>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($details['lte_carrier'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; text-align: center;">
+                                                            <div style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary);"><?php echo htmlspecialchars($details['lte_carrier']); ?></div>
+                                                            <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase;">Carrier</div>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php // WAN reconnect stats ?>
+                                                <?php if (isset($details['wan_reconnect_count']) && $details['wan_reconnect_count'] > 0): ?>
+                                                    <div style="margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-secondary); background: rgba(243,156,18,0.08); border: 1px solid rgba(243,156,18,0.2); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                                                        <i class="fas fa-rotate" style="color: var(--color-yellow, #f39c12); margin-right: 0.3rem;"></i>
+                                                        WAN reconnects: <strong><?php echo (int)$details['wan_reconnect_count']; ?></strong>
+                                                        <?php if (!empty($details['wan_last_reconnect'])): ?> (last: <?php echo date('d.m. H:i', (int)$details['wan_last_reconnect']); ?>)<?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if ($mtabs_openwrt && (isset($details['conntrack_pct']) || isset($details['fw_dropped']))): ?>
+                                            <div class="monitor-tab-panel" data-tab="firewall">
+                                                <div class="detail-section-title"><i class="fas fa-fire"></i> <?php echo htmlspecialchars(t('ow_firewall_heading')); ?></div>
+                                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.75rem;">
+                                                    <?php if (isset($details['conntrack_pct'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: <?php echo $details['conntrack_pct'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo round($details['conntrack_pct'], 1); ?>%</div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_conntrack')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['fw_accepted'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: var(--color-green);"><?php echo number_format($details['fw_accepted']); ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_fw_accepted')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['fw_dropped'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: var(--color-yellow, #f39c12);"><?php echo number_format($details['fw_dropped']); ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_fw_dropped')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['fw_rejected'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: var(--color-red);"><?php echo number_format($details['fw_rejected']); ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_fw_rejected')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php // OpenWrt DHCP/DNS tab ?>
+                                            <?php if ($mtabs_openwrt && (isset($details['dhcp_leases_count']) || isset($details['dns_queries']))): ?>
+                                            <div class="monitor-tab-panel" data-tab="dhcp_dns">
+                                                <div class="detail-section-title"><i class="fas fa-server"></i> DHCP / DNS</div>
+                                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.75rem;">
+                                                    <?php if (isset($details['lan_subnet']) && $details['lan_subnet']): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1rem; font-weight: 600; color: var(--text-primary); font-family: monospace;"><?php echo htmlspecialchars($details['lan_subnet']); ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_lan_subnet')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['dhcp_leases_count'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);"><?php echo $details['dhcp_leases_count']; ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_dhcp_leases')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['dhcp_reservations_count'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);"><?php echo $details['dhcp_reservations_count']; ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_dhcp_reservations')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['dns_queries'])): ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);"><?php echo number_format($details['dns_queries']); ?></div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_dns_queries')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($details['dns_cache_hits']) && isset($details['dns_cache_misses'])): ?>
+                                                        <?php $dns_total = ($details['dns_cache_hits'] ?? 0) + ($details['dns_cache_misses'] ?? 0); $dns_hit_rate = $dns_total > 0 ? round(($details['dns_cache_hits'] / $dns_total) * 100, 1) : 0; ?>
+                                                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                                            <div style="font-size: 1.4rem; font-weight: 700; color: <?php echo $dns_hit_rate > 50 ? 'var(--color-green)' : 'var(--color-yellow, #f39c12)'; ?>;"><?php echo $dns_hit_rate; ?>%</div>
+                                                            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;"><?php echo htmlspecialchars(t('ow_dns_cache_hit_rate')); ?></div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($knowledge_tips) || !empty($monitor_insights)): ?>
+                                            <div class="monitor-tab-panel" data-tab="insights">
+                                            <?php echo render_knowledge_panel($knowledge_tips); ?>
+                                            <?php echo render_insights_panel($monitor_insights); ?>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php
+                                            // Query metrics history for the charts
+                                            $show_charts = false;
+                                            $cpu_avg = $cpu_max = $ram_avg = $ram_max = $hdd_avg = $hdd_max = $net_avg = $net_max = 0;
+                                            $labels = [];
+                                            $cpu_data = [];
+                                            $ram_data = [];
+                                            $hdd_data = [];
+                                            $net_data = [];
+
+                                            if ($m_type === 'vps' || $m_type === 'cpanel' || ($m_type === 'web' && isset($details['cpanel_stats'])) || isset($details['cpu'])) {
+                                                $stmt_metrics_history = $pdo->prepare("
+                                                    SELECT checked_at, cpu_usage, ram_usage, hdd_usage, net_usage
+                                                    FROM vps_metrics
+                                                    WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                                                    ORDER BY checked_at ASC
+                                                ");
+                                                $stmt_metrics_history->execute([$mid]);
+                                                $metrics_history = $stmt_metrics_history->fetchAll();
+
+                                                if (!empty($metrics_history)) {
+                                                    $show_charts = true;
+                                                    $cpu_sum = 0;
+                                                    $cpu_max = 0;
+                                                    $ram_sum = 0;
+                                                    $ram_max = 0;
+                                                    $hdd_sum = 0;
+                                                    $hdd_max = 0;
+                                                    $net_sum = 0;
+                                                    $net_count = 0;
+                                                    $count_mh = count($metrics_history);
+
+                                                    // NULL metriky (zdroj hodnotu nevrací) se do sum ani maxim
+                                                    // nepočítají - průměr z falešných nul by lhal.
+                                                    $cpu_count = $ram_count = $hdd_count = 0;
+                                                    foreach ($metrics_history as $mh) {
+                                                        if ($mh['cpu_usage'] !== null) {
+                                                            $cpu_sum += $mh['cpu_usage'];
+                                                            $cpu_count++;
+                                                            if ($mh['cpu_usage'] > $cpu_max) $cpu_max = $mh['cpu_usage'];
+                                                        }
+                                                        if ($mh['ram_usage'] !== null) {
+                                                            $ram_sum += $mh['ram_usage'];
+                                                            $ram_count++;
+                                                            if ($mh['ram_usage'] > $ram_max) $ram_max = $mh['ram_usage'];
+                                                        }
+                                                        if ($mh['hdd_usage'] !== null) {
+                                                            $hdd_sum += $mh['hdd_usage'];
+                                                            $hdd_count++;
+                                                            if ($mh['hdd_usage'] > $hdd_max) $hdd_max = $mh['hdd_usage'];
+                                                        }
+                                                        if ($mh['net_usage'] !== null) {
+                                                            $net_sum += $mh['net_usage'];
+                                                            $net_count++;
+                                                            if ($mh['net_usage'] > $net_max) $net_max = $mh['net_usage'];
+                                                        }
+
+                                                        // Zaokrouhlení na dvě desetiny: graf má pár set pixelů, jemnější
+                                                        // hodnoty v něm nikdo nerozezná. Velikost stránky tím ale
+                                                        // neřešíme - tu srazilo až serialize_precision v db.php.
+                                                        $labels[] = date('H:i', strtotime($mh['checked_at']));
+                                                        $cpu_data[] = $mh['cpu_usage'] !== null ? round((float)$mh['cpu_usage'], 2) : null;
+                                                        $ram_data[] = $mh['ram_usage'] !== null ? round((float)$mh['ram_usage'], 2) : null;
+                                                        $hdd_data[] = $mh['hdd_usage'] !== null ? round((float)$mh['hdd_usage'], 2) : null;
+                                                        $net_data[] = $mh['net_usage'] !== null ? round((float)$mh['net_usage'], 2) : null;
+                                                    }
+
+                                                    $cpu_avg = $cpu_count > 0 ? round($cpu_sum / $cpu_count, 1) : null;
+                                                    $ram_avg = $ram_count > 0 ? round($ram_sum / $ram_count, 1) : null;
+                                                    $hdd_avg = $hdd_count > 0 ? round($hdd_sum / $hdd_count, 1) : null;
+                                                    $net_avg = $net_count > 0 ? round($net_sum / $net_count, 1) : 0;
+                                                }
+                                            }
+                                            ?>
+                                            <?php if ($show_charts): ?>
+                                                <div class="monitor-tab-panel active" data-tab="overview">
+                                                <div class="metrics-history-charts" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                                                        <div class="detail-section-title" style="margin-bottom: 0;"><i class="fas fa-chart-line"></i> <?php echo htmlspecialchars(t('load_history_heading')); ?></div>
+                                                        <div class="chart-period-switch" data-monitor="<?php echo $mid; ?>" style="display: flex; gap: 0.25rem;">
+                                                            <button type="button" data-period="24h" class="btn btn-secondary btn-sm active" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_24h')); ?></button>
+                                                            <button type="button" data-period="7d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_7d')); ?></button>
+                                                            <button type="button" data-period="30d" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;"><?php echo htmlspecialchars(t('period_30d')); ?></button>
+                                                        </div>
+                                                    </div>
+                                                    <div style="display: flex; gap: 1rem; margin: 0.75rem 0 1rem 0; font-size: 0.8rem; flex-wrap: wrap;">
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=cpu" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('cpu_avg_max')); ?></span>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="cpuStats-<?php echo $mid; ?>"><?php echo $cpu_avg !== null ? "{$cpu_avg}% / {$cpu_max}%" : '–'; ?></strong>
+                                                        </a>
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=ram" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('ram_avg_max')); ?></span>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="ramStats-<?php echo $mid; ?>"><?php echo $ram_avg !== null ? "{$ram_avg}% / {$ram_max}%" : '–'; ?></strong>
+                                                        </a>
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=hdd" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit;" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('hdd_avg_max')); ?></span>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="hddStats-<?php echo $mid; ?>"><?php echo $hdd_avg !== null ? "{$hdd_avg}% / {$hdd_max}%" : '–'; ?></strong>
+                                                        </a>
+                                                        <a href="index.php?view=metric&monitor=<?php echo $mid; ?>&metric=net" class="net-stats-box" id="netStatsBox-<?php echo $mid; ?>" style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-decoration: none; color: inherit; <?php echo $net_max > 0 ? '' : 'display: none;'; ?>" title="<?php echo htmlspecialchars(t('metric_detail_link_hint')); ?>">
+                                                            <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('net_avg_max')); ?></span>
+                                                            <strong style="color: #fff; margin-left: 0.25rem;" id="netStats-<?php echo $mid; ?>"><?php echo $net_avg; ?> / <?php echo $net_max; ?> KB/s</strong>
+                                                        </a>
+                                                    </div>
+                                                    <div style="position: relative; height: 220px; width: 100%;">
+                                                    <div style="position: relative; height: 220px; width: 100%;">
+                                                        <div id="metricsChart-<?php echo $mid; ?>" style="position: absolute; inset: 0;"></div>
+                                                    </div>
+                                                </div>
+
+                                                <script>
+                                                document.addEventListener("DOMContentLoaded", function() {
+                                                    const el = document.getElementById('metricsChart-<?php echo $mid; ?>');
+                                                    if (!el) return;
+                                                    window.bkMetricsCharts = window.bkMetricsCharts || {};
+                                                    const chart = echarts.init(el, (localStorage.getItem('theme') === 'light') ? null : 'dark');
+                                                    chart.setOption({
+                                                        backgroundColor: 'transparent',
+                                                        grid: { left: 40, right: 46, top: 34, bottom: 26 },
+                                                        tooltip: { trigger: 'axis' },
+                                                        legend: {
+                                                            data: ['CPU (%)', 'RAM (%)', 'Disk (%)', 'S\u00ed\u0165 (KB/s)'],
+                                                            top: 0,
+                                                            textStyle: { color: '#e1e1e6', fontSize: 11 }
+                                                        },
+                                                        xAxis: {
+                                                            type: 'category',
+                                                            data: <?php echo json_encode($labels); ?>,
+                                                            axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                            axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+                                                            splitLine: { show: false }
+                                                        },
+                                                        yAxis: [
+                                                            {
+                                                                type: 'value',
+                                                                min: 0,
+                                                                max: 100,
+                                                                axisLabel: { color: '#8b8ba0', fontSize: 10 },
+                                                                splitLine: { lineStyle: { color: 'rgba(255,255,255,0.03)' } }
+                                                            },
+                                                            {
+                                                                type: 'value',
+                                                                min: 0,
+                                                                position: 'right',
+                                                                axisLabel: { color: '#8b5cf6', fontSize: 10 },
+                                                                splitLine: { show: false }
+                                                            }
+                                                        ],
+                                                        series: [
+                                                            {
+                                                                name: 'CPU (%)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($cpu_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                lineStyle: { color: '#c1121f', width: 2 },
+                                                                areaStyle: { color: '#c1121f', opacity: 0.05 }
+                                                            },
+                                                            {
+                                                                name: 'RAM (%)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($ram_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                lineStyle: { color: '#1ec773', width: 2 },
+                                                                areaStyle: { color: '#1ec773', opacity: 0.05 }
+                                                            },
+                                                            {
+                                                                name: 'Disk (%)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($hdd_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                lineStyle: { color: '#ffb703', width: 2 },
+                                                                areaStyle: { color: '#ffb703', opacity: 0.05 }
+                                                            },
+                                                            {
+                                                                name: 'S\u00ed\u0165 (KB/s)',
+                                                                type: 'line',
+                                                                data: <?php echo json_encode($net_data); ?>,
+                                                                showSymbol: false,
+                                                                smooth: 0.3,
+                                                                connectNulls: true,
+                                                                lineStyle: { color: '#8b5cf6', width: 2 },
+                                                                yAxisIndex: 1
+                                                            }
+                                                        ]
+                                                    });
+                                                    window.bkMetricsCharts[<?php echo $mid; ?>] = chart;
+                                                });
+                                                </script>
+                                                </div>
+                                             <?php endif; ?>
+
+                                             <?php if (!empty($monitor_outages) || !empty($monitor_timeline)): ?>
+                                             <div class="monitor-tab-panel" data-tab="timeline">
+                                             <?php if (!empty($monitor_outages)): ?>
+                                                 <div class="monitor-outages-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                     <div class="detail-section-title" style="color: var(--color-red); margin-bottom: 0.75rem;"><i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars(t('recent_outages_heading')); ?></div>
+                                                     <div style="overflow-x: auto;">
+                                                         <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left;">
+                                                             <thead>
+                                                                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
+                                                                     <th style="padding: 0.5rem 0.25rem;"><?php echo htmlspecialchars(t('th_time')); ?></th>
+                                                                     <th style="padding: 0.5rem 0.25rem;"><?php echo htmlspecialchars(t('th_error_reason')); ?></th>
+                                                                     <th style="padding: 0.5rem 0.25rem; text-align: right;"><?php echo htmlspecialchars(t('th_measured_from')); ?></th>
+                                                                 </tr>
+                                                             </thead>
+                                                             <tbody>
+                                                                 <?php foreach ($monitor_outages as $mo): 
+                                                                     $mo_time = date('d.m.Y H:i:s', strtotime($mo['checked_at']));
+                                                                 ?>
+                                                                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary);">
+                                                                         <td style="padding: 0.5rem 0.25rem; font-weight: 500; color: var(--text-primary); white-space: nowrap;"><?php echo $mo_time; ?></td>
+                                                                         <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars($mo['error_message'] ?: t('unspecified_connection_error')); ?></td>
+                                                                         <td style="padding: 0.5rem 0.25rem; text-align: right; white-space: nowrap;"><i class="fas fa-map-marker-alt" style="font-size: 0.65rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($mo['checked_from'] ?: '—'); ?></td>
+                                                                     </tr>
+                                                                 <?php endforeach; ?>
+                                                             </tbody>
+                                                         </table>
+                                                     </div>
+                                                 </div>
+                                             <?php endif; ?>
+
+                                             <?php if (!empty($monitor_timeline)): ?>
+                                                 <div class="monitor-timeline-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                     <div class="detail-section-title"><i class="fas fa-clock-rotate-left"></i> <?php echo htmlspecialchars(t('timeline_heading')); ?></div>
+                                                     <div style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.9rem;">
+                                                         <?php
+                                                         $tl_grouped = [];
+                                                         foreach ($monitor_timeline as $tl_item) {
+                                                             $tl_grouped[bk_relative_time_label($tl_item['ts'])][] = $tl_item;
+                                                         }
+                                                         ?>
+                                                         <?php foreach ($tl_grouped as $tl_day_label => $tl_items): ?>
+                                                             <div>
+                                                                 <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-bottom: 0.35rem;"><?php echo htmlspecialchars($tl_day_label); ?></div>
+                                                                 <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                                                                     <?php foreach ($tl_items as $tl_item):
+                                                                         $tl_label_key = 'timeline_event_' . $tl_item['event_type'];
+                                                                         $tl_label = t($tl_label_key);
+                                                                         if ($tl_label === $tl_label_key) { $tl_label = $tl_item['description'] ?: $tl_item['event_type']; }
+                                                                     ?>
+                                                                         <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
+                                                                             <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo date('H:i', strtotime($tl_item['ts'])); ?></span>
+                                                                             <span style="color: var(--text-primary);"><?php echo htmlspecialchars($tl_label); ?></span>
+                                                                             <?php if (!empty($tl_item['description']) && $tl_label !== $tl_item['description']): ?>
+                                                                                 <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($tl_item['description']); ?></span>
+                                                                             <?php endif; ?>
+                                                                         </div>
+                                                                     <?php endforeach; ?>
+                                                                 </div>
+                                                             </div>
+                                                         <?php endforeach; ?>
+                                                     </div>
+                                                 </div>
+                                             <?php endif; ?>
+                                             </div>
+                                             <?php endif; ?>
+
+                                             <?php if ($is_asset_grouped): ?>
+                                             <div class="monitor-tab-panel" data-tab="asset_timeline">
+                                             <?php
+                                             $asset_timeline = bk_get_asset_timeline($pdo, $monitor['asset_id'], 30);
+                                             ?>
+                                             <?php if (!empty($asset_timeline)): ?>
+                                                 <div style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
+                                                     <div class="detail-section-title"><i class="fas fa-layer-group"></i> <?php echo htmlspecialchars(t('mtab_asset_timeline')); ?> &mdash; <?php echo htmlspecialchars($monitor['asset_name'] ?? ''); ?></div>
+                                                     <div style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.9rem;">
+                                                         <?php
+                                                         $atl_grouped = [];
+                                                         foreach ($asset_timeline as $atl_item) {
+                                                             $atl_grouped[bk_relative_time_label($atl_item['ts'])][] = $atl_item;
+                                                         }
+                                                         ?>
+                                                         <?php foreach ($atl_grouped as $atl_day_label => $atl_items): ?>
+                                                             <div>
+                                                                 <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-bottom: 0.35rem;"><?php echo htmlspecialchars($atl_day_label); ?></div>
+                                                                 <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                                                                     <?php foreach ($atl_items as $atl_item):
+                                                                         $atl_label_key = 'timeline_event_' . $atl_item['event_type'];
+                                                                         $atl_label = t($atl_label_key);
+                                                                         if ($atl_label === $atl_label_key) { $atl_label = $atl_item['description'] ?: $atl_item['event_type']; }
+                                                                     ?>
+                                                                         <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
+                                                                             <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo date('H:i', strtotime($atl_item['ts'])); ?></span>
+                                                                             <span style="background: rgba(255,255,255,0.06); border-radius: 4px; padding: 0.1rem 0.4rem; font-size: 0.72rem; color: var(--color-blue, #58a6ff); white-space: nowrap;"><?php echo htmlspecialchars($atl_item['monitor_name']); ?></span>
+                                                                             <span style="color: var(--text-primary);"><?php echo htmlspecialchars($atl_label); ?></span>
+                                                                             <?php if (!empty($atl_item['description']) && $atl_label !== $atl_item['description']): ?>
+                                                                                 <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($atl_item['description']); ?></span>
+                                                                             <?php endif; ?>
+                                                                         </div>
+                                                                     <?php endforeach; ?>
+                                                                 </div>
+                                                             </div>
+                                                         <?php endforeach; ?>
+                                                     </div>
+                                                 </div>
+                                             <?php else: ?>
+                                                 <p style="color: var(--text-muted); font-size: 0.82rem; margin-top: 1rem;"><?php echo htmlspecialchars(t('no_events')); ?></p>
+                                             <?php endif; ?>
+                                             </div>
+                                             <?php endif; ?>
+                                         </div>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                        <?php if ($open_asset_group_id !== null): ?></div><?php endif; ?>
+                    </div>
+                </section>
+            <?php endforeach; ?>
+            
+        <?php endif; ?>
+
+        <!-- Sekce s incidenty -->
+        <?php if (!empty($incidents)): ?>
+            <div class="incident-card">
+                <h2 style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <span><i class="fas fa-history" style="color: var(--color-red); margin-right: 0.5rem;"></i><?php echo htmlspecialchars(t('incidents_heading')); ?></span>
+                    <?php // Viditelný odkaz vedle hlavičky v hlavičce dokumentu: čtečky najdou
+                          // kanál samy, lidé potřebují vidět, že vůbec existuje. ?>
+                    <a href="<?php echo htmlspecialchars($bk_rss_href); ?>" style="font-size: 0.8rem; font-weight: 500; color: var(--text-muted); text-decoration: none;">
+                        <i class="fas fa-rss" style="margin-right: 0.25rem;"></i><?php echo htmlspecialchars(t('rss_subscribe')); ?>
+                    </a>
+                </h2>
+                <div style="overflow-x: auto;">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th><?php echo htmlspecialchars(t('th_time')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_monitor')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_type')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_location')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_status')); ?></th>
+                                <th><?php echo htmlspecialchars(t('th_error_info')); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody id="incidents-tbody">
+                            <?php foreach ($incidents as $inc_idx => $inc): ?>
+                                <tr class="incident-row" data-row-index="<?php echo $inc_idx; ?>">
+                                    <td><?php echo date('d.m.Y H:i:s', strtotime($inc['checked_at'])); ?></td>
+                                    <td>
+                                        <strong><?php echo htmlspecialchars($inc['name']); ?></strong>
+                                        <span style="display: block; font-size: 0.75rem; color: var(--text-muted); font-family: monospace;"><?php echo htmlspecialchars($inc['target'] ?? ''); ?></span>
+                                    </td>
+                                    <td><span style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);"><?php echo htmlspecialchars($inc['type']); ?></span></td>
+                                    <td>
+                                        <span style="font-size: 0.8rem; color: var(--text-secondary);">
+                                            <i class="fas fa-map-marker-alt" style="font-size: 0.7rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($inc['checked_from'] ?: '—'); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="log-status <?php echo $inc['status']; ?>">
+                                            <?php echo ($inc['status'] === 'up') ? t('resp_online') : t('stat_down'); ?>
+                                        </span>
+                                    </td>
+                                    <td style="color: var(--text-secondary);">
+                                        <?php 
+                                        if ($inc['status'] === 'down') {
+                                            echo htmlspecialchars($inc['error_message'] ?: t('unspecified_connection_error'));
+                                        } else {
+                                            echo htmlspecialchars($inc['error_message'] ?: t('service_recovered'));
+                                        }
+                                        ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php if (count($incidents) > 10): ?>
+                    <div class="incidents-pagination" id="incidents-pagination" style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1rem;">
+                        <button type="button" id="incidents-prev" class="btn btn-secondary btn-sm" style="padding: 0.3rem 0.8rem; font-size: 0.78rem;"><i class="fas fa-chevron-left"></i> <?php echo htmlspecialchars(t('pagination_prev')); ?></button>
+                        <span id="incidents-page-label" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+                        <button type="button" id="incidents-next" class="btn btn-secondary btn-sm" style="padding: 0.3rem 0.8rem; font-size: 0.78rem;"><?php echo htmlspecialchars(t('pagination_next')); ?> <i class="fas fa-chevron-right"></i></button>
+                    </div>
+                    <script>
+                    (function() {
+                        const PAGE_SIZE = 10;
+                        const rows = Array.from(document.querySelectorAll('#incidents-tbody .incident-row'));
+                        const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+                        const label = document.getElementById('incidents-page-label');
+                        const prevBtn = document.getElementById('incidents-prev');
+                        const nextBtn = document.getElementById('incidents-next');
+                        const pageLabelTpl = <?php echo json_encode(t('pagination_page_of')); ?>;
+                        let page = 0;
+
+                        function render() {
+                            rows.forEach((row, i) => {
+                                row.style.display = (i >= page * PAGE_SIZE && i < (page + 1) * PAGE_SIZE) ? '' : 'none';
+                            });
+                            label.textContent = pageLabelTpl.replace('%d', page + 1).replace('%d', totalPages);
+                            prevBtn.disabled = page === 0;
+                            nextBtn.disabled = page >= totalPages - 1;
+                        }
+
+                        prevBtn.addEventListener('click', () => { if (page > 0) { page--; render(); } });
+                        nextBtn.addEventListener('click', () => { if (page < totalPages - 1) { page++; render(); } });
+                        render();
+                    })();
+                    </script>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <p>&copy; <?php echo date('Y'); ?> <?php if ($portal_url !== ''): ?><a href="<?php echo htmlspecialchars($portal_url); ?>"><?php echo htmlspecialchars($site_title); ?></a><?php else: ?><?php echo htmlspecialchars($site_title); ?><?php endif; ?>. <?php echo htmlspecialchars(t('footer_rights')); ?></p>
+            <?php $ver = get_app_version(); ?>
+            <p style="font-size: 0.75rem; opacity: 0.5; margin-top: 0.25rem;">
+                <i class="fas fa-code-branch"></i> <?php echo htmlspecialchars($ver['label']); ?>
+                &middot; <?php echo htmlspecialchars(t('footer_powered_by')); ?> <a href="https://monitoring.bloodkings.eu" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline;">Blood Kings Monitoring</a>
+            </p>
+            <div class="social-links" style="margin-top: 0.75rem; display: flex; justify-content: center; gap: 1.25rem; font-size: 1.2rem;">
+                <a href="https://www.facebook.com/bloodkings" target="_blank" style="color: var(--text-muted); transition: color 0.15s ease;" onmouseover="this.style.color='#1877f2'" onmouseout="this.style.color='var(--text-muted)'" title="Facebook Page"><i class="fab fa-facebook"></i></a>
+                <a href="https://discord.gg/bloodkings" target="_blank" style="color: var(--text-muted); transition: color 0.15s ease;" onmouseover="this.style.color='#5865f2'" onmouseout="this.style.color='var(--text-muted)'" title="Discord Server"><i class="fab fa-discord"></i></a>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+    function toggleDetails(id) {
+        const item = document.getElementById('monitor-item-' + id);
+        const panel = document.getElementById('details-panel-' + id);
+
+        if (!item || !panel) return;
+
+        const isOpen = item.classList.contains('open');
+
+        if (isOpen) {
+            panel.style.maxHeight = null;
+            item.classList.remove('open');
+        } else {
+            panel.style.maxHeight = panel.scrollHeight + "px";
+            item.classList.add('open');
+        }
+    }
+
+    // Odkaz z breadcrumbu na Level 3 Metric Detail stránce (index.php?expand=ID)
+    // automaticky rozbalí a odscrolluje na daný monitor.
+    document.addEventListener('DOMContentLoaded', function () {
+        const openId = new URLSearchParams(window.location.search).get('expand');
+        if (!openId) return;
+        const item = document.getElementById('monitor-item-' + openId);
+        if (!item || item.classList.contains('open')) return;
+        toggleDetails(openId);
+        item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+
+    // Přepínání tabů v detailu monitoru (Overview/Health Score/Ports/...). Pamatuje
+    // si naposledy otevřený tab per-monitor v localStorage, stejný vzorec jako
+    // záložky v administraci.
+    function switchMonitorTab(monitorId, tabId) {
+        const container = document.getElementById('details-panel-' + monitorId);
+        if (!container) return;
+        const buttons = container.querySelectorAll('.monitor-tabs button[data-tab]');
+        // Poznámka: víc panelů může sdílet stejné data-tab (např. "overview" je
+        // poskládané z několika oddělených bloků existujícího markupu) - proto se
+        // necílí přes unikátní id, ale přes data-tab atribut.
+        const panels = container.querySelectorAll('.monitor-tab-panel[data-tab]');
+
+        buttons.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabId));
+        panels.forEach((p) => p.classList.toggle('active', p.dataset.tab === tabId));
+
+        try { localStorage.setItem('bk_monitor_tab_' + monitorId, tabId); } catch (e) {}
+
+        // ECharts instance vytvořené uvnitř skrytého (display:none) tabu se
+        // vykreslí s nulovou velikostí - při přepnutí NA tab s grafem je potřeba
+        // ho ručně přepočítat (.resize()). Load History graf tomu unikl tím, že
+        // žije v defaultně aktivním Overview tabu, ale Client History (TS3) je
+        // svůj vlastní tab, takže potřebuje tenhle fix.
+        if (tabId === 'clients_chart' && window.bkTs3ClientsCharts && window.bkTs3ClientsCharts[monitorId]) {
+            window.bkTs3ClientsCharts[monitorId].resize();
+        }
+
+        // Přepnutí tabu mění viditelnou výšku obsahu - pokud je panel právě
+        // otevřený, musíme přepočítat maxHeight (viz toggleDetails výše), jinak
+        // by se vyšší tab mohl oříznout na výšku toho předchozího.
+        const item = document.getElementById('monitor-item-' + monitorId);
+        if (item && item.classList.contains('open')) {
+            container.style.maxHeight = container.scrollHeight + "px";
+        }
+    }
+
+    function initMonitorTabs(monitorId, defaultTab) {
+        let tabId = defaultTab;
+        try {
+            const saved = localStorage.getItem('bk_monitor_tab_' + monitorId);
+            const container = document.getElementById('details-panel-' + monitorId);
+            if (saved && container && container.querySelector('.monitor-tabs button[data-tab="' + CSS.escape(saved) + '"]')) {
+                tabId = saved;
+            }
+        } catch (e) {}
+        switchMonitorTab(monitorId, tabId);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.monitor-tabs[data-monitor]').forEach(function (tabs) {
+            const monitorId = tabs.dataset.monitor;
+            // Chybělo: samotné kliknutí na tab tlačítko nic nedělalo, protože
+            // switchMonitorTab() se nikde nenavěsilo jako click handler.
+            tabs.querySelectorAll('button[data-tab]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    switchMonitorTab(monitorId, btn.dataset.tab);
+                });
+            });
+            initMonitorTabs(monitorId, 'overview');
+        });
+    });
+
+    // Přepínač období grafů vytížení (24h / 7d / 30d)
+    document.querySelectorAll('.chart-period-switch').forEach((sw) => {
+        const monitorId = sw.dataset.monitor;
+        sw.querySelectorAll('button[data-period]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                if (btn.classList.contains('active')) return;
+                const chart = window.bkMetricsCharts && window.bkMetricsCharts[monitorId];
+                if (!chart) return;
+
+                sw.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+                btn.classList.add('active');
+                btn.disabled = true;
+                try {
+                    const res = await fetch('api.php?action=metrics_history&monitor_id=' + encodeURIComponent(monitorId) + '&period=' + encodeURIComponent(btn.dataset.period));
+                    const data = await res.json();
+                    chart.setOption({
+                        xAxis: { data: data.labels },
+                        series: [
+                            { data: data.cpu },
+                            { data: data.ram },
+                            { data: data.hdd || [] },
+                            { data: data.net || [] }
+                        ]
+                    });
+
+                    const cpuStats = document.getElementById('cpuStats-' + monitorId);
+                    const ramStats = document.getElementById('ramStats-' + monitorId);
+                    const hddStats = document.getElementById('hddStats-' + monitorId);
+                    const netStats = document.getElementById('netStats-' + monitorId);
+                    const netStatsBox = document.getElementById('netStatsBox-' + monitorId);
+                    // null = metrika se v daném období vůbec neměřila - pomlčka, ne "0%"
+                    const fmtPct = (avg, max) => (avg !== null && avg !== undefined) ? avg + '% / ' + max + '%' : '–';
+                    if (cpuStats) cpuStats.textContent = fmtPct(data.cpu_avg, data.cpu_max);
+                    if (ramStats) ramStats.textContent = fmtPct(data.ram_avg, data.ram_max);
+                    if (hddStats) hddStats.textContent = fmtPct(data.hdd_avg, data.hdd_max);
+                    if (netStats) netStats.textContent = (data.net_avg !== null && data.net_avg !== undefined) ? data.net_avg + ' / ' + data.net_max + ' KB/s' : '–';
+                    if (netStatsBox) netStatsBox.style.display = data.net_max > 0 ? '' : 'none';
+                } catch (e) {
+                    console.error(<?php echo json_encode(t('js_metrics_load_error')); ?>, e);
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        });
+    });
+
+    // Theme toggle logic
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+        const updateIcon = () => {
+            const isLight = document.documentElement.classList.contains('light-theme');
+            themeToggle.innerHTML = isLight ? '<i class="fas fa-moon"></i>' : '<i class="fas fa-sun"></i>';
+        };
+        updateIcon();
+        
+        themeToggle.addEventListener('click', () => {
+            const isLight = document.documentElement.classList.toggle('light-theme');
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+            updateIcon();
+        });
+    }
+    </script>
+</body>
+</html>

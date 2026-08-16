@@ -1,0 +1,43 @@
+name: Release Agent Scripts
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Package and Release Agent Scripts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Bundle Agent Files
+        run: |
+          mkdir -p build/
+          cp agents/vps-agent/agent.sh build/
+          cp agents/vps-agent/agent.py build/
+          cp agents/vps-agent/agent.ps1 build/
+          cp agents/vps-agent/agent_openwrt.sh build/
+          cp agents/vps-agent/docker-compose.agent.yml build/
+          cd build && tar -czvf ../bloodkings-agents.tar.gz * && cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            agents/vps-agent/agent.sh
+            agents/vps-agent/agent.py
+            agents/vps-agent/agent.ps1
+            agents/vps-agent/agent_openwrt.sh
+            agents/vps-agent/docker-compose.agent.yml
+            bloodkings-agents.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

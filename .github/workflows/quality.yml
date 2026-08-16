@@ -1,0 +1,316 @@
+name: "Quality Gate"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Souběžné běhy nad stejnou větví se ruší - poslední commit je ten, který nás zajímá.
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint, format, types, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Druha sit pod `npm ci`. Ta prvni chyti rozejity lock jen podle verze
+      # npm - npm 10 v CI ho odmitne, npm 11 (bezne na vyvojarskem stroji)
+      # ho toleruje, takze rozdil projde revizi a spadne az po pushi na vsech
+      # workflow najednou. Tahle kontrola je na verzi npm nezavisla a jde
+      # spustit lokalne pres `npm run check:lock` jeste pred commitem.
+      - name: Soulad package.json a package-lock.json
+        run: npm run check:lock
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier (formát)
+        run: npm run format:check
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Unit testy SPA (vitest)
+        run: npm run test:react
+
+      - name: Build všech workspace aplikací
+        run: npm run build
+
+      # Prvni nacteni aplikace hlida rozpocet velikosti: jeden import na
+      # urovni modulu dokaze vratit knihovnu do vstupniho balíku a nikdo
+      # by si toho nevsiml, dokud si uzivatel nestezuje na pomale nacitani.
+      # Detektor mrtveho kodu pokryval jen PHP, takze v TypeScriptu se
+      # nastradaly komponenty, ktere nikdo neimportuje. Bundler je z balicku
+      # vyhodi, ale ctou se pri revizi a udrzuji pri refaktoru.
+      - name: Nepoužité exporty v SPA
+        run: npm run check:exports
+
+      - name: Rozpočet velikosti buildu
+        run: npm run check:bundle
+
+  php:
+    name: PHP (testy, coverage, lint, mrtvý kód)
+    runs-on: ubuntu-latest
+    steps:
+      # Agent linty ctou soubory ze submodulu `agents` - bez nej by nemely co
+      # kontrolovat a tise by prosly.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Setup PHP s Xdebug (kvůli coverage)
+        uses: shivammathur/setup-php@v2
+        with:
+          # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
+          # verzi znamena netestovat to, co uzivatelum opravdu bezi.
+          php-version: '8.4'
+          coverage: xdebug
+          extensions: mbstring, curl, pdo
+
+      - name: Syntaktická kontrola všech PHP souborů
+        run: |
+          set -e
+          for f in apps/status/*.php apps/status/lang/*.php apps/status/tests/*.php; do
+            php -l "$f" > /dev/null
+          done
+          echo "Všechny PHP soubory se parsují."
+
+      - name: Unit testy
+        run: php apps/status/tests/run_tests.php
+
+      - name: Testy sběru, e-mailů a notifikací
+        run: php apps/status/tests/run_pipeline_tests.php
+
+      - name: SQL lint (rizikové dotazy)
+        run: php apps/status/tests/run_query_lint.php
+
+      # Schema se udrzuje na dvou mistech (schema.sql pro cerstvou instalaci,
+      # migrace v db.php pro uz bezici). Nic je nedrzelo pohromade a rozesly
+      # se o sedm sloupcu a tri tabulky - cerstva instalace fungovala jen
+      # proto, ze po importu dobehnou migrace.
+      - name: Schema lint (schema.sql vs. migrace)
+        run: php apps/status/tests/run_schema_lint.php
+
+      # Neznama akce vracela 200 s vychozim prehledem, takze preklep v nazvu
+      # vypadal jako uspech. Diky tomu roky nikdo nezjistil, ze chybi pet
+      # endpointu, na ktere se z UI volalo - vcetne exportu CSV, grafu odezvy
+      # a "zapomenuteho hesla", ktere vzdy tvrdilo, ze e-mail odesel.
+      - name: API action lint (volané akce vs. api.php)
+        run: php apps/status/tests/run_api_action_lint.php
+
+      # The settings key list existed three times (admin.php, the read path in
+      # api.php, the write path in api.php) and drifted: whatsapp_* could be
+      # saved but was never read back, so the form showed an empty field and the
+      # next save overwrote the real value with an empty one. No error anywhere.
+      - name: Settings parity lint (UI vs. server)
+        run: php apps/status/tests/run_settings_parity_lint.php
+
+      # api.php releases the session lock so parallel requests stop queuing
+      # behind each other. After session_write_close() a write to $_SESSION is
+      # discarded without any error, so an action that starts writing and is
+      # not on the allowlist would break login in a way that looks random.
+      - name: Session lock lint (kdo smí zapisovat do session)
+        run: php apps/status/tests/run_session_lock_lint.php
+
+      # Dokumentace je ve dvou jazycich a dve kopie cehokoli se v tomhle
+      # projektu rozesly pokazde. U dokumentace to nic neshodi - jen jedna
+      # verze zacne popisovat neco, co uz neplati.
+      - name: Docs parity lint (api.md vs. api.cs.md)
+        run: php apps/status/tests/run_docs_parity_lint.php
+
+      # Agenti posilali kazdou minutu 35 cisel, ze kterych se ukladal jen
+      # posledni snimek - slo videt aktualni hodnotu, ale ne jestli je to
+      # spicka nebo normal. Nastradalo se to postupne, protoze na rozdil mezi
+      # "poslano" a "ulozeno" nic neupozornovalo.
+      - name: Agent metric lint (posílané hodnoty vs. metriky)
+        run: php apps/status/tests/run_agent_metric_lint.php
+
+      # Jadro pravidel projektu: nezmerena hodnota je NULL a v UI pomlcka.
+      # Dva rucni audity to nepodchytily (poprve chybely coercions, podruhe
+      # legacy PHP stranky), takze to hlida skript.
+      - name: Honesty lint (žádné vymyšlené nuly)
+        run: php apps/status/tests/run_honesty_lint.php
+
+      - name: Detekce mrtvého kódu
+        run: php apps/status/tests/find_dead_code.php
+
+      # BK_COVERAGE_MIN je rohatka: az bude zmerena skutecna hodnota z CI,
+      # doplni se sem a pokryti uz nesmi klesnout niz.
+      - name: Coverage report (Cobertura + Clover)
+        env:
+          # Namerena hodnota z prvniho behu CI; snizovat se nema, zvysovat ano.
+          BK_COVERAGE_MIN: '55'
+        run: |
+          mkdir -p coverage
+          php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
+
+      - name: Upload coverage artefaktu
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: php-coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+  api:
+    name: API integrační testy (api.php nad MySQL)
+    runs-on: ubuntu-latest
+    # api.php je monolit nad databází - jediný způsob, jak otestovat jeho
+    # dotazy a názvy sloupců, je opravdu ho zavolat. Přesně tahle třída
+    # chyb (setting_key vs key_name) tu už jednou shodila endpoint na 500.
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: bk_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, curl, pdo, pdo_mysql
+
+      - name: Integrační testy api.php
+        env:
+          BK_TEST_DB_HOST: 127.0.0.1
+          BK_TEST_DB_NAME: bk_test
+          BK_TEST_DB_USER: root
+          BK_TEST_DB_PASS: test
+        run: php apps/status/tests/run_api_tests.php
+
+  agents:
+    name: Agent skripty (shell, python, powershell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Shell syntaxe
+        run: |
+          set -e
+          # agent.sh má shebang #!/bin/bash a bashismy používá záměrně;
+          # agent_openwrt.sh musí být čistý POSIX (routery mají ash/dash).
+          bash -n agents/vps-agent/agent.sh
+          dash -n agents/vps-agent/agent_openwrt.sh
+          echo "Shell agenti se parsují."
+
+      # Blokujici: na urovni 'error' jsou agenti dnes ciste, takze cokoli
+      # noveho je regrese. Nizsi urovne (warning/info) zamerne netestujeme -
+      # 13 zbylych nalezu jsou stylisticke veci, ne chyby.
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: './apps/status'
+          severity: error
+          additional_files: 'agent.sh agent_openwrt.sh'
+
+      - name: Setup PHP pro lint agentů
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring
+
+      # Vymyslene nuly nevznikaji jen v PHP/TS: awk 'END{print sum+0}' hlasil
+      # "0 zahozenych paketu" na routeru, kde se firewall vubec nemeri.
+      - name: Honesty lint agentů (žádné vymyšlené nuly)
+        run: php apps/status/tests/run_agent_honesty_lint.php
+
+      - name: Python agent
+        run: python3 -m py_compile agents/vps-agent/agent.py
+
+      - name: PowerShell agent
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/agents/vps-agent/agent.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "agent.ps1 se parsuje."
+
+  go:
+    name: Go backend (vet, testy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # Verze se čte z go.mod - natvrdo zapsaná '1.23' rozbila job,
+          # protože go.mod vyžaduje novější toolchain.
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: go vet
+        working-directory: apps/server
+        run: go vet ./...
+      - name: Testy s coverage
+        working-directory: apps/server
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+      - name: Upload Go coverage
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: go-coverage
+          path: apps/server/coverage.out
+          if-no-files-found: ignore
+
+  perf:
+    name: Výkon produkčních endpointů
+    runs-on: ubuntu-latest
+    # Měří živou instalaci, takže jen po nasazení na main - ne u PR.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
+          # verzi znamena netestovat to, co uzivatelum opravdu bezi.
+          php-version: '8.4'
+          extensions: curl
+      - name: Perf check
+        run: php apps/status/tests/run_perf_check.php
+        continue-on-error: true # regresi hlásí, ale nezastavuje pipeline
+
+      # widget.php a badge.php mesice vracely 500, protoze je nikdo neotevrel
+      # a php -l chybu za behu nevidi. Tenhle test kazdou stranku pozada.
+      - name: Smoke test PHP stránek (žádná nesmí spadnout)
+        run: php apps/status/tests/run_page_smoke.php
+
+      # Přesně tahle kontrola chyběla, když F5 na /app/<route> vracel 404:
+      # API se měřilo, ale nasazené SPA routy nikdo netestoval. Deploy
+      # workflow to ověřuje po nasazení; tady se to hlídá při každém pushi,
+      # protože .htaccess může ze serveru zmizet i bez deploye.
+      # Tahle kontrola drive chybela: API se merilo, ale nasazene SPA routy
+      # nikdo netestoval - a F5 na /app/<route> pritom vracel 404.
+      - name: SPA deep-link check (F5 na route musí vrátit aplikaci)
+        run: |
+          code=$(curl -s -o /tmp/deeplink.html -w "%{http_code}" "https://bloodkings.eu/app/infrastructure/1")
+          if [ "$code" != "200" ] || ! grep -q "id=.root." /tmp/deeplink.html; then
+            echo "Deep link vraci $code misto aplikace - SPA fallback na serveru nefunguje."
+            echo "Zkontroluj cPanel -> Application Manager: aplikace registrovana na"
+            echo "URL '/app' prebira to URI a .htaccess se v jejim kontextu ignoruje."
+            exit 1
+          fi
+          echo "SPA fallback OK (HTTP $code)."

@@ -1,0 +1,200 @@
+---
+// Map.astro - Live distributed agents overview, fetched from the real status API.
+// No hardcoded cities/coordinates: this shows whatever distributed nodes are
+// actually reporting to the self-hosted status app right now.
+const currentPath = Astro.url.pathname;
+const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+
+const t = isCs ? {
+  title: 'Distribuovaní agenti',
+  desc: 'Živý přehled uzlů, které v posledních 24 hodinách reálně hlásily měření.',
+  loading: 'Načítám živá data...',
+  unavailable: 'Data o agentech jsou momentálně nedostupná.',
+  empty: 'Zatím nejsou nasazeni žádní distribuovaní agenti - viz BKPepe/monitoring-agent.',
+  online: 'Online',
+  warning: 'Zpožděno',
+  offline: 'Neaktivní',
+  nodesLabel: 'uzlů',
+} : {
+  title: 'Distributed Agents',
+  desc: 'Live view of nodes that actually reported measurements in the last 24 hours.',
+  loading: 'Loading live data...',
+  unavailable: 'Agent data is temporarily unavailable.',
+  empty: 'No distributed agents deployed yet - see BKPepe/monitoring-agent.',
+  online: 'Online',
+  warning: 'Delayed',
+  offline: 'Inactive',
+  nodesLabel: 'nodes',
+};
+---
+
+<div class="map-card card" id="agent-map-card">
+  <div class="map-header">
+    <div class="map-title-info">
+      <h4>{t.title}</h4>
+      <p>{t.desc}</p>
+    </div>
+    <div class="map-stats-badges">
+      <span class="badge badge-success" id="agent-map-count">— {t.nodesLabel}</span>
+    </div>
+  </div>
+
+  <div class="agent-nodes-grid" id="agent-nodes-grid" data-loading={t.loading} data-unavailable={t.unavailable} data-empty={t.empty} data-online={t.online} data-warning={t.warning} data-offline={t.offline}>
+    <p class="agent-nodes-status">{t.loading}</p>
+  </div>
+</div>
+
+<script>
+  import { API_ORIGIN } from '../config';
+
+  async function loadAgentNodes() {
+    const grid = document.getElementById('agent-nodes-grid');
+    const countBadge = document.getElementById('agent-map-count');
+    if (!grid) return;
+
+    const labels = {
+      unavailable: grid.dataset.unavailable || '',
+      empty: grid.dataset.empty || '',
+      online: grid.dataset.online || 'Online',
+      warning: grid.dataset.warning || 'Warning',
+      offline: grid.dataset.offline || 'Offline',
+    };
+
+    // The worker API lives on its own subdomain, independent of wherever the
+    // static site itself is served from (production domain, Pages preview, local dev).
+
+    try {
+      const res = await fetch(`${API_ORIGIN}/api/status`);
+      if (!res.ok) throw new Error('unavailable');
+      const data = await res.json();
+      if (data.available === false) throw new Error('unavailable');
+
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+
+      if (countBadge) countBadge.textContent = `${nodes.length}`;
+
+      if (nodes.length === 0) {
+        grid.innerHTML = `<p class="agent-nodes-status">${labels.empty}</p>`;
+        return;
+      }
+
+      grid.innerHTML = nodes.map((n) => {
+        const statusLabel = n.status === 'online' ? labels.online : (n.status === 'warning' ? labels.warning : labels.offline);
+        const safeName = String(n.name ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+        const latency = (typeof n.latencyMs === 'number') ? `${n.latencyMs} ms` : '';
+        return `
+          <div class="agent-node-item node-${n.status}">
+            <span class="node-dot"></span>
+            <div class="node-info">
+              <span class="node-name">${safeName}</span>
+              <span class="node-meta">${statusLabel}${latency ? ' · ' + latency : ''}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      grid.innerHTML = `<p class="agent-nodes-status">${labels.unavailable}</p>`;
+      if (countBadge) countBadge.textContent = '—';
+    }
+  }
+
+  loadAgentNodes();
+</script>
+
+<style>
+  .map-card {
+    background: var(--surface-1);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 2.5rem;
+  }
+
+  .map-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1.2rem;
+  }
+
+  .map-title-info h4 {
+    font-size: 1.25rem;
+    font-weight: 700;
+  }
+
+  .map-title-info p {
+    font-size: 0.9rem;
+    margin-top: 0.2rem;
+    color: var(--text-low);
+  }
+
+  .map-stats-badges {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .agent-nodes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.75rem;
+    min-height: 4rem;
+  }
+
+  .agent-nodes-status {
+    color: var(--text-low);
+    font-size: 0.9rem;
+    grid-column: 1 / -1;
+    padding: 1rem 0;
+  }
+
+  .agent-node-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.85rem 1rem;
+  }
+
+  .node-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .node-online .node-dot { background: var(--up); box-shadow: 0 0 0 3px var(--up-bg); }
+  .node-warning .node-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-bg); }
+  .node-offline .node-dot { background: var(--down); box-shadow: 0 0 0 3px var(--down-bg); }
+
+  .node-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .node-name {
+    font-size: 0.85rem;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .node-meta {
+    font-size: 0.75rem;
+    color: var(--text-low);
+  }
+
+  @media (max-width: 768px) {
+    .map-card {
+      padding: 1.5rem;
+    }
+    .map-header {
+      flex-direction: column;
+      gap: 1rem;
+    }
+  }
+</style>

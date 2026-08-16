@@ -1,0 +1,103 @@
+---
+/**
+ * FeatureStrip.astro — pás šesti klíčových schopností pod hero sekcí.
+ *
+ * SVG glyfy místo emoji: emoji se na každé platformě renderují jinak
+ * (a na některých Linuxech vůbec) a čtečky je předčítají jako popis
+ * obrázku uprostřed nadpisu. SVG je `aria-hidden`, význam nese nadpis.
+ */
+
+interface Item {
+  icon: 'agents' | 'protocols' | 'ip' | 'status' | 'bell' | 'api';
+  title: string;
+  desc: string;
+  /** Barevný tón dlaždice ikony. */
+  tone: 'brand' | 'up' | 'info' | 'warning';
+}
+
+interface Props {
+  items: Item[];
+}
+
+const { items } = Astro.props;
+
+// stroke-based ikony, 24×24, dědí currentColor.
+const icons: Record<Item['icon'], string> = {
+  agents:
+    '<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>',
+  protocols:
+    '<path d="M4 7h10a4 4 0 0 1 0 8H7"/><path d="m7 12-3 3 3 3"/><path d="M20 5v6"/>',
+  ip: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
+  status:
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/><path d="M15.5 16.5 17 18l3-3"/>',
+  bell: '<path d="M18 8a6 6 0 1 0-12 0c0 6-3 7-3 7h18s-3-1-3-7"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+  api: '<path d="M8 3H6a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h2"/><path d="M16 3h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-2"/><path d="M12 9v6"/>',
+};
+---
+
+<ul class="feature-strip grid-3">
+  {
+    items.map((item) => (
+      <li class="feature-item card card-glow">
+        <span class:list={['feature-icon', `tone-${item.tone}`]} aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            set:html={icons[item.icon]}
+          />
+        </span>
+        <h3>{item.title}</h3>
+        <p>{item.desc}</p>
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .feature-strip {
+    list-style: none;
+    padding: 0;
+  }
+
+  .feature-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.5rem;
+  }
+
+  .feature-item h3 {
+    font-size: var(--text-lg);
+  }
+
+  .feature-item p {
+    font-size: var(--text-sm);
+    margin: 0;
+  }
+
+  .feature-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 0.25rem;
+    border-radius: var(--radius-sm);
+    background: color-mix(in oklab, var(--tone) 14%, transparent);
+    border: 1px solid color-mix(in oklab, var(--tone) 28%, transparent);
+    color: var(--tone);
+  }
+
+  .feature-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .tone-brand { --tone: var(--brand-500); }
+  .tone-up { --tone: var(--up); }
+  .tone-info { --tone: var(--info); }
+  .tone-warning { --tone: var(--warning); }
+</style>

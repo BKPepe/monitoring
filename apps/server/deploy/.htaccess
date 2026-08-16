@@ -1,0 +1,20 @@
+# LiteSpeed / Apache Reverse Proxy pro Go Backend a WebSockets
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # 1. Přesměrování WebSocket spojení (/api/v1/ws) na Go server (:8090)
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^api/v1/ws(.*) ws://127.0.0.1:8090/api/v1/ws$1 [P,L]
+
+    # 2. Přesměrování REST API požadavků (/api/v1/...) na Go server (:8090)
+    RewriteRule ^api/v1/(.*) http://127.0.0.1:8090/api/v1/$1 [P,L]
+
+    # 3. Přesměrování legacy API endpointů pro zpětnou kompatibilitu agentů a odznaků
+    RewriteRule ^(agent_api\.php|node_api\.php|metrics\.php|badge\.php|widget\.php|report\.php|public_status) http://127.0.0.1:8090/$1 [P,L]
+
+    # 4. Statické soubory frontendu (Vite SPA Fallback)
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/status/
+    RewriteRule ^ index.html [L]
+</IfModule>

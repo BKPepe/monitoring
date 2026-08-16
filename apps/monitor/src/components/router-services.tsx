@@ -1,0 +1,328 @@
+import * as React from 'react';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Globe, Shield, Wifi, Lock, Gauge, Network } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
+import { formatUptime } from '@/lib/utils';
+
+/**
+ * Sekce „Služby" pro router (OpenWrt/Turris).
+ *
+ * Nahrazuje kartu s TLS certifikátem, která u routeru nedávala smysl -
+ * router žádný web necertifikuje. Ukazuje to, co router opravdu má:
+ * konektivitu WAN a LTE, DNS včetně ověřeného šifrování, firewall, Wi-Fi,
+ * VPN a SQM.
+ *
+ * Každá dlaždice se vykreslí jen tehdy, když pro ni agent poslal data -
+ * prázdné místo je poctivější než karta s pomlčkami.
+ */
+/**
+ * Slovní hodnocení RSRP podle běžně používaných pásem u LTE.
+ *
+ * Samotné "-83 dBm" nikomu nic neřekne; hranice jsou standardní
+ * (nad -80 výborný, do -90 dobrý, do -100 slabý, níž na hraně použitelnosti).
+ */
+function rsrpQuality(rsrp: number, t: (k: string, f?: string) => string): string {
+  if (rsrp >= -80) return t('rsvc.signal_excellent', 'výborný');
+  if (rsrp >= -90) return t('rsvc.signal_good', 'dobrý');
+  if (rsrp >= -100) return t('rsvc.signal_fair', 'slabší');
+  return t('rsvc.signal_poor', 'slabý');
+}
+
+/** Velké čítače paketů se čtou lépe s oddělovači tisíců. */
+function formatCount(value: unknown): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n.toLocaleString('cs-CZ') : String(value);
+}
+
+export function RouterServices({ d }: { d: Record<string, any> }) {
+  const { t } = useLanguage();
+
+  const tiles: React.ReactNode[] = [];
+
+  // --- WAN -----------------------------------------------------------
+  if (d.wan_up != null || d.wan_proto) {
+    tiles.push(
+      <Tile
+        key="wan"
+        icon={<Globe className="size-4" />}
+        title={t('rsvc.wan', 'Připojení WAN')}
+        state={d.wan_up === false ? 'bad' : d.wan_up === true ? 'good' : 'unknown'}
+        stateText={
+          d.wan_up == null
+            ? t('rsvc.unknown', 'Neznámý stav')
+            : d.wan_up
+              ? t('common.online', 'Online')
+              : t('common.offline', 'Offline')
+        }
+        lines={[
+          d.wan_proto ? `${t('rsvc.protocol', 'Protokol')}: ${String(d.wan_proto).toUpperCase()}` : null,
+          d.wan_ipv4 ? `IPv4: ${d.wan_ipv4}` : null,
+          d.wan_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.wan_uptime)}` : null,
+          // Vyjednaná rychlost portu - gigabit spadlý na 100 Mbit je tady vidět.
+          d.wan_link_mbit != null ? `${t('rsvc.link_speed', 'Rychlost linky')}: ${d.wan_link_mbit} Mbit/s` : null,
+          d.wan_latency_ms != null ? `${t('rsvc.wan_latency', 'Odezva k bráně')}: ${d.wan_latency_ms} ms` : null,
+        ]}
+      />
+    );
+  }
+
+  // --- Multi-WAN (mwan3) ------------------------------------------------
+  // Vykreslí se jen když má router mwan3 nakonfigurované; jinak by dlaždice
+  // tvrdila zálohovanou konektivitu, která neexistuje.
+  const mwan3 = Array.isArray(d.mwan3_policies) ? d.mwan3_policies : [];
+  if (mwan3.length > 0 || d.mwan3_active_gw) {
+    const offline = mwan3.filter((p: any) => p?.status === 'offline');
+    tiles.push(
+      <Tile
+        key="mwan3"
+        icon={<Network className="size-4" />}
+        title={t('rsvc.mwan3', 'Multi-WAN (mwan3)')}
+        state={offline.length > 0 ? 'warn' : 'good'}
+        stateText={
+          offline.length > 0
+            ? t('rsvc.mwan3_degraded', { count: offline.length }, `${offline.length} mimo provoz`)
+            : t('rsvc.active', 'Aktivní')
+        }
+        lines={[
+          d.mwan3_active_gw ? `${t('rsvc.mwan3_gw', 'Aktivní brána')}: ${d.mwan3_active_gw}` : null,
+          ...mwan3.map((p: any) =>
+            p?.interface ? `${p.interface}${p.policy ? ` (${p.policy})` : ''}: ${p.status ?? '—'}` : null
+          ),
+        ]}
+      />
+    );
+  }
+
+  // --- LTE (jen když router o nějakém ví) ------------------------------
+  const hasLteSignal = d.lte_rsrp != null || d.lte_rssi != null || d.lte_rsrq != null || d.lte_sinr != null;
+
+  if (d.lte_up != null || hasLteSignal) {
+    tiles.push(
+      <Tile
+        key="lte"
+        icon={<Network className="size-4" />}
+        title={t('rsvc.lte', 'LTE / mobilní záloha')}
+        state={d.lte_up === true ? 'good' : d.lte_up === false ? 'muted' : 'unknown'}
+        stateText={
+          d.lte_up == null
+            ? t('rsvc.unknown', 'Neznámý stav')
+            : d.lte_up
+              ? t('common.online', 'Online')
+              : t('common.offline', 'Offline')
+        }
+        lines={[
+          d.lte_device ? `${t('rsvc.device', 'Rozhraní')}: ${d.lte_device}` : null,
+          d.lte_ipv4 ? `IPv4: ${d.lte_ipv4}` : null,
+          d.lte_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.lte_uptime)}` : null,
+          [d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null,
+          // Signál z HTTP API modemu. RSRP i RSSI jsou obojí síla signálu -
+          // některé modemy (Brovi/Huawei přes ethernet) vyplní jen RSSI a tag
+          // <rsrp> nechají prázdný. Dřív se v takovém případě nevypsalo nic
+          // a karta tvrdila, že signál neznáme, přestože jsme měli RSSI,
+          // cell ID i šířku pásma - tedy data, která jdou získat jedině
+          // z toho API, o kterém hláška psala, že neexistuje.
+          d.lte_rsrp != null ? `RSRP: ${d.lte_rsrp} dBm (${rsrpQuality(d.lte_rsrp, t)})` : null,
+          d.lte_rssi != null ? `RSSI: ${d.lte_rssi} dBm` : null,
+          d.lte_rsrq != null ? `RSRQ: ${d.lte_rsrq} dB` : null,
+          d.lte_sinr != null ? `SINR: ${d.lte_sinr} dB` : null,
+          d.lte_bandwidth ? `${t('rsvc.bandwidth', 'Šířka pásma')}: ${d.lte_bandwidth}` : null,
+          d.lte_cell_id != null
+            ? `${t('rsvc.cell', 'Buňka')}: ${d.lte_cell_id}${d.lte_pci != null ? ` · PCI ${d.lte_pci}` : ''}`
+            : null,
+          d.lte_plmn != null ? `PLMN: ${d.lte_plmn}` : null,
+        ]}
+        note={
+          // Rozlišuje se "modem o signálu neřekl vůbec nic" od "řekl, ale
+          // zrovna ne RSRP". Slít to v jedno znamenalo radit doinstalování
+          // balíčku někomu, jehož modem odpovídá úplně v pořádku.
+          d.lte_up === true && !hasLteSignal
+            ? t(
+                'rsvc.lte_no_signal',
+                'Sílu signálu se nepodařilo zjistit — modem ji nehlásí přes ModemManager (uqmi/mmcli) ani přes HTTP API na své bráně.'
+              )
+            : d.lte_up === true && d.lte_rsrp == null
+              ? t(
+                  'rsvc.lte_rssi_only',
+                  'Modem hlásí RSSI, ale ne RSRP — tuhle hodnotu prostě nevyplňuje. Pro sílu signálu se řiďte RSSI.'
+                )
+              : null
+        }
+      />
+    );
+  }
+
+  // --- DNS -------------------------------------------------------------
+  if (d.dns_encryption || d.dns_servers || d.dns_latency_ms != null) {
+    const enc = String(d.dns_encryption ?? '');
+    const verified = enc.includes('ověřeno') || enc.toLowerCase().includes('verified');
+    tiles.push(
+      <Tile
+        key="dns"
+        icon={<Lock className="size-4" />}
+        title={t('rsvc.dns', 'DNS resolver')}
+        state={verified ? 'good' : enc ? 'warn' : 'unknown'}
+        stateText={enc || t('rsvc.unknown', 'Neznámý stav')}
+        lines={[
+          Array.isArray(d.dns_servers) && d.dns_servers.length > 0
+            ? `${t('rsvc.servers', 'Servery')}: ${d.dns_servers.slice(0, 3).join(', ')}`
+            : null,
+          d.dns_latency_ms != null ? `${t('rsvc.dns_latency', 'Odezva dotazu')}: ${d.dns_latency_ms} ms` : null,
+        ]}
+      />
+    );
+  }
+
+  // --- Firewall / NAT --------------------------------------------------
+  // Čítače paketů jsou důkaz, že firewall běží - i když agent stav sám
+  // neposlal (starší verze ho neuměla). Bez tohohle hlásila dlaždice
+  // "Neznámý stav" na routeru, který zrovna zahodil tři tisíce paketů.
+  const fwCounters = d.fw_accepted != null || d.fw_dropped != null || d.fw_rejected != null;
+  const fwRunning = d.firewall_enabled != null ? d.firewall_enabled === true : fwCounters ? true : null;
+
+  if (d.firewall_enabled != null || d.conntrack_count != null || d.conntrack_pct != null || fwCounters) {
+    tiles.push(
+      <Tile
+        key="fw"
+        icon={<Shield className="size-4" />}
+        title={t('rsvc.firewall', 'Firewall & NAT')}
+        state={fwRunning === false ? 'bad' : fwRunning === true ? 'good' : 'unknown'}
+        stateText={
+          fwRunning == null
+            ? t('rsvc.unknown', 'Neznámý stav')
+            : fwRunning
+              ? t('rsvc.active', 'Aktivní')
+              : t('rsvc.inactive', 'Vypnutý')
+        }
+        lines={[
+          d.conntrack_count != null
+            ? `${t('rsvc.conntrack', 'Sledovaná spojení')}: ${d.conntrack_count}${
+                d.conntrack_pct != null ? ` (${d.conntrack_pct} %)` : ''
+              }`
+            : null,
+          // Čítače hlásí jen router s iptables; na firewall4/nftables
+          // mohou chybět a pak se řádek nevypisuje (dřív tu byla nula).
+          d.fw_accepted != null ? `${t('rsvc.fw_accepted', 'Propuštěno')}: ${formatCount(d.fw_accepted)}` : null,
+          d.fw_dropped != null ? `${t('rsvc.fw_dropped', 'Zahozeno')}: ${formatCount(d.fw_dropped)}` : null,
+          d.fw_rejected != null ? `${t('rsvc.fw_rejected', 'Odmítnuto')}: ${formatCount(d.fw_rejected)}` : null,
+        ]}
+      />
+    );
+  }
+
+  // --- Wi-Fi -----------------------------------------------------------
+  if (Array.isArray(d.wifi_radios) && d.wifi_radios.length > 0) {
+    const totalClients = d.wifi_radios.reduce(
+      (sum: number, r: any) => (typeof r.clients === 'number' ? sum + r.clients : sum),
+      0
+    );
+    const anyClientData = d.wifi_radios.some((r: any) => typeof r.clients === 'number');
+    tiles.push(
+      <Tile
+        key="wifi"
+        icon={<Wifi className="size-4" />}
+        title={t('rsvc.wifi', 'Wi-Fi')}
+        state="good"
+        stateText={t('rsvc.radios', { count: d.wifi_radios.length }, `${d.wifi_radios.length} rádia`)}
+        lines={[
+          anyClientData ? `${t('rsvc.clients', 'Připojení klienti')}: ${totalClients}` : null,
+          ...d.wifi_radios.slice(0, 3).map((r: any) => {
+            const parts = [r.ssid, r.channel != null ? `kanál ${r.channel}` : null].filter(Boolean);
+            return parts.length > 0 ? parts.join(' · ') : null;
+          }),
+        ]}
+      />
+    );
+  }
+
+  // --- VPN -------------------------------------------------------------
+  const wgPeers = Array.isArray(d.wireguard_peers) ? d.wireguard_peers.length : null;
+  if (wgPeers != null || d.openvpn_tunnels != null || d.tailscale_up != null) {
+    tiles.push(
+      <Tile
+        key="vpn"
+        icon={<Shield className="size-4" />}
+        title={t('rsvc.vpn', 'VPN tunely')}
+        state="good"
+        stateText={t('rsvc.configured', 'Nastaveno')}
+        lines={[
+          wgPeers != null ? `WireGuard: ${wgPeers} ${t('rsvc.peers', 'protějšků')}` : null,
+          d.openvpn_tunnels != null ? `OpenVPN: ${d.openvpn_tunnels}` : null,
+          d.tailscale_up != null
+            ? `Tailscale: ${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}`
+            : null,
+        ]}
+      />
+    );
+  }
+
+  // --- SQM -------------------------------------------------------------
+  if (d.sqm_enabled != null) {
+    tiles.push(
+      <Tile
+        key="sqm"
+        icon={<Gauge className="size-4" />}
+        title={t('rsvc.sqm', 'SQM (řízení fronty)')}
+        state={d.sqm_enabled ? 'good' : 'muted'}
+        stateText={d.sqm_enabled ? t('rsvc.active', 'Aktivní') : t('rsvc.inactive', 'Vypnutý')}
+        lines={[
+          d.sqm_download_kbps ? `↓ ${Math.round(d.sqm_download_kbps / 1000)} Mb/s` : null,
+          d.sqm_upload_kbps ? `↑ ${Math.round(d.sqm_upload_kbps / 1000)} Mb/s` : null,
+        ]}
+        note={
+          d.sqm_enabled === false
+            ? t('rsvc.sqm_off_hint', 'Bez SQM se při plném vytížení linky zhoršuje odezva (bufferbloat).')
+            : null
+        }
+      />
+    );
+  }
+
+  if (tiles.length === 0) {
+    return (
+      <p className="text-muted-foreground py-6 text-center text-sm">
+        {t('rsvc.empty', 'Agent zatím neposlal žádné údaje o síťových službách routeru.')}
+      </p>
+    );
+  }
+
+  return <div className="grid gap-3 md:grid-cols-2">{tiles}</div>;
+}
+
+function Tile({
+  icon,
+  title,
+  state,
+  stateText,
+  lines,
+  note,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  state: 'good' | 'warn' | 'bad' | 'muted' | 'unknown';
+  stateText: string;
+  lines: (string | null)[];
+  note?: string | null;
+}) {
+  const visible = lines.filter((l): l is string => Boolean(l));
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-2">
+        <span className="bg-muted grid size-7 shrink-0 place-items-center rounded-lg">{icon}</span>
+        <span className="text-sm font-semibold">{title}</span>
+        <Badge variant={state === 'bad' ? 'down' : state === 'warn' ? 'warning' : state === 'good' ? 'up' : 'neutral'}>
+          {stateText}
+        </Badge>
+      </div>
+      {visible.length > 0 && (
+        <ul className="text-muted-foreground mt-2 space-y-0.5 font-mono text-[11px]">
+          {visible.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {note && <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">{note}</p>}
+    </Card>
+  );
+}

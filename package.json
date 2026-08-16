@@ -1,0 +1,48 @@
+{
+  "name": "bloodkings-monitoring-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/site",
+    "apps/worker",
+    "apps/monitor"
+  ],
+  "scripts": {
+    "dev:site": "npm run dev -w apps/site",
+    "dev:worker": "npm run dev -w apps/worker",
+    "dev:monitor": "npm run dev -w apps/monitor",
+    "build:site": "npm run build -w apps/site",
+    "build:worker": "npm run build -w apps/worker",
+    "build:monitor": "npm run build -w apps/monitor",
+    "build": "npm run build -w apps/site && npm run build -w apps/worker && npm run build -w apps/monitor",
+    "lint": "eslint apps/monitor/src apps/worker/src",
+    "format:check": "prettier --check \"apps/{monitor,worker,site}/src/**/*.{ts,tsx,js,json,css}\"",
+    "format": "prettier --write \"apps/{monitor,worker,site}/src/**/*.{ts,tsx,js,json,css}\"",
+    "typecheck": "tsc --noEmit -p apps/monitor/tsconfig.json && tsc --noEmit -p apps/worker/tsconfig.json",
+    "test:php": "php apps/status/tests/run_tests.php && php apps/status/tests/run_pipeline_tests.php",
+    "lint:sql": "php apps/status/tests/run_query_lint.php",
+    "deadcode": "php apps/status/tests/find_dead_code.php",
+    "perf": "php apps/status/tests/run_perf_check.php",
+    "test:react": "npm run test -w apps/monitor",
+    "check:bundle": "node apps/monitor/scripts/check-bundle-size.mjs",
+    "check:lock": "node scripts/check-lock-sync.mjs",
+    "lint:schema": "php apps/status/tests/run_schema_lint.php",
+    "lint:actions": "php apps/status/tests/run_api_action_lint.php",
+    "lint:metrics": "php apps/status/tests/run_agent_metric_lint.php",
+    "check:exports": "node scripts/check-dead-exports.mjs"
+  },
+  "//overrides": "undici 7.0.0-7.28.0 je high (desync odpovedi mezi uzivateli); miniflare ho ma zamcene na 7.28.0 a wrangler opravenou verzi zatim nevydal. Po KAZDE zmene tohoto bloku je nutne pregenerovat package-lock.json - `npm ci` odmita bezet, kdyz override neni promitnuty v locku, a v CI to spadne az pri instalaci.",
+  "overrides": {
+    "sharp": "^0.35.0",
+    "undici": "^7.29.0",
+    "nanoid": "^3.3.18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.6",
+    "semver": "^7.8.5",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
+  }
+}

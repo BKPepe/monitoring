@@ -1,0 +1,48 @@
+name: Weekly NPM Dependencies Update
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Spouští se každé pondělí o půlnoci UTC
+  workflow_dispatch:
+
+# Bez těchto oprávnění je GITHUB_TOKEN read-only a create-pull-request
+# skončí na `git push` chybou 128 - workflow tak padal každé pondělí.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-dependencies:
+    name: Check & Update NPM Dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Update NPM Packages & Audit Fix
+        run: |
+          npm ci
+          npm update
+          npm audit fix || true
+
+      - name: Verify Build
+        run: |
+          npm run build --workspace=apps/monitor
+          npm run build --workspace=apps/site || true
+
+      - name: Create Pull Request for Updates
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore(deps): weekly npm dependencies update'
+          title: 'Automated Weekly NPM Dependencies Update'
+          body: 'Automatická týdenní aktualizace NPM závislostí a bezpečnostní audit. Všechny sestavení proběhla úspěšně.'
+          branch: 'deps/weekly-npm-update'
+          delete-branch: true

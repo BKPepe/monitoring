@@ -1,0 +1,57 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bloodkings-monitoring-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-16",
+
+  // Hlídač sběru dat. Běží mimo cPanel schválně: kdyby běžel tam, umřel by
+  // spolu s tím, co má hlídat.
+  //
+  // Pět minut je kompromis - status API má limit stáří 15 minut, takže se
+  // výpadek pozná do ~20 minut a hlídač přitom netrápí server dotazem každou
+  // minutu.
+  //
+  // Aby měl alert kam odejít, je potřeba jednou nastavit webhook:
+  //   npx wrangler secret put WATCHDOG_DISCORD_WEBHOOK
+  // Bez něj hlídač kontroluje dál, ale jen loguje - a přizná to na /api/watchdog.
+  //
+  // Nastavený webhook ale ještě neznamená funkční: /api/watchdog proto sám
+  // ověřuje, že ho Discord pořád zná (alertChannelValid). Celou cestu včetně
+  // doručení do kanálu otestuje POST /api/watchdog/test, který se odemyká:
+  //   npx wrangler secret put WATCHDOG_TEST_TOKEN
+  "triggers": {
+    "crons": ["*/5 * * * *"],
+  },
+  // "compatibility_flags": [
+  //   "nodejs_compat"
+  // ],
+  // "vars": {
+  //   "MY_VAR": "my-variable"
+  // },
+  // "kv_namespaces": [
+  //   {
+  //     "binding": "MY_KV_NAMESPACE",
+  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  //   }
+  // ],
+  // "r2_buckets": [
+  //   {
+  //     "binding": "MY_BUCKET",
+  //     "bucket_name": "my-bucket"
+  //   }
+  // ],
+  // "d1_databases": [
+  //   {
+  //     "binding": "MY_DB",
+  //     "database_name": "my-database",
+  //     "database_id": ""
+  //   }
+  // ],
+  // "ai": {
+  //   "binding": "AI"
+  // },
+  // "observability": {
+  //   "enabled": true,
+  //   "head_sampling_rate": 1
+  // }
+}

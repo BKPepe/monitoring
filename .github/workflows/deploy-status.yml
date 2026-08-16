@@ -1,0 +1,127 @@
+name: Deploy Status App to cPanel
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/status/**'
+      # Zmena verze agenta = posun ukazatele submodulu. Bez tehle cesty by se
+      # novy agent nikdy nenasadil a self-update by stahoval porad tu starou.
+      - 'agents'
+      - '.github/workflows/deploy-status.yml'
+
+  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
+  # Actions zrovna nezareagovaly na push).
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build and Deploy Status App
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          # Agenti bydli v samostatnem repozitari (submodul `agents`), ale
+          # servirovat se musi z /status/ - odtud si je routery stahuji pri
+          # self-update. Bez submodulu by se nasadila stranka bez agentu a
+          # kazdy nasazeny router by dostal 404 misto aktualizace.
+          submodules: true
+
+      - name: Zkopirovat agenty ze submodulu do nasazovane slozky
+        run: |
+          set -e
+          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
+            cp "agents/vps-agent/$f" "apps/status/$f"
+          done
+          # Kontrola, ze soubory opravdu dorazily: prazdny nebo chybejici agent
+          # by se jinak nahral az na produkci a projevil se rozbitym
+          # self-updatem, ne chybou v CI.
+          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
+            test -s "apps/status/$f" || { echo "CHYBI nebo je prazdny: $f"; exit 1; }
+          done
+          echo "Agenti zkopirovani ze submodulu:"
+          grep -H -m1 'AGENT_VERSION' apps/status/agent.sh apps/status/agent_openwrt.sh
+
+      - name: Run PHP unit tests (pure functions)
+        run: php apps/status/tests/run_tests.php
+
+      - name: Run pipeline tests (collection, e-mail, notifications)
+        run: php apps/status/tests/run_pipeline_tests.php
+
+      - name: PHP syntax check
+        run: |
+          set -e
+          for f in apps/status/*.php apps/status/lang/*.php; do
+            php -l "$f" > /dev/null
+          done
+          echo "All PHP files parse cleanly."
+
+      - name: Agent script syntax check
+        run: |
+          set -e
+          # agent.sh má shebang #!/bin/bash a bashismy používá záměrně;
+          # agent_openwrt.sh musí být čistý POSIX (routery mají ash/dash).
+          bash -n agents/vps-agent/agent.sh
+          dash -n agents/vps-agent/agent_openwrt.sh
+          python3 -m py_compile agents/vps-agent/agent.py
+          echo "Agent scripts parse cleanly."
+
+      - name: Inject Status Database Config
+        env:
+          STATUS_CONFIG_PHP: ${{ secrets.STATUS_CONFIG_PHP || secrets.status_config_php }}
+        run: |
+          if [ -n "$STATUS_CONFIG_PHP" ]; then
+            echo "Creating apps/status/config.php from GitHub Actions secret..."
+            printf '%s' "$STATUS_CONFIG_PHP" > apps/status/config.php
+          else
+            echo "STATUS_CONFIG_PHP secret is not set. Using config.sample.php as fallback."
+            cp apps/status/config.sample.php apps/status/config.php
+          fi
+
+      - name: Generate Version File
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          DEPLOY_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+          cat > apps/status/version.php << PHPEOF
+          <?php
+          // Automaticky vygenerováno GitHub Actions deployem – NEUPRAVUJTE RUČNĚ
+          define('APP_VERSION_HASH', '${SHORT_SHA}');
+          define('APP_VERSION_DATE', '${DEPLOY_DATE}');
+          define('APP_VERSION_LABEL', '${DEPLOY_DATE} · ${SHORT_SHA}');
+          PHPEOF
+          echo "Version file generated: ${DEPLOY_DATE} · ${SHORT_SHA}"
+
+      - name: FTP Deploy to cPanel (status/ subfolder)
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./apps/status/
+          server-dir: public_html/status/
+          protocol: ftps
+          timeout: 60000
+          retry: 3
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            .github/**
+
+      # Po nasazeni se kazda verejna stranka pozada, jestli neupadla.
+      # widget.php a badge.php takhle mesice vracely 500 (volaly funkci,
+      # ktera v kodu nebyla) a nikdo si toho nevsiml - php -l chybu za
+      # behu nevidi a nikdo ty stranky neotviral.
+      - name: Setup PHP pro smoke test
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring
+
+      - name: Smoke test nasazených stránek
+        run: |
+          sleep 5
+          php apps/status/tests/run_page_smoke.php
