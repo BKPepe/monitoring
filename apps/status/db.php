@@ -47,7 +47,7 @@ try {
 
     // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
     // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
-    define('BK_SCHEMA_VERSION', '20260817a');
+    define('BK_SCHEMA_VERSION', '20260817b');
 
     $bk_current_schema = false;
     try {
@@ -604,6 +604,12 @@ try {
           UNIQUE KEY `uniq_speedtest_measurement` (`monitor_id`, `measured_at`),
           KEY `idx_speedtest_measured` (`measured_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Regions dotaz (dostupnost podle místa měření) agregoval 30 dní
+        // monitor_logs bez použitelného indexu - 3,7 s na produkci, zatímco
+        // ostatní dotazy veřejné stránky jsou pod vteřinou. Krycí index dá
+        // MySQL všechno, co dotaz čte, bez sahání do řádků tabulky.
+        "CREATE INDEX idx_logs_regions ON monitor_logs (checked_at, checked_from, status, response_time, monitor_id)",
 
         // Volby zobrazení status stránky - které sekce veřejná stránka ukáže.
         // NULL = všechno, aby se stránky založené dřív nezměnily.
