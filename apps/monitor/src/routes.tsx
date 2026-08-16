@@ -14,6 +14,9 @@ const AssetDetailPage = React.lazy(() => import('@/pages/asset-detail').then((m)
 const MetricDetailPage = React.lazy(() =>
   import('@/pages/metric-detail').then((m) => ({ default: m.MetricDetailPage }))
 );
+const PublicStatusPage = React.lazy(() =>
+  import('@/pages/public-status').then((m) => ({ default: m.PublicStatusPage }))
+);
 const UsersPage = React.lazy(() => import('@/pages/users').then((m) => ({ default: m.UsersPage })));
 const SetupPage = React.lazy(() => import('@/pages/setup').then((m) => ({ default: m.SetupPage })));
 const WebsitesPage = React.lazy(() => import('@/pages/websites').then((m) => ({ default: m.WebsitesPage })));
@@ -118,6 +121,17 @@ export const router = createBrowserRouter(
       element: (
         <GlobalErrorBoundary>
           <SetupPage />
+        </GlobalErrorBoundary>
+      ),
+      errorElement: <RouteErrorFallback />,
+    },
+    {
+      // Verejna status stranka: zamerne MIMO AppShell, aby navstevnik bez uctu
+      // nedostal postranni menu provozni aplikace. Nahrazuje legacy index.php.
+      path: 'public',
+      element: (
+        <GlobalErrorBoundary>
+          <PublicStatusPage />
         </GlobalErrorBoundary>
       ),
       errorElement: <RouteErrorFallback />,

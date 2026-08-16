@@ -438,6 +438,29 @@ if ($logged_in) {
     check_false('skrytá stránka není vidět anonymně', in_array('interni', $anon_slugs, true));
     check_true('veřejná stránka vidět je', in_array('verejny-prehled', $anon_slugs, true));
 
+    // --- Jedna stránka podle slugu (verejna stranka v Reactu) -----------
+    //
+    // Skryta stranka musi byt pro anonyma K NEROZEZNANI od neexistujici:
+    // stejny kod, stejne telo. Kdyby se lisily, existence skrytych stranek
+    // by sla zjistit zkousenim adres.
+    [$code, $sp_pub] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    check('veřejná stránka podle slugu vrací 200', $code, 200);
+    check('a nese titulek', $sp_pub['title'] ?? null, 'Veřejný přehled');
+
+    [$code_hidden, , $raw_hidden] = api_get($base, 'action=status_page&slug=interni');
+    [$code_missing, , $raw_missing] = api_get($base, 'action=status_page&slug=neexistuje');
+    check('skrytá stránka vrací anonymovi 404', $code_hidden, 404);
+    check('neexistující slug vrací 404', $code_missing, 404);
+    check('a obě odpovědi jsou k nerozeznání', $raw_hidden, $raw_missing);
+
+    // Prihlaseny admin skrytou stranku vidi.
+    [$code, $sp_admin] = api_get_auth($base, 'action=status_page&slug=interni', $cookie_jar);
+    check('admin skrytou stránku vidí', $code, 200);
+    check('včetně titulku', $sp_admin['title'] ?? null, 'Interní');
+
+    [$code] = api_get($base, 'action=status_page');
+    check('chybějící slug vrací 400', $code, 400);
+
     // --- Export konfigurace ---------------------------------------------
     [$code, , $raw_export] = api_get_auth($base, 'action=export_config', $cookie_jar);
     check('export vrací 200', $code, 200);

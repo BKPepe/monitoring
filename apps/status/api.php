@@ -2076,6 +2076,45 @@ if ($action === 'export_config') {
     exit;
 }
 
+// Jedna status stranka podle slugu - pro verejnou stranku v Reactu.
+//
+// Chovani kopiruje legacy index.php?page=: skryta stranka je pro anonyma
+// k nerozeznani od neexistujici (404 v obou pripadech), aby se existence
+// skrytych stranek nedala zjistit zkousenim adres.
+if ($action === 'status_page') {
+    $sp_slug = trim((string)($_GET['slug'] ?? ''));
+    if ($sp_slug === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí slug.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt_sp = $pdo->prepare("SELECT title, description, is_public, monitor_ids FROM status_pages WHERE slug = ? LIMIT 1");
+        $stmt_sp->execute([$sp_slug]);
+        $sp_row = $stmt_sp->fetch();
+        $sp_is_admin = !empty($_SESSION['admin_logged_in']);
+
+        if (!$sp_row || ((int)$sp_row['is_public'] !== 1 && !$sp_is_admin)) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Stránka nenalezena.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $sp_ids = json_decode($sp_row['monitor_ids'] ?? '', true);
+        echo json_encode([
+            'title' => $sp_row['title'],
+            'description' => $sp_row['description'],
+            // Prazdny vyber znamena "vsechny monitory" - stejne jako legacy.
+            'monitorIds' => is_array($sp_ids) ? array_map('intval', $sp_ids) : [],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // Bez tabulky (stara DB) se stranka tvari jako neexistujici.
+        http_response_code(404);
+        echo json_encode(['error' => 'Stránka nenalezena.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'status_pages') {
     $is_admin_sp = !empty($_SESSION['admin_logged_in']);
     try {
