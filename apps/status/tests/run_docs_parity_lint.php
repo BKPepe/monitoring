@@ -29,7 +29,7 @@ foreach ([$en_path, $cs_path] as $path) {
 $en = file_get_contents($en_path);
 $cs = file_get_contents($cs_path);
 
-/** Endpointy zmíněné v textu - `action=neco` kdekoli v souboru. */
+/** Endpoints mentioned in the text - `action=something` anywhere in the file. */
 function bk_doc_actions(string $text): array {
     preg_match_all('/action=([a-z_0-9]+)/', $text, $m);
     $found = array_unique($m[1] ?? []);
@@ -37,7 +37,7 @@ function bk_doc_actions(string $text): array {
     return $found;
 }
 
-/** Počet nadpisů po úrovních - hrubá, ale citlivá míra struktury. */
+/** Heading counts per level - a coarse but sensitive structure measure. */
 function bk_doc_heading_shape(string $text): array {
     preg_match_all('/^(#{1,6}) /m', $text, $m);
     $shape = [];
@@ -78,7 +78,7 @@ if ($en_shape !== $cs_shape) {
     );
 }
 
-// Obě verze musí odkazovat na tu druhou, jinak ji nikdo nenajde.
+// Both versions must link to the other, or nobody finds it.
 if (!str_contains($en, 'api.cs.md')) {
     $problems[] = 'api.md neodkazuje na českou verzi';
 }

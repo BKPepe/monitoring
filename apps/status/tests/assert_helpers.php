@@ -1,11 +1,11 @@
 <?php
 /**
- * Sdílené pomocné funkce testovacích sad.
+ * Shared helper functions of the test suites.
  *
- * Vlastní soubor proto, že coverage runner obě sady includuje do JEDNOHO
- * procesu - dokud měla každá sada vlastní check(), skončilo to fatální
- * chybou "Cannot redeclare check()". Guard přes function_exists drží běh
- * samostatně i dohromady.
+ * A separate file because the coverage runner includes both suites in ONE
+ * process - while each suite had its own check() it ended in a fatal
+ * "Cannot redeclare check()" error. The function_exists guard keeps runs
+ * working separately and together.
  */
 
 if (!function_exists('bk_test_report')) {
@@ -31,11 +31,11 @@ if (!function_exists('bk_test_report')) {
     function check_false(string $name, bool $actual): void { check($name, $actual, false); }
 
     /**
-     * Vytáhne funkci ze zdrojového souboru a vyhodnotí ji.
+     * Extracts a function from a source file and evaluates it.
      *
-     * functions.php nejde načíst celý (vyžaduje DB a posílá hlavičky), takže
-     * se testované funkce izolují ze zdroje. __DIR__ se přepisuje, jinak by
-     * uvnitř eval() ukazovalo na adresář testů a require lang souborů selhal.
+     * functions.php cannot be loaded whole (it needs a DB and sends headers), so
+     * the tested functions are isolated from the source. __DIR__ is rewritten,
+     * otherwise inside eval() it would point at the tests directory and requiring lang files would fail.
      */
     function bk_test_load_functions(string $source_file, array $names): void {
         $src = file_get_contents($source_file);
@@ -54,8 +54,8 @@ if (!function_exists('bk_test_report')) {
         $passed = $GLOBALS['bk_test_passed'];
         $failed = $GLOBALS['bk_test_failed'];
         printf("\n[%s] %d prošlo, %d selhalo\n", $suite, $passed, $failed);
-        // Počítadla se resetují, aby druhá sada ve stejném procesu
-        // (coverage runner) reportovala své vlastní výsledky.
+        // Counters reset so a second suite in the same process
+        // (the coverage runner) reports its own results.
         $GLOBALS['bk_test_passed'] = 0;
         $GLOBALS['bk_test_failed'] = 0;
         return $failed;

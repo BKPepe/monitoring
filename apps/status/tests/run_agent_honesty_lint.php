@@ -1,23 +1,23 @@
 <?php
 /**
- * Lint proti vymýšlení dat v agentech (shell / python / powershell).
+ * A lint against invented data in the agents (shell / python / powershell).
  *
- * Spuštění:  php apps/status/tests/run_agent_honesty_lint.php
+ * Running:  php apps/status/tests/run_agent_honesty_lint.php
  *
- * Proč vznikl: honesty lint hlídal PHP a TypeScript, ale ne agenty - a
- * právě tam vznikla nula, která tvrdila „0 zahozených paketů" na routeru,
- * kde firewall vůbec neměříme (awk `END{print sum+0}` vypíše nulu i když
- * nic neodpovídalo). Chyba se pak přenese celou cestou až do UI a vypadá
- * jako naměřený údaj.
+ * Why it exists: the honesty lint guarded PHP and TypeScript, but not the
+ * agents - and right there a zero appeared claiming "0 dropped packets" on a
+ * router where the firewall is not measured at all (awk `END{print sum+0}`
+ * prints a zero even when nothing matched). The error then travels all the way
+ * as a measured value.
  *
- * Hlídané vzory:
- *   awk '... END{print sum+0}'      nula i bez jediného shodného řádku
- *   [ -z "$metrika" ] && metrika=0  prázdná hodnota přepsaná nulou
- *   metrika=${x:-0}                 totéž jiným zápisem
- *   'metrika': 0 / = 0              výchozí nula v py/ps1
+ * Guarded patterns:
+ *   awk '... END{print sum+0}'      a zero even without a single matching row
+ *   [ -z "$metric" ] && metric=0    an empty value overwritten with zero
+ *   metric=${x:-0}                  the same in another notation
+ *   'metric': 0 / = 0               a default zero in py/ps1
  *
- * Nulu, která je opravdu nula (počítadla vlastních akcí, přepínače,
- * indexy), pusťte přes seznam allowed_names.
+ * A zero that is genuinely zero (counters of own actions, switches,
+ * indices) goes through the allowed_names list.
  */
 
 // Agenti bydli v samostatnem repozitari (submodul `agents`) a lint cte VYHRADNE
@@ -43,7 +43,7 @@ if (!$agents) {
     exit(1);
 }
 
-/** Názvy, u nichž nula znamená měření, a je tedy lží, když se nezměřilo. */
+/** Names where a zero means a measurement, i.e. it is a lie when unmeasured. */
 $metric_names = [
     'cpu', 'ram', 'mem', 'hdd', 'disk', 'swap', 'load', 'temp', 'temperature',
     'latency', 'ping', 'rtt', 'response',
@@ -55,8 +55,8 @@ $metric_names = [
 ];
 
 /**
- * Názvy, kde je nula legitimní: vlastní počítadla skriptu, přepínače
- * a pomocné proměnné, které nic neměří.
+ * Names where zero is legitimate: the script's own counters, switches
+ * and helper variables that measure nothing.
  */
 $allowed_names = [
     'auto_update', 'verbose', 'debug', 'exit_code', 'retry', 'attempt',
@@ -72,14 +72,14 @@ foreach ($agents as $file) {
 
     foreach ($lines as $no => $line) {
         $trimmed = ltrim($line);
-        // Komentáře popisují problém, netvoří ho (např. tenhle soubor).
+        // Comments describe the problem, they do not create it (e.g. this file).
         if ($trimmed === '' || str_starts_with($trimmed, '#') || str_starts_with($trimmed, '//')) {
             continue;
         }
 
         $checks = [];
 
-        // 1. awk END{print sum+0} - nula i bez jediného shodného řádku
+        // 1. awk END{print sum+0} - a zero even without a single matching row
         if (preg_match('/END\s*\{\s*print\s+[a-z_]+\s*\+\s*0\s*\}/i', $line)) {
             $checks[] = 'awk vypíše 0 i když nic neodpovídalo (END{print x+0})';
         }
@@ -111,7 +111,7 @@ foreach ($agents as $file) {
             continue;
         }
 
-        // Jméno proměnné rozhoduje, jestli jde o měření.
+        // The variable's name decides whether it is a measurement.
         $haystack = strtolower($var ?? $line);
         $is_metric = false;
         foreach ($metric_names as $metric) {

@@ -1,14 +1,14 @@
 <?php
 /**
- * Testy čistých funkcí z functions.php (bez DB a bez sítě).
+ * Tests of the pure functions from functions.php (no DB, no network).
  *
- * Spuštění:  php apps/status/tests/run_tests.php
- * V CI: .github/workflows/deploy-status.yml je pouští před nasazením.
+ * Running:  php apps/status/tests/run_tests.php
+ * In CI: .github/workflows/deploy-status.yml runs them before the deploy.
  *
- * Proč takhle: aplikace běží na sdíleném hostingu bez Composeru, takže
- * PHPUnit není k dispozici. Tenhle runner nepotřebuje nic než PHP a chytá
- * přesně tu třídu regresí, kterou tenhle projekt opakovaně vyráběl -
- * vymyšlené hodnoty a špatné vyhodnocení vstupů.
+ * Why this way: the app runs on shared hosting without Composer, so PHPUnit
+ * is unavailable. This runner needs nothing but PHP and catches exactly the
+ * class of regressions this project kept producing -
+ * invented values and wrong input evaluation.
  */
 
 require_once __DIR__ . '/assert_helpers.php';
@@ -29,9 +29,9 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
 ]);
 
 
-// --- bk_validate_import_target: importované cíle -------------------------
-// Blokuje se všechno, na co kontrola z hostingu nikdy nedosáhne. Právě tahle
-// mezera vyrobila tři monitory hlásící trvale falešný výpadek.
+// --- bk_validate_import_target: imported targets ----------------------------
+// Everything a hosting-side check can never reach is blocked. Exactly this
+// gap produced three monitors reporting a permanent false outage.
 if (function_exists('bk_validate_import_target')) {
     check('veřejná doména projde', bk_validate_import_target('dns.example.com'), null);
     check('veřejná IPv4 projde', bk_validate_import_target('8.8.8.8'), null);
@@ -47,17 +47,17 @@ if (function_exists('bk_validate_import_target')) {
     check_true('.internal jméno odmítnuto', bk_validate_import_target('kresd.internal') !== null);
     check_true('prázdný cíl odmítnut', bk_validate_import_target('') !== null);
     check_true('URL na privátní IP odmítnuta', bk_validate_import_target('https://192.168.0.1/admin') !== null);
-    // Přesně ten vstup, se kterým vznikl rozbitý kresd monitor:
+    // Exactly the input that produced the broken kresd monitor:
     check_true('jméno monitoru není adresa', bk_validate_import_target('Router - Praha') !== null);
 }
 
-// --- bk_version_is_older: nabídka aktualizace agenta ---------------------
-// Řetězcové porovnání tu hlásilo "neaktuální" u aktuálních agentů.
+// --- bk_version_is_older: the agent update offer ----------------------------
+// String comparison reported "outdated" for current agents here.
 if (function_exists('bk_version_is_older')) {
     check_true('1.5.2 je starší než 1.5.6', bk_version_is_older('1.5.2', '1.5.6'));
     check_false('1.5.6 není starší než 1.5.6', bk_version_is_older('1.5.6', '1.5.6'));
     check_false('1.7.3 není starší než 1.5.6', bk_version_is_older('1.7.3', '1.5.6'));
-    // Klasická past řetězcového porovnání: "1.10.0" < "1.9.0" jako text.
+    // The classic string-comparison trap: "1.10.0" < "1.9.0" as text.
     check_false('1.10.0 není starší než 1.9.0', bk_version_is_older('1.10.0', '1.9.0'));
     check_true('1.9.0 je starší než 1.10.0', bk_version_is_older('1.9.0', '1.10.0'));
     check_false('neznámá verze nehlásí zastaralost', bk_version_is_older(null, '1.5.6'));
@@ -264,11 +264,11 @@ check_false('CIDR bez lomitka', bk_ip_in_cidr('104.16.5.9', '104.16.0.0'));
 check_false('zaporny prefix', bk_ip_in_cidr('104.16.5.9', '104.16.0.0/-1'));
 check_false('prilis velky prefix', bk_ip_in_cidr('104.16.5.9', '104.16.0.0/33'));
 
-// --- Eskalace nepřevzatých incidentů -------------------------------------
+// --- Escalation of unacknowledged incidents --------------------------------
 //
-// Eskalace budí člověka, takže každá podmínka musí platit doslova. Nejvíc
-// záleží na razítku: bez něj by se stejný incident hlásil při každém běhu
-// cronu a naučili bychom se ho ignorovat stejně jako to první upozornění.
+// Escalation wakes a human, so every condition must hold literally. The stamp
+// matters most: without it the same incident would be reported on every cron
+// run and we would learn to ignore it like the first alert.
 $inc_base = [
     'status' => 'investigating',
     'created_at' => null,
@@ -285,7 +285,7 @@ check('doba čekání se počítá od vzniku', $r['waiting_secs'], 1800);
 $r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-10 minutes')]), 15, $now);
 check_false('před uplynutím lhůty se neeskaluje', $r['escalate']);
 
-// Přesně na hranici ano - lhůta uplynula.
+// Exactly at the boundary yes - the period has elapsed.
 $r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-900 seconds')]), 15, $now);
 check_true('přesně po lhůtě se eskaluje', $r['escalate']);
 
@@ -314,8 +314,8 @@ $r = bk_escalation_due(array_merge($inc_base, [
 ]), 15, $now);
 check_false('incident s časem vyřešení neeskaluje', $r['escalate']);
 
-// Poškozený nebo chybějící čas vzniku: budit člověka kvůli rozbitému
-// záznamu je horší než neudělat nic.
+// A corrupted or missing creation time: waking a human over a broken record
+// is worse than doing nothing.
 $r = bk_escalation_due(array_merge($inc_base, ['created_at' => null]), 15, $now);
 check_false('bez času vzniku se neeskaluje', $r['escalate']);
 check('a je řečeno proč', $r['reason'], 'incident nemá použitelný čas vzniku');
@@ -341,7 +341,7 @@ if (function_exists('bk_period_minutes')) {
 }
 
 $failed = bk_test_report('čisté funkce');
-// Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
+// Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {
     exit($failed > 0 ? 1 : 0);
 }

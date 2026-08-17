@@ -1,22 +1,22 @@
 <?php
 /**
- * Hlídá, že se volají jen akce, které api.php opravdu zná.
+ * Guards that only actions api.php really knows get called.
  *
- * Spuštění:  php apps/status/tests/run_api_action_lint.php
+ * Running:  php apps/status/tests/run_api_action_lint.php
  *
- * Proč vznikl: api.php dosud na neznámou akci vracelo výchozí přehled služeb
- * s kódem 200, takže překlep v názvu vypadal jako úspěch. Díky tomu roky
- * nikdo nezjistil, že chybí dva endpointy, na které se volalo z UI:
+ * Why it exists: api.php used to answer an unknown action with the default
+ * service overview with a 200, so a typo in a name looked like success. Thanks
+ * to that, for years nobody learned that two endpoints the UI called were
  *
- *   save_annotation  poznámky klikané do grafu se tiše zahazovaly
- *   setup            průvodce prvním spuštěním hlásil úspěch a nezaložil účet
+ *   save_annotation  chart notes were silently dropped
+ *   setup            the first-run wizard reported success and created no account
  *
- * Guard v api.php teď vrací 400, takže se to projeví hned. Tenhle lint to
- * odhalí ještě dřív - při buildu, ne až u uživatele.
+ * The guard in api.php now returns 400, so it shows immediately. This lint
+ * catches it even earlier - at build time, not at the user.
  *
- * Nekontroluje se jen samotné `action=`: rozhoduje, na KTERÝ skript volání
- * míří. admin.php, node_api.php i agent_api.php mají vlastní sadu akcí a
- * do api.php jim nic není.
+ * More than the bare `action=` is checked: what matters is WHICH script the
+ * call targets. admin.php, node_api.php and agent_api.php have their own
+ * action sets and have no business in api.php.
  */
 
 $root = realpath(__DIR__ . '/..');
@@ -28,7 +28,7 @@ if ($api_src === false) {
     exit(1);
 }
 
-/** Akce, které api.php obsluhuje (`$action === 'x'`, i ve složených podmínkách). */
+/** Actions api.php handles (`$action === 'x'`, compound conditions included). */
 preg_match_all("/\\\$action === '([a-z_]+)'/", $api_src, $m);
 $known = array_unique($m[1] ?? []);
 sort($known);
@@ -38,7 +38,7 @@ if (empty($known)) {
     exit(1);
 }
 
-/** Soubory, které mohou API volat. api.php sám sebe nekontroluje. */
+/** Files that may call the API. api.php does not check itself. */
 $files = array_filter(array_merge(
     glob($root . '/*.php') ?: [],
     glob($repo . '/apps/monitor/src/*.ts*') ?: [],
@@ -53,22 +53,22 @@ $problems = [];
 foreach ($files as $file) {
     $lines = file($file, FILE_IGNORE_NEW_LINES) ?: [];
 
-    // Konstanta se základní adresou: `const API_BASE = '/status/api.php';`
-    // Volání pak vypadá jako `${API_BASE}?action=…` a bez tohohle kroku by
-    // se nepoznalo, kam míří.
+    // The base-address constant: `const API_BASE = '/status/api.php';`
+    // Calls then look like `${API_BASE}?action=…` and without this step there
+    // would be no telling where they aim.
     $base_is_api = (bool)preg_match("/(?:const|\\\$)\s*\w*API_BASE\w*\s*=\s*['\"][^'\"]*api\.php['\"]/", implode("\n", $lines));
 
     foreach ($lines as $no => $line) {
         $trimmed = ltrim($line);
-        // Komentáře popisují chování, nevolají ho - zmínka „viz action=monitors"
-        // není volání a nemá se kontrolovat.
+        // Comments describe behaviour, they do not call it - a "see action=monitors"
+        // mention is not a call and must not be checked.
         if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*') || str_starts_with($trimmed, '#')) {
             continue;
         }
 
         $hits = [];
 
-        // 1. Přímá adresa: api.php?action=…, admin.php?action=… atd.
+        // 1. A direct address: api.php?action=…, admin.php?action=… etc.
         if (preg_match_all('/(\w+)\.php\?action=([a-z_]+)/', $line, $direct, PREG_SET_ORDER)) {
             foreach ($direct as $d) {
                 if ($d[1] === 'api') {
@@ -77,17 +77,17 @@ foreach ($files as $file) {
             }
         }
 
-        // 2b. Přes appApi helpery: request('akce') / mutate('akce') skládají
-        // URL dynamicky (`?action=${action}`), takže vzor 1 je nevidí. Přesně
+        // 2b. Via the appApi helpers: request('action') / mutate('action') compose
+        // the URL dynamically (`?action=${action}`), so pattern 1 misses them. This
         // tudy proklouzlo save_user/delete_user - klient je volal, api.php je
-        // neznal, neznámá akce vracela 200 a UI hlásilo neexistující úspěch.
+        // never knew, the unknown action returned 200 and the UI reported a nonexistent success.
         if (preg_match_all("/(?:request|mutate)(?:<[^>]*>)?\(\s*'([a-z_]+)'/", $line, $helper_calls)) {
             foreach ($helper_calls[1] as $hc) {
                 $hits[] = $hc;
             }
         }
 
-        // 2. Přes konstantu: `${API_BASE}?action=…`
+        // 2. Via the constant: `${API_BASE}?action=…`
         if ($base_is_api && preg_match_all('/API_BASE\}\?action=([a-z_]+)/', $line, $viabase)) {
             foreach ($viabase[1] as $a) {
                 $hits[] = $a;
@@ -113,9 +113,9 @@ if ($problems) {
     exit(1);
 }
 
-// Akce, na které se odsud nevolá, NEJSOU chyba: část API obsluhuje agenty,
-// Prometheus nebo veřejné odkazy, které v repozitáři nikde nefigurují.
-// Vypisují se jen pro přehled a exit kód neovlivňují.
+// Actions not called from here are NOT errors: part of the API serves agents,
+// Prometheus or public links that appear nowhere in the repository.
+// They are listed for overview only and do not affect the exit code.
 $unused = array_values(array_diff($known, array_keys($used)));
 
 printf("API action lint: %d akcí v api.php, všechna volání sedí.\n", count($known));

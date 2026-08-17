@@ -1,24 +1,24 @@
 <?php
 /**
- * Hlídá, že schema.sql a migrace v db.php popisují stejnou databázi.
+ * Guards that schema.sql and the migrations in db.php describe the same database.
  *
- * Spuštění:  php apps/status/tests/run_schema_lint.php
+ * Running:  php apps/status/tests/run_schema_lint.php
  *
- * Proč vznikl: schéma se udržuje na dvou místech. `schema.sql` je to, co
- * dostane čerstvá instalace, migrace v `db.php` doplňují, co přibylo od
- * posledního importu. Nic je nedrželo pohromadě - a rozešly se: sedm sloupců
+ * Why it exists: the schema is maintained in two places. `schema.sql` is what
+ * a fresh install gets, the migrations in `db.php` top up what accrued since
+ * the last import. Nothing held them together - and they drifted: seven columns
  * (preset_id, latency_threshold_ms/mins, acknowledged_by/at, postmortem,
- * lte_rsrp) existovalo jen v migracích.
+ * lte_rsrp) existed only in the migrations.
  *
- * Dnes to projde jen shodou okolností. Verze v schema.sql je nižší než
- * BK_SCHEMA_VERSION, takže po importu doběhnou migrace a chybějící sloupce
- * doplní. Jakmile by ale někdo verze „srovnal" - což ten komentář na začátku
- * schema.sql přímo doporučuje - čerstvá instalace by se rozbila až za běhu,
- * na dotazu na neexistující sloupec.
+ * Today it passes only by luck. The version in schema.sql is lower than
+ * BK_SCHEMA_VERSION, so after an import the migrations run and add the missing
+ * columns. But the moment someone "aligned" the versions - which the comment
+ * at the top of schema.sql outright recommends - a fresh install would break at
+ * runtime, on a query against a nonexistent column.
  *
- * Kontroluje se obojí:
- *   1. Každý sloupec z `ALTER TABLE … ADD COLUMN` má být i v schema.sql.
- *   2. Každá tabulka zakládaná v migracích má být i v schema.sql.
+ * Both directions are checked:
+ *   1. Every column from `ALTER TABLE … ADD COLUMN` must also be in schema.sql.
+ *   2. Every table created in the migrations must also be in schema.sql.
  */
 
 $db_src = file_get_contents(__DIR__ . '/../db.php');
@@ -29,7 +29,7 @@ if ($db_src === false || $schema_src === false) {
     exit(1);
 }
 
-/** Tělo tabulky v schema.sql - hledá se v něm sloupec, ne v celém souboru. */
+/** The table body in schema.sql - the column is searched there, not in the whole file. */
 function bk_schema_table_body(string $schema, string $table): ?string {
     if (!preg_match('/CREATE TABLE IF NOT EXISTS `' . preg_quote($table, '/') . '`\s*\((.*?)\n\)\s*ENGINE/s', $schema, $m)) {
         return null;
@@ -46,7 +46,7 @@ $checked_columns = 0;
 foreach ($col_matches as [$_, $table, $column]) {
     $body = bk_schema_table_body($schema_src, $table);
     if ($body === null) {
-        // Tabulku řeší kontrola níž - tady by to byl druhý hlas o téže věci.
+        // The table is handled by the check below - here it would be a second voice on the same thing.
         continue;
     }
     $checked_columns++;
@@ -65,13 +65,13 @@ foreach (array_unique($tbl_matches[1] ?? []) as $table) {
 
 // --- 3. Verze ------------------------------------------------------------
 //
-// Verze se schválně NEporovnávají na shodu. Dokud je v schema.sql nižší,
-// migrace po importu doběhnou a případný zbytek dorovnají - je to bezpečná
-// pojistka. Kontroluje se jen to, že v schema.sql opravdu nějaká je: bez ní
-// by se migrace pouštěly při každém requestu.
-// Verzí je v schema.sql víc (řádek v seed datech a přepis na konci souboru).
-// Platí ta poslední - ON DUPLICATE KEY UPDATE přepíše předchozí - takže se
-// bere ona, jinak by hlášení ukazovalo hodnotu, která se nikdy neuplatní.
+// Versions are deliberately NOT compared for equality. As long as schema.sql is
+// lower, migrations finish after an import and top up the rest - a safe
+// safety net. Only its presence is checked: without one, migrations would
+// run on every request.
+// schema.sql holds several versions (a seed-data row and an overwrite at the end).
+// The last one wins - ON DUPLICATE KEY UPDATE overwrites the previous - so it is
+// the one taken, otherwise the report would show a value that never applies.
 preg_match_all("/schema_version['\"]?,\s*'([0-9a-z]+)'/i", $schema_src, $sv_all);
 $schema_version = !empty($sv_all[1]) ? end($sv_all[1]) : null;
 if ($schema_version === null) {

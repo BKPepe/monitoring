@@ -1,23 +1,23 @@
 <?php
 /**
- * Lint proti vymýšlení dat: hlídá převod "nezměřeno" na nulu.
+ * A lint against invented data: guards the "unmeasured" to zero conversion.
  *
- * Spuštění:  php apps/status/tests/run_honesty_lint.php
+ * Running:  php apps/status/tests/run_honesty_lint.php
  *
- * Proč vznikl: pravidlo "nenaměřená hodnota je NULL a v UI pomlčka, nikdy
- * vymyšlená nula" se v tomhle repu prosazovalo dvěma ručními audity - a
- * obojí něco propustilo (poprvé konstanty bez coercions, podruhé datovou
- * cestu React aplikace bez legacy PHP stránek). Ruční audit tuhle práci
- * dělat nemá; dělá ji tenhle skript při každém pushi.
+ * Why it exists: the rule "an unmeasured value is NULL and a dash in the UI,
+ * never an invented zero" was enforced in this repo by two manual audits - and
+ * both let something through (first constants without coercions, then the
+ * React app's data path without the legacy PHP pages). A manual audit cannot
+ * to; this script does it on every push.
  *
- * Co je a není porušení:
- *   $_GET['id'] ?? 0            OK  - parametr requestu, ne měření
- *   $stats['up_count'] ?? 0     OK  - COUNT() bez řádků je opravdu nula
- *   $d['response_time'] ?? 0    CHYBA - neexistující měření není 0 ms
- *   bk_ping_host($h) ?? 0       CHYBA - selhaný ping není 0 ms
+ * What is and is not a violation:
+ *   $_GET['id'] ?? 0            OK  - a request parameter, not a measurement
+ *   $stats['up_count'] ?? 0     OK  - COUNT() without rows really is zero
+ *   $d['response_time'] ?? 0    ERROR - a nonexistent measurement is not 0 ms
+ *   bk_ping_host($h) ?? 0       ERROR - a failed ping is not 0 ms
  */
 
-/** Názvy, které označují MĚŘENOU veličinu - u nich je nula lež. */
+/** Names denoting a MEASURED quantity - for them a zero is a lie. */
 $metric_words = [
     'response_time', 'ping', 'latency', 'rtt',
     'cpu', 'ram', 'hdd', 'disk', 'swap', 'load',
@@ -27,7 +27,7 @@ $metric_words = [
     'presence_count', 'members_online', 'players', 'players_online',
 ];
 
-/** Výrazy, kde nula skutečně znamená nulu (počty, identifikátory, stavy). */
+/** Expressions where zero genuinely means zero (counts, identifiers, states). */
 $allowed_patterns = [
     '/\$_(GET|POST|REQUEST|SERVER)\[/',      // vstup z requestu
     '/_count\b/', '/\bcount\b/', '/\btotal\b/', // agregace COUNT()
@@ -35,7 +35,7 @@ $allowed_patterns = [
     '/alerts_read_log_id/',                   // ukazatel přečtenosti
 ];
 
-/** Rekurzivní sběr souborů - glob() se ** nezvládá. */
+/** Recursive file collection - glob() cannot do **. */
 function bk_collect_files(string $dir, array $extensions): array {
     if (!is_dir($dir)) {
         return [];
@@ -58,7 +58,7 @@ function bk_collect_files(string $dir, array $extensions): array {
 }
 
 // realpath: cesty z glob() obsahuji "/tests/../", takze by je filtr nize
-// omylem zahodil VSECHNY (a lint by tise hlasil nula porusení).
+// accidentally dropped ALL of them (and the lint would quietly report zero violations).
 $targets = array_merge(
     array_map('realpath', glob(__DIR__ . '/../*.php') ?: []),
     bk_collect_files(realpath(__DIR__ . '/../../monitor/src') ?: '', ['.ts', '.tsx'])
@@ -71,11 +71,11 @@ $targets = array_filter(
 );
 
 /**
- * Datová pole, u nichž je vymyšlený ŘETĚZEC stejná lež jako vymyšlená nula.
+ * Data fields where an invented STRING is the same lie as an invented zero.
  *
  * Zachytilo to `checked_from ?: 'Frankfurt am Main, DE (RackNerd, LLC)'` -
- * 37 ze 40 událostí tvrdilo konkrétní místo měření, které nikdo nezapsal.
- * Číselná kontrola níže takovou věc principiálně nevidí.
+ * 37 of 40 events claimed a concrete vantage point nobody ever recorded.
+ * The numeric check below cannot see such a thing in principle.
  */
 $data_string_fields = [
     'checked_from', 'location', 'region', 'country', 'city', 'isp', 'asn',
@@ -84,7 +84,7 @@ $data_string_fields = [
     'agent_version', 'version',
 ];
 
-/** Hodnoty, které jsou poctivé zástupné texty, ne vymyšlená data. */
+/** Values that are honest placeholders, not invented data. */
 $honest_placeholders = [
     '—', '-', '', '?', 'n/a', 'N/A', 'null', 'unknown', 'neznámé', 'neznámý',
     'neznámá', 'nezjištěno', 'není k dispozici', 'not available',
@@ -95,7 +95,7 @@ $violations = [];
 foreach ($targets as $file) {
     $lines = file($file, FILE_IGNORE_NEW_LINES) ?: [];
     foreach ($lines as $no => $line) {
-        // Zajímají nás jen řádky, kde se něco převádí na nulu.
+        // Only lines converting something to zero are of interest.
         if (!preg_match('/\?\?\s*0(?![.\d])|COALESCE\([^)]+,\s*0\s*\)/i', $line)) {
             continue;
         }
@@ -113,8 +113,8 @@ foreach ($targets as $file) {
             continue;
         }
 
-        // Povolené případy (počty, id, request) mají přednost - jinak by
-        // lint hlásil "up_count ?? 0", což je korektní nula.
+        // Allowed cases (counts, ids, request) take precedence - otherwise the
+        // lint reported "up_count ?? 0", which is a correct zero.
         $allowed = false;
         foreach ($allowed_patterns as $pattern) {
             if (preg_match($pattern, $lower)) {
@@ -134,10 +134,10 @@ foreach ($targets as $file) {
         ];
     }
 
-    // --- Vymyšlené řetězce u datových polí ------------------------------
-    // Literál se musí vázat PŘÍMO na dané pole (field ?? 'hodnota'), ne jen
-    // být kdesi na stejném řádku - jinak lint hlásil `m.category ?? 'Monitory'`
-    // jen proto, že vedle stálo `m.os`.
+    // --- Invented strings on data fields --------------------------------
+    // The literal must bind DIRECTLY to the field (field ?? 'value'), not just
+    // sit on the same line - the lint used to report `m.category ?? 'Monitory'`
+    // merely because `m.os` stood nearby.
     foreach ($lines as $no => $line) {
         foreach ($data_string_fields as $field) {
             $pattern = '/\\b' . preg_quote($field, '/') . "\\b['\"]?\\]?\\s*(\\?\\?|\\?:)\\s*'([^']{1,80})'/i";
@@ -149,7 +149,7 @@ foreach ($targets as $file) {
                 if (in_array(mb_strtolower($literal), array_map('mb_strtolower', $honest_placeholders), true)) {
                     continue;
                 }
-                // Klíče překladů, CSS proměnné a enum hodnoty nejsou data.
+                // Translation keys, CSS variables and enum values are not data.
                 if (str_starts_with($literal, 'var(') || preg_match('/^[a-z0-9_]+$/', $literal)) {
                     continue;
                 }

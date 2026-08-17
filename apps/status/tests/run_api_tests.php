@@ -1,21 +1,21 @@
 <?php
 /**
- * Integrační testy api.php proti skutečné databázi a skutečnému HTTP.
+ * Integration tests of api.php against a real database and real HTTP.
  *
- * Spuštění (vyžaduje MySQL/MariaDB a PHP CLI):
+ * Running (requires MySQL/MariaDB and the PHP CLI):
  *   BK_TEST_DB_NAME=bk_test BK_TEST_DB_USER=root BK_TEST_DB_PASS=root \
  *     php apps/status/tests/run_api_tests.php
  *
- * Proč zrovna takhle: api.php je monolit, který si sám načítá config,
- * otevírá PDO a rovnou tiskne JSON. Vytáhnout z něj funkce jako u
- * ostatních sad nejde. Zároveň jsou to právě dotazy a názvy sloupců, kde
- * se tenhle projekt opakovaně sekl (Prometheus token psal do
- * setting_key/setting_value místo key_name/key_value a endpoint vracel
- * 500; daily_uptime odkazoval na proměnnou, která už neexistovala).
- * Takové chyby odhalí jedině skutečné zavolání endpointu.
+ * Why this way: api.php is a monolith that loads its own config, opens
+ * PDO and prints JSON directly. Extracting functions from it like the
+ * other suites do is not possible. At the same time it is exactly the
+ * queries and column names where this project kept tripping (the Prometheus
+ * token wrote setting_key/setting_value instead of key_name/key_value and
+ * the endpoint returned 500; daily_uptime referenced a variable that no
+ * longer existed). Only really calling the endpoint reveals such bugs.
  *
- * Test si proto postaví vlastní databázi ze schema.sql, naplní ji známými
- * daty, spustí `php -S` nad apps/status a mluví s ním přes HTTP.
+ * The test therefore builds its own database from schema.sql, fills it with
+ * known data, starts `php -S` over apps/status and talks to it via HTTP.
  */
 
 require_once __DIR__ . '/assert_helpers.php';
@@ -28,7 +28,7 @@ $db_pass = getenv('BK_TEST_DB_PASS') ?: '';
 $port = (int)(getenv('BK_TEST_PORT') ?: 8123);
 $root = realpath(__DIR__ . '/..');
 
-// --- 1. Databáze ---------------------------------------------------------
+// --- 1. Database ----------------------------------------------------------
 try {
     $pdo = new PDO("mysql:host={$db_host};port={$db_port};charset=utf8mb4", $db_user, $db_pass, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -43,8 +43,8 @@ $pdo->exec("DROP DATABASE IF EXISTS `{$db_name}`");
 $pdo->exec("CREATE DATABASE `{$db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
 $pdo->exec("USE `{$db_name}`");
 
-// schema.sql se pouští po jednotlivých příkazech - PDO::exec zvládne víc
-// dotazů najednou jen někdy a chyba by pak zůstala neviditelná.
+// schema.sql runs statement by statement - PDO::exec handles multiple
+// queries at once only sometimes and an error would stay invisible.
 $schema = file_get_contents($root . '/schema.sql');
 $schema = preg_replace('/^\s*--.*$/m', '', $schema);
 foreach (array_filter(array_map('trim', explode(";\n", $schema))) as $sql) {
@@ -54,17 +54,17 @@ foreach (array_filter(array_map('trim', explode(";\n", $schema))) as $sql) {
     try {
         $pdo->exec($sql);
     } catch (PDOException $e) {
-        // Sekvence INSERT s ukázkovými daty nejsou pro testy podstatné.
+        // The INSERT sequences with sample data do not matter for the tests.
         if (!str_contains($e->getMessage(), 'Duplicate')) {
             fwrite(STDERR, "schema.sql: " . substr($e->getMessage(), 0, 120) . "\n");
         }
     }
 }
 
-// --- 2. Známá testovací data --------------------------------------------
-// Web s naměřenou odezvou a SSL, agent BEZ naměřených metrik. Ten druhý je
-// tu schválně: většina regresí v tomhle projektu byla o tom, že se
-// nezměřená hodnota ukázala jako nula.
+// --- 2. Known test data ---------------------------------------------------
+// A website with a measured latency and SSL, an agent WITHOUT measured
+// metrics. The latter is here on purpose: most regressions in this project
+// were about an unmeasured value showing up as zero.
 $pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category)
             VALUES (1, 'Testovací web', 'web', 'https://example.com', 443, 'up', 'Weby')");
 $pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category)
@@ -80,11 +80,11 @@ for ($i = 0; $i < 10; $i++) {
 }
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
             VALUES (1, 'down', NULL, DATE_SUB(NOW(), INTERVAL 30 MINUTE))");
-// Agent hlásí, že žije, ale metriky nezměřil - v odpovědi musí být null.
+// The agent reports it is alive but measured no metrics - the response must hold null.
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
             VALUES (2, NULL, NULL, NULL, NOW())");
 
-// --- 3. config.php pro testovací instanci --------------------------------
+// --- 3. config.php for the test instance ----------------------------------
 $config_path = $root . '/config.php';
 $config_backup = file_exists($config_path) ? file_get_contents($config_path) : null;
 file_put_contents($config_path, "<?php\n"
@@ -100,7 +100,7 @@ file_put_contents($config_path, "<?php\n"
     . "define('TIMEZONE', 'Europe/Prague');\n"
     . "date_default_timezone_set(TIMEZONE);\n");
 
-// --- 4. Vestavěný PHP server --------------------------------------------
+// --- 4. The built-in PHP server -------------------------------------------
 $server = proc_open(
     sprintf('php -S 127.0.0.1:%d -t %s', $port, escapeshellarg($root)),
     [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
@@ -112,7 +112,7 @@ $cleanup = function () use ($server, $config_path, $config_backup) {
         proc_terminate($server);
         proc_close($server);
     }
-    // config.php patří vývojáři, ne testu - vrací se do původního stavu.
+    // config.php belongs to the developer, not the test - restored to its original state.
     if ($config_backup !== null) {
         file_put_contents($config_path, $config_backup);
     } elseif (file_exists($config_path)) {
@@ -121,7 +121,7 @@ $cleanup = function () use ($server, $config_path, $config_backup) {
 };
 register_shutdown_function($cleanup);
 
-// Server chvíli startuje; čeká se na první úspěšné spojení.
+// The server takes a moment to start; wait for the first successful connection.
 $base = "http://127.0.0.1:{$port}";
 for ($i = 0; $i < 50; $i++) {
     if (@fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2)) {
@@ -130,7 +130,7 @@ for ($i = 0; $i < 50; $i++) {
     usleep(100000);
 }
 
-/** Zavolá endpoint a vrátí [stavový kód, dekódované JSON, syrové tělo]. */
+/** Calls an endpoint and returns [status code, decoded JSON, raw body]. */
 function api_get(string $base, string $query): array {
     $ch = curl_init($base . '/api.php?' . $query);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
@@ -139,7 +139,7 @@ function api_get(string $base, string $query): array {
     return [$code, json_decode((string)$body, true), (string)$body];
 }
 
-/** Cookie jar drží PHP session mezi požadavky (přihlášení admina). */
+/** The cookie jar keeps the PHP session between requests (admin login). */
 $cookie_jar = tempnam(sys_get_temp_dir(), 'bk_test_cookies');
 register_shutdown_function(function () use ($cookie_jar) {
     if ($cookie_jar && file_exists($cookie_jar)) {
@@ -147,12 +147,12 @@ register_shutdown_function(function () use ($cookie_jar) {
     }
 });
 
-/** POST s JSON tělem; sdílí session přes cookie jar. */
+/** POST with a JSON body; shares the session via the cookie jar. */
 function api_post(string $base, string $query, array $payload, string $jar, ?string $csrf = null): array {
-    // Server od 2026-08-17 vynucuje CSRF token u všech zápisů - stejně jako
-    // reálný klient ho testy posílají v hlavičce. Zachytává se při přihlášení
-    // (viz $GLOBALS['bk_test_csrf'] u action=login). Explicitní '' = neposlat
-    // (testy, které ověřují, že server bez tokenu odmítne).
+    // Since 2026-08-17 the server enforces a CSRF token on all writes - the
+    // tests send it in the header just like the real client. Captured at
+    // login (see $GLOBALS['bk_test_csrf'] at action=login). An explicit '' =
+    // do not send (tests verifying the server refuses without a token).
     $headers = ['Content-Type: application/json'];
     $token = $csrf ?? ($GLOBALS['bk_test_csrf'] ?? '');
     if ($token !== '') {
@@ -174,8 +174,8 @@ function api_post(string $base, string $query, array $payload, string $jar, ?str
 }
 
 /**
- * Signál na heartbeat.php - jiný skript než api.php, proto vlastní helper.
- * Bez přihlášení: token je jediné, co endpoint autorizuje.
+ * A signal to heartbeat.php - a different script from api.php, hence its own
+ * helper. No login: the token is all the endpoint authorises.
  */
 function hb_ping(string $base, string $token, string $extra = ''): array {
     $url = $base . '/heartbeat.php?token=' . rawurlencode($token) . ($extra !== '' ? '&' . $extra : '');
@@ -186,7 +186,7 @@ function hb_ping(string $base, string $token, string $extra = ''): array {
     return [$code, json_decode((string)$body, true), (string)$body];
 }
 
-/** GET se session - pro endpointy, které vrací víc přihlášenému. */
+/** GET with a session - for endpoints returning more to the logged-in. */
 function api_get_auth(string $base, string $query, string $jar): array {
     $ch = curl_init($base . '/api.php?' . $query);
     curl_setopt_array($ch, [
@@ -201,7 +201,7 @@ function api_get_auth(string $base, string $query, string $jar): array {
 }
 
 // =======================================================================
-// 1. monitors - páteřní endpoint, volá ho každá stránka aplikace
+// 1. monitors - the backbone endpoint, called by every app page
 // =======================================================================
 [$code, $data, $raw] = api_get($base, 'action=monitors');
 check('monitors vrací HTTP 200', $code, 200);
@@ -214,9 +214,9 @@ foreach (($data['monitors'] ?? []) as $m) {
 check_true('web monitor je v odpovědi', isset($by_id[1]));
 check_true('agent monitor je v odpovědi', isset($by_id[2]));
 
-// Jádro pravidla o poctivosti: nezměřené metriky jsou null, ne nula.
-// array_key_exists, ne ?? - operátor ?? považuje NULL za chybějící hodnotu
-// a testu na null by tím podrazil nohy.
+// The heart of the honesty rule: unmeasured metrics are null, not zero.
+// array_key_exists, not ?? - the ?? operator treats NULL as missing and
+// would trip up a test for null.
 $agent = $by_id[2] ?? [];
 foreach (['cpu' => 'CPU', 'ram' => 'RAM', 'hdd' => 'disk'] as $key => $label) {
     check_true("klíč {$key} je v odpovědi přítomen", array_key_exists($key, $agent));
@@ -225,15 +225,15 @@ foreach (['cpu' => 'CPU', 'ram' => 'RAM', 'hdd' => 'disk'] as $key => $label) {
 }
 check('naměřená odezva se vrací', (int)($by_id[1]['responseMs'] ?? 0), 120);
 
-// Anonymní přístup nesmí vidět síťovou topologii.
+// Anonymous access must not see the network topology.
 check_true(
     'anonymní odpověď neobsahuje wan_ipv4',
     !str_contains($raw, 'wan_ipv4') && !str_contains($raw, 'wireguard_peers')
 );
 
-// Ohlášená údržba je veřejná (legacy stránka ji tiskne v banneru), ale popis
-// smí ven JEN dokud je příznak zapnutý - starý popis minulé odstávky je
-// interní poznámka, ne veřejné oznámení.
+// Announced maintenance is public (the legacy page prints it in a banner), but
+// the description may leave ONLY while the flag is on - a stale description of
+// a past window is an internal note, not a public announcement.
 check_true('monitor nese klíč maintenance', array_key_exists('maintenance', $by_id[1] ?? []));
 check_false('bez údržby je maintenance false', ($by_id[1]['maintenance'] ?? null) === true);
 check('bez údržby se popis nevrací', $by_id[1]['maintenanceDescription'] ?? null, null);
@@ -248,7 +248,7 @@ check_true('zapnutá údržba je v anonymní odpovědi', ($mnt_by_id[1]['mainten
 check('popis údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceDescription'] ?? null, 'Výměna disku');
 check('konec údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceEnd'] ?? null, '2030-01-02 03:00:00');
 
-// Vypnutí příznaku popis zase schová, i když v DB zůstal.
+// Switching the flag off hides the description again even though it stayed in the DB.
 $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 1");
 [, $mnt_data2] = api_get($base, 'action=monitors');
 $mnt_row2 = null;
@@ -258,15 +258,15 @@ foreach (($mnt_data2['monitors'] ?? []) as $m) {
 check('po vypnutí údržby je popis zase skrytý', $mnt_row2['maintenanceDescription'] ?? null, null);
 $pdo->exec("UPDATE monitors SET maintenance_description = NULL, maintenance_end = NULL WHERE id = 1");
 
-// ui_config nese portalUrl pro patičku veřejné stránky - klíč musí existovat
-// i prázdný, aby frontend poznal "nenastaveno" od "starý server bez pole".
+// ui_config carries portalUrl for the public page footer - the key must exist
+// even when empty, so the frontend can tell "unset" from "old server without the field".
 [$code, $uicfg] = api_get($base, 'action=ui_config');
 check('ui_config vrací HTTP 200', $code, 200);
 check_true('ui_config nese portalUrl', array_key_exists('portalUrl', $uicfg ?? []));
 
-// uptime_windows: čtyři okna jedním dotazem. Monitor 1 má nasetá up i down
-// měření (musí vyjít mezi 0 a 100), monitor 2 nemá jediný log - nesmí se
-// v odpovědi objevit vůbec (frontend z absence udělá pomlčku, ne 100 %).
+// uptime_windows: four windows in one query. Monitor 1 has seeded up and down
+// measurements (must land between 0 and 100), monitor 2 has not a single log -
+// it must not appear in the response at all (the frontend turns absence into a dash, not 100 %).
 [$code, $uw] = api_get($base, 'action=uptime_windows');
 check('uptime_windows vrací HTTP 200', $code, 200);
 $uw_m1 = $uw['windows']['1'] ?? ($uw['windows'][1] ?? null);
@@ -277,8 +277,8 @@ foreach (['d1', 'd7', 'd30', 'd90'] as $uw_key) {
 check_true('d1 je mezi 0 a 100 (up i down v seedu)', is_numeric($uw_m1['d1'] ?? null) && $uw_m1['d1'] > 0 && $uw_m1['d1'] < 100);
 check_true('monitor bez logů v oknech není', !isset($uw['windows']['2']) && !isset($uw['windows'][2]));
 
-// daily_uptime nese avgMs pro latenční sparkline - průměr jen z reálných
-// odpovědí (down řádek s NULL odezvou průměr nesmí stáhnout).
+// daily_uptime carries avgMs for the latency sparkline - an average of real
+// answers only (the down row with a NULL latency must not drag it down).
 [, $du] = api_get($base, 'action=daily_uptime&days=7');
 $du_days = $du['series']['1'] ?? ($du['series'][1] ?? []);
 $du_has_120 = false;
@@ -290,7 +290,7 @@ foreach ($du_days as $du_day) {
 check_true('daily_uptime dny nesou klíč avgMs', $du_has_key);
 check_true('den s měřeními má avgMs 120', $du_has_120);
 
-// badge: vložitelné SVG. Neznámý monitor je 404, ne vymyšlený zelený odznak.
+// badge: embeddable SVG. An unknown monitor is 404, not an invented green badge.
 [$code, , $bdg_raw] = api_get($base, 'action=badge');
 check('badge (flotila) vrací HTTP 200', $code, 200);
 check_true('badge je SVG', str_contains($bdg_raw, '<svg'));
@@ -301,16 +301,16 @@ check_true('badge nese jméno monitoru', str_contains($bdg_raw1, htmlspecialchar
 [$code] = api_get($base, 'action=badge&monitor_id=99999');
 check('badge neexistujícího monitoru je 404', $code, 404);
 
-// type=uptime: monitor 1 má měření (musí vrátit procenta), monitor 2 nemá
-// jediný log - "bez dat", nikdy vymyšlené procento.
+// type=uptime: monitor 1 has measurements (must return a percentage), monitor 2
+// has not a single log - "no data", never an invented percentage.
 [$code, , $bdg_up] = api_get($base, 'action=badge&monitor_id=1&type=uptime');
 check('uptime badge vrací HTTP 200', $code, 200);
 check_true('uptime badge nese procenta', (bool)preg_match('/\d+\.\d{2} %/', $bdg_up));
 [, , $bdg_nodata] = api_get($base, 'action=badge&monitor_id=2&type=uptime');
 check_true('bez měření říká "bez dat"', str_contains($bdg_nodata, 'bez dat'));
 
-// badge.php je zastaralý alias - stará README embedy musí dál fungovat
-// přes 302 na action=badge se zachovanými parametry.
+// badge.php is a deprecated alias - old README embeds must keep working
+// via a 302 to action=badge with the parameters preserved.
 $ch_alias = curl_init($base . '/badge.php?id=1&type=uptime');
 curl_setopt_array($ch_alias, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10]);
 curl_exec($ch_alias);
@@ -321,7 +321,7 @@ check('badge.php přesměrovává', $alias_code, 302);
 check_true('alias míří na action=badge s parametry', str_contains($alias_loc, 'action=badge') && str_contains($alias_loc, 'monitor_id=1') && str_contains($alias_loc, 'type=uptime'));
 
 // =======================================================================
-// 2. public_status - podklad pro veřejnou stránku i widget
+// 2. public_status - the basis of the public page and the widget
 // =======================================================================
 [$code, $data] = api_get($base, 'action=public_status');
 check('public_status vrací HTTP 200', $code, 200);
@@ -329,7 +329,7 @@ check_true('public_status zná počet monitorů', isset($data['totalMonitors']))
 check('public_status počítá oba monitory', (int)($data['totalMonitors'] ?? 0), 2);
 
 // =======================================================================
-// 3. dashboard_layout - katalog dlaždic (nová funkce, dosud bez testu)
+// 3. dashboard_layout - the tile catalogue (new feature, previously untested)
 // =======================================================================
 [$code, $data] = api_get($base, 'action=dashboard_layout');
 check('dashboard_layout vrací HTTP 200', $code, 200);
@@ -338,8 +338,8 @@ check_true('katalog je pole', isset($data['catalog']) && is_array($data['catalog
 $panels = array_filter($data['catalog'] ?? [], fn($c) => ($c['kind'] ?? '') === 'panel');
 check_true('katalog nabízí panely dashboardu', count($panels) >= 5);
 
-// Metrika bez jediného vzorku se nesmí nabízet jako dostupná - jinak si
-// uživatel zapne dlaždici, která bude navždy prázdná.
+// A metric without a single sample must not be offered as available - the user
+// would enable a tile that stays forever empty.
 foreach (($data['catalog'] ?? []) as $entry) {
     if (($entry['kind'] ?? '') === 'metric' && ($entry['key'] ?? '') === 'metric_cpu') {
         check('metrika bez vzorků není available', $entry['available'], false);
@@ -347,7 +347,7 @@ foreach (($data['catalog'] ?? []) as $entry) {
 }
 
 // =======================================================================
-// 4. websites_overview - SLA okna pro stránku webů
+// 4. websites_overview - the SLA windows for the websites page
 // =======================================================================
 [$code, $data] = api_get($base, 'action=websites_overview');
 check('websites_overview vrací HTTP 200', $code, 200);
@@ -355,7 +355,7 @@ check_true('vrací mapu monitorů', isset($data['monitors']) && is_array($data['
 
 $sla = $data['monitors'][1] ?? $data['monitors']['1'] ?? null;
 check_true('web má spočítané SLA za 7 dní', $sla !== null && $sla['sla7'] !== null);
-// 10 up + 1 down = 90,909 %; kdyby se 'down' ztratil, vyšlo by 100 %.
+// 10 up + 1 down = 90.909 %; if the 'down' got lost, it would come out 100 %.
 check_true(
     'SLA počítá i výpadky (není 100 %)',
     $sla !== null && $sla['sla7'] < 100 && $sla['sla7'] > 85
@@ -365,7 +365,7 @@ $sla_agent = $data['monitors'][2] ?? $data['monitors']['2'] ?? null;
 check('monitor bez logů nemá vymyšlené SLA', $sla_agent, null);
 
 // =======================================================================
-// 5. Autorizace - měnící operace nesmí být přístupné bez přihlášení
+// 5. Authorisation - mutating operations must not be reachable without login
 // =======================================================================
 foreach ([
     'incident_action' => 'akce nad incidentem',
@@ -386,7 +386,7 @@ foreach ([
 }
 
 // =======================================================================
-// 6. Neznámá akce a chybějící parametry nesmí shodit endpoint
+// 6. An unknown action and missing parameters must not crash the endpoint
 // =======================================================================
 [$code, , $raw] = api_get($base, 'action=neexistujici_akce_xyz');
 check_true('neznámá akce nekončí chybou serveru', $code < 500);
@@ -396,26 +396,26 @@ check_true('odpověď neobsahuje fatální chybu', !str_contains($raw, 'Fatal er
 check_true('nesmyslný rozsah SLA nekončí chybou serveru', $code < 500);
 check_true('SLA report neobsahuje fatální chybu', !str_contains($raw, 'Fatal error'));
 
-// Hodnoty přibité na seed - drží ekvivalenci při přepisu smyčky 3 dotazů
-// na monitor na dávkové dotazy (viz sla_report v api.php).
+// Values pinned to the seed - they hold equivalence across the rewrite of the
+// 3-queries-per-monitor loop into batched queries (see sla_report in api.php).
 [, $sla_pin] = api_get($base, 'action=sla_report&days=30');
 $sla_by_id = [];
 foreach (($sla_pin['monitors'] ?? []) as $sm) { $sla_by_id[(int)$sm['id']] = $sm; }
 check('p50 monitoru 1 je 120 ms', $sla_by_id[1]['p50Ms'] ?? null, 120);
 check('p99 monitoru 1 je 120 ms', $sla_by_id[1]['p99Ms'] ?? null, 120);
 check_true('poslední výpadek monitoru 1 je vyřešený', ($sla_by_id[1]['lastOutage']['resolved'] ?? null) === true);
-// array_key_exists, ne ?? - operátor ?? považuje NULL za chybějící hodnotu.
+// array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
 check_true('monitor bez logů má p50 null, ne nulu', array_key_exists('p50Ms', $sla_by_id[2]) && $sla_by_id[2]['p50Ms'] === null);
 check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id[2]) && $sla_by_id[2]['uptimePercent'] === null);
 
 // =======================================================================
 // =======================================================================
-// 7. ZAPISOVACÍ ENDPOINTY
+// 7. WRITE ENDPOINTS
 //
-// Tahle část vznikla poté, co se ukázalo, že save_monitor používal
-// $preset_id, který se nikde nepřiřazoval - každé uložení monitoru tiše
-// smazalo jeho preset. Čtecí testy takovou chybu nevidí; pozná ji jedině
-// uložení a následné přečtení.
+// This part exists because save_monitor turned out to use a $preset_id that
+// was never assigned - every monitor save silently erased its preset.
+// Read tests cannot see such a bug; only saving and reading back
+// can catch it.
 // =======================================================================
 
 [$code, $login] = api_post($base, 'action=login', [
@@ -424,13 +424,13 @@ check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id
 ], $cookie_jar);
 $logged_in = $code === 200 && !empty($login['success']);
 check_true('přihlášení admina projde', $logged_in);
-// CSRF token pro všechny další zápisy - stejný zdroj jako reálný klient.
+// The CSRF token for all further writes - the same source as the real client.
 $GLOBALS['bk_test_csrf'] = (string)($login['csrfToken'] ?? '');
 check_true('login vrací CSRF token', $GLOBALS['bk_test_csrf'] !== '');
 
-// Write guard end-to-end: zápis bez tokenu musí spadnout na 403 dřív, než se
-// čehokoli dotkne, a GET na POST-only akci na 405. Bez tohohle by celá CSRF
-// ochrana byla jen mrtvý kód, který nikdo nikdy nevynutil.
+// The write guard end-to-end: a write without a token must fail with 403 before
+// touching anything, and a GET on a POST-only action with 405. Without this the
+// whole CSRF protection would be dead code nobody ever enforced.
 [$wg_code, $wg_data] = api_post($base, 'action=create_incident', ['title' => 'CSRF test'], $cookie_jar, '');
 check('zápis bez CSRF tokenu je 403', $wg_code, 403);
 check_true('a hláška mluví o CSRF', str_contains((string)($wg_data['error'] ?? ''), 'CSRF'));
@@ -440,8 +440,8 @@ check('GET na POST-only akci je 405', $wg_code2, 405);
 check('neznámá akce je 400, ne tichých 200', $wg_code3, 400);
 check_true('a nese klíč error', isset($wg_unknown['error']));
 
-// CORS: odpověď cizímu Originu nesmí nést Allow-Origin (jinak by si
-// credentialované odpovědi mohl číst kdokoliv), vlastnímu ano.
+// CORS: a response to a foreign Origin must not carry Allow-Origin (anyone
+// could read credentialed responses otherwise); the own origin gets it.
 $cors_probe = function (string $origin) use ($base): string {
     $ch = curl_init($base . '/api.php?action=public_status');
     curl_setopt_array($ch, [
@@ -458,7 +458,7 @@ check_false('cizí Origin nedostane Allow-Origin', stripos($cors_probe('https://
 check_true('vlastní Origin Allow-Origin dostane', stripos($cors_probe('http://127.0.0.1:8123'), 'Access-Control-Allow-Origin: http://127.0.0.1:8123') !== false);
 
 // save_user/delete_user: do 2026-08-17 v api.php neexistovaly - React je
-// volal, dostával 400 "Neznámá akce" a správa uživatelů z appky nefungovala.
+// called them, got 400 "unknown action" and user management from the app did not work.
 [$su_code, $su_res] = api_post($base, 'action=save_user', ['username' => 'audit_tester', 'email' => 'audit@example.com', 'role' => 'user', 'password' => 'TesterHeslo123!'], $cookie_jar);
 check('save_user vytvoří účet', $su_code, 200);
 $su_new_id = (int)($su_res['id'] ?? 0);
@@ -470,7 +470,7 @@ check('úprava e-mailu se skutečně uloží', $su_mail_stmt->fetchColumn(), 'au
 [$sd_code] = api_post($base, 'action=delete_user', ['id' => 1], $cookie_jar);
 check('vlastní přihlášený účet smazat nejde', $sd_code, 400);
 
-// Role: běžný účet (role user) nesmí na adminské zápisy, na vlastní profil ano.
+// Roles: a regular account (role user) must not reach admin writes; its own profile works.
 $jar3 = tempnam(sys_get_temp_dir(), 'bk_test_c3');
 [$u3_code, $u3_login] = api_post($base, 'action=login', ['username' => 'audit_tester', 'password' => 'TesterHeslo123!'], $jar3, '');
 check_true('tester se přihlásí', $u3_code === 200 && !empty($u3_login['success']));
@@ -513,11 +513,11 @@ if ($logged_in) {
     check_true('preset je vidět v seznamu', $saved_preset !== null);
     check('preset si drží vybrané metriky', $saved_preset['metrics'] ?? null, ['ssl_card', 'headers']);
     check('vyplněný práh se uloží', $saved_preset['cpuThreshold'] ?? 'chybí', 70);
-    // Prázdné pole znamená "preset ten práh neřeší" - není to nula.
+    // An empty field means "the preset does not govern this threshold" - it is not a zero.
     check_true('prázdný práh zůstává null', array_key_exists('ramThreshold', $saved_preset) && $saved_preset['ramThreshold'] === null);
     check('nulový práh se uloží jako nula', $saved_preset['hddThreshold'] ?? 'chybí', 0);
 
-    // --- Monitor: preset a prahy zpomalení musí přežít uložení ----------
+    // --- Monitor: the preset and slowdown thresholds must survive a save ----
     [$code, $res] = api_post($base, 'action=save_monitor', [
         'name' => 'Zápisový test',
         'type' => 'web',
@@ -539,12 +539,12 @@ if ($logged_in) {
         }
     }
     check_true('nový monitor je v seznamu', $saved_monitor !== null);
-    // Přesně tohle byla ta chyba: preset se ztrácel při každém uložení.
+    // Exactly this was the bug: the preset was lost on every save.
     check('preset zůstane přiřazený', $saved_monitor['presetId'] ?? 'chybí', $preset_id);
     check('práh zpomalení se uloží', $saved_monitor['latencyThresholdMs'] ?? 'chybí', 750);
     check('okno zpomalení se uloží', $saved_monitor['latencyThresholdMins'] ?? 'chybí', 3);
 
-    // Úprava nesmí ostatní nastavení shodit.
+    // An edit must not knock out the other settings.
     [$code] = api_post($base, 'action=save_monitor', [
         'id' => $new_monitor_id,
         'name' => 'Zápisový test (upraveno)',
@@ -567,7 +567,7 @@ if ($logged_in) {
     check('přejmenování se projeví', $edited['name'] ?? 'chybí', 'Zápisový test (upraveno)');
     check('preset přežil i úpravu', $edited['presetId'] ?? 'chybí', $preset_id);
 
-    // Vypnutí upozornění: prázdná hodnota = null, ne nula.
+    // Disabling the alert: an empty value = null, not zero.
     api_post($base, 'action=save_monitor', [
         'id' => $new_monitor_id,
         'name' => 'Zápisový test (upraveno)',
@@ -583,7 +583,7 @@ if ($logged_in) {
         }
     }
 
-    // --- Status stránky -------------------------------------------------
+    // --- Status pages ----------------------------------------------------
     [$code, $sp] = api_post($base, 'action=save_status_page', [
         'title' => 'Veřejný přehled',
         'isPublic' => true,
@@ -592,8 +592,8 @@ if ($logged_in) {
     check('save_status_page vrací 200', $code, 200);
     check('slug se odvodí bez diakritiky', $sp['slug'] ?? 'chybí', 'verejny-prehled');
 
-    // Druhá stránka se stejným slugem musí skončit srozumitelnou chybou,
-    // ne pádem na databázovém indexu.
+    // A second page with the same slug must end in an intelligible error,
+    // not a crash on the database index.
     [$code, $dup] = api_post($base, 'action=save_status_page', [
         'title' => 'Jiný název',
         'slug' => 'verejny-prehled',
@@ -601,7 +601,7 @@ if ($logged_in) {
     check('duplicitní slug vrací 400', $code, 400);
     check_true('duplicita má srozumitelnou hlášku', !empty($dup['error']));
 
-    // Skrytá stránka nesmí být vidět nepřihlášenému.
+    // A hidden page must not be visible to the unauthenticated.
     api_post($base, 'action=save_status_page', [
         'title' => 'Interní',
         'slug' => 'interni',
@@ -612,7 +612,7 @@ if ($logged_in) {
     check_false('skrytá stránka není vidět anonymně', in_array('interni', $anon_slugs, true));
     check_true('veřejná stránka vidět je', in_array('verejny-prehled', $anon_slugs, true));
 
-    // --- Jedna stránka podle slugu (verejna stranka v Reactu) -----------
+    // --- One page by slug (the public page in React) --------------------
     //
     // Skryta stranka musi byt pro anonyma K NEROZEZNANI od neexistujici:
     // stejny kod, stejne telo. Kdyby se lisily, existence skrytych stranek
@@ -635,11 +635,11 @@ if ($logged_in) {
     [$code] = api_get($base, 'action=status_page');
     check('chybějící slug vrací 400', $code, 400);
 
-    // --- Volby zobrazení status stránky ---------------------------------
+    // --- Status page display options ------------------------------------
     //
-    // NULL v databázi = "ukázat všechno". Stránka založená před touto volbou
-    // se nesmí změnit, proto se výchozí hodnoty doplňují při čtení a testují
-    // se dřív než cokoliv jiného.
+    // NULL in the database = "show everything". A page created before this
+    // option must not change, so defaults are filled at read time and tested
+    // before anything else.
     [, $sp_default] = api_get($base, 'action=status_page&slug=verejny-prehled');
     check('stránka bez voleb dostane výchozí showRegions', $sp_default['displayOptions']['showRegions'] ?? null, true);
     check('a detailLevel full', $sp_default['displayOptions']['detailLevel'] ?? null, 'full');
@@ -665,7 +665,7 @@ if ($logged_in) {
     check('zapnuté zůstávají zapnuté', $sp_opts['displayOptions']['showIncidents'] ?? null, true);
     check('detailLevel status se drží', $sp_opts['displayOptions']['detailLevel'] ?? null, 'status');
 
-    // Neznámý klíč se nesmí uložit - do databáze jde jen whitelist.
+    // An unknown key must not be stored - only the whitelist reaches the database.
     api_post($base, 'action=save_status_page', [
         'id' => 0,
         'title' => 'Podvržená',
@@ -685,9 +685,9 @@ if ($logged_in) {
     check_true('export obsahuje monitory', !empty($export['monitors']));
     check_true('export obsahuje nastavení', isset($export['settings']));
 
-    // Tajemství v souboru ke stažení je únik na počkání - hlídá se to,
-    // protože stačí přidat nový klíč s heslem a bez testu si toho nikdo
-    // nevšimne.
+    // A secret in a downloadable file is an instant leak - guarded because
+    // adding a new key with a password is all it takes, and without a test
+    // nobody would notice.
     $leaked = [];
     foreach (array_keys($export['settings'] ?? []) as $k) {
         if (preg_match('/(pass|secret|token|key|hash|webhook)/i', $k)) {
@@ -698,37 +698,37 @@ if ($logged_in) {
     check_false('export neobsahuje klíče agentů', str_contains($raw_export, 'agent_key'));
     check_false('export neobsahuje hesla ServerQuery', str_contains($raw_export, 'sq_password'));
 
-    // Bez přihlášení nesmí export projít vůbec.
+    // Without login the export must not pass at all.
     [$anon_code] = api_get($base, 'action=export_config');
     check_true('export bez přihlášení je odmítnut', in_array($anon_code, [401, 403], true));
 
-    // --- Úklid ----------------------------------------------------------
+    // --- Cleanup ---------------------------------------------------------
     [$code] = api_post($base, 'action=delete_preset', ['id' => $preset_id], $cookie_jar);
     check('smazání presetu vrací 200', $code, 200);
 
     [, $mlist4] = api_get_auth($base, 'action=monitors', $cookie_jar);
     foreach (($mlist4['monitors'] ?? []) as $m) {
         if ((int)$m['id'] === $new_monitor_id) {
-            // Smazání presetu nesmí monitor rozbít - jen se vrátí ke svému.
+            // Deleting a preset must not break the monitor - it just returns to its own.
             check_true('monitor po smazání presetu zůstává', array_key_exists('presetId', $m) && $m['presetId'] === null);
         }
     }
 }
 
 // =======================================================================
-// 8. Heartbeat - celý tok od založení přes signál po vyhodnocení
+// 8. Heartbeat - the whole flow from creation through the signal to evaluation
 // =======================================================================
 //
-// Vyhodnocení samo má testy bez databáze (run_tests.php). Tady jde o to, co
-// se dá ověřit jedině naostro: že token opravdu vznikne, že se na něj dá
-// poslat signál přes HTTP, že se zapíše, a hlavně že se nedostane ven
-// nikomu nepřihlášenému.
+// The evaluation itself has database-free tests (run_tests.php). Here the
+// point is what can only be verified for real: that the token truly appears,
+// that a signal can be sent to it over HTTP, that it gets written, and above
+// all that it leaks to nobody unauthenticated.
 if (!empty($cookie_jar)) {
     [$code, $hb_created] = api_post($base, 'action=save_monitor', [
         'id' => 0,
         'name' => 'Noční záloha (test)',
         'type' => 'heartbeat',
-        // Cíl se záměrně neposílá - heartbeat žádný nemá.
+        // The target is deliberately not sent - a heartbeat has none.
         'heartbeat_interval' => 3600,
         'heartbeat_grace' => 300,
     ], $cookie_jar);
@@ -736,7 +736,7 @@ if (!empty($cookie_jar)) {
     $hb_id = (int)($hb_created['id'] ?? 0);
     check_true('heartbeat monitor dostal id', $hb_id > 0);
 
-    // Interval je jediné, bez čeho heartbeat nedává smysl.
+    // The interval is the one thing a heartbeat makes no sense without.
     [$code_bad] = api_post($base, 'action=save_monitor', [
         'id' => 0,
         'name' => 'Heartbeat bez intervalu',
@@ -750,21 +750,21 @@ if (!empty($cookie_jar)) {
         $hb_token = (string)($info['token'] ?? '');
         check_true('token má tvar 48 hex znaků', (bool)preg_match('/^[0-9a-f]{48}$/', $hb_token));
         check('nový heartbeat je unknown, ne down', $info['state'] ?? null, 'unknown');
-        // array_key_exists, ne ?? - operátor by NULL prohlásil za chybějící klíč
-        // a test by prošel i tehdy, kdyby endpoint pole vůbec neposílal.
+        // array_key_exists, not ?? - the operator would declare NULL a missing key
+        // and the test would pass even if the endpoint did not send the field at all.
         check_true('bez signálu je čas posledního signálu null', array_key_exists('lastSignalAt', $info) && $info['lastSignalAt'] === null);
         check('interval se uložil v sekundách', $info['intervalSecs'] ?? null, 3600);
 
-        // Token nesmí ven bez přihlášení - kdo ho má, může posílat signál za nás
-        // a monitor pak svítí zeleně, i když záloha dávno neběží.
+        // The token must not leave without login - whoever has it can send signals
+        // for us and the monitor glows green while the backup has long stopped.
         [$anon_code] = api_get($base, 'action=heartbeat_info&monitor_id=' . $hb_id);
         check_true('heartbeat_info bez přihlášení je odmítnut', in_array($anon_code, [401, 403], true));
 
-        // Token se nesmí objevit ani v běžném seznamu monitorů.
+        // The token must not appear in the regular monitor list either.
         [, , $mon_raw] = api_get($base, 'action=monitors');
         check_true('token není v seznamu monitorů', $hb_token !== '' && !str_contains($mon_raw, $hb_token));
 
-        // --- Samotný příjem signálu -------------------------------------
+        // --- The signal intake itself -----------------------------------
         [$hb_code, $hb_res] = hb_ping($base, $hb_token);
         check('signál s platným tokenem vrací 200', $hb_code, 200);
         check_true('odpověď potvrzuje přijetí', ($hb_res['ok'] ?? false) === true);
@@ -774,7 +774,7 @@ if (!empty($cookie_jar)) {
         check('po čerstvém signálu je stav up', $info2['state'] ?? null, 'up');
         check('výsledek je ok', $info2['lastResult'] ?? null, 'ok');
 
-        // --- Ohlášené selhání -------------------------------------------
+        // --- A reported failure -----------------------------------------
         [$hb_code] = hb_ping($base, $hb_token, 'status=fail&msg=' . rawurlencode('tar skončil kódem 2'));
         check('signál o selhání vrací 200', $hb_code, 200);
 
@@ -783,13 +783,13 @@ if (!empty($cookie_jar)) {
         check('výsledek je fail', $info3['lastResult'] ?? null, 'fail');
         check_true('zpráva od úlohy se uložila', str_contains((string)($info3['lastMessage'] ?? ''), 'tar'));
 
-        // --- Neplatný token nesmí nic prozradit --------------------------
+        // --- An invalid token must reveal nothing -----------------------
         [$bad_code] = hb_ping($base, str_repeat('a', 48));
         check('neznámý token vrací 404', $bad_code, 404);
         [$bad_code2] = hb_ping($base, 'nesmysl');
         check('token špatného tvaru vrací taky 404', $bad_code2, 404);
 
-        // --- Výměna tokenu ----------------------------------------------
+        // --- Token rotation ---------------------------------------------
         [, $info4] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', $cookie_jar);
         check_true('regenerate vyrobí jiný token', ($info4['token'] ?? '') !== $hb_token);
         [$old_code] = hb_ping($base, $hb_token);
@@ -800,14 +800,14 @@ if (!empty($cookie_jar)) {
 }
 
 // =======================================================================
-// 9. RSS kanál - odběr místo čekání, až si stránku někdo otevře
+// 9. The RSS feed - a subscription instead of waiting for a visit
 // =======================================================================
 //
-// Kanál je veřejný, takže se testuje bez přihlášení. Nejdůležitější je
-// poslední kontrola: skrytá stránka nesmí přes RSS vydat nic, co neukáže
-// na webu - jinak by stačilo uhodnout slug a obejít tím viditelnost.
-// Bez incidentů by kanál byl prázdný a testy níž by prošly, i kdyby se
-// položky nikdy negenerovaly. Jeden uzavřený a jeden probíhající.
+// The feed is public, so it is tested without login. The last check matters
+// most: a hidden page must not hand out via RSS anything it will not show on
+// the web - otherwise guessing a slug would bypass visibility.
+// Without incidents the feed would be empty and the tests below would pass
+// even if items were never generated. One closed and one ongoing.
 $pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at, resolved_at)
             VALUES (901, 'Výpadek: Testovací web', 'major', 'resolved', 1,
                     DATE_SUB(NOW(), INTERVAL 3 HOUR), DATE_SUB(NOW(), INTERVAL 2 HOUR))");
@@ -825,8 +825,8 @@ $rss_body = substr($rss_raw, curl_getinfo($rss_ch, CURLINFO_HEADER_SIZE));
 check('RSS kanál vrací 200', $rss_code, 200);
 check_true('RSS má správný Content-Type', str_contains($rss_ctype, 'application/rss+xml'));
 
-// Platnost XML se ověřuje parserem, ne hledáním podřetězců: neescapovaný
-// znak v názvu monitoru rozbije kanál způsobem, který `str_contains` mine.
+// XML validity is verified by a parser, not substring search: an unescaped
+// character in a monitor name breaks the feed in a way `str_contains` misses.
 $prev_errors = libxml_use_internal_errors(true);
 $rss_xml = simplexml_load_string($rss_body);
 libxml_use_internal_errors($prev_errors);
@@ -844,21 +844,21 @@ if ($rss_xml !== false) {
         $pub_dates[] = (string)$item->pubDate;
     }
 
-    // Vznik a vyřešení jsou dvě položky s různým guid. Kdyby se vyřešení jen
-    // připsalo k původní položce, čtečka by ho odběrateli nikdy neukázala -
-    // jednou zobrazené guid už znovu nevypisuje.
+    // Opening and resolution are two items with different guids. If the resolution
+    // were merely appended to the original item, the reader would never show it
+    // to the subscriber - a guid displayed once is not printed again.
     check_true('uzavřený incident má položku o vzniku', in_array('incident-901-opened', $guids, true));
     check_true('uzavřený incident má položku o vyřešení', in_array('incident-901-resolved', $guids, true));
 
-    // Probíhající incident vyřešení nemá - dopočítat ho z "teď" by byl
-    // vymyšlený údaj o něčem, co se nestalo.
+    // An ongoing incident has no resolution - deriving one from "now" would be
+    // an invented value about something that did not happen.
     check_true('probíhající incident má položku o vzniku', in_array('incident-902-opened', $guids, true));
     check_false('probíhající incident nemá vyřešení', in_array('incident-902-resolved', $guids, true));
 
     check_true('název monitoru je v položce', str_contains($rss_body, 'Testovací web'));
     check_true('každá položka má pubDate', count($pub_dates) === count($guids) && !in_array('', $pub_dates, true));
 
-    // Nejnovější nahoře - čtečky pořadí z kanálu přebírají.
+    // Newest on top - readers take the order from the feed.
     $first_ts = !empty($pub_dates) ? strtotime($pub_dates[0]) : 0;
     $last_ts = !empty($pub_dates) ? strtotime(end($pub_dates)) : 0;
     check_true('položky jsou od nejnovější', $first_ts >= $last_ts);
@@ -866,7 +866,7 @@ if ($rss_xml !== false) {
 }
 
 if (!empty($cookie_jar)) {
-    // Skrytá stránka - anonym musí dostat 404 stejně jako u neexistujícího slugu.
+    // A hidden page - an anonym must get 404 exactly like a nonexistent slug.
     [$code] = api_post($base, 'action=save_status_page', [
         'id' => 0,
         'title' => 'Skrytá pro RSS',
@@ -883,8 +883,8 @@ if (!empty($cookie_jar)) {
     check('RSS skryté stránky je pro anonyma 404', $hidden_code, 404);
     check_true('RSS skryté stránky nevydá žádný kanál', !str_contains($hidden_body, '<rss'));
 
-    // A veřejná stránka kanál vydat musí, jinak by test výše prošel i tehdy,
-    // kdyby byl rozbitý úplně každý kanál se slugem.
+    // And a public page must serve the feed, otherwise the test above would
+    // pass even with every slugged feed broken.
     api_post($base, 'action=save_status_page', [
         'id' => 0,
         'title' => 'Veřejná pro RSS',
@@ -902,17 +902,17 @@ if (!empty($cookie_jar)) {
 }
 
 // =======================================================================
-// 10. Eskalace - pojistka pro upozornění, které nikdo neviděl
+// 10. Escalation - the safety net for an alert nobody saw
 // =======================================================================
 //
-// Rozhodovací logika má testy bez databáze. Tady jde o průchod celým
-// mechanismem: co se opravdu zapíše do databáze a hlavně co se NEzapíše,
-// když eskalace nemá kam odejít.
+// The decision logic has database-free tests. This is about the full
+// mechanism: what really gets written to the database and above all what
+// does NOT when escalation has nowhere to go.
 require_once __DIR__ . '/../functions.php';
 
-// Prahy z presetu se skutečně uplatní. bk_effective_threshold měla testy,
-// ale ŽÁDNÉHO produkčního volajícího - editor presetů prahy nabízel a
-// alerty/tipy/pásma četly jen hodnotu monitoru.
+// Preset thresholds actually apply. bk_effective_threshold had tests but
+// NO production caller - the preset editor offered thresholds while the
+// alerts/tips/bands read only the monitor's value.
 $pdo->exec("INSERT INTO metric_presets (id, name, cpu_threshold) VALUES (77, 'Tvrdší CPU limit', 70)");
 $pdo->exec("UPDATE monitors SET preset_id = 77, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
 $thr_row = $pdo->query("SELECT * FROM monitors WHERE id = 2")->fetch();
@@ -922,18 +922,18 @@ check('preset bez RAM prahu nechá hodnotu monitoru', $thr_eff['ram'], 95);
 $thr_eff_nopdo = bk_monitor_thresholds(null, $thr_row);
 check('bez PDO zůstává hodnota monitoru (žádný pád)', $thr_eff_nopdo['cpu'], 90);
 
-// A tady end-to-end přes HTTP: pásmo v grafu (metric_detail) musí kreslit
-// mez z presetu - tutéž, při které agent_api skutečně alertuje.
+// And here end-to-end over HTTP: the chart band (metric_detail) must draw the
+// preset's limit - the very one agent_api actually alerts at.
 [, $thr_detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
 check('metric_detail kreslí pásmo podle presetu', $thr_detail['thresholds']['critical'] ?? null, 70);
 $pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
 $pdo->exec("DELETE FROM metric_presets WHERE id = 77");
 
 
-// Nastavení se načítá jednou při startu do globálu `$system_settings`
-// (db.php) a get_setting() čte odtud. Zápis do databáze tedy sám o sobě nic
-// nezmění - v cronu to nevadí, protože ten startuje s čerstvými hodnotami,
-// ale test mění nastavení za běhu a musí si globál obnovit.
+// Settings load once at startup into the `$system_settings` global (db.php)
+// and get_setting() reads from there. A database write alone therefore changes
+// nothing - fine in cron, which starts with fresh values, but the test changes
+// settings at runtime and must refresh the global itself.
 $set_setting = function (string $key, string $value) use ($pdo) {
     $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
     $stmt->execute([$key, $value]);
@@ -947,15 +947,15 @@ $pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, create
 
 $esc_state = fn(int $id) => $pdo->query("SELECT escalated_at FROM incidents WHERE id = {$id}")->fetchColumn();
 
-// --- Vypnutá eskalace nedělá nic ---
+// --- Disabled escalation does nothing ---
 $set_setting('escalation_enabled', '0');
 $res = bk_process_escalations($pdo);
 check('vypnutá eskalace nic nekontroluje', $res['checked'], 0);
 check_true('a nic neorazítkuje', $esc_state(910) === null);
 
-// --- Zapnutá, ale bez kanálu ---
-// Razítko se nesmí dát: incident by se tvářil jako eskalovaný a po doplnění
-// kanálu by se už nikdy neozval. Tiché selhání přesně tam, kde má pojistka
+// --- Enabled, but without a channel ---
+// The stamp must not be set: the incident would look escalated and never speak
+// up once a channel was added. A silent failure exactly where the safety net
 // fungovat.
 $set_setting('escalation_enabled', '1');
 $set_setting('escalation_after_mins', '15');
@@ -965,37 +965,37 @@ check_true('bez kanálu se incident započítá jako čekající', $res['skipped
 check('bez kanálu se nic neodešle', $res['escalated'], 0);
 check_true('bez kanálu incident zůstává neorazítkovaný', $esc_state(910) === null);
 
-// --- S kanálem ---
-// Webhook míří na vlastní testovací server: ověřuje se zápis do databáze,
-// ne doručení do Discordu.
+// --- With a channel ---
+// The webhook targets our own test server: what is verified is the database
+// write, not delivery to Discord.
 $set_setting('escalation_webhook_url', $base . '/api.php?action=ui_config');
 $res = bk_process_escalations($pdo);
-// Kontroluje se konkrétní incident, ne součet: otevřených incidentů je
-// v databázi víc (seed pro RSS) a na počtu by test praskal při každé
-// změně testovacích dat.
+// A specific incident is checked, not a sum: the database has more open
+// incidents (the RSS seed) and a count-based test would crack on every
+// test-data change.
 check_true('nepřevzatý incident eskaluje', $res['escalated'] >= 1);
 check_true('a dostane razítko', $esc_state(910) !== null);
 check_true('převzatý incident razítko nedostane', $esc_state(911) === null);
 
-// --- Opakování ---
+// --- Repetition ---
 $res = bk_process_escalations($pdo);
 check('podruhé už se stejný incident neeskaluje', $res['escalated'], 0);
 
 $set_setting('escalation_enabled', '0');
 
 // =======================================================================
-// 11. Endpointy, které chyběly a volání na ně tiše propadala
+// 11. Endpoints that were missing while calls to them silently fell through
 // =======================================================================
 //
-// api.php dosud na neznámou akci vracelo výchozí přehled služeb s kódem 200,
-// takže volání na neexistující endpoint vypadalo jako úspěch. Tyhle testy
-// hlídají obojí: že guard neznámou akci odmítne a že chybějící endpointy
-// opravdu existují a něco dělají.
+// api.php used to answer an unknown action with the default service overview
+// and a 200, so calling a nonexistent endpoint looked like success. These tests
+// guard both: that the guard rejects an unknown action and that the missing
+// endpoints really exist and do something.
 [$code, $unknown] = api_get($base, 'action=rozhodne_neexistujici_akce');
 check('neznámá akce vrací 400, ne tiché 200', $code, 400);
 check_true('a řekne, co je špatně', str_contains((string)($unknown['error'] ?? ''), 'Neznámá akce'));
 
-// Prázdná akce si ponechává staré chování (výchozí přehled služeb).
+// An empty action keeps the old behaviour (the default service overview).
 [$code] = api_get($base, '');
 check('prázdná akce dál vrací výchozí přehled', $code, 200);
 
@@ -1008,13 +1008,13 @@ $csv_body = substr($csv_raw, curl_getinfo($csv_ch, CURLINFO_HEADER_SIZE));
 check('export CSV vrací 200', $csv_code, 200);
 check_true('CSV se posílá ke stažení', str_contains($csv_raw, 'text/csv') && str_contains($csv_raw, 'attachment'));
 check_true('CSV má hlavičku sloupců', str_contains($csv_body, 'Stav') && str_contains($csv_body, 'Odezva'));
-// Chybové hlášky jsou jen pro přihlášené - stránka monitoru je veřejná.
+// Error texts are for the logged-in only - the monitor page is public.
 check_false('anonym nedostane sloupec s chybami', str_contains($csv_body, 'Chybová hláška'));
 
 [$csv_missing_code] = api_get($base, 'action=export_csv&monitor_id=999999');
 check('export neexistujícího monitoru vrací 404', $csv_missing_code, 404);
 
-// --- Poznámky do grafů --------------------------------------------------
+// --- Chart annotations ---------------------------------------------------
 if (!empty($cookie_jar)) {
     [$code, $ann] = api_post($base, 'action=save_annotation', [
         'monitor_id' => 1,
@@ -1025,8 +1025,8 @@ if (!empty($cookie_jar)) {
     check('poznámka se uloží', $code, 200);
     check_true('a vrátí své id', (int)($ann['id'] ?? 0) > 0);
 
-    // Tabulka metric_annotations byla roky prázdná právě proto, že endpoint
-    // chyběl a poznámka se tiše zahodila.
+    // The metric_annotations table stayed empty for years precisely because the
+    // endpoint was missing and the note was silently dropped.
     $ann_count = (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations")->fetchColumn();
     check_true('poznámka je opravdu v databázi', $ann_count > 0);
 
@@ -1041,7 +1041,7 @@ if (!empty($cookie_jar)) {
     check('načtení poznámek vrací 200', $code, 200);
     check_true('a obsahuje uloženou poznámku', str_contains(json_encode($ann_list, JSON_UNESCAPED_UNICODE), 'Nasazena nová verze'));
 
-    // Provozní poznámky nejsou pro veřejnost.
+    // Operational notes are not for the public.
     [, $anon_ann] = api_get($base, 'action=annotations&monitor_id=1&metric=response_time');
     check('anonym poznámky nevidí', $anon_ann['annotations'] ?? null, []);
 
@@ -1051,10 +1051,10 @@ if (!empty($cookie_jar)) {
     check('anonym poznámku neuloží', $anon_save_code, 403);
 }
 
-// --- Zapomenuté heslo ---------------------------------------------------
+// --- Forgotten password --------------------------------------------------
 //
-// Odpověď musí být stejná pro existující i neexistující e-mail, jinak jde
-// formulářem zjišťovat, kdo má účet.
+// The response must be identical for existing and nonexistent e-mails, else the
+// form can probe who has an account.
 [$code, $fp1] = api_post($base, 'action=forgot_password', ['email' => 'urcite-neexistuje@example.com'], tempnam(sys_get_temp_dir(), 'bk_fp'));
 check('žádost o obnovu hesla vrací 200', $code, 200);
 [$code, $fp2] = api_post($base, 'action=forgot_password', ['email' => 'admin@bloodkings.eu'], tempnam(sys_get_temp_dir(), 'bk_fp2'));
@@ -1062,8 +1062,8 @@ check('a pro existující účet vrací totéž', $code, 200);
 check('odpověď neprozradí, jestli účet existuje', $fp1['message'] ?? 'a', $fp2['message'] ?? 'b');
 
 // --- Instalace ----------------------------------------------------------
-// Schema.sql zakládá výchozí účet, takže tabulka uživatelů není prázdná
-// a instalace se musí odmítnout. Dřív vracela 200 a netvořila nic.
+// Schema.sql creates the default account, so the users table is not empty
+// and the install must refuse. It used to return 200 and create nothing.
 [$code, $su] = api_post($base, 'action=setup', [
     'username' => 'druhy_admin', 'email' => 'druhy@example.com', 'password' => 'DostDlouheHeslo1',
 ], tempnam(sys_get_temp_dir(), 'bk_setup'));
@@ -1077,17 +1077,17 @@ check('žádný účet navíc nevznikl', $user_count_after, 1);
 if (!empty($cookie_jar)) {
     [, $sess] = api_get_auth($base, 'action=session', $cookie_jar);
     check_true('session hlásí stav instalace', array_key_exists('installed', $sess) && $sess['installed'] === true);
-    // E-mail se dřív vracel natvrdo jako admin@bloodkings.eu bez ohledu na to,
-    // kdo je přihlášený.
+    // The e-mail used to come back hardcoded as admin@bloodkings.eu no matter
+    // who was logged in.
     check_true('e-mail je z databáze, ne natvrdo', array_key_exists('email', $sess['user'] ?? []));
 }
 
-// --- Auditní protokol ---------------------------------------------------
+// --- The audit trail -----------------------------------------------------
 if (!empty($cookie_jar)) {
     [$code, $audit] = api_get_auth($base, 'action=user_audit_log&limit=20', $cookie_jar);
     check('auditní protokol vrací 200', $code, 200);
     check_true('a je to pole záznamů', isset($audit['entries']) && is_array($audit['entries']));
-    // Přihlášení admina proběhlo na začátku testů, takže záznam existovat musí.
+    // The admin login happened at the start of the tests, so the record must exist.
     check_true('obsahuje přihlášení', str_contains(json_encode($audit, JSON_UNESCAPED_UNICODE), 'login_success'));
 
     [$anon_audit_code] = api_get($base, 'action=user_audit_log');
@@ -1095,14 +1095,14 @@ if (!empty($cookie_jar)) {
 }
 
 // =======================================================================
-// 12. Dlouhodobá řada metrik z denní agregace
+// 12. The long-term metric series from the daily rollup
 // =======================================================================
 //
-// Syrové vps_metrics se po 30 dnech mažou, takže bez agregace nešlo
-// odpovědět na "jak rostlo zaplnění disku za půl roku". Test zapisuje data
-// stará víc než měsíc - přesně ta, která by v syrové podobě už neexistovala.
-// Nejdřív samotná agregace: bez ní by test níž ověřoval jen čtení z tabulky,
-// kterou nikdo neplní.
+// Raw vps_metrics is pruned after 30 days, so without the rollup "how did
+// disk usage grow over half a year" had no answer. The test writes data
+// older than a month - exactly what would no longer exist raw.
+// First the rollup itself: without it the test below would only verify reads
+// from a table nobody fills.
 $pdo->exec("DELETE FROM metrics_daily");
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
             VALUES (2, 10, 50, 70, DATE_SUB(NOW(), INTERVAL 2 HOUR))");
@@ -1112,13 +1112,13 @@ $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage
 $rolled_metrics = bk_rollup_daily_metrics($pdo, 2);
 check_true('agregace zapsala řádky', $rolled_metrics > 0);
 
-// Den, do kterého ty vzorky patří - NE dnešek.
+// The day those samples belong to - NOT today.
 //
-// Původně se tu kontrolovalo `day = CURDATE()`, jenže vzorky jsou hodinu a dvě
-// staré: mezi půlnocí a druhou ranní spadnou do včerejška a test selhal, aniž
-// by se v kódu cokoli změnilo. Chytlo se to až v CI, které jednou proběhlo
-// v 00:11 UTC. Test se teď ptá na den, kam data podle svých vlastních časů
-// patří, takže na hodině spuštění nezáleží.
+// This used to check `day = CURDATE()`, but the samples are an hour or two
+// old: between midnight and 2 am they fall into yesterday and the test failed
+// with no code change at all. It was caught in CI, which once happened to run
+// at 00:11 UTC. The test now asks for the day the data belongs to by its own
+// timestamps, so the start hour does not matter.
 $sample_day = $pdo->query("SELECT DATE(DATE_SUB(NOW(), INTERVAL 1 HOUR))")->fetchColumn();
 
 $stmt_cpu_row = $pdo->prepare("SELECT min_val, avg_val, max_val, samples FROM metrics_daily
@@ -1127,18 +1127,18 @@ $stmt_cpu_row->execute([$sample_day]);
 $cpu_row = $stmt_cpu_row->fetch();
 check_true('CPU má agregát za den vzorků', $cpu_row !== false);
 if ($cpu_row) {
-    // Průměr sám by schoval špičku; proto se ukládá i min a max.
+    // The average alone would hide the spike; hence min and max are stored too.
     check('minimum sedí', (int)round($cpu_row['min_val']), 10);
     check('maximum sedí', (int)round($cpu_row['max_val']), 90);
     check('průměr sedí', (int)round($cpu_row['avg_val']), 50);
     check('počet vzorků sedí', (int)$cpu_row['samples'], 2);
 }
 
-// Metrika, kterou agent nehlásí, nesmí vzniknout jako nula.
+// A metric the agent does not report must not appear as zero.
 $swap_rows = (int)$pdo->query("SELECT COUNT(*) FROM metrics_daily WHERE metric_key = 'swap'")->fetchColumn();
 check('nezměřená metrika se neagreguje', $swap_rows, 0);
 
-// Opakovaný běh nesmí duplikovat ani zdvojnásobit počty.
+// A repeated run must neither duplicate nor double the counts.
 bk_rollup_daily_metrics($pdo, 2);
 $stmt_cpu_count = $pdo->prepare("SELECT COUNT(*) FROM metrics_daily
                                  WHERE monitor_id = 2 AND metric_key = 'cpu' AND day = ?");
@@ -1158,26 +1158,26 @@ check_true('a nese body', !empty($year['points']));
 check('a přizná, že jde o denní průměry', $year['resolution'] ?? null, 'daily');
 check_true('k průměrům je min/max', !empty($year['dailyRange']) && array_key_exists('max', $year['dailyRange'][0]));
 
-// Rok nesmí sahat dál než rok - jinak by graf tvrdil delší historii, než má.
+// A year must not reach beyond a year - the chart would claim more history than exists.
 $oldest = $year['points'][0][0] ?? 0;
 check_true('nejstarší bod není starší než rok', $oldest >= time() - 366 * 86400);
 
-// Data starší než retence syrových dat se do krátkého okna nesmí připlést.
+// Data older than the raw retention must not sneak into the short window.
 [, $day] = api_get($base, 'action=metric_series&monitor_id=2&metric=hdd&period=24h');
 check_false('24h okno denní agregaci nepoužívá', ($day['resolution'] ?? null) === 'daily');
 
-// Prázdná agregace znamená prázdnou řadu, ne vymyšlená čísla.
+// An empty rollup means an empty series, not invented numbers.
 $pdo->exec("DELETE FROM metrics_daily");
 [, $empty_year] = api_get($base, 'action=metric_series&monitor_id=2&metric=hdd&period=1y');
 check('bez agregovaných dat je řada prázdná', $empty_year['points'] ?? null, []);
 
 // =======================================================================
-// 13. Hlášení agenta se uloží jako metriky
+// 13. An agent report is stored as metrics
 // =======================================================================
 //
-// Tohle je jediný test, který ověřuje celou cestu: agent pošle JSON, API ho
-// zapíše do sloupců a graf ho pak najde. Právě tady se ztrácelo 35 hodnot -
-// posílaly se každou minutu a končily jen v posledním snímku detailů.
+// The only test verifying the whole path: the agent sends JSON, the API writes
+// it into columns and the chart then finds it. Right here 35 values used to
+// get lost - sent every minute, ending only in the latest details snapshot.
 $agent_key = $pdo->query("SELECT agent_key FROM monitors WHERE id = 2")->fetchColumn();
 if (!$agent_key) {
     $agent_key = bin2hex(random_bytes(16));
@@ -1188,7 +1188,7 @@ if (!$agent_key) {
 $agent_payload = [
     'agent_key' => $agent_key,
     'cpu' => 12.5, 'ram' => 44.0, 'hdd' => 61.0,
-    // Nově ukládané metriky napříč typy: latence, kvalita signálu, počítadla.
+    // Newly stored metrics across types: latency, signal quality, counters.
     'wan_latency_ms' => 18.4,
     'dns_latency_ms' => 7.2,
     'lte_rsrq' => -11.5,
@@ -1199,7 +1199,7 @@ $agent_payload = [
     'tcp_retrans' => 500,
     'fw_dropped' => 4200,
     'dns_queries' => 9000,
-    // Nezměřená hodnota - musí zůstat NULL, ne spadnout na nulu.
+    // An unmeasured value - must stay NULL, not fall to zero.
     'entropy' => null,
     'oom_kills' => 'null',
 ];
@@ -1227,16 +1227,16 @@ if ($saved) {
     check('obsazená paměť se uložila', round((float)$saved['ram_used_mb'], 1), 812.5);
     check('počítadlo TCP retransmisí se uložilo', (int)$saved['tcp_retrans'], 500);
 
-    // Jádro pravidla: co agent neposlal, je NULL. Nula by tvrdila, že se
-    // naměřila nulová entropie, což je něco úplně jiného.
+    // The core rule: what the agent did not send is NULL. A zero would claim
+    // measured zero entropy, which is something else entirely.
     check_true('neposlaná entropie je NULL', $saved['entropy_avail'] === null);
     check_true('řetězec "null" od agenta je taky NULL', $saved['oom_kills'] === null);
     check_true('nezmíněná metrika je NULL', $saved['sqm_dropped'] === null);
 }
 
-// --- Počítadla se v grafu kreslí jako přírůstek --------------------------
+// --- Counters draw as deltas in the chart --------------------------------
 //
-// Kumulativní hodnota z jádra by dala jen stoupající rampu.
+// A cumulative kernel value would only give a rising ramp.
 $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
 foreach ([[100, 5], [150, 4], [220, 3], [60, 2], [90, 1]] as [$val, $mins_ago]) {
     $pdo->exec("INSERT INTO vps_metrics (monitor_id, tcp_retrans, checked_at)
@@ -1245,24 +1245,24 @@ foreach ([[100, 5], [150, 4], [220, 3], [60, 2], [90, 1]] as [$val, $mins_ago]) 
 
 [, $ctr] = api_get($base, 'action=metric_series&monitor_id=2&metric=tcp_retrans&period=24h');
 $ctr_values = array_map(fn($p) => $p[1], $ctr['points'] ?? []);
-// 100→150→220 dá přírůstky 50 a 70; pak hodnota spadne na 60 (reset
-// počítadla po rebootu) - ten bod se přeskočí, ne aby vyrobil zápornou
-// špičku nebo falešnou nulu. Následuje 60→90, tedy 30.
-// JSON vrací celá čísla jako int, ne float - proto celočíselná očekávání.
+// 100→150→220 gives deltas of 50 and 70; then the value drops to 60 (counter
+// reset after a reboot) - that point is skipped rather than producing a negative
+// spike or a false zero. Then 60→90, i.e. 30.
+// JSON returns whole numbers as int, not float - hence integer expectations.
 check('počítadlo se kreslí jako přírůstek', $ctr_values, [50, 70, 30]);
 check_true('popisek přizná, že jde o přírůstek', str_contains((string)($ctr['label'] ?? ''), 'přírůstek'));
 
-// Okamžitá metrika se nesmí do přírůstku převádět.
+// An instantaneous metric must not be converted to deltas.
 $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 30, DATE_SUB(NOW(), INTERVAL 2 MINUTE))");
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 80, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
 [, $gauge] = api_get($base, 'action=metric_series&monitor_id=2&metric=cpu&period=24h');
 check('okamžitá metrika se kreslí tak, jak byla naměřena', array_map(fn($p) => $p[1], $gauge['points'] ?? []), [30, 80]);
 
-// --- Stav sběru dat -----------------------------------------------------
+// --- Data collection health ----------------------------------------------
 //
-// Endpoint hlídá hlídač zvenku, takže musí být dostupný bez přihlášení a
-// nesmí tvrdit, že je vše v pořádku, když cron nikdy neběžel.
+// An external watchdog polls the endpoint, so it must be reachable without
+// login and must not claim all is well when cron never ran.
 [$code, $health] = api_get($base, 'action=collection_health');
 check('collection_health je veřejný a vrací 200', $code, 200);
 check_true('obsahuje příznak stale', array_key_exists('stale', $health ?? []));
@@ -1348,8 +1348,8 @@ check('vrátí jen procesy z okna', count($ph['samples'] ?? []), 2);
 check('nejvyšší je první', $ph['samples'][0]['name'] ?? null, 'hostapd');
 check('a se svou hodnotou CPU', $ph['samples'][0]['cpuPct'] ?? null, 87.5);
 
-// Nezměřená dimenze zůstává null. Nula by tvrdila "změřeno, proces nic
-// nezabíral" - to je něco jiného než "agent to u něj nehlásil".
+// An unmeasured dimension stays null. A zero would claim "measured, the process
+// used nothing" - different from "the agent did not report it for this one".
 $kresd = null;
 foreach ($ph['samples'] as $sample) {
     if ($sample['name'] === 'kresd') { $kresd = $sample; }
@@ -1360,7 +1360,7 @@ check('a paměť má null, ne nulu', $kresd['ramMb'], null);
 check_true('odpověď přiznává, jestli je sběr zapnutý', array_key_exists('enabled', $ph ?? []));
 check('bez prořezání je pruned false', $ph['pruned'] ?? null, false);
 
-// Prázdné okno není totéž co vypnutý sběr - klient to musí rozlišit.
+// An empty window is not the same as collection turned off - the client must tell them apart.
 [, $ph_empty] = api_get($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . ($now_ts - 86400 * 3) . '&radius=5');
 check('okno bez záznamů vrátí prázdno, ne chybu', $ph_empty['samples'] ?? null, []);
 check('a pořád hlásí, že sběr běží', $ph_empty['enabled'] ?? null, true);
@@ -1381,7 +1381,7 @@ if (function_exists('bk_metric_pressure')) {
     $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
     $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
 
-    // Deset minut nad prahem, předtím pod ním.
+    // Ten minutes above the threshold, below it before.
     for ($i = 14; $i >= 0; $i--) {
         $val = $i <= 10 ? 91 : 20;
         $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
@@ -1394,24 +1394,24 @@ if (function_exists('bk_metric_pressure')) {
     check('a trvá deset minut, ne patnáct', $pressure['minutes'], 10);
     check('aktuální hodnota sedí', $pressure['current'], 91.0);
 
-    // Hodnota pod prahem není tlak, i kdyby předtím špička byla.
+    // A value below the threshold is not pressure, even if a spike came before.
     $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 30, NOW())");
     check('po poklesu se tlak nehlásí', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
 
-    // Jediné měření není doba trvání.
+    // A single measurement is not a duration.
     $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
     $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 99, NOW())");
     check('jeden vzorek se nevydává za trvání', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
 
-    // Název sloupce jde do SQL, takže smí projít jen ze seznamu.
+    // The column name goes into SQL, so only list members may pass.
     check('neznámý sloupec se odmítne', bk_metric_pressure($pdo, 2, 'cpu_usage; DROP TABLE monitors', 85.0), null);
 }
 
-// --- Knowledge tipy: práh se bere z nastavení monitoru ------------------
+// --- Knowledge tips: the threshold comes from the monitor's settings ------
 //
-// Tipy měly prahy natvrdo (CPU 80/50), zatímco pásma v grafu i Executive
-// Summary jedou podle monitors.cpu_threshold. Kdo si práh zvedl na 95,
-// dostával kritický tip už při 81 % - tři různé názory na "moc vysoko".
+// Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the
+// Executive Summary follow monitors.cpu_threshold. Anyone who raised theirs
+// to 95 still got a critical tip at 81 % - three opinions on "too high".
 bk_test_load_functions($root . '/functions.php', [
     'bk_get_knowledge_tips', 'bk_enrich_threshold_tip', 'bk_metric_duration_above',
     'bk_format_duration', 'bk_get_enabled_metrics',
@@ -1421,34 +1421,34 @@ require_once $root . '/lang.php';
 if (function_exists('bk_get_knowledge_tips')) {
     $details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
 
-    // Práh 95: 85 % je pod ním, kritický tip nemá vzniknout.
+    // Threshold 95: 85 % sits below it, no critical tip may appear.
     $mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
     $tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
     $crit_high = array_filter($tips_high, fn($t) => $t['severity'] === 'critical');
     check('s prahem 95 se při 85 % nekřičí', count($crit_high), 0);
 
-    // Práh 80: totéž měření je nad ním.
+    // Threshold 80: the same measurement sits above it.
     $mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
     $tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
     $crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
     check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
 
-    // A nese jméno viníka - kvůli tomu ta věta existuje.
+    // And it names the culprit - the sentence exists for that.
     $text = implode(' ', array_column($crit_low, 'text'));
     check_true('a jmenuje viníka', str_contains($text, 'hostapd'));
 
-    // Bez nastaveného prahu zůstává původní chování (80/50), aby se nikomu
-    // nezměnilo pod rukama.
+    // Without a configured threshold the original behaviour (80/50) stays, so
+    // nothing shifts under anyone's feet.
     $mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
     $tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
     check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
 }
 
-// --- Knowledge tipy: práh se bere z nastavení monitoru ------------------
+// --- Knowledge tips: the threshold comes from the monitor's settings ------
 //
-// Tipy měly prahy natvrdo (CPU 80/50), zatímco pásma v grafu i Executive
-// Summary jedou podle monitors.cpu_threshold. Kdo si práh zvedl na 95,
-// dostával kritický tip už při 81 % - tři různé názory na "moc vysoko".
+// Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the
+// Executive Summary follow monitors.cpu_threshold. Anyone who raised theirs
+// to 95 still got a critical tip at 81 % - three opinions on "too high".
 bk_test_load_functions($root . '/functions.php', [
     'bk_get_knowledge_tips', 'bk_enrich_threshold_tip', 'bk_metric_duration_above',
     'bk_format_duration', 'bk_get_enabled_metrics',
@@ -1458,32 +1458,32 @@ require_once $root . '/lang.php';
 if (function_exists('bk_get_knowledge_tips')) {
     $details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
 
-    // Práh 95: 85 % je pod ním, kritický tip nemá vzniknout.
+    // Threshold 95: 85 % sits below it, no critical tip may appear.
     $mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
     $tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
     check('s prahem 95 se při 85 % nekřičí', count(array_filter($tips_high, fn($t) => $t['severity'] === 'critical')), 0);
 
-    // Práh 80: totéž měření je nad ním.
+    // Threshold 80: the same measurement sits above it.
     $mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
     $tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
     $crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
     check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
     check_true('a jmenuje viníka', str_contains(implode(' ', array_column($crit_low, 'text')), 'hostapd'));
 
-    // Bez nastaveného prahu zůstává původní chování (80/50).
+    // Without a configured threshold the original behaviour (80/50) stays.
     $mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
     $tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
     check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
 }
 
-// Shrnutí si nesmí odporovat v jednom dechu.
+// The summary must not contradict itself in one breath.
 //
-// První verze říkala "Žádné aktuální problémy nebyly zjištěny." a hned za tím
-// "CPU je na 91 % už 18 min." - věta o klidu se skládala dřív, než se tlak
-// vůbec spočítal. Chyceno na ukázce se skutečnými daty, ne úvahou.
+// The first version said "No current problems detected." immediately followed
+// by "CPU has been at 91 % for 18 min." - the calm sentence was assembled
+// before the pressure was even computed. Caught on a demo with real data, not by reasoning.
 bk_test_load_functions($root . '/functions.php', ['bk_summary_pressure_line', 'bk_build_executive_summary']);
-// Shrnutí skládá věty přes t(), takže bez slovníku spadne na nedefinovanou
-// funkci - stejná past, jakou už jednou schytal cron.php a agent_api.php.
+// The summary composes sentences via t(), so without the dictionary it dies
+// on an undefined function - the same trap cron.php and agent_api.php already took.
 require_once $root . '/lang.php';
 if (function_exists('bk_build_executive_summary')) {
     $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
@@ -1497,7 +1497,7 @@ if (function_exists('bk_build_executive_summary')) {
     check_true('shrnutí hlásí tlak', str_contains($text, '91'));
     check_false('a netvrdí zároveň, že je klid', str_contains($text, 'Žádné aktuální problémy'));
 
-    // Bez tlaku ta věta naopak zaznít musí, jinak by shrnutí mlčelo.
+    // Without pressure that sentence MUST appear, or the summary would stay silent.
     $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
     $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 10, NOW())");
     $calm = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
@@ -1515,8 +1515,8 @@ if (function_exists('bk_top_process_in_window')) {
     check('viník se najde', $top['name'] ?? null, 'hostapd');
     check('i s hodnotou', $top['cpu'] ?? null, 61.0);
 
-    // Mimo okno se nic nevymýšlí - historie procesů je mladá a starší špičku
-    // prostě vysvětlit neumíme.
+    // Outside the window nothing is invented - process history is young and an
+    // older spike simply cannot be explained.
     check('mimo okno se nehádá', bk_top_process_in_window($pdo, 2, time() - 86400 * 5, time() - 86400 * 4, 'cpu'), null);
 }
 
@@ -1540,11 +1540,11 @@ check('cizí token vrací 400', $code, 400);
 check('platný token nastaví heslo', $code, 200);
 check_true('a hlásí úspěch', !empty($sp_ok['success']));
 
-// Token se spotřeboval - druhé použití musí selhat.
+// The token was consumed - a second use must fail.
 [$code] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'JineHeslo123!'], $cookie_jar);
 check('spotřebovaný token vrací 400', $code, 400);
 
-// A novým heslem se jde přihlásit (do nové session, ať nerozbijeme tu adminovu).
+// And the new password can log in (into a new session, so the admin's stays intact).
 $login_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_c2');
 [$code, $relog] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'NoveHeslo123!'], $login_jar2);
 check_true('nové heslo funguje pro přihlášení', $code === 200 && !empty($relog['success']));
@@ -1564,19 +1564,19 @@ if (function_exists('bk_totp_calculate')) {
     check_true('a secret', !empty($ts['secret']));
     check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
 
-    // Špatný kód nesmí 2FA zapnout.
+    // A wrong code must not enable 2FA.
     [$code] = api_post($base, 'action=totp_confirm', ['code' => '000000'], $cookie_jar);
     check('špatný kód vrací 400', $code, 400);
     $totp_row = $pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn();
     check('a 2FA zůstává vypnuté', (int)$totp_row, 0);
 
-    // Správný kód spočítaný z téhož secretu.
+    // The right code computed from the same secret.
     $valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
     [$code] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
     check('správný kód 2FA zapne', $code, 200);
     check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
 
-    // Vypnutí bez hesla neprojde - ukradená session nesmí 2FA tiše sundat.
+    // Disabling without the password must fail - a stolen session must not quietly remove 2FA.
     [$code] = api_post($base, 'action=totp_disable', ['password' => 'spatne-heslo'], $cookie_jar);
     check('vypnutí se špatným heslem vrací 400', $code, 400);
     check('2FA drží', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
@@ -1597,7 +1597,7 @@ bk_test_load_functions($root . '/functions.php', ['bk_prune_process_samples']);
 $seed_samples = function (PDO $pdo) {
     $pdo->exec("DELETE FROM process_samples");
     $rows = [
-        // [dní zpět, jméno, cpu, ram]
+        // [days back, name, cpu, ram]
         [1, 'dnesni-klidny', 3.0, 10.0],
         [1, 'dnesni-spicka', 95.0, 10.0],
         [10, 'stary-klidny', 3.0, 10.0],
@@ -1620,7 +1620,7 @@ $names_left = function (PDO $pdo): array {
 };
 
 if (function_exists('bk_prune_process_samples')) {
-    // 1. Bez prořezávání se zahodí jen to, co je za retencí.
+    // 1. Without thinning only what is beyond retention is dropped.
     $seed_samples($pdo);
     $r = bk_prune_process_samples($pdo, 30, 0, 50.0);
     check('za retencí se smaže', $r['deleted'], 1);
@@ -1631,7 +1631,7 @@ if (function_exists('bk_prune_process_samples')) {
         ['dnesni-klidny', 'dnesni-spicka', 'stary-klidny', 'stary-spicka', 'stary-zravy-na-pamet']
     );
 
-    // 2. Se zapnutým prořezáváním zmizí staré klidné vzorky, špičky zůstanou.
+    // 2. With thinning on, old calm samples vanish and the peaks stay.
     $seed_samples($pdo);
     $r = bk_prune_process_samples($pdo, 30, 7, 50.0);
     check('prořezal se jeden klidný starý vzorek', $r['pruned'], 1);
@@ -1642,28 +1642,28 @@ if (function_exists('bk_prune_process_samples')) {
         ['dnesni-klidny', 'dnesni-spicka', 'stary-spicka', 'stary-zravy-na-pamet']
     );
 
-    // Označení musí být vidět v datech - jinak by prořezané okno vypadalo
-    // jako doba, kdy se nic nedělo.
+    // The marking must be visible in the data - a thinned window would otherwise
+    // look like a time when nothing happened.
     $kept = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'stary-spicka'")->fetchColumn();
     check('přeživší vzorek přizná, že je z prořezaného okna', $kept, 'peak');
     $fresh = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'dnesni-klidny'")->fetchColumn();
     check('čerstvý vzorek zůstává raw', $fresh, 'raw');
 
-    // 3. Prořezání nastavené za hranicí retence je no-op.
+    // 3. Thinning configured beyond the retention boundary is a no-op.
     //
-    // Pozor na to, co tenhle případ NEtestuje: ztrátu dat tu nehlídá, protože
-    // první fáze dotčené okno smaže dřív, než se k němu druhá dostane - ověřeno
-    // sabotáží, po odstranění pojistky testy dál procházely. Pojistka tedy
-    // nechrání data, jen ušetří dva zbytečné dotazy. Test hlídá to, na čem
-    // záleží: že se v takové konfiguraci nesáhne na čerstvé vzorky.
+    // Mind what this case does NOT test: it does not guard data loss, because
+    // the first phase deletes the affected window before the second reaches it -
+    // verified by sabotage, the tests kept passing with the guard removed. The
+    // guard therefore protects no data, it only saves two pointless queries.
+    // The test guards what matters: fresh samples stay untouched in that configuration.
     $seed_samples($pdo);
     $r = bk_prune_process_samples($pdo, 5, 30, 50.0);
     check('prořezání za hranicí retence nic neprořeže', $r['pruned'], 0);
     check('a nic neoznačí', $r['marked'], 0);
     check('čerstvé vzorky zůstanou nedotčené', $names_left($pdo), ['dnesni-klidny', 'dnesni-spicka']);
 
-    // 4. Vypnutá historie tabulku vyprázdní - data, která nikdo nesbírá
-    //    a nikdo nevidí, nemají v databázi co dělat.
+    // 4. Disabled history empties the table - data nobody collects and
+    //    nobody sees has no business in the database.
     $seed_samples($pdo);
     $r = bk_prune_process_samples($pdo, 0);
     check_true('vypnutá historie se přizná', $r['disabled']);
@@ -1703,8 +1703,8 @@ if ($logged_in) {
 
     // The heart of it: whatever can be saved must also be readable. If a key
     // dropped out of the read path again, the next save would erase it.
-    // (Původní kanárek byly whatsapp_* klíče - ty se 2026-08-17 ukázaly jako
-    // mrtvé a smazaly se, kanárkem je teď SMTP pár plain+secret.)
+    // (The original canary were the whatsapp_* keys - they turned out dead on
+    // 2026-08-17 and were deleted; the canary is now the SMTP plain+secret pair.)
     check('smtp host se vrací zpátky (jinak ho další uložení smaže)', $s['smtp_host'] ?? null, 'smtp.example.com');
     check_true('smtp heslo se vrací maskované, ne prázdné a ne plaintext',
         ($s['smtp_pass'] ?? '') !== '' && ($s['smtp_pass'] ?? '') !== 'TajneHeslo123');
@@ -1714,7 +1714,7 @@ if ($logged_in) {
     api_post($base, 'action=save_settings', ['settings' => $s], $cookie_jar);
     [, $again] = api_get_auth($base, 'action=get_settings', $cookie_jar);
     check('druhé uložení nastavení nesmaže', $again['settings']['smtp_host'] ?? null, 'smtp.example.com');
-    // A maskované heslo poslané zpátky NESMÍ přepsat skutečnou hodnotu.
+    // And a masked password sent back must NOT overwrite the real value.
     $smtp_pass_db = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_pass'")->fetchColumn();
     check('maskovaný secret nepřepsal skutečné heslo', $smtp_pass_db, 'TajneHeslo123');
 
@@ -1725,15 +1725,15 @@ if ($logged_in) {
 }
 
 // =======================================================================
-// Digest v jazyce příjemce - náhled přes admin.php renderuje stejnou
-// šablonou jako ostrý e-mail. EN verze nesmí propustit jediný český
-// řetězec šablony; česká data (názvy monitorů ze seedů) se před kontrolou
-// odstraní, protože ta se nepřekládají po právu.
+// The digest in the recipient's language - the admin.php preview renders with
+// the same template as the real e-mail. The EN version must not leak a single
+// Czech template string; Czech data (monitor names from the seeds) is removed
+// before the check, because it rightfully stays untranslated.
 // =======================================================================
 if (isset($cookie_jar)) {
-    // admin.php má instalační bránu: přihlášený admin bez setup_completed
-    // dostane místo obsahu dokončení průvodce. Testovací DB průvodcem
-    // neprošla, flag se nastaví přímo.
+    // admin.php has an install gate: a logged-in admin without setup_completed
+    // gets the wizard-completion page instead of content. The test DB never ran
+    // the wizard, so the flag is set directly.
     $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
     $digest_preview = function (string $lang) use ($pdo, $base, $cookie_jar): string {
         $pdo->exec("UPDATE users SET email_lang = " . ($lang === '' ? 'NULL' : "'{$lang}'") . " WHERE username = 'admin'");
@@ -1751,7 +1751,7 @@ if (isset($cookie_jar)) {
 
     $digest_en = $digest_preview('en');
     check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
-    // Data z DB zůstávají v původním jazyce - jen šablona se překládá.
+    // DB data stays in its original language - only the template translates.
     $digest_en_clean = str_replace(['Testovací web', 'Router bez metrik', 'Síť', 'Weby'], '', $digest_en);
     $digest_leaks = [];
     if (preg_match_all('/[^\s>]*[ěščřžýáíéúůťďňóĚŠČŘŽÝÁÍÉÚŮŤĎŇ][^\s<]*/u', $digest_en_clean, $m)) {
@@ -1762,7 +1762,7 @@ if (isset($cookie_jar)) {
     $digest_cs = $digest_preview('cs');
     check_true('CS digest je česky', str_contains($digest_cs, 'Týdenní report'));
 
-    // Úklid: admin zpět na globální jazyk.
+    // Cleanup: the admin back to the global language.
     $digest_preview('');
 }
 

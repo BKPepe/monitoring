@@ -1,13 +1,13 @@
 <?php
 /**
- * Hledání mrtvého kódu v PHP aplikaci.
+ * Dead code hunting in the PHP application.
  *
- * Spuštění:  php apps/status/tests/find_dead_code.php
- *            php apps/status/tests/find_dead_code.php --strict   (nenulový exit)
+ * Running:  php apps/status/tests/find_dead_code.php
+ *            php apps/status/tests/find_dead_code.php --strict   (non-zero exit)
  *
- * Proč: repo dlouho neslo funkce, které nikdo nevolal, a nastavení, která se
- * ukládala a nikdy nečetla. Ruční audit to našel jednou; tenhle skript to
- * dokáže kdykoli znovu a v CI hlídá, aby mrtvého kódu nepřibývalo.
+ * Why: the repo long carried functions nobody called and settings that were
+ * saved and never read. A manual audit found them once; this script can do it
+ * again any time and guards in CI that dead code does not accumulate.
  */
 
 $strict = in_array('--strict', $argv, true);
@@ -23,7 +23,7 @@ foreach ($php_files as $f) {
     $all_src .= "\n" . file_get_contents($f);
 }
 
-// --- 1. Definované, ale nikde nevolané funkce ---------------------------
+// --- 1. Functions defined but never called ---------------------------------
 $defs = [];
 foreach ($php_files as $f) {
     $src = file_get_contents($f);
@@ -36,7 +36,7 @@ foreach ($php_files as $f) {
 
 $dead_functions = [];
 foreach ($defs as $fn => $file) {
-    // Počet výskytů "jmeno(" mimo samotnou definici.
+    // Number of "name(" occurrences outside the definition itself.
     $uses = preg_match_all('/(?<![a-zA-Z0-9_$>])' . preg_quote($fn, '/') . '\s*\(/', $all_src);
     $definitions = preg_match_all('/^\s*function\s+' . preg_quote($fn, '/') . '\s*\(/m', $all_src);
     if ($uses <= $definitions) {
@@ -44,15 +44,15 @@ foreach ($defs as $fn => $file) {
     }
 }
 
-// --- 1b. Volané, ale nikde nedefinované funkce ---------------------------
-// Opačný směr než kontrola výše, a v praxi nebezpečnější: widget.php volal
-// calculate_uptime(), která v repu vůbec nebyla, takže stránka končila
-// fatální chybou pro každý existující monitor. php -l to nezachytí -
-// nedefinovaná funkce je chyba za běhu, ne syntaktická.
+// --- 1b. Functions called but defined nowhere ------------------------------
+// The opposite direction of the check above, and in practice more dangerous:
+// widget.php called calculate_uptime(), which did not exist in the repo, so the
+// page ended with a fatal error for every existing monitor. php -l cannot catch it -
+// an undefined function is a runtime error, not a syntactic one.
 $builtin = get_defined_functions()['internal'];
 $builtin_map = array_flip(array_map('strtolower', $builtin));
 
-// Konstrukty jazyka a věci z knihoven, které se volají jako funkce.
+// Language constructs and library things called like functions.
 $known_external = array_flip([
     'echo', 'print', 'isset', 'unset', 'empty', 'list', 'array', 'exit', 'die',
     'include', 'require', 'include_once', 'require_once', 'eval', 'fn', 'function',
@@ -118,7 +118,7 @@ foreach ($php_files as $f) {
     }
 }
 
-// --- 2. Nastavení ukládaná v adminu, ale nikde nečtená -------------------
+// --- 2. Settings saved in the admin but read nowhere ----------------------
 $admin = file_get_contents($dir . '/admin.php');
 $saved = [];
 if (preg_match('/settings_to_save\s*=\s*\[(.*?)\];/s', $admin, $m)) {
@@ -129,9 +129,9 @@ $dead_settings = [];
 foreach ($saved as $key) {
     $read_direct = preg_match("/get_setting\(\s*'" . preg_quote($key, '/') . "'/", $all_src);
 
-    // Klíče se často skládají za běhu: get_setting('oauth_' . $provider . '_client_id').
-    // Detektor proto zkouší i všechny prefixy/suffixy rozdělené podtržítkem -
-    // bez toho hlásil 8 falešných poplachů u OAuth nastavení.
+    // Keys are often composed at runtime: get_setting('oauth_' . $provider . '_client_id').
+    // The detector therefore tries all underscore-separated prefixes/suffixes -
+    // without that it reported 8 false alarms on the OAuth settings.
     $read_dynamic = false;
     $parts = explode('_', $key);
     for ($i = 1; $i < count($parts) && !$read_dynamic; $i++) {
@@ -150,25 +150,25 @@ foreach ($saved as $key) {
     }
 }
 
-// --- 2b. Nastavení čtená, ale nikde neukládaná ---------------------------
+// --- 2b. Settings read but saved nowhere ----------------------------------
 //
-// Opačný směr než kontrola výše, ze stejných dat. Chybí-li klíč v adminu,
-// get_setting() vždycky vrátí výchozí hodnotu a nikdo si toho nevšimne -
-// funkce nespadne, jen tiše vrátí něco jiného, než uživatel nastavil.
+// The opposite direction of the check above, over the same data. When a key is
+// missing from the admin, get_setting() always returns the default and nobody
+// notices - nothing crashes, it just silently returns something else than the user set.
 //
-// Přesně takhle se RSS kanál jmenoval „Monitoring" místo názvu webu: četl
-// se klíč `site_name`, ukládá se ale `site_title`. Překlep, který projde
-// testem i revizí, protože výsledek vypadá jako legitimní výchozí stav.
+// Exactly this is how the RSS feed was named "Monitoring" instead of the site
+// name: the `site_name` key was read while `site_title` is what gets saved.
+// A typo that passes tests and review, because the result looks like a legitimate default.
 //
-// Klíče zapisované mimo administraci (cron si značkuje vlastní běh, cache
-// geolokace) tu nejsou chybou - proto se hledají i zápisy do `settings`.
+// Keys written outside the admin (cron stamps its own runs, the geolocation
+// cache) are not errors here - hence writes into `settings` are searched too.
 preg_match_all("/get_setting\(\s*'([a-z0-9_]+)'/", $all_src, $read_keys);
 $written_anywhere = [];
 preg_match_all("/VALUES\s*\(\s*'([a-z0-9_]+)'/i", $all_src, $sql_writes);
 foreach ($sql_writes[1] ?? [] as $k) {
     $written_anywhere[$k] = true;
 }
-// Zápisy s klíčem v parametru: execute(['last_cron_run', ...]).
+// Writes with the key in a parameter: execute(['last_cron_run', ...]).
 preg_match_all("/execute\(\s*\[\s*'([a-z0-9_]+)'/", $all_src, $param_writes);
 foreach ($param_writes[1] ?? [] as $k) {
     $written_anywhere[$k] = true;
@@ -179,21 +179,21 @@ foreach (array_unique($read_keys[1] ?? []) as $key) {
     if (in_array($key, $saved, true) || isset($written_anywhere[$key])) {
         continue;
     }
-    // Skládaný klíč: get_setting('oauth_' . $provider . '_client_id').
-    // Zachycený kus není celý název, takže se hledat nemá - jinak detektor
-    // hlásí 'oauth_' jako neexistující nastavení.
+    // A composed key: get_setting('oauth_' . $provider . '_client_id').
+    // The captured piece is not the full name, so it must not be searched -
+    // otherwise the detector reports 'oauth_' as a nonexistent setting.
     if (preg_match("/get_setting\(\s*'" . preg_quote($key, '/') . "'\s*\./", $all_src)) {
         continue;
     }
-    // Konstanta v config.php nebo proměnná prostředí má u get_setting()
-    // přednost před databází, takže takový klíč nikde ukládat netřeba.
+    // A config.php constant or an environment variable takes precedence over
+    // the database in get_setting(), so such a key needs no saving anywhere.
     if (preg_match('/\b' . strtoupper($key) . '\b/', $all_src)) {
         continue;
     }
     $phantom_settings[] = $key;
 }
 
-// --- 3. Jazykové klíče definované, ale nepoužité -------------------------
+// --- 3. Language keys defined but unused -----------------------------------
 $cs_lang = file_get_contents($dir . '/lang/cs.php');
 preg_match_all("/^\s*'([a-z0-9_]+)'\s*=>/m", $cs_lang, $lm);
 $unused_lang = [];
@@ -204,7 +204,7 @@ foreach ($lm[1] as $key) {
     }
 }
 
-// --- Výstup -------------------------------------------------------------
+// --- Output ----------------------------------------------------------------
 printf("Prohledáno %d PHP souborů, %d funkcí.\n\n", count($php_files), count($defs));
 
 if ($dead_functions) {
@@ -251,7 +251,7 @@ if ($undefined_calls) {
     echo "Nedefinovaná volání: žádná\n\n";
 }
 
-// Nedefinované volání je vždy chyba za běhu, takže shazuje i bez --strict.
+// An undefined call is always a runtime error, so it fails even without --strict.
 $problems = count($dead_functions) + count($dead_settings) + count($phantom_settings);
 if ($undefined_calls) {
     fwrite(STDERR, "Nalezena volání nedefinovaných funkcí - stránka by skončila fatální chybou.\n");

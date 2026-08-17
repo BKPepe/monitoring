@@ -1,39 +1,39 @@
 <?php
 /**
- * Smoke test veřejných PHP stránek proti běžící instalaci.
+ * Smoke test of the public PHP pages against a running installation.
  *
- * Spuštění:
+ * Running:
  *   php apps/status/tests/run_page_smoke.php
  *   BK_SMOKE_BASE=http://localhost:8080/status php .../run_page_smoke.php
  *
- * Proč vznikl: widget.php a badge.php měsíce vracely HTTP 500 pro každý
- * existující monitor, protože volaly funkci, která v kódu vůbec nebyla.
- * Nikdo si toho nevšiml - ty stránky se nikdy neotevřely a `php -l` chybu
- * za běhu nezachytí. Tenhle test každou stránku prostě požádá a čeká, že
+ * Why it exists: widget.php and badge.php returned HTTP 500 for months for
+ * every existing monitor, because they called a function that did not exist.
+ * Nobody noticed - those pages were never opened and `php -l` cannot catch a
+ * runtime error. This test simply requests every page and expects it
  * nespadne.
  *
- * Kontroluje se stavový kód A obsah odpovědi: PHP se sdíleným hostingem
- * umí vrátit 200 s vypsanou fatální chybou v těle, což je z pohledu
- * uživatele stejně rozbité jako 500.
+ * Both the status code AND the response body are checked: PHP on shared
+ * hosting can return a 200 with a printed fatal error in the body, which is
+ * just as broken for the user as a 500.
  */
 
 $base = rtrim(getenv('BK_SMOKE_BASE') ?: 'https://bloodkings.eu/status', '/');
 
-/** Reálné id monitoru pro stránky, které ho vyžadují. */
+/** A real monitor id for pages that require one. */
 $monitor_id = getenv('BK_SMOKE_MONITOR_ID') ?: null;
 if ($monitor_id === null) {
-    // Vezme se první monitor z veřejného API - test tak nezávisí na tom,
-    // jaká id zrovna v databázi jsou.
+    // The first monitor from the public API is taken - the test thus does not
+    // depend on which ids happen to be in the database.
     $json = @file_get_contents($base . '/api.php?action=monitors');
     $decoded = $json ? json_decode($json, true) : null;
     $monitor_id = $decoded['monitors'][0]['id'] ?? 1;
 }
 
 /**
- * stránka => [popis, očekávané stavové kódy]
+ * page => [description, expected status codes]
  *
- * 403 u admin.php je správná odpověď (nepřihlášený uživatel), 404 u
- * neexistujícího monitoru taky - test hlídá pády, ne autorizaci.
+ * 403 for admin.php is the right answer (an unauthenticated user), 404 for a
+ * nonexistent monitor too - the test guards crashes, not authorisation.
  */
 $pages = [
     '/' => ['veřejná status stránka', [200]],
@@ -41,7 +41,7 @@ $pages = [
     "/monitor.php?id={$monitor_id}" => ['detail monitoru', [200]],
     "/widget.php?id={$monitor_id}" => ['embed widget', [200]],
     // badge.php je od konsolidace 302 alias na api.php?action=badge -
-    // kontroluje se přesměrování I cílová akce (hned pod tím).
+    // both the redirect AND the target action are checked (right below).
     "/badge.php?id={$monitor_id}" => ['odznak (alias, stav)', [302]],
     "/badge.php?id={$monitor_id}&type=uptime" => ['odznak (alias, dostupnost)', [302]],
     '/widget.php?id=999999' => ['widget s neexistujícím id', [200]],
@@ -53,22 +53,22 @@ $pages = [
     '/health.php' => ['health endpoint', [200, 403]],
     '/api.php?action=public_status' => ['veřejné API', [200]],
     '/api.php?action=ui_config' => ['konfigurace UI', [200]],
-    // Hlídač zvenku na tomhle stojí - když spadne, nikdo se o výpadku sběru
-    // dat nedozví, protože hlásit ho má právě tenhle endpoint.
+    // The external watchdog stands on this - if it breaks, nobody learns about
+    // a collection outage, because this very endpoint is meant to report it.
     '/api.php?action=collection_health' => ['stav sběru dat', [200]],
-    // Kanál musí vrátit platné XML i s prázdnou databází incidentů - prázdný
-    // kanál je legitimní stav, chyba serveru ne.
+    // The feed must return valid XML even with an empty incident database - an
+    // empty feed is a legitimate state, a server error is not.
     '/rss.php' => ['RSS kanál', [200]],
     '/rss.php?page=neexistuje' => ['RSS neexistující stránky', [404]],
-    // Neznámý token má vrátit 404, ne 500. Přesně tady se dřív schovávala
-    // chyba, která shodila widget.php i badge.php pro každý reálný monitor.
+    // An unknown token should return 404, not 500. Exactly here hid the bug
+    // that took down widget.php and badge.php for every real monitor.
     '/heartbeat.php?token=' . str_repeat('f', 48) => ['příjem heartbeatu', [404]],
     '/heartbeat.php' => ['heartbeat bez tokenu', [404]],
     '/metrics.php' => ['Prometheus exportér', [200, 401, 403]],
     '/admin.php' => ['admin (nepřihlášený)', [200, 302, 403]],
 ];
 
-/** Řetězce, které v odpovědi znamenají rozbitou stránku i při stavu 200. */
+/** Strings that mean a broken page even with a 200 status. */
 $fatal_markers = [
     'Fatal error',
     'Parse error',
@@ -83,16 +83,16 @@ $failed = 0;
 $results = [];
 
 /**
- * Stavy, u kterých má smysl požadavek zopakovat.
+ * Statuses worth retrying the request for.
  *
- * Test běží hned po FTP nasazení, kdy se soubory na serveru ještě přepisují
- * jeden po druhém. Požadavek, který trefí rozepsaný stav, dostane od
- * Cloudflare 520 (origin nevrátil nic použitelného) - a shodí deploy, přestože
- * stránka je v pořádku. Přesně to se stalo u /heartbeat.php: v CI 520,
- * o minutu později pětkrát po sobě správné 404.
+ * The test runs right after the FTP deploy, while files on the server are still
+ * being replaced one by one. A request hitting a half-written state gets a 520
+ * from Cloudflare (the origin returned nothing usable) - and fails the deploy
+ * although the page is fine. Exactly that happened with /heartbeat.php: a 520
+ * in CI, five correct 404s in a row a minute later.
  *
- * Opakují se jen chyby brány. Aplikační 500 se neopakuje - to je chyba, kterou
- * má tenhle test hlásit, ne přesedět.
+ * Only gateway errors are retried. An application 500 is not - that is the
+ * error this test exists to report, not to wait out.
  */
 const BK_SMOKE_RETRY_CODES = [0, 502, 503, 504, 520, 521, 522, 523, 524];
 const BK_SMOKE_MAX_ATTEMPTS = 3;
@@ -114,7 +114,7 @@ foreach ($pages as $path => [$label, $expected]) {
         $body = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 
-        // Očekávaný stav je hotovo; jinak zkusit znovu, jen když jde o bránu.
+        // The expected status ends it; otherwise retry only for gateway errors.
         $transient = !in_array($code, $expected, true) && in_array($code, BK_SMOKE_RETRY_CODES, true);
     } while ($transient && $attempts < BK_SMOKE_MAX_ATTEMPTS);
 
@@ -135,12 +135,12 @@ foreach ($pages as $path => [$label, $expected]) {
     if ($problem !== null) {
         $failed++;
     }
-    // Počet pokusů se vypisuje: opakování nemá zmizet z očí, jinak by se
-    // z občasného výpadku stal normál, kterého si nikdo nevšimne.
+    // The attempt count is printed: retries must not vanish from sight, or an
+    // occasional failure becomes a norm nobody notices.
     $results[] = [$path, $label, $code, $problem, $attempts];
 }
 
-/** printf počítá bajty, takže česká diakritika rozhodí sloupce. */
+/** printf counts bytes, so Czech diacritics would misalign the columns. */
 $pad = function (string $text, int $width): string {
     $len = mb_strlen($text, 'UTF-8');
     if ($len > $width) {

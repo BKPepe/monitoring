@@ -1,24 +1,24 @@
 <?php
 /**
- * Výkonnostní kontrola veřejných API endpointů proti běžící instalaci.
+ * Performance check of the public API endpoints against a running installation.
  *
- * Spuštění:
+ * Running:
  *   php apps/status/tests/run_perf_check.php                       (produkce)
  *   BK_PERF_BASE=http://localhost:8080/status php .../run_perf_check.php
  *
- * Proč vznikl: endpoint dashboard_insights se nasadil s dobou odezvy 3,7 s a
- * nikdo si toho nevšiml, protože se výkon nikdy neměřil - appka se prostě
- * "nějak dlouho načítala". Prahy jsou vědomě velkorysé (sdílený hosting),
- * hlídají řádovou regresi, ne desetiny sekundy.
+ * Why it exists: the dashboard_insights endpoint shipped with a 3.7 s response
+ * time and nobody noticed, because performance was never measured - the app just
+ * "loaded slow somehow". The thresholds are deliberately generous (shared
+ * hosting) and guard an order-of-magnitude regression, not tenths of a second.
  */
 
 $base = rtrim(getenv('BK_PERF_BASE') ?: 'https://bloodkings.eu/status', '/');
 
-// endpoint => maximální akceptovatelná doba odezvy v sekundách
+// endpoint => the maximum acceptable response time in seconds
 $budgets = [
-    // Prahy počítají s tím, že měření běží i z CI runneru přes internet na
-    // sdílený hosting - hlídá se řádová regrese (endpoint, který se utrhne
-    // na sekundy), ne desetiny sekundy kolísání sítě.
+    // The thresholds assume the measurement runs from a CI runner across the
+    // internet to shared hosting - what is guarded is an order-of-magnitude
+    // regression (an endpoint blowing up to seconds), not network jitter.
     'monitors' => 1.20,           // volá KAŽDÁ stránka aplikace jako první
     'public_status' => 1.00,
     'dashboard_insights' => 1.20, // těžké analýzy, ale cachované
@@ -35,8 +35,8 @@ foreach ($budgets as $action => $budget) {
     $url = $base . '/api.php?action=' . rawurlencode($action);
     $best = null;
 
-    // Tři měření, bere se nejlepší - sdílený hosting kolísá a první
-    // požadavek platí za studený cache/opcache stav.
+    // Three measurements, the best is taken - shared hosting fluctuates and the
+    // first request pays for the cold cache/opcache state.
     for ($i = 0; $i < 3; $i++) {
         $ch = curl_init($url);
         curl_setopt_array($ch, [

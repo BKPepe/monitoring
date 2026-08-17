@@ -1,14 +1,14 @@
 <?php
 /**
- * Testy sběrové/notifikační/e-mailové vrstvy - bez DB a bez sítě.
+ * Tests of the collection/notification/e-mail layer - no DB and no network.
  *
- * Spuštění:  php apps/status/tests/run_pipeline_tests.php
+ * Running:  php apps/status/tests/run_pipeline_tests.php
  *
- * Tyhle tři oblasti (cron pipeline, e-mailové šablony, notifikační kanály)
- * dosud neměly žádné pokrytí, přestože právě ony rozhodují, jestli se
- * uživatel o výpadku dozví - a jestli mu systém neukáže vymyšlená data.
- * Testuje se to, co jde deterministicky: vyhodnocení stavu sběru, jazyk
- * e-mailů, výběr příjemců/kanálů a skládání textů.
+ * These three areas (the cron pipeline, e-mail templates, notification
+ * channels) had no coverage at all, although they are what decides whether
+ * the user learns about an outage - and whether the system shows invented data.
+ * What is deterministic gets tested: collection state evaluation, e-mail language,
+ * e-mails, recipient/channel selection and text assembly.
  */
 
 require_once __DIR__ . '/../lang.php';
@@ -22,9 +22,9 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
 
 
 // =======================================================================
-// 1. SBĚR DAT - bk_get_collection_issues
-// Tvrdé pravidlo projektu: výpadek sběru MUSÍ být vidět. Tyhle testy hlídají,
-// že se hlásí právě tehdy, když se opravdu nesbírá - ani dřív, ani později.
+// 1. DATA COLLECTION - bk_get_collection_issues
+// The project's hard rule: a collection outage MUST be visible. These tests
+// guard that it is reported exactly when collection truly stops - no sooner, no later.
 // =======================================================================
 if (function_exists('bk_get_collection_issues')) {
     $healthy_monitor = ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s')];
@@ -32,7 +32,7 @@ if (function_exists('bk_get_collection_issues')) {
     check('zdravý monitor bez agenta nehlásí nic',
         count(bk_get_collection_issues($healthy_monitor, [])), 0);
 
-    // cPanel exporter selhává - přesně scénář, který dva týdny nikdo neviděl.
+    // The cPanel exporter is failing - exactly the scenario nobody saw for two weeks.
     $issues = bk_get_collection_issues($healthy_monitor, [
         'cpanel_stats_error' => ['error' => 'HTTP 403', 'hint' => 'Špatný klíč', 'since' => '2026-08-01T10:00:00+02:00'],
     ]);
@@ -41,7 +41,7 @@ if (function_exists('bk_get_collection_issues')) {
     check('hint se propaguje k adminovi', $issues[0]['hint'] ?? null, 'Špatný klíč');
     check('začátek výpadku se propaguje', $issues[0]['since'] ?? null, '2026-08-01T10:00:00+02:00');
 
-    // Mlčící agent: hlásí se až po vypršení timeoutu, ne dřív.
+    // A silent agent: reported only after the timeout expires, not sooner.
     $fresh = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 60], 3000);
     check('čerstvý agent nehlásí problém', count($fresh), 0);
 
@@ -49,12 +49,12 @@ if (function_exists('bk_get_collection_issues')) {
     check_true('mlčící agent se hlásí',
         count(array_filter($stale, fn($i) => $i['type'] === 'agent_silent')) === 1);
 
-    // Monitor, který agenta nikdy neměl, nesmí hlásit "agent mlčí".
+    // A monitor that never had an agent must not report "the agent is silent".
     $never = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => 0], 3000);
     check('monitor bez agenta nehlásí mlčení agenta',
         count(array_filter($never, fn($i) => $i['type'] === 'agent_silent')), 0);
 
-    // Zastavené kontroly - pauznutý monitor je legitimní stav, ne porucha.
+    // Stopped checks - a paused monitor is a legitimate state, not a fault.
     $paused = bk_get_collection_issues(
         ['status' => 'paused', 'last_checked' => date('Y-m-d H:i:s', time() - 86400)], []);
     check('pozastavený monitor nehlásí zastavené kontroly',
@@ -68,9 +68,9 @@ if (function_exists('bk_get_collection_issues')) {
 
 // =======================================================================
 // 2. E-MAILY - bk_with_email_lang
-// E-maily nemají návštěvníka, takže jazyk určuje nastavení. Test hlídá, že
-// se globály korektně přepnou A VRÁTÍ - jinak by první odeslaný e-mail
-// přepnul jazyk celému běžícímu requestu (a tím i stránce uživatele).
+// E-mails have no visitor, so the setting decides the language. The test guards
+// that the globals switch AND switch back - otherwise the first sent e-mail
+// would flip the language of the whole running request (and the user's page).
 // =======================================================================
 if (function_exists('bk_with_email_lang')) {
     $GLOBALS['BK_LANG'] = 'cs';
@@ -84,24 +84,24 @@ if (function_exists('bk_with_email_lang')) {
     check('jazyk se po odeslání vrátí zpět', $GLOBALS['BK_LANG'], 'cs');
     check('slovník se po odeslání vrátí zpět', t('day_no_data'), $cs_text);
 
-    // Nesmyslný kód jazyka nesmí shodit odesílání - fallback na češtinu.
+    // A nonsense language code must not break sending - fallback to Czech.
     $fallback = bk_with_email_lang('xx', fn() => t('day_no_data'));
     check('neznámý jazyk padá na češtinu', $fallback, $cs_text);
 
-    // Výjimka uvnitř builderu nesmí nechat globály přepnuté.
+    // An exception inside the builder must not leave the globals switched.
     try {
         bk_with_email_lang('en', function () { throw new RuntimeException('boom'); });
     } catch (RuntimeException $e) {
-        // očekávané
+        // expected
     }
     check('výjimka v šabloně nenechá přepnutý jazyk', $GLOBALS['BK_LANG'], 'cs');
 }
 
 // =======================================================================
-// 3. TEXTY UPOZORNĚNÍ - bk_enrich_threshold_tip
-// Obohacení tipu smí použít jen data, která opravdu dorazila. Vymyšlený
-// "top proces" nebo "Wi-Fi klientů: 0" by byl přesně ten druh lži, kvůli
-// které tenhle projekt prošel čistkou fabrikovaných dat.
+// 3. ALERT TEXTS - bk_enrich_threshold_tip
+// Tip enrichment may only use data that really arrived. An invented
+// "top process" or "Wi-Fi clients: 0" would be exactly the kind of lie this
+// project went through a fabricated-data purge over.
 // =======================================================================
 if (function_exists('bk_enrich_threshold_tip')) {
     $GLOBALS['BK_LANG'] = 'cs';
@@ -121,15 +121,15 @@ if (function_exists('bk_enrich_threshold_tip')) {
     check_true('kontext Wi-Fi klientů je v textu', str_contains($with_proc, '27'));
     check_true('doporučení je v textu', str_contains(mb_strtolower($with_proc), 'doporučení'));
 
-    // Bez Wi-Fi telemetrie se o klientech nesmí psát vůbec.
+    // Without Wi-Fi telemetry, clients must not be written about at all.
     $no_wifi = bk_enrich_threshold_tip([
         'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
     ], 'cpu');
     check_false('bez telemetrie se nepíše o klientech', str_contains(mb_strtolower($no_wifi), 'klient'));
 
-    // Vytížení kanálu z iwinfo survey: bere se nejvytíženější rádio, které
-    // ho REÁLNĚ změřilo - driver bez survey podpory (busy_pct null) nesmí
-    // vyrobit vymyšlenou nulu ani se do výběru počítat.
+    // Channel utilisation from iwinfo survey: the busiest radio that REALLY
+    // measured it is taken - a driver without survey support (busy_pct null)
+    // must neither produce an invented zero nor enter the selection.
     $busy_tip = bk_enrich_threshold_tip([
         'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
         'wifi_radios' => [
@@ -141,15 +141,15 @@ if (function_exists('bk_enrich_threshold_tip')) {
     check_true('vytížení kanálu je v textu', str_contains($busy_tip, '71'));
     check_true('jmenuje se nejvytíženější rádio', str_contains($busy_tip, 'wlan1'));
 
-    // Obecné doporučení kt_rec_wifi o kanálu mluvit smí - vymyšlené ale nesmí
-    // být MĚŘENÍ. Jméno rádia se v textu objeví jedině se změřenou hodnotou.
+    // The generic kt_rec_wifi advice MAY talk about the channel - what must not be
+    // invented is a MEASUREMENT. The radio name appears only with a measured value.
     $busy_none = bk_enrich_threshold_tip([
         'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
         'wifi_radios' => [['radio' => 'wlan0', 'busy_pct' => null]],
     ], 'cpu');
     check_false('samá null měření = žádné jméno rádia s číslem', str_contains($busy_none, 'wlan0'));
 
-    // RAM varianta bere paměťový žebříček, ne CPU.
+    // The RAM variant takes the memory ranking, not CPU.
     $ram_tip = bk_enrich_threshold_tip([
         'top_ram_processes' => [['name' => 'java', 'ram_mb' => 2048]],
     ], 'ram');
@@ -157,25 +157,25 @@ if (function_exists('bk_enrich_threshold_tip')) {
 }
 
 // =======================================================================
-// 4. DETEKCE ANOMÁLIÍ A TRENDŮ (podklad pro notifikace a insights)
+// 4. ANOMALY AND TREND DETECTION (the basis for notifications and insights)
 // =======================================================================
 if (function_exists('bk_compute_baseline_anomaly')) {
-    // Stabilní řada + hodnota v normálu = žádná anomálie.
+    // A stable series + a value in the norm = no anomaly.
     $stable = array_fill(0, 30, 20.0);
     check('hodnota v normálu není anomálie',
         bk_compute_baseline_anomaly($stable, 21.0, 5.0), null);
 
-    // Výrazný výkyv nad baseline anomálie být musí.
+    // A marked deviation above the baseline must be an anomaly.
     $spike = bk_compute_baseline_anomaly($stable, 90.0, 5.0);
     check_true('výrazný výkyv je anomálie', is_array($spike));
 
-    // Prázdná historie nesmí nic tvrdit (nemáme s čím porovnávat).
+    // Empty history must claim nothing (there is nothing to compare with).
     check('bez historie se anomálie nehlásí',
         bk_compute_baseline_anomaly([], 90.0, 5.0), null);
 }
 
 if (function_exists('bk_half_window_rate')) {
-    // Rostoucí zaplnění disku - podklad pro predikci "plno za N dní".
+    // Growing disk usage - the basis for the "full in N days" prediction.
     $rows = [];
     for ($i = 0; $i < 14; $i++) {
         $rows[] = ['checked_at' => date('Y-m-d H:i:s', strtotime("-" . (14 - $i) . " days")), 'hdd_usage' => 50 + $i];
@@ -183,7 +183,7 @@ if (function_exists('bk_half_window_rate')) {
     $rate = bk_half_window_rate($rows, 'hdd_usage');
     check_true('růst disku se detekuje', is_array($rate) && $rate['rate_per_day'] > 0);
 
-    // Plochá řada nesmí generovat předpověď zaplnění.
+    // A flat series must not generate a fill-up forecast.
     $flat = [];
     for ($i = 0; $i < 14; $i++) {
         $flat[] = ['checked_at' => date('Y-m-d H:i:s', strtotime("-" . (14 - $i) . " days")), 'hdd_usage' => 50];
@@ -194,7 +194,7 @@ if (function_exists('bk_half_window_rate')) {
 }
 
 // =======================================================================
-// 5. FORMÁTOVÁNÍ V NOTIFIKACÍCH
+// 5. FORMATTING IN NOTIFICATIONS
 // =======================================================================
 if (function_exists('bk_relative_time_label')) {
     check_true('relativní čas vrací text', is_string(bk_relative_time_label(time() - 300)));
@@ -310,7 +310,7 @@ check(
 //
 // Prah je zamerne prisny: nad limitem musi byt KAZDA kontrola v okne, ne jen
 // prumer. Alert, ktery houka na jednu pomalou odpoved, se nauci kazdy
-// ignorovat - a pak prehlédne i ten skutecny.
+// ignore it - and then miss the real one too.
 $lat_src = file_get_contents(__DIR__ . '/../functions.php');
 
 check_true(
@@ -344,7 +344,7 @@ check('bez odeslaneho alertu se navrat nehlasi', $decide([90, 85], 500, false), 
 check('hodnota rovna prahu neni zpomaleni', $decide([500, 500], 500, false), 'ok');
 
 $failed = bk_test_report('sběr, e-maily, notifikace');
-// Pod coverage runnerem se nekončí procesem - jinak by se report nikdy nevygeneroval.
+// Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {
     exit($failed > 0 ? 1 : 0);
 }

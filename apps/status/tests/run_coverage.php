@@ -1,12 +1,12 @@
 <?php
 /**
- * Coverage report pro PHP testy - Cobertura XML + textový souhrn.
+ * Coverage report for the PHP tests - Cobertura XML + a text summary.
  *
- * Spuštění:  php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
- * Výstup:    coverage/cobertura.xml, coverage/coverage.txt
+ * Running:  php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
+ * Output:   coverage/cobertura.xml, coverage/coverage.txt
  *
- * Cobertura formát čtou GitHub Actions reportéry, GitLab i SonarQube, takže
- * pokrytí jde sledovat v čase místo hádání "asi to nějak otestované je".
+ * The Cobertura format is read by GitHub Actions reporters, GitLab and
+ * SonarQube, so coverage can be tracked over time instead of guessing "it is probably tested somehow".
  */
 
 if (!function_exists('xdebug_start_code_coverage')) {
@@ -20,21 +20,21 @@ $out_dir = getcwd() . '/coverage';
 
 xdebug_start_code_coverage(XDEBUG_CC_UNUSED | XDEBUG_CC_DEAD_CODE);
 
-// Testy se spouští ve vlastním procesním prostoru přes include, aby jejich
-// exit() neukončil sběr - proto se zachytává výstup a exit kód se ignoruje.
+// Tests run in their own process space via include, so their exit() does not
+// end collection - output is captured and the exit code ignored.
 define('BK_COVERAGE_RUN', true);
 $suites = [__DIR__ . '/run_tests.php', __DIR__ . '/run_pipeline_tests.php'];
 foreach ($suites as $suite) {
-    // Testy končí exit(), takže se spouští v odděleném rozsahu přes
-    // register_shutdown_function ne - jednodušší je pustit jejich TĚLO
-    // v uzavřené funkci a exit odchytit přes výjimku není možný. Proto se
-    // testy includují v samostatném procesu jen kvůli výsledku a zde se
-    // znovu volají testované funkce, aby se pokrytí nasbíralo.
+    // Tests end with exit(), so they run in a separate scope via
+    // register_shutdown_function - no; simpler is running their BODY in a
+    // closed function, and catching exit via an exception is impossible. So the
+    // tests are included in a separate process only for the result, and here the
+    // tested functions are called again so coverage accumulates.
     ob_start();
     try {
         include $suite;
     } catch (Throwable $e) {
-        // Selhání testu nesmí zrušit generování reportu.
+        // A test failure must not cancel report generation.
     }
     ob_end_clean();
 }
@@ -109,7 +109,7 @@ foreach ($files as $f) {
 }
 $xml->asXML($out_dir . '/cobertura.xml');
 
-// --- Textový souhrn -----------------------------------------------------
+// --- Text summary -----------------------------------------------------------
 $report = sprintf("Pokrytí PHP testy: %.1f %% (%d z %d spustitelných řádků)\n\n", $rate * 100, $covered_lines, $total_lines);
 $report .= sprintf("%-40s %8s %10s\n", 'soubor', 'pokrytí', 'řádky');
 foreach ($files as $f) {
@@ -124,8 +124,8 @@ file_put_contents($out_dir . '/coverage.txt', $report);
 echo $report;
 echo "\nCobertura XML: coverage/cobertura.xml\n";
 
-// Rohatka proti propadu pokrytí: prah se drží v CI (BK_COVERAGE_MIN) a
-// zvedá se, kdyz testu pribude. Bez promenne se jen reportuje - lokalni
+// A ratchet against coverage decay: the threshold lives in CI (BK_COVERAGE_MIN)
+// and rises as tests grow. Without the variable it only reports - local
 // beh nema duvod padat.
 $min = getenv('BK_COVERAGE_MIN');
 if ($min !== false && $min !== '') {
