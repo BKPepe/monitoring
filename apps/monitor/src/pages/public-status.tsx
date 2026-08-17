@@ -40,15 +40,15 @@ interface IncidentUpdate {
 interface Incident {
   id: number;
   title: string;
-  /** 'open' | 'investigating' | 'resolved' - rozhoduje stav, ne domněnka. */
+  /** 'open' | 'investigating' | 'resolved' - the state decides, not a guess. */
   status: string;
   impact: string | null;
   createdAt: string;
   resolvedAt: string | null;
   durationText: string | null;
-  /** Průběh řešení (investigating -> identified -> ... ) z incident_updates. */
+  /** Resolution progress (investigating -> identified -> ...) from incident_updates. */
   updates?: IncidentUpdate[];
-  /** Shrnutí po vyřešení - admin ho píše právě pro veřejnost. */
+  /** The post-resolution summary - the admin writes it precisely for the public. */
   postmortem?: string | null;
 }
 
@@ -113,8 +113,8 @@ export function PublicStatusPage() {
           setPageMeta({
             title: d.title ?? '',
             monitorIds: d.monitorIds ?? [],
-            // Server posílá volby vždy kompletní; tohle je jen pojistka pro
-            // starší nasazení bez endpointu s volbami.
+            // The server always sends the options complete; this is just a
+            // safety net for older deployments without the options endpoint.
             displayOptions: d.displayOptions ?? {
               showRegions: true,
               showEvents: true,
@@ -149,9 +149,9 @@ export function PublicStatusPage() {
   // known data on screen - a blink to an empty page would claim an outage of
   // the STATUS PAGE as an outage of the services.
   const [refreshTick, setRefreshTick] = React.useState(0);
-  // "Teď" pro porovnávání oken údržby žije ve stavu - Date.now() přímo v
-  // renderu je nečisté (a lint to právem odmítá); minutová granularita tady
-  // bohatě stačí, okna údržby se neohlašují na sekundy.
+  // "Now" for comparing maintenance windows lives in state - Date.now() right
+  // in render is impure (and the lint rightly refuses it); minute granularity
+  // is plenty here, maintenance windows are not announced to the second.
   const [nowTs, setNowTs] = React.useState(() => Date.now());
   React.useEffect(() => {
     const id = window.setInterval(() => {
@@ -269,10 +269,10 @@ export function PublicStatusPage() {
     showUptime: true,
     detailLevel: 'full' as const,
   };
-  // Stránkování po deseti. Endpoint vrací až 200 posledních kontrol; po
-  // odfiltrování na výpadky a zhoršení jich může zbýt od nuly po desítky -
-  // ukazovat všechny najednou by na klidné flotile nevadilo, po hektickém
-  // týdnu by to byla zeď.
+  // Pagination by ten. The endpoint returns up to 200 recent checks; after
+  // filtering to outages and degradations anywhere from zero to dozens may
+  // remain - showing all at once would be fine on a calm fleet and a wall
+  // after a hectic week.
   const [eventsShown, setEventsShown] = React.useState(10);
   const allFailureEvents = React.useMemo(
     () => (events ?? []).filter((e) => e.isDown || e.rawStatus === 'warning'),
@@ -400,9 +400,9 @@ export function PublicStatusPage() {
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {/* "Online 6" vedle "Agenti online 6/6" četlo jako totéž dvakrát a
-            "agent" je interní žargon - čtvrtá dlaždice teď říká, z kolika
-            MÍST se měří, což návštěvníkovi skutečně něco sděluje. */}
+        {/* "Online 6" next to "Agents online 6/6" read like the same thing twice and
+            "agent" is internal jargon - the fourth tile now says from how many
+            PLACES measurements run, which actually tells the visitor something. */}
         <Stat label={t('public.stat_online', 'Online')} value={online} tone="up" />
         <Stat
           label={t('public.stat_down', 'Mimo provoz')}
@@ -439,9 +439,9 @@ export function PublicStatusPage() {
         </Card>
       )}
 
-      {/* Ohlášená BUDOUCÍ údržba - okno teprve přijde, služba zatím běží.
-          Návštěvník se o plánovaném oknu má dozvědět předem, ne až mu
-          služba zmizí. Běžící údržba je ve verdiktu a na kartě služby. */}
+      {/* Announced FUTURE maintenance - the window is yet to come, the service still runs.
+          The visitor should learn about a planned window ahead of time, not when
+          the service disappears. Running maintenance is in the verdict and on the card. */}
       {(() => {
         const upcoming = (visibleMonitors ?? []).filter(
           (m) =>
@@ -522,14 +522,14 @@ export function PublicStatusPage() {
           <h2 className="text-sm font-semibold">{t('public.incidents', 'Incidenty')}</h2>
           <ul className="space-y-2">
             {incidents.slice(0, 10).map((inc) => (
-              // "Probíhá" se odvozuje ze STAVU, ne z chybějícího pole.
-              // První verze četla resolved_at (snake_case), API posílá
-              // resolvedAt - vyřešený incident z 8. 8. se tak ukazoval jako
-              // probíhající. Ověřeno proti skutečné odpovědi.
+              // "Ongoing" derives from the STATE, not from a missing field.
+              // The first version read resolved_at (snake_case) while the API
+              // sends resolvedAt - a resolved incident from 8 Aug thus showed
+              // as ongoing. Verified against the real response.
               <li key={inc.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
-                {/* Odznak se slovem místo tečky: zelené kolečko vedle titulku
-                    "Výpadek: ..." četlo jako protimluv - teď tam stojí přímo
-                    "Vyřešeno", resp. "Probíhá". */}
+                {/* A badge with a word instead of a dot: a green circle next to
+                    "Outage: ..." read as a contradiction - now it literally says
+                    "Resolved" or "Ongoing". */}
                 <span className="flex items-center gap-2 font-medium">
                   <Badge variant={inc.status === 'resolved' ? 'up' : 'down'}>
                     {inc.status === 'resolved'
@@ -538,18 +538,18 @@ export function PublicStatusPage() {
                   </Badge>
                   {inc.title}
                 </span>
-                {/* Bez sekund: s nimi se rozsah na úzkém displeji lámal
-                    uprostřed času. Minutová přesnost tu stačí - trvání
-                    říká durationText. */}
+                {/* Without seconds: with them the range wrapped mid-time on
+                    mid-time on a narrow display. Minute precision is enough here -
+                    the duration is stated by durationText. */}
                 <span className="text-muted-foreground tabular-nums">
                   {noSeconds(inc.createdAt)}
                   {inc.status === 'resolved' && inc.resolvedAt
                     ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
                     : ''}
                 </span>
-                {/* Průběh řešení - stejná timeline, kterou vidí admin.
-                    Status stránka, která umí říct jen "rozbité/spravené",
-                    nutí lidi ptát se na Discordu; tohle je ta odpověď. */}
+                {/* Resolution progress - the same timeline the admin sees.
+                    A status page that can only say "broken/fixed" makes people
+                    ask on Discord; this is that answer. */}
                 {(inc.updates ?? []).length > 0 && (
                   <ul className="w-full space-y-1 border-l border-border/60 pl-3">
                     {(inc.updates ?? []).map((u, i) => (
@@ -561,8 +561,8 @@ export function PublicStatusPage() {
                     ))}
                   </ul>
                 )}
-                {/* Postmortem po vyřešení: admin UI ho umí od začátku, ale
-                    veřejnost ho neviděla - přitom je psaný právě pro ni. */}
+                {/* The postmortem after resolution: the admin UI could always write it, but
+                    the public never saw it - though it is written precisely for them. */}
                 {inc.status === 'resolved' && inc.postmortem && (
                   <div className="bg-secondary/30 w-full rounded-md border border-border/60 p-2.5">
                     <p className="text-foreground mb-1 text-[11px] font-semibold">
@@ -623,7 +623,7 @@ export function PublicStatusPage() {
   );
 }
 
-/** Okno údržby "od – do" bez sekund; chybějící konec = otevřený interval. */
+/** The maintenance window "from – to" without seconds; a missing end = an open interval. */
 function fmtWindow(start: string | null | undefined, end: string | null | undefined): string {
   const f = (v: string) => v.replace('T', ' ').slice(0, 16);
   if (start && end) return `(${f(start)} – ${f(end)})`;
@@ -631,7 +631,7 @@ function fmtWindow(start: string | null | undefined, end: string | null | undefi
   return '';
 }
 
-/** Stavy z incident_updates - výčtem, ať chybějící překlad neuteče do EN. */
+/** States from incident_updates - enumerated, so a missing translation cannot leak into EN. */
 function updateStatusLabel(
   status: string,
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string

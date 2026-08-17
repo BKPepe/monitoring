@@ -3,11 +3,11 @@ import { nestUnderAgents, processUsage } from './monitor-grouping';
 import type { ApiMonitor } from '@/api/app-api';
 
 /**
- * Testy zanořování služeb pod agenty a čtení spotřeby procesů.
+ * Tests for nesting services under agents and reading process consumption.
  *
- * Obě funkce vznikly z reálných reklamací: služby se ukazovaly jako
- * samostatné řádky místo podkategorie agenta a spotřeba procesu se
- * vymýšlela (20 % / 0 MB pro všechno).
+ * Both functions came from real complaints: services showed as standalone
+ * rows instead of the agent's subcategory, and process consumption was
+ * being invented (20 % / 0 MB for everything).
  */
 
 const mon = (over: Partial<ApiMonitor>): ApiMonitor =>

@@ -30,18 +30,18 @@ interface StatusPage {
   slug: string;
   description: string | null;
   isPublic: boolean;
-  /** Prázdné pole = stránka ukazuje všechny monitory. */
+  /** An empty array = the page shows all monitors. */
   monitorIds: number[];
   displayOptions?: DisplayOptions;
 }
 
 /**
- * Správa veřejných status stránek.
+ * Public status page management.
  *
- * Dřív tu byla jediná natvrdo složená karta s odkazem na /status/ - stránka
- * se jmenovala „Status Pages", ale žádnou druhou nešlo založit ani vybrat,
- * co na ní bude. Teď jde vytvořit víc stránek, každé přiřadit monitory,
- * vlastní slug a skrýt ji před veřejností.
+ * There used to be a single hardcoded card linking to /status/ - the page
+ * was named "Status Pages", yet no second page could be created and nothing
+ * about its content chosen. Now several pages can exist, each with its own
+ * monitors, slug, and the option to hide it from the public.
  */
 export function StatusPagesPage() {
   const { t } = useLanguage();
@@ -90,8 +90,8 @@ export function StatusPagesPage() {
     }
   };
 
-  // Odkaz míří na novou React stránku. Do přepnutí /status/ vedl na legacy
-  // PHP, takže si člověk vytvořil stránku tady a proklik ho poslal do staré
+  // The link targets the new React page. Until the switchover /status/ led to
+  // legacy PHP, so one created a page here and the click-through led into the old
   // aplikace.
   const pageUrl = (slug: string) => `${window.location.origin}/app/public?page=${encodeURIComponent(slug)}`;
 
@@ -116,9 +116,9 @@ export function StatusPagesPage() {
       {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
       {notice && <p className="text-up text-xs font-semibold">{notice}</p>}
 
-      {/* Hlavní veřejná stránka existuje vždy - bez tohohle odkazu se k ní
-          nešlo z aplikace prokliknout, dokud člověk nevytvořil vlastní
-          stránku (a i pak jen na tu vlastní). */}
+      {/* The main public page always exists - without this link there was no
+          click-through to it from the app until one created a custom page
+          (and even then only to that one). */}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold">{t('sp.main_page', 'Hlavní veřejná stránka')}</p>
@@ -136,9 +136,9 @@ export function StatusPagesPage() {
         </a>
       </Card>
 
-      {/* Vložitelný SVG odznak - živý stav na cizím webu (fórum, wiki, README).
-          Náhled je ten samý endpoint, takže co je vidět tady, je přesně to,
-          co dostane cizí stránka. */}
+      {/* The embeddable SVG badge - live status on a foreign site (forum, wiki, README).
+          The preview is the very same endpoint, so what is visible here is exactly
+          what a foreign page gets. */}
       <Card className="space-y-2 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
@@ -362,8 +362,8 @@ function PageDialog({
           {t('sp.field_public', 'Veřejně přístupná')}
         </label>
 
-        {/* Co stránka ukáže. Výchozí je všechno - vypíná se, ne zapíná,
-            aby stránky založené před touto volbou vypadaly stejně. */}
+        {/* What the page shows. The default is everything - options switch things
+            off, not on, so pages created before this option look unchanged. */}
         <div>
           <span className="text-muted-foreground mb-1 block text-xs font-medium">
             {t('sp.field_display', 'Zobrazené sekce')}

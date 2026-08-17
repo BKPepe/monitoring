@@ -31,11 +31,11 @@ export interface PublicMonitor {
   lastStatusChange: string | null;
   details: Record<string, unknown> | null;
   assetId: number | null;
-  /** null = agent CPU nehlásí; podle toho se pozná, jestli existují grafy. */
+  /** null = the agent does not report CPU; this tells whether charts exist. */
   cpu: number | null;
   ram: number | null;
   hdd: number | null;
-  /** Příznak ohlášené údržby - i budoucí (status je pak stále 'up'). */
+  /** Announced-maintenance flag - future windows too (status stays 'up' then). */
   maintenance?: boolean;
   maintenanceDescription?: string | null;
   maintenanceStart?: string | null;
@@ -52,7 +52,7 @@ export interface PublicMonitor {
  * value produces no row rather than a dash-filled skeleton, because on a
  * public page an empty grid reads as broken.
  */
-/** Dostupnost po oknech z action=uptime_windows; null = okno bez měření. */
+/** Availability per window from action=uptime_windows; null = a window without measurements. */
 export interface UptimeWindows {
   d1: number | null;
   d7: number | null;
@@ -69,10 +69,10 @@ export function PublicMonitorCard({
 }: {
   monitor: PublicMonitor;
   uptime: UptimeDay[];
-  /** 30denní dostupnost; null = zatím nezměřeno -> pomlčka. */
+  /** 30-day availability; null = unmeasured yet -> a dash. */
   uptimePct: number | null;
   windows?: UptimeWindows | null;
-  /** Stránka s detailLevel 'status': žádné rozbalování, jen stav a čísla. */
+  /** A page with detailLevel 'status': no expanding, just state and numbers. */
   statusOnly?: boolean;
 }) {
   const { t } = useLanguage();
@@ -108,8 +108,8 @@ export function PublicMonitorCard({
             <span className="truncate text-sm font-medium">{monitor.name}</span>
           )}
           {liveBadge(monitor, d, t)}
-          {/* Údržba je taky nedostupnost - ale ohlášená. Návštěvník má vidět
-              ŽE neběží, PROČ, a do kdy - ne jen oranžovou tečku bez vysvětlení. */}
+          {/* Maintenance is unavailability too - just an announced one. The visitor should see
+              THAT it is down, WHY, and until when - not just an orange dot with no explanation. */}
           {monitor.status === 'maintenance' && (
             <Badge variant="warning">
               <Wrench className="mr-1 size-3" />
@@ -119,8 +119,8 @@ export function PublicMonitorCard({
         </span>
         <span className="flex items-center gap-3">
           {uptime.length > 0 && <UptimeStrip days={uptime} />}
-          {/* Barva podle výše: pod 99 % už stojí za pozornost, pod 95 % je
-              to problém - stejné prahy jako uptime-pct třídy na legacy. */}
+          {/* Colour by level: below 99 % already deserves attention, below 95 % is
+              a problem - the same thresholds as the legacy uptime-pct classes. */}
           <span
             className={cn(
               'w-16 text-right text-xs font-semibold tabular-nums',
@@ -168,8 +168,8 @@ export function PublicMonitorCard({
 
       {open && !statusOnly && (
         <div className="mt-3 space-y-2.5 pl-5">
-          {/* Dostupnost za víc oken - jako HetrixTools. Nezměřené okno je
-              pomlčka: čerstvý monitor nemá "100 % za 90 dní". */}
+          {/* Availability over several windows - like HetrixTools. An unmeasured window is
+              a dash: a fresh monitor has no "100 % over 90 days". */}
           {windows && (
             <div className="grid max-w-md grid-cols-4 gap-2">
               {(
@@ -201,7 +201,7 @@ export function PublicMonitorCard({
             </div>
           )}
           <LatencySparkline days={uptime} t={t} />
-          {/* Vytížení serveru - jen kde agent měří. */}
+          {/* Server load - only where an agent measures. */}
           {(monitor.cpu !== null || monitor.ram !== null || monitor.hdd !== null) && (
             <div className="space-y-1.5">
               <UsageBar label="CPU" percent={monitor.cpu} />
@@ -209,9 +209,9 @@ export function PublicMonitorCard({
               <UsageBar label={t('public.disk', 'Disk')} percent={monitor.hdd} />
             </div>
           )}
-          {/* Čerpání limitů hostingu (cPanel) - s formatted hodnotou
-              ("1.45 GB / 50 GB"), protože samotné procento u limitů neříká,
-              kolik místa doopravdy zbývá. */}
+          {/* Hosting limits usage (cPanel) - with the formatted value
+              ("1.45 GB / 50 GB"), because with limits the percentage alone does not
+              say how much room actually remains. */}
           {(() => {
             const cp = d.cpanel_stats;
             if (!cp || typeof cp !== 'object') return null;
@@ -332,9 +332,9 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
           style={{ width: `${clamped}%` }}
         />
       </span>
-      {/* nowrap: "39.01 GB / 124.4 GB" se do pevné šířky nevešlo a lámalo
-          se na dva řádky - hodnota si vezme, kolik potřebuje, a zmenší se
-          pruh, ne čitelnost. */}
+      {/* nowrap: "39.01 GB / 124.4 GB" did not fit the fixed width and wrapped
+          onto two lines - the value takes what it needs and the bar shrinks,
+          not the legibility. */}
       <span className="shrink-0 text-right whitespace-nowrap tabular-nums" title={detail}>
         {detail ?? `${percent} %`}
       </span>
@@ -343,9 +343,9 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
 }
 
 /**
- * Denní průměry odezvy za 30 dní jako drobná čárka - netdata grafy patří do
- * detailu metriky, tohle je jen tvar trendu. Dny bez měření trhají čáru na
- * segmenty; spojitá čára přes díru by tvrdila měření, které neexistuje.
+ * Daily latency averages over 30 days as a tiny line - netdata-style charts belong
+ * to the metric detail, this is just the shape of the trend. Unmeasured days tear
+ * the line into segments; a continuous line across a gap would claim measurements that do not exist.
  */
 function LatencySparkline({
   days,
@@ -391,9 +391,9 @@ function LatencySparkline({
           {min === max ? `${max} ms` : `${min}–${max} ms`}
         </span>
       </div>
-      {/* Viditelný popisek, ne title= tooltip - na dotykových zařízeních
-          tooltip neexistuje (stejná lekce jako u pásu dostupnosti). Bez
-          vysvětlení je to jen anonymní čárka: co je osa, co znamená díra? */}
+      {/* A visible caption, not a title= tooltip - tooltips do not exist on touch
+          (the same lesson as the availability strip). Without an explanation
+          it is an anonymous squiggle: what is the axis, what does a gap mean? */}
       <p className="text-muted-foreground/70 pl-[5.5rem] text-[10px]">
         {t(
           'public.latency_hint',
@@ -404,7 +404,7 @@ function LatencySparkline({
   );
 }
 
-/** Klíče cpanel_stats v pořadí, v jakém je ukazuje legacy stránka. */
+/** cpanel_stats keys in the order the legacy page shows them. */
 const CPANEL_KEYS: [string, string][] = [
   ['disk', 'Disk'],
   ['memory', 'RAM'],

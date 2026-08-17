@@ -1,13 +1,13 @@
 import type { MetricSeries, MetricTone } from '@/api/types';
 
 /**
- * Trend metriky v zobrazeném okně - srovnání průměru poslední čtvrtiny
- * bodů s průměrem první čtvrtiny (mockup dashboardu: „23 % ↓ 5 %").
+ * Metric trend in the shown window - comparing the average of the last quarter
+ * of points with the average of the first (dashboard mockup: "23 % ↓ 5 %").
  *
- * Průměry čtvrtin místo první/poslední hodnoty: jediný zašuměný bod by
- * jinak vyráběl falešné trendy. Počítá se jen ze skutečně naměřených bodů;
- * bez dostatku dat vrací null a UI deltu prostě nevypíše - žádné vymyšlené
- * „stabilní 0 %".
+ * Quarter averages instead of first/last values: a single noisy point would
+ * manufacture false trends otherwise. Computed only from actually measured points;
+ * with too little data it returns null and the UI just omits the delta - no invented
+ * "stable 0 %".
  */
 export function computeSeriesDelta(series: MetricSeries | undefined): {
   pct: number;
@@ -23,8 +23,8 @@ export function computeSeriesDelta(series: MetricSeries | undefined): {
   const before = avg(head);
   const after = avg(tail);
 
-  // Růst z ~nuly nemá smysluplné procento (viz stejná úvaha u trend_pct
-  // ve functions.php) - radši žádná delta než „+9000 %".
+  // Growth from ~zero has no meaningful percentage (same reasoning as trend_pct
+  // in functions.php) - better no delta than "+9000 %".
   if (Math.abs(before) < 0.01) return null;
 
   const pct = Math.round(((after - before) / before) * 100);
@@ -33,9 +33,9 @@ export function computeSeriesDelta(series: MetricSeries | undefined): {
 }
 
 /**
- * U kterých metrik je pokles dobrá zpráva. Síť a počty klientů jsou
- * neutrální (víc provozu není samo o sobě špatně) - null = delta se
- * vykreslí bez hodnotícího zabarvení.
+ * For which metrics a drop is good news. Network and client counts are
+ * neutral (more traffic is not bad by itself) - null = the delta renders
+ * without judgmental colouring.
  */
 export function goodDirectionFor(tone: MetricTone | undefined): 'up' | 'down' | null {
   switch (tone) {

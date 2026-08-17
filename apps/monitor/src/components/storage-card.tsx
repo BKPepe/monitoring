@@ -28,7 +28,7 @@ interface IoProcess {
   write_bytes: number;
 }
 
-/** Bajty na čitelnou jednotku. NULL zůstává pomlčkou, ne nulou. */
+/** Bytes to a readable unit. NULL stays a dash, not a zero. */
 function human(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return '—';
   const units = ['B', 'kB', 'MB', 'GB', 'TB'];
@@ -47,11 +47,11 @@ function rate(kbps: number | null | undefined): string {
 }
 
 /**
- * Úložiště zařízení: všechny filesystémy, provoz po discích a procesy,
- * které nejvíc zapisují.
+ * Device storage: all filesystems, per-disk traffic and the processes
+ * writing the most.
  *
- * Dosud se ukazovalo jedno číslo za celý router - zaplnění /overlay nebo /.
- * Připojený USB disk nebo druhý oddíl tak nebyl vidět vůbec.
+ * A single number per router used to be shown - the / or /overlay usage.
+ * A plugged-in USB disk or a second partition was invisible.
  */
 export function StorageCard({ d }: { d: Record<string, unknown> }) {
   const { t } = useLanguage();
@@ -60,9 +60,9 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
   const devices = Array.isArray(d.disk_devices) ? (d.disk_devices as DiskDevice[]) : [];
   const writers = Array.isArray(d.top_io_processes) ? (d.top_io_processes as IoProcess[]) : [];
 
-  // `io_accounting: false` znamená "jádro tuhle věc neumí" - to je jiná
-  // informace než "zatím nic nedorazilo" a uživatel si zaslouží vědět, kterou
-  // z nich vidí.
+  // `io_accounting: false` means "the kernel cannot do this" - different
+  // information from "nothing arrived yet", and the user deserves to know
+  // which one they are looking at.
   const ioAccounting = d.io_accounting;
   const ioUnsupported = ioAccounting === false;
 
@@ -132,8 +132,8 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
                 {devices.map((dev) => (
                   <tr key={dev.device} className="border-b border-border/50 last:border-0">
                     <td className="py-1.5 pr-3 font-mono">{dev.device}</td>
-                    {/* Pomlčka znamená "první měření po startu nebo po restartu
-                        zařízení" - rychlost nejde spočítat z jediného odečtu. */}
+                    {/* A dash means "first measurement after boot or after a device
+                        restart" - a rate cannot be computed from a single reading. */}
                     <td className="py-1.5 pr-3 tabular-nums">{rate(dev.read_kbps)}</td>
                     <td className="py-1.5 tabular-nums">{rate(dev.write_kbps)}</td>
                   </tr>
@@ -149,10 +149,10 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
           <p className="text-muted-foreground text-xs font-medium">
             {t('storage.top_writers', 'Nejvíc zapisující procesy')}
           </p>
-          {/* Vysvětlení chybějícího údaje bylo šedým drobným textem k nerozeznání
-              od popisků kolem, takže se přehlédlo a vypadalo to jako prázdná
-              sekce. Jako informační hláška je jasné, že tady nic nechybí -
-              tohle zařízení to prostě neumí. */}
+          {/* The missing-data explanation used to be small grey text indistinguishable
+              from the labels around it, so it was overlooked and the section looked
+              empty. As an info notice it is clear nothing is missing here -
+              this device simply cannot do it. */}
           <p className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 p-2.5 text-[11px] leading-relaxed text-info">
             <Info className="mt-px size-3.5 shrink-0" />
             <span>

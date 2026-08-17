@@ -1,8 +1,8 @@
 <?php
 /**
- * Jednoduchý i18n loader bez závislostí. Jazyk se volí přes ?lang=cs|en
- * a persistuje se v cookie; výchozí jazyk je čeština (zachovává současné
- * chování pro stávající nasazení). Volané z index.php (a časem admin.php).
+ * A simple dependency-free i18n loader. The language is chosen via ?lang=cs|en
+ * and persists in a cookie; the default language is Czech (preserving the
+ * existing behaviour of current deployments). Called from index.php (and later admin.php).
  */
 
 $bk_supported_langs = ['cs', 'en'];
@@ -26,14 +26,14 @@ $GLOBALS['BK_LANG'] = $bk_lang;
 $GLOBALS['BK_STRINGS'] = require __DIR__ . '/lang/' . $bk_lang . '.php';
 
 /**
- * Vrátí přeložený řetězec pro daný klíč v aktuálním jazyce.
- * Nepřeložené/chybějící klíče spadnou zpět na český text (nikdy prázdný výstup).
+ * Returns the translated string for a key in the current language.
+ * Untranslated/missing keys fall back to the Czech text (never empty output).
  */
 function t(string $key): string {
     return $GLOBALS['BK_STRINGS'][$key] ?? ($GLOBALS['BK_STRINGS_CS_FALLBACK'][$key] ?? $key);
 }
 
-// Fallback pole pro případ, že by v en.php nějaký klíč chyběl (nikdy nespadne na holý klíč)
+// Fallback array in case a key were missing from en.php (never falls to a bare key)
 if ($GLOBALS['BK_LANG'] !== 'cs') {
     $GLOBALS['BK_STRINGS_CS_FALLBACK'] = require __DIR__ . '/lang/cs.php';
 }

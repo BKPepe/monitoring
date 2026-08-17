@@ -5,12 +5,12 @@ import { useLanguage } from '@/context/language-context';
 /**
  * Detail Minecraft serveru.
  *
- * MOTD, verze, seznam hráčů a TPS se sbíraly při každé kontrole, ale
- * v aplikaci se nezobrazovalo nic z toho - jediné, co o serveru šlo poznat,
+ * MOTD, version, player list and TPS were collected on every check, yet
+ * none of it showed in the app - the only thing one could learn about the server
  * byla odezva.
  *
- * TPS umí vrátit jen RCON. Když nakonfigurované není, hodnoty zůstávají
- * prázdné a karta řekne proč, místo aby předstírala plynulý běh.
+ * Only RCON can return TPS. When unconfigured, the values stay empty
+ * and the card says why, instead of pretending a smooth run.
  */
 export function MinecraftCard({ d }: { d: Record<string, any> }) {
   const { t } = useLanguage();
@@ -28,7 +28,7 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
   ];
   const hasTps = tps.some((x) => typeof x.value === 'number');
 
-  // 20 TPS je strop; níž znamená, že server nestíhá tikat včas.
+  // 20 TPS is the ceiling; lower means the server cannot tick on time.
   const tpsTone = (v: number) => (v >= 19.5 ? 'text-up' : v >= 18 ? 'text-warning' : 'text-down');
 
   const fill = online != null && max != null && max > 0 ? (online / max) * 100 : null;
@@ -57,7 +57,7 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {/* Hráči -------------------------------------------------------- */}
+        {/* Players -------------------------------------------------------- */}
         <div className="rounded-lg border border-border p-3">
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
             <Users className="size-3.5" /> {t('mc.players', 'Hráči')}
@@ -83,8 +83,8 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
             <p className="text-muted-foreground mt-2 text-[11px]">{t('mc.nobody', 'Nikdo není připojen')}</p>
           ) : (
             online != null && (
-              // Server hlásí počet, ale jmenný seznam ne - běžné u serverů
-              // se skrytým seznamem hráčů.
+              // The server reports a count but no name list - common on servers
+              // with a hidden player list.
               <p className="text-muted-foreground mt-2 text-[11px]">
                 {t('mc.list_hidden', 'Server jmenný seznam hráčů neposkytuje')}
               </p>

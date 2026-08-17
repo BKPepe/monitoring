@@ -21,12 +21,12 @@ interface HeartbeatInfo {
 }
 
 /**
- * Nastavení heartbeat monitoru.
+ * Heartbeat monitor setup.
  *
- * Ukazuje adresu, na kterou se má úloha ozvat, a hotový příkaz k vložení do
- * cronu. Bez toho by si administrátor musel URL skládat ručně z tokenu, což
- * je přesně ten druh kroku, u kterého se udělá překlep a monitor pak tiše
- * hlásí výpadek, který se nestal.
+ * Shows the address the job should report to and a ready-made command to put
+ * into cron. Without it the administrator would assemble the URL by hand from
+ * the token, which is exactly the kind of step where a typo happens and the
+ * monitor then silently reports an outage that never happened.
  */
 export function HeartbeatCard({ monitorId }: { monitorId: number }) {
   const { t } = useLanguage();
@@ -115,8 +115,8 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
         </Badge>
       </div>
 
-      {/* Stav vlastními slovy - "unknown" bez vysvětlení vypadá jako chyba,
-          přitom znamená jen, že úloha ještě neběžela. */}
+      {/* The state in plain words - "unknown" without an explanation looks like an
+          error, yet it only means the job has not run yet. */}
       {info.stateReason && <p className="text-muted-foreground text-xs">{info.stateReason}</p>}
 
       {info.lastResult === 'fail' && (

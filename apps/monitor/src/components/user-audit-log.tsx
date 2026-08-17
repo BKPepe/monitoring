@@ -27,16 +27,16 @@ interface AuditEntry {
 const PAGE_SIZE = 25;
 
 /**
- * Auditní protokol uživatelských akcí.
+ * Audit trail of user actions.
  *
- * Aplikace dosud ukazovala jako „protokol" jen výsledky kontrol z cronu -
- * u každého řádku stálo „Systémový Agent (Cron)". Skutečný záznam toho, kdo
- * se přihlásil a kdo co změnil, se přitom celou dobu ukládal do vlastní
- * tabulky a byl vidět jen ve staré administraci.
+ * The app used to show only cron check results as its "log" - every row
+ * said "System Agent (Cron)". The real record of who signed in and who
+ * changed what was being stored in its own table the whole time and was
+ * visible only in the old admin.
  *
- * Endpoint vrací nejnovějších 500 záznamů; řazení, filtr podle druhu akce
- * a stránkování po 25 běží nad nimi na klientovi - další dotaz do DB by
- * jen opakoval touž odpověď v jiném pořadí.
+ * The endpoint returns the newest 500 records; sorting, action-kind
+ * filtering and 25-per-page pagination run over them on the client - another
+ * DB query would just repeat the same answer in a different order.
  */
 export function UserAuditLog() {
   const { t } = useLanguage();
@@ -47,9 +47,9 @@ export function UserAuditLog() {
   const [filter, setFilter] = React.useState<'all' | 'security' | 'changes' | 'destructive'>('all');
   const [page, setPage] = React.useState(0);
 
-  // Načtení samo nesahá na stav synchronně - všechno se děje až v `then`.
-  // Indikátor obnovování si zapíná tlačítko, protože v obsluze události je
-  // to v pořádku; uvnitř efektu by šlo o kaskádové překreslení.
+  // The load touches no state synchronously - everything happens in `then`.
+  // The refresh indicator is set by the button, because in an event handler
+  // that is fine; inside an effect it would be a cascading re-render.
   const load = React.useCallback(() => {
     return fetch('/status/api.php?action=user_audit_log&limit=500', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
@@ -71,8 +71,8 @@ export function UserAuditLog() {
     load();
   }, [load]);
 
-  // Popisky se skládají výčtem, ne dynamickým klíčem - chybějící překlad by
-  // se jinak projevil až anglickému uživateli.
+  // Labels are assembled by enumeration, not a dynamic key - a missing
+  // translation would otherwise surface only for an English user.
   const actionLabels: Record<string, string> = {
     login_success: t('uaudit.login_success', 'Přihlášení'),
     login_failed: t('uaudit.login_failed', 'Neúspěšné přihlášení'),
@@ -95,15 +95,15 @@ export function UserAuditLog() {
   const isSecurity = (action: string) => /login|logout|password|totp|token|oauth|denied/.test(action);
   const isDestructive = (action: string) => /deleted|failed|denied/.test(action);
 
-  // Filtr před stránkováním: stránka 2 „bezpečnostních" má být druhá
-  // pětadvacítka bezpečnostních záznamů, ne bezpečnostní záznamy z druhé
-  // pětadvacítky všech.
+  // Filter before pagination: page 2 of "security" should be the second
+  // twenty-five of security records, not the security records from the
+  // second twenty-five of everything.
   const visible = React.useMemo(() => {
     let list = entries ?? [];
     if (filter === 'security') list = list.filter((e) => isSecurity(e.action));
     else if (filter === 'changes') list = list.filter((e) => !isSecurity(e.action));
     else if (filter === 'destructive') list = list.filter((e) => isDestructive(e.action));
-    // API vrací nejnovější první; vzestupně = obrátit kopii, ne originál.
+    // The API returns newest first; ascending = reverse a copy, not the original.
     if (sortAsc) list = [...list].reverse();
     return list;
   }, [entries, filter, sortAsc]);
@@ -203,16 +203,16 @@ export function UserAuditLog() {
                       </Badge>
                     </td>
                     <td className="py-2 pr-3 font-medium">
-                      {/* Prázdné jméno znamená nepřihlášeného - typicky pokus
-                          o přihlášení neexistujícím účtem. Pomlčka, ne „systém". */}
+                      {/* An empty name means unauthenticated - typically an attempt
+                          to sign in with a nonexistent account. A dash, not "system". */}
                       {e.actor ?? '—'}
                     </td>
                     <td className="text-muted-foreground max-w-[28rem] truncate py-2 pr-3" title={e.description ?? ''}>
                       {e.description ?? '—'}
                     </td>
                     <td className="text-muted-foreground py-2 font-mono whitespace-nowrap">{e.ip ?? '—'}</td>
-                    {/* Celý user agent je dlouhý; v tabulce je zkrácený a plné
-                        znění se ukáže po najetí myší. */}
+                    {/* The full user agent is long; the table shows it truncated and
+                        text shows on hover. */}
                     <td className="text-muted-foreground max-w-[14rem] truncate py-2 pl-3" title={e.userAgent ?? ''}>
                       {e.userAgent ?? '—'}
                     </td>

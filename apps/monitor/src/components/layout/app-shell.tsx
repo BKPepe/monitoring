@@ -22,8 +22,8 @@ export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const { session } = useSession();
 
-  // Index globálního vyhledávání (⌘K): stránky + skutečné monitory.
-  // Dřív tu byl statický seznam čtyř stránek a klik nikam nevedl.
+  // Global search index (⌘K): pages + real monitors.
+  // It used to be a static list of four pages and clicking led nowhere.
   const [monitorResults, setMonitorResults] = React.useState<
     { id: string; label: string; group: string; hint?: string }[]
   >([]);
@@ -120,11 +120,11 @@ export function AppShell() {
     session?.authenticated && session.user ? session.user.username : t('user_menu.logged_out', 'Nepřihlášen');
   const userRole =
     session?.authenticated && session.user ? session.user.role : t('user_menu.please_login', 'Přihlaste se');
-  // Odznak u Incidentů musí počítat TOTÉŽ, co stránka incidentů ukazuje -
-  // dřív bral downMonitors z public_status a ukazoval "2", zatímco stránka
-  // (otevřené incidenty z DB + monitory v problému) žádné neměla.
-  // Jediný zdroj: endpoint incidents už v sobě má i právě padlé monitory,
-  // takže se nic nesčítá (jinak by se výpadek počítal dvakrát).
+  // The Incidents badge must count THE SAME thing the incidents page shows -
+  // it used to take downMonitors from public_status and show "2" while the
+  // page (open DB incidents + troubled monitors) had none.
+  // A single source: the incidents endpoint already includes freshly fallen
+  // monitors, so nothing is summed (an outage would be counted twice otherwise).
   const [realAlertCount, setRealAlertCount] = React.useState(0);
   React.useEffect(() => {
     let active = true;
@@ -198,8 +198,8 @@ export function AppShell() {
           {/* The 12-column grid is available to pages inside; the shell just
               holds the max width and padding. */}
           <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:px-0 print:py-0 print:max-w-none">
-            {/* Stránky se načítají až při návštěvě (React.lazy v routes.tsx),
-                takže mezi kliknutím a vykreslením je krátká pauza na stažení
+            {/* Pages load on visit (React.lazy in routes.tsx), so between the
+                click and the render there is a short pause for downloading
                 jejich kódu. Bez tohohle boundary by React vyhodil chybu. */}
             <React.Suspense
               fallback={

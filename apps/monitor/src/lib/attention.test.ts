@@ -3,10 +3,10 @@ import { buildNeedsAttention, type AttentionLabels } from './attention';
 import type { ApiMonitor } from '@/api/app-api';
 
 /**
- * Sekce „Vyžaduje pozornost" rozhoduje, na co se admin podívá první.
- * Testuje se hlavně to, co tenhle projekt opakovaně pálilo: nezměřená
- * hodnota (null) nesmí nikdy založit upozornění, a prázdno musí zůstat
- * prázdnem místo vycpávky.
+ * The "Needs attention" section decides what the admin looks at first.
+ * Tested mostly for what burned this project repeatedly: an unmeasured
+ * value (null) must never create an alert, and emptiness must stay
+ * empty instead of padding.
  */
 
 const labels: AttentionLabels = {
@@ -80,7 +80,7 @@ describe('buildNeedsAttention', () => {
     ];
     const out = buildNeedsAttention(rows, labels);
     expect(out.map((i) => i.text).sort()).toEqual(['AGENT_1.8.0', 'Disk_95', 'UNREACHABLE']);
-    // Klíče musí být unikátní, jinak React vypíše jen jeden řádek.
+    // Keys must be unique, otherwise React renders just one row.
     expect(new Set(out.map((i) => i.key)).size).toBe(out.length);
   });
 

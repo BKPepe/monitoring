@@ -33,8 +33,8 @@ export function installCsrfFetch(): void {
           token = data.csrfToken ?? null;
           setCsrfToken(token);
         } catch {
-          // Bez tokenu požadavek stejně odejde - server odpoví srozumitelnou
-          // 403 hláškou, což je lepší diagnostika než tichý fail tady.
+          // The request goes out even without a token - the server answers with an
+          // intelligible 403, which is better diagnostics than a silent fail here.
         }
       }
       if (token) {

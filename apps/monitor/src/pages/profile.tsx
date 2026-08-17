@@ -24,7 +24,7 @@ interface MyProfile {
 }
 
 /**
- * "Můj účet" - the user-level settings, split out of /settings.
+ * "My account" - the user-level settings, split out of /settings.
  *
  * The settings page mixed system administration (SMTP, thresholds, agents)
  * with things every account holder sets for themselves - contact details,

@@ -2,14 +2,14 @@
 /**
  * Prometheus exporter pro Blood Kings Status Monitoring
  *
- * Vystavuje stav monitorů a metriky VPS agentů ve formátu Prometheus text
- * exposition (verze 0.0.4) pro scrapování externím Prometheus serverem.
+ * Exposes monitor states and VPS agent metrics in the Prometheus text
+ * exposition format (version 0.0.4) for scraping by an external Prometheus server.
  *
- * Zabezpečení: endpoint je aktivní pouze pokud je v nastavení (nebo config.php /
- * proměnné prostředí METRICS_TOKEN) vyplněn tajný token. Scraper jej předává
- * buď jako ?token=... nebo hlavičkou "Authorization: Bearer ...".
+ * Security: the endpoint is active only when a secret token is set in settings
+ * (or config.php / the METRICS_TOKEN environment variable). The scraper passes it
+ * either as ?token=... or via the "Authorization: Bearer ..." header.
  *
- * Ukázka konfigurace Prometheus:
+ * Prometheus configuration example:
  *   scrape_configs:
  *     - job_name: bloodkings
  *       metrics_path: /status/metrics.php
@@ -46,14 +46,14 @@ if (!hash_equals($configured_token, $provided_token)) {
 }
 
 /**
- * Escapování hodnoty labelu podle Prometheus exposition formátu
+ * Escapes a label value per the Prometheus exposition format
  */
 function prom_escape_label(string $value): string {
     return str_replace(['\\', '"', "\n"], ['\\\\', '\\"', '\\n'], $value);
 }
 
 /**
- * Sestaví řetězec labelů: {name="...", type="..."}
+ * Builds the label string: {name="...", type="..."}
  */
 function prom_labels(array $labels): string {
     $parts = [];
@@ -71,11 +71,11 @@ try {
     $stmt = $pdo->query("SELECT id, name, type, category, status, last_details, last_status_change FROM monitors ORDER BY id");
     $monitors = $stmt->fetchAll();
 
-    // Poslední odezvy z monitor_logs (jeden nejnovější záznam pro každý monitor)
+    // Latest responses from monitor_logs (one newest row per monitor)
     $response_times = [];
-    // Poslední odezva na monitor: dohledává se přes index (monitor_id, id),
-    // ne agregací MAX(id) přes celou tabulku logů - ta rostla s historií
-    // a scrapování Promethea by ji časem zdrželo na sekundy.
+    // The latest response per monitor: looked up via the (monitor_id, id) index,
+    // not by aggregating MAX(id) over the whole log table - that grew with
+    // history and would eventually slow Prometheus scrapes to seconds.
     $stmt_rt = $pdo->query("
         SELECT m.id AS monitor_id,
                (SELECT l.response_time FROM monitor_logs l
@@ -110,7 +110,7 @@ try {
         $lines[] = 'bloodkings_monitor_response_time_ms' . $labels . ' ' . (int)$response_times[$m['id']];
     }
 
-    // Metriky VPS agentů z last_details (aktuální hodnoty hlášené agenty)
+    // VPS agent metrics from last_details (current values reported by agents)
     $vps_metric_defs = [
         'cpu' => ['bloodkings_vps_cpu_percent', 'Aktualni vytizeni CPU v procentech (hlaseno agentem).'],
         'ram' => ['bloodkings_vps_ram_percent', 'Aktualni vytizeni RAM v procentech (hlaseno agentem).'],
@@ -134,7 +134,7 @@ try {
         $lines[] = '# HELP ' . $metric_name . ' ' . $help;
         $lines[] = '# TYPE ' . $metric_name . ' gauge';
         foreach ($vps_values[$key] as [$name, $value]) {
-            // Celočíselné hodnoty bez desetinné části kvůli čitelnosti
+            // Integer values without a decimal part for readability
             $formatted = ($value == (int)$value) ? (string)(int)$value : (string)$value;
             $lines[] = $metric_name . prom_labels(['name' => $name]) . ' ' . $formatted;
         }

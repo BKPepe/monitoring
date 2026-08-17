@@ -8,7 +8,7 @@ export interface AttentionItem {
   text: string;
 }
 
-/** Překlad hlášek - dashboard předává t(), testy jednoduchou náhradu. */
+/** Message translation - the dashboard passes t(), tests a simple stand-in. */
 export interface AttentionLabels {
   down: string;
   warning: string;
@@ -19,20 +19,20 @@ export interface AttentionLabels {
   metricHigh: (metric: string, value: number) => string;
 }
 
-/** Nad touhle hodnotou se metrika považuje za kritickou. */
+/** Above this value the metric counts as critical. */
 export const METRIC_ATTENTION_THRESHOLD = 90;
-/** Kolik dní před vypršením certifikátu se začne upozorňovat. */
+/** How many days before certificate expiry alerts start. */
 export const SSL_ATTENTION_DAYS = 14;
 
 /**
- * Sestaví seznam pro sekci „Vyžaduje pozornost".
+ * Builds the list for the "Needs attention" section.
  *
- * Vrací JEN skutečné, aktuálně platné problémy odvozené z naměřených dat -
- * žádné vycpávky. Prázdný seznam je dobrá zpráva, ne chyba.
+ * Returns ONLY real, currently valid problems derived from measured data -
+ * no padding. An empty list is good news, not an error.
  *
- * Jeden monitor může přispět víc položkami (běží, ale dochází disk a
- * zároveň mu vyprší certifikát) - to je záměr, každý problém potřebuje
- * vlastní řádek.
+ * One monitor can contribute several items (it runs, but the disk is filling
+ * and its certificate expires too) - by design, every problem needs
+ * its own row.
  */
 export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLabels): AttentionItem[] {
   const items: AttentionItem[] = [];
@@ -80,7 +80,7 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
       ['RAM', m.ram],
       ['Disk', m.hdd],
     ] as const) {
-      // Nezměřená metrika (null) nikdy nezakládá upozornění.
+      // An unmeasured metric (null) never creates an alert.
       if (typeof value === 'number' && value >= METRIC_ATTENTION_THRESHOLD) {
         items.push({
           key: `${metric}-${m.id}`,
@@ -93,7 +93,7 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
     }
   }
 
-  // Výpadky první, pak varování; v rámci závažnosti podle jména.
+  // Outages first, then warnings; within a severity, by name.
   return items.sort((a, b) =>
     a.severity === b.severity ? a.name.localeCompare(b.name) : a.severity === 'down' ? -1 : 1
   );

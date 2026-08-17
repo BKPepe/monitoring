@@ -7,8 +7,8 @@ import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 
 /**
- * Karta grafu: malý titulek, velká aktuální hodnota a delta za zobrazené
- * okno (průměr poslední vs. první čtvrtiny bodů) - vizuální jazyk podle
+ * Chart card: a small title, a large current value and the delta over the shown
+ * window (average of the last vs. the first quarter of points) - visual language per
  * mockupu dashboardu ("CPU Usage (%) / 23 % ↓ 5 %").
  */
 export function ChartCard({ data, group }: { data: ChartData; group?: string }) {
@@ -19,7 +19,7 @@ export function ChartCard({ data, group }: { data: ChartData; group?: string }) 
 
   const delta = computeSeriesDelta(primary);
   const goodDir = goodDirectionFor(primary?.tone);
-  // Neutrální metriky (síť) nesou deltu bez hodnotícího zabarvení.
+  // Neutral metrics (network) carry the delta without judgmental colouring.
   const deltaGood = delta && goodDir ? delta.direction === goodDir : null;
 
   return (

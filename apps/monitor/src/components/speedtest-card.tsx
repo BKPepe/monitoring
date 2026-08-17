@@ -31,11 +31,11 @@ interface SpeedtestData {
 const fmt = (v: number | null | undefined, unit: string) => (v === null || v === undefined ? '—' : `${v} ${unit}`);
 
 /**
- * Rychlost linky měřená přímo routerem (librespeed-cli).
+ * Link speed measured by the router itself (librespeed-cli).
  *
- * Router si výsledky ukládá do /tmp, což je na OpenWrt ramdisk - po restartu
- * jsou pryč. Agent je posílá na server, takže tahle karta je jediné místo,
- * kde ta historie přežije.
+ * The router stores results in /tmp, a ramdisk on OpenWrt - gone after a
+ * reboot. The agent sends them to the server, so this card is the only place
+ * where that history survives.
  */
 export function SpeedtestCard({ monitorId }: { monitorId: number }) {
   const { t } = useLanguage();
@@ -54,8 +54,8 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
     load();
   }, [load]);
 
-  // Dokud se nenačte, nebo když měření nejsou, karta se nevykreslí vůbec -
-  // prázdný rámeček "zatím nic" jen zabírá místo na stránce plné jiných dat.
+  // Until it loads, or when there are no measurements, the card does not render
+  // at all - an empty "nothing yet" frame just takes space on a page full of other data.
   if (!data || !data.measurements || data.measurements.length === 0) {
     return null;
   }
@@ -128,8 +128,8 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
                       ? '—'
                       : `${a.downloadMinMbps} – ${a.downloadMaxMbps}`}
                   </td>
-                  {/* Počet měření je podstatný: průměr z jednoho měření a
-                      průměr z třiceti vypadají v tabulce stejně. */}
+                  {/* The sample count matters: an average of one measurement and
+                      an average of thirty look identical in the table. */}
                   <td className="text-muted-foreground py-1.5 tabular-nums">{a.samples}</td>
                 </tr>
               );

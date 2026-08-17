@@ -2,10 +2,10 @@
 /**
  * Blood Kings Status Monitoring - Independent Monitoring Node
  * 
- * Tento skript funguje jako samostatný monitorovací uzel.
- * Nahrajte ho na jakýkoliv jiný hosting a nastavte spouštění přes Cron.
- * Skript si stáhne seznam serverů z hlavní status stránky, otestuje je z této lokace
- * a pošle výsledky zpět přes API.
+ * This script acts as a standalone monitoring node.
+ * Upload it to any other hosting and schedule it via cron.
+ * It downloads the server list from the main status page, tests them from its
+ * location and sends the results back through the API.
  */
 
 // --- KONFIGURACE UZLU ---
@@ -17,9 +17,9 @@ $timeout_seconds = 5;                              // Výchozí timeout pro test
 // --- KONEC KONFIGURACE ---
 
 $is_cli = (php_sapi_name() === 'cli');
-// Chyby na obrazovku jen z CLI (ruční ladění) - tenhle skript se dá spustit i
-// přes web (viz větev níže s <pre>) a display_errors=1 by tam komukoliv, kdo
-// trefí URL, ukázal PHP warningy/cesty na disku.
+// Errors on screen only from the CLI (manual debugging) - this script can run
+// via the web too (see the <pre> branch below) and display_errors=1 would show
+// PHP warnings/disk paths to anyone hitting the URL.
 ini_set('display_errors', $is_cli ? 1 : 0);
 error_reporting(E_ALL);
 
@@ -29,7 +29,7 @@ if (!$is_cli) {
 
 echo "=== Blood Kings Status - Spouštím monitorovací uzel [$node_location] ===\n\n";
 
-// 1. Stažení seznamu monitorů z centrálního serveru
+// 1. Download the monitor list from the central server
 echo "Stahuji seznam monitorů z hlavní status stránky...\n";
 $get_url = $central_api_url . '?action=get_monitors&key=' . urlencode($node_key);
 
@@ -49,7 +49,7 @@ echo "Načteno " . count($monitors) . " monitorů k otestování.\n\n";
 
 $results = [];
 
-// 2. Provedení kontrol
+// 2. Run the checks
 foreach ($monitors as $m) {
     $mid = $m['id'];
     $name = $m['name'];
@@ -131,7 +131,7 @@ foreach ($monitors as $m) {
             break;
             
         case 'vps':
-            // VPS je kontrolován lokálním python agentem, tento uzel ho přeskočí
+            // The VPS is checked by a local python agent, this node skips it
             echo "Přeskočeno (VPS)\n";
             continue 2;
     }
@@ -146,7 +146,7 @@ foreach ($monitors as $m) {
 
 echo "\nZpracováno " . count($results) . " výsledků.\n";
 
-// 3. Odeslání výsledků zpět na hlavní server
+// 3. Send the results back to the main server
 echo "Odesílám výsledky na hlavní server...\n";
 $post_url = $central_api_url . '?action=post_results&key=' . urlencode($node_key);
 $payload = json_encode([
@@ -172,7 +172,7 @@ if (!$is_cli) {
     echo "</pre>";
 }
 
-// --- POMOCNÉ DOTAZOVACÍ FUNKCE ---
+// --- QUERY HELPER FUNCTIONS ---
 
 function http_request($url, $method = 'GET', $post_data = null) {
     if (function_exists('curl_init')) {

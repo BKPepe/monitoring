@@ -146,7 +146,7 @@ export function SettingsPage() {
       const res = await fetch(`${API_BASE}?action=upload_logo`, { method: 'POST', credentials: 'include', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-      // Server nastavení uložil sám; tady jen zrcadlíme novou URL do formuláře.
+      // The server saved the setting itself; here we only mirror the new URL into the form.
       set('custom_logo_url', data.url);
     } catch (e) {
       setLogoError(e instanceof Error ? e.message : t('settings.logo_upload_failed', 'Nahrání loga selhalo.'));
@@ -256,14 +256,14 @@ export function SettingsPage() {
     );
   }
 
-  // FieldInput je definovaný na úrovni modulu (viz dole) - když byl uvnitř
-  // komponenty, vznikal při každém překreslení NOVÝ typ, React input
-  // odmountoval a znovu vytvořil, takže po každém napsaném znaku zmizel
-  // fokus (hlášeno u SMTP hostu). Props se předávají explicitně.
-  // Kontext pro pole formuláře. Obalová komponenta tady BÝT NESMÍ: i když
-  // SettingsField žije na úrovni modulu, wrapper definovaný uvnitř vzniká
-  // při každém renderu jako nový typ, takže React celý input odmountuje -
-  // což byla původní příčina mizejícího fokusu. Předává se proto jen data.
+  // FieldInput is defined at module level (see below) - when it lived inside
+  // the component, a NEW type was created on every repaint, React unmounted
+  // and recreated the input, and focus vanished after every typed character
+  // (reported on the SMTP host). Props are passed explicitly.
+  // Context for the form fields. A wrapper component must NOT live here: even
+  // though SettingsField sits at module level, a wrapper defined inside is a
+  // new type on every render, so React unmounts the whole input - which was
+  // the original cause of the vanishing focus. Hence only data is passed.
   const fieldCtx: FieldCtx = {
     settings,
     isLocked,
@@ -858,11 +858,11 @@ export function SettingsPage() {
               />
             </Card>
 
-            {/* WhatsApp Business Gateway karta smazána 2026-08-17: tři pole
-                (endpoint/token/číslo) nečetl jediný řádek serveru - WhatsApp
-                reálně jezdí přes CallMeBot s per-user klíčem v profilu - a
-                "Test" tlačítko jen zobrazovalo toast bez volání serveru.
-                Formulář, který nic nedělá, je lež. */}
+            {/* The WhatsApp Business Gateway card was deleted 2026-08-17: three fields
+                (endpoint/token/number) were read by no line of server code - WhatsApp
+                really goes through CallMeBot with the per-user key in the profile - and
+                the "Test" button only showed a toast without calling the server.
+                A form that does nothing is a lie. */}
 
             {/* Digest reporty */}
             <Card className="p-6 space-y-5 border-teal-500/40 bg-teal-500/5">
@@ -958,8 +958,8 @@ export function SettingsPage() {
               </div>
             </Card>
 
-            {/* Odběry notifikací se přestěhovaly na /app/profile - jsou to
-                nastavení MÉHO účtu, ne systému. */}
+            {/* Notification subscriptions moved to /app/profile - they are
+                settings of MY account, not the system. */}
           </div>
         )}
 
@@ -1028,7 +1028,7 @@ export function SettingsPage() {
           </div>
         )}
 
-        {/* TAB: Zálohy a export */}
+        {/* TAB: Backups and export */}
         {activeTab === 'presety' && (
           <div className="mb-6">
             <Card className="p-6 space-y-4">
@@ -1160,7 +1160,7 @@ export function SettingsPage() {
   );
 }
 
-/** Data, která pole formuláře potřebuje z okolní stránky. */
+/** Data a form field needs from the surrounding page. */
 interface FieldCtx {
   settings: Record<string, string>;
   isLocked: (k: string) => boolean;
@@ -1171,9 +1171,9 @@ interface FieldCtx {
 }
 
 /**
- * Pole nastavení navázané na stav stránky.
+ * A settings field bound to the page state.
  *
- * Na úrovni modulu, aby jeho typ byl mezi rendery stabilní - viz komentář
+ * At module level so its type stays stable between renders - see the comment
  * u fieldCtx.
  */
 function FieldInput({
@@ -1213,9 +1213,9 @@ interface FieldInputProps {
 }
 
 /**
- * Jedno pole nastavení. Musí žít na úrovni modulu - komponenta vytvářená
- * uvnitř render funkce dostane při každém překreslení novou identitu a
- * React její DOM podstrom zahodí i s fokusem a kurzorem.
+ * One settings field. Must live at module level - a component created inside
+ * a render function gets a new identity on every repaint and React throws
+ * away its DOM subtree along with focus and cursor.
  */
 function SettingsField({
   label,

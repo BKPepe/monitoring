@@ -3,12 +3,12 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Každý klíč použitý v t() musí být ve slovníku.
+ * Every key used in t() must exist in the dictionary.
  *
- * t() umí fallback, takže chybějící klíč nic neshodí - jen se anglickému
- * uživateli ukáže česká věta. Přesně to se stalo u Discord karty: skript,
- * který klíče přidával, spadl před zápisem a nikdo si toho nevšiml,
- * protože v češtině vypadalo všechno správně.
+ * t() has a fallback, so a missing key crashes nothing - the English user
+ * just sees a Czech sentence. Exactly that happened with the Discord card: the
+ * script adding the keys crashed before writing and nobody noticed,
+ * because in Czech everything looked right.
  */
 
 const SRC = join(__dirname, '..');
@@ -23,10 +23,10 @@ function walk(dir: string): string[] {
 
 const dictionarySource = readFileSync(join(SRC, 'context/language-context.tsx'), 'utf8');
 
-/** Klíče definované ve slovníku: řádky tvaru  'klic': { cs: …, en: … } */
+/** Keys defined in the dictionary: lines shaped  'key': { cs: …, en: … } */
 const definedKeys = new Set(Array.from(dictionarySource.matchAll(/^\s{2}'([^']+)':\s*\{/gm), (m) => m[1]));
 
-/** Klíče použité v kódu: t('klic', …) */
+/** Keys used in code: t('key', …) */
 function usedKeysIn(file: string): string[] {
   const source = readFileSync(file, 'utf8');
   return Array.from(source.matchAll(/\bt\(\s*'([a-z][a-zA-Z0-9_.]*)'/g), (m) => m[1]);
@@ -45,7 +45,7 @@ describe('i18n slovník', () => {
       }
     }
 
-    // Výpis obsahuje soubory, aby šlo doplnit klíč bez dalšího hledání.
+    // The listing includes the files, so a key can be added without more searching.
     const report = Array.from(missing.entries())
       .map(([key, files]) => `${key} (${[...new Set(files)].join(', ')})`)
       .sort();
@@ -54,9 +54,9 @@ describe('i18n slovník', () => {
   });
 
   it('nepoužívá dynamicky skládané klíče', () => {
-    // `t(`prefix.${x}`)` nejde staticky ověřit, takže by chybějící překlad
-    // proklouzl i testem výše. Když je taková potřeba, patří to do explicitní
-    // mapy popisků - viz voice_activity v teamspeak-card.tsx.
+    // `t(`prefix.${x}`)` cannot be verified statically, so a missing translation
+    // would slip past the test above too. When such a need arises, it belongs in
+    // an explicit label map - see voice_activity in teamspeak-card.tsx.
     const dynamic: string[] = [];
 
     for (const file of walk(SRC)) {
@@ -70,9 +70,9 @@ describe('i18n slovník', () => {
   });
 
   it('má pro každý klíč českou i anglickou variantu', () => {
-    // Tělo se čte párováním závorek, ne regexem: hodnoty obsahují
-    // zástupné výrazy jako '{count}', na kterých by /\{([^}]*)\}/ skončil
-    // předčasně a hlásil chybějící 'en' u desítek správných klíčů.
+    // The body is read by bracket matching, not a regex: values contain
+    // placeholders like '{count}', where /\{([^}]*)\}/ would stop early and
+    // report a missing 'en' on dozens of correct keys.
     const incomplete: string[] = [];
     const starts = dictionarySource.matchAll(/^\s{2}'([^']+)':\s*\{/gm);
 

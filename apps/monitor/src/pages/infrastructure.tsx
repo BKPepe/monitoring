@@ -80,13 +80,13 @@ export function InfrastructurePage() {
   const [notes, setNotes] = React.useState('');
   const [maintenance, setMaintenance] = React.useState(false);
   const [maintenanceDescription, setMaintenanceDescription] = React.useState('');
-  // Okno údržby (od-do). Prázdné = údržba platí, dokud ji někdo nevypne;
-  // vyplněné = cron ji uplatní jen uvnitř intervalu (is_in_maintenance).
+  // The maintenance window (from-to). Empty = maintenance holds until switched
+  // off; filled = cron applies it only inside the interval (is_in_maintenance).
   const [maintenanceStart, setMaintenanceStart] = React.useState('');
   const [maintenanceEnd, setMaintenanceEnd] = React.useState('');
 
-  // Heartbeat - úloha se hlásí sama, my se neptáme. Hodnoty jsou v minutách,
-  // protože v sekundách nikdo interval zálohy nezadává; na API se převádějí.
+  // Heartbeat - the job reports itself, we do not ask. Values are in minutes,
+  // because nobody enters a backup interval in seconds; converted for the API.
   const [heartbeatIntervalMins, setHeartbeatIntervalMins] = React.useState('60');
   const [heartbeatGraceMins, setHeartbeatGraceMins] = React.useState('5');
 
@@ -108,10 +108,10 @@ export function InfrastructurePage() {
   // VPS & OpenWrt Agent
   const [monitoredProcesses, setMonitoredProcesses] = React.useState('');
   const [cpuThreshold, setCpuThreshold] = React.useState('90');
-  // Preset: pojmenovaná sada metrik a prahů. Prázdné = monitor si drží
-  // vlastní hodnoty (chování před zavedením presetů).
+  // Preset: a named set of metrics and thresholds. Empty = the monitor keeps
+  // its own values (the pre-preset behaviour).
   const [presetId, setPresetId] = React.useState('');
-  // Prázdný práh = upozorňování na zpomalení vypnuté.
+  // An empty threshold = slowdown alerting is off.
   const [latencyThresholdMs, setLatencyThresholdMs] = React.useState('');
   const [latencyThresholdMins, setLatencyThresholdMins] = React.useState('5');
   const [presets, setPresets] = React.useState<{ id: number; name: string; serviceType: string | null }[]>([]);
@@ -176,13 +176,13 @@ export function InfrastructurePage() {
     return cancel;
   }, [session, loadMonitors]);
 
-  // Deep-link ?edit=<id>: handler se čte přes ref, protože efekt má běžet
-  // jen při příchodu monitorů - závislost na identitě handleru by ho pouštěla
-  // při každém renderu (handler není memoizovaný).
+  // Deep-link ?edit=<id>: the handler is read via a ref, because the effect
+  // must run only when the monitors arrive - depending on the handler identity
+  // would run it on every render (the handler is not memoised).
   const handleStartEditRef = React.useRef<(id: number) => void>(() => {});
-  // Vybraný asset se v handleru čte přes ref: samotná proměnná vzniká až
-  // níž (potřebuje strom assetů) a čtení hodnoty před její deklarací je
-  // past, i když handler běží až z události.
+  // The selected asset is read via a ref in the handler: the variable itself
+  // is created lower (it needs the asset tree) and reading a value before its
+  // declaration is a trap even when the handler only runs from an event.
   const selectedAssetRef = React.useRef<(typeof allAssets)[number] | null>(null);
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -203,8 +203,8 @@ export function InfrastructurePage() {
     return Array.from(new Set([...defaultCats, ...loadedCats]));
   }, [rawMonitors]);
 
-  // Ref se plní až za deklarací handleru - čtení proměnné před jejím
-  // vznikem si React lint (právem) hlídá, i když to za běhu prošlo.
+  // The ref is filled after the handler declaration - reading a variable
+  // before it exists is (rightly) flagged by the React lint, even though it ran fine.
   const handleStartEdit = (monId: number) => {
     const mon = rawMonitors.find((m) => m.id === monId);
     setEditingId(monId);
@@ -293,9 +293,9 @@ export function InfrastructurePage() {
     setShowAddModal(true);
   };
 
-  // Ref na handler se plní až tady, za jeho deklarací. Deep-link efekt výš
-  // ho volá přes ref, aby nezávisel na identitě handleru (ta se mění při
-  // každém renderu a efekt by se spouštěl pořád dokola).
+  // The handler ref is filled here, after its declaration. The deep-link effect
+  // above calls it via the ref so it does not depend on the handler identity
+  // (which changes on every render and would loop the effect forever).
   React.useEffect(() => {
     handleStartEditRef.current = handleStartEdit;
   });
@@ -323,10 +323,10 @@ export function InfrastructurePage() {
     for (const m of rawMonitors) {
       const catName = m.category || 'Ostatní';
       const node: AssetNode = {
-        // Klíč uzlu MUSÍ být id monitoru: víc monitorů může sdílet asset
-        // (agent-side kontroly běží pod assetem svého routeru), a s
-        // asset_id jako klíčem dostaly stejné id - kliknutí na kresd pak
-        // vybralo router a k editaci/smazání služby se nešlo dostat.
+        // The node key MUST be the monitor id: several monitors can share an
+        // asset (agent-side checks run under their router's asset), and with
+        // asset_id as the key they got the same id - clicking kresd then
+        // selected the router and the service could not be edited/deleted.
         id: m.id,
         monitorId: m.id,
         name: m.name,
@@ -406,8 +406,8 @@ export function InfrastructurePage() {
           maintenance_end: fromLocalInput(maintenanceEnd),
           cpanel_stats_url: cpanelStatsUrl || null,
           body_keyword: bodyKeyword || null,
-          // Formulář pracuje v minutách, API v sekundách. U jiných typů se
-          // posílá null, aby uložení nezaneslo interval tam, kam nepatří.
+          // The form works in minutes, the API in seconds. Other types send
+          // null, so saving does not smuggle an interval where it does not belong.
           heartbeat_interval: monitorType === 'heartbeat' ? (parseInt(heartbeatIntervalMins, 10) || 0) * 60 : null,
           heartbeat_grace: monitorType === 'heartbeat' ? (parseInt(heartbeatGraceMins, 10) || 0) * 60 : null,
           sq_username: sqUsername || null,
@@ -461,7 +461,7 @@ export function InfrastructurePage() {
     : null;
 
   const selectedAsset = allAssets.find((a) => a.id === selectedId) ?? allAssets[0];
-  // Ref se plní v efektu, ne během renderu - render nemá do refů sahat.
+  // The ref is filled in an effect, not during render - render must not touch refs.
   React.useEffect(() => {
     selectedAssetRef.current = selectedAsset ?? null;
   });
@@ -712,8 +712,8 @@ export function InfrastructurePage() {
                       </div>
                     </div>
 
-                    {/* Heartbeat nemá cíl - úloha se hlásí sama. Místo adresy
-                        se nastavuje, jak často se má ozvat. */}
+                    {/* A heartbeat has no target - the job reports itself. Instead of an address
+                        configures how often it must report. */}
                     {monitorType === 'heartbeat' ? (
                       <div className="space-y-3">
                         <div className="rounded-lg border border-border bg-secondary/40 p-3 text-[11px] text-muted-foreground">
@@ -1053,8 +1053,8 @@ export function InfrastructurePage() {
                         const mon = editingId ? rawMonitors.find((m) => m.id === editingId) : selectedMonitor;
                         const hasActiveAgent =
                           mon?.agentLastSeen != null || Boolean(mon?.details?.agent_version) || mon?.status === 'up';
-                        // Jen skutečná verze agenta z reportu - details.version je verze
-                        // SLUŽBY (např. TS3 serveru) a dřívější '3.13.8' fallback byl výmysl.
+                        // Only the real agent version from the report - details.version is the
+                        // SERVICE's version (e.g. the TS3 server) and the old '3.13.8' fallback was fiction.
                         const agentVer = mon?.details?.agent_version ?? null;
                         const lastSeenText = mon?.agentLastSeen
                           ? formatRelative(new Date(mon.agentLastSeen * 1000).toISOString())
@@ -1473,7 +1473,7 @@ export function InfrastructurePage() {
                       variant="destructive"
                       className="mr-auto gap-1.5 text-xs font-semibold"
                       onClick={async () => {
-                        // Answers "jak importovaný monitor zase odeberu?" -
+                        // Answers "how do I remove an imported monitor again?" -
                         // deletion previously existed only in admin.php.
                         if (
                           !window.confirm(
@@ -1751,11 +1751,11 @@ interface DiscoveredService {
   type: string;
   port: number | null;
   target: string | null;
-  /** Název procesu služby (pro agent-side kontrolu), pokud ho agent hlásí. */
+  /** The service's process name (for the agent-side check), when the agent reports it. */
   process: string | null;
-  /** 'active' = kontrola z hostingu; 'agent' = službu ověřuje lokálně agent (LAN cíle). */
+  /** 'active' = checked from the hosting; 'agent' = the agent verifies locally (LAN targets). */
   mode: 'active' | 'agent';
-  /** Serverem předpočítaný důvod, proč službu nelze importovat (null = lze). */
+  /** Server-precomputed reason the service cannot be imported (null = it can). */
   importBlocked: string | null;
   confidence: number;
   evidence: string[];
@@ -1880,8 +1880,8 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
           const isOpen = expandedAgents.has(sourceId);
           return (
             <div key={sourceId} className="rounded-lg border border-border overflow-hidden">
-              {/* Skupina je sbalitelná - s víc agenty by rozbalený seznam
-                udělal ze stránky nekonečnou nudli (feedback uživatele). */}
+              {/* The group is collapsible - with several agents an expanded list
+                turned the page into an endless noodle (user feedback). */}
               <button
                 type="button"
                 onClick={() =>
@@ -2009,9 +2009,9 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
 /**
  * MySQL datetime ("2026-08-12 02:00:00") -> hodnota pro <input type="datetime-local">.
  *
- * Záměrně se neparsuje přes Date(): ten by řetězec bez zóny vyložil jako
- * lokální čas na jednom prohlížeči a jako UTC na jiném a údržba by se
- * posunula o hodiny. Formát je pevný, takže stačí ořez a záměna mezery.
+ * Deliberately not parsed via Date(): it would read a zoneless string as local
+ * time in one browser and as UTC in another, shifting maintenance by hours.
+ * The format is fixed, so a trim and a space swap suffice.
  */
 export function toLocalInput(value?: string | null): string {
   if (!value) return '';
@@ -2019,7 +2019,7 @@ export function toLocalInput(value?: string | null): string {
   return match ? `${match[1]}T${match[2]}` : '';
 }
 
-/** Opačný směr; prázdné pole znamená "okno nenastaveno" (null). */
+/** The other direction; an empty field means "window not set" (null). */
 export function fromLocalInput(value: string): string | null {
   if (!value) return null;
   const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);

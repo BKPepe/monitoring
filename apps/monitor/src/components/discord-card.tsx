@@ -16,12 +16,12 @@ interface DiscordVoiceChannel {
 /**
  * Detail Discord serveru z widget API.
  *
- * Data (jméno serveru, počet online, hlasové kanály, seznam členů) se
- * sbírala každou minutu, ale kromě počtu online se nikde nezobrazovala.
+ * The data (server name, online count, voice channels, member list) was
+ * collected every minute, but except the online count nothing showed anywhere.
  *
- * Widget API má dvě omezení, která se tu říkají nahlas místo předstírání:
- * vrací jen členy, kteří jsou právě online (ne celý seznam), a nejvýš 100
- * z nich - proto se nikde nepíše "členů celkem".
+ * The widget API has two limitations stated here out loud instead of pretending:
+ * it returns only members currently online (not the whole list), and at most 100
+ * of them - which is why "total members" is written nowhere.
  */
 export function DiscordCard({ d }: { d: Record<string, any> }) {
   const { t } = useLanguage();
@@ -30,7 +30,7 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
   const voice: DiscordVoiceChannel[] = Array.isArray(d.voice_channels) ? d.voice_channels : [];
   const presence = typeof d.presence_count === 'number' ? d.presence_count : null;
 
-  // Boti se od lidí přes widget API nepoznají, takže se nic takového netvrdí.
+  // Bots cannot be told from humans via the widget API, so no such claim is made.
   const byStatus = members.reduce<Record<string, number>>((acc, m) => {
     const key = (m.status ?? 'unknown').toLowerCase();
     acc[key] = (acc[key] ?? 0) + 1;
@@ -97,7 +97,7 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
           )}
         </div>
 
-        {/* Hlasové kanály ------------------------------------------------ */}
+        {/* Voice channels ------------------------------------------------ */}
         <div className="rounded-lg border border-border p-3">
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
             <Volume2 className="size-3.5" /> {t('discord.voice', 'Hlasové kanály')}
@@ -119,7 +119,7 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
         </div>
       </div>
 
-      {/* Členové online ---------------------------------------------------- */}
+      {/* Members online ---------------------------------------------------- */}
       {members.length > 0 && (
         <div>
           <p className="text-muted-foreground mb-1.5 text-xs font-medium">{t('discord.members', 'Členové online')}</p>

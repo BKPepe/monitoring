@@ -2,27 +2,27 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 /**
- * Skládá třídy a řeší konflikty Tailwind utilit — pozdější `p-4` přebije
- * dřívější `p-2`, což samotné clsx neumí. Konvence shadcn/ui.
+ * Composes classes and resolves Tailwind utility conflicts — a later `p-4`
+ * beats an earlier `p-2`, which clsx alone cannot do. The shadcn/ui convention.
  */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Odezva v ms. `—` pro chybějící hodnotu, ať tabulka nemá prázdné buňky. */
+/** Latency in ms. `—` for a missing value, so the table has no empty cells. */
 export function formatMs(value: number | null | undefined): string {
   return value == null ? '—' : `${value} ms`;
 }
 
-/** Procenta na jedno desetinné místo, bez zbytečné nuly u celých čísel. */
+/** Percentages to one decimal place, without the pointless zero on whole numbers. */
 export function formatPercent(value: number | null | undefined, digits = 0): string {
   if (value == null) return '—';
   return `${value.toFixed(digits)} %`;
 }
 
 /**
- * Relativní čas. Záměrně hrubá granularita — u "před 3 s" nikoho nezajímá,
- * jestli to bylo 3,4 s, a jemnější údaj jen nutí oči číst přesněji.
+ * Relative time. Deliberately coarse — with "3 s ago" nobody cares whether
+ * it was 3.4 s, and a finer value only makes eyes read harder.
  */
 export function formatRelative(iso: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
@@ -35,7 +35,7 @@ export function formatRelative(iso: string, now = Date.now()): string {
   return `před ${Math.round(hours / 24)} d`;
 }
 
-/** Uptime ve formátu 42d 7h 23m — vynechává nulové jednotky zleva. */
+/** Uptime as 42d 7h 23m — omits zero units from the left. */
 export function formatUptime(totalSeconds: number): string {
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);

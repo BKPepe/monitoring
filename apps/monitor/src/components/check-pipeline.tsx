@@ -19,11 +19,11 @@ interface StagesResponse {
 }
 
 /**
- * Rozpad poslední kontroly webu na fáze: DNS → TCP → TLS → HTTP.
+ * Breakdown of the last web check into stages: DNS → TCP → TLS → HTTP.
  *
- * Odpovídá na otázku „kde se to zdrželo / kde to spadlo", kterou samotná
- * celková odezva nezodpoví. Data se sbírala od začátku do monitor_logs,
- * ale žádné API je nevydávalo, takže je aplikace neuměla ukázat.
+ * Answers "where did it stall / where did it fail", which the overall
+ * latency alone cannot. The data went into monitor_logs from the start,
+ * but no API served it, so the app could not show it.
  */
 export function CheckPipeline({ monitorId }: { monitorId: number }) {
   const { t } = useLanguage();
@@ -75,8 +75,8 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
     );
   }
 
-  // Pořadí je pevné - fáze na sebe navazují a přeskládat je podle klíčů
-  // v JSONu by rozbilo čitelnost („TLS před TCP").
+  // The order is fixed - the stages follow each other and reordering them by
+  // JSON keys would break readability ("TLS before TCP").
   const order = ['dns', 'tcp', 'tls', 'http', 'body'];
   const labels: Record<string, string> = {
     dns: t('pipeline.dns', 'DNS překlad'),
@@ -112,7 +112,7 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
           const stage = data.stages![key];
           const ms = typeof stage.time_ms === 'number' ? stage.time_ms : null;
           const ok = stage.ok !== false;
-          // Podíl na celkovém čase; bez změřeného času se pruh nekreslí.
+          // Share of the total time; without a measured time no bar is drawn.
           const share = ms != null && total > 0 ? (ms / total) * 100 : null;
           const expanded = openStage === key;
           const extras = Object.entries(stage).filter(
@@ -169,9 +169,9 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
                     </dl>
                   )}
 
-                  {/* HTTP hlavičky jsou vnořený objekt, takže je výpis
-                      skalárních hodnot výše nezachytí. Nezaslané hlavičky se
-                      nevypisují vůbec - "—" u pěti řádků nic neříká. */}
+                  {/* HTTP headers are a nested object, so the scalar dump
+                      above does not catch them. Unsent headers are not
+                      printed at all - "—" on five rows says nothing. */}
                   {headerEntries.length > 0 && (
                     <div className="mt-2">
                       <p className="text-muted-foreground mb-1 text-[11px] font-medium">

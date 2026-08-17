@@ -6,7 +6,7 @@ export interface UptimeDay {
   date: string;
   status: 'up' | 'down' | 'nodata' | string;
   uptimePct: number | null;
-  /** Průměrná odezva dne v ms; null = ten den nic neodpovědělo. */
+  /** The day's average latency in ms; null = nothing answered that day. */
   avgMs?: number | null;
   detail: string;
 }

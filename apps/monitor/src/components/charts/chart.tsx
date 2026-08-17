@@ -15,15 +15,15 @@ import type { EChartsCoreOption } from 'echarts/core';
 import { cn } from '@/lib/utils';
 
 /**
- * Registrujeme jen to, co opravdu kreslíme.
+ * Only what we actually draw gets registered.
  *
- * `import * as echarts from 'echarts'` by přitáhlo celý balík (~1 MB) včetně
- * map, 3D a grafů, které tu nikdy nebudou. Tenhle výběr drží přírůstek na
- * zlomku a nová komponenta si případný modul doregistruje sama.
+ * `import * as echarts from 'echarts'` would pull the whole bundle (~1 MB)
+ * including maps, 3D and chart types that will never live here. This selection
+ * keeps the increment to a fraction and a new component registers its own module.
  *
- * MarkLine/MarkArea a DataZoom tu jsou dopředu — Sprint 5 (zoom, brush,
- * event markery) je bude potřebovat a doregistrovat je později znamená
- * hledat, proč se anotace tiše nevykreslují.
+ * MarkLine/MarkArea and DataZoom are here ahead of time — Sprint 5 (zoom,
+ * brush, event markers) will need them and registering them later means
+ * hunting down why annotations silently do not draw.
  */
 echarts.use([
   LineChart,
@@ -42,26 +42,26 @@ export { echarts };
 export interface ChartProps {
   option: EChartsCoreOption;
   /**
-   * Textová alternativa. Canvas je pro čtečky prázdný, takže bez tohohle
-   * popisku je graf pro nevidomého uživatele neexistující prvek.
+   * Text alternative. A canvas is empty for screen readers, so without this
+   * label the chart is a nonexistent element for a blind user.
    */
   ariaLabel: string;
-  /** Shrnutí dat (min/max/průměr) — čte ho čtečka místo canvasu. */
+  /** Data summary (min/max/avg) — read by the screen reader instead of the canvas. */
   summary?: string;
   height?: number;
   className?: string;
-  /** Vypne animace (respekt k prefers-reduced-motion řeší volající). */
+  /** Disables animations (the caller handles prefers-reduced-motion). */
   animate?: boolean;
   /**
-   * Grafy se stejnou skupinou sdílí kurzor tooltopu i zoom
-   * (echarts.connect) - hover na CPU ukáže tentýž okamžik i v RAM grafu.
+   * Charts sharing a group share the tooltip cursor and zoom
+   * (echarts.connect) - hovering CPU shows the same moment in the RAM chart.
    */
   group?: string;
   /**
-   * Klepnutí do plochy grafu vrátí čas, na který uživatel ukázal (ms).
+   * Clicking into the chart area returns the time the user pointed at (ms).
    *
-   * Používá se pro dotaz "co běželo v tuhle chvíli" - graf ukáže špičku,
-   * klik na ni doplní důvod.
+   * Used for the "what was running at this moment" query - the chart shows
+   * a spike, clicking it fills in the reason.
    */
   onPickTime?: (timestampMs: number) => void;
 }
@@ -79,8 +79,8 @@ export function Chart({
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
 
-  // Init + úklid. ECharts instance drží canvas a listenery — bez dispose()
-  // po odmountování zůstane v paměti a při návratu na stránku se navrství.
+  // Init + cleanup. An ECharts instance holds the canvas and listeners — without
+  // dispose() it stays in memory after unmount and stacks up on returning to the page.
   React.useEffect(() => {
     if (!containerRef.current) return;
 
@@ -94,9 +94,9 @@ export function Chart({
       echarts.connect(group);
     }
 
-    // ECharts se sám nepřekresluje při změně velikosti kontejneru; sleduje
-    // se jen window.resize. V gridu, který mění šířku bez změny okna
-    // (sbalení sidebaru), je proto potřeba ResizeObserver.
+    // ECharts does not redraw itself when the container resizes; it only
+    // watches window.resize. In a grid that changes width without a window
+    // change (sidebar collapse), a ResizeObserver is needed.
     const observer = new ResizeObserver(() => instance.resize());
     observer.observe(containerRef.current);
 
@@ -107,9 +107,9 @@ export function Chart({
     };
   }, [group]);
 
-  // Klik kdekoli v ploše, ne jen na datový bod: uživatel míří na okamžik
-  // v čase, ne na konkrétní vzorek. `zr` (ZRender) dává souřadnice i tam,
-  // kde žádná série není, a convertFromPixel je přeloží na osu X.
+  // A click anywhere in the area, not just on a data point: the user aims at a
+  // moment in time, not a specific sample. `zr` (ZRender) provides coordinates
+  // even where no series is, and convertFromPixel maps them onto the X axis.
   React.useEffect(() => {
     const instance = instanceRef.current;
     if (!instance || !onPickTime) return;
@@ -129,8 +129,8 @@ export function Chart({
 
   React.useEffect(() => {
     instanceRef.current?.setOption(option, {
-      // notMerge: staré série se musí zahodit, jinak by po změně dat
-      // zůstaly viset zbytky předchozí konfigurace.
+      // notMerge: old series must be dropped, otherwise leftovers of the
+      // previous configuration survive a data change.
       notMerge: true,
       silent: !animate,
     });

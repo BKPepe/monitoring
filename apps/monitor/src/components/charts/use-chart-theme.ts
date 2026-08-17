@@ -1,12 +1,12 @@
 import * as React from 'react';
 
 /**
- * Překlad design tokenů do barev pro ECharts.
+ * Translation of design tokens into ECharts colours.
  *
- * ECharts kreslí do canvasu a rozumí jen konkrétním hodnotám — CSS třídy ani
- * `var(--…)` nepobere. Tokeny proto čteme za běhu z `:root` přes
- * `getComputedStyle` a při přepnutí motivu je načteme znovu, jinak by graf
- * zůstal v barvách předchozího tématu.
+ * ECharts draws into a canvas and understands only concrete values — it takes
+ * neither CSS classes nor `var(--…)`. So the tokens are read at runtime from `:root` via
+ * `getComputedStyle` and re-read on a theme switch, otherwise the chart
+ * would keep the previous theme's colours.
  */
 export interface ChartTheme {
   text: string;
@@ -17,7 +17,7 @@ export interface ChartTheme {
   series: Record<SeriesTone, string>;
   /** Fill of the threshold bands. Weak enough not to overpower the data line. */
   band: Record<'warning' | 'critical', string>;
-  /** Klíč do `key` propu — vynutí přerender grafu po změně motivu. */
+  /** Key for the `key` prop — forces a chart re-render after a theme change. */
   key: string;
 }
 
@@ -32,7 +32,7 @@ function readTokens(): ChartTheme {
   return {
     text: token('--foreground', isDark ? '#e5e7eb' : '#0b0d10'),
     textMuted: token('--muted-foreground', isDark ? '#8b93a1' : '#6b7280'),
-    // Mřížka musí být znatelně slabší než text, jinak přebije data.
+    // The grid must be noticeably weaker than the text, or it overpowers the data.
     grid: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)',
     tooltipBg: token('--popover', isDark ? '#14181d' : '#ffffff'),
     tooltipBorder: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)',
@@ -58,8 +58,8 @@ export function useChartTheme(): ChartTheme {
   const [theme, setTheme] = React.useState<ChartTheme>(readTokens);
 
   React.useEffect(() => {
-    // Motiv se přepíná třídou na <html>; MutationObserver je jediný způsob,
-    // jak se o tom dozvědět bez provazování přes globální stav.
+    // The theme toggles via a class on <html>; a MutationObserver is the only
+    // way to learn about it without wiring global state through.
     const observer = new MutationObserver(() => setTheme(readTokens()));
     observer.observe(document.documentElement, {
       attributes: true,
@@ -71,7 +71,7 @@ export function useChartTheme(): ChartTheme {
   return theme;
 }
 
-/** Uživatel si vyžádal omezený pohyb — animace grafů se pak nespouští. */
+/** The user asked for reduced motion — chart animations do not run then. */
 export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = React.useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 

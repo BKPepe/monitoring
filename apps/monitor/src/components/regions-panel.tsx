@@ -5,7 +5,7 @@ import { useLanguage } from '@/context/language-context';
 import { formatMs } from '@/lib/utils';
 
 interface Region {
-  /** null = uzel svou lokalitu nehlásí. Nedomýšlí se. */
+  /** null = the node does not report its location. No guessing. */
   location: string | null;
   checks: number;
   upChecks: number;
@@ -17,12 +17,12 @@ interface Region {
 }
 
 /**
- * Odkud se kontroly opravdu prováděly.
+ * Where the checks really ran from.
  *
- * Záměrně to NENÍ mapa světa s body: kontroly dnes běží hlavně z jednoho
- * místa (cron na hostingu) a rozsvícené body po kontinentech by tvrdily
- * něco, co není pravda. Vypisuje se jen to, co je v `checked_from` -
- * včetně poctivého "místo neuvedeno" u záznamů bez lokality.
+ * Deliberately NOT a world map with dots: checks today run mostly from one
+ * place (cron on the hosting) and lit-up dots across continents would claim
+ * something untrue. Only what is in `checked_from` is listed -
+ * including an honest "location not given" for rows without one.
  */
 export function RegionsPanel() {
   const { t } = useLanguage();
@@ -85,7 +85,7 @@ export function RegionsPanel() {
                   </span>
                 </div>
 
-                {/* Podíl na celkovém počtu kontrol - proporce, ne mapa. */}
+                {/* Share of the total check count - a proportion, not a map. */}
                 <div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
                   <div className="bg-primary h-full rounded-full" style={{ width: `${share}%` }} />
                 </div>

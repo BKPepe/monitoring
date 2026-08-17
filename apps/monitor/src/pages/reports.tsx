@@ -44,7 +44,7 @@ interface MonitorSLA {
   target: string;
   type: string;
   currentStatus: string;
-  /** null = žádná měřená kontrola v okně (SLA nikdo nenaměřil). */
+  /** null = no measured check in the window (nobody measured the SLA). */
   uptimePercent: number | null;
   outageMinutes: number;
   totalChecks: number;
@@ -85,7 +85,7 @@ export function ReportsPage() {
   const [generatingToken, setGeneratingToken] = useState<boolean>(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
-  // Období výkazu - měsíc/kvartál/rok (uživatelský požadavek na delší okna).
+  // Report period - month/quarter/year (user request for longer windows).
   const [days, setDays] = useState<30 | 90 | 365>(30);
 
   useEffect(() => {
@@ -186,8 +186,8 @@ export function ReportsPage() {
       `"${m.target.replace(/"/g, '""')}"`,
       m.type,
       m.currentStatus,
-      // Prázdná buňka znamená "nenaměřeno" - nula by v exportu tvrdila
-      // dokonalé SLA / okamžité obnovení, které se nikdy nestalo.
+      // An empty cell means "unmeasured" - a zero would claim perfect SLA /
+      // instant recovery in the export that never happened.
       m.uptimePercent != null ? m.uptimePercent.toFixed(3) : '',
       m.outageMinutes,
       m.totalChecks,
@@ -217,8 +217,8 @@ export function ReportsPage() {
       {/* Official header for PDF export and print (only shown when printing) */}
       <div className="hidden print:flex items-center justify-between border-b-2 border-primary/80 pb-4 mb-4">
         <div className="flex items-center gap-3">
-          {/* Vlastní logo z nastavení má přednost; jinak repo logo Blood Kings
-              (varianta s tmavým textem - PDF se tiskne na bílou). */}
+          {/* The custom logo from settings wins; otherwise the repo's Blood Kings
+              logo (the dark-text variant - PDFs print on white). */}
           <img
             src={customLogoUrl || '/status/assets/bk-logo.svg'}
             alt={siteTitle}
@@ -368,9 +368,9 @@ export function ReportsPage() {
         </Card>
       </div>
 
-      {/* SLA per monitor. V tisku karta nesmí být nedělitelný box - celá by
-          se odsunula na druhou stránku a první zůstala poloprázdná; vizuál
-          karty se v tisku vypne a láme se po jednotlivých řádcích monitorů. */}
+      {/* SLA per monitor. In print the card must not be an unbreakable box - it
+          would move whole to page two leaving page one half-empty; the card
+          visuals switch off in print and rows break per monitor. */}
       <Card className="p-6 space-y-5 print:border-0 print:bg-transparent print:shadow-none print:p-0 print:break-inside-auto">
         <div className="flex items-center justify-between border-b border-border pb-3">
           <div>
@@ -623,8 +623,8 @@ export function ReportsPage() {
         )}
       </Card>
 
-      {/* Exports. Býval tu druhý CSV export (report.php) - stejná data jako
-          tlačítko v hlavičce, jen matoucí duplicita (hlášeno uživatelem). */}
+      {/* Exports. A second CSV export (report.php) used to sit here - the same
+          data as the header button, just confusing duplication (user report). */}
       <div className="grid gap-4 md:grid-cols-2 print:hidden">
         {/* The Prometheus token is admin-only configuration: the backend only
             includes metricsToken in sla_report for an admin session, and

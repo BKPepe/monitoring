@@ -18,17 +18,17 @@ interface CatalogEntry {
   key: string;
   label: string;
   kind: 'panel' | 'metric';
-  /** false = pro tuhle dlaždici se reálně nic nesbírá, ukazovala by jen pomlčky. */
+  /** false = nothing is actually collected for this tile, it would show only dashes. */
   available: boolean;
   samples: number | null;
 }
 
 /**
- * Editor rozložení dashboardu.
+ * Dashboard layout editor.
  *
- * Katalog dlaždic chodí ze serveru a odvozuje se ze SKUTEČNĚ naměřených dat -
- * metrika bez jediného vzorku se nabídne jako nedostupná místo toho, aby
- * uživatel zapnul dlaždici, která bude navždy prázdná.
+ * The tile catalogue comes from the server and derives from ACTUALLY measured
+ * data - a metric without a single sample is offered as unavailable instead of
+ * letting the user enable a tile that stays forever empty.
  */
 export function DashboardLayoutEditor({
   open,
@@ -57,9 +57,9 @@ export function DashboardLayoutEditor({
         const cat: CatalogEntry[] = Array.isArray(data.catalog) ? data.catalog : [];
         setCatalog(cat);
         const saved: DashboardTile[] = Array.isArray(data.tiles) ? data.tiles : [];
-        // Dlaždice z katalogu, které uživatel ještě nikdy neseřadil, se
-        // přidají na konec - nové funkce tak nezmizí jen proto, že si
-        // uživatel rozložení uložil dřív.
+        // Catalogue tiles the user never ordered are appended at the end -
+        // new features do not vanish just because the user saved their
+        // layout earlier.
         const known = new Set(saved.map((s) => s.key));
         const merged = [
           ...saved.filter((s) => cat.some((c) => c.key === s.key)),

@@ -6,21 +6,21 @@ import { useLanguage } from '@/context/language-context';
 import { formatUptime } from '@/lib/utils';
 
 /**
- * Sekce „Služby" pro router (OpenWrt/Turris).
+ * The "Services" section for a router (OpenWrt/Turris).
  *
- * Nahrazuje kartu s TLS certifikátem, která u routeru nedávala smysl -
- * router žádný web necertifikuje. Ukazuje to, co router opravdu má:
- * konektivitu WAN a LTE, DNS včetně ověřeného šifrování, firewall, Wi-Fi,
+ * Replaces the TLS certificate card, which made no sense for a router -
+ * a router certifies no website. Shows what the router really has:
+ * WAN and LTE connectivity, DNS incl. verified encryption, firewall, Wi-Fi,
  * VPN a SQM.
  *
- * Každá dlaždice se vykreslí jen tehdy, když pro ni agent poslal data -
- * prázdné místo je poctivější než karta s pomlčkami.
+ * Each tile renders only when the agent sent data for it - an empty
+ * space is more honest than a card full of dashes.
  */
 /**
- * Slovní hodnocení RSRP podle běžně používaných pásem u LTE.
+ * A verbal RSRP rating using the commonly used LTE bands.
  *
- * Samotné "-83 dBm" nikomu nic neřekne; hranice jsou standardní
- * (nad -80 výborný, do -90 dobrý, do -100 slabý, níž na hraně použitelnosti).
+ * A bare "-83 dBm" tells nobody anything; the boundaries are standard
+ * (above -80 excellent, to -90 good, to -100 weak, below that barely usable).
  */
 function rsrpQuality(rsrp: number, t: (k: string, f?: string) => string): string {
   if (rsrp >= -80) return t('rsvc.signal_excellent', 'výborný');
@@ -29,7 +29,7 @@ function rsrpQuality(rsrp: number, t: (k: string, f?: string) => string): string
   return t('rsvc.signal_poor', 'slabý');
 }
 
-/** Velké čítače paketů se čtou lépe s oddělovači tisíců. */
+/** Large packet counters read better with thousands separators. */
 function formatCount(value: unknown): string {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? n.toLocaleString('cs-CZ') : String(value);
@@ -59,7 +59,7 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           d.wan_proto ? `${t('rsvc.protocol', 'Protokol')}: ${String(d.wan_proto).toUpperCase()}` : null,
           d.wan_ipv4 ? `IPv4: ${d.wan_ipv4}` : null,
           d.wan_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.wan_uptime)}` : null,
-          // Vyjednaná rychlost portu - gigabit spadlý na 100 Mbit je tady vidět.
+          // The negotiated port speed - a gigabit dropped to 100 Mbit shows here.
           d.wan_link_mbit != null ? `${t('rsvc.link_speed', 'Rychlost linky')}: ${d.wan_link_mbit} Mbit/s` : null,
           d.wan_latency_ms != null ? `${t('rsvc.wan_latency', 'Odezva k bráně')}: ${d.wan_latency_ms} ms` : null,
         ]}
@@ -68,8 +68,8 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
   }
 
   // --- Multi-WAN (mwan3) ------------------------------------------------
-  // Vykreslí se jen když má router mwan3 nakonfigurované; jinak by dlaždice
-  // tvrdila zálohovanou konektivitu, která neexistuje.
+  // Renders only when the router has mwan3 configured; otherwise the tile
+  // would claim redundant connectivity that does not exist.
   const mwan3 = Array.isArray(d.mwan3_policies) ? d.mwan3_policies : [];
   if (mwan3.length > 0 || d.mwan3_active_gw) {
     const offline = mwan3.filter((p: any) => p?.status === 'offline');
@@ -94,7 +94,7 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
     );
   }
 
-  // --- LTE (jen když router o nějakém ví) ------------------------------
+  // --- LTE (only when the router knows about one) ------------------------
   const hasLteSignal = d.lte_rsrp != null || d.lte_rssi != null || d.lte_rsrq != null || d.lte_sinr != null;
 
   if (d.lte_up != null || hasLteSignal) {
@@ -116,12 +116,12 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           d.lte_ipv4 ? `IPv4: ${d.lte_ipv4}` : null,
           d.lte_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.lte_uptime)}` : null,
           [d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null,
-          // Signál z HTTP API modemu. RSRP i RSSI jsou obojí síla signálu -
-          // některé modemy (Brovi/Huawei přes ethernet) vyplní jen RSSI a tag
-          // <rsrp> nechají prázdný. Dřív se v takovém případě nevypsalo nic
-          // a karta tvrdila, že signál neznáme, přestože jsme měli RSSI,
-          // cell ID i šířku pásma - tedy data, která jdou získat jedině
-          // z toho API, o kterém hláška psala, že neexistuje.
+          // Signal from the modem's HTTP API. RSRP and RSSI are both signal
+          // strength - some modems (Brovi/Huawei over ethernet) fill only RSSI
+          // and leave the <rsrp> tag empty. Nothing was printed in that case
+          // and the card claimed the signal was unknown although we had RSSI,
+          // the cell ID and the bandwidth - data obtainable only from the
+          // very API the message said did not exist.
           d.lte_rsrp != null ? `RSRP: ${d.lte_rsrp} dBm (${rsrpQuality(d.lte_rsrp, t)})` : null,
           d.lte_rssi != null ? `RSSI: ${d.lte_rssi} dBm` : null,
           d.lte_rsrq != null ? `RSRQ: ${d.lte_rsrq} dB` : null,
@@ -133,9 +133,9 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           d.lte_plmn != null ? `PLMN: ${d.lte_plmn}` : null,
         ]}
         note={
-          // Rozlišuje se "modem o signálu neřekl vůbec nic" od "řekl, ale
-          // zrovna ne RSRP". Slít to v jedno znamenalo radit doinstalování
-          // balíčku někomu, jehož modem odpovídá úplně v pořádku.
+          // "The modem said nothing about signal" is distinguished from "it
+          // spoke, just not RSRP". Merging them meant advising a package
+          // install to someone whose modem answers perfectly fine.
           d.lte_up === true && !hasLteSignal
             ? t(
                 'rsvc.lte_no_signal',
@@ -174,9 +174,9 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
   }
 
   // --- Firewall / NAT --------------------------------------------------
-  // Čítače paketů jsou důkaz, že firewall běží - i když agent stav sám
-  // neposlal (starší verze ho neuměla). Bez tohohle hlásila dlaždice
-  // "Neznámý stav" na routeru, který zrovna zahodil tři tisíce paketů.
+  // Packet counters prove the firewall runs - even when the agent did not
+  // send the state itself (older versions could not). Without this the tile
+  // said "Unknown state" on a router that just dropped three thousand packets.
   const fwCounters = d.fw_accepted != null || d.fw_dropped != null || d.fw_rejected != null;
   const fwRunning = d.firewall_enabled != null ? d.firewall_enabled === true : fwCounters ? true : null;
 
@@ -200,8 +200,8 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
                 d.conntrack_pct != null ? ` (${d.conntrack_pct} %)` : ''
               }`
             : null,
-          // Čítače hlásí jen router s iptables; na firewall4/nftables
-          // mohou chybět a pak se řádek nevypisuje (dřív tu byla nula).
+          // Only routers with iptables report the counters; on firewall4/nftables
+          // they may be missing and the row is omitted (it used to be a zero).
           d.fw_accepted != null ? `${t('rsvc.fw_accepted', 'Propuštěno')}: ${formatCount(d.fw_accepted)}` : null,
           d.fw_dropped != null ? `${t('rsvc.fw_dropped', 'Zahozeno')}: ${formatCount(d.fw_dropped)}` : null,
           d.fw_rejected != null ? `${t('rsvc.fw_rejected', 'Odmítnuto')}: ${formatCount(d.fw_rejected)}` : null,

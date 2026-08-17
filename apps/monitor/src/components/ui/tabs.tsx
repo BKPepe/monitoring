@@ -2,7 +2,7 @@ import * as React from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { cn } from '@/lib/utils';
 
-/** Radix řeší klávesnicovou navigaci a ARIA — my jen stylujeme. */
+/** Radix handles keyboard navigation and ARIA — we only style. */
 export const Tabs = TabsPrimitive.Root;
 
 export function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {

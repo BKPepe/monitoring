@@ -25,13 +25,13 @@ interface Ts3Stages {
 /**
  * Detail TeamSpeak serveru ze ServerQuery.
  *
- * Kontrola sbírá mnohem víc, než se dosud zobrazovalo: obsazenost slotů,
- * kanály, aktivitu v hlasu, dostupnost všech tří portů, licenci a verzi.
- * Do `details` se z toho ukládaly jen počty klientů - zbytek končil
- * v monitor_logs.check_stages, odkud ho nic nečetlo.
+ * The check collects far more than was ever displayed: slot usage,
+ * channels, voice activity, availability of all three ports, licence and version.
+ * Only the client counts made it into `details` - the rest ended in
+ * monitor_logs.check_stages, where nothing read it.
  *
- * Část údajů vyžaduje přihlášení k ServerQuery. Bez něj zůstávají prázdné
- * a karta řekne proč.
+ * Some fields require a ServerQuery login. Without it they stay empty
+ * and the card says why.
  */
 export function TeamspeakCard({ monitorId }: { monitorId: number }) {
   const { t } = useLanguage();
@@ -85,10 +85,10 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
 
   const activity = svc.voice_activity ?? null;
 
-  // Popisky se skládají explicitně, ne přes `t(\`ts3.activity_${key}\`)`:
-  // dynamický klíč nejde staticky ověřit, takže chybějící překlad by prošel
-  // testem i kódovou revizí a projevil se až anglickému uživateli.
-  // Server posílá právě tyhle čtyři stavy (functions.php: voice_activity).
+  // Labels are assembled explicitly, not via `t(\`ts3.activity_${key}\`)`:
+  // a dynamic key cannot be verified statically, so a missing translation would
+  // pass both the test and code review and surface only for an English user.
+  // The server sends exactly these four states (functions.php: voice_activity).
   const activityLabels: Record<string, string> = {
     talking: t('ts3.activity_talking', 'Mluví'),
     away: t('ts3.activity_away', 'Pryč'),
@@ -116,7 +116,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {/* Sloty a kanály ------------------------------------------------ */}
+        {/* Slots and channels ------------------------------------------- */}
         <div className="rounded-lg border border-border p-3">
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
             <Users className="size-3.5" /> {t('ts3.slots', 'Obsazenost')}
@@ -144,7 +144,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
                 {t('ts3.active_channels', { count: svc.active_channel_count }, `${svc.active_channel_count} aktivních`)}
               </span>
             )}
-            {/* Query klienti nejsou lidé - proto se od počtu odečítají. */}
+            {/* Query clients are not people - hence subtracted from the count. */}
             {svc.query_client_count != null && svc.query_client_count > 0 && (
               <span>
                 {t('ts3.query_clients', { count: svc.query_client_count }, `${svc.query_client_count} query klientů`)}

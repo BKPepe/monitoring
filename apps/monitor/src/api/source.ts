@@ -3,30 +3,30 @@ import { mockMetricsSource } from './mock-source';
 import type { MetricsSource } from './types';
 
 /**
- * Výběr zdroje dat.
+ * Data source selection.
  *
- * Výchozí je skutečné `api.php`. Mock se použije jen když ho výslovně
- * vyžádáš (`VITE_USE_MOCK=1`) nebo když je API nedostupné — a v tom případě
- * to musí být v UI vidět. Dashboard, který mlčky ukazuje vymyšlená čísla,
- * je horší než dashboard, který nefunguje.
+ * The default is the real `api.php`. The mock is used only when explicitly
+ * requested (`VITE_USE_MOCK=1`) or when the API is unreachable — and then it
+ * must be visible in the UI. A dashboard silently showing invented numbers
+ * is worse than a dashboard that does not work.
  */
 const useMockByDefault = import.meta.env.VITE_USE_MOCK === '1';
 
 export interface SourceState {
   source: MetricsSource;
-  /** Zdroj běží na vymyšlených datech. */
+  /** The source runs on invented data. */
   isMock: boolean;
-  /** Důvod pádu na mock — zobrazí se uživateli. */
+  /** Why we fell back to the mock — shown to the user. */
   fallbackReason?: string;
 }
 
 let cached: SourceState | null = null;
 
 /**
- * Zjistí, jestli je `api.php` dostupné, a podle toho vybere zdroj.
+ * Checks whether `api.php` is reachable and picks the source accordingly.
  *
- * Výsledek se cachuje na dobu běhu stránky — zjišťovat to před každým
- * požadavkem by zdvojnásobilo počet volání.
+ * The result is cached for the page's lifetime — probing before every
+ * request would double the number of calls.
  */
 export async function resolveSource(): Promise<SourceState> {
   if (cached) return cached;
@@ -37,9 +37,9 @@ export async function resolveSource(): Promise<SourceState> {
   }
 
   try {
-    // Timeout 12 s: sdílený hosting umí při zátěži odpovídat i 5-8 s a
-    // dřívější 4s limit hlásil "API nedostupné" u serveru, který jen
-    // pomalu odpovídal (hlášeno uživatelem: "signal is aborted without reason").
+    // Timeout 12 s: shared hosting can answer in 5-8 s under load and the
+    // earlier 4 s limit reported "API unreachable" for a server that was
+    // merely slow (reported by the user: "signal is aborted without reason").
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 12000);
     const res = await fetch(`${STATUS_API}/api.php?action=public_status`, {

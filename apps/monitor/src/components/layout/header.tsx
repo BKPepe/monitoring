@@ -22,12 +22,12 @@ export function Header({
   const { lang, setLang, t } = useLanguage();
   const [showNotifications, setShowNotifications] = useState(false);
   const [activeAlerts, setActiveAlerts] = useState<any[]>([]);
-  // Zvonek dřív počítal VŠECHNY historické down události jako "aktivní" -
-  // svítilo pak třeba 20 dávno vyřešených výpadků bez možnosti je odbavit.
-  // Skutečně probíhající výpadky (propAlertCount) svítí vždy.
-  // Přečtenost se drží na serveru u uživatele - localStorage platil jen pro
-  // jeden prohlížeč, takže "označit vše jako přečtené" se na jiném počítači
-  // (nebo po smazání dat prohlížeče) nikdy neprojevilo.
+  // The bell used to count ALL historical down events as "active" - it would
+  // glow with e.g. 20 long-resolved outages with no way to dismiss them.
+  // Genuinely ongoing outages (propAlertCount) always glow.
+  // Read state lives on the server with the user - localStorage held only for
+  // one browser, so "mark all as read" never took effect on another computer
+  // (or after clearing browser data).
   const [readUpToId, setReadUpToId] = useState<number>(0);
   useEffect(() => {
     let active = true;

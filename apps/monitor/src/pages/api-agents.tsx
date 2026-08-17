@@ -176,15 +176,15 @@ export function ApiAgentsPage() {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  // Zdrojem pravdy je server: porovnává verzi z reportu s verzí SOUBORU
-  // agenta (agentUpdateAvailable/agentLatestVersion). Dřív se tu porovnávalo
-  // proti natvrdo zapsané "3.13.8" - což je verze TeamSpeak SERVERU, ne
-  // agenta - navíc řetězcovým '<'.
+  // The server is the source of truth: it compares the reported version with the
+  // agent FILE's version (agentUpdateAvailable/agentLatestVersion). This used to
+  // compare against a hardcoded "3.13.8" - the TeamSpeak SERVER's version, not
+  // the agent's - with a string '<' on top.
   const hasOutdatedAgent = agents.some((a) => Boolean(a.agentUpdateAvailable));
 
-  // Varování o vypnutých aktualizacích má smysl jen u monitorů, které
-  // agenta opravdu mají a hlásí svůj stav auto-update. Dřív hlásilo
-  // "vypnuto" i u cPanel webu bez agenta (uživatelský report).
+  // The disabled-updates warning only makes sense for monitors that really
+  // have an agent reporting its auto-update state. It used to say
+  // "disabled" even for an agentless cPanel site (user report).
   const hasDisabledAutoUpdate = agents.some((a) => {
     if (!a.details?.agent_version) return false;
     const au = a.details?.auto_update;
@@ -251,8 +251,8 @@ export function ApiAgentsPage() {
           })}
         </div>
 
-        {/* Kontejner respektuje motiv; tmavý zůstává jen samotný terminálový
-            blok s příkazem (tam je tmavé pozadí konvence, ne nedopatření). */}
+        {/* The container respects the theme; only the terminal block with the
+            command stays dark (a dark background is convention there, not an accident). */}
         <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
@@ -348,7 +348,7 @@ export function ApiAgentsPage() {
             </p>
           ) : (
             agents.map((a) => {
-              // Verze agenta - nikdy details.version (to je verze SLUŽBY, např. TS3).
+              // The agent's version - never details.version (that is the SERVICE's, e.g. TS3).
               const version = a.details?.agent_version ?? null;
               const latestVersion = a.agentLatestVersion ?? null;
               const isOutdated = Boolean(a.agentUpdateAvailable);

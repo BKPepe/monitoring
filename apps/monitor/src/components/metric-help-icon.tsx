@@ -4,14 +4,14 @@ import { useLanguage } from '@/context/language-context';
 import { metricHelp } from '@/lib/metric-help';
 
 /**
- * Otazník u metriky, který po najetí řekne, co se měří, čím a odkud.
+ * The question mark next to a metric that on hover says what is measured, how and from where.
  *
- * Do dneška to bylo napsané jen u doby odezvy; u ostatních hodnot si člověk
- * musel domýšlet, jestli "zaplnění disku" znamená celý disk, nebo jen
- * zapisovatelnou vrstvu routeru - a to jsou úplně jiné závěry.
+ * Until now only latency had this written down; for other values people had
+ * to guess whether "disk usage" means the whole disk or just
+ * the router's writable overlay - and those are entirely different conclusions.
  *
- * Když pro metriku vysvětlivka není, nevykreslí se nic. Prázdná bublina
- * s textem "žádný popis" by jen zabírala místo a učila lidi otazník
+ * When a metric has no explainer, nothing renders. An empty bubble saying
+ * "no description" would only take space and teach people the question mark
  * ignorovat.
  */
 export function MetricHelpIcon({ metric, className }: { metric: string; className?: string }) {
@@ -24,7 +24,7 @@ export function MetricHelpIcon({ metric, className }: { metric: string; classNam
       <TooltipTrigger asChild>
         <button
           type="button"
-          // Nápověda musí být dosažitelná i z klávesnice, ne jen myší.
+          // The help must be reachable from the keyboard too, not just the mouse.
           aria-label={t('help.aria', { metric }, `Co znamená ${metric}`)}
           className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex align-middle transition-colors focus-visible:ring-2 focus-visible:outline-none"
         >

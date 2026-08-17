@@ -12,7 +12,7 @@ import type {
 } from './types';
 
 /**
- * Napojení na PHP backend (`apps/status/api.php`).
+ * Binding to the PHP backend (`apps/status/api.php`).
  */
 export const STATUS_API: string = import.meta.env.VITE_STATUS_API ?? '/status';
 
@@ -30,11 +30,11 @@ const CHART_METRICS: {
   tone: MetricTone;
   yMax: number | null;
 }[] = [
-  // Jediná metrika, kterou má i monitor bez agenta (web/port/discord/...) -
-  // response_time se měří při každé kontrole dostupnosti (monitor_logs), ne
-  // jen u agentů. Bez tohohle záznamu neměl monitor bez agenta na záložce
-  // "Přehled & Výkon" nikdy žádný graf, i když jeho historie odezvy reálně
-  // existuje (stejná data používá i SLA report a tabulka událostí).
+  // The one metric even an agentless monitor (web/port/discord/...) has -
+  // response_time is measured on every availability check (monitor_logs), not
+  // just for agents. Without this entry an agentless monitor never had any
+  // chart on the "Overview & Performance" tab even though its latency
+  // history really exists (the SLA report and the events table use the same data).
   { key: 'response_time', title: 'Doba odezvy (Latency)', tone: 'latency', yMax: null },
   { key: 'cpu', title: 'Využití CPU', tone: 'cpu', yMax: 100 },
   { key: 'ram', title: 'Využití paměti', tone: 'memory', yMax: 100 },
@@ -44,16 +44,16 @@ const CHART_METRICS: {
   { key: 'swap', title: 'Využití swapu', tone: 'temperature', yMax: 100 },
   { key: 'load1', title: 'Load Average (1 min)', tone: 'cpu', yMax: null },
   { key: 'ts_clients', title: 'TeamSpeak Klienti', tone: 'memory', yMax: null },
-  // Discord: počet lidí online. Data se sbírala každou minutu, ale do
-  // historie se neukládala, takže Discord neměl žádný graf kromě odezvy.
+  // Discord: people online. The data was collected every minute but never
+  // stored into history, so Discord had no chart except latency.
   { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null },
   { key: 'mc_players', title: 'Hráči online', tone: 'memory', yMax: null },
-  // RSRP je v záporných dBm, takže žádný yMax - graf si rozsah určí z dat.
+  // RSRP is in negative dBm, so no yMax - the chart derives the range from the data.
   { key: 'lte_rsrp', title: 'Síla LTE signálu (RSRP)', tone: 'latency', yMax: null },
   { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: 120 },
 ];
 
-/** Odpověď `action=metric_series_batch` - všechny grafy zařízení v jednom požadavku. */
+/** Response of `action=metric_series_batch` - all device charts in one request. */
 interface MetricSeriesBatchResponse {
   series: Record<string, { points: [number, number, number?][]; unit: string; label: string }>;
   error?: string;
@@ -84,7 +84,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   }
 }
 
-/** Sekundy → milisekundy. `api.php` posílá UNIX_TIMESTAMP(), tedy sekundy. */
+/** Seconds → milliseconds. `api.php` sends UNIX_TIMESTAMP(), i.e. seconds. */
 function toPoints(raw: [number, number, number?][]): MetricPoint[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(([ts, value]) => ({ t: ts * 1000, v: value }));
@@ -94,9 +94,9 @@ export const httpMetricsSource: MetricsSource = {
   name: 'api.php',
 
   async getAssetCharts(monitorId: number, range: TimeRange): Promise<ChartData[]> {
-    // monitorId je vždy skutečné monitors.id - api.php ho navíc přijímá i jako
-    // asset_id (WHERE id = ? OR asset_id = ?), takže žádná přepočítávací
-    // normalizace ID tady není potřeba.
+    // monitorId is always the real monitors.id - api.php additionally accepts it
+    // as asset_id too (WHERE id = ? OR asset_id = ?), so no ID re-mapping
+    // normalisation is needed here.
     const batch = await getJson<MetricSeriesBatchResponse>(
       `api.php?action=metric_series_batch&monitor_id=${monitorId}&period=${range}`
     ).catch(() => null);
@@ -125,9 +125,9 @@ export const httpMetricsSource: MetricsSource = {
       }
     }
 
-    // Žádná fabrikace: chybí-li reálná data, vrací se prázdné pole a komponenta,
+    // No fabrication: when real data is missing, an empty array comes back and the component,
     // co grafy vykresluje, na to reaguje stavem "data nejsou k dispozici" - ne
-    // vymyšlenými hodnotami, které vypadají jako měření.
+    // with invented values that look like measurements.
     return validCharts;
   },
 

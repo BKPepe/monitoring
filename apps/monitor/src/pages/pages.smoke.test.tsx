@@ -18,12 +18,12 @@ import { SettingsPage } from './settings';
 import { NotFoundPage } from './not-found';
 
 /**
- * Smoke testy stránek: každá stránka se musí vykreslit bez pádu
- * (a) s prázdnými daty z API a (b) při síťové chybě.
+ * Page smoke tests: every page must render without crashing
+ * (a) with empty API data and (b) on a network error.
  *
- * Nekontroluje se pixel-perfect obsah - kontroluje se, že refactor
- * nerozbije render úplně (přesně to se v tomhle repu už stalo: komponenta
- * definovaná uvnitř render funkce, chybějící null-check na details…).
+ * No pixel-perfect content checks - what is checked is that a refactor
+ * does not break rendering outright (exactly what already happened in this
+ * repo: a component defined inside a render function, a missing null-check on details…).
  */
 
 const jsonResponse = (body: unknown) =>
@@ -34,7 +34,7 @@ const jsonResponse = (body: unknown) =>
     text: () => Promise.resolve(JSON.stringify(body)),
   }) as Response;
 
-/** Minimální poctivé odpovědi: prázdno, ne vymyšlená čísla. */
+/** Minimal honest responses: emptiness, not invented numbers. */
 const emptyApi = (url: string): Response => {
   if (url.includes('action=monitors')) return jsonResponse({ monitors: [] });
   if (url.includes('action=incidents')) return jsonResponse({ incidents: [], manualIncidents: [] });
@@ -84,7 +84,7 @@ describe('smoke: stránky se vykreslí', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL) => Promise.resolve(emptyApi(String(input))))
     );
-    // matchMedia jsdom nemá; useChartTheme/reduced-motion ho potřebují.
+    // jsdom lacks matchMedia; useChartTheme/reduced-motion need it.
     vi.stubGlobal(
       'matchMedia',
       vi.fn((query: string) => ({
@@ -130,7 +130,7 @@ describe('smoke: stránky se vykreslí', () => {
   it('Dashboard ukazuje nadpis a poctivé nuly, žádná vymyšlená čísla', async () => {
     renderPage(<DashboardPage />);
     expect(await screen.findByText('Status Overview')).toBeTruthy();
-    // Uptime bez dat = pomlčka, nikdy fiktivních 100 %.
+    // Uptime without data = a dash, never a fictional 100 %.
     expect(screen.queryByText('100.00')).toBeNull();
   });
 });

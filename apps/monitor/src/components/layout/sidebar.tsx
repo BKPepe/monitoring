@@ -59,8 +59,8 @@ export function Sidebar({
 }) {
   const { t } = useLanguage();
 
-  // Vlastní odkazy z nastavení (custom_nav_links) - stejná data, která
-  // renderuje menu veřejné status stránky; endpoint ui_config je veřejný.
+  // Custom links from settings (custom_nav_links) - the same data the public
+  // status page menu renders; the ui_config endpoint is public.
   const [customLinks, setCustomLinks] = React.useState<{ name: string; url: string }[]>([]);
   React.useEffect(() => {
     let active = true;
@@ -98,7 +98,7 @@ export function Sidebar({
       )}
     >
       <div className="flex h-16 items-center gap-2.5 px-4">
-        {/* Skutečný znak Blood Kings (koruna s mečem) místo generické korunky. */}
+        {/* The real Blood Kings mark (crown with a sword) instead of a generic crown. */}
         <img src="/status/assets/bk-mark.svg" alt="" aria-hidden="true" className="size-8 shrink-0 object-contain" />
         {!collapsed && (
           <div className="min-w-0 leading-tight">

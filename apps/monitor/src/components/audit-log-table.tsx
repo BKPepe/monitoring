@@ -19,9 +19,9 @@ export function AuditLogTable() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  // Bez členění byl protokol nečitelná směs cronu, přihlášení a změn
-  // monitorů (uživatelský report). Filtry pracují nad už načtenými řádky -
-  // žádné další volání API.
+  // Without grouping the log was an unreadable mix of cron, sign-ins and
+  // monitor changes (user report). The filters work over already-loaded rows -
+  // no extra API call.
   const [category, setCategory] = useState<'all' | 'security' | 'config' | 'automation'>('all');
   const [onlyProblems, setOnlyProblems] = useState(false);
 
@@ -52,7 +52,7 @@ export function AuditLogTable() {
     return () => clearInterval(timer);
   }, [fetchAuditLogs]);
 
-  // Kategorie podle typu akce - klíčové slovo v action, ne uživatelský vstup.
+  // Category by action type - a keyword in action, not user input.
   const categoryOf = (action: string): 'security' | 'config' | 'automation' => {
     const a = (action || '').toLowerCase();
     if (/(login|logout|2fa|totp|password|token|session|denied|forbidden)/.test(a)) return 'security';

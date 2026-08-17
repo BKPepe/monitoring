@@ -57,7 +57,7 @@ export function SubscriptionsCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (e) {
-      // Tiché spolknutí chyby by uživateli tvrdilo, že se odběry uložily.
+      // Silently swallowing the error would tell the user the subscriptions saved.
       setError(e instanceof Error ? e.message : t('settings.save_error', 'Uložení se nezdařilo.'));
     }
   };

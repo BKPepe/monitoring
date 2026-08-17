@@ -6,7 +6,7 @@ const STORAGE_KEY = 'bk-theme';
 function readInitialTheme(): Theme {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === 'dark' || stored === 'light') return stored;
-  // Aplikace je navržená dark-first, ale systémová volba má přednost.
+  // The app is designed dark-first, but the system preference wins.
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 

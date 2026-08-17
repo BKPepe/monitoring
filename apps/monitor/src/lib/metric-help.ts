@@ -1,27 +1,27 @@
 /**
- * Vysvětlivky k metrikám: co se měří, čím a odkud.
+ * Metric explainers: what is measured, how and from where.
  *
- * Vzniklo z konkrétní otázky: u odezvy bylo vidět, co znamená, u ostatních
- * hodnot ne. Číslo bez kontextu svádí ke špatným závěrům - "zaplnění disku
- * 40 %" je něco jiného, když jde o celý disk, a něco jiného, když jde jen
+ * Born from a concrete question: latency had its meaning written down, the others
+ * did not. A number without context invites wrong conclusions - "disk usage
+ * 40 %" is one thing for the whole disk and another when it is only
  * o zapisovatelnou vrstvu routeru.
  *
- * Katalog je schválně na jednom místě: kdyby si každá komponenta psala
- * vlastní popisek, rozejdou se a nikdo nepozná, který platí.
+ * The catalogue is deliberately in one place: if every component wrote its
+ * own caption, they would drift and nobody could tell which one holds.
  *
- * `source` odpovídá na "kam se to měří" - tedy odkud hodnota pochází a jak
- * často. To je u monitoringu důležitější než u běžné aplikace: hodnota
- * z agenta na routeru a hodnota naměřená z hostingu můžou být obě správně
- * a přitom si odporovat.
+ * `source` answers "where is this measured" - i.e. where the value comes from and
+ * how often. That matters more in monitoring than in an ordinary app: a value
+ * from the router's agent and a value measured from the hosting can both be
+ * right and still contradict each other.
  */
 export interface MetricHelp {
-  /** Co ta hodnota znamená. */
+  /** What the value means. */
   what: string;
-  /** Jak se získává - konkrétní příkaz nebo soubor, ne obecné "ze systému". */
+  /** How it is obtained - the concrete command or file, not a generic "from the system". */
   how: string;
-  /** Odkud a jak často. */
+  /** From where and how often. */
   source: string;
-  /** Na co si dát pozor při čtení hodnoty. Nepovinné. */
+  /** What to watch out for when reading the value. Optional. */
   caveat?: string;
 }
 
@@ -119,7 +119,7 @@ export const METRIC_HELP: Record<string, MetricHelp> = {
   },
 };
 
-/** Vysvětlivka k metrice, nebo null když pro ni žádná není. */
+/** The explainer for a metric, or null when there is none. */
 export function metricHelp(key: string): MetricHelp | null {
   return METRIC_HELP[key] ?? null;
 }

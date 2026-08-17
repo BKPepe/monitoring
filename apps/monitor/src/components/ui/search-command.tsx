@@ -6,11 +6,11 @@ import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/language-context';
 
 /**
- * Globální vyhledávání v headeru (⌘K / Ctrl+K).
+ * Global search in the header (⌘K / Ctrl+K).
  *
- * Sprint 1 řeší jen skořápku a klávesovou zkratku — napojení na skutečný
- * index (assets, monitory, incidenty) přijde, až bude API. Proto komponenta
- * bere výsledky zvenčí a sama nic nefiltruje.
+ * Sprint 1 covers just the shell and the keyboard shortcut — wiring to a real
+ * index (assets, monitors, incidents) comes with the API. That is why the
+ * component takes results from outside and filters nothing itself.
  */
 export interface SearchResult {
   id: string;
@@ -37,7 +37,7 @@ export function SearchCommand({
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey)) {
-        // Prohlížeč má na Ctrl+K vlastní chování (fokus do adresního řádku).
+        // The browser has its own Ctrl+K behaviour (focus the address bar).
         event.preventDefault();
         setOpen((prev) => !prev);
       }
@@ -48,7 +48,7 @@ export function SearchCommand({
 
   const filtered = query ? results.filter((r) => r.label.toLowerCase().includes(query.toLowerCase())) : results;
 
-  // Šipky + Enter: aktivní položka sleduje pořadí ve vyfiltrovaném seznamu.
+  // Arrows + Enter: the active item follows the order of the filtered list.
   React.useEffect(() => {
     setActiveIndex(0);
   }, [query, open]);

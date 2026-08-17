@@ -2,11 +2,11 @@
 /**
  * Blood Kings Status Monitoring - Distributed Node API
  * 
- * Endpoint pro komunikaci se vzdálenými monitorovacími uzly (nodes).
- * Umožňuje stahovat seznam monitorů k testování a ukládat výsledky měření.
+ * Endpoint for talking to remote monitoring nodes.
+ * Lets them download the monitor list to test and store measurement results.
  */
 
-// Zapneme zobrazování chyb pro případné ladění API
+// Show errors for API debugging
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
@@ -15,17 +15,17 @@ header('Content-Type: application/json; charset=utf-8');
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/db.php';
 
-// 1. Zajištění existence sloupce checked_from v tabulce monitor_logs
+// 1. Ensure the checked_from column exists in monitor_logs
 try {
     $pdo->exec("ALTER TABLE monitor_logs ADD COLUMN checked_from VARCHAR(50) DEFAULT 'Main Server'");
 } catch (PDOException $e) {
-    // Sloupec již existuje, ignorujeme chybu
+    // Column already exists, ignore the error
 }
 
-// 2. Bezpečnostní kontrola API klíče - žádný natvrdo psaný fallback klíč.
-// Prázdný cron_key znamená, že endpoint je úplně vypnutý (fail closed), ne že
-// se použije nějaký veřejně známý výchozí klíč (to byla reálná díra, protože
-// stejný literál je zveřejněný v node_client.php jako výchozí hodnota k okopírování).
+// 2. API key security check - no hardcoded fallback key.
+// An empty cron_key means the endpoint is switched off entirely (fail closed),
+// not that some publicly known default applies (a real hole, because the same
+// literal is published in node_client.php as the copy-paste default).
 $node_key = trim((string)get_setting('cron_key', ''));
 $client_key = isset($_GET['key']) ? (string)$_GET['key'] : (isset($_SERVER['HTTP_X_NODE_KEY']) ? (string)$_SERVER['HTTP_X_NODE_KEY'] : '');
 
@@ -37,7 +37,7 @@ if ($node_key === '' || $client_key === '' || !hash_equals($node_key, $client_ke
 
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 
-// --- AKCE: Stáhnutí seznamu monitorů k otestování ---
+// --- ACTION: fetch the list of monitors to test ---
 if ($action === 'get_monitors') {
     try {
         $stmt = $pdo->query("SELECT id, name, type, target, port FROM monitors");
@@ -50,7 +50,7 @@ if ($action === 'get_monitors') {
     exit;
 }
 
-// --- AKCE: Uložení výsledků měření z uzlu ---
+// --- ACTION: store measurement results from a node ---
 if ($action === 'post_results') {
     $input = file_get_contents('php://input');
     $data = json_decode($input, true);
@@ -67,13 +67,13 @@ if ($action === 'post_results') {
         $ip = $_SERVER['REMOTE_ADDR'];
         $cache_key = 'ip_loc_' . str_replace('.', '_', $ip);
         
-        // Zkusíme najít lokaci v cache nastavení
+        // Try the settings cache for the location
         $stmt_cache = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
         $stmt_cache->execute([$cache_key]);
         $node_location = $stmt_cache->fetchColumn();
         
         if (empty($node_location)) {
-            // Pokud chybí v cache, dotážeme se GeoIP API s timeoutem 2s
+            // When missing from the cache, ask the GeoIP API with a 2 s timeout
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, "https://ipapi.co/{$ip}/json/");
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -88,14 +88,14 @@ if ($action === 'post_results') {
                     $cc = $geo['country_code'];
                     $city = $geo['city'] ?? '';
                     
-                    // Převod ISO kódu země na emoji vlaječku
+                    // ISO country code to an emoji flag
                     $c1 = ord($cc[0]) - 65 + 127462;
                     $c2 = ord($cc[1]) - 65 + 127462;
                     $flag = html_entity_decode("&#$c1;&#$c2;", ENT_NOQUOTES, 'UTF-8');
                     
                     $node_location = $flag . ' ' . ($city ? $city . ', ' : '') . $cc;
                     
-                    // Uložíme do settings jako cache
+                    // Store into settings as a cache
                     $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
                     $stmt_set->execute([$cache_key, $node_location, $node_location]);
                 }
@@ -121,28 +121,28 @@ if ($action === 'post_results') {
         if ($mid <= 0) continue;
         
         try {
-            // Zjistíme předchozí stav monitoru
+            // Find the monitor's previous state
             $stmt_old = $pdo->prepare("SELECT status FROM monitors WHERE id = ?");
             $stmt_old->execute([$mid]);
             $old_status = $stmt_old->fetchColumn();
             
-            // Zápis do logu měření i s lokací uzlu
+            // Write the measurement log including the node's location
             $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, ?, ?, ?)");
             $stmt_log->execute([$mid, $status, $response_time, $error_message, $node_location]);
             
-            // Pokud se změnil stav, nebo se jedná o první měření
+            // When the state changed, or this is the first measurement
             if ($old_status !== $status || empty($old_status)) {
                 $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
                 $stmt_up->execute([$status, $details, $mid]);
             } else {
-                // Pokud stav zůstal stejný, aktualizujeme pouze čas poslední kontroly a případné detaily
+                // State unchanged - only update the last-check time and any details
                 $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
                 $stmt_up->execute([$details, $mid]);
             }
             
             $success_count++;
         } catch (PDOException $e) {
-            // Logování chyb u konkrétního monitoru, pokračujeme dál
+            // Log per-monitor errors and continue
             continue;
         }
     }
@@ -155,6 +155,6 @@ if ($action === 'post_results') {
     exit;
 }
 
-// Neplatná akce
+// Invalid action
 http_response_code(400);
 echo json_encode(['error' => 'Neplatná akce. Použijte action=get_monitors nebo action=post_results.']);

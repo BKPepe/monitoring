@@ -1,34 +1,34 @@
 <?php
 /**
- * RSS kanál se stavem služeb.
+ * RSS feed with the service status.
  *
- * Status stránka dosud počítala s tím, že si ji někdo otevře. Kdo se o
- * výpadku měl dozvědět, musel na ni sám přijít - a přesně tomu se má status
- * stránka vyhýbat. Odběr přes RSS to obrací: čtečka se ptá sama.
+ * The status page assumed someone would open it. Whoever was supposed to learn
+ * about an outage had to come by themselves - exactly what a status page
+ * should avoid. An RSS subscription flips it: the reader asks by itself.
  *
- * Volání:
- *   rss.php                 všechny monitory
- *   rss.php?page=herni      jen monitory zvolené status stránky
+ * Invocation:
+ *   rss.php                 all monitors
+ *   rss.php?page=herni      only the monitors of the chosen status page
  *
- * Skrytá stránka se chová stejně jako v index.php - anonymní návštěvník
- * dostane 404 jako u neexistujícího slugu, aby se její existence nedala
- * zjistit zkoušením adres.
+ * A hidden page behaves like in index.php - an anonymous visitor gets a 404
+ * as with a nonexistent slug, so its existence cannot be discovered by
+ * probing addresses.
  */
 
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
-/** Kolik posledních událostí kanál nese. Čtečky si stejně pamatují jen nové. */
+/** How many recent events the feed carries. Readers remember only new ones anyway. */
 const BK_RSS_MAX_ITEMS = 40;
 
 $is_admin = !empty($_SESSION['admin_logged_in']);
 
-/** Escapování do XML - `<` v názvu monitoru jinak rozbije celý kanál. */
+/** XML escaping - a `<` in a monitor name would break the whole feed otherwise. */
 function bk_xml(string $value): string {
     return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
 }
 
-/** Absolutní adresa téhle instance (RSS musí odkazovat naplno, ne relativně). */
+/** The absolute address of this instance (RSS must link fully, not relatively). */
 function bk_rss_base_url(): string {
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
@@ -70,20 +70,20 @@ if ($slug !== '') {
     }
 }
 
-// --- Události ------------------------------------------------------------
+// --- Events ---------------------------------------------------------------
 //
-// Jedna položka na jednu skutečnou událost, ne na incident. Čtečky poznají
-// položku podle guid a jednou zobrazenou už znovu neukážou - kdyby se
-// vyřešení jen připsalo k původní položce, odběratel by se o něm nedozvěděl.
-// Otevření a vyřešení jsou proto dvě samostatné položky.
+// One item per actual event, not per incident. Readers identify an item by
+// its guid and never show a seen one again - if the resolution were merely
+// appended to the original item, the subscriber would never learn about it.
+// Opening and resolution are therefore two separate items.
 $items = [];
 
 try {
     $params = [];
     $where = '';
     if (!empty($monitor_ids)) {
-        // Incidenty bez monitoru (ruční, obecné) patří na stránku s výběrem taky:
-        // typicky se týkají celé infrastruktury.
+        // Incidents without a monitor (manual, global) belong on a filtered page
+        // too: they typically concern the whole infrastructure.
         $ph = implode(',', array_fill(0, count($monitor_ids), '?'));
         $where = "WHERE (i.monitor_id IS NULL OR i.monitor_id IN ({$ph}))";
         $params = $monitor_ids;
@@ -100,9 +100,9 @@ try {
     );
     $stmt->execute($params);
 
-    // Popisky dopadu se skládají výčtem, ne přes t('rss_impact_' . $impact):
-    // dynamický klíč nejde staticky ověřit, takže chybějící překlad by prošel
-    // testem i revizí a projevil se až odběrateli. Schéma zná právě tyhle tři.
+    // Impact labels are enumerated, not t('rss_impact_' . $impact):
+    // a dynamic key cannot be verified statically, so a missing translation would
+    // pass tests and review and surface only to a subscriber. The schema knows exactly these three.
     $impact_labels = [
         'minor' => t('rss_impact_minor'),
         'major' => t('rss_impact_major'),
@@ -115,8 +115,8 @@ try {
 
         // --- Vznik incidentu ---
         if (!empty($inc['created_at'])) {
-            // Neznámý dopad se vypíše, jak přišel z databáze - přejmenovat ho
-            // na „malý" by tvrdilo něco, co nikdo nenastavil.
+            // An unknown impact is printed as it came from the database - renaming
+            // it to "minor" would claim something nobody set.
             $body = t('rss_impact_label') . ': ' . ($impact_labels[$impact] ?? $impact);
             if ($monitor_name !== null) {
                 $body .= ' · ' . t('rss_service_label') . ': ' . $monitor_name;
@@ -129,9 +129,9 @@ try {
             ];
         }
 
-        // --- Vyřešení ---
-        // Jen když je opravdu vyplněné. Dopočítat čas vyřešení z "teď" u
-        // incidentu, který nikdo neuzavřel, by byl vymyšlený údaj.
+        // --- Resolution ---
+        // Only when actually filled. Deriving a resolution time from "now" for
+        // an incident nobody closed would be an invented value.
         if (!empty($inc['resolved_at'])) {
             $body = t('rss_resolved_body');
             if ($monitor_name !== null) {
@@ -161,20 +161,20 @@ try {
     exit;
 }
 
-// Bez použitelného času by položka v čtečce skončila nahoře nebo dole náhodně;
-// takové záznamy do kanálu nepatří.
+// Without a usable time the item would land at a reader's top or bottom at random;
+// such records do not belong in the feed.
 $items = array_values(array_filter($items, fn($i) => $i['timestamp'] !== null && $i['timestamp'] !== false));
 usort($items, fn($a, $b) => $b['timestamp'] <=> $a['timestamp']);
 $items = array_slice($items, 0, BK_RSS_MAX_ITEMS);
 
-// --- Výstup --------------------------------------------------------------
+// --- Output ---------------------------------------------------------------
 header('Content-Type: application/rss+xml; charset=utf-8');
-// Čtečky se ptají často; pět minut je kompromis mezi čerstvostí a zátěží.
+// Readers poll often; five minutes is the compromise between freshness and load.
 header('Cache-Control: public, max-age=300');
 
 $base = bk_rss_base_url();
-// Klíč je 'site_title', ne 'site_name' - pod 'site_name' nikdo nikdy nic
-// neuložil, takže se kanál vždycky jmenoval obecným náhradním názvem.
+// The key is 'site_title', not 'site_name' - nobody ever stored anything under
+// 'site_name', so the feed was always named by the generic fallback.
 $site_name = get_setting('site_title', '');
 $channel_title = ($site_name !== '' ? $site_name : t('rss_default_site')) . ' - ' . ($page_title ?? t('rss_channel_suffix'));
 $channel_link = $base . '/' . ($slug !== '' ? '?page=' . rawurlencode($slug) : '');

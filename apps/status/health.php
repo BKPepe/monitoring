@@ -1,8 +1,8 @@
 <?php
 /**
  * Blood Kings Monitoring - Health Check / Schema Validator
- * Ověří, že DB schéma je kompletní a agent API bude fungovat.
- * Přístup: admin-only (web) nebo CLI.
+ * Verifies the DB schema is complete and the agent API will work.
+ * Access: admin-only (web) or the CLI.
  */
 
 require_once __DIR__ . '/db.php';
@@ -26,7 +26,7 @@ function add_check(&$checks, &$all_ok, $name, $ok, $detail = '') {
     if (!$ok) $all_ok = false;
 }
 
-// 1. DB připojení
+// 1. DB connection
 add_check($checks, $all_ok, 'DB connection', true, 'PDO connected');
 
 // 2. Required tables

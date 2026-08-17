@@ -51,10 +51,10 @@ define('DB_USER', 'bloodkings');
 define('DB_PASS', 'heslo_databaze');
 
 // --- SMTP ---
-// SMTP se NEnastavuje tady: kompletní konfigurace (host, port, účet, heslo,
-// šifrování) žije v databázi a spravuje se v Admin -> Nastavení -> SMTP.
-// Dřívější zakomentované SMTP_* konstanty tu slibovaly přednost před databází,
-// ale žádný kód je nikdy nečetl - byla to mrtvá (a matoucí) dokumentace.
+// SMTP is NOT configured here: the complete configuration (host, port, account,
+// password, encryption) lives in the database, managed in Admin -> Settings -> SMTP.
+// The earlier commented-out SMTP_* constants here promised precedence over the DB,
+// but no code ever read them - it was dead (and confusing) documentation.
 
 // --- OTHER SETTINGS ---
 // Default admin credentials after schema.sql import: admin / BloodKingsAdmin123!

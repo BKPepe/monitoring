@@ -1,36 +1,36 @@
 <?php
 /**
- * Příjem heartbeatů - opačný směr než zbytek monitoringu.
+ * Heartbeat intake - the opposite direction from the rest of monitoring.
  *
- * Aktivní kontrola umí jen to, na co dosáhne ze sítě. Záloha, která se spustí
- * ve tři ráno a tiše selže, nebo cron, který přestal běžet, jsou pro ni
- * neviditelné: není co pingnout. Proto se sem hlásí úloha sama a monitoring
- * hlídá, že se ozvala včas.
+ * An active check can only do what it reaches over the network. A backup that
+ * runs at three in the morning and silently fails, or a cron that stopped,
+ * are invisible to it: there is nothing to ping. So the job reports itself
+ * and monitoring watches that it reported in time.
  *
- * Použití na konci úlohy:
+ * Usage at the end of a job:
  *   curl -fsS -m 10 https://bloodkings.eu/status/heartbeat.php?token=TOKEN
  *
- * Ohlášení selhání (nenulový návratový kód nebo chyba v logu):
+ * Reporting a failure (non-zero exit code or an error in the log):
  *   curl -fsS -m 10 "https://bloodkings.eu/status/heartbeat.php?token=TOKEN&status=fail&msg=Zaloha%20selhala"
  *
- * Endpoint jen zapíše signál. Stav vyhodnotí cron při nejbližším běhu -
- * jedno místo, kde se rozhoduje o stavu a odesílají notifikace, místo dvou.
+ * The endpoint only records the signal. Cron evaluates the state on its next
+ * run - one place deciding state and sending notifications, not two.
  */
 
 require_once __DIR__ . '/functions.php';
 
 header('Content-Type: application/json; charset=utf-8');
-// Odpověď je stavová a nikdy se nesmí kešovat - ani u nás, ani na cestě.
+// The response is stateful and must never be cached - neither by us nor on the way.
 header('Cache-Control: no-store');
 
-/** Token může přijít v ?token= i v cestě (/heartbeat.php/TOKEN) kvůli hezčím URL. */
+/** The token may come as ?token= or in the path (/heartbeat.php/TOKEN) for nicer URLs. */
 $token = (string)($_GET['token'] ?? '');
 if ($token === '' && !empty($_SERVER['PATH_INFO'])) {
     $token = trim((string)$_SERVER['PATH_INFO'], '/');
 }
 
-// Tvarová kontrola dřív, než se sáhne do databáze: token je hex z
-// bk_heartbeat_generate_token(), takže cokoli jiného je překlep nebo skenování.
+// Shape check before touching the database: the token is hex from
+// bk_heartbeat_generate_token(), so anything else is a typo or scanning.
 if ($token === '' || !preg_match('/^[0-9a-f]{16,64}$/', $token)) {
     http_response_code(404);
     echo json_encode(['error' => 'Neznámý token.'], JSON_UNESCAPED_UNICODE);
@@ -49,34 +49,34 @@ try {
 }
 
 if (!$monitor) {
-    // Stejná odpověď jako u špatného tvaru - platnost tokenu se odsud nedá
-    // zjistit zkoušením.
+    // The same response as for a malformed token - validity cannot be probed
+    // from here by trying.
     http_response_code(404);
     echo json_encode(['error' => 'Neznámý token.'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// 'fail' musí úloha říct výslovně; cokoli jiného (i překlep) je úspěch, aby
-// se z chyby v parametru nestal falešný výpadek.
+// 'fail' must be said explicitly by the job; anything else (a typo too) is a success,
+// so a parameter mistake cannot become a false outage.
 $result = (($_GET['status'] ?? $_POST['status'] ?? 'ok') === 'fail') ? 'fail' : 'ok';
 
 $message = trim((string)($_GET['msg'] ?? $_POST['msg'] ?? ''));
 if ($message !== '') {
-    // Sloupec je VARCHAR(255); ořezáváme po znacích, ne po bajtech, aby se
-    // diakritika nerozsekla uprostřed.
+    // The column is VARCHAR(255); trimmed by characters, not bytes, so
+    // diacritics are not cut in half.
     $message = mb_substr($message, 0, 255);
 } else {
     $message = null;
 }
 
 try {
-    // Čas zapisuje PHP, ne databáze přes NOW().
+    // The time is written by PHP, not by the database via NOW().
     //
-    // Vyhodnocení v cronu porovnává tenhle údaj s time(), tedy s hodinami PHP.
-    // Kdyby ho zapsala databáze ve své časové zóně, stačil by rozdíl mezi
-    // zónami a monitor by hlásil výpadek u úlohy, která se ozvala včas -
-    // v testovacím prostředí (databáze v UTC, PHP v Praze) přesně tak vypadal.
-    // Zapisuje i čte tytéž hodiny, takže na nastavení databáze nezáleží.
+    // Cron's evaluation compares this value with time(), i.e. PHP's clock.
+    // Were it written by the database in its own zone, a mere zone difference
+    // would make the monitor report an outage for a job that reported on time -
+    // exactly how it looked in the test environment (DB in UTC, PHP in Prague).
+    // The same clock writes and reads, so the database setting does not matter.
     $stmt_up = $pdo->prepare(
         "UPDATE monitors
             SET last_heartbeat = ?,

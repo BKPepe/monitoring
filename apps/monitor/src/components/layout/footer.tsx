@@ -17,8 +17,8 @@ export function Footer({ version }: { version: string }) {
   return (
     <>
       <footer className="text-muted-foreground flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border px-6 py-3 text-xs print:hidden">
-        {/* Verze odkazuje na konkrétní commit na GitHubu - z běžící instalace
-            jde tak jedním klikem zjistit, co přesně je nasazené. */}
+        {/* The version links to the exact commit on GitHub - one click from a
+            running install tells precisely what is deployed. */}
         {(() => {
           const hash = version.match(/\(([0-9a-f]{7,40})\)/)?.[1];
           const href = hash

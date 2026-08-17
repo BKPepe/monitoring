@@ -57,9 +57,9 @@ export function DataSourceBanner() {
     );
   }
 
-  // Aplikace nemá žádná ukázková data - když API neodpoví, prostě data
-  // nejsou. Dřívější text "Ukázková data" tedy lhal a hlavně neříkal,
-  // co má admin dělat (hlášeno uživatelem).
+  // The app has no demo data - when the API does not answer, there simply is
+  // no data. The earlier "Demo data" text therefore lied and above all did not
+  // say what the admin should do (reported by the user).
   return (
     <div
       role="alert"

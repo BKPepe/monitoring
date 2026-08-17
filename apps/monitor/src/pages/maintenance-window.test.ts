@@ -19,8 +19,8 @@ describe('okno údržby: převod času', () => {
   });
 
   it('čas se posunem zóny nemění (žádný Date parsing)', () => {
-    // Kdyby se použil new Date(), tenhle řetězec by se podle prohlížeče
-    // vyložil jako lokální čas nebo UTC a údržba by se posunula o hodiny.
+    // With new Date() this string would be read as local time or UTC
+    // depending on the browser, shifting maintenance by hours.
     expect(fromLocalInput(toLocalInput('2026-01-15 23:30:00'))).toBe('2026-01-15 23:30:00');
   });
 });

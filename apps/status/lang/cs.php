@@ -1,12 +1,12 @@
 <?php
 /**
- * Český překlad (výchozí jazyk) - musí přesně odpovídat textu, který byl
- * na stránce natvrdo předtím, aby se chování stávajících nasazení nezměnilo.
+ * Czech translation (the default language) - must match exactly the text that
+ * was hardcoded on the page before, so existing deployments do not change behaviour.
  */
 return [
     'default_category' => 'Ostatní',
 
-    // Hlavička / navigace
+    // Header / navigation
     'nav_portal' => 'Portál',
     'nav_monitoring' => 'Monitoring',
     'nav_admin_prefix' => 'Administrace',
@@ -16,7 +16,7 @@ return [
     'theme_toggle_title' => 'Přepnout tmavý/světlý motiv',
     'lang_toggle_title' => 'Switch to English',
 
-    // Hero - celkový stav
+    // Hero - overall state
     'hero_down_title' => 'Některé systémy vykazují výpadek',
     'hero_down_desc' => 'Detekovali jsme potíže u %d z %d sledovaných služeb.',
     'hero_maintenance_title' => 'Systémy běží, probíhá plánovaná údržba',
@@ -34,7 +34,7 @@ return [
     'recent_events_heading' => 'Poslední události',
     'breadcrumb_dashboard' => 'Přehled',
 
-    // Banner plánované údržby
+    // Planned maintenance banner
     'maintenance_banner_title' => 'Probíhá plánovaná údržba',
     'maintenance_default_desc' => 'Údržba a optimalizace systému',
 
@@ -47,7 +47,7 @@ return [
     'time_ago_min' => 'před %d min',
     'time_ago_hours' => 'před %d hod',
 
-    // Prázdný stav
+    // Empty state
     'empty_title' => 'Zatím nebyly přidány žádné servery',
     'empty_desc' => 'Přihlaste se do administrace a přidejte své první servery k monitorování.',
     'empty_cta' => 'Přejít do administrace',
@@ -92,7 +92,7 @@ return [
     'resp_online' => 'Online',
     'na' => 'N/A',
 
-    // Detail panel - společné
+    // Detail panel - shared
     'maintenance_heading' => 'Plánovaná údržba (Maintenance)',
     'maintenance_duration' => 'Doba trvání:',
     'maintenance_duration_range' => 'od %s do %s',
@@ -282,11 +282,11 @@ return [
     'agent_discovered_services' => 'Zjištěné služby:',
     'agent_svc_missing' => 'chybí',
 
-    // Monitor detail stránka (Level 2 - monitor.php)
+    // Monitor detail page (Level 2 - monitor.php)
     'mp_asset_siblings' => 'Další monitory v tomto assetu',
     'mp_detail_page' => 'Otevřít detailní stránku',
 
-    // Knowledge layer - vysvětlení, co znamená překročený práh u konkrétní metriky
+    // Knowledge layer - explaining what an exceeded threshold on a metric means
     'knowledge_panel_heading' => '💡 Doporučení',
     'knowledge_tip_cpu_high' => 'Trvale vysoké CPU může znamenat přetížený proces nebo potřebu navýšit výkon serveru.',
     'knowledge_tip_ram_high' => 'Vysoké využití RAM může vést ke swapování a zpomalení - zkontrolujte, co paměť spotřebovává.',
@@ -296,7 +296,7 @@ return [
     'knowledge_tip_zombie_high' => 'Zombie procesy samy nezatěžují CPU/RAM, ale velké množství značí, že rodičovský proces řádně neukončuje potomky.',
     'knowledge_tip_btrfs_errors' => 'Btrfs hlásí chyby čtení/zápisu nebo poškození dat - může jít o počínající selhání disku, zkontrolujte SMART a zvažte zálohu dat.',
 
-    // Insights (Level 1 Forecasting) - trendová matematika nad historií
+    // Insights (Level 1 Forecasting) - trend math over history
     'insights_panel_heading' => '🔮 Insights',
     'insight_forecast_disk' => 'Disk roste přibližně o %s %%/den - při tomto tempu bude plný přibližně za %d dní.',
     'insight_forecast_ram' => 'Využití RAM roste přibližně o %s %%/den - při tomto tempu dojde přibližně za %d dní.',
@@ -305,7 +305,7 @@ return [
     'insight_trend_latency_down' => 'Latence se za posledních 14 dní snížila přibližně o %d %%.',
     'insight_trend_latency_basis' => 'Průměr dříve: %d ms, nyní: %d ms.',
 
-    // Insights (Level 2 Anomaly Detection) - odchylka od vlastní historie monitoru
+    // Insights (Level 2 Anomaly Detection) - deviation from the monitor's own history
     'insight_anomaly_cpu' => 'Neobvyklé využití CPU: %s %%.',
     'insight_anomaly_ram' => 'Neobvyklé využití RAM: %s %%.',
     'insight_anomaly_latency' => 'Neobvyklá latence: %d ms.',
@@ -328,7 +328,7 @@ return [
     'knowledge_tip_ts3_clients' => 'Server se blíží limitu slotů - noví uživatelé se brzy nebudou moci připojit.',
     'knowledge_tip_ts3_version' => 'Běží starší verze TeamSpeak serveru, než je nastavená jako aktuální - zvažte aktualizaci kvůli opravám a bezpečnosti.',
 
-    // TeamSpeak Health Score / hloubkový monitoring
+    // TeamSpeak Health Score / deep monitoring
     'ts3_health_score_heading' => 'Health Score',
     'ts3_health_area_availability' => 'Dostupnost',
     'ts3_health_area_process' => 'TeamSpeak proces',
@@ -364,14 +364,14 @@ return [
     'ts3_version_up_to_date' => 'Aktuální',
     'ts3_clients_chart_heading' => 'Historie klientů (24 hodin)',
 
-    // Výpadky monitoru
+    // Monitor outages
     'recent_outages_heading' => 'Nedávné výpadky (posledních 30 dní)',
     'th_time' => 'Čas',
     'th_error_reason' => 'Chyba / Důvod výpadku',
     'th_measured_from' => 'Měřeno z',
     'unspecified_connection_error' => 'Nespecifikovaná chyba spojení',
 
-    // Sekce incidentů
+    // Incidents section
     'incidents_heading' => 'Historie posledních událostí',
     'th_monitor' => 'Monitor',
     'th_type' => 'Typ',
@@ -383,21 +383,21 @@ return [
     'pagination_next' => 'Další',
     'pagination_page_of' => 'Strana %d z %d',
 
-    // Patička
+    // Footer
     'footer_rights' => 'Všechna práva vyhrazena.',
     'footer_powered_by' => 'Poháněno',
 
     // JS
     'js_metrics_load_error' => 'Nepodařilo se načíst historii metrik:',
 
-    // Executive Summary (shrnutí nahoře v detailu monitoru)
+    // Executive Summary (the summary atop the monitor detail)
     'exec_summary_down' => '%s je aktuálně nedostupný.',
     'exec_summary_healthy_score' => '%s je zdravý (%d/100).',
     'exec_summary_warn_score' => '%s funguje, ale má pár problémů (%d/100).',
     'exec_summary_fail_score' => '%s má vážné problémy (%d/100).',
     'exec_summary_up' => '%s je momentálně online.',
     'exec_summary_no_concerns' => 'Žádné aktuální problémy nebyly zjištěny.',
-    // Obohacené shrnutí: trvání a příčina, ne jen okamžitá hodnota.
+    // Enriched summary: duration and cause, not just the instant value.
     'exec_summary_pressure_cpu' => 'CPU je na %s %% už %s.',
     'exec_summary_pressure_ram' => 'Paměť je na %s %% už %s.',
     'exec_summary_pressure_process' => 'Nejvíc zatěžuje %s (%s %s).',
@@ -460,12 +460,12 @@ return [
     'chart_count' => 'Počet',
     'chart_annotation_prompt' => 'Přidat poznámku k tomuto bodu:',
 
-    // Timeline (historie událostí v detailu monitoru)
+    // Timeline (event history in the monitor detail)
     'timeline_heading' => 'Historie',
     'timeline_today' => 'dnes',
     'timeline_yesterday' => 'včera',
     'timeline_days_ago' => '%d dní zpět',
-    // ne cookie/GET prohlížeče (viz bk_with_email_lang() ve functions.php).
+    // not the browser's cookie/GET (see bk_with_email_lang() in functions.php).
     'digest_title_monthly' => 'Měsíční report',
     'digest_title_weekly' => 'Týdenní report',
     'digest_subject_monthly' => 'Měsíční infrastrukturní report',
@@ -560,8 +560,8 @@ return [
     'digest_summary_recommended_action' => 'Doporučená akce: %s',
     'digest_summary_no_critical_action' => 'Žádná kritická akce není momentálně potřeba.',
 
-    // Alert notifikace (e-mailová část trigger_notifications() - SMS/webhooky
-    // zůstávají česky, viz komentář ve funkci).
+    // Alert notifications (the e-mail part of trigger_notifications() - SMS/webhooks
+    // stay Czech, see the comment in the function).
     'alert_status_down' => 'DOWN (Výpadek)',
     'alert_status_up' => 'ONLINE (Zpět v provozu)',
     'alert_status_maintenance' => 'ÚDRŽBA (Plánovaná odstávka)',
@@ -576,7 +576,7 @@ return [
     'alert_email_outro' => 'Systém bude nadále monitorovat tuto službu a obdržíte další upozornění, jakmile se její stav změní.',
     'alert_email_footer' => 'Tento e-mail byl automaticky generován systémem Blood Kings.',
 
-    // Testovací e-mail (admin.php)
+    // Test e-mail (admin.php)
     'test_email_subject' => 'Zkušební e-mail - Blood Kings',
     'test_email_heading' => 'Test SMTP / Mail odchozí pošty',
     'test_email_body1' => 'Tento e-mail byl odeslán jako test funkčnosti ze status panelu Blood Kings.',
@@ -631,7 +631,7 @@ return [
     'knowledge_tip_ow_wg_cpu' => 'CPU je zatíženo WireGuard (%s %%). Průchod: RX %s MB / TX %s MB.',
     'knowledge_tip_ow_dns_cpu' => 'CPU je zatíženo dnsmasq (%s %%). DNS dotazů: %d. Zvažte optimalizaci cache.',
 
-    // Obecné UI
+    // General UI
     'btn_edit' => 'Upravit',
     'status_up' => 'Online',
     'status_down' => 'Výpadek',
@@ -666,8 +666,8 @@ return [
     'ao_peers' => 'peerů',
     'ao_clients' => 'klientů',
     'ao_online' => 'Online',
-    // --- RSS kanál ---------------------------------------------------
-    // Odběr místo čekání, až si status stránku někdo sám otevře.
+    // --- RSS feed ----------------------------------------------------
+    // A subscription instead of waiting for someone to open the status page themselves.
     'rss_channel_suffix' => 'Stav služeb',
     'rss_channel_description' => 'Výpadky a jejich vyřešení, jak je zaznamenal monitoring.',
     'rss_default_site' => 'Monitoring',

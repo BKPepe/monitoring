@@ -1,11 +1,11 @@
 import { cn } from '@/lib/utils';
 
 /**
- * Prstencový graf rozložení stavů.
+ * Ring chart of the status distribution.
  *
- * Čisté SVG, žádná grafová knihovna — ECharts (Sprint 4) se hodí na časové
- * řady se zoomem a brushingem, ne na kruh se třemi segmenty. Nemá smysl
- * kvůli tomuhle tahat na dashboard megabajt JS.
+ * Pure SVG, no chart library — ECharts (Sprint 4) suits time series with
+ * zoom and brushing, not a circle with three segments. No point dragging
+ * a megabyte of JS onto the dashboard for this.
  */
 export interface HealthSegment {
   label: string;
@@ -36,15 +36,15 @@ export function HealthDonut({
   className,
 }: {
   segments: HealthSegment[];
-  /** Popisek uprostřed prstence — typicky podíl zdravých. */
+  /** Label in the ring's centre — typically the healthy share. */
   centerLabel: { value: string; caption: string };
   className?: string;
 }) {
   const total = segments.reduce((sum, s) => sum + s.value, 0);
 
-  // Offsety segmentů se skládají postupně; každý začíná tam, kde skončil
-  // předchozí. Průběžný součet se počítá dopředu místo mutace proměnné
-  // během renderu - render má být čistá funkce vstupů.
+  // Segment offsets accumulate; each starts where the previous ended.
+  // The running total is computed ahead of time instead of mutating a variable
+  // during render - render should be a pure function of its inputs.
   const offsets = segments.reduce<number[]>((acc, _segment, i) => {
     const prevFraction = i === 0 ? 0 : total === 0 ? 0 : segments[i - 1].value / total;
     acc.push((acc[i - 1] ?? 0) + prevFraction);
@@ -90,8 +90,8 @@ export function HealthDonut({
         </div>
       </div>
 
-      {/* Legenda nese stejná čísla jako graf — je zároveň textovou
-          alternativou pro čtečky, proto graf sám má role="presentation". */}
+      {/* The legend carries the same numbers as the chart — it doubles as the
+          text alternative for screen readers, hence the chart itself has role="presentation". */}
       <ul className="flex min-w-40 flex-col gap-2 text-sm">
         {arcs.map((arc) => (
           <li key={arc.label} className="flex items-center gap-2">

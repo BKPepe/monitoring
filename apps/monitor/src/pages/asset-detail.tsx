@@ -47,7 +47,7 @@ interface HealthMetric {
   label: string;
   value: string;
   tone?: 'latency' | 'cpu' | 'memory' | 'disk' | 'temperature';
-  /** Mini průběh za zvolené období (z už načtených dat grafů - žádný extra fetch). */
+  /** Mini trend for the chosen period (from already-loaded chart data - no extra fetch). */
   series?: number[];
   delta?: { pct: number; direction: 'up' | 'down'; good: boolean | null };
 }
@@ -62,21 +62,21 @@ interface AssetDetail {
   health: HealthMetric[];
   summary: string;
   summaryChips: { label: string; variant: 'up' | 'warning' | 'info' | 'down' }[];
-  /** `hint` se zobrazí pod hodnotou - odpověď na "co se změnilo a proč". */
+  /** `hint` shows under the value - the answer to "what changed and why". */
   info: { label: string; value: string; hint?: string }[];
   smartStatus?: string | null;
   cpanelStats?: Record<string, { formatted?: string }> | null;
   cpanelStatsError?: { error?: string; hint?: string | null; since?: string } | null;
   collectionIssues: { type: string; message: string; hint?: string | null; since: string | null }[];
-  /** Syrová details z posledního reportu - Network tab z nich čte OpenWrt telemetrii. */
+  /** Raw details from the last report - the Network tab reads OpenWrt telemetry from them. */
   rawDetails: Record<string, any>;
-  /** Remote Actions - jen pro admin session (API ta pole jinak neposílá). */
+  /** Remote Actions - admin session only (the API omits the fields otherwise). */
   remoteActionsEnabled: boolean;
   allowedActions: string[];
   monitoredProcesses: string | null;
   sslCert?: { days_remaining?: number | null; issuer?: string | null; valid_to?: string | null } | null;
   events: TimelineEvent[];
-  /** Sloučené top-CPU + top-RAM procesy z agenta; null = agent tu dimenzi u procesu nehlásí. */
+  /** Merged top-CPU + top-RAM processes from the agent; null = the agent does not report that dimension. */
   processes: { name: string; cpu: number | null; memory: number | null }[];
   related: { name: string; kind: string; status: MonitorStatus; detail: string }[];
 }
@@ -135,8 +135,8 @@ export function AssetDetailPage() {
     };
   }, [idNum, t]);
 
-  // Efekty níže se váží na ID assetu, ne na objekt - refresh objektu se
-  // stejným ID nemá znovu stahovat události ani insights.
+  // The effects below key on the asset ID, not the object - refreshing an object
+  // with the same ID must not refetch events or insights.
   const loadedAssetId = asset?.id;
 
   /**
@@ -253,7 +253,7 @@ export function AssetDetailPage() {
   }
 
   const upperKind = (asset.kind || '').toUpperCase();
-  // Router má vlastní podobu sekce Služby - TLS certifikát u něj nedává smysl.
+  // The router has its own Services section - a TLS certificate makes no sense for it.
   const isRouter = upperKind === 'ROUTER' || upperKind === 'OPENWRT';
   const isDiscord = upperKind === 'DISCORD';
   const isMinecraft = upperKind === 'MINECRAFT';
@@ -286,8 +286,8 @@ export function AssetDetailPage() {
       <Hero asset={asset} />
 
       <Tabs defaultValue="overview" className="space-y-6">
-        {/* Sticky pod headerem (h-16): u dlouhého detailu jsou záložky a
-            přepínač rozsahu pořád po ruce, bez scrollování zpět nahoru. */}
+        {/* Sticky under the header (h-16): on a long detail the tabs and
+            the range switcher stay at hand without scrolling back up. */}
         <div className="bg-background/95 sticky top-16 z-20 -mx-1 flex flex-wrap items-center justify-between gap-4 border-b border-border px-1 pb-3 pt-1 backdrop-blur-sm">
           <TabsList className="bg-secondary/40 p-1">
             <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled & Výkon')}</TabsTrigger>
@@ -400,14 +400,14 @@ export function AssetDetailPage() {
               )
             ) : (
               <>
-                {/* Mobil: proces na řádek s hodnotami pod názvem. */}
+                {/* Mobile: one process per row, values under the name. */}
                 <div className="flex flex-col gap-1.5 md:hidden">
                   {asset.processes.map((proc) => (
                     <div key={proc.name} className="rounded-lg border border-border px-3 py-2">
                       <p className="truncate font-mono text-xs font-semibold">{proc.name}</p>
                       <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono text-[11px]">
                         <span>CPU {formatPercent(proc.cpu, 1)}</span>
-                        {/* Nezměřená paměť = pomlčka, ne holé "MB". */}
+                        {/* Unmeasured memory = a dash, not a bare "MB". */}
                         <span>RAM {proc.memory == null ? '—' : `${proc.memory} MB`}</span>
                       </div>
                     </div>
@@ -470,22 +470,22 @@ export function AssetDetailPage() {
               </div>
             </div>
 
-            {/* Router žádný web necertifikuje - karta s TLS certifikátem tu
-                jen zabírala místo. Místo toho se ukazuje, co router má. */}
+            {/* A router certifies no website - the TLS certificate card
+                only took space. What the router does have is shown instead. */}
             {isRouter && <RouterServices d={asset.rawDetails ?? {}} />}
             {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
             {isMinecraft && <MinecraftCard d={asset.rawDetails ?? {}} />}
             {isWeb && <CheckPipeline monitorId={asset.id} />}
             {isTeamspeak && <TeamspeakCard monitorId={asset.id} />}
             {isHeartbeat && <HeartbeatCard monitorId={asset.id} />}
-            {/* Úložiště se vykreslí samo jen tam, kde agent nějaké oddíly
-                poslal - u webu nebo Discordu se nezobrazí nic. */}
+            {/* Storage renders itself only where the agent reports partitions
+                sent them - a website or Discord shows nothing. */}
             <StorageCard d={asset.rawDetails ?? {}} />
-            {/* Rychlost linky se ukáže jen tam, kde nějaká měření dorazila. */}
+            {/* Link speed shows only where measurements arrived. */}
             <SpeedtestCard monitorId={asset.id} />
 
-            {/* Heartbeat nemá cíl, na který by se dalo připojit - certifikát
-                ani "protokol nepoužívá TLS" u něj nedávají smysl. */}
+            {/* A heartbeat has no target to connect to - a certificate
+                nor "the protocol uses no TLS" makes sense for it. */}
             {!isRouter &&
               !isDiscord &&
               !isMinecraft &&
@@ -559,9 +559,9 @@ export function AssetDetailPage() {
                         </>
                       ) : (
                         <>
-                          {/* Bez dat certifikátu se nic netvrdí - dřív tu svítilo
-                            "TLS 1.3 ověřeno" i u monitoru, kde žádný certifikát
-                            neexistuje (hlášeno u OpenWrt routeru). */}
+                          {/* Without certificate data nothing is claimed - this used to
+                            "TLS 1.3 verified" even for a monitor with no
+                            certificate at all (reported on the OpenWrt router). */}
                           <p className="text-xs font-medium text-muted-foreground">
                             {t('asset.ssl_unknown', 'Certifikát zatím nebyl načten')}
                           </p>
@@ -593,8 +593,8 @@ export function AssetDetailPage() {
                         {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
                       </p>
                       {(() => {
-                        // "N/A (smartctl chybí)" není zdravý stav - je to chybějící
-                        // nástroj a admin má vědět, co doinstalovat.
+                        // "N/A (smartctl missing)" is not a healthy state - it is a missing
+                        // tool and the admin should know what to install.
                         const raw = asset.smartStatus ?? null;
                         const missingTool = !raw || /n\/a|chyb|not available|unavailable|missing/i.test(raw);
                         return (
@@ -778,15 +778,15 @@ function OverviewTab({
   range: TimeRange;
   events: TimelineEvent[];
   serverInsights: ServerInsights | null;
-  /** Co a proč se stalo při poslední změně stavu; undefined = zatím nevíme. */
+  /** What happened at the last status change and why; undefined = unknown yet. */
   statusChangeHint?: string;
   /** The URL segment - carried further down the path so that navigating to a
       metric and back does not land on a different ID than the user is on. */
   assetId: string | undefined;
 }) {
   const { t } = useLanguage();
-  // Jeden fetch grafů pro celý tab: stejná data živí velké grafy dole
-  // i sparkliny v KPI dlaždicích nahoře (mockup: hodnota + delta + průběh).
+  // One chart fetch for the whole tab: the same data feeds the big charts below
+  // and the KPI-tile sparklines above (mockup: value + delta + trend).
   const charts = useAssetCharts(asset.id, range);
 
   const healthWithTrends = React.useMemo<HealthMetric[]>(() => {
@@ -841,10 +841,10 @@ function OverviewTab({
       </div>
 
       {/*
-        Hustota: pro dvě věty tahle karta zabírala půl obrazovky.
-        Podtitulek "Živý stav měření z databáze" nic nesděloval - že jde
-        o živá data je vidět z čísel - a mezery byly stavěné na obsah, který
-        tu je jen občas.
+        Density: this card took half a screen for two sentences.
+        The "Live measurement state from the database" subtitle conveyed nothing -
+        that the data is live shows in the numbers - and the spacing was built
+        for content that is only here occasionally.
       */}
       <Card className="xl:col-span-8">
         <CardHeader className="pb-2">
@@ -916,8 +916,8 @@ function OverviewTab({
                     <span className="block truncate" title={row.hint ?? undefined}>
                       {row.value}
                     </span>
-                    {/* Bez tohohle řádek říkal jen KDY se stav změnil. Co se
-                      změnilo a proč se muselo hledat v časové ose níž. */}
+                    {/* Without this the row only said WHEN the status changed. What
+                      changed and why had to be dug out of the timeline below. */}
                     {row.hint && (
                       <span className="text-muted-foreground block text-[11px] font-normal">{row.hint}</span>
                     )}
@@ -961,7 +961,7 @@ function OverviewTab({
                   <p className="truncate text-xs font-medium">{e.title}</p>
                   <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-[11px]">
                     <span className="font-mono">{e.at}</span>
-                    {/* Místo měření nemusí být zaznamenané - pak se nic nepíše. */}
+                    {/* The vantage point may be unrecorded - then nothing is printed. */}
                     {e.location && <span className="truncate">· {e.location}</span>}
                   </div>
                 </div>
@@ -1028,9 +1028,9 @@ function OverviewTab({
           <CardTitle>{t('asset.detected_services', 'Detekované Služby / Porty')}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-1 px-2">
-          {/* Kromě navázaných monitorů ukazujeme i to, co agent reálně hlásí:
-              naslouchající porty a objevené (zatím nesledované) služby -
-              dosud tahle data ležela v reportu bez využití. */}
+          {/* Besides the linked monitors we also show what the agent really reports:
+              listening ports and discovered (not-yet-monitored) services -
+              this data used to sit unused in the report. */}
           {asset.related.length === 0 &&
             (() => {
               const ports: number[] = Array.isArray(asset.rawDetails?.ports) ? asset.rawDetails.ports : [];
@@ -1116,7 +1116,7 @@ function OverviewTab({
   );
 }
 
-/** Má monitor síťovou telemetrii, kvůli které stojí za to ukázat Síť tab? */
+/** Does the monitor carry network telemetry worth a Network tab? */
 function hasNetworkData(d: Record<string, any>): boolean {
   return (
     d.wan_proto != null ||
@@ -1129,18 +1129,18 @@ function hasNetworkData(d: Record<string, any>): boolean {
 }
 
 /**
- * Síťová telemetrie z OpenWrt/VPS agenta - agent tahle data sbírá dlouho,
- * ale React app je nikdy nezobrazila (viděla je jen stará status stránka).
- * Každá sekce se vykreslí jen když má skutečná data; citlivé položky (WAN
- * adresy, SSID, WG endpointy...) API posílá pouze admin session.
+ * Network telemetry from the OpenWrt/VPS agent - the agent has long collected
+ * this, but the React app never displayed it (only the old status page did).
+ * Each section renders only with real data; sensitive items (WAN addresses,
+ * SSIDs, WG endpoints...) are sent by the API to admin sessions only.
  */
 /**
- * Řádek a sekce síťového detailu.
+ * A row and a section of the network detail.
  *
- * Na úrovni modulu schválně: komponenta definovaná uvnitř jiné komponenty
- * vzniká při každém renderu znovu, React ji považuje za jiný typ a celý
- * podstrom odmountuje. Tady by to jen zbytečně překreslovalo, ale je to
- * tatáž příčina, kvůli které v nastavení mizel fokus z inputu.
+ * At module level on purpose: a component defined inside another component is
+ * recreated on every render, React treats it as a different type and unmounts
+ * the whole subtree. Here it would merely re-render needlessly, but it is the
+ * same root cause that made inputs lose focus in the settings.
  */
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   if (value == null || value === '') return null;
@@ -1164,9 +1164,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function NetworkTab({ d }: { d: Record<string, any> }) {
   const { t } = useLanguage();
 
-  // Popisky „před x minutami" potřebují hodiny, což je z definice nečistý
-  // vstup. Čte se proto jednou při mountu do stavu - v rámci jednoho
-  // renderu jsou tak všechna pole počítaná vůči témuž okamžiku.
+  // "x minutes ago" labels need the clock, which is impure by definition.
+  // It is read once on mount into state - within a single render all the
+  // fields are therefore computed against the same moment.
   const [nowSecs] = React.useState(() => Math.floor(Date.now() / 1000));
 
   const fmtAgo = (ts: unknown) => {
@@ -1346,9 +1346,9 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
           )}
           <Row label={t('net.sqm_dropped', 'SQM zahozeno')} value={d.sqm_dropped} />
           <Row label="SQM ECN" value={d.sqm_ecn != null ? (d.sqm_ecn ? 'ECN' : 'noECN') : null} />
-          {/* Spojení se pozná i bez ModemManageru (ubus interface), síla
-              signálu ne - proto se hlásí zvlášť a chybějící metriky
-              zůstávají prázdné místo výmluvy. */}
+          {/* The connection is detectable even without ModemManager (ubus
+              the signal does not - hence reported separately, and missing metrics
+              stay empty instead of an excuse. */}
           <Row
             label={t('net.lte_state', 'LTE spojení')}
             value={
@@ -1449,10 +1449,10 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
 }
 
 /**
- * "Actions" dropdown z mockupu - reálné Remote Actions. Server akci podepíše
- * HMAC klíčem monitoru a agent ji provede při příštím reportu (do ~1 min);
- * výsledek se pak objeví v systémové časové ose. restart_service se ptá na
- * název služby (návrh z hlídaných procesů monitoru).
+ * The "Actions" dropdown from the mockup - real Remote Actions. The server
+ * signs the action with the monitor's HMAC key and the agent runs it on its
+ * next report (within ~1 min); the result then appears in the system timeline.
+ * restart_service asks for the service name (suggested from the monitor's watched processes).
  */
 function ActionsMenu({ asset }: { asset: AssetDetail }) {
   const { t } = useLanguage();
@@ -1652,9 +1652,9 @@ function PerformanceCharts({
 }) {
   const { t } = useLanguage();
 
-  // Události monitoru jako svislé značky ve VŠECH grafech - výpadek nebo
-  // restart je vidět přímo v místě, kde metrika uskočila. MySQL datetime se
-  // parsuje přes 'T' variantu (Safari čisté 'YYYY-MM-DD HH:MM' neumí).
+  // Monitor events as vertical markers in ALL charts - an outage or restart is
+  // visible right where the metric jumped. MySQL datetimes are parsed via the
+  // 'T' variant (Safari cannot handle a bare 'YYYY-MM-DD HH:MM').
   const chartEvents = React.useMemo(() => {
     return events
       .map((e) => {
@@ -1737,9 +1737,9 @@ function PerformanceCharts({
  * (Safari can't reliably parse that format via new Date()).
  */
 /**
- * Časová osa s filtrem závažnosti a stránkováním - 60 událostí v jednom
- * nekonečném sloupci se nedalo číst (hlášeno uživatelem: obnovení provozu
- * a service discovered pomíchané dohromady).
+ * Timeline with a severity filter and pagination - 60 events in one endless
+ * column were unreadable (reported by the user: recovery and service
+ * discovered mixed together).
  */
 function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
   const { t } = useLanguage();
@@ -1756,8 +1756,8 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
     info: events.filter((e) => e.severity === 'info').length,
   };
   const bySeverity = severity === 'all' ? events : events.filter((e) => e.severity === severity);
-  // Řazení podle času; při neparsovatelném datu se zachová původní pořadí
-  // (server je posílá od nejnovějších), místo aby položka propadla dolů.
+  // Sorted by time; an unparsable date keeps its original position (the
+  // server sends newest first) instead of sinking to the bottom.
   const filtered = React.useMemo(() => {
     const withTime = bySeverity.map((e, i) => ({ e, i, ts: Date.parse(String(e.at).replace(' ', 'T')) }));
     withTime.sort((a, b) => {
@@ -1932,9 +1932,9 @@ function buildDynamicAsset(
     ? `${timeAgo(m.lastStatusChange, t)} (${new Date(m.lastStatusChange).toLocaleString('cs-CZ')})`
     : '—';
 
-  // Agent posílá dva TOP žebříčky (5 podle CPU, 5 podle RAM) - ne kompletní
-  // výpis procesů. Každý žebříček nese jen svou dimenzi; ta druhá zůstává
-  // null a tabulka ukáže pomlčku, ne vymyšlenou nulu.
+  // The agent sends two TOP rankings (5 by CPU, 5 by RAM) - not a complete
+  // process list. Each ranking carries only its own dimension; the other stays
+  // null and the table shows a dash, not an invented zero.
   const parsedProcesses: { name: string; cpu: number | null; memory: number | null }[] = [];
   const numOrNull = (...vals: unknown[]): number | null => {
     for (const v of vals) {
@@ -1963,7 +1963,7 @@ function buildDynamicAsset(
       const name = String(p.name || p.command || 'proc');
       const existing = p ? parsedProcesses.find((e) => e.name === name) : undefined;
       if (existing) {
-        // Proces je v obou žebříčcích - doplníme mu RAM z RAM žebříčku.
+        // The process is in both rankings - fill its RAM from the RAM ranking.
         if (existing.memory == null) existing.memory = numOrNull(p.memory, p.ram_mb);
       } else if (p) {
         parsedProcesses.push({
@@ -1988,16 +1988,16 @@ function buildDynamicAsset(
     id: m.id,
     name: m.name,
     kind: m.type.toUpperCase(),
-    // Mockup: "OpenWrt 23.05.3 · 192.168.1.1 · Prague, CZ" - OS na prvním místě,
-    // pokud ho agent hlásí (u webů je m.os jen echo typu, to nevypisujeme).
+    // Mockup: "OpenWrt 23.05.3 · 192.168.1.1 · Prague, CZ" - the OS first
+    // when the agent reports it (for websites m.os merely echoes the type, skip it).
     subtitle: [m.os && m.os !== 'web' && m.os !== m.type ? m.os : null, m.target, m.category ?? 'Monitory']
       .filter(Boolean)
       .join(' · '),
     status,
     breadcrumb: [m.category ?? 'Monitory'],
-    // KPI řada podle mockupu: Uptime, odezva, CPU, RAM, disk, teplota.
-    // Stav tu není - hero badge ho už ukazuje; Health Score dlaždici
-    // přidává OverviewTab ze server insights.
+    // The KPI row per the mockup: uptime, latency, CPU, RAM, disk, temperature.
+    // No status here - the hero badge already shows it; the Health Score tile
+    // is added by OverviewTab from server insights.
     health: [
       ...(m.uptimeSeconds != null ? [{ key: 'uptime', label: 'Uptime', value: formatUptime(m.uptimeSeconds) }] : []),
       {
@@ -2063,8 +2063,8 @@ function buildDynamicAsset(
         variant: status === 'up' ? 'up' : 'warning',
       },
       { label: `${t('common.type', 'Typ')}: ${m.type.toUpperCase()}`, variant: 'info' },
-      // Roky ukládané, nikdy nezobrazené: server čekající na restart a hlídané
-      // procesy, které neběží - obojí patří na první pohled.
+      // Stored for years, never displayed: a server awaiting restart and watched
+      // processes that are not running - both belong at first sight.
       ...(m.details?.reboot_required
         ? [
             {

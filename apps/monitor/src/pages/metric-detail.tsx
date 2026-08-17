@@ -34,7 +34,7 @@ export function MetricDetailPage() {
   const metric = String(metricKey ?? '');
 
   const [range, setRange] = React.useState<MetricRange>('24h');
-  // Okamžik, na který uživatel klepl v grafu - odpověď na "čím to bylo".
+  // The moment the user clicked in the chart - the answer to "what caused it".
   const [pickedAt, setPickedAt] = React.useState<number | null>(null);
   const [detail, setDetail] = React.useState<MetricDetail | null>(null);
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);

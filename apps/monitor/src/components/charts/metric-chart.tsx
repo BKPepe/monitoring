@@ -6,10 +6,10 @@ import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
 import type { ChartTheme } from './use-chart-theme';
 
 /**
- * Graf jedné metriky v čase (jedna nebo víc sérií ve společných osách).
+ * Chart of one metric over time (one or more series sharing axes).
  *
- * Barvy sérií jdou z tokenů `--chart-*`, takže CPU je zelené i tady i na
- * sparkline v health kartě. To je záměr: uživatel má poznat metriku podle
+ * Series colours come from the `--chart-*` tokens, so CPU is green both here
+ * and in the health-card sparkline. That is deliberate: the user should
  * barvy, ne podle legendy.
  */
 export function MetricChart({
@@ -21,14 +21,14 @@ export function MetricChart({
   data: ChartData;
   height?: number;
   group?: string;
-  /** Klik do grafu vrátí čas v ms - viz Chart.onPickTime. */
+  /** A click into the chart returns the time in ms - see Chart.onPickTime. */
   onPickTime?: (timestampMs: number) => void;
 }) {
   const theme = useChartTheme();
   const reducedMotion = usePrefersReducedMotion();
 
-  // CSV export: přesně ty body, které graf kreslí (včetně null jako
-  // prázdné buňky - díra v měření zůstává dírou i v exportu).
+  // CSV export: exactly the points the chart draws (including null as an
+  // empty cell - a gap in measurement stays a gap in the export).
   const exportCsv = React.useCallback(() => {
     const rows: string[] = ['time,' + data.series.map((s) => `"${s.label} (${s.unit})"`).join(',')];
     const times = data.series[0]?.points.map((p) => p.t) ?? [];
@@ -55,8 +55,8 @@ export function MetricChart({
       animation: !reducedMotion,
       animationDuration: 300,
       grid: { top: 28, right: 12, bottom: 24, left: 44 },
-      // Zoom: tažením v grafu (inside) i výběrem oblasti (toolbox lupa).
-      // Grafy ve skupině se zoomují společně (echarts.connect).
+      // Zoom: dragging inside the chart (inside) and area selection (toolbox lens).
+      // Charts in a group zoom together (echarts.connect).
       dataZoom: [{ type: 'inside', throttle: 50, zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false }],
       toolbox: {
         show: true,
@@ -72,8 +72,8 @@ export function MetricChart({
           myCsv: {
             show: true,
             title: 'Export CSV',
-            // Ikona dokumentu se šipkou (jednoduchá SVG cesta, ať se nemusí
-            // tahat ikonový balík do canvasu).
+            // A document-with-arrow icon (a simple SVG path, so no icon
+            // package needs dragging into the canvas).
             icon: 'path://M4 2h10l6 6v14H4V2z M14 2v6h6 M9 13h6 M12 10v6',
             onclick: exportCsv,
           },
@@ -136,8 +136,8 @@ export function MetricChart({
 
   return (
     <Chart
-      // Přepnutí motivu vyžaduje nové barvy v canvasu — remount je
-      // nejspolehlivější způsob, jak to udělat bez zbytků starého tématu.
+      // A theme switch needs new canvas colours — a remount is the most
+      // reliable way without leftovers of the old theme.
       key={theme.key}
       option={option}
       height={height}
@@ -180,15 +180,15 @@ function buildSeries(
       : undefined,
     name: s.label,
     type: 'line' as const,
-    // [timestamp, hodnota] — null zůstává null, ať se díra v datech
-    // vykreslí jako přerušení, ne jako pád na nulu.
+    // [timestamp, value] — null stays null, so a data gap draws as a
+    // break, not a drop to zero.
     data: s.points.map((p) => [p.t, p.v]),
     showSymbol: false,
     smooth: 0.25,
-    // Predikce se kreslí přerušovaně — nesmí být k nerozeznání od měření.
+    // Predictions draw dashed — they must not be mistakable for measurements.
     lineStyle: { width: 1.6, color, type: s.predicted ? ('dashed' as const) : ('solid' as const) },
     itemStyle: { color },
-    // Plocha jen u samostatné série; u dvou by se překrývaly a nešly číst.
+    // Area fill only for a single series; two would overlap and become unreadable.
     areaStyle:
       seriesCount === 1 && !s.predicted
         ? {
@@ -199,8 +199,8 @@ function buildSeries(
           }
         : undefined,
     connectNulls: false,
-    // Události (výpadek, restart, změna konfigurace) jako svislé čáry.
-    // silent: false - najetí na čáru ukáže, CO se v tu chvíli stalo.
+    // Events (outage, restart, config change) as vertical lines.
+    // silent: false - hovering the line shows WHAT happened at that moment.
     markLine: events?.length
       ? {
           symbol: 'none',
@@ -220,7 +220,7 @@ function buildSeries(
   };
 }
 
-/** Přidá alfa kanál k hex barvě z tokenu. */
+/** Adds an alpha channel to a hex colour from a token. */
 function withAlpha(color: string, alpha: number): string {
   if (!color.startsWith('#')) return color;
   const hex =
@@ -238,11 +238,11 @@ function withAlpha(color: string, alpha: number): string {
 }
 
 /**
- * Textové shrnutí pro čtečky.
+ * Text summary for screen readers.
  *
- * Canvas je pro asistivní technologie prázdná plocha — bez tohohle popisu
- * by graf pro nevidomého uživatele neexistoval. Min/max/průměr je to
- * nejmenší, co dává smysl sdělit.
+ * A canvas is a blank area for assistive tech — without this description the
+ * chart would not exist for a blind user. Min/max/avg is the least worth saying.
+
  */
 function describe(data: ChartData): string {
   const parts = data.series.map((s) => {

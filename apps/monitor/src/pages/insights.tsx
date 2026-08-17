@@ -47,8 +47,8 @@ export function InsightsPage() {
     );
   });
 
-  // Do souboje o "nejvyšší" jdou jen stroje, které tu metriku opravdu
-  // hlásí. Dřív se null převáděl na nulu a tiše soutěžil s naměřenými daty.
+  // Only machines that really report the metric enter the "highest" contest.
+  // null used to be cast to zero and silently competed with measured data.
   const withDisk = serverAgents.filter((m) => typeof m.hdd === 'number');
   const highDiskMonitor =
     withDisk.length > 0
@@ -273,7 +273,7 @@ export function InsightsPage() {
                 </p>
               ) : (
                 serverAgents.map((m) => {
-                  // null = nezměřeno, takže se nehlásí ani jako v pořádku, ani jako problém.
+                  // null = unmeasured, so it is reported neither as fine nor as a problem.
                   const isHighDisk = typeof m.hdd === 'number' && m.hdd >= 70;
                   const isHighCpu = typeof m.cpu === 'number' && m.cpu >= 60;
 
@@ -306,7 +306,7 @@ export function InsightsPage() {
                                     'insights.rec_optimal',
                                     {
                                       extra: (() => {
-                                        // Jen skutečně naměřené hodnoty - žádná "Odezva 0 ms" pro monitor bez měření.
+                                        // Only actually measured values - no "Latency 0 ms" for an unmeasured monitor.
                                         const parts: string[] = [];
                                         if (m.responseMs != null)
                                           parts.push(`${t('insights.part_latency', 'Odezva')} ${m.responseMs} ms`);

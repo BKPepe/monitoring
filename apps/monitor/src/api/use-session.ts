@@ -2,9 +2,9 @@ import * as React from 'react';
 import { appApi, type SessionInfo } from './app-api';
 
 /**
- * `useSession()` se volá nezávisle z AppShell i z každé stránky (websites,
- * infrastructure, users, ...) - bez sdílení by to byl samostatný
- * `action=session` požadavek za každou z nich na jednom načtení stránky.
+ * `useSession()` is called independently from AppShell and every page
+ * (websites, infrastructure, users, ...) - without sharing, each would fire
+ * its own `action=session` request on a single page load.
  */
 let sessionCache: Promise<SessionInfo> | null = null;
 

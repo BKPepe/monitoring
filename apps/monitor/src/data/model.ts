@@ -1,9 +1,9 @@
 /**
- * Sdílené UI typy a statický vyhledávací index.
+ * Shared UI types and the static search index.
  *
- * Soubor se dřív jmenoval mock.ts a nesl vývojová data - ta jsou pryč
- * (aplikace jede výhradně na živém API), zůstaly jen typy, které sdílí
- * víc komponent, a seznam stránek pro vyhledávání.
+ * The file used to be called mock.ts and carried development data - that is gone
+ * (the app runs exclusively on the live API); what remains are the types shared
+ * by several components, and the page list for search.
  */
 
 export type MonitorStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
@@ -23,9 +23,9 @@ export interface HealthMetric {
 export interface DayUptime {
   date: string;
   status: DayStatus;
-  /** null = pro ten den neproběhla žádná kontrola (žádné vymyšlené 0 %). */
+  /** null = no check ran that day (no invented 0 %). */
   uptimePct: number | null;
-  /** Skutečný popis dne z monitor_logs (počet selhaných kontrol, doba výpadku). */
+  /** The day's real description from monitor_logs (failed check count, outage duration). */
   detail?: string;
 }
 
@@ -44,6 +44,6 @@ export interface TimelineEvent {
   resolution?: 'Resolved' | 'Info' | 'Open';
   location?: string;
   method?: string;
-  /** Naměřená odezva té konkrétní kontroly; null = nezměřeno. */
+  /** The measured latency of that particular check; null = unmeasured. */
   responseMs?: number | null;
 }

@@ -52,9 +52,9 @@ export function DashboardPage() {
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<StatusFilter>('all');
   const { data: live } = usePublicStatus();
-  // Uživatelské rozložení dashboardu (viditelnost + pořadí panelů). Prázdné
-  // pole = uchovává se výchozí rozložení, aby se nic neztratilo, dokud si
-  // uživatel nic nenastaví.
+  // The user's dashboard layout (panel visibility + order). An empty array
+  // = the default layout is kept, so nothing is lost until the user
+  // configures something.
   const [layoutOpen, setLayoutOpen] = React.useState(false);
   const [tiles, setTiles] = React.useState<DashboardTile[]>([]);
   React.useEffect(() => {
@@ -161,8 +161,8 @@ export function DashboardPage() {
     return alertsList;
   }, [monitors, t]);
 
-  // Mini průběhy odezvy pro tabulku (mockup: trend vedle hodnoty). Jeden
-  // lehký request na monitor po načtení seznamu; bez dat sparkline prostě není.
+  // Mini latency trends for the table (mockup: a trend next to the value). One
+  // light request per monitor after the list loads; without data there is simply no sparkline.
   const [latencySeries, setLatencySeries] = React.useState<Record<number, number[]>>({});
   React.useEffect(() => {
     if (monitors.length === 0) return;
@@ -220,9 +220,9 @@ export function DashboardPage() {
     };
   }, [t, lang]);
 
-  // "System Insights" řada podle mockupu - server agreguje forecast/anomálie/
-  // síťové postřehy přes všechny monitory. Prázdno = řada se nevykreslí,
-  // žádné dekorativní "vše OK" karty.
+  // The "System Insights" row per the mockup - the server aggregates forecast/
+  // anomalies/network insights across all monitors. Empty = the row does not
+  // render, no decorative "all OK" cards.
   const [systemInsights, setSystemInsights] = React.useState<
     { monitorId: number; monitorName: string; kind: string; text: string; detail: string }[]
   >([]);
@@ -261,7 +261,7 @@ export function DashboardPage() {
     });
   }, [monitors, dailyUptimeRows]);
 
-  // Sekce "Vyžaduje pozornost" - logika i prahy v lib/attention.ts, ať jde
+  // The "Needs attention" section - logic and thresholds in lib/attention.ts, so it
   // otestovat bez renderu (viz attention.test.ts).
   const needsAttention = React.useMemo(
     () =>
@@ -278,10 +278,10 @@ export function DashboardPage() {
     [monitors, t]
   );
 
-  // --- Sekce dashboardu jako pojmenované bloky -------------------------
-  // Uložené rozložení určuje jejich pořadí a viditelnost; bez uloženého
-  // rozložení se vykreslí výchozí mockup (monitory vlevo, alerty+zdraví
-  // v pravém sloupci).
+  // --- Dashboard sections as named blocks ------------------------------
+  // The stored layout drives their order and visibility; without a stored
+  // layout the default mockup renders (monitors left, alerts+health in the
+  // right column).
   const attentionSection = (
     <Card key="attention">
       <CardHeader>
@@ -534,8 +534,8 @@ export function DashboardPage() {
     </Card>
   );
 
-  // Agregované dlaždice metrik (katalog: metric_cpu/ram/hdd) - nejvyšší
-  // hodnota napříč agenty; bez jediného měření se dlaždice nevykreslí.
+  // Aggregated metric tiles (catalogue: metric_cpu/ram/hdd) - the highest
+  // value across agents; without a single measurement the tile does not render.
   const metricTile = (key: string) => {
     // Klic je bud agregovany ("metric_cpu" = nejvyssi hodnota napric stroji),
     // nebo vazany na konkretni monitor ("metric_cpu_12").
@@ -564,8 +564,8 @@ export function DashboardPage() {
     );
   };
 
-  // Vykreslení podle uloženého pořadí; sousedící alerty+zdraví se spárují
-  // do dvou sloupců, sousedící metriky do jedné řady dlaždic.
+  // Rendered in the stored order; adjacent alerts+health pair into two
+  // columns, adjacent metrics into one tile row.
   // Vykresleni podle ulozeneho rozlozeni: dvousloupcovy grid, kde sirka
   // dlazdice z editoru urcuje, jestli zabere jeden sloupec ("bezna") nebo
   // oba ("siroka"). Drive se sirka ukladala, ale nikdo ji necetl - prepinac
@@ -700,7 +700,7 @@ const typeIcon: Record<string, LucideIcon> = {
   agent_service: Radar,
 };
 
-// Barevné ladění ikon podle typu (mockup: každý druh služby má svůj odstín).
+// Icon colour tuning by type (mockup: each service kind has its own shade).
 const typeTint: Record<string, string> = {
   web: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
   http: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
@@ -735,8 +735,8 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
 
   return (
     <>
-      {/* Mobil: karty místo tabulky - 8 sloupců se na 390px displeji nedá
-          číst ani horizontálním scrollem. */}
+      {/* Mobile: cards instead of the table - 8 columns cannot be used on a 390px
+          be read even with a horizontal scroll. */}
       <div className="flex flex-col gap-2 px-4 pb-4 md:hidden">
         {nestUnderAgents(rows).map(({ row: monitor, child }) => {
           const usage = processUsage(monitor, rows);
@@ -833,7 +833,7 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
                   </div>
                 </TableCell>
                 <TableCell>
-                  {/* Mockup: stav jako barevný text s tečkou, ne pill badge. */}
+                  {/* Mockup: status as coloured text with a dot, not a pill badge. */}
                   <span className="flex items-center gap-1.5 text-xs font-semibold">
                     <StatusDot variant={monitor.status === 'maintenance' ? 'info' : monitor.status} />
                     <span
@@ -860,8 +860,8 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
                   </div>
                 </TableCell>
                 {(() => {
-                  // Agent-side kontrola nemá vlastní CPU/RAM stroje - ukážeme
-                  // spotřebu JEJÍHO procesu z žebříčků agenta (uživatelský podnět).
+                  // An agent-side check has no machine CPU/RAM of its own - show
+                  // ITS process's consumption from the agent rankings (user request).
                   const usage = processUsage(monitor, rows);
                   const isProc = (monitor.type || '').toLowerCase() === 'agent_service';
                   return (

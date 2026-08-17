@@ -26,7 +26,7 @@ export function IncidentsPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const { data: publicData } = usePublicStatus();
-  // Rozbalený incident (timeline + akce) a rozepsané texty poznámek.
+  // The expanded incident (timeline + actions) and draft note texts.
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [noteText, setNoteText] = useState('');
   const [postmortemText, setPostmortemText] = useState('');
@@ -439,7 +439,7 @@ export function IncidentsPage() {
 
                       {expanded && (
                         <div className="mt-3 space-y-3 border-t border-border pt-3">
-                          {/* Timeline všech kroků - automatických i ručních. */}
+                          {/* Timeline of all steps - automatic and manual alike. */}
                           <ol className="space-y-1.5">
                             {(inc.updates ?? []).map((u: any, i: number) => (
                               <li key={i} className="flex items-start gap-2 text-xs">
@@ -503,7 +503,7 @@ export function IncidentsPage() {
                                 </div>
                               )}
 
-                              {/* Postmortem dává smysl hlavně po vyřešení, ale psát ho jde kdykoli. */}
+                              {/* A postmortem makes sense mostly after resolution, but can be written anytime. */}
                               <div className="flex flex-col gap-1.5">
                                 <textarea
                                   value={postmortemText}

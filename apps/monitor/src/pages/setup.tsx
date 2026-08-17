@@ -172,7 +172,7 @@ export function SetupPage() {
           border: '1px solid #334155',
         }}
       >
-        {/* Přihlašovací karta je vždy tmavá - bílá textová varianta loga. */}
+        {/* The login card is always dark - the white text variant of the logo. */}
         <img
           src="/status/assets/bk-logo-white.svg"
           alt="Blood Kings Monitoring"

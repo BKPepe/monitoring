@@ -1,11 +1,11 @@
 import { STATUS_API } from './http-source';
 
 /**
- * Klient autentizovaného API (`apps/status/app_api.php`).
+ * Client of the authenticated API (`apps/status/app_api.php`).
  *
- * Oddělené od `http-source.ts` schválně: tohle jsou data za přihlášením,
- * zatímco `api.php` je veřejné. Míchat je dohromady by svádělo k tomu
- * vystavit chráněný obsah přes veřejný endpoint.
+ * Deliberately separate from `http-source.ts`: this is data behind a login,
+ * while `api.php` is public. Mixing them would invite exposing protected
+ * content through a public endpoint.
  */
 
 export interface SessionInfo {
@@ -36,14 +36,14 @@ export interface ApiMonitor {
   hostname: string | null;
   os: string | null;
   details?: Record<string, any>;
-  /** Výpadky SBĚRU dat (ne služby samotné) - viz bk_get_collection_issues()
-   *  v PHP. Pravidlo projektu: frontend je MUSÍ viditelně zobrazit; tiché
-   *  zahazování/zamlčení chybějících dat je zakázané. Server je posílá JEN
-   *  administrátorovi - je to provozní diagnostika, ne veřejný stav služeb. */
+  /** Outages of data COLLECTION (not the service itself) - see bk_get_collection_issues()
+   *  in PHP. Project rule: the frontend MUST show them visibly; silently
+   *  dropping/hiding missing data is forbidden. The server sends them ONLY
+   *  to the administrator - operational diagnostics, not public service status. */
   collectionIssues?: { type: string; message: string; hint?: string | null; since: string | null }[];
-  // Konfigurační pole - přítomná jen v odpovědi pro přihlášeného administrátora
-  // (viz api.php action=monitors, $is_admin blok). Hesla se nikdy neposílají zpátky,
-  // jen příznak, že jsou nastavená.
+  // Configuration fields - present only in the logged-in administrator's response
+  // (see api.php action=monitors, the $is_admin block). Passwords never travel back,
+  // only a flag that they are set.
   timeout?: number;
   emailNotifications?: boolean;
   smsNotifications?: boolean;
@@ -67,11 +67,11 @@ export interface ApiMonitor {
   rconPort?: number | null;
   rconPasswordSet?: boolean;
   enabledMetrics?: string[];
-  /** Novější verze agenta dostupná na serveru (admin-only; chybí = aktuální/neznámé). */
+  /** A newer agent version available on the server (admin-only; absent = current/unknown). */
   agentUpdateAvailable?: string;
-  /** Verze skriptu agenta nasazená na serveru (admin-only). */
+  /** The agent script version deployed on the server (admin-only). */
   agentLatestVersion?: string;
-  /** Cíl monitoru není z hostingu dosažitelný (privátní síť) - admin-only. */
+  /** The monitor's target is unreachable from the hosting (private network) - admin-only. */
   unreachableTarget?: boolean;
   remoteActionsEnabled?: boolean;
   allowedActions?: string[];
@@ -110,10 +110,10 @@ export class ApiError extends Error {
   }
 }
 
-/** CSRF token se drží v paměti — do localStorage nepatří. */
+/** The CSRF token lives in memory — it does not belong in localStorage. */
 let csrfToken: string | null = null;
 
-/** Pro fetch wrapper v main.tsx — server od 08/2026 CSRF u zápisů vynucuje. */
+/** For the fetch wrapper in main.tsx — since 08/2026 the server enforces CSRF on writes. */
 export function getCsrfToken(): string | null {
   return csrfToken;
 }
@@ -136,7 +136,7 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    // Fallback: zkusi starý PHP URL if Go API selhal
+    // Fallback: try the old PHP URL if the Go API failed
     if (url.startsWith('/api/v1/')) {
       const fallbackUrl = `${STATUS_API}/app_api.php?action=${action}`;
       const fallbackRes = await fetch(fallbackUrl, { credentials: 'include', ...init });
@@ -155,7 +155,7 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
 
 function mutate<T>(action: string, body: unknown): Promise<T> {
   if (!csrfToken) {
-    // Bez tokenu by server vrátil 403 — lepší je selhat srozumitelně tady.
+    // Without a token the server would return 403 — better to fail intelligibly here.
     throw new ApiError('Chybí CSRF token — načtěte stránku znovu.', 403);
   }
 

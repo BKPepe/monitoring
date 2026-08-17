@@ -3,9 +3,9 @@ import { computeSeriesDelta, goodDirectionFor } from './series-delta';
 import type { MetricSeries } from '@/api/types';
 
 /**
- * Trend metriky: průměr poslední čtvrtiny vs první čtvrtiny bodů.
- * Pravidla poctivosti: málo dat → null, růst z ~nuly → null (žádné
- * „+9000 %"), nulová změna → null.
+ * Metric trend: the average of the last quarter vs. the first quarter of points.
+ * Honesty rules: too little data → null, growth from ~zero → null (no
+ * "+9000 %"), zero change → null.
  */
 
 const series = (values: (number | null)[]): MetricSeries =>

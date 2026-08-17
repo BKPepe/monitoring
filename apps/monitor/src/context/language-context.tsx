@@ -48,8 +48,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'common.cpu': { cs: 'Využití CPU', en: 'CPU Usage' },
   'common.ram': { cs: 'Využití RAM', en: 'RAM Usage' },
   'common.hdd': { cs: 'Využití disku', en: 'Disk Usage' },
-  // Auditní protokol uživatelských akcí - dřív byl vidět jen ve staré
-  // administraci, React ukazoval pod stejným názvem výsledky kontrol z cronu.
+  // Audit trail of user actions - it used to be visible only in the old
+  // admin; React showed cron check results under the same name.
   'uaudit.title': { cs: 'Auditní protokol uživatelů', en: 'User audit log' },
   'uaudit.subtitle': {
     cs: 'Kdo se přihlásil, kdo co změnil. Včetně neúspěšných pokusů.',
@@ -81,7 +81,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'uaudit.password_reset': { cs: 'Žádost o obnovu hesla', en: 'Password reset requested' },
   'uaudit.setup_completed': { cs: 'Dokončena instalace', en: 'Setup completed' },
   'uaudit.annotation_created': { cs: 'Poznámka v grafu', en: 'Chart annotation' },
-  // Vysvětlivky u metrik a přehled úložiště.
+  // Metric explainers and the storage overview.
   'help.aria': { cs: 'Co znamená {metric}', en: 'What {metric} means' },
   'help.how': { cs: 'Jak:', en: 'How:' },
   'help.source': { cs: 'Odkud:', en: 'Source:' },
@@ -164,7 +164,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'metric.peak': { cs: 'Špička', en: 'Peak' },
   'metric.min': { cs: 'Minimum', en: 'Minimum' },
   'metric.unit': { cs: 'Jednotka', en: 'Unit' },
-  // "Co v tu chvíli běželo" - odpověď, kterou graf sám nedá.
+  // "What was running at that moment" - the answer the chart alone cannot give.
   'culprits.title': { cs: 'Co v tu chvíli běželo', en: 'What was running then' },
   'culprits.pick': {
     cs: 'Klepnutím do grafu zjistíte, co v tu chvíli běželo.',
@@ -357,7 +357,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Status + expandable detail and usage',
   },
   'sp.detail_status': { cs: 'Jen stav a dostupnost', en: 'Status and availability only' },
-  // Nastavení hesla z pozvánky.
+  // Setting a password from an invitation.
   'setpw.title': { cs: 'Nastavení hesla', en: 'Set your password' },
   'setpw.too_short': { cs: 'Heslo musí mít alespoň 8 znaků.', en: 'The password must be at least 8 characters.' },
   'setpw.mismatch': { cs: 'Hesla se neshodují.', en: 'The passwords do not match.' },
@@ -372,7 +372,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'setpw.confirm': { cs: 'Heslo znovu', en: 'Repeat password' },
   'setpw.saving': { cs: 'Nastavuji…', en: 'Setting…' },
   'setpw.submit': { cs: 'Nastavit heslo', en: 'Set password' },
-  // 2FA pro přihlášeného uživatele.
+  // 2FA for the logged-in user.
   'totp.title': { cs: 'Dvoufázové ověření (2FA)', en: 'Two-factor authentication (2FA)' },
   'totp.on': { cs: 'Zapnuto', en: 'Enabled' },
   'totp.off': { cs: 'Vypnuto', en: 'Disabled' },
@@ -506,7 +506,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'infra.type_discord': { cs: 'Discord Bot', en: 'Discord Bot' },
   'infra.type_discord_desc': { cs: 'Bot WebSocket / Guild API', en: 'Bot WebSocket / Guild API' },
 
-  // Heartbeat: opačný směr než zbytek monitoringu - úloha se hlásí sama.
+  // Heartbeat: the opposite direction from the rest of monitoring - the job reports itself.
   'infra.type_heartbeat': { cs: 'Heartbeat (úloha se hlásí)', en: 'Heartbeat (job reports in)' },
   'infra.type_heartbeat_desc': { cs: 'Zálohy, cronjoby, dávky', en: 'Backups, cron jobs, batches' },
   'infra.heartbeat_help': {
@@ -582,9 +582,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'infra.metric_clients_chart': { cs: 'Graf klientů (24h historie)', en: 'Client chart (24h history)' },
   'infra.metric_voice_quality': { cs: 'Kvalita hlasu & ztráta paketů', en: 'Voice quality & packet loss' },
-  // Konkrétní čísla portů tady být nesmí: byla to výchozí hodnota TeamSpeaku,
-  // ale popisek ji tvrdil o serveru uživatele, který běží na 8200/8214/8219.
-  // Skutečné porty hlásí agent a jsou vidět na detailu služby.
+  // No concrete port numbers here: they were TeamSpeak's defaults, but the
+  // label claimed them about the user's server, which runs on 8200/8214/8219.
+  // The real ports are reported by the agent and visible on the service detail.
   'infra.metric_ports': {
     cs: 'Porty (hlas, ServerQuery, přenos souborů)',
     en: 'Ports (voice, ServerQuery, file transfer)',
@@ -611,8 +611,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'infra.ts3_settings': { cs: 'TeamSpeak 3 ServerQuery & Porty', en: 'TeamSpeak 3 ServerQuery & Ports' },
   'infra.sq_user': { cs: 'ServerQuery Uživatel', en: 'ServerQuery User' },
   'infra.sq_password': { cs: 'ServerQuery Heslo', en: 'ServerQuery Password' },
-  // U pole ve formuláři výchozí hodnota smysl dává - je to nápověda, co vyplnit,
-  // ne tvrzení o běžícím serveru.
+  // In a form field a default makes sense - it hints what to fill in,
+  // it is not a claim about a running server.
   'infra.ft_port': { cs: 'FileTransfer Port (výchozí 30033)', en: 'FileTransfer Port (default 30033)' },
   'infra.rcon_settings': { cs: 'Minecraft RCON Příkazové Rozhraní', en: 'Minecraft RCON Command Interface' },
   'infra.rcon_port': { cs: 'RCON Port (výchozí 25575)', en: 'RCON Port (default 25575)' },
@@ -855,9 +855,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.ts3_clients': { cs: 'Připojení klienti TS3', en: 'Connected TS3 Clients' },
   'asset.ts3_clients_value': { cs: '{online} / {max} uživatelů', en: '{online} / {max} users' },
   'asset.ts3_serverquery': { cs: 'TeamSpeak 3 ServerQuery', en: 'TeamSpeak 3 ServerQuery' },
-  // Bez čísel portů: "9987/8200" byla výchozí hodnota TeamSpeaku a hodnota
-  // jednoho konkrétního serveru, ale řádek to tvrdil o každém. Skutečný port
-  // je na téže stránce v parametrech monitoru.
+  // No port numbers: "9987/8200" was TeamSpeak's default plus one specific
+  // server's value, yet the row claimed it about every one. The real port
+  // is in the monitor parameters on the same page.
   'asset.ts3_serverquery_value': {
     cs: '{online} / {max} uživatelů online',
     en: '{online} / {max} users online',
@@ -2431,8 +2431,8 @@ const LanguageContext = createContext<LanguageContextType>({
 });
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  // localStorage nemusí existovat (testy, private mode se zákazem storage) -
-  // bez guardu by celá aplikace spadla při mountu na čtení jazyka.
+  // localStorage may not exist (tests, private mode with storage blocked) -
+  // without the guard the whole app would crash on mount reading the language.
   const [lang, setLangState] = useState<Language>(() => {
     try {
       return localStorage.getItem('bk_lang') === 'en' ? 'en' : 'cs';
@@ -2446,12 +2446,12 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     try {
       localStorage.setItem('bk_lang', newLang);
     } catch {
-      // Jazyk se nepodaří persistovat - session poběží dál v paměti.
+      // The language fails to persist - the session continues in memory.
     }
   };
 
-  // useCallback: t se předává do závislostí efektů napříč aplikací -
-  // nememoizovaná verze by každý takový efekt spouštěla při každém renderu.
+  // useCallback: t is passed into effect dependencies across the app -
+  // an unmemoised version would run every such effect on every render.
   const t = React.useCallback(
     (key: string, params?: Record<string, string | number> | string, fallbackEn?: string): string => {
       let fallback: string | undefined;

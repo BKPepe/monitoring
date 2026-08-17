@@ -13,7 +13,7 @@ interface WebMonitor {
   target: string;
   type: string;
   status: 'up' | 'down' | 'warning' | 'paused';
-  /** null = latence se nezměřila (žádné vymyšlené 0 ms). */
+  /** null = latency was not measured (no invented 0 ms). */
   response_time: number | null;
   details?: Record<string, any>;
 }
@@ -38,14 +38,14 @@ export function WebsitesPage() {
         sla30: number | null;
         sla365: number | null;
         measuredSince: string | null;
-        /** Kolik dní historie denních souhrnů skutečně existuje. */
+        /** How many days of daily-rollup history actually exist. */
         longTermDays?: number;
       }
     >
   >({});
 
-  // SLA okna se berou z lehkého cachovaného endpointu - sla_report s plnými
-  // detaily výpadků trvá i 3,7 s a sem se nehodí.
+  // SLA windows come from the light cached endpoint - sla_report with full
+  // outage details takes up to 3.7 s and does not belong here.
   useEffect(() => {
     let active = true;
     fetch('/status/api.php?action=websites_overview', { credentials: 'include' })
@@ -236,7 +236,7 @@ export function WebsitesPage() {
             <Lock className="size-4 text-emerald-400" /> {t('websites.ssl_valid', 'SSL Certifikáty')}
           </div>
           {(() => {
-            // Souhrn z reálných dat - dřív tu bylo natvrdo "100 % OK".
+            // A summary from real data - it used to be a hardcoded "100 % OK".
             const withSsl = websites.filter((w) => typeof w.details?.ssl_days_remaining === 'number');
             if (withSsl.length === 0) {
               return (
@@ -443,7 +443,7 @@ export function WebsitesPage() {
                     const sla = slaByMonitor[web.id];
                     if (!sla) return null;
                     const cell = (label: string, value: number | null) => {
-                      // null = okno bez měření (monitor je mladší) - pomlčka.
+                      // null = a window without measurements (the monitor is younger) - a dash.
                       const cls =
                         value == null
                           ? 'text-muted-foreground'
@@ -474,8 +474,8 @@ export function WebsitesPage() {
                         <div className="grid grid-cols-3 gap-1.5 mt-0.5">
                           {cell(t('websites.sla_7d', '7 dní'), sla.sla7)}
                           {cell(t('websites.sla_30d', '30 dní'), sla.sla30)}
-                          {/* Dokud není historie delší než rok, píše se skutečný
-                              rozsah - "rok" u 47 dnů dat by byl výmysl. */}
+                          {/* Until the history exceeds a year, the real range is
+                              written - "a year" over 47 days of data would be fiction. */}
                           {cell(
                             sla.longTermDays != null && sla.longTermDays > 0 && sla.longTermDays < 365
                               ? t('websites.sla_since', { days: sla.longTermDays }, `${sla.longTermDays} dní`)

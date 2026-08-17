@@ -10,10 +10,10 @@ import { processUsage } from '@/lib/monitor-grouping';
 import { formatPercent, formatRelative } from '@/lib/utils';
 
 /**
- * Služby: všechny agent-side kontroly (agent_service) napříč stroji,
- * seskupené podle agenta, na kterém běží. Doplněk k dashboardu, kde jsou
- * služby zanořené pod agenty - tady je pohled "co všechno mi kde běží"
- * na jednom místě, včetně spotřeby procesů z žebříčků agentů.
+ * Services: all agent-side checks (agent_service) across machines, grouped
+ * by the agent they run on. A companion to the dashboard, where services
+ * nest under agents - here the view is "what runs where" in one place,
+ * including process consumption from the agents' rankings.
  */
 export function ServicesPage() {
   const { t } = useLanguage();
@@ -46,8 +46,8 @@ export function ServicesPage() {
   const services = monitors.filter((m) => (m.type || '').toLowerCase() === 'agent_service');
   const agents = monitors.filter((m) => ['openwrt', 'vps'].includes((m.type || '').toLowerCase()));
 
-  // Skupiny podle agenta (sdílený assetId); služby bez známého agenta
-  // spadnou do vlastní skupiny, ať se neztratí.
+  // Groups by agent (shared assetId); services without a known agent fall
+  // into their own group, so they do not get lost.
   const groups = agents
     .map((agent) => ({
       agent,

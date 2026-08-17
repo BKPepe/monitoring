@@ -2,19 +2,19 @@
 /**
  * cPanel Resource Exporter for Blood Kings Status Monitoring
  * 
- * Umístěte tento soubor do kořenového adresáře vašeho cPanel webu (např. public_html/cpanel_stats.php).
- * A nastavit token do STATS_KEY níže. Tento klíč musí odpovídat konfiguraci monitoru.
+ * Place this file into the root of your cPanel site (e.g. public_html/cpanel_stats.php).
+ * And set the token in STATS_KEY below. The key must match the monitor's configuration.
  */
 
-// Načtení klíče z externího konfiguračního souboru, pokud existuje (zabraňuje přepsání při git deployi)
+// Load the key from an external config file when present (prevents overwrite on git deploy)
 if (file_exists(__DIR__ . '/cpanel_config.php')) {
     include_once __DIR__ . '/cpanel_config.php';
 }
 
-// Určení klíče (Environment variable -> Definovaná konstanta -> Výchozí placeholder)
+// Resolve the key (environment variable -> defined constant -> default placeholder)
 $configured_key = getenv('STATS_KEY') ?: (defined('STATS_KEY') ? STATS_KEY : 'YOUR_SECURE_TOKEN_HERE');
 
-// Zamezení neoprávněnému přístupu bez správného klíče v URL (?key=...)
+// Deny unauthorised access without the right key in the URL (?key=...)
 if (!isset($_GET['key']) || $_GET['key'] !== $configured_key || $configured_key === 'YOUR_SECURE_TOKEN_HERE') {
     http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');
@@ -27,7 +27,7 @@ if (!isset($_GET['key']) || $_GET['key'] !== $configured_key || $configured_key 
 
 header('Content-Type: application/json; charset=utf-8');
 
-// Výchozí struktura odpovědi
+// Default response structure
 $stats = [
     'status' => 'ok',
     'timestamp' => time(),
@@ -40,7 +40,7 @@ $stats = [
 ];
 
 /**
- * Pomocná funkce pro převod lidsky čitelné hodnoty (např. "1.23 GB", "100 MB", "0 bytes") na bajty
+ * Helper converting a human-readable value (e.g. "1.23 GB", "100 MB", "0 bytes") to bytes
  */
 function parse_cpanel_value($val, $default_unit = '') {
     if ($val === null || $val === '') return 0;
@@ -79,7 +79,7 @@ function parse_cpanel_value($val, $default_unit = '') {
 }
 
 /**
- * Pomocná funkce pro zobrazení bajtů v lidsky čitelném formátu (KB, MB, GB atd.)
+ * Helper printing bytes in a human-readable format (KB, MB, GB, ...)
  */
 function format_cpanel_bytes($bytes) {
     if ($bytes === null || $bytes === '') return 'N/A';
@@ -97,10 +97,10 @@ function format_cpanel_bytes($bytes) {
     return round($bytes / pow(1024, $pow), 2) . ' ' . $units[$pow];
 }
 
-// 1. Zkusíme zavolat cPanel CLI UAPI pro získání statistik
+// 1. Try the cPanel CLI UAPI for the statistics
 $output = null;
 if (function_exists('shell_exec')) {
-    // Spustíme uapi s JSON výstupem pro vybrané metriky, nově přidáno cpuusage
+    // Run uapi with JSON output for the selected metrics, cpuusage newly added
     $output = @shell_exec("uapi --output=json StatsBar get_stats display='diskusage|physicalmemoryusage|numberofprocesses|bandwidthusage|cachedmysqldiskusage|cachedpostgresdiskusage|cpuusage'");
 }
 
@@ -125,7 +125,7 @@ if ($output) {
                 $percent = round(($used_val / $limit_val) * 100, 2);
             }
             
-            // Formátování podle typu metriky
+            // Formatting by metric type
             $is_byte_metric = in_array($name, ['diskusage', 'physicalmemoryusage', 'bandwidthusage', 'cachedmysqldiskusage', 'cachedpostgresdiskusage']);
             if ($is_byte_metric) {
                 $used_formatted = ($used_val >= 0) ? format_cpanel_bytes($used_val) : $count;
@@ -161,9 +161,9 @@ if ($output) {
     }
 }
 
-// 2. Bezpečné fallbacks pro servery, kde nefunguje UAPI (např. VPS nebo jiné typy sdíleného hostingu)
+// 2. Safe fallbacks for servers where UAPI does not work (e.g. a VPS or other shared hosting)
 
-// Fallback pro využití disku (standardní PHP funkce)
+// Disk usage fallback (standard PHP functions)
 if (!$stats['disk']) {
     $free = @disk_free_space(__DIR__);
     $total = @disk_total_space(__DIR__);
@@ -180,7 +180,7 @@ if (!$stats['disk']) {
     }
 }
 
-// Fallback pro paměť RAM ze systémových informací /proc/meminfo
+// RAM fallback from /proc/meminfo system info
 if (!$stats['memory']) {
     if (@file_exists('/proc/meminfo')) {
         $mem_data = @file_get_contents('/proc/meminfo');
@@ -200,11 +200,11 @@ if (!$stats['memory']) {
     }
 }
 
-// Fallback pro CPU: položku 'cpuusage' vrací StatsBar jen na CloudLinux/LVE
-// hostech. Jinde použijeme load average celého stroje vztažený k počtu jader -
-// je to reálné číslo o zdraví serveru (byť ne per-účet), a jako takové je
-// označené přes 'source' i ve 'formatted'. Percent záměrně nestropujeme na 100,
-// přetížení > 100 % je právě ta informace, kterou chceme vidět.
+// CPU fallback: StatsBar returns 'cpuusage' only on CloudLinux/LVE hosts.
+// Elsewhere the whole machine's load average relative to core count is used -
+// a real number about server health (though not per-account), and labelled as
+// such via 'source' and in 'formatted'. Percent is deliberately not capped at 100,
+// overload > 100 % is exactly the information we want to see.
 if (empty($stats['cpu'])) {
     $load1 = null;
     if (function_exists('sys_getloadavg')) {
@@ -231,7 +231,7 @@ if (empty($stats['cpu'])) {
     }
 }
 
-// Pokud nejsou dostupné detailní metriky o procesech a databázích, necháme je jako null,
-// což status stránka rozpozná a nezobrazí graficky.
+// When detailed process/database metrics are unavailable, they stay null,
+// which the status page recognises and does not chart.
 
 echo json_encode($stats, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

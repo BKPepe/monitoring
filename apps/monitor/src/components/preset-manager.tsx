@@ -11,7 +11,7 @@ export interface MetricPreset {
   description: string | null;
   serviceType: string | null;
   metrics: string[];
-  /** null = preset práh neřeší a nechá hodnotu na monitoru. */
+  /** null = the preset does not govern the threshold and leaves it to the monitor. */
   cpuThreshold: number | null;
   ramThreshold: number | null;
   hddThreshold: number | null;
@@ -24,12 +24,12 @@ interface CatalogEntry {
 }
 
 /**
- * Správa presetů metrik.
+ * Metric preset management.
  *
- * Preset je pojmenovaná sada „co se u téhle služby zobrazuje a od kdy je to
- * problém". Dřív byla taková sada napevno v PHP (get_service_profiles) a
- * prahy se nastavovaly monitor po monitoru; teď jde vytvořit vlastní,
- * přiřadit ji více monitorům a měnit na jednom místě.
+ * A preset is a named set of "what shows for this service and from when it is
+ * a problem". Such a set used to be hardcoded in PHP (get_service_profiles) and
+ * thresholds were set monitor by monitor; now you can create your own,
+ * assign it to several monitors and change it in one place.
  */
 export function PresetManager() {
   const { t } = useLanguage();
@@ -124,7 +124,7 @@ export function PresetManager() {
                 {p.description && <p className="text-muted-foreground mt-0.5 text-xs">{p.description}</p>}
                 <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
                   <span>{t('presets.metrics_count', { count: p.metrics.length }, `${p.metrics.length} metrik`)}</span>
-                  {/* Nenastavený práh se nevypisuje - preset ho prostě neřeší. */}
+                  {/* An unset threshold is not printed - the preset simply does not govern it. */}
                   {p.cpuThreshold != null && <span>CPU ≥ {p.cpuThreshold} %</span>}
                   {p.ramThreshold != null && <span>RAM ≥ {p.ramThreshold} %</span>}
                   {p.hddThreshold != null && <span>Disk ≥ {p.hddThreshold} %</span>}
@@ -206,7 +206,7 @@ function PresetDialog({
           description,
           serviceType,
           metrics,
-          // Prázdné pole = práh neřešit; posílá se '' a server ho převede na null.
+          // An empty field = do not govern the threshold; '' is sent and the server turns it into null.
           cpuThreshold: cpu,
           ramThreshold: ram,
           hddThreshold: hdd,

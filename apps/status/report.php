@@ -1,7 +1,7 @@
 <?php
 /**
  * SLA Report Generator (Blood Kings Status Monitoring)
- * Vygeneruje tiskový SLA report nebo stáhnutelný CSV výkaz za vybraný měsíc.
+ * Generates a printable SLA report or a downloadable CSV statement for a month.
  */
 
 require_once __DIR__ . '/functions.php';
@@ -15,7 +15,7 @@ $start_date = sprintf('%04d-%02d-01 00:00:00', $year, $month);
 $end_date = date('Y-m-t 23:59:59', strtotime($start_date));
 $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
 
-// Načtení monitorů
+// Load the monitors
 if ($monitor_id > 0) {
     $stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
     $stmt->execute([$monitor_id]);
@@ -29,7 +29,7 @@ $report_data = [];
 foreach ($monitors as $m) {
     $mid = $m['id'];
     
-    // Výpočet uptime za dané období z monitor_logs
+    // Compute uptime for the period from monitor_logs
     $stmt_logs = $pdo->prepare("
         SELECT status, response_time, checked_at 
         FROM monitor_logs 
@@ -95,7 +95,7 @@ if ($format === 'csv') {
     exit;
 }
 
-// --- HTML TISKOVÝ REPORT ---
+// --- HTML PRINT REPORT ---
 $month_names = [1 => 'Leden', 2 => 'Únor', 3 => 'Březen', 4 => 'Duben', 5 => 'Květen', 6 => 'Červen', 7 => 'Červenec', 8 => 'Srpen', 9 => 'Září', 10 => 'Říjen', 11 => 'Listopad', 12 => 'Prosinec'];
 ?>
 <!DOCTYPE html>

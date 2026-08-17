@@ -3,10 +3,10 @@ import { resolveSource, type SourceState } from './source';
 import type { ChartData, PublicStatus, TimeRange } from './types';
 
 /**
- * Stav zdroje dat pro celou aplikaci — reálné `api.php`, nebo mock.
+ * State of the data source for the whole app — the real `api.php`, or the mock.
  *
- * Vrací i `isMock`, aby UI mohlo uživatele upozornit, že čísla na obrazovce
- * nejsou naměřená.
+ * Also returns `isMock`, so the UI can warn the user that the numbers on
+ * screen are not measured.
  */
 export function useSource(): SourceState | null {
   const [state, setState] = React.useState<SourceState | null>(null);
@@ -24,14 +24,14 @@ export function useSource(): SourceState | null {
   return state;
 }
 
-/** Podklady pro grafy zařízení. */
+/** Inputs for the device charts. */
 export function useAssetCharts(monitorId: number, range: TimeRange) {
   const [data, setData] = React.useState<ChartData[] | null>(null);
   const [error, setError] = React.useState<Error | null>(null);
 
   React.useEffect(() => {
-    // Odpověď na starý požadavek nesmí přepsat novější — při rychlém
-    // přepínání rozsahu by jinak zůstal na obrazovce ten pomalejší.
+    // A response to an old request must not overwrite a newer one — with fast
+    // range switching the slower one would otherwise stay on screen.
     let active = true;
     setData(null);
     setError(null);
@@ -54,10 +54,10 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
 }
 
 /**
- * `action=public_status` se renderuje na jedné stránce nezávisle z několika
- * komponent najednou (AppShell, DataSourceBanner, Dashboard) - bez sdílení by
- * to byly 3 samostatné požadavky na server a DB pro tatáž data. Krátká TTL
- * cache na úrovni modulu je sdílí, aniž by se muselo tahat přes React Context.
+ * `action=public_status` renders on one page independently from several
+ * components at once (AppShell, DataSourceBanner, Dashboard) - without sharing
+ * that would be 3 separate requests to the server and DB for the same data.
+ * A short module-level TTL cache shares them without dragging React Context in.
  */
 let publicStatusCache: { promise: Promise<PublicStatus>; timestamp: number } | null = null;
 const PUBLIC_STATUS_CACHE_MS = 10000;
@@ -69,13 +69,13 @@ function fetchPublicStatusShared(): Promise<PublicStatus> {
   const promise = resolveSource().then(({ source }) => source.getPublicStatus());
   publicStatusCache = { promise, timestamp: Date.now() };
   promise.catch(() => {
-    // Chybu necachujeme - další volání ať to zkusí znovu, ne ať opakuje stejné selhání.
+    // Errors are not cached - let the next call retry rather than replay the same failure.
     publicStatusCache = null;
   });
   return promise;
 }
 
-/** Souhrnný stav pro dashboard (`action=public_status`). */
+/** Summary state for the dashboard (`action=public_status`). */
 export function usePublicStatus(refreshMs?: number) {
   const [data, setData] = React.useState<PublicStatus | null>(null);
   const [error, setError] = React.useState<Error | null>(null);

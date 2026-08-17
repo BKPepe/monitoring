@@ -1,19 +1,19 @@
 /**
- * Tvar dat, který grafy očekávají.
+ * The shape of data the charts expect.
  *
- * Jediné místo, kde je definované rozhraní mezi UI a zdrojem dat.
- * Implementace jsou dvě: `http-source.ts` (dnešní PHP `api.php`) a
- * `mock-source.ts` (dnes jen deleguje na http-source; vymyšlená data
- * negeneruje - UI přes `isMock` jen hlásí, že API bylo nedostupné).
+ * The single place defining the interface between the UI and the data source.
+ * There are two implementations: `http-source.ts` (today's PHP `api.php`) and
+ * `mock-source.ts` (which now just delegates to http-source; it generates no
+ * invented data - via `isMock` the UI only reports the API was unreachable).
  *
- * Typy odpovídají tomu, co `apps/status/api.php` reálně vrací —
+ * The types match what `apps/status/api.php` really returns —
  * viz `apps/server/API-CONTRACT.md`.
  */
 
 /**
- * Klíče metrik z `bk_get_metric_registry()` ve `functions.php`.
- * Registr je zdroj pravdy; tenhle výčet ho musí kopírovat přesně,
- * jinak API vrátí `{"error":"Unknown metric"}`.
+ * Metric keys from `bk_get_metric_registry()` in `functions.php`.
+ * The registry is the source of truth; this enum must copy it exactly,
+ * otherwise the API returns `{"error":"Unknown metric"}`.
  */
 export type MetricKey =
   | 'response_time'
@@ -41,18 +41,18 @@ export type MetricKey =
   | 'net_ipv6'
   | 'temperature_c';
 
-/** Barevný tón série. Musí odpovídat tokenům `--chart-*`. */
+/** Colour tone of a series. Must match the `--chart-*` tokens. */
 export type MetricTone = 'cpu' | 'memory' | 'network' | 'temperature' | 'disk' | 'latency';
 
 export interface MetricPoint {
   /**
-   * Unix timestamp v **milisekundách**.
+   * Unix timestamp in **milliseconds**.
    *
-   * `api.php` vrací sekundy — převod na ms dělá `http-source.ts`, aby si
-   * s tím nemusela poradit každá komponenta zvlášť.
+   * `api.php` returns seconds — `http-source.ts` converts to ms so every
+   * component does not have to deal with it separately.
    */
   t: number;
-  /** Hodnota v jednotce série; `null` = chybějící měření, ne nula. */
+  /** Value in the series' unit; `null` = a missing measurement, not zero. */
   v: number | null;
 }
 
@@ -62,21 +62,21 @@ export interface MetricSeries {
   unit: string;
   tone: MetricTone;
   points: MetricPoint[];
-  /** Série je predikce, ne měření — vykresluje se přerušovaně. */
+  /** The series is a prediction, not a measurement — drawn dashed. */
   predicted?: boolean;
 }
 
-/** Událost na časové ose grafu (výpadek, restart, změna konfigurace). */
+/** An event on the chart's timeline (outage, restart, config change). */
 export interface ChartEvent {
   t: number;
   label: string;
 }
 
-/** Podklad pro jeden graf — jedna nebo víc sérií ve společných osách. */
+/** Input for one chart — one or more series sharing axes. */
 export interface ChartData {
   id: string;
   title: string;
-  /** Horní mez osy Y. `null` = dopočítat z dat. */
+  /** Upper Y-axis bound. `null` = derive from the data. */
   yMax: number | null;
   series: MetricSeries[];
   events?: ChartEvent[];
@@ -88,15 +88,15 @@ export interface ChartData {
    */
   bands?: { from: number; to: number; tone: 'warning' | 'critical'; label: string }[];
   /**
-   * Kolik dní zbývá do zaplnění (100 %).
+   * Days remaining until full (100 %).
    *
-   * Počítá to `api.php` lineární regresí nad 7 dny, pro `hdd`, `ram`
-   * a `inode_usage`. Nepočítá se to tady.
+   * Computed by `api.php` with linear regression over 7 days, for `hdd`, `ram`
+   * and `inode_usage`. Not computed here.
    */
   daysToFull?: number;
 }
 
-/** Periody, které `api.php` přijímá v parametru `period`. */
+/** The periods `api.php` accepts in the `period` parameter. */
 export type TimeRange = '15m' | '1h' | '6h' | '24h' | '7d' | '30d';
 
 /**
@@ -138,23 +138,23 @@ export interface MetricDetail {
   events: { t: number; type: string; label: string }[];
 }
 
-/** Odpověď `api.php?action=public_status`. */
+/** Response of `api.php?action=public_status`. */
 export interface PublicStatus {
   status: 'healthy' | 'degraded';
-  /** null = zatím žádná kontrola za posledních 30 dní (nová instalace / mrtvý cron), ne 100 %. */
+  /** null = no check in the last 30 days yet (fresh install / dead cron), not 100 %. */
   uptimePercent: number | null;
   totalMonitors: number;
   downMonitors: number;
   agentsOnline: number;
   agentsTotal: number;
-  /** null = zatím žádné měření odezvy za poslední hodinu. */
+  /** null = no latency measurement in the last hour yet. */
   avgLatencyMs: number | null;
   lastUpdated: string | null;
   nodes: { name: string; status: 'online' | 'warning' | 'offline'; latencyMs: number | null }[];
 }
 
 export interface MetricsSource {
-  /** Jméno zdroje pro UI — uživatel má vidět, jestli kouká na reálná data. */
+  /** Source name for the UI — the user should see whether the data is real. */
   readonly name: 'api.php' | 'mock';
   getAssetCharts(monitorId: number, range: TimeRange): Promise<ChartData[]>;
   getPublicStatus(): Promise<PublicStatus>;
