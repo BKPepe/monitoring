@@ -54,6 +54,19 @@ export function StatusPagesPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
 
+  const [subscribers, setSubscribers] = React.useState<
+    { id: number; email: string; lang: string; confirmed: boolean; createdAt: string }[] | null
+  >(null);
+  const loadSubscribers = React.useCallback(() => {
+    fetch('/status/api.php?action=public_subscribers', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => setSubscribers(Array.isArray(d.subscribers) ? d.subscribers : []))
+      .catch(() => setSubscribers(null));
+  }, []);
+  React.useEffect(() => {
+    if (isAdmin) loadSubscribers();
+  }, [isAdmin, loadSubscribers]);
+
   const load = React.useCallback(() => {
     fetch('/status/api.php?action=status_pages', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -159,6 +172,53 @@ export function StatusPagesPage() {
           {t('sp.badge_monitor_hint', 'Odznak jedné služby: přidejte &monitor_id=ID, anglická verze: &lang=en.')}
         </p>
       </Card>
+
+      {/* Public e-mail subscribers - the admin must be able to see and remove
+          addresses (manual removal requests, GDPR). */}
+      {isAdmin && subscribers !== null && (
+        <Card className="space-y-2 p-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">{t('sp.subscribers_title', 'Veřejní odběratelé e-mailů')}</p>
+            <p className="text-muted-foreground text-xs">
+              {t(
+                'sp.subscribers_desc',
+                'Návštěvníci přihlášení k upozorněním na výpadky (double opt-in). Smazání = okamžité odhlášení.'
+              )}
+            </p>
+          </div>
+          {subscribers.length === 0 ? (
+            <p className="text-muted-foreground text-xs">{t('sp.subscribers_none', 'Zatím žádní odběratelé.')}</p>
+          ) : (
+            <ul className="space-y-1">
+              {subscribers.map((sub) => (
+                <li key={sub.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono">{sub.email}</span>
+                  <Badge variant={sub.confirmed ? 'up' : 'neutral'}>
+                    {sub.confirmed ? 'OK' : t('sp.subscribers_pending', 'čeká na potvrzení')}
+                  </Badge>
+                  <span className="text-muted-foreground">{sub.lang}</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch('/status/api.php?action=delete_public_subscriber', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: sub.id }),
+                      }).catch(() => {});
+                      loadSubscribers();
+                    }}
+                    aria-label={t('sp.subscriber_delete', 'Smazat odběratele')}
+                    className="text-muted-foreground hover:text-down ml-auto transition-colors"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
 
       {pages === null ? (
         <p className="text-muted-foreground text-sm">{t('sp.loading', 'Načítám…')}</p>

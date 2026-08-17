@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, CheckCircle2, Moon, Radio, Rss, Sun, Wrench } from 'lucide-react';
+import { Activity, BellRing, CheckCircle2, Moon, Radio, Rss, Sun, Wrench } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { usePublicStatus } from '@/api/use-asset-charts';
@@ -275,6 +275,10 @@ export function PublicStatusPage() {
   // remain - showing all at once would be fine on a calm fleet and a wall
   // after a hectic week.
   const [eventsShown, setEventsShown] = React.useState(10);
+  const [subEmail, setSubEmail] = React.useState('');
+  const [subState, setSubState] = React.useState<'idle' | 'busy' | 'done'>('idle');
+  const [subEmailSent, setSubEmailSent] = React.useState<boolean | null>(null);
+  const [subError, setSubError] = React.useState<string | null>(null);
   const allFailureEvents = React.useMemo(
     () => (events ?? []).filter((e) => e.isDown || e.rawStatus === 'warning'),
     [events]
@@ -577,6 +581,69 @@ export function PublicStatusPage() {
           </ul>
         </Card>
       )}
+
+      {/* E-mail subscription for visitors without accounts. Double opt-in on
+          the server; the honest emailSent flag distinguishes "check your
+          inbox" from "stored, but the mail failed - try again later". */}
+      <Card className="space-y-2 p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <BellRing className="size-4 text-primary" />
+          {t('pubsub.box_title', 'Upozornění na výpadky e-mailem')}
+        </h2>
+        {subState === 'done' ? (
+          <p className="text-up text-xs font-medium">
+            {subEmailSent === false
+              ? t(
+                  'pubsub.box_saved_nomail',
+                  'Uloženo, ale potvrzovací e-mail se nepodařilo odeslat. Zkuste to prosím později.'
+                )
+              : t('pubsub.box_check_inbox', 'Hotovo - potvrďte odběr kliknutím na odkaz v e-mailu.')}
+          </p>
+        ) : (
+          <form
+            className="flex flex-wrap gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setSubState('busy');
+              setSubError(null);
+              try {
+                const res = await fetch('/status/api.php?action=public_subscribe', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: subEmail, lang }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+                setSubEmailSent(data.emailSent ?? null);
+                setSubState('done');
+              } catch (err) {
+                setSubState('idle');
+                setSubError(err instanceof Error ? err.message : t('pubsub.failed', 'Odběr se nepodařilo založit.'));
+              }
+            }}
+          >
+            <input
+              type="email"
+              required
+              value={subEmail}
+              onChange={(e) => setSubEmail(e.target.value)}
+              placeholder={t('pubsub.box_placeholder', 'vas@email.cz')}
+              className="bg-secondary/60 h-9 min-w-0 flex-1 rounded-md border border-input px-3 text-sm"
+            />
+            <button
+              type="submit"
+              disabled={subState === 'busy'}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 h-9 shrink-0 rounded-md px-4 text-xs font-semibold transition-colors disabled:opacity-60"
+            >
+              {subState === 'busy' ? t('pubsub.box_sending', 'Odesílám…') : t('pubsub.box_subscribe', 'Odebírat')}
+            </button>
+          </form>
+        )}
+        {subError && <p className="text-down text-xs font-semibold">{subError}</p>}
+        <p className="text-muted-foreground/70 text-[11px]">
+          {t('pubsub.box_hint', 'Pošleme jen výpadky a jejich obnovení. Odhlášení jedním klikem v každém e-mailu.')}
+        </p>
+      </Card>
 
       {/* The same footer the legacy page had: © + portal link, custom links
           from the admin settings, RSS, and who runs the monitoring. */}

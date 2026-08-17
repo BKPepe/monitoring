@@ -665,6 +665,18 @@ return [
     'ao_peers' => 'peers',
     'ao_clients' => 'clients',
     'ao_online' => 'Online',
+    // --- Public e-mail subscriptions ----------------------------------
+    'pubsub_confirm_subject' => 'Confirm your outage notifications - %s',
+    'pubsub_confirm_intro' => 'Someone (most likely you) subscribed this address to outage notifications for %s. Nothing is sent until you confirm.',
+    'pubsub_confirm_button' => 'Confirm subscription',
+    'pubsub_confirm_ignore' => 'If you did not ask for this, ignore this e-mail - without confirmation nothing will ever be sent.',
+    'pubsub_down_subject' => 'Outage: %s',
+    'pubsub_down_body' => 'The service %s is down. We are on it.',
+    'pubsub_up_subject' => 'Recovered: %s',
+    'pubsub_up_body' => 'The service %s is back up.',
+    'pubsub_status_link' => 'Current status of all services: %s',
+    'pubsub_unsub_line' => 'Unsubscribe from these notifications',
+
     // --- RSS feed ------------------------------------------------------
     'rss_channel_suffix' => 'Service status',
     'rss_channel_description' => 'Outages and their resolutions, as recorded by the monitoring.',

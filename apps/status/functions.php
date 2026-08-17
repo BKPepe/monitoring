@@ -5008,7 +5008,7 @@ function check_discord($guild_id, $timeout = 3) {
 /**
  * Sends an e-mail via PHPMailer (SMTP auth) or PHP mail() as fallback
  */
-function send_email($to, $subject, $html_body) {
+function send_email($to, $subject, $html_body, array $extra_headers = []) {
     $GLOBALS['last_mail_error'] = '';
     // 'smtp' = verified delivery through an authenticated SMTP server (a strong
     // success signal), 'fallback' = unauthenticated PHP mail() - returns true even
@@ -5050,6 +5050,9 @@ function send_email($to, $subject, $html_body) {
             $mail->isHTML(true);
             $mail->Subject    = $subject;
             $mail->Body       = $html_body;
+            foreach ($extra_headers as $eh_name => $eh_value) {
+                $mail->addCustomHeader($eh_name, $eh_value);
+            }
             
             $mail->send();
             $GLOBALS['last_mail_method'] = 'smtp';
@@ -5069,6 +5072,7 @@ function send_email($to, $subject, $html_body) {
         'Content-type: text/html; charset=utf-8',
         'From: ' . $site_title . ' <' . $from . '>',
         'Reply-To: ' . $from,
+        ...array_map(fn($k) => $k . ': ' . $extra_headers[$k], array_keys($extra_headers)),
         'X-Mailer: PHP/' . phpversion()
     ];
     set_error_handler(function($errno, $errstr) {
@@ -5432,6 +5436,14 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
             send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
         }
+    }
+
+    // Public subscribers (no accounts): outage and recovery only - agent
+    // internals (vps_warning, agent_offline) are operations, not public news.
+    try {
+        bk_public_sub_notify($pdo, $monitor, $new_status);
+    } catch (Throwable $e) {
+        error_log('[pubsub] ' . $e->getMessage());
     }
 
     // System/monitor webhooks (Discord, Slack, Telegram) - fired only once per event
@@ -6959,6 +6971,109 @@ function bk_totp_recovery_remaining(PDO $pdo, int $user_id): int {
     } catch (Throwable $e) {
         return 0;
     }
+}
+
+/**
+ * Public e-mail subscriptions - visitors without accounts.
+ *
+ * Double opt-in: anyone can type any address into a public form, so nothing
+ * is ever sent to an address whose owner did not click the confirmation
+ * link. Tokens are stored as sha256 hashes only; the raw token exists just
+ * in the e-mail. The confirmation/unsubscribe links lead to React pages
+ * with an explicit button - mail scanners follow bare GET links and would
+ * otherwise confirm (or cancel) subscriptions nobody asked for.
+ */
+
+/** Issues (or refreshes) a subscription and returns [raw confirm token, lang] or null on a recent resend. */
+function bk_public_sub_issue(PDO $pdo, string $email, string $lang, ?string $ip): ?string {
+    $confirm_raw = bin2hex(random_bytes(24));
+    $unsub_raw = bin2hex(random_bytes(24));
+    $stmt = $pdo->prepare("SELECT id, confirmed_at, confirm_sent_at FROM public_subscribers WHERE email = ? LIMIT 1");
+    $stmt->execute([$email]);
+    $row = $stmt->fetch();
+    if ($row) {
+        if (!empty($row['confirmed_at'])) {
+            // Already confirmed - nothing to send, and the caller must not
+            // reveal that the address is subscribed (no enumeration).
+            return null;
+        }
+        // Resend cooldown: an unconfirmed address gets a fresh mail at most
+        // once per 10 minutes, so the form cannot be used to bombard someone.
+        if (!empty($row['confirm_sent_at']) && strtotime($row['confirm_sent_at']) > time() - 600) {
+            return null;
+        }
+        $pdo->prepare("UPDATE public_subscribers SET confirm_token_hash = ?, confirm_sent_at = NOW() WHERE id = ?")
+            ->execute([hash('sha256', $confirm_raw), (int)$row['id']]);
+        return $confirm_raw;
+    }
+    // The unsubscribe token is stored RAW on purpose: its only power is
+    // cancelling a subscription, and hashing it would invalidate the links
+    // in every previously sent mail (the raw value cannot be re-derived).
+    $pdo->prepare("INSERT INTO public_subscribers (email, lang, confirm_token_hash, unsubscribe_token, created_ip, confirm_sent_at) VALUES (?, ?, ?, ?, ?, NOW())")
+        ->execute([$email, in_array($lang, ['cs', 'en'], true) ? $lang : 'cs', hash('sha256', $confirm_raw), $unsub_raw, $ip]);
+    return $confirm_raw;
+}
+
+/** Renders + sends the confirmation e-mail. Returns whether sending succeeded. */
+function bk_public_sub_send_confirm(string $email, string $lang, string $confirm_raw, string $base_origin): bool {
+    return (bool)bk_with_email_lang($lang, function () use ($email, $confirm_raw, $base_origin) {
+        $site = get_setting('site_title', 'Blood Kings Monitoring');
+        $link = $base_origin . '/app/subscribe-confirm?token=' . $confirm_raw;
+        $subject = sprintf(t('pubsub_confirm_subject'), $site);
+        $body = '<p>' . htmlspecialchars(sprintf(t('pubsub_confirm_intro'), $site)) . '</p>'
+            . '<p><a href="' . htmlspecialchars($link) . '">' . htmlspecialchars(t('pubsub_confirm_button')) . '</a></p>'
+            . '<p style="color:#888;font-size:12px">' . htmlspecialchars(t('pubsub_confirm_ignore')) . '</p>';
+        return send_email($email, $subject, $body);
+    });
+}
+
+/**
+ * Sends outage/recovery mails to confirmed public subscribers.
+ *
+ * Deliberately carries no error details - the mail says WHICH service and
+ * WHAT happened, the status page says the rest. Rendered once per language,
+ * sent per subscriber because every mail carries a personal unsubscribe link.
+ */
+function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): void {
+    if (!in_array($new_status, ['down', 'up'], true)) {
+        return;
+    }
+    try {
+        $subs = $pdo->query("SELECT id, email, lang, unsubscribe_token FROM public_subscribers WHERE confirmed_at IS NOT NULL")->fetchAll();
+    } catch (Throwable $e) {
+        return; // Table missing on an old DB - the feature simply is not there yet.
+    }
+    if (!$subs) {
+        return;
+    }
+    $base_origin = bk_public_base_origin();
+    $rendered = [];
+    foreach ($subs as $sub) {
+        $lang = in_array($sub['lang'], ['cs', 'en'], true) ? $sub['lang'] : 'cs';
+        if (!isset($rendered[$lang])) {
+            $rendered[$lang] = bk_with_email_lang($lang, function () use ($monitor, $new_status, $base_origin) {
+                $site = get_setting('site_title', 'Blood Kings Monitoring');
+                $subject = sprintf(t($new_status === 'down' ? 'pubsub_down_subject' : 'pubsub_up_subject'), $monitor['name']);
+                $body = '<p>' . htmlspecialchars(sprintf(t($new_status === 'down' ? 'pubsub_down_body' : 'pubsub_up_body'), $monitor['name'])) . '</p>'
+                    . '<p><a href="' . htmlspecialchars($base_origin . '/app/public') . '">' . htmlspecialchars(sprintf(t('pubsub_status_link'), $site)) . '</a></p>';
+                return [$subject, $body, t('pubsub_unsub_line')];
+            });
+        }
+        [$subject, $body, $unsub_label] = $rendered[$lang];
+        $unsub_link = $base_origin . '/app/unsubscribe?token=' . $sub['unsubscribe_token'];
+        $full_body = $body . '<p style="color:#888;font-size:12px"><a href="' . htmlspecialchars($unsub_link) . '">' . htmlspecialchars($unsub_label) . '</a></p>';
+        send_email($sub['email'], $subject, $full_body, ['List-Unsubscribe' => '<' . $unsub_link . '>']);
+    }
+}
+
+/** Absolute origin for links in public mails - site_url setting first, request as fallback. */
+function bk_public_base_origin(): string {
+    $configured = trim((string)get_setting('site_url', ''));
+    if ($configured !== '') {
+        return rtrim($configured, '/');
+    }
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    return $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost');
 }
 
 /**

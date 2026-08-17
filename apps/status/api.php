@@ -86,10 +86,13 @@ $bk_post_only_actions = [
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
     'save_annotation', 'save_user', 'delete_user',
+    'delete_public_subscriber',
     // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
     'login', 'logout', 'setup', 'forgot_password', 'set_password',
+    'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe',
 ];
-$bk_csrf_exempt = ['login', 'logout', 'setup', 'forgot_password', 'set_password'];
+$bk_csrf_exempt = ['login', 'logout', 'setup', 'forgot_password', 'set_password',
+    'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe'];
 // alerts_read_state and dashboard_layout are GET read + POST write in one action.
 $bk_csrf_on_post = array_merge(
     array_values(array_diff($bk_post_only_actions, $bk_csrf_exempt)),
@@ -4184,6 +4187,139 @@ if ($action === 'user_audit_log') {
         error_log('[api] user_audit_log selhal: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'Auditní protokol se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/**
+ * Public e-mail subscriptions - visitors without accounts.
+ *
+ * Double opt-in: the form is public, so anyone can type any address - nothing
+ * is sent until the owner clicks the confirmation link. The response is
+ * deliberately identical whether the address is new, pending or already
+ * subscribed, so the form cannot be used to probe who subscribes. The
+ * confirm/unsubscribe links lead to React pages with an explicit button -
+ * mail scanners follow bare GET links and would confirm or cancel
+ * subscriptions nobody asked for.
+ */
+if ($action === 'public_subscribe') {
+    $ps_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $ps_email = trim((string)($ps_input['email'] ?? ''));
+    $ps_lang = ($ps_input['lang'] ?? '') === 'en' ? 'en' : 'cs';
+    if (!filter_var($ps_email, FILTER_VALIDATE_EMAIL)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Neplatná e-mailová adresa.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $ps_ip = bk_client_ip();
+    try {
+        // Sign-up rate limit per IP: the form must not become a mail cannon.
+        $stmt_rl = $pdo->prepare("SELECT COUNT(*) FROM public_subscribers WHERE created_ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
+        $stmt_rl->execute([$ps_ip]);
+        if ((int)$stmt_rl->fetchColumn() >= 5) {
+            http_response_code(429);
+            echo json_encode(['error' => 'Příliš mnoho pokusů. Zkuste to později.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $ps_token = bk_public_sub_issue($pdo, $ps_email, $ps_lang, $ps_ip);
+        $ps_sent = false;
+        if ($ps_token !== null) {
+            $ps_sent = bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_public_base_origin());
+        }
+        // emailSent is honest: telling the visitor "check your inbox" when the
+        // mail failed to send would be a lie. null token = already subscribed
+        // or a recent resend - the neutral message covers both (no enumeration).
+        echo json_encode(['success' => true, 'emailSent' => $ps_token !== null ? $ps_sent : null], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_subscribe] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Odběr se nepodařilo založit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'public_subscribe_confirm') {
+    $psc_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $psc_token = trim((string)($psc_input['token'] ?? ''));
+    if ($psc_token === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí token.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt_psc = $pdo->prepare("SELECT id FROM public_subscribers WHERE confirm_token_hash = ? AND confirmed_at IS NULL LIMIT 1");
+        $stmt_psc->execute([hash('sha256', $psc_token)]);
+        $psc_row = $stmt_psc->fetch();
+        if (!$psc_row) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Odkaz je neplatný nebo už byl použit.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $pdo->prepare("UPDATE public_subscribers SET confirmed_at = NOW(), confirm_token_hash = NULL WHERE id = ?")
+            ->execute([(int)$psc_row['id']]);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_subscribe_confirm] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Potvrzení se nepodařilo.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'public_unsubscribe') {
+    $pu_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $pu_token = trim((string)($pu_input['token'] ?? ''));
+    if ($pu_token === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí token.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt_pu = $pdo->prepare("DELETE FROM public_subscribers WHERE unsubscribe_token = ?");
+        $stmt_pu->execute([$pu_token]);
+        // Deleting an already-deleted row is still a successful unsubscribe -
+        // the link in an old mail must never show the visitor an error.
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_unsubscribe] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Odhlášení se nepodařilo.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// Admin overview of public subscribers - the admin must be able to see and
+// remove addresses (somebody asks to be removed by hand, GDPR requests...).
+if ($action === 'public_subscribers' || $action === 'delete_public_subscriber') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        if ($action === 'delete_public_subscriber') {
+            $dps_input = json_decode(file_get_contents('php://input'), true) ?: [];
+            $pdo->prepare("DELETE FROM public_subscribers WHERE id = ?")->execute([(int)($dps_input['id'] ?? 0)]);
+            bk_audit_log($pdo, 'public_subscriber_deleted', '', 'subscriber', (int)($dps_input['id'] ?? 0));
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $ps_rows = $pdo->query("SELECT id, email, lang, confirmed_at, created_at FROM public_subscribers ORDER BY id DESC")->fetchAll();
+        $ps_out = [];
+        foreach ($ps_rows as $r) {
+            $ps_out[] = [
+                'id' => (int)$r['id'],
+                'email' => $r['email'],
+                'lang' => $r['lang'],
+                'confirmed' => !empty($r['confirmed_at']),
+                'createdAt' => $r['created_at'],
+            ];
+        }
+        echo json_encode(['subscribers' => $ps_out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_subscribers] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Seznam odběratelů se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

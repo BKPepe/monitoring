@@ -440,6 +440,20 @@ CREATE TABLE IF NOT EXISTS `speedtest_results` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Profily metrik (presety) - sdílené nastavení, které jde přiřadit víc monitorům.
+-- Public e-mail subscriptions (double opt-in; token hashes only).
+CREATE TABLE IF NOT EXISTS `public_subscribers` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `email` VARCHAR(190) NOT NULL,
+  `lang` VARCHAR(5) NOT NULL DEFAULT 'cs',
+  `confirm_token_hash` CHAR(64) DEFAULT NULL,
+  `confirmed_at` DATETIME DEFAULT NULL,
+  `unsubscribe_token` CHAR(48) NOT NULL,
+  `created_ip` VARCHAR(45) DEFAULT NULL,
+  `confirm_sent_at` DATETIME DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY `uniq_pub_sub_email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 2FA recovery codes - one-time sign-in codes; only sha256 hashes are stored.
 CREATE TABLE IF NOT EXISTS `totp_recovery_codes` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,

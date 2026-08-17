@@ -474,6 +474,8 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=trigger_remote_action` | admin | Akce na routeru (jen povolené) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
 | `action=get_subscriptions` / `save_subscriptions` | přihlášený | Odběr upozornění |
+| `action=public_subscribe` / `public_subscribe_confirm` / `public_unsubscribe` | veřejné | E-mailový odběr pro návštěvníky bez účtu: double opt-in (nic se neposílá, dokud majitel nepotvrdí), IP rate limit na přihlášení, neutrální odpovědi (žádná enumerace), odhlášení jedním klikem v každém e-mailu |
+| `action=public_subscribers` / `delete_public_subscriber` | admin | Přehled odběratelů a ruční odstranění (GDPR žádosti) |
 | `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |

@@ -1051,6 +1051,57 @@ if (!empty($cookie_jar)) {
     check('anonym poznámku neuloží', $anon_save_code, 403);
 }
 
+// --- Public e-mail subscriptions -----------------------------------------
+//
+// Double opt-in end-to-end: sign-up stores a row (nothing confirmed), the
+// confirmation token flips it, the unsubscribe token deletes it. Tokens are
+// injected via SQL - the raw ones live only in e-mails the test cannot read.
+[$pss_code, $pss] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
+check('public_subscribe vrací 200', $pss_code, 200);
+check_true('odpověď nese poctivý emailSent příznak', array_key_exists('emailSent', $pss ?? []));
+$pss_row = $pdo->query("SELECT confirmed_at, confirm_token_hash, unsubscribe_token FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetch();
+check_true('řádek vznikl a čeká na potvrzení', $pss_row !== false && $pss_row['confirmed_at'] === null);
+check_true('potvrzovací token je hash, odhlašovací raw', strlen((string)$pss_row['confirm_token_hash']) === 64 && strlen((string)$pss_row['unsubscribe_token']) === 48);
+
+[$pse_code] = api_post($base, 'action=public_subscribe', ['email' => 'neni-email'], $cookie_jar, '');
+check('nevalidní adresa je 400', $pse_code, 400);
+
+// Potvrzení: vstříknutý známý token.
+$pdo->exec("UPDATE public_subscribers SET confirm_token_hash = '" . hash('sha256', 'test-confirm-token') . "' WHERE email = 'navstevnik@example.com'");
+[$psc_code] = api_post($base, 'action=public_subscribe_confirm', ['token' => 'test-confirm-token'], $cookie_jar, '');
+check('potvrzení projde', $psc_code, 200);
+check_true('a v DB je potvrzeno', $pdo->query("SELECT confirmed_at FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetchColumn() !== null);
+[$psc2_code] = api_post($base, 'action=public_subscribe_confirm', ['token' => 'test-confirm-token'], $cookie_jar, '');
+check('použitý potvrzovací token podruhé neprojde', $psc2_code, 400);
+
+// Už potvrzená adresa: neutrální odpověď, žádný nový mail (emailSent null).
+[$pss2_code, $pss2] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
+check('opakované přihlášení je neutrálních 200', $pss2_code, 200);
+// array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
+check_true('a nic se neposílá (emailSent null)', array_key_exists('emailSent', $pss2) && $pss2['emailSent'] === null);
+
+// Admin přehled + neutrální odhlášení.
+[, $psl] = api_get_auth($base, 'action=public_subscribers', $cookie_jar);
+check_true('admin vidí odběratele', count(array_filter($psl['subscribers'] ?? [], fn($r) => $r['email'] === 'navstevnik@example.com')) === 1);
+[$psl_code] = api_get($base, 'action=public_subscribers');
+check('anonym seznam nevidí', $psl_code, 403);
+
+$pdo->exec("UPDATE public_subscribers SET unsubscribe_token = '" . str_pad('testunsub', 48, 'x') . "' WHERE email = 'navstevnik@example.com'");
+[$psu_code] = api_post($base, 'action=public_unsubscribe', ['token' => str_pad('testunsub', 48, 'x')], $cookie_jar, '');
+check('odhlášení projde', $psu_code, 200);
+check('a řádek je pryč', (int)$pdo->query("SELECT COUNT(*) FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetchColumn(), 0);
+[$psu2_code] = api_post($base, 'action=public_unsubscribe', ['token' => str_pad('testunsub', 48, 'x')], $cookie_jar, '');
+check('odkaz ze starého mailu nikdy neukáže chybu', $psu2_code, 200);
+
+// Rate limit: pátý zápis z téže IP v hodině projde, šestý ne.
+$pdo->exec("DELETE FROM public_subscribers");
+for ($ps_i = 1; $ps_i <= 5; $ps_i++) {
+    api_post($base, 'action=public_subscribe', ['email' => "flood{$ps_i}@example.com"], $cookie_jar, '');
+}
+[$ps_flood_code] = api_post($base, 'action=public_subscribe', ['email' => 'flood6@example.com'], $cookie_jar, '');
+check('šesté přihlášení z téže IP za hodinu je 429', $ps_flood_code, 429);
+$pdo->exec("DELETE FROM public_subscribers");
+
 // --- Forgotten password --------------------------------------------------
 //
 // The response must be identical for existing and nonexistent e-mails, else the

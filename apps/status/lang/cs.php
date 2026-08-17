@@ -666,6 +666,18 @@ return [
     'ao_peers' => 'peerů',
     'ao_clients' => 'klientů',
     'ao_online' => 'Online',
+    // --- Veřejný e-mailový odběr --------------------------------------
+    'pubsub_confirm_subject' => 'Potvrďte odběr upozornění - %s',
+    'pubsub_confirm_intro' => 'Někdo (nejspíš vy) přihlásil tuto adresu k odběru upozornění na výpadky služeb %s. Odběr začne až po potvrzení.',
+    'pubsub_confirm_button' => 'Potvrdit odběr',
+    'pubsub_confirm_ignore' => 'Pokud jste o odběr nežádali, tento e-mail ignorujte - bez potvrzení se nic posílat nebude.',
+    'pubsub_down_subject' => 'Výpadek: %s',
+    'pubsub_down_body' => 'Služba %s je mimo provoz. Pracujeme na tom.',
+    'pubsub_up_subject' => 'Obnoveno: %s',
+    'pubsub_up_body' => 'Služba %s je zpět v provozu.',
+    'pubsub_status_link' => 'Aktuální stav všech služeb: %s',
+    'pubsub_unsub_line' => 'Odhlásit odběr těchto upozornění',
+
     // --- RSS feed ----------------------------------------------------
     // A subscription instead of waiting for someone to open the status page themselves.
     'rss_channel_suffix' => 'Stav služeb',

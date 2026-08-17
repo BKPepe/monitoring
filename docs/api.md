@@ -480,6 +480,8 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=trigger_remote_action` | admin | Action on a router (allowed ones only) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
 | `action=get_subscriptions` / `save_subscriptions` | logged in | Alert subscriptions |
+| `action=public_subscribe` / `public_subscribe_confirm` / `public_unsubscribe` | public | E-mail subscription for visitors without accounts: double opt-in (nothing is sent until the owner confirms), IP rate limit on sign-up, neutral responses (no enumeration), one-click unsubscribe link in every mail |
+| `action=public_subscribers` / `delete_public_subscriber` | admin | Subscriber overview and manual removal (GDPR requests) |
 | `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |

@@ -262,6 +262,58 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.upd_monitoring': { cs: 'Sledujeme', en: 'Monitoring' },
   'public.upd_resolved': { cs: 'Vyřešeno', en: 'Resolved' },
   'public.postmortem': { cs: 'Co se stalo (postmortem)', en: 'What happened (postmortem)' },
+  'pubsub.box_title': { cs: 'Upozornění na výpadky e-mailem', en: 'Outage notifications by e-mail' },
+  'pubsub.box_placeholder': { cs: 'vas@email.cz', en: 'you@example.com' },
+  'pubsub.box_subscribe': { cs: 'Odebírat', en: 'Subscribe' },
+  'pubsub.box_sending': { cs: 'Odesílám…', en: 'Sending…' },
+  'pubsub.box_check_inbox': {
+    cs: 'Hotovo - potvrďte odběr kliknutím na odkaz v e-mailu.',
+    en: 'Done - confirm the subscription via the link in your inbox.',
+  },
+  'pubsub.box_saved_nomail': {
+    cs: 'Uloženo, ale potvrzovací e-mail se nepodařilo odeslat. Zkuste to prosím později.',
+    en: 'Stored, but the confirmation e-mail failed to send. Please try again later.',
+  },
+  'pubsub.box_hint': {
+    cs: 'Pošleme jen výpadky a jejich obnovení. Odhlášení jedním klikem v každém e-mailu.',
+    en: 'Only outages and recoveries. One-click unsubscribe in every e-mail.',
+  },
+  'pubsub.failed': { cs: 'Operace se nepodařila.', en: 'The operation failed.' },
+  'pubsub.no_token': {
+    cs: 'Odkazu chybí token. Použijte celý odkaz z e-mailu.',
+    en: 'The link is missing its token. Use the complete link from the e-mail.',
+  },
+  'pubsub.go_status': { cs: 'Přejít na stav služeb', en: 'Go to service status' },
+  'pubsub.confirm_title': { cs: 'Potvrzení odběru', en: 'Confirm subscription' },
+  'pubsub.confirm_hint': {
+    cs: 'Kliknutím potvrdíte odběr upozornění na výpadky pro tuto e-mailovou adresu.',
+    en: 'Clicking confirms outage notifications for this e-mail address.',
+  },
+  'pubsub.confirm_btn': { cs: 'Potvrdit odběr', en: 'Confirm subscription' },
+  'pubsub.working': { cs: 'Potvrzuji…', en: 'Confirming…' },
+  'pubsub.confirmed': {
+    cs: 'Odběr je potvrzený. Při výpadku a obnovení služeb vám přijde e-mail.',
+    en: 'Subscription confirmed. You will get an e-mail on outages and recoveries.',
+  },
+  'pubsub.unsub_title': { cs: 'Odhlášení odběru', en: 'Unsubscribe' },
+  'pubsub.unsub_hint': {
+    cs: 'Kliknutím zrušíte odběr upozornění na výpadky pro tuto e-mailovou adresu.',
+    en: 'Clicking cancels outage notifications for this e-mail address.',
+  },
+  'pubsub.unsub_btn': { cs: 'Odhlásit odběr', en: 'Unsubscribe' },
+  'pubsub.working_unsub': { cs: 'Odhlašuji…', en: 'Unsubscribing…' },
+  'pubsub.unsubscribed': {
+    cs: 'Odběr je zrušený. Žádné další e-maily nepřijdou.',
+    en: 'Unsubscribed. No further e-mails will arrive.',
+  },
+  'sp.subscribers_title': { cs: 'Veřejní odběratelé e-mailů', en: 'Public e-mail subscribers' },
+  'sp.subscribers_desc': {
+    cs: 'Návštěvníci přihlášení k upozorněním na výpadky (double opt-in). Smazání = okamžité odhlášení.',
+    en: 'Visitors subscribed to outage notifications (double opt-in). Deleting unsubscribes immediately.',
+  },
+  'sp.subscribers_none': { cs: 'Zatím žádní odběratelé.', en: 'No subscribers yet.' },
+  'sp.subscribers_pending': { cs: 'čeká na potvrzení', en: 'awaiting confirmation' },
+  'sp.subscriber_delete': { cs: 'Smazat odběratele', en: 'Delete subscriber' },
   'sp.badge_title': { cs: 'Vložitelný odznak stavu', en: 'Embeddable status badge' },
   'sp.badge_desc': {
     cs: 'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.',

@@ -47,7 +47,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260817c');
+    define('BK_SCHEMA_VERSION', '20260817d');
 
     $bk_current_schema = false;
     try {
@@ -627,6 +627,24 @@ try {
           `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           KEY `idx_trc_user` (`user_id`),
           CONSTRAINT `fk_trc_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Public e-mail subscriptions: visitors without accounts get outage
+        // and recovery mails. Double opt-in - anyone can type any address, so
+        // nothing is sent until the owner clicks the confirmation link. Both
+        // tokens are stored as sha256 hashes only (same rule as password
+        // reset tokens); created_ip exists solely for the sign-up rate limit.
+        "CREATE TABLE IF NOT EXISTS `public_subscribers` (
+          `id` INT AUTO_INCREMENT PRIMARY KEY,
+          `email` VARCHAR(190) NOT NULL,
+          `lang` VARCHAR(5) NOT NULL DEFAULT 'cs',
+          `confirm_token_hash` CHAR(64) DEFAULT NULL,
+          `confirmed_at` DATETIME DEFAULT NULL,
+          `unsubscribe_token` CHAR(48) NOT NULL,
+          `created_ip` VARCHAR(45) DEFAULT NULL,
+          `confirm_sent_at` DATETIME DEFAULT NULL,
+          `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY `uniq_pub_sub_email` (`email`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // Process history - who was eating CPU and memory at a given moment.

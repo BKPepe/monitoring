@@ -24,7 +24,15 @@ export function installCsrfFetch(): void {
 
     if (method === 'POST' && url.includes('/api.php')) {
       let token = getCsrfToken();
-      if (!token && !/action=(login|setup|set_password|forgot_password)/.test(url)) {
+      // The public subscription actions are CSRF-exempt server-side (no
+      // session to protect) - priming a token for them would just add an
+      // extra round-trip before every anonymous submit.
+      if (
+        !token &&
+        !/action=(login|setup|set_password|forgot_password|public_subscribe|public_subscribe_confirm|public_unsubscribe)/.test(
+          url
+        )
+      ) {
         // First write before any session fetch (deep link straight to a
         // form): prime the token once from the session endpoint.
         try {
