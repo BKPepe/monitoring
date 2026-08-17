@@ -76,25 +76,41 @@ function fetchPublicStatusShared(): Promise<PublicStatus> {
 }
 
 /** Souhrnný stav pro dashboard (`action=public_status`). */
-export function usePublicStatus() {
+export function usePublicStatus(refreshMs?: number) {
   const [data, setData] = React.useState<PublicStatus | null>(null);
   const [error, setError] = React.useState<Error | null>(null);
 
   React.useEffect(() => {
     let active = true;
 
-    fetchPublicStatusShared()
-      .then((result) => {
-        if (active) setData(result);
-      })
-      .catch((err: unknown) => {
-        if (active) setError(err instanceof Error ? err : new Error('Načtení selhalo'));
-      });
+    const load = () => {
+      fetchPublicStatusShared()
+        .then((result) => {
+          if (!active) return;
+          setData(result);
+          // A recovered refresh clears the stale error - otherwise the page
+          // would keep apologising long after the data came back.
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          // Deliberately does NOT clear `data`: one failed background refresh
+          // must not blank a page that still holds valid last-known state.
+          if (active) setError(err instanceof Error ? err : new Error('Načtení selhalo'));
+        });
+    };
 
+    load();
+    if (!refreshMs) {
+      return () => {
+        active = false;
+      };
+    }
+    const id = window.setInterval(load, refreshMs);
     return () => {
       active = false;
+      window.clearInterval(id);
     };
-  }, []);
+  }, [refreshMs]);
 
   return { data, error, loading: data === null && error === null };
 }

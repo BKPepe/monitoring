@@ -206,6 +206,7 @@ if ($action === 'monitors') {
         $stmt = $pdo->query("
             SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
                    m.last_checked, m.last_status_change, m.last_details,
+                   m.maintenance, m.maintenance_description, m.maintenance_start, m.maintenance_end,
                    (SELECT l.response_time FROM monitor_logs l
                     WHERE l.monitor_id = m.id AND l.response_time > 0
                     ORDER BY l.id DESC LIMIT 1) AS response_time,
@@ -266,6 +267,14 @@ if ($action === 'monitors') {
                 'hdd' => $r['hdd_usage'] !== null ? (float)$r['hdd_usage'] : null,
                 // Doba od poslední změny stavu (ne fixní hodnota) - 0 dokud první kontrola neproběhne.
                 'uptimeSeconds' => ($last_change_ts && strtolower($r['status'] ?? '') === 'up') ? max(0, time() - $last_change_ts) : 0,
+                // Announced maintenance is public by design - the legacy page
+                // prints the description and window in a public banner. Only
+                // while the flag is on; a stale description of a past window
+                // stays private.
+                'maintenance' => !empty($r['maintenance']),
+                'maintenanceDescription' => !empty($r['maintenance']) ? ($r['maintenance_description'] ?: null) : null,
+                'maintenanceStart' => (!empty($r['maintenance']) && $r['maintenance_start']) ? $r['maintenance_start'] : null,
+                'maintenanceEnd' => (!empty($r['maintenance']) && $r['maintenance_end']) ? $r['maintenance_end'] : null,
                 'agentLastSeen' => $details['agent_last_seen'] ?? null,
                 'hostname' => $details['hostname'] ?? $r['target'],
                 'os' => $details['os'] ?? $r['type'],
@@ -902,6 +911,9 @@ if ($action === 'ui_config') {
         'siteTitle' => trim((string)get_setting('site_title', 'Blood Kings Monitoring')),
         'customLogoUrl' => trim((string)get_setting('custom_logo_url')),
         'customNavLinks' => $links,
+        // For the public page footer - the © line links to the main portal,
+        // same as the legacy footer.
+        'portalUrl' => trim((string)get_setting('portal_url')),
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -2078,6 +2090,125 @@ if ($action === 'export_config') {
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Export se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// Vlastni profil prihlaseneho uzivatele - pro /app/profile.
+//
+// Zrcadli legacy handler change_password v admin.php: zmena hesla vyzaduje
+// stavajici heslo, samotny profil ne. Cizi ucet tudy zmenit nejde - ID se
+// bere VYHRADNE ze session.
+if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oauth_unlink') {
+    if (empty($_SESSION['admin_logged_in']) || empty($_SESSION['admin_id'])) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $mp_uid = (int)$_SESSION['admin_id'];
+
+    if ($action === 'my_profile') {
+        try {
+            $stmt_mp = $pdo->prepare("SELECT username, email, phone, whatsapp_apikey, sms_notifications, whatsapp_notifications, email_lang, totp_enabled, oauth_provider FROM users WHERE id = ? LIMIT 1");
+            $stmt_mp->execute([$mp_uid]);
+            $mp = $stmt_mp->fetch();
+            if (!$mp) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Účet nenalezen.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            echo json_encode([
+                'username' => $mp['username'],
+                'email' => $mp['email'] ?: null,
+                'phone' => $mp['phone'] ?: null,
+                // Klic se vraci maskovany - je to credential pro CallMeBot.
+                'whatsappApikeySet' => ($mp['whatsapp_apikey'] ?? '') !== '',
+                'smsNotifications' => !empty($mp['sms_notifications']),
+                'whatsappNotifications' => !empty($mp['whatsapp_notifications']),
+                // NULL = ridit se globalnim nastavenim email_lang.
+                'emailLang' => in_array($mp['email_lang'], ['cs', 'en'], true) ? $mp['email_lang'] : null,
+                'totpEnabled' => !empty($mp['totp_enabled']),
+                'oauthProvider' => $mp['oauth_provider'] ?: null,
+            ], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            error_log('[my_profile] ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Profil se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $mp_input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    try {
+        $stmt_me = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+        $stmt_me->execute([$mp_uid]);
+        $mp_me = $stmt_me->fetch();
+        if (!$mp_me) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Účet nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'oauth_unlink') {
+            // Odpojeni chce heslo - ukradena session nesmi tise odpojit
+            // prihlasovani a prevzit ucet pres OAuth provider.
+            if (!password_verify((string)($mp_input['password'] ?? ''), $mp_me['password_hash'])) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Nesprávné heslo - účet zůstává propojený.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $pdo->prepare("UPDATE users SET oauth_provider = NULL, oauth_id = NULL WHERE id = ?")->execute([$mp_uid]);
+            bk_audit_log($pdo, 'oauth_unlinked', '', 'user', $mp_uid);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // update_profile
+        $mp_email = trim((string)($mp_input['email'] ?? ''));
+        if ($mp_email === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'E-mail je povinný.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $mp_phone = trim((string)($mp_input['phone'] ?? ''));
+        $mp_lang = in_array($mp_input['emailLang'] ?? null, ['cs', 'en'], true) ? $mp_input['emailLang'] : null;
+        $mp_sms = !empty($mp_input['smsNotifications']) ? 1 : 0;
+        $mp_wa = !empty($mp_input['whatsappNotifications']) ? 1 : 0;
+        // Prazdny klic = beze zmeny (vraci se jen maskovany priznak, takze
+        // formular original nezna a nesmi ho prepsat prazdnem).
+        $mp_wa_key = trim((string)($mp_input['whatsappApikey'] ?? ''));
+        $mp_wa_key_sql = $mp_wa_key !== '' ? $mp_wa_key : $mp_me['whatsapp_apikey'];
+
+        $mp_new_pass = (string)($mp_input['newPassword'] ?? '');
+        $mp_hash = $mp_me['password_hash'];
+        if ($mp_new_pass !== '') {
+            if (strlen($mp_new_pass) < 8) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Heslo musí mít alespoň 8 znaků.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            if (!password_verify((string)($mp_input['oldPassword'] ?? ''), $mp_me['password_hash'])) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Stávající heslo je nesprávné. Změna neproběhla.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $mp_hash = password_hash($mp_new_pass, PASSWORD_BCRYPT);
+        }
+
+        $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ?, password_hash = ? WHERE id = ?")
+            ->execute([$mp_email, $mp_phone ?: null, $mp_wa_key_sql, $mp_sms, $mp_wa, $mp_lang, $mp_hash, $mp_uid]);
+        bk_audit_log($pdo, $mp_new_pass !== '' ? 'password_changed' : 'profile_updated', 'Vlastní profil', 'user', $mp_uid);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[update_profile] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Profil se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

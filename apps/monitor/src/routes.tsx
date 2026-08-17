@@ -19,6 +19,7 @@ const PublicStatusPage = React.lazy(() =>
 );
 const SetPasswordPage = React.lazy(() => import('@/pages/set-password').then((m) => ({ default: m.SetPasswordPage })));
 const UsersPage = React.lazy(() => import('@/pages/users').then((m) => ({ default: m.UsersPage })));
+const ProfilePage = React.lazy(() => import('@/pages/profile').then((m) => ({ default: m.ProfilePage })));
 const SetupPage = React.lazy(() => import('@/pages/setup').then((m) => ({ default: m.SetupPage })));
 const WebsitesPage = React.lazy(() => import('@/pages/websites').then((m) => ({ default: m.WebsitesPage })));
 const ServicesPage = React.lazy(() => import('@/pages/services').then((m) => ({ default: m.ServicesPage })));
@@ -172,6 +173,7 @@ export const router = createBrowserRouter(
         { path: 'settings', element: <SettingsPage /> },
         { path: 'api-agents', element: <ApiAgentsPage /> },
         { path: 'users', element: <UsersPage /> },
+        { path: 'profile', element: <ProfilePage /> },
         { path: '*', element: <NotFoundPage /> },
       ],
     },

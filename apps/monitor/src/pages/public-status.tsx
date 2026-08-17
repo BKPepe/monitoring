@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, CheckCircle2, Moon, Radio, Rss, Sun } from 'lucide-react';
+import { Activity, CheckCircle2, Moon, Radio, Rss, Sun, Wrench } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { PublicMonitorCard, type PublicMonitor } from '@/components/public/monitor-card';
 import { Timeline } from '@/components/timeline';
@@ -54,11 +55,15 @@ interface Incident {
  * (addresses, SSIDs, hostnames) from anonymous responses, so what arrives here
  * is already safe to show.
  */
+/** How often the page re-fetches everything it shows. The header says so. */
+const REFRESH_MS = 60_000;
+
 export function PublicStatusPage() {
   const { t, lang, setLang } = useLanguage();
   const { theme, toggle: toggleTheme } = useTheme();
   const [params] = useSearchParams();
-  const { data: status, error } = usePublicStatus();
+  // A status page left open on a wall monitor has to stay true without F5.
+  const { data: status, error } = usePublicStatus(REFRESH_MS);
 
   // ?lang=en in the URL wins over the stored preference - existing links to
   // the legacy page carry it and they have to keep meaning the same thing.
@@ -120,9 +125,24 @@ export function PublicStatusPage() {
   const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]>>({});
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
   const [regions, setRegions] = React.useState<Region[] | null>(null);
-  const [branding, setBranding] = React.useState<{ siteTitle: string; customLogoUrl: string } | null>(null);
+  const [branding, setBranding] = React.useState<{
+    siteTitle: string;
+    customLogoUrl: string;
+    portalUrl: string;
+    customNavLinks: { name: string; url: string }[];
+  } | null>(null);
   const [uptimeById, setUptimeById] = React.useState<Record<number, number | null>>({});
   const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
+
+  // Auto-refresh for everything the page shows, not just the headline stats:
+  // the tick re-runs the whole fetch effect. Failed refreshes keep the last
+  // known data on screen - a blink to an empty page would claim an outage of
+  // the STATUS PAGE as an outage of the services.
+  const [refreshTick, setRefreshTick] = React.useState(0);
+  React.useEffect(() => {
+    const id = window.setInterval(() => setRefreshTick((n) => n + 1), REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, []);
 
   React.useEffect(() => {
     let active = true;
@@ -132,7 +152,7 @@ export function PublicStatusPage() {
         if (active) setMonitors(Array.isArray(d.monitors) ? d.monitors : []);
       })
       .catch(() => {
-        if (active) setMonitors([]);
+        if (active) setMonitors((prev) => prev ?? []);
       });
     // The 30-day strips - one request for every monitor at once, keyed by id.
     fetch('/status/api.php?action=daily_uptime&days=30')
@@ -158,7 +178,13 @@ export function PublicStatusPage() {
     fetch('/status/api.php?action=ui_config')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setBranding({ siteTitle: d.siteTitle ?? '', customLogoUrl: d.customLogoUrl ?? '' });
+        if (active)
+          setBranding({
+            siteTitle: d.siteTitle ?? '',
+            customLogoUrl: d.customLogoUrl ?? '',
+            portalUrl: d.portalUrl ?? '',
+            customNavLinks: Array.isArray(d.customNavLinks) ? d.customNavLinks : [],
+          });
       })
       .catch(() => {});
     // The real measurement locations - regions, not nodes. The first version
@@ -171,7 +197,7 @@ export function PublicStatusPage() {
         if (active) setRegions(Array.isArray(d.regions) ? d.regions : []);
       })
       .catch(() => {
-        if (active) setRegions([]);
+        if (active) setRegions((prev) => prev ?? []);
       });
     // Recent events - the "what happened lately" strip the legacy page had.
     fetch('/status/api.php?action=events&limit=200')
@@ -180,7 +206,7 @@ export function PublicStatusPage() {
         if (active) setEvents(Array.isArray(d.events) ? d.events : []);
       })
       .catch(() => {
-        if (active) setEvents([]);
+        if (active) setEvents((prev) => prev ?? []);
       });
     // Incidents arrive as JSON and paginate client-side. The legacy page
     // shipped all 200 rows as styled HTML - a third of its 1.1 MB.
@@ -190,12 +216,12 @@ export function PublicStatusPage() {
         if (active) setIncidents(Array.isArray(d.manualIncidents) ? d.manualIncidents : []);
       })
       .catch(() => {
-        if (active) setIncidents([]);
+        if (active) setIncidents((prev) => prev ?? []);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshTick]);
 
   // Grouped by category, in the order the categories first appear - the legacy
   // page did the same, so an existing page keeps its familiar layout.
@@ -261,7 +287,12 @@ export function PublicStatusPage() {
   const down = filtered
     ? (visibleMonitors ?? []).filter((m) => m.status === 'down').length
     : (status?.downMonitors ?? 0);
-  const allGood = filtered ? visibleMonitors !== null && down === 0 : status != null && down === 0;
+  // Announced maintenance is still unavailability. A verdict of "all systems
+  // online" next to a service that is down for maintenance would be false -
+  // the visitor gets an amber verdict naming the maintenance instead.
+  const inMaintenance = (visibleMonitors ?? []).filter((m) => m.status === 'maintenance').length;
+  const online = visibleMonitors === null ? null : visibleMonitors.filter((m) => m.status === 'up').length;
+  const allGood = visibleMonitors !== null && (filtered || status != null) && down === 0 && inMaintenance === 0;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
@@ -277,6 +308,8 @@ export function PublicStatusPage() {
             {status?.lastUpdated && (
               <p className="text-muted-foreground text-xs">
                 {t('public.updated', { at: status.lastUpdated }, `Aktualizováno ${status.lastUpdated}`)}
+                {' · '}
+                {t('public.auto_refresh', 'obnovuje se každou minutu')}
               </p>
             )}
           </div>
@@ -318,21 +351,31 @@ export function PublicStatusPage() {
       <Card
         className={cn(
           'flex flex-wrap items-center gap-3 p-5',
-          allGood ? 'border-up/30 bg-up/5' : down > 0 ? 'border-down/30 bg-down/5' : ''
+          allGood
+            ? 'border-up/30 bg-up/5'
+            : down > 0
+              ? 'border-down/30 bg-down/5'
+              : inMaintenance > 0
+                ? 'border-warning/30 bg-warning/5'
+                : ''
         )}
       >
         {allGood ? (
           <CheckCircle2 className="text-up size-6 shrink-0" />
+        ) : down === 0 && inMaintenance > 0 ? (
+          <Wrench className="text-warning size-6 shrink-0" />
         ) : (
           <Activity className="text-muted-foreground size-6 shrink-0" />
         )}
         <div className="min-w-0">
           <p className="text-base font-bold">
-            {status == null
+            {status == null && monitors == null
               ? t('public.loading', 'Zjišťuji stav…')
               : down > 0
                 ? t('public.degraded', { count: down }, `${down} služeb mimo provoz`)
-                : t('public.all_ok', 'Všechny systémy jsou online')}
+                : inMaintenance > 0
+                  ? t('public.in_maintenance', { count: inMaintenance }, `${inMaintenance} služeb v plánované údržbě`)
+                  : t('public.all_ok', 'Všechny systémy jsou online')}
           </p>
           {error && (
             <p className="text-muted-foreground text-xs">{t('public.load_error', 'Data se nepodařilo načíst.')}</p>
@@ -341,22 +384,17 @@ export function PublicStatusPage() {
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat
-          label={t('public.stat_online', 'Online')}
-          value={filtered ? (visibleMonitors ?? []).filter((m) => m.status === 'up').length : statOnline(status)}
-          tone="up"
-        />
+        {/* "Online 6" vedle "Agenti online 6/6" četlo jako totéž dvakrát a
+            "agent" je interní žargon - čtvrtá dlaždice teď říká, z kolika
+            MÍST se měří, což návštěvníkovi skutečně něco sděluje. */}
+        <Stat label={t('public.stat_online', 'Online')} value={online} tone="up" />
         <Stat
           label={t('public.stat_down', 'Mimo provoz')}
           value={filtered ? down : status ? down : null}
           tone={down > 0 ? 'down' : undefined}
         />
         <Stat label={t('public.stat_uptime', 'Dostupnost 30 dní')} value={status?.uptimePercent ?? null} suffix=" %" />
-        <Stat
-          label={t('public.stat_agents', 'Agenti online')}
-          value={status ? status.agentsOnline : null}
-          suffix={status ? ` / ${status.agentsTotal}` : ''}
-        />
+        <Stat label={t('public.stat_regions', 'Míst měření')} value={regions === null ? null : regions.length} />
       </div>
 
       {/* The measurement locations - where the checks come FROM. This answers
@@ -439,17 +477,25 @@ export function PublicStatusPage() {
               // resolvedAt - vyřešený incident z 8. 8. se tak ukazoval jako
               // probíhající. Ověřeno proti skutečné odpovědi.
               <li key={inc.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                {/* Odznak se slovem místo tečky: zelené kolečko vedle titulku
+                    "Výpadek: ..." četlo jako protimluv - teď tam stojí přímo
+                    "Vyřešeno", resp. "Probíhá". */}
                 <span className="flex items-center gap-2 font-medium">
-                  <span
-                    className={cn('size-2 rounded-full', inc.status === 'resolved' ? 'bg-up' : 'bg-down animate-pulse')}
-                  />
+                  <Badge variant={inc.status === 'resolved' ? 'up' : 'down'}>
+                    {inc.status === 'resolved'
+                      ? t('public.incident_resolved', 'Vyřešeno')
+                      : t('public.incident_open', 'Probíhá')}
+                  </Badge>
                   {inc.title}
                 </span>
+                {/* Bez sekund: s nimi se rozsah na úzkém displeji lámal
+                    uprostřed času. Minutová přesnost tu stačí - trvání
+                    říká durationText. */}
                 <span className="text-muted-foreground tabular-nums">
-                  {inc.createdAt}
+                  {noSeconds(inc.createdAt)}
                   {inc.status === 'resolved' && inc.resolvedAt
-                    ? ` → ${inc.resolvedAt}${inc.durationText ? ` (${inc.durationText})` : ''}`
-                    : ` · ${t('public.incident_open', 'probíhá')}`}
+                    ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
+                    : ''}
                 </span>
               </li>
             ))}
@@ -457,21 +503,55 @@ export function PublicStatusPage() {
         </Card>
       )}
 
-      <footer className="text-muted-foreground flex flex-wrap items-center gap-3 pt-2 text-xs">
-        <a
-          href={pageSlug ? `/status/rss.php?page=${encodeURIComponent(pageSlug)}` : '/status/rss.php'}
-          className="hover:text-foreground inline-flex items-center gap-1.5 transition-colors"
-        >
-          <Rss className="size-3.5" /> {t('public.rss', 'RSS kanál výpadků')}
-        </a>
+      {/* The same footer the legacy page had: © + portal link, custom links
+          from the admin settings, RSS, and who runs the monitoring. */}
+      <footer className="text-muted-foreground space-y-2 border-t border-border pt-4 text-xs">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <a
+            href={pageSlug ? `/status/rss.php?page=${encodeURIComponent(pageSlug)}` : '/status/rss.php'}
+            className="hover:text-foreground inline-flex items-center gap-1.5 transition-colors"
+          >
+            <Rss className="size-3.5" /> {t('public.rss', 'RSS kanál výpadků')}
+          </a>
+          {(branding?.customNavLinks ?? []).map((l) => (
+            <a
+              key={l.url}
+              href={l.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground transition-colors"
+            >
+              {l.name}
+            </a>
+          ))}
+        </div>
+        <p>
+          © {new Date().getFullYear()}{' '}
+          {branding?.portalUrl ? (
+            <a href={branding.portalUrl} className="hover:text-foreground transition-colors">
+              {branding.siteTitle || 'Blood Kings'}
+            </a>
+          ) : (
+            (branding?.siteTitle ?? '')
+          )}
+          . {t('public.footer_rights', 'Všechna práva vyhrazena.')} · {t('public.powered_by', 'Poháněno')}{' '}
+          <a
+            href="https://monitoring.bloodkings.eu"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline transition-colors hover:text-foreground"
+          >
+            Blood Kings Monitoring
+          </a>
+        </p>
       </footer>
     </div>
   );
 }
 
-function statOnline(status: { totalMonitors: number; downMonitors: number } | null): number | null {
-  if (status == null) return null;
-  return status.totalMonitors - status.downMonitors;
+/** "08.08.2026 00:21:11" -> "08.08.2026 00:21" - seconds add wrap, not meaning. */
+function noSeconds(v: string): string {
+  return v.replace(/(\d{1,2}:\d{2}):\d{2}/, '$1');
 }
 
 function Stat({

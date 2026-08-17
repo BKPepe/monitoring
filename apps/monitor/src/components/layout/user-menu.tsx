@@ -60,7 +60,7 @@ export function UserMenu({
   }
 
   return (
-    <Link to="/users" title={t('user_menu.profile_title', 'Profil a uživatelé')}>
+    <Link to="/profile" title={t('user_menu.profile_title', 'Můj účet')}>
       {content}
     </Link>
   );

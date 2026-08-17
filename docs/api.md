@@ -478,6 +478,10 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=trigger_remote_action` | admin | Action on a router (allowed ones only) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
 | `action=get_subscriptions` / `save_subscriptions` | logged in | Alert subscriptions |
+| `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
+| `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; disabling requires the password |
+| `action=set_password` | public (one-time token) | Set a password from an invite or reset e-mail; the token is consumed on first success |
 
 `export_config` deliberately omits passwords, tokens and agent keys - it exists
 to back up settings, not to clone access.

@@ -2,7 +2,14 @@ import * as React from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ShieldAlert, RefreshCw } from 'lucide-react';
+import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  ChevronLeft,
+  ChevronRight,
+  ShieldAlert,
+  RefreshCw,
+} from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 
 interface AuditEntry {
@@ -17,6 +24,8 @@ interface AuditEntry {
   userAgent: string | null;
 }
 
+const PAGE_SIZE = 25;
+
 /**
  * Auditní protokol uživatelských akcí.
  *
@@ -24,18 +33,25 @@ interface AuditEntry {
  * u každého řádku stálo „Systémový Agent (Cron)". Skutečný záznam toho, kdo
  * se přihlásil a kdo co změnil, se přitom celou dobu ukládal do vlastní
  * tabulky a byl vidět jen ve staré administraci.
+ *
+ * Endpoint vrací nejnovějších 500 záznamů; řazení, filtr podle druhu akce
+ * a stránkování po 25 běží nad nimi na klientovi - další dotaz do DB by
+ * jen opakoval touž odpověď v jiném pořadí.
  */
 export function UserAuditLog() {
   const { t } = useLanguage();
   const [entries, setEntries] = React.useState<AuditEntry[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [sortAsc, setSortAsc] = React.useState(false);
+  const [filter, setFilter] = React.useState<'all' | 'security' | 'changes' | 'destructive'>('all');
+  const [page, setPage] = React.useState(0);
 
   // Načtení samo nesahá na stav synchronně - všechno se děje až v `then`.
   // Indikátor obnovování si zapíná tlačítko, protože v obsluze události je
   // to v pořádku; uvnitř efektu by šlo o kaskádové překreslení.
   const load = React.useCallback(() => {
-    return fetch('/status/api.php?action=user_audit_log&limit=100', { credentials: 'include' })
+    return fetch('/status/api.php?action=user_audit_log&limit=500', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         setEntries(Array.isArray(d?.entries) ? d.entries : []);
@@ -69,12 +85,37 @@ export function UserAuditLog() {
     user_updated: t('uaudit.user_updated', 'Uživatel upraven'),
     user_deleted: t('uaudit.user_deleted', 'Uživatel smazán'),
     password_reset_requested: t('uaudit.password_reset', 'Žádost o obnovu hesla'),
+    password_changed: t('uaudit.password_changed', 'Heslo změněno'),
+    profile_updated: t('uaudit.profile_updated', 'Profil upraven'),
+    oauth_unlinked: t('uaudit.oauth_unlinked', 'OAuth odpojen'),
     setup_completed: t('uaudit.setup_completed', 'Dokončena instalace'),
     annotation_created: t('uaudit.annotation_created', 'Poznámka v grafu'),
   };
 
-  const isSecurity = (action: string) => /login|logout|password|totp|token|denied/.test(action);
+  const isSecurity = (action: string) => /login|logout|password|totp|token|oauth|denied/.test(action);
   const isDestructive = (action: string) => /deleted|failed|denied/.test(action);
+
+  // Filtr před stránkováním: stránka 2 „bezpečnostních" má být druhá
+  // pětadvacítka bezpečnostních záznamů, ne bezpečnostní záznamy z druhé
+  // pětadvacítky všech.
+  const visible = React.useMemo(() => {
+    let list = entries ?? [];
+    if (filter === 'security') list = list.filter((e) => isSecurity(e.action));
+    else if (filter === 'changes') list = list.filter((e) => !isSecurity(e.action));
+    else if (filter === 'destructive') list = list.filter((e) => isDestructive(e.action));
+    // API vrací nejnovější první; vzestupně = obrátit kopii, ne originál.
+    if (sortAsc) list = [...list].reverse();
+    return list;
+  }, [entries, filter, sortAsc]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = visible.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  const setFilterAndReset = (f: typeof filter) => {
+    setFilter(f);
+    setPage(0);
+  };
 
   return (
     <Card className="space-y-4 p-5">
@@ -103,55 +144,112 @@ export function UserAuditLog() {
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={filter}
+          onChange={(e) => setFilterAndReset(e.target.value as typeof filter)}
+          className="bg-secondary/60 h-8 rounded-md border border-input px-2 text-xs"
+          aria-label={t('uaudit.filter_aria', 'Filtr záznamů')}
+        >
+          <option value="all">{t('uaudit.filter_all', 'Vše')}</option>
+          <option value="security">{t('uaudit.filter_security', 'Přihlášení a zabezpečení')}</option>
+          <option value="changes">{t('uaudit.filter_changes', 'Změny konfigurace')}</option>
+          <option value="destructive">{t('uaudit.filter_destructive', 'Mazání a selhání')}</option>
+        </select>
+        <Button variant="outline" size="sm" onClick={() => setSortAsc((v) => !v)} className="gap-1.5">
+          {sortAsc ? <ArrowUpNarrowWide className="size-3.5" /> : <ArrowDownWideNarrow className="size-3.5" />}
+          {sortAsc ? t('uaudit.sort_oldest', 'Nejstarší první') : t('uaudit.sort_newest', 'Nejnovější první')}
+        </Button>
+        {entries !== null && (
+          <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+            {t('uaudit.count', { n: visible.length }, `${visible.length} záznamů`)}
+          </span>
+        )}
+      </div>
+
       {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
 
       {entries === null ? (
         <p className="text-muted-foreground text-sm">{t('uaudit.loading', 'Načítám…')}</p>
-      ) : entries.length === 0 && !error ? (
+      ) : visible.length === 0 && !error ? (
         <p className="text-muted-foreground text-sm">
-          {t('uaudit.empty', 'Zatím žádné záznamy. Přibudou při prvním přihlášení nebo změně nastavení.')}
+          {entries.length === 0
+            ? t('uaudit.empty', 'Zatím žádné záznamy. Přibudou při prvním přihlášení nebo změně nastavení.')
+            : t('uaudit.empty_filter', 'Filtru neodpovídá žádný záznam.')}
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="text-muted-foreground border-b border-border">
-              <tr>
-                <th className="py-2 pr-3 font-medium">{t('uaudit.col_time', 'Čas')}</th>
-                <th className="py-2 pr-3 font-medium">{t('uaudit.col_action', 'Akce')}</th>
-                <th className="py-2 pr-3 font-medium">{t('uaudit.col_actor', 'Kdo')}</th>
-                <th className="py-2 pr-3 font-medium">{t('uaudit.col_detail', 'Detail')}</th>
-                <th className="py-2 font-medium">{t('uaudit.col_ip', 'IP')}</th>
-                <th className="py-2 pl-3 font-medium">{t('uaudit.col_agent', 'Klient')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((e) => (
-                <tr key={e.id} className="border-b border-border/50 last:border-0">
-                  <td className="text-muted-foreground py-2 pr-3 font-mono whitespace-nowrap tabular-nums">{e.time}</td>
-                  <td className="py-2 pr-3">
-                    <Badge variant={isDestructive(e.action) ? 'down' : isSecurity(e.action) ? 'neutral' : 'up'}>
-                      {actionLabels[e.action] ?? e.action}
-                    </Badge>
-                  </td>
-                  <td className="py-2 pr-3 font-medium">
-                    {/* Prázdné jméno znamená nepřihlášeného - typicky pokus
-                        o přihlášení neexistujícím účtem. Pomlčka, ne „systém". */}
-                    {e.actor ?? '—'}
-                  </td>
-                  <td className="text-muted-foreground max-w-[28rem] truncate py-2 pr-3" title={e.description ?? ''}>
-                    {e.description ?? '—'}
-                  </td>
-                  <td className="text-muted-foreground py-2 font-mono whitespace-nowrap">{e.ip ?? '—'}</td>
-                  {/* Celý user agent je dlouhý; v tabulce je zkrácený a plné
-                      znění se ukáže po najetí myší. */}
-                  <td className="text-muted-foreground max-w-[14rem] truncate py-2 pl-3" title={e.userAgent ?? ''}>
-                    {e.userAgent ?? '—'}
-                  </td>
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-muted-foreground border-b border-border">
+                <tr>
+                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_time', 'Čas')}</th>
+                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_action', 'Akce')}</th>
+                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_actor', 'Kdo')}</th>
+                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_detail', 'Detail')}</th>
+                  <th className="py-2 font-medium">{t('uaudit.col_ip', 'IP')}</th>
+                  <th className="py-2 pl-3 font-medium">{t('uaudit.col_agent', 'Klient')}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {pageRows.map((e) => (
+                  <tr key={e.id} className="border-b border-border/50 last:border-0">
+                    <td className="text-muted-foreground py-2 pr-3 font-mono whitespace-nowrap tabular-nums">
+                      {e.time}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <Badge variant={isDestructive(e.action) ? 'down' : isSecurity(e.action) ? 'neutral' : 'up'}>
+                        {actionLabels[e.action] ?? e.action}
+                      </Badge>
+                    </td>
+                    <td className="py-2 pr-3 font-medium">
+                      {/* Prázdné jméno znamená nepřihlášeného - typicky pokus
+                          o přihlášení neexistujícím účtem. Pomlčka, ne „systém". */}
+                      {e.actor ?? '—'}
+                    </td>
+                    <td className="text-muted-foreground max-w-[28rem] truncate py-2 pr-3" title={e.description ?? ''}>
+                      {e.description ?? '—'}
+                    </td>
+                    <td className="text-muted-foreground py-2 font-mono whitespace-nowrap">{e.ip ?? '—'}</td>
+                    {/* Celý user agent je dlouhý; v tabulce je zkrácený a plné
+                        znění se ukáže po najetí myší. */}
+                    <td className="text-muted-foreground max-w-[14rem] truncate py-2 pl-3" title={e.userAgent ?? ''}>
+                      {e.userAgent ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={safePage === 0}
+                onClick={() => setPage(safePage - 1)}
+                className="gap-1"
+              >
+                <ChevronLeft className="size-3.5" />
+                {t('uaudit.prev', 'Předchozí')}
+              </Button>
+              <span className="text-muted-foreground text-xs tabular-nums">
+                {t('uaudit.page', { page: safePage + 1, pages: pageCount }, `Strana ${safePage + 1} / ${pageCount}`)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={safePage >= pageCount - 1}
+                onClick={() => setPage(safePage + 1)}
+                className="gap-1"
+              >
+                {t('uaudit.next', 'Další')}
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </Card>
   );

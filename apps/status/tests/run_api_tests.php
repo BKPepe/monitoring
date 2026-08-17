@@ -222,6 +222,39 @@ check_true(
     !str_contains($raw, 'wan_ipv4') && !str_contains($raw, 'wireguard_peers')
 );
 
+// Ohlášená údržba je veřejná (legacy stránka ji tiskne v banneru), ale popis
+// smí ven JEN dokud je příznak zapnutý - starý popis minulé odstávky je
+// interní poznámka, ne veřejné oznámení.
+check_true('monitor nese klíč maintenance', array_key_exists('maintenance', $by_id[1] ?? []));
+check_false('bez údržby je maintenance false', ($by_id[1]['maintenance'] ?? null) === true);
+check('bez údržby se popis nevrací', $by_id[1]['maintenanceDescription'] ?? null, null);
+
+$pdo->exec("UPDATE monitors SET maintenance = 1, maintenance_description = 'Výměna disku', maintenance_end = '2030-01-02 03:00:00' WHERE id = 1");
+[, $mnt_data] = api_get($base, 'action=monitors');
+$mnt_by_id = [];
+foreach (($mnt_data['monitors'] ?? []) as $m) {
+    $mnt_by_id[$m['id']] = $m;
+}
+check_true('zapnutá údržba je v anonymní odpovědi', ($mnt_by_id[1]['maintenance'] ?? null) === true);
+check('popis údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceDescription'] ?? null, 'Výměna disku');
+check('konec údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceEnd'] ?? null, '2030-01-02 03:00:00');
+
+// Vypnutí příznaku popis zase schová, i když v DB zůstal.
+$pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 1");
+[, $mnt_data2] = api_get($base, 'action=monitors');
+$mnt_row2 = null;
+foreach (($mnt_data2['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 1) $mnt_row2 = $m;
+}
+check('po vypnutí údržby je popis zase skrytý', $mnt_row2['maintenanceDescription'] ?? null, null);
+$pdo->exec("UPDATE monitors SET maintenance_description = NULL, maintenance_end = NULL WHERE id = 1");
+
+// ui_config nese portalUrl pro patičku veřejné stránky - klíč musí existovat
+// i prázdný, aby frontend poznal "nenastaveno" od "starý server bez pole".
+[$code, $uicfg] = api_get($base, 'action=ui_config');
+check('ui_config vrací HTTP 200', $code, 200);
+check_true('ui_config nese portalUrl', array_key_exists('portalUrl', $uicfg ?? []));
+
 // =======================================================================
 // 2. public_status - podklad pro veřejnou stránku i widget
 // =======================================================================

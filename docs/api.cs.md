@@ -472,6 +472,10 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=trigger_remote_action` | admin | Akce na routeru (jen povolené) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
 | `action=get_subscriptions` / `save_subscriptions` | přihlášený | Odběr upozornění |
+| `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
+| `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; vypnutí vyžaduje heslo |
+| `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
 
 `export_config` záměrně nevrací hesla, tokeny ani agent klíče - existuje na
 zálohu nastavení, ne na klonování přístupů.

@@ -1,9 +1,11 @@
 import * as React from 'react';
 import {
   Activity,
+  Wrench,
   ChevronDown,
   Gamepad2,
   Globe,
+  Headphones,
   HeartPulse,
   LineChart,
   MessageCircle,
@@ -33,6 +35,8 @@ export interface PublicMonitor {
   cpu: number | null;
   ram: number | null;
   hdd: number | null;
+  maintenanceDescription?: string | null;
+  maintenanceEnd?: string | null;
 }
 
 /**
@@ -91,6 +95,14 @@ export function PublicMonitorCard({
             <span className="truncate text-sm font-medium">{monitor.name}</span>
           )}
           {liveBadge(monitor, d, t)}
+          {/* Údržba je taky nedostupnost - ale ohlášená. Návštěvník má vidět
+              ŽE neběží, PROČ, a do kdy - ne jen oranžovou tečku bez vysvětlení. */}
+          {monitor.status === 'maintenance' && (
+            <Badge variant="warning">
+              <Wrench className="mr-1 size-3" />
+              {t('public.maintenance', 'Údržba')}
+            </Badge>
+          )}
         </span>
         <span className="flex items-center gap-3">
           {uptime.length > 0 && <UptimeStrip days={uptime} />}
@@ -126,6 +138,20 @@ export function PublicMonitorCard({
           )}
         </span>
       </div>
+
+      {monitor.status === 'maintenance' && (monitor.maintenanceDescription || monitor.maintenanceEnd) && (
+        <p className="text-warning mt-1.5 pl-5 text-xs">
+          {monitor.maintenanceDescription || t('public.maintenance', 'Údržba')}
+          {monitor.maintenanceEnd
+            ? ' ' +
+              t(
+                'public.maintenance_until',
+                { until: fmtWindowTime(monitor.maintenanceEnd) },
+                `(do ${fmtWindowTime(monitor.maintenanceEnd)})`
+              )
+            : ''}
+        </p>
+      )}
 
       {open && !statusOnly && (
         <div className="mt-3 space-y-2.5 pl-5">
@@ -226,6 +252,16 @@ function liveBadge(
       <Badge variant="info">{t('public.discord_online', { n: d.presence_count }, `${d.presence_count} online`)}</Badge>
     );
   }
+  // TeamSpeak: connected clients, same headset + "3 / 32" the legacy page had.
+  if (monitor.type === 'teamspeak' && d.clients_online != null) {
+    return (
+      <Badge variant="info" title={t('public.ts_clients', 'Připojení klienti')}>
+        <Headphones className="mr-1 size-3" />
+        {d.clients_online}
+        {d.clients_max != null ? ` / ${d.clients_max}` : ''}
+      </Badge>
+    );
+  }
   return null;
 }
 
@@ -250,7 +286,10 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
           style={{ width: `${clamped}%` }}
         />
       </span>
-      <span className="w-24 shrink-0 text-right tabular-nums" title={detail}>
+      {/* nowrap: "39.01 GB / 124.4 GB" se do pevné šířky nevešlo a lámalo
+          se na dva řádky - hodnota si vezme, kolik potřebuje, a zmenší se
+          pruh, ne čitelnost. */}
+      <span className="shrink-0 text-right whitespace-nowrap tabular-nums" title={detail}>
         {detail ?? `${percent} %`}
       </span>
     </div>
@@ -325,6 +364,11 @@ function buildRows(
   add(t('public.f_last_check', 'Poslední kontrola'), monitor.lastCheck);
   add(t('public.f_last_change', 'Poslední změna stavu'), monitor.lastStatusChange);
   return rows;
+}
+
+/** "2026-08-17 12:00:00" / ISO -> "2026-08-17 12:00" - drop seconds, keep both source formats. */
+function fmtWindowTime(v: string): string {
+  return v.replace('T', ' ').slice(0, 16);
 }
 
 function formatDuration(

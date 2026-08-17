@@ -24,13 +24,13 @@ import {
   EyeOff,
   RefreshCw,
   FileBarChart,
-  BellRing,
   ExternalLink,
   Layers,
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { PresetManager } from '@/components/preset-manager';
+import { GithubIcon, GoogleIcon } from '@/components/ui/brand-icons';
 import { Link } from 'react-router';
 
 const API_BASE = '/status/api.php';
@@ -48,37 +48,6 @@ const selectCls = inputCls;
 const labelCls = 'block text-[11px] font-medium text-muted-foreground mb-1';
 const hintCls = 'text-[10px] text-muted-foreground/70 mt-0.5';
 const sectionTitle = 'text-xs font-bold uppercase tracking-wider text-rose-400 mb-3';
-
-function GithubIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
-      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-    </svg>
-  );
-}
-
-function GoogleIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className}>
-      <path
-        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-        fill="#4285F4"
-      />
-      <path
-        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-        fill="#34A853"
-      />
-      <path
-        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-        fill="#FBBC05"
-      />
-      <path
-        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-        fill="#EA4335"
-      />
-    </svg>
-  );
-}
 
 function DiscordIcon({ className }: { className?: string }) {
   return (
@@ -139,18 +108,6 @@ export function SettingsPage() {
   const [digestSending, setDigestSending] = useState<string | null>(null);
   const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  interface SubEntry {
-    id: number;
-    name: string;
-    type: string;
-    email: number;
-    sms: number;
-    whatsapp: number;
-  }
-  const [subs, setSubs] = useState<SubEntry[]>([]);
-  const [subsLoading, setSubsLoading] = useState(false);
-  const [subsSaved, setSubsSaved] = useState(false);
-
   const fetchSettings = useCallback(async () => {
     try {
       setLoading(true);
@@ -173,18 +130,6 @@ export function SettingsPage() {
       setLoading(false);
     }
   }, [session, fetchSettings]);
-
-  // Fetch subscriptions when Notifikace tab opens
-  useEffect(() => {
-    if (activeTab === 'notifikace' && session?.authenticated && subs.length === 0) {
-      setSubsLoading(true);
-      fetch(`${API_BASE}?action=get_subscriptions`, { credentials: 'include' })
-        .then((r) => r.json())
-        .then((d) => setSubs(d.subscriptions ?? []))
-        .catch(() => {})
-        .finally(() => setSubsLoading(false));
-    }
-  }, [activeTab, session, subs.length]);
 
   // Update a single setting
   const set = (key: string, val: string) => setSettings((prev) => ({ ...prev, [key]: val }));
@@ -261,26 +206,6 @@ export function SettingsPage() {
       setDigestSending(null);
       setTimeout(() => setDigestResult(null), 5000);
     }
-  };
-
-  const handleSaveSubs = async () => {
-    try {
-      await fetch(`${API_BASE}?action=save_subscriptions`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscriptions: subs }),
-      });
-      setSubsSaved(true);
-      setTimeout(() => setSubsSaved(false), 3000);
-    } catch (e) {
-      // Tiché spolknutí chyby by uživateli tvrdilo, že se odběry uložily.
-      setError(e instanceof Error ? e.message : t('settings.save_error', 'Uložení se nezdařilo.'));
-    }
-  };
-
-  const toggleSub = (id: number, field: 'email' | 'sms' | 'whatsapp') => {
-    setSubs((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: s[field] ? 0 : 1 } : s)));
   };
 
   const isLocked = (key: string) => envLocked.includes(key);
@@ -1074,80 +999,8 @@ export function SettingsPage() {
               </div>
             </Card>
 
-            {/* Notification subscriptions for my account */}
-            <Card className="p-6 space-y-5">
-              <div className="flex items-center gap-3 border-b border-border pb-3">
-                <BellRing className="size-5 text-violet-400" />
-                <div>
-                  <h3 className="font-semibold text-sm">{t('settings.subs_title', 'Odběr notifikací pro můj účet')}</h3>
-                  <p className="text-[10px] text-muted-foreground">
-                    {t(
-                      'settings.subs_desc',
-                      'Zvolte, pro které monitory chcete dostávat e-mailové, SMS nebo WhatsApp notifikace při výpadku.'
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              {subsLoading ? (
-                <p className="text-xs text-muted-foreground">{t('settings.subs_loading', 'Načítám odběry…')}</p>
-              ) : subs.length === 0 ? (
-                <p className="text-xs text-muted-foreground">{t('settings.subs_none', 'Žádné monitory k odběru.')}</p>
-              ) : (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-[1fr_60px_60px_70px] gap-2 text-[10px] font-bold text-muted-foreground uppercase tracking-wider px-1">
-                    <span>{t('settings.subs_col_monitor', 'Monitor')}</span>
-                    <span className="text-center">E-mail</span>
-                    <span className="text-center">SMS</span>
-                    <span className="text-center">WhatsApp</span>
-                  </div>
-                  {subs.map((s) => (
-                    <div
-                      key={s.id}
-                      className="grid grid-cols-[1fr_60px_60px_70px] gap-2 items-center p-2 rounded-lg bg-secondary/30 border border-border/50 text-xs"
-                    >
-                      <span className="font-medium truncate" title={s.name}>
-                        {s.name}
-                      </span>
-                      <label className="flex justify-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={s.email === 1}
-                          onChange={() => toggleSub(s.id, 'email')}
-                          className="rounded border-border"
-                        />
-                      </label>
-                      <label className="flex justify-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={s.sms === 1}
-                          onChange={() => toggleSub(s.id, 'sms')}
-                          className="rounded border-border"
-                        />
-                      </label>
-                      <label className="flex justify-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={s.whatsapp === 1}
-                          onChange={() => toggleSub(s.id, 'whatsapp')}
-                          className="rounded border-border"
-                        />
-                      </label>
-                    </div>
-                  ))}
-                  <div className="flex justify-end pt-2">
-                    <button
-                      type="button"
-                      onClick={handleSaveSubs}
-                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-violet-600 text-white text-xs font-bold shadow-sm hover:bg-violet-500 transition-colors"
-                    >
-                      {subsSaved ? <Check className="size-3.5" /> : <Save className="size-3.5" />}
-                      {subsSaved ? t('settings.subs_saved', 'Uloženo!') : t('settings.subs_save', 'Uložit odběry')}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </Card>
+            {/* Odběry notifikací se přestěhovaly na /app/profile - jsou to
+                nastavení MÉHO účtu, ne systému. */}
           </div>
         )}
 
