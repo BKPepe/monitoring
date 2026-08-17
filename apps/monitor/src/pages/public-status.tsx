@@ -609,15 +609,25 @@ export function PublicStatusPage() {
           ) : (
             (branding?.siteTitle ?? '')
           )}
-          . {t('public.footer_rights', 'Všechna práva vyhrazena.')} · {t('public.powered_by', 'Poháněno')}{' '}
-          <a
-            href="https://monitoring.bloodkings.eu"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline transition-colors hover:text-foreground"
-          >
-            Blood Kings Monitoring
-          </a>{' '}
+          . {t('public.footer_rights', 'Všechna práva vyhrazena.')}{' '}
+          {/* Product attribution only where the instance's own title does not
+              already name the product - "© Blood Kings | Status Monitoring ...
+              Poháněno Blood Kings Monitoring" read the same name twice in one
+              line (reported by the user). Foreign deployments keep the credit. */}
+          {!(branding?.siteTitle ?? '').toLowerCase().includes('blood kings') && (
+            <>
+              · {t('public.powered_by', 'Poháněno')}{' '}
+              <a
+                href="https://monitoring.bloodkings.eu"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline transition-colors hover:text-foreground"
+              >
+                Blood Kings Monitoring
+              </a>
+            </>
+          )}{' '}
+          ·{' '}
           {/* The exact deployed version, linking to its commit - the same
               transparency the app footer has had; the public page gets it too
               (open-source project, the repo is public anyway). */}
