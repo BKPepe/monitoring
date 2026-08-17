@@ -10,6 +10,7 @@ import type { TimelineEvent } from '@/data/model';
 import type { UptimeDay } from '@/components/public/uptime-strip';
 import { useLanguage } from '@/context/language-context';
 import { useTheme } from '@/lib/use-theme';
+import { versionCommitUrl } from '@/lib/version';
 import { cn } from '@/lib/utils';
 
 interface Region {
@@ -616,6 +617,18 @@ export function PublicStatusPage() {
             className="underline transition-colors hover:text-foreground"
           >
             Blood Kings Monitoring
+          </a>{' '}
+          {/* The exact deployed version, linking to its commit - the same
+              transparency the app footer has had; the public page gets it too
+              (open-source project, the repo is public anyway). */}
+          <a
+            href={versionCommitUrl(__APP_VERSION__)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
+            title={t('footer.version_link_title', 'Otevřít zdrojový kód této verze na GitHubu')}
+          >
+            v{__APP_VERSION__}
           </a>
         </p>
       </footer>

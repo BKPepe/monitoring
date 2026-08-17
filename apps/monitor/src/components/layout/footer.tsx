@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card';
 import { FileText, HelpCircle, X, ExternalLink, Mail, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { usePublicStatus } from '@/api/use-asset-charts';
+import { versionCommitUrl } from '@/lib/version';
 
 export function Footer({ version }: { version: string }) {
   const { t } = useLanguage();
@@ -19,23 +20,15 @@ export function Footer({ version }: { version: string }) {
       <footer className="text-muted-foreground flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border px-6 py-3 text-xs print:hidden">
         {/* The version links to the exact commit on GitHub - one click from a
             running install tells precisely what is deployed. */}
-        {(() => {
-          const hash = version.match(/\(([0-9a-f]{7,40})\)/)?.[1];
-          const href = hash
-            ? `https://github.com/BKPepe/monitoring/commit/${hash}`
-            : 'https://github.com/BKPepe/monitoring';
-          return (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-foreground transition-colors underline decoration-dotted underline-offset-2"
-              title={t('footer.version_link_title', 'Otevřít zdrojový kód této verze na GitHubu')}
-            >
-              Blood Kings Monitoring v{version}
-            </a>
-          );
-        })()}
+        <a
+          href={versionCommitUrl(version)}
+          target="_blank"
+          rel="noreferrer"
+          className="hover:text-foreground transition-colors underline decoration-dotted underline-offset-2"
+          title={t('footer.version_link_title', 'Otevřít zdrojový kód této verze na GitHubu')}
+        >
+          Blood Kings Monitoring v{version}
+        </a>
 
         <div className="ml-auto flex flex-wrap items-center gap-x-6 gap-y-2">
           <span className="flex items-center gap-1.5">
