@@ -48,6 +48,8 @@ interface Incident {
   durationText: string | null;
   /** Průběh řešení (investigating -> identified -> ... ) z incident_updates. */
   updates?: IncidentUpdate[];
+  /** Shrnutí po vyřešení - admin ho píše právě pro veřejnost. */
+  postmortem?: string | null;
 }
 
 /**
@@ -558,6 +560,16 @@ export function PublicStatusPage() {
                       </li>
                     ))}
                   </ul>
+                )}
+                {/* Postmortem po vyřešení: admin UI ho umí od začátku, ale
+                    veřejnost ho neviděla - přitom je psaný právě pro ni. */}
+                {inc.status === 'resolved' && inc.postmortem && (
+                  <div className="bg-secondary/30 w-full rounded-md border border-border/60 p-2.5">
+                    <p className="text-foreground mb-1 text-[11px] font-semibold">
+                      {t('public.postmortem', 'Co se stalo (postmortem)')}
+                    </p>
+                    <p className="text-muted-foreground text-[11px] whitespace-pre-wrap">{inc.postmortem}</p>
+                  </div>
                 )}
               </li>
             ))}

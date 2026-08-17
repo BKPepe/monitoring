@@ -127,6 +127,28 @@ if (function_exists('bk_enrich_threshold_tip')) {
     ], 'cpu');
     check_false('bez telemetrie se nepíše o klientech', str_contains(mb_strtolower($no_wifi), 'klient'));
 
+    // Vytížení kanálu z iwinfo survey: bere se nejvytíženější rádio, které
+    // ho REÁLNĚ změřilo - driver bez survey podpory (busy_pct null) nesmí
+    // vyrobit vymyšlenou nulu ani se do výběru počítat.
+    $busy_tip = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+        'wifi_radios' => [
+            ['radio' => 'wlan0', 'busy_pct' => 34],
+            ['radio' => 'wlan1', 'busy_pct' => 71],
+            ['radio' => 'wlan2', 'busy_pct' => null],
+        ],
+    ], 'cpu');
+    check_true('vytížení kanálu je v textu', str_contains($busy_tip, '71'));
+    check_true('jmenuje se nejvytíženější rádio', str_contains($busy_tip, 'wlan1'));
+
+    // Obecné doporučení kt_rec_wifi o kanálu mluvit smí - vymyšlené ale nesmí
+    // být MĚŘENÍ. Jméno rádia se v textu objeví jedině se změřenou hodnotou.
+    $busy_none = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+        'wifi_radios' => [['radio' => 'wlan0', 'busy_pct' => null]],
+    ], 'cpu');
+    check_false('samá null měření = žádné jméno rádia s číslem', str_contains($busy_none, 'wlan0'));
+
     // RAM varianta bere paměťový žebříček, ne CPU.
     $ram_tip = bk_enrich_threshold_tip([
         'top_ram_processes' => [['name' => 'java', 'ram_mb' => 2048]],

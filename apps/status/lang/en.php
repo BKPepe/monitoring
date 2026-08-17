@@ -587,6 +587,7 @@ return [
     'kt_top_proc_ram' => 'Most memory held by: %s (%s MB).',
     'kt_load_avg' => 'Load average: %s/%s/%s.',
     'kt_ctx_wifi_clients' => 'Wi-Fi clients: %d.',
+    'kt_ctx_wifi_busy' => 'Radio %s channel is %d %% busy.',
     'kt_ctx_dns_queries' => 'DNS queries: %d.',
     'kt_ctx_ts3_clients' => 'TeamSpeak clients: %d.',
     'kt_ctx_wg_peers' => 'WireGuard peers: %d.',

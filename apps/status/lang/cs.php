@@ -588,6 +588,7 @@ return [
     'kt_top_proc_ram' => 'Nejvíce paměti drží: %s (%s MB).',
     'kt_load_avg' => 'Load average: %s/%s/%s.',
     'kt_ctx_wifi_clients' => 'Wi-Fi klientů: %d.',
+    'kt_ctx_wifi_busy' => 'Kanál rádia %s je vytížený na %d %%.',
     'kt_ctx_dns_queries' => 'DNS dotazů: %d.',
     'kt_ctx_ts3_clients' => 'TeamSpeak klientů: %d.',
     'kt_ctx_wg_peers' => 'WireGuard peerů: %d.',

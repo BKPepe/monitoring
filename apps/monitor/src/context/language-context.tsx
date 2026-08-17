@@ -289,6 +289,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.upd_identified': { cs: 'Příčina nalezena', en: 'Identified' },
   'public.upd_monitoring': { cs: 'Sledujeme', en: 'Monitoring' },
   'public.upd_resolved': { cs: 'Vyřešeno', en: 'Resolved' },
+  'public.postmortem': { cs: 'Co se stalo (postmortem)', en: 'What happened (postmortem)' },
   'sp.badge_title': { cs: 'Vložitelný odznak stavu', en: 'Embeddable status badge' },
   'sp.badge_desc': {
     cs: 'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.',

@@ -1512,6 +1512,22 @@ function bk_enrich_threshold_tip(
         if (isset($details['wifi_clients_count'])) {
             $parts[] = sprintf(t('kt_ctx_wifi_clients'), (int)$details['wifi_clients_count']);
         }
+        // The generic advice says "check the channel" - with survey data the
+        // tip can say HOW busy it is. Only radios that measured busy_pct
+        // count; a driver without survey support must not produce a made-up 0.
+        $busiest_pct = null;
+        $busiest_radio = '';
+        foreach ((array)($details['wifi_radios'] ?? []) as $ktr) {
+            if (is_array($ktr) && isset($ktr['busy_pct']) && $ktr['busy_pct'] !== null) {
+                if ($busiest_pct === null || (float)$ktr['busy_pct'] > $busiest_pct) {
+                    $busiest_pct = (float)$ktr['busy_pct'];
+                    $busiest_radio = (string)($ktr['radio'] ?? '');
+                }
+            }
+        }
+        if ($busiest_pct !== null && $busiest_radio !== '') {
+            $parts[] = sprintf(t('kt_ctx_wifi_busy'), $busiest_radio, (int)round($busiest_pct));
+        }
         $rec_key = 'kt_rec_wifi';
     } elseif (preg_match('/dnsmasq|kresd|unbound/', $proc_name)) {
         if (isset($details['dns_queries'])) {
