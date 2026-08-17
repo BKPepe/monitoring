@@ -28,7 +28,8 @@
     "lint:schema": "php apps/status/tests/run_schema_lint.php",
     "lint:actions": "php apps/status/tests/run_api_action_lint.php",
     "lint:metrics": "php apps/status/tests/run_agent_metric_lint.php",
-    "check:exports": "node scripts/check-dead-exports.mjs"
+    "check:exports": "node scripts/check-dead-exports.mjs",
+    "check:i18n-dead": "node scripts/check-dead-i18n.mjs"
   },
   "//overrides": "undici 7.0.0-7.28.0 je high (desync odpovedi mezi uzivateli); miniflare ho ma zamcene na 7.28.0 a wrangler opravenou verzi zatim nevydal. Po KAZDE zmene tohoto bloku je nutne pregenerovat package-lock.json - `npm ci` odmita bezet, kdyz override neni promitnuty v locku, a v CI to spadne az pri instalaci.",
   "overrides": {

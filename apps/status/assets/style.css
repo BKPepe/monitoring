@@ -1481,6 +1481,15 @@ select.form-control {
     display: none;
   }
 
+  /* Hover tooltips on the 30-day strip cannot fire on touch at all - and
+     their laid-out (opacity:0) ::after boxes near the strip's right edge
+     were the entire source of the page's 30px horizontal wobble on phones.
+     Measured on the live page: 30px overflow before, 0px with this rule. */
+  .history-day[data-tooltip]::after,
+  .history-day[data-tooltip]::before {
+    display: none;
+  }
+
   /* Buttons */
   .btn {
     padding: 0.5rem 0.75rem;

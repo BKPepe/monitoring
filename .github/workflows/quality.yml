@@ -59,6 +59,12 @@ jobs:
       - name: Nepoužité exporty v SPA
         run: npm run check:exports
 
+      # Slovnik ma pres 1400 klicu a mrtve se v nem hromadi tise - rucni sken
+      # jich jednou nasel 86 a o dva dny pozdeji dalsi 4. Dynamicke klice
+      # zakazuje i18n test, takze literalni sken je spolehlivy.
+      - name: Mrtvé překladové klíče
+        run: npm run check:i18n-dead
+
       - name: Rozpočet velikosti buildu
         run: npm run check:bundle
 
