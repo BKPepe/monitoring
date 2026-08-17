@@ -100,6 +100,20 @@ Deployment runs automatically on every push to `main` via GitHub Actions
 
 ---
 
+## 🔢 Versioning
+
+After the history squash (2026-08) both the app and the agents restarted at
+**0.0.1** and version independently:
+
+- **App** (`apps/monitor/package.json`): bump **patch** for fixes, **minor**
+  for features. The footer shows `v<version> (<git hash>)` linking to the
+  exact deployed commit - the hash is the precise identity, the number is the
+  human-readable milestone.
+- **Agents** (`AGENT_VERSION` in each `agents/vps-agent/*` file): each of the
+  four versions independently, same bump rule. Self-update triggers on any
+  version *difference* (not ordering), so a bump - or even a reset - reaches
+  the fleet on its next report cycle.
+
 ## 📈 Design goals
 *   **Performance:** 100/100 on Lighthouse metrics via static Astro compilation with no heavy client-side JS framework, responsive from 360px to 4K.
 *   **Premium design:** minimal, dark-mode-first, red used only as an accent, smooth Vercel-style animations.
