@@ -148,13 +148,22 @@ register_shutdown_function(function () use ($cookie_jar) {
 });
 
 /** POST s JSON tělem; sdílí session přes cookie jar. */
-function api_post(string $base, string $query, array $payload, string $jar): array {
+function api_post(string $base, string $query, array $payload, string $jar, ?string $csrf = null): array {
+    // Server od 2026-08-17 vynucuje CSRF token u všech zápisů - stejně jako
+    // reálný klient ho testy posílají v hlavičce. Zachytává se při přihlášení
+    // (viz $GLOBALS['bk_test_csrf'] u action=login). Explicitní '' = neposlat
+    // (testy, které ověřují, že server bez tokenu odmítne).
+    $headers = ['Content-Type: application/json'];
+    $token = $csrf ?? ($GLOBALS['bk_test_csrf'] ?? '');
+    if ($token !== '') {
+        $headers[] = 'X-CSRF-Token: ' . $token;
+    }
     $ch = curl_init($base . '/api.php?' . $query);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_HTTPHEADER => $headers,
         CURLOPT_COOKIEJAR => $jar,
         CURLOPT_COOKIEFILE => $jar,
         CURLOPT_TIMEOUT => 15,
@@ -387,6 +396,18 @@ check_true('odpověď neobsahuje fatální chybu', !str_contains($raw, 'Fatal er
 check_true('nesmyslný rozsah SLA nekončí chybou serveru', $code < 500);
 check_true('SLA report neobsahuje fatální chybu', !str_contains($raw, 'Fatal error'));
 
+// Hodnoty přibité na seed - drží ekvivalenci při přepisu smyčky 3 dotazů
+// na monitor na dávkové dotazy (viz sla_report v api.php).
+[, $sla_pin] = api_get($base, 'action=sla_report&days=30');
+$sla_by_id = [];
+foreach (($sla_pin['monitors'] ?? []) as $sm) { $sla_by_id[(int)$sm['id']] = $sm; }
+check('p50 monitoru 1 je 120 ms', $sla_by_id[1]['p50Ms'] ?? null, 120);
+check('p99 monitoru 1 je 120 ms', $sla_by_id[1]['p99Ms'] ?? null, 120);
+check_true('poslední výpadek monitoru 1 je vyřešený', ($sla_by_id[1]['lastOutage']['resolved'] ?? null) === true);
+// array_key_exists, ne ?? - operátor ?? považuje NULL za chybějící hodnotu.
+check_true('monitor bez logů má p50 null, ne nulu', array_key_exists('p50Ms', $sla_by_id[2]) && $sla_by_id[2]['p50Ms'] === null);
+check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id[2]) && $sla_by_id[2]['uptimePercent'] === null);
+
 // =======================================================================
 // =======================================================================
 // 7. ZAPISOVACÍ ENDPOINTY
@@ -403,6 +424,70 @@ check_true('SLA report neobsahuje fatální chybu', !str_contains($raw, 'Fatal e
 ], $cookie_jar);
 $logged_in = $code === 200 && !empty($login['success']);
 check_true('přihlášení admina projde', $logged_in);
+// CSRF token pro všechny další zápisy - stejný zdroj jako reálný klient.
+$GLOBALS['bk_test_csrf'] = (string)($login['csrfToken'] ?? '');
+check_true('login vrací CSRF token', $GLOBALS['bk_test_csrf'] !== '');
+
+// Write guard end-to-end: zápis bez tokenu musí spadnout na 403 dřív, než se
+// čehokoli dotkne, a GET na POST-only akci na 405. Bez tohohle by celá CSRF
+// ochrana byla jen mrtvý kód, který nikdo nikdy nevynutil.
+[$wg_code, $wg_data] = api_post($base, 'action=create_incident', ['title' => 'CSRF test'], $cookie_jar, '');
+check('zápis bez CSRF tokenu je 403', $wg_code, 403);
+check_true('a hláška mluví o CSRF', str_contains((string)($wg_data['error'] ?? ''), 'CSRF'));
+[$wg_code2] = api_get_auth($base, 'action=send_digest&period=weekly', $cookie_jar);
+check('GET na POST-only akci je 405', $wg_code2, 405);
+[$wg_code3, $wg_unknown] = api_get($base, 'action=neexistujici_akce');
+check('neznámá akce je 400, ne tichých 200', $wg_code3, 400);
+check_true('a nese klíč error', isset($wg_unknown['error']));
+
+// CORS: odpověď cizímu Originu nesmí nést Allow-Origin (jinak by si
+// credentialované odpovědi mohl číst kdokoliv), vlastnímu ano.
+$cors_probe = function (string $origin) use ($base): string {
+    $ch = curl_init($base . '/api.php?action=public_status');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_HTTPHEADER => ['Origin: ' . $origin],
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $resp = (string)curl_exec($ch);
+    curl_close($ch);
+    return $resp;
+};
+check_false('cizí Origin nedostane Allow-Origin', stripos($cors_probe('https://evil.example'), 'Access-Control-Allow-Origin') !== false);
+check_true('vlastní Origin Allow-Origin dostane', stripos($cors_probe('http://127.0.0.1:8123'), 'Access-Control-Allow-Origin: http://127.0.0.1:8123') !== false);
+
+// save_user/delete_user: do 2026-08-17 v api.php neexistovaly - React je
+// volal, dostával 400 "Neznámá akce" a správa uživatelů z appky nefungovala.
+[$su_code, $su_res] = api_post($base, 'action=save_user', ['username' => 'audit_tester', 'email' => 'audit@example.com', 'role' => 'user', 'password' => 'TesterHeslo123!'], $cookie_jar);
+check('save_user vytvoří účet', $su_code, 200);
+$su_new_id = (int)($su_res['id'] ?? 0);
+check_true('vrací id nového účtu', $su_new_id > 0);
+api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user'], $cookie_jar);
+$su_mail_stmt = $pdo->prepare("SELECT email FROM users WHERE id = ?");
+$su_mail_stmt->execute([$su_new_id]);
+check('úprava e-mailu se skutečně uloží', $su_mail_stmt->fetchColumn(), 'audit2@example.com');
+[$sd_code] = api_post($base, 'action=delete_user', ['id' => 1], $cookie_jar);
+check('vlastní přihlášený účet smazat nejde', $sd_code, 400);
+
+// Role: běžný účet (role user) nesmí na adminské zápisy, na vlastní profil ano.
+$jar3 = tempnam(sys_get_temp_dir(), 'bk_test_c3');
+[$u3_code, $u3_login] = api_post($base, 'action=login', ['username' => 'audit_tester', 'password' => 'TesterHeslo123!'], $jar3, '');
+check_true('tester se přihlásí', $u3_code === 200 && !empty($u3_login['success']));
+$u3_csrf = (string)($u3_login['csrfToken'] ?? '');
+[$ri_code] = api_post($base, 'action=create_incident', ['title' => 'nesmí projít'], $jar3, $u3_csrf);
+check('běžný uživatel nezaloží incident', $ri_code, 403);
+[$rp_code] = api_post($base, 'action=save_preset', ['name' => 'nesmí projít'], $jar3, $u3_csrf);
+check('běžný uživatel neuloží preset', $rp_code, 403);
+[$mp3_code] = api_get_auth($base, 'action=my_profile', $jar3);
+check('vlastní profil běžnému uživateli funguje', $mp3_code, 200);
+@unlink($jar3);
+
+[$du_code] = api_post($base, 'action=delete_user', ['id' => $su_new_id], $cookie_jar);
+check('delete_user účet skutečně smaže', $du_code, 200);
+$su_gone_stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ?");
+$su_gone_stmt->execute([$su_new_id]);
+check('řádek v DB zmizel', (int)$su_gone_stmt->fetchColumn(), 0);
 
 if ($logged_in) {
     // --- Preset ---------------------------------------------------------
@@ -1602,8 +1687,8 @@ if ($logged_in) {
             'escalation_enabled' => '1',
             'escalation_after_mins' => '20',
             'escalation_webhook_url' => 'https://discord.com/api/webhooks/test',
-            'whatsapp_api_endpoint' => 'https://graph.facebook.com/v20.0/123/messages',
-            'whatsapp_phone_number' => '+420777123456',
+            'smtp_host' => 'smtp.example.com',
+            'smtp_pass' => 'TajneHeslo123',
         ],
     ], $cookie_jar);
     check('save_settings vrací 200', $code, 200);
@@ -1616,24 +1701,22 @@ if ($logged_in) {
     check('lhůta na převzetí se uložila', $s['escalation_after_mins'] ?? null, '20');
     check('eskalační webhook se uložil', $s['escalation_webhook_url'] ?? null, 'https://discord.com/api/webhooks/test');
 
-    // The heart of it: whatever can be saved must also be readable. If these two
-    // keys dropped out of the read path again, the next save would erase them.
-    check(
-        'whatsapp endpoint se vrací zpátky (jinak ho další uložení smaže)',
-        $s['whatsapp_api_endpoint'] ?? null,
-        'https://graph.facebook.com/v20.0/123/messages'
-    );
-    check('whatsapp číslo se vrací zpátky', $s['whatsapp_phone_number'] ?? null, '+420777123456');
+    // The heart of it: whatever can be saved must also be readable. If a key
+    // dropped out of the read path again, the next save would erase it.
+    // (Původní kanárek byly whatsapp_* klíče - ty se 2026-08-17 ukázaly jako
+    // mrtvé a smazaly se, kanárkem je teď SMTP pár plain+secret.)
+    check('smtp host se vrací zpátky (jinak ho další uložení smaže)', $s['smtp_host'] ?? null, 'smtp.example.com');
+    check_true('smtp heslo se vrací maskované, ne prázdné a ne plaintext',
+        ($s['smtp_pass'] ?? '') !== '' && ($s['smtp_pass'] ?? '') !== 'TajneHeslo123');
 
     // The second save sends back what the form loaded - exactly like a user
     // flipping some other option and hitting save.
     api_post($base, 'action=save_settings', ['settings' => $s], $cookie_jar);
     [, $again] = api_get_auth($base, 'action=get_settings', $cookie_jar);
-    check(
-        'druhé uložení nastavení nesmaže',
-        $again['settings']['whatsapp_api_endpoint'] ?? null,
-        'https://graph.facebook.com/v20.0/123/messages'
-    );
+    check('druhé uložení nastavení nesmaže', $again['settings']['smtp_host'] ?? null, 'smtp.example.com');
+    // A maskované heslo poslané zpátky NESMÍ přepsat skutečnou hodnotu.
+    $smtp_pass_db = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_pass'")->fetchColumn();
+    check('maskovaný secret nepřepsal skutečné heslo', $smtp_pass_db, 'TajneHeslo123');
 
     // Every key the server accepts must also be returnable. Without this the
     // same bug could be recreated with a different key.

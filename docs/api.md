@@ -480,6 +480,7 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=trigger_remote_action` | admin | Action on a router (allowed ones only) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
 | `action=get_subscriptions` / `save_subscriptions` | logged in | Alert subscriptions |
+| `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; disabling requires the password |
@@ -541,6 +542,17 @@ A node downloads the list of monitors to check and posts results back, including
 | `cron.php[?key=…]` | text | CLI or `cron_key` | Data collection; from the web only with the key |
 
 ---
+
+## Writes: POST + CSRF
+
+Since 2026-08 every state-changing action accepts **POST only** (GET gets 405)
+and every session-authenticated write must carry the session's CSRF token in
+the `X-CSRF-Token` header (multipart forms may send a `csrf_token` field
+instead). The token comes back from `action=login` and `action=session`.
+Token-authenticated flows (`set_password`) and session-establishing ones
+(`login`, `setup`, `forgot_password`, `logout`) are exempt. CORS reflects
+only the site's own origin - a foreign origin gets no
+`Access-Control-Allow-Origin` at all.
 
 ## Versioning and stability
 

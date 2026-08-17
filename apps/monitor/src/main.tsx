@@ -7,6 +7,10 @@ import './styles/theme.css';
 import { router } from './routes';
 import { LanguageProvider } from './context/language-context';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { installCsrfFetch } from './api/csrf-fetch';
+
+// Must run before the first render - components fire POSTs from effects.
+installCsrfFetch();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Chybí #root — zkontroluj index.html.');

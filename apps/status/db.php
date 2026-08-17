@@ -812,7 +812,6 @@ function bk_settings_keys(): array {
         'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_secure',
         'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from',
         'smsbrana_user', 'smsbrana_password',
-        'whatsapp_api_endpoint', 'whatsapp_token', 'whatsapp_phone_number',
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
@@ -835,7 +834,7 @@ function bk_settings_keys(): array {
  */
 function bk_settings_secret_keys(): array {
     return [
-        'smtp_pass', 'twilio_token', 'smsbrana_password', 'whatsapp_token',
+        'smtp_pass', 'twilio_token', 'smsbrana_password',
         'oauth_github_client_secret', 'oauth_google_client_secret',
         'oauth_discord_client_secret', 'oauth_gitlab_client_secret',
         'pushover_api_token', 'pagerduty_routing_key', 'metrics_token',

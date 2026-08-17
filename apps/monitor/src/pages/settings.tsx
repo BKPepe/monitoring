@@ -858,52 +858,11 @@ export function SettingsPage() {
               />
             </Card>
 
-            {/* WhatsApp Business Gateway */}
-            <Card className="p-6 space-y-5 border-emerald-500/30">
-              <div className="flex items-center gap-3 border-b border-border pb-3">
-                <MessageCircle className="size-5 text-emerald-400" />
-                <div>
-                  <h3 className="font-semibold text-sm">WhatsApp Business Gateway</h3>
-                  <p className="text-[10px] text-muted-foreground">
-                    {t(
-                      'settings.whatsapp_desc',
-                      'Konfigurace WhatsApp API pro doručování výstrah (Twilio WhatsApp, UltraMsg nebo Meta Cloud API).'
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-3">
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="whatsapp_api_endpoint"
-                  label="WhatsApp API Endpoint URL"
-                  placeholder="https://api.ultramsg.com/instance1234/messages/chat"
-                />
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="whatsapp_token"
-                  label={t('settings.whatsapp_token_label', 'WhatsApp Access Token / Token')}
-                  type="password"
-                />
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="whatsapp_phone_number"
-                  label={t('settings.whatsapp_phone_label', 'Cílové / Odesílací číslo WhatsApp')}
-                  placeholder="+420777111222"
-                />
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => handleSendTest('WhatsApp Gateway')}
-                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold shadow-sm hover:bg-emerald-500 transition-colors cursor-pointer"
-                >
-                  <Send className="size-3.5" /> {t('settings.test_whatsapp', 'Test WhatsApp Gateway')}
-                </button>
-              </div>
-            </Card>
+            {/* WhatsApp Business Gateway karta smazána 2026-08-17: tři pole
+                (endpoint/token/číslo) nečetl jediný řádek serveru - WhatsApp
+                reálně jezdí přes CallMeBot s per-user klíčem v profilu - a
+                "Test" tlačítko jen zobrazovalo toast bez volání serveru.
+                Formulář, který nic nedělá, je lež. */}
 
             {/* Digest reporty */}
             <Card className="p-6 space-y-5 border-teal-500/40 bg-teal-500/5">

@@ -11,9 +11,22 @@ $request_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? '
 $host = $_SERVER['HTTP_HOST'] ?? 'bloodkings.eu';
 $default_origin = $request_scheme . '://' . $host;
 
-$origin = $_SERVER['HTTP_ORIGIN'] ?? $default_origin;
-header('Access-Control-Allow-Origin: ' . $origin);
-header('Access-Control-Allow-Credentials: true');
+// CORS: dřív se sem odrážel JAKÝKOLIV Origin i s Allow-Credentials: true -
+// důvěrnost všech přihlášených odpovědí pak držela jen na SameSite=Lax
+// atributu cookie. Povolený je výhradně vlastní origin (SPA i legacy stránky
+// běží na téže doméně jako API); cizímu originu se hlavičky nepošlou vůbec
+// a prohlížeč mu odpověď nevydá.
+$origin = (string)($_SERVER['HTTP_ORIGIN'] ?? '');
+$bk_host_no_port = strtolower(explode(':', (string)$host)[0]);
+$bk_allowed_origins = [
+    $default_origin,
+    'https://' . $bk_host_no_port,
+    'http://' . $bk_host_no_port,
+];
+if ($origin === '' || in_array($origin, $bk_allowed_origins, true)) {
+    header('Access-Control-Allow-Origin: ' . ($origin !== '' ? $origin : $default_origin));
+    header('Access-Control-Allow-Credentials: true');
+}
 header('Vary: Origin');
 
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
@@ -52,6 +65,49 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 $bk_session_writers = ['login', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
 if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SESSION_ACTIVE) {
     session_write_close();
+}
+
+/**
+ * Write guard: každá stav měnící akce musí přijít jako POST a každý
+ * session-autentizovaný zápis musí nést CSRF token session (hlavička
+ * X-CSRF-Token, u multipart formulářů pole csrf_token).
+ *
+ * Do této chvíle byla jedinou cross-site ochranou SameSite=Lax na cookie -
+ * jediný atribut mezi "bezpečné" a "každý web smí volat adminské akce".
+ * A protože Lax cookie POSÍLÁ při top-level GET navigaci, akce čtoucí
+ * parametry z $_GET (send_digest) šly spustit obyčejným odkazem.
+ */
+$bk_post_only_actions = [
+    // session-autentizované zápisy (vyžadují i CSRF)
+    'save_monitor', 'delete_monitor', 'import_discovered_service', 'upload_logo',
+    'trigger_remote_action', 'convert_to_agent_check', 'save_settings',
+    'generate_metrics_token', 'incident_action', 'create_incident',
+    'save_preset', 'delete_preset', 'assign_preset',
+    'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable',
+    'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
+    'save_annotation', 'save_user', 'delete_user',
+    // session teprve zakládají / autentizují se jinak než cookie - POST ano, CSRF ne
+    'login', 'logout', 'setup', 'forgot_password', 'set_password',
+];
+$bk_csrf_exempt = ['login', 'logout', 'setup', 'forgot_password', 'set_password'];
+// alerts_read_state a dashboard_layout jsou GET čtení + POST zápis v jedné akci.
+$bk_csrf_on_post = array_merge(
+    array_values(array_diff($bk_post_only_actions, $bk_csrf_exempt)),
+    ['alerts_read_state', 'dashboard_layout']
+);
+
+if (in_array($action, $bk_post_only_actions, true) && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $bk_csrf_on_post, true)) {
+    $bk_csrf_in = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['csrf_token'] ?? ''));
+    if ($bk_csrf_in === '' || empty($_SESSION['csrf_token']) || !hash_equals((string)$_SESSION['csrf_token'], $bk_csrf_in)) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Chybí nebo nesouhlasí CSRF token. Obnovte stránku a zkuste akci znovu.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 }
 
 // 1. Kontrola stavu relace (přihlášení z admin.php / PHP session)
@@ -1863,7 +1919,7 @@ if ($action === 'incidents') {
 // vyřešení s poznámkou, postmortem. Každý krok se zapisuje do
 // incident_updates - timeline je tak úplná bez ohledu na to, kdo co udělal.
 if ($action === 'incident_action') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -1934,7 +1990,7 @@ if ($action === 'incident_action') {
 // 2c3. Ruční nahlášení incidentu (admin-only) - zapisuje do `incidents` + první
 // zprávu do `incident_updates`.
 if ($action === 'create_incident') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -2035,7 +2091,7 @@ if ($action === 'presets') {
 }
 
 if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'assign_preset') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -2569,7 +2625,7 @@ if ($action === 'status_pages') {
 }
 
 if ($action === 'save_status_page' || $action === 'delete_status_page') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -2844,6 +2900,61 @@ if ($action === 'sla_report') {
         $stmt->execute([$days]);
         $monitors = $stmt->fetchAll();
 
+        // Dřív tu smyčka pálila 3 dotazy NA KAŽDÝ monitor (poslední výpadek,
+        // jeho konec, percentily) - N+1 v čisté podobě. Teď tři dávkové
+        // dotazy před smyčkou; výsledky drží mapy podle monitor_id a hodnoty
+        // jsou bit po bitu stejné (přibité integračními testy).
+        $sla_outage_by_mid = [];
+        try {
+            // Poslední down řádek každého monitoru + nejbližší následující up
+            // (korelovaný poddotaz běží jen pro monitory, které kdy spadly).
+            $stmt_out_all = $pdo->query("
+                SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
+                       (SELECT u.checked_at FROM monitor_logs u
+                        WHERE u.monitor_id = l.monitor_id AND u.status = 'up' AND u.id > l.id
+                        ORDER BY u.id ASC LIMIT 1) AS next_up_at
+                FROM monitor_logs l
+                JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
+                  ON ld.max_id = l.id
+            ");
+            foreach ($stmt_out_all->fetchAll() as $orow) {
+                $sla_outage_by_mid[(int)$orow['monitor_id']] = $orow;
+            }
+        } catch (Throwable $t) {}
+
+        $sla_pct_by_mid = [];
+        try {
+            // Přesné percentily jedním průchodem: ROW_NUMBER/COUNT po monitorech
+            // a ven jdou JEN řádky na pozicích percentilů. Vzorec pozice je
+            // týž jako v původním PHP: idx = floor(p*(n-1)), rn = idx+1.
+            $stmt_pct = $pdo->prepare("
+                SELECT monitor_id, rn, cnt, response_time FROM (
+                    SELECT monitor_id, response_time,
+                           ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY response_time) AS rn,
+                           COUNT(*) OVER (PARTITION BY monitor_id) AS cnt
+                    FROM monitor_logs
+                    WHERE response_time IS NOT NULL AND response_time > 0
+                          AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                ) t
+                WHERE rn = FLOOR(0.50 * (cnt - 1)) + 1
+                   OR rn = FLOOR(0.95 * (cnt - 1)) + 1
+                   OR rn = FLOOR(0.99 * (cnt - 1)) + 1
+            ");
+            $stmt_pct->execute([$days]);
+            foreach ($stmt_pct->fetchAll() as $prow) {
+                $p_mid = (int)$prow['monitor_id'];
+                $p_rn = (int)$prow['rn'];
+                $p_cnt = (int)$prow['cnt'];
+                $p_val = (int)$prow['response_time'];
+                // Jeden řádek může obsadit víc pozic najednou (malé n).
+                foreach ([['p50', 0.50], ['p95', 0.95], ['p99', 0.99]] as [$pk, $pp]) {
+                    if ($p_rn === (int)floor($pp * ($p_cnt - 1)) + 1) {
+                        $sla_pct_by_mid[$p_mid][$pk] = $p_val;
+                    }
+                }
+            }
+        } catch (Throwable $t) {}
+
         $report = [];
         foreach ($monitors as $m) {
             $mid = (int)$m['id'];
@@ -2854,68 +2965,32 @@ if ($action === 'sla_report') {
             // ne dokonalých 100.0 do reportu, který nikdo nenaměřil.
             $uptimePct = $non_maint > 0 ? round(($up / $non_maint) * 100, 3) : null;
 
-            // Rychlé načtení posledního výpadku přímo z DB (monitor_logs) - konec výpadku
-            // dohledáme jako nejbližší následující 'up' záznam, stejně jako u action=events,
-            // ne odhadem pevných 10 minut.
+            // Poslední výpadek z dávkové mapy - konec výpadku je nejbližší
+            // následující 'up' záznam, stejně jako u action=events.
             $last_outage = null;
-            try {
-                $stmt_out = $pdo->prepare("
-                    SELECT id, checked_at, error_message
-                    FROM monitor_logs
-                    WHERE monitor_id = ? AND status = 'down'
-                    ORDER BY id DESC LIMIT 1
-                ");
-                $stmt_out->execute([$mid]);
-                $out_row = $stmt_out->fetch();
-                if ($out_row) {
-                    $out_start = strtotime($out_row['checked_at']);
-                    $resolved = $m['current_status'] !== 'down';
-                    $out_end_ts = time();
-                    if ($resolved) {
-                        $stmt_next_up = $pdo->prepare("
-                            SELECT checked_at FROM monitor_logs
-                            WHERE monitor_id = ? AND status = 'up' AND id > ?
-                            ORDER BY id ASC LIMIT 1
-                        ");
-                        $stmt_next_up->execute([$mid, $out_row['id']]);
-                        $next_up = $stmt_next_up->fetchColumn();
-                        $out_end_ts = $next_up ? strtotime($next_up) : $out_start;
-                    }
-                    $last_outage = [
-                        'start' => date('d.m.Y H:i:s', $out_start),
-                        'end' => $resolved ? date('d.m.Y H:i:s', $out_end_ts) : null,
-                        'durationSec' => max(0, $out_end_ts - $out_start),
-                        'reason' => $out_row['error_message'] ?: 'Port neodpovídá',
-                        'resolved' => $resolved,
-                    ];
+            $out_row = $sla_outage_by_mid[$mid] ?? null;
+            if ($out_row) {
+                $out_start = strtotime($out_row['checked_at']);
+                $resolved = $m['current_status'] !== 'down';
+                $out_end_ts = time();
+                if ($resolved) {
+                    $out_end_ts = $out_row['next_up_at'] ? strtotime($out_row['next_up_at']) : $out_start;
                 }
-            } catch (Throwable $t) {}
+                $last_outage = [
+                    'start' => date('d.m.Y H:i:s', $out_start),
+                    'end' => $resolved ? date('d.m.Y H:i:s', $out_end_ts) : null,
+                    'durationSec' => max(0, $out_end_ts - $out_start),
+                    'reason' => $out_row['error_message'] ?: 'Port neodpovídá',
+                    'resolved' => $resolved,
+                ];
+            }
 
             $outageMinutes = $down;
             $mttr = $last_outage['resolved'] ?? false ? $last_outage['durationSec'] : null;
 
-            // Percentily odezvy počítané z reálných měření za období, ne odhadem podle typu.
-            $p50 = $p95 = $p99 = null;
-            try {
-                $stmt_rt = $pdo->prepare("
-                    SELECT response_time FROM monitor_logs
-                    WHERE monitor_id = ? AND response_time IS NOT NULL AND response_time > 0
-                          AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-                    ORDER BY response_time ASC
-                ");
-                $stmt_rt->execute([$mid, $days]);
-                $rt_values = array_map('intval', $stmt_rt->fetchAll(PDO::FETCH_COLUMN));
-                $rt_count = count($rt_values);
-                if ($rt_count > 0) {
-                    $pct = function (array $vals, int $n, float $p) {
-                        $idx = (int)floor($p * ($n - 1));
-                        return $vals[max(0, min($n - 1, $idx))];
-                    };
-                    $p50 = $pct($rt_values, $rt_count, 0.50);
-                    $p95 = $pct($rt_values, $rt_count, 0.95);
-                    $p99 = $pct($rt_values, $rt_count, 0.99);
-                }
-            } catch (Throwable $t) {}
+            $p50 = $sla_pct_by_mid[$mid]['p50'] ?? null;
+            $p95 = $sla_pct_by_mid[$mid]['p95'] ?? null;
+            $p99 = $sla_pct_by_mid[$mid]['p99'] ?? null;
 
             $report[] = [
                 'id' => $mid,
@@ -3552,6 +3627,133 @@ if ($action === 'save_subscriptions') {
 
 
 // 3. Seznam uživatelů z databáze (vyžaduje přihlášení)
+// Správa uživatelů pro React (/app/users). Do 2026-08-17 tyhle akce
+// NEEXISTOVALY: appApi posílal save_user/delete_user, neznámá akce propadla
+// na výchozí odpověď s HTTP 200 bez klíče error - a UI hlásilo "uloženo",
+// zatímco se nestalo vůbec nic. Stejná logika jako handlery v admin.php.
+if ($action === 'save_user' || $action === 'delete_user') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $su_input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    if ($action === 'delete_user') {
+        $du_id = (int)($su_input['id'] ?? 0);
+        if ($du_id === (int)($_SESSION['admin_id'] ?? 0)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Nemůžete smazat svůj vlastní přihlášený účet.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        try {
+            $stmt_du = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+            $stmt_du->execute([$du_id]);
+            $du_username = $stmt_du->fetchColumn();
+            if ($du_username === false) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Uživatel nenalezen.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$du_id]);
+            bk_audit_log($pdo, 'user_deleted', (string)$du_username, 'user', $du_id);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            error_log('[delete_user] ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Uživatele se nepodařilo smazat.'], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    // save_user
+    $su_id = (int)($su_input['id'] ?? 0);
+    $su_username = trim((string)($su_input['username'] ?? ''));
+    $su_email = trim((string)($su_input['email'] ?? ''));
+    $su_phone = trim((string)($su_input['phone'] ?? ''));
+    $su_role = ($su_input['role'] ?? '') === 'admin' ? 'admin' : 'user';
+    $su_password = (string)($su_input['password'] ?? '');
+
+    if ($su_username === '' || $su_email === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Uživatelské jméno a e-mail jsou povinné.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($su_password !== '' && strlen($su_password) < 8) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Heslo musí mít alespoň 8 znaků.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        if ($su_id > 0) {
+            // Staré hodnoty kvůli auditu - tichá změna e-mailu cizího účtu je
+            // vektor převzetí, audit musí říct, co přesně se změnilo.
+            $stmt_old = $pdo->prepare("SELECT username, email, phone, role FROM users WHERE id = ?");
+            $stmt_old->execute([$su_id]);
+            $su_old = $stmt_old->fetch();
+            if (!$su_old) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Uživatel nenalezen.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            if ($su_password !== '') {
+                $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?")
+                    ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT), $su_id]);
+            } else {
+                $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?")
+                    ->execute([$su_username, $su_email, $su_phone, $su_role, $su_id]);
+            }
+            $su_changes = [];
+            if ($su_old['username'] !== $su_username) $su_changes[] = "jméno {$su_old['username']} -> {$su_username}";
+            if ($su_old['email'] !== $su_email) $su_changes[] = "e-mail {$su_old['email']} -> {$su_email}";
+            if ((string)$su_old['phone'] !== $su_phone) $su_changes[] = 'telefon změněn';
+            if ($su_old['role'] !== $su_role) $su_changes[] = "role {$su_old['role']} -> {$su_role}";
+            if ($su_password !== '') $su_changes[] = 'heslo nastaveno adminem';
+            bk_audit_log($pdo, 'user_updated', $su_username . (!empty($su_changes) ? ' (' . implode(', ', $su_changes) . ')' : ' (beze změny)'), 'user', $su_id);
+            echo json_encode(['success' => true, 'id' => $su_id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($su_password !== '') {
+            // Heslo zadal admin ručně - žádná pozvánka.
+            $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
+                ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT)]);
+            $su_new_id = (int)$pdo->lastInsertId();
+            bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', heslo nastaveno adminem)', 'user', $su_new_id);
+            echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => false], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // Bez hesla: placeholder hash, který žádnému plaintextu neodpovídá,
+        // a pozvánkový odkaz - admin heslo uživatele nikdy nezná.
+        $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
+            ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash(bin2hex(random_bytes(32)), PASSWORD_BCRYPT)]);
+        $su_new_id = (int)$pdo->lastInsertId();
+        $su_token = bk_issue_password_reset_token($pdo, $su_new_id);
+        $su_link = $default_origin . '/app/set-password?token=' . $su_token;
+        $su_site = get_setting('site_title', 'Blood Kings');
+        $su_body = '<h1>Vítejte v ' . htmlspecialchars($su_site) . '</h1>'
+            . '<p>Byl pro vás vytvořen účet <strong>' . htmlspecialchars($su_username) . '</strong>. Nastavte si prosím heslo kliknutím na odkaz níže (platnost 48 hodin):</p>'
+            . '<p><a href="' . htmlspecialchars($su_link) . '">' . htmlspecialchars($su_link) . '</a></p>';
+        bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', pozvánka e-mailem)', 'user', $su_new_id);
+        $su_sent = send_email($su_email, 'Nastavení hesla - ' . $su_site, $su_body);
+        // invited=false při selhání mailu: UI pak po pravdě řekne "účet vznikl,
+        // ale pozvánka neodešla" místo lživého "pozvánka odeslána".
+        echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => (bool)$su_sent], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        if ((string)$e->getCode() === '23000') {
+            http_response_code(400);
+            echo json_encode(['error' => 'Uživatelské jméno nebo e-mail už existuje.'], JSON_UNESCAPED_UNICODE);
+        } else {
+            error_log('[save_user] ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Uživatele se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        }
+    }
+    exit;
+}
+
 if ($action === 'users') {
     if (empty($_SESSION['admin_logged_in'])) {
         http_response_code(401);

@@ -77,6 +77,16 @@ foreach ($files as $file) {
             }
         }
 
+        // 2b. Přes appApi helpery: request('akce') / mutate('akce') skládají
+        // URL dynamicky (`?action=${action}`), takže vzor 1 je nevidí. Přesně
+        // tudy proklouzlo save_user/delete_user - klient je volal, api.php je
+        // neznal, neznámá akce vracela 200 a UI hlásilo neexistující úspěch.
+        if (preg_match_all("/(?:request|mutate)(?:<[^>]*>)?\(\s*'([a-z_]+)'/", $line, $helper_calls)) {
+            foreach ($helper_calls[1] as $hc) {
+                $hits[] = $hc;
+            }
+        }
+
         // 2. Přes konstantu: `${API_BASE}?action=…`
         if ($base_is_api && preg_match_all('/API_BASE\}\?action=([a-z_]+)/', $line, $viabase)) {
             foreach ($viabase[1] as $a) {

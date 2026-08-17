@@ -474,6 +474,7 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=trigger_remote_action` | admin | Akce na routeru (jen povolené) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
 | `action=get_subscriptions` / `save_subscriptions` | přihlášený | Odběr upozornění |
+| `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; vypnutí vyžaduje heslo |
@@ -533,6 +534,16 @@ Uzel si stáhne seznam monitorů ke kontrole a pošle zpátky výsledky včetně
 | `cron.php[?key=…]` | text | CLI nebo `cron_key` | Sběr dat; z webu jen s klíčem |
 
 ---
+
+## Zápisy: POST + CSRF
+
+Od 2026-08 každá stav měnící akce přijímá **jen POST** (GET dostane 405)
+a každý session-autentizovaný zápis musí nést CSRF token session v hlavičce
+`X-CSRF-Token` (multipart formuláře mohou poslat pole `csrf_token`). Token
+vrací `action=login` a `action=session`. Tokenem autentizované toky
+(`set_password`) a akce session teprve zakládající (`login`, `setup`,
+`forgot_password`, `logout`) jsou vyjmuté. CORS odráží jen vlastní origin -
+cizí origin `Access-Control-Allow-Origin` nedostane vůbec.
 
 ## Verzování a stabilita
 

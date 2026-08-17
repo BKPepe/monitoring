@@ -113,6 +113,15 @@ export class ApiError extends Error {
 /** CSRF token se drží v paměti — do localStorage nepatří. */
 let csrfToken: string | null = null;
 
+/** Pro fetch wrapper v main.tsx — server od 08/2026 CSRF u zápisů vynucuje. */
+export function getCsrfToken(): string | null {
+  return csrfToken;
+}
+
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token;
+}
+
 async function request<T>(action: string, init?: RequestInit): Promise<T> {
   let url = `${STATUS_API}/api.php?action=${action}`;
   if (action === 'session') {
