@@ -83,7 +83,7 @@ $bk_post_only_actions = [
     'trigger_remote_action', 'convert_to_agent_check', 'save_settings',
     'generate_metrics_token', 'incident_action', 'create_incident',
     'save_preset', 'delete_preset', 'assign_preset',
-    'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable',
+    'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
     'save_annotation', 'save_user', 'delete_user',
     // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
@@ -209,11 +209,18 @@ if ($action === 'login') {
             echo json_encode(['success' => true, 'requires2fa' => true]);
             exit;
         }
+        $login_recovery_left = null;
         if (!bk_totp_verify_code($user['totp_secret'], $totp_code)) {
-            bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
-            http_response_code(401);
-            echo json_encode(['success' => false, 'message' => 'Invalid 2FA code.']);
-            exit;
+            // Lost phone: a one-time recovery code works in place of the TOTP
+            // code. Consumed on success - the audit records how many remain.
+            $login_recovery_left = bk_totp_try_recovery_code($pdo, (int)$user['id'], $totp_code);
+            if ($login_recovery_left === null) {
+                bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
+                http_response_code(401);
+                echo json_encode(['success' => false, 'message' => 'Invalid 2FA code.']);
+                exit;
+            }
+            bk_audit_log($pdo, 'totp_recovery_used', "Zbývá {$login_recovery_left} záložních kódů", 'user', $user['id'], $user['id'], $user['username']);
         }
     }
 
@@ -230,6 +237,9 @@ if ($action === 'login') {
         'authenticated' => true,
         'user' => ['id' => (int)$user['id'], 'username' => $user['username'], 'email' => $user['email'] ?? '', 'role' => $user['role']],
         'csrfToken' => bk_csrf_token(),
+        // Present only when a recovery code signed this login in - the client
+        // should tell the user how many one-time codes are left.
+        'recoveryCodesRemaining' => $login_recovery_left ?? null,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -2329,6 +2339,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
                 // NULL = ridit se globalnim nastavenim email_lang.
                 'emailLang' => in_array($mp['email_lang'], ['cs', 'en'], true) ? $mp['email_lang'] : null,
                 'totpEnabled' => !empty($mp['totp_enabled']),
+                'totpRecoveryRemaining' => !empty($mp['totp_enabled']) ? bk_totp_recovery_remaining($pdo, $mp_uid) : null,
                 'oauthProvider' => $mp['oauth_provider'] ?: null,
             ], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
@@ -2466,7 +2477,7 @@ if ($action === 'set_password') {
 // 2FA pro prihlaseneho uzivatele. Stejny dvoukrokovy postup jako admin.php:
 // secret zije jen v session, dokud uzivatel kodem nepotvrdi, ze se mu QR
 // opravdu naskenoval - jinak by sel ucet zamknout neoverenym secretem.
-if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable') {
+if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable' || $action === 'totp_recovery_regenerate') {
     if (empty($_SESSION['admin_logged_in']) || empty($_SESSION['admin_id'])) {
         http_response_code(401);
         echo json_encode(['error' => 'Vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
@@ -2510,7 +2521,33 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             $stmt_t->execute([$totp_pending, $totp_uid]);
             unset($_SESSION['totp_pending_secret']);
             bk_audit_log($pdo, 'totp_enabled', '', 'user', $totp_uid);
-            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            // Recovery codes are part of enabling 2FA, not an optional extra -
+            // without them a lost phone means a locked account. Returned in
+            // plaintext exactly once; only hashes are stored.
+            $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
+            echo json_encode(['success' => true, 'recoveryCodes' => $totp_recovery], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'totp_recovery_regenerate') {
+            // A new set invalidates the old one, so it demands the password -
+            // a stolen session must not be able to mint sign-in codes.
+            $stmt_me = $pdo->prepare("SELECT password_hash, totp_enabled FROM users WHERE id = ? LIMIT 1");
+            $stmt_me->execute([$totp_uid]);
+            $trr_me = $stmt_me->fetch();
+            if (!$trr_me || empty($trr_me['totp_enabled'])) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Záložní kódy mají smysl jen se zapnutým 2FA.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            if (!password_verify((string)($totp_input['password'] ?? ''), $trr_me['password_hash'])) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Nesprávné heslo - kódy zůstávají beze změny.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
+            bk_audit_log($pdo, 'totp_recovery_regenerated', '', 'user', $totp_uid);
+            echo json_encode(['success' => true, 'recoveryCodes' => $totp_recovery], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -2526,6 +2563,8 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
         }
         $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
         $stmt_t->execute([$totp_uid]);
+        // Codes without 2FA are a sign-in backdoor - they go with it.
+        try { $pdo->prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?")->execute([$totp_uid]); } catch (Throwable $e) {}
         bk_audit_log($pdo, 'totp_disabled', '', 'user', $totp_uid);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {

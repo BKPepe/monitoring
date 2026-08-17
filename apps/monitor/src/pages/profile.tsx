@@ -20,6 +20,7 @@ interface MyProfile {
   whatsappNotifications: boolean;
   emailLang: 'cs' | 'en' | null;
   totpEnabled: boolean;
+  totpRecoveryRemaining?: number | null;
   oauthProvider: string | null;
 }
 
@@ -105,6 +106,7 @@ export function ProfilePage() {
           />
           <TotpSection
             enabled={profile.totpEnabled}
+            recoveryRemaining={profile.totpRecoveryRemaining ?? null}
             onChanged={() => {
               load();
               refetchSession();

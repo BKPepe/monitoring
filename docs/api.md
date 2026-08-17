@@ -483,7 +483,7 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
-| `action=totp_setup` / `totp_confirm` / `totp_disable` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; disabling requires the password |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; regenerating a set and disabling both require the password |
 | `action=set_password` | public (one-time token) | Set a password from an invite or reset e-mail; the token is consumed on first success |
 
 `export_config` deliberately omits passwords, tokens and agent keys - it exists

@@ -375,7 +375,7 @@ export function SetupPage() {
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\s+/g, ''))}
                 placeholder="123456"
-                maxLength={6}
+                maxLength={11}
                 style={{
                   width: '100%',
                   padding: '0.625rem 0.875rem',

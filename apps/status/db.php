@@ -47,7 +47,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260817b');
+    define('BK_SCHEMA_VERSION', '20260817c');
 
     $bk_current_schema = false;
     try {
@@ -614,6 +614,20 @@ try {
         // Status page display options - which sections the public page shows.
         // NULL = everything, so pages created earlier do not change.
         "ALTER TABLE status_pages ADD COLUMN display_options TEXT DEFAULT NULL",
+
+        // 2FA recovery codes: one-time codes for when the phone is gone -
+        // without them, losing the authenticator meant a locked account.
+        // Only sha256 hashes are stored (same rule as password reset tokens),
+        // so a DB dump cannot be used to sign in.
+        "CREATE TABLE IF NOT EXISTS `totp_recovery_codes` (
+          `id` INT AUTO_INCREMENT PRIMARY KEY,
+          `user_id` INT NOT NULL,
+          `code_hash` CHAR(64) NOT NULL,
+          `used_at` DATETIME DEFAULT NULL,
+          `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          KEY `idx_trc_user` (`user_id`),
+          CONSTRAINT `fk_trc_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // Process history - who was eating CPU and memory at a given moment.
         //

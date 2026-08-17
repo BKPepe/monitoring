@@ -440,6 +440,17 @@ CREATE TABLE IF NOT EXISTS `speedtest_results` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Profily metrik (presety) - sdílené nastavení, které jde přiřadit víc monitorům.
+-- 2FA recovery codes - one-time sign-in codes; only sha256 hashes are stored.
+CREATE TABLE IF NOT EXISTS `totp_recovery_codes` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` INT NOT NULL,
+  `code_hash` CHAR(64) NOT NULL,
+  `used_at` DATETIME DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_trc_user` (`user_id`),
+  CONSTRAINT `fk_trc_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `metric_presets` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `name` VARCHAR(80) NOT NULL,

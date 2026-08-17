@@ -6900,6 +6900,68 @@ function bk_totp_verify_code($secret, $code, $discrepancy = 1) {
 }
 
 /**
+ * Generates one-time 2FA recovery codes and stores their sha256 hashes,
+ * replacing any previous set. Returns the PLAINTEXT codes - they are shown
+ * exactly once; only hashes survive, so a DB dump cannot be used to sign in.
+ * The alphabet omits 0/O, 1/l/I - the codes are meant to be read off paper.
+ */
+function bk_totp_generate_recovery_codes(PDO $pdo, int $user_id, int $count = 10): array {
+    $alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+    $codes = [];
+    for ($i = 0; $i < $count; $i++) {
+        $raw = '';
+        for ($j = 0; $j < 10; $j++) {
+            $raw .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+        $codes[] = substr($raw, 0, 5) . '-' . substr($raw, 5);
+    }
+    $pdo->prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?")->execute([$user_id]);
+    $ins = $pdo->prepare("INSERT INTO totp_recovery_codes (user_id, code_hash) VALUES (?, ?)");
+    foreach ($codes as $c) {
+        $ins->execute([$user_id, hash('sha256', str_replace('-', '', $c))]);
+    }
+    return $codes;
+}
+
+/**
+ * Tries a recovery code in place of a TOTP code. On match the code is
+ * consumed (strictly single use) and the number of remaining codes is
+ * returned; null means no match. Input is normalised (case, dashes), so the
+ * code works however the user re-types it from paper.
+ */
+function bk_totp_try_recovery_code(PDO $pdo, int $user_id, string $code): ?int {
+    $norm = strtolower(preg_replace('/[^a-z0-9]/i', '', $code));
+    if (strlen($norm) < 8) {
+        // TOTP codes are 6 digits - do not even look those up here.
+        return null;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM totp_recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL LIMIT 1");
+        $stmt->execute([$user_id, hash('sha256', $norm)]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+        $pdo->prepare("UPDATE totp_recovery_codes SET used_at = NOW() WHERE id = ?")->execute([(int)$row['id']]);
+        return bk_totp_recovery_remaining($pdo, $user_id);
+    } catch (Throwable $e) {
+        // Without the table (old DB before migration) recovery simply does not exist.
+        return null;
+    }
+}
+
+/** Number of unused recovery codes; 0 also when the table does not exist yet. */
+function bk_totp_recovery_remaining(PDO $pdo, int $user_id): int {
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = ? AND used_at IS NULL");
+        $stmt->execute([$user_id]);
+        return (int)$stmt->fetchColumn();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+/**
  * Renders the card for enabling/disabling 2FA on one's own account (the admin
  * and regular-user Profile share this one implementation). The QR code is
  * generated purely client-side (the qrcode CDN library) - the secret is thus never

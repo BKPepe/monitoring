@@ -1572,9 +1572,45 @@ if (function_exists('bk_totp_calculate')) {
 
     // The right code computed from the same secret.
     $valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
-    [$code] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
+    [$code, $tc] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
     check('správný kód 2FA zapne', $code, 200);
     check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+
+    // --- Recovery codes ----------------------------------------------------
+    // Enabling 2FA hands out ten one-time codes exactly once; only hashes
+    // are stored. A code signs the user in IN PLACE of the TOTP code when
+    // the phone is gone - and is consumed by doing so.
+    $rc = $tc['recoveryCodes'] ?? [];
+    check('potvrzení vrací 10 záložních kódů', count($rc), 10);
+    check_true('kódy mají tvar xxxxx-xxxxx', (bool)preg_match('/^[a-z2-9]{5}-[a-z2-9]{5}$/', $rc[0] ?? ''));
+    check('v DB je 10 hashů, ne kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1 AND used_at IS NULL")->fetchColumn(), 10);
+    check_true('plaintext kód v DB není', $pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE code_hash = " . $pdo->quote(str_replace('-', '', $rc[0])))->fetchColumn() == 0);
+
+    [, $mp_rc] = api_get_auth($base, 'action=my_profile', $cookie_jar);
+    check('profil hlásí 10 zbývajících kódů', $mp_rc['totpRecoveryRemaining'] ?? null, 10);
+
+    // Sign-in with a recovery code instead of the TOTP code (separate jar,
+    // the admin session must stay intact).
+    $rc_jar = tempnam(sys_get_temp_dir(), 'bk_test_rc');
+    [$code, $rc_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!', 'totp_code' => $rc[0]], $rc_jar, '');
+    check('záložní kód přihlásí', $code, 200);
+    check('a odpověď říká, kolik kódů zbývá', $rc_login['recoveryCodesRemaining'] ?? null, 9);
+
+    // Strictly single use: the same code a second time must fail.
+    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!', 'totp_code' => $rc[0]], $rc_jar, '');
+    check('použitý kód podruhé nepřihlásí', $code, 401);
+    @unlink($rc_jar);
+
+    // Regeneration requires the password and invalidates the old set.
+    [$code] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'spatne-heslo'], $cookie_jar);
+    check('regenerace se špatným heslem vrací 400', $code, 400);
+    [$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'BloodKingsAdmin123!'], $cookie_jar);
+    check('se správným heslem vrací novou sadu', $code, 200);
+    check('nová sada má zase 10 kódů', count($rr['recoveryCodes'] ?? []), 10);
+    $rc_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_rc2');
+    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!', 'totp_code' => $rc[1]], $rc_jar2, '');
+    check('starý kód po regeneraci neplatí', $code, 401);
+    @unlink($rc_jar2);
 
     // Disabling without the password must fail - a stolen session must not quietly remove 2FA.
     [$code] = api_post($base, 'action=totp_disable', ['password' => 'spatne-heslo'], $cookie_jar);
@@ -1584,6 +1620,8 @@ if (function_exists('bk_totp_calculate')) {
     [$code] = api_post($base, 'action=totp_disable', ['password' => 'BloodKingsAdmin123!'], $cookie_jar);
     check('se správným heslem se vypne', $code, 200);
     check('a v databázi je vypnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 0);
+    // Codes without 2FA would be a sign-in backdoor - disabling removes them.
+    check('vypnutí 2FA smaže i záložní kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1")->fetchColumn(), 0);
 }
 
 // --- Retention for process history --------------------------------------

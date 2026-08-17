@@ -19,9 +19,20 @@ import { useLanguage } from '@/context/language-context';
  * The QR is drawn client-side (the `qrcode` package, lazy-loaded) - the
  * secret never leaves for any third-party service.
  */
-export function TotpSection({ enabled, onChanged }: { enabled: boolean | null; onChanged: () => void }) {
+export function TotpSection({
+  enabled,
+  recoveryRemaining,
+  onChanged,
+}: {
+  enabled: boolean | null;
+  /** Unused recovery codes left; null = unknown (e.g. 2FA off). */
+  recoveryRemaining?: number | null;
+  onChanged: () => void;
+}) {
   const { t } = useLanguage();
-  const [phase, setPhase] = React.useState<'idle' | 'setup' | 'disable'>('idle');
+  const [phase, setPhase] = React.useState<'idle' | 'setup' | 'disable' | 'codes' | 'regen'>('idle');
+  const [recoveryCodes, setRecoveryCodes] = React.useState<string[]>([]);
+  const [codesCopied, setCodesCopied] = React.useState(false);
   const [qrDataUrl, setQrDataUrl] = React.useState<string | null>(null);
   const [secret, setSecret] = React.useState('');
   const [code, setCode] = React.useState('');
@@ -63,10 +74,13 @@ export function TotpSection({ enabled, onChanged }: { enabled: boolean | null; o
     setBusy(true);
     setError(null);
     try {
-      await post('totp_confirm', { code });
-      setPhase('idle');
+      const res = await post('totp_confirm', { code });
       setCode('');
       setQrDataUrl(null);
+      // Recovery codes come with enabling 2FA and are shown exactly once -
+      // the server keeps only hashes, so there is no "show again" later.
+      setRecoveryCodes(Array.isArray(res.recoveryCodes) ? res.recoveryCodes : []);
+      setPhase('codes');
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('totp.failed', 'Operace se nepodařila.'));
@@ -123,9 +137,25 @@ export function TotpSection({ enabled, onChanged }: { enabled: boolean | null; o
       )}
 
       {phase === 'idle' && enabled === true && (
-        <Button size="sm" variant="outline" onClick={() => setPhase('disable')}>
-          {t('totp.disable', 'Vypnout 2FA')}
-        </Button>
+        <div className="space-y-2">
+          {typeof recoveryRemaining === 'number' && (
+            <p
+              className={recoveryRemaining === 0 ? 'text-down text-xs font-semibold' : 'text-muted-foreground text-xs'}
+            >
+              {t('totp.remaining', { n: recoveryRemaining }, `Zbývá ${recoveryRemaining} záložních kódů.`)}
+              {recoveryRemaining === 0 &&
+                ' ' + t('totp.remaining_zero', 'Bez nich vás ztráta telefonu odřízne od účtu.')}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => setPhase('regen')}>
+              {t('totp.regen', 'Vygenerovat nové kódy')}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setPhase('disable')}>
+              {t('totp.disable', 'Vypnout 2FA')}
+            </Button>
+          </div>
+        </div>
       )}
 
       {phase === 'setup' && (
@@ -153,6 +183,90 @@ export function TotpSection({ enabled, onChanged }: { enabled: boolean | null; o
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={busy || code.trim().length < 6}>
               {t('totp.confirm', 'Potvrdit a zapnout')}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setPhase('idle')}>
+              {t('common.cancel', 'Zrušit')}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {phase === 'codes' && (
+        <div className="space-y-3">
+          <p className="text-warning text-xs font-semibold">
+            {t(
+              'totp.codes_hint',
+              'Uložte si záložní kódy - zobrazí se jen teď. Každý funguje jednou a nahradí kód z aplikace, když přijdete o telefon.'
+            )}
+          </p>
+          <div className="bg-secondary/40 grid grid-cols-2 gap-1.5 rounded-md border border-border p-3 font-mono text-sm select-all sm:grid-cols-5">
+            {recoveryCodes.map((c) => (
+              <span key={c} className="tabular-nums">
+                {c}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                navigator.clipboard?.writeText(recoveryCodes.join('\n')).then(
+                  () => setCodesCopied(true),
+                  () => {}
+                );
+              }}
+            >
+              {codesCopied ? t('totp.codes_copied', 'Zkopírováno') : t('totp.codes_copy', 'Zkopírovat kódy')}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setRecoveryCodes([]);
+                setCodesCopied(false);
+                setPhase('idle');
+              }}
+            >
+              {t('totp.codes_done', 'Mám je uložené')}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {phase === 'regen' && (
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setError(null);
+            try {
+              const res = await post('totp_recovery_regenerate', { password });
+              setPassword('');
+              setRecoveryCodes(Array.isArray(res.recoveryCodes) ? res.recoveryCodes : []);
+              setPhase('codes');
+              onChanged();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : t('totp.failed', 'Operace se nepodařila.'));
+            } finally {
+              setBusy(false);
+            }
+          }}
+          className="space-y-3"
+        >
+          {/* A new set invalidates the old one - hence the password, a stolen
+              session must not be able to mint sign-in codes. */}
+          <p className="text-muted-foreground text-xs">
+            {t('totp.regen_hint', 'Nová sada zneplatní všechny staré kódy. Vyžaduje aktuální heslo.')}
+          </p>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={busy || !password}>
+              {t('totp.regen', 'Vygenerovat nové kódy')}
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => setPhase('idle')}>
               {t('common.cancel', 'Zrušit')}

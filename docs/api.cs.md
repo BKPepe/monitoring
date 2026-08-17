@@ -477,7 +477,7 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
-| `action=totp_setup` / `totp_confirm` / `totp_disable` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; vypnutí vyžaduje heslo |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; nová sada i vypnutí vyžadují heslo |
 | `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
 
 `export_config` záměrně nevrací hesla, tokeny ani agent klíče - existuje na
