@@ -346,9 +346,13 @@ try {
         log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'agent_connected', 'Agent se znovu ozval');
     }
     
-    $cpu_threshold = floatval(isset($monitor['cpu_threshold']) ? $monitor['cpu_threshold'] : 90.0);
-    $ram_threshold = floatval(isset($monitor['ram_threshold']) ? $monitor['ram_threshold'] : 95.0);
-    $hdd_threshold = floatval(isset($monitor['hdd_threshold']) ? $monitor['hdd_threshold'] : 90.0);
+    // Preset > monitor > default. The preset editor offered thresholds, but
+    // the alerts here never read them - a preset saying "alert at 70 %"
+    // silently alerted at the monitor's own value instead.
+    $eff_thresholds = bk_monitor_thresholds($pdo, $monitor);
+    $cpu_threshold = floatval($eff_thresholds['cpu'] ?? 90.0);
+    $ram_threshold = floatval($eff_thresholds['ram'] ?? 95.0);
+    $hdd_threshold = floatval($eff_thresholds['hdd'] ?? 90.0);
     
     if ($cpu >= $cpu_threshold) {
         if (!$cpu_alert_sent) {

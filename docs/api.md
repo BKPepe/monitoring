@@ -354,7 +354,7 @@ command.
 | `action=check_stages&monitor_id=` | public | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | public | Availability by measurement location (`checked_from`) |
 | `action=public_status` | public | Summary for the public page (counts, average availability) |
-| `action=badge[&monitor_id=][&lang=en]` | public | Embeddable SVG status badge (60 s cache); without `monitor_id` it summarises the fleet, an unknown monitor is 404 |
+| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it summarises the fleet, an unknown monitor is 404 |
 | `action=websites_overview` | public | Sites with certificates and availability in the window |
 | `action=monitor_insights&monitor_id=` | public | Derived observations for one monitor |
 | `action=dashboard_insights&limit=` | public | The same across monitors, for the overview |
@@ -535,7 +535,7 @@ A node downloads the list of monitors to check and posts results back, including
 | Endpoint | Format | Access | Description |
 |---|---|---|---|
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scraping by an external Prometheus; disabled when no token is set. The token may also be sent as an `Authorization: Bearer` header |
-| `badge.php?id=&type=&style=` | SVG | public | README badge (`type`: `status` / `uptime`) |
+| `badge.php?id=&type=` | 302 | public | Deprecated alias - redirects to `action=badge` (old README embeds keep working) |
 | `widget.php?id=` | HTML | public | Compact embed via iframe |
 | `health.php` | JSON | admin or CLI | Database schema completeness check |
 | `cron.php[?key=…]` | text | CLI or `cron_key` | Data collection; from the web only with the key |

@@ -292,6 +292,25 @@ check_true('badge nese jméno monitoru', str_contains($bdg_raw1, htmlspecialchar
 [$code] = api_get($base, 'action=badge&monitor_id=99999');
 check('badge neexistujícího monitoru je 404', $code, 404);
 
+// type=uptime: monitor 1 má měření (musí vrátit procenta), monitor 2 nemá
+// jediný log - "bez dat", nikdy vymyšlené procento.
+[$code, , $bdg_up] = api_get($base, 'action=badge&monitor_id=1&type=uptime');
+check('uptime badge vrací HTTP 200', $code, 200);
+check_true('uptime badge nese procenta', (bool)preg_match('/\d+\.\d{2} %/', $bdg_up));
+[, , $bdg_nodata] = api_get($base, 'action=badge&monitor_id=2&type=uptime');
+check_true('bez měření říká "bez dat"', str_contains($bdg_nodata, 'bez dat'));
+
+// badge.php je zastaralý alias - stará README embedy musí dál fungovat
+// přes 302 na action=badge se zachovanými parametry.
+$ch_alias = curl_init($base . '/badge.php?id=1&type=uptime');
+curl_setopt_array($ch_alias, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10]);
+curl_exec($ch_alias);
+$alias_code = (int)curl_getinfo($ch_alias, CURLINFO_RESPONSE_CODE);
+$alias_loc = (string)curl_getinfo($ch_alias, CURLINFO_REDIRECT_URL);
+curl_close($ch_alias);
+check('badge.php přesměrovává', $alias_code, 302);
+check_true('alias míří na action=badge s parametry', str_contains($alias_loc, 'action=badge') && str_contains($alias_loc, 'monitor_id=1') && str_contains($alias_loc, 'type=uptime'));
+
 // =======================================================================
 // 2. public_status - podklad pro veřejnou stránku i widget
 // =======================================================================
@@ -805,6 +824,26 @@ if (!empty($cookie_jar)) {
 // mechanismem: co se opravdu zapíše do databáze a hlavně co se NEzapíše,
 // když eskalace nemá kam odejít.
 require_once __DIR__ . '/../functions.php';
+
+// Prahy z presetu se skutečně uplatní. bk_effective_threshold měla testy,
+// ale ŽÁDNÉHO produkčního volajícího - editor presetů prahy nabízel a
+// alerty/tipy/pásma četly jen hodnotu monitoru.
+$pdo->exec("INSERT INTO metric_presets (id, name, cpu_threshold) VALUES (77, 'Tvrdší CPU limit', 70)");
+$pdo->exec("UPDATE monitors SET preset_id = 77, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
+$thr_row = $pdo->query("SELECT * FROM monitors WHERE id = 2")->fetch();
+$thr_eff = bk_monitor_thresholds($pdo, $thr_row);
+check('preset práh přebíjí hodnotu monitoru', $thr_eff['cpu'], 70);
+check('preset bez RAM prahu nechá hodnotu monitoru', $thr_eff['ram'], 95);
+$thr_eff_nopdo = bk_monitor_thresholds(null, $thr_row);
+check('bez PDO zůstává hodnota monitoru (žádný pád)', $thr_eff_nopdo['cpu'], 90);
+
+// A tady end-to-end přes HTTP: pásmo v grafu (metric_detail) musí kreslit
+// mez z presetu - tutéž, při které agent_api skutečně alertuje.
+[, $thr_detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
+check('metric_detail kreslí pásmo podle presetu', $thr_detail['thresholds']['critical'] ?? null, 70);
+$pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
+$pdo->exec("DELETE FROM metric_presets WHERE id = 77");
+
 
 // Nastavení se načítá jednou při startu do globálu `$system_settings`
 // (db.php) a get_setting() čte odtud. Zápis do databáze tedy sám o sobě nic

@@ -349,7 +349,7 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 | `action=check_stages&monitor_id=` | veřejné | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | veřejné | Dostupnost podle místa měření (`checked_from`) |
 | `action=public_status` | veřejné | Souhrn pro veřejnou stránku (počty, průměrná dostupnost) |
-| `action=badge[&monitor_id=][&lang=en]` | veřejné | Vložitelný SVG odznak stavu (cache 60 s); bez `monitor_id` shrnuje celou flotilu, neznámý monitor je 404 |
+| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` shrnuje celou flotilu, neznámý monitor je 404 |
 | `action=websites_overview` | veřejné | Weby s certifikáty a dostupností v okně |
 | `action=monitor_insights&monitor_id=` | veřejné | Odvozená pozorování k jednomu monitoru |
 | `action=dashboard_insights&limit=` | veřejné | Totéž napříč monitory, pro přehled |
@@ -527,7 +527,7 @@ Uzel si stáhne seznam monitorů ke kontrole a pošle zpátky výsledky včetně
 | Endpoint | Formát | Přístup | Popis |
 |---|---|---|---|
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scrapování externím Prometheem; bez nastaveného tokenu je vypnutý. Token lze poslat i hlavičkou `Authorization: Bearer` |
-| `badge.php?id=&type=&style=` | SVG | veřejné | Odznak do README (`type`: `status` / `uptime`) |
+| `badge.php?id=&type=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge` (staré README embedy fungují dál) |
 | `widget.php?id=` | HTML | veřejné | Kompaktní vložení přes iframe |
 | `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze |
 | `cron.php[?key=…]` | text | CLI nebo `cron_key` | Sběr dat; z webu jen s klíčem |

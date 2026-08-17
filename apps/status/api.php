@@ -1417,7 +1417,7 @@ if ($action === 'monitor_insights') {
         // stejné omezení jako na veřejné status stránce, ne nedopatření tady.
         $health_score = null;
         if (strtolower($monitor['type'] ?? '') === 'teamspeak') {
-            $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details);
+            $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details, $pdo);
             $health_score = bk_compute_health_score($health_areas);
         }
 
@@ -1667,8 +1667,22 @@ if ($action === 'badge') {
                 exit;
             }
             $bdg_label = (string)$bdg_row['name'];
-            $bdg_state = in_array($bdg_row['status'], ['up', 'down', 'warning', 'maintenance'], true) ? $bdg_row['status'] : 'unknown';
-            $bdg_value = $bdg_words[$bdg_state];
+            if (($_GET['type'] ?? '') === 'uptime') {
+                // Uptime variant (from the legacy badge.php, now an alias of
+                // this action): 30-day availability instead of the live state.
+                // No measurements = grey "no data", never a made-up percent.
+                $bdg_uptime = bk_uptime_30d($pdo, $bdg_mid);
+                if ($bdg_uptime === null) {
+                    $bdg_state = 'unknown';
+                    $bdg_value = $bdg_lang === 'en' ? 'no data' : 'bez dat';
+                } else {
+                    $bdg_state = $bdg_uptime < 95.0 ? 'down' : ($bdg_uptime < 99.0 ? 'warning' : 'up');
+                    $bdg_value = number_format($bdg_uptime, 2, '.', '') . ' %';
+                }
+            } else {
+                $bdg_state = in_array($bdg_row['status'], ['up', 'down', 'warning', 'maintenance'], true) ? $bdg_row['status'] : 'unknown';
+                $bdg_value = $bdg_words[$bdg_state];
+            }
         } else {
             // Souhrn: down > údržba > vše online. Prázdná flotila není "online".
             $stmt_bdg = $pdo->query("
@@ -3183,7 +3197,7 @@ if ($action === 'metric_detail') {
 
     try {
         $stmt = $pdo->prepare("
-            SELECT id, name, type, asset_id, cpu_threshold, ram_threshold, hdd_threshold
+            SELECT id, name, type, asset_id, preset_id, cpu_threshold, ram_threshold, hdd_threshold
             FROM monitors WHERE id = ? LIMIT 1
         ");
         $stmt->execute([$monitor_id]);
@@ -3230,9 +3244,12 @@ if ($action === 'metric_detail') {
 
         // Thresholds exist only for metrics that can be watched. Elsewhere a band
         // in the chart would pretend a limit nobody ever set.
-        $threshold_col = ['cpu' => 'cpu_threshold', 'ram' => 'ram_threshold', 'hdd' => 'hdd_threshold'][$metric] ?? null;
-        $critical = ($threshold_col !== null && $mon[$threshold_col] !== null && (float)$mon[$threshold_col] > 0)
-            ? (float)$mon[$threshold_col]
+        // Preset > monitor - stejné pořadí jako u alertů v agent_api; pásma
+        // v grafu musí kreslit tutéž mez, při které se skutečně alertuje.
+        $threshold_key = ['cpu' => 'cpu', 'ram' => 'ram', 'hdd' => 'hdd'][$metric] ?? null;
+        $eff_detail = bk_monitor_thresholds($pdo, $mon);
+        $critical = ($threshold_key !== null && $eff_detail[$threshold_key] !== null && (float)$eff_detail[$threshold_key] > 0)
+            ? (float)$eff_detail[$threshold_key]
             : null;
 
         // Events for the chart markers. Same source as the Timeline, so the chart

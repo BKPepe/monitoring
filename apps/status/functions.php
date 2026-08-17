@@ -1580,13 +1580,15 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         $warn = $crit === $fallback_crit ? $fallback_warn : max(1.0, $crit - 15);
         return [$crit, $warn];
     };
+    // Preset > monitor > výchozí - stejné pořadí jako u alertů v agent_api.
+    $kt_eff_thr = bk_monitor_thresholds($pdo instanceof PDO ? $pdo : null, (array)$monitor);
 
     // --- VPS / agent (platí pro jakýkoli typ s propojeným agentem, stejně
     // jako render_vps_agent_details() sama není omezená na type=vps) ---
     if (is_array($details)) {
         if (isset($details['cpu'])) {
             $cpu = floatval($details['cpu']);
-            [$cpu_crit, $cpu_warn] = $tip_threshold($monitor['cpu_threshold'] ?? null, 80.0, 50.0);
+            [$cpu_crit, $cpu_warn] = $tip_threshold($kt_eff_thr['cpu'], 80.0, 50.0);
             if ($cpu > $cpu_crit) {
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'cpu_usage', $cpu_crit) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
@@ -1596,7 +1598,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         }
         if (isset($details['ram'])) {
             $ram = floatval($details['ram']);
-            [$ram_crit, $ram_warn] = $tip_threshold($monitor['ram_threshold'] ?? null, 85.0, 60.0);
+            [$ram_crit, $ram_warn] = $tip_threshold($kt_eff_thr['ram'], 85.0, 60.0);
             if ($ram > $ram_crit) {
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'ram_usage', $ram_crit) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
@@ -1606,7 +1608,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         }
         if (isset($details['hdd'])) {
             $hdd = floatval($details['hdd']);
-            [$hdd_crit, $hdd_warn] = $tip_threshold($monitor['hdd_threshold'] ?? null, 90.0, 70.0);
+            [$hdd_crit, $hdd_warn] = $tip_threshold($kt_eff_thr['hdd'], 90.0, 70.0);
             if ($hdd > $hdd_crit) {
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'hdd_usage', $hdd_crit) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
@@ -1691,7 +1693,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
             'clients' => 'knowledge_tip_ts3_clients',
             'version' => 'knowledge_tip_ts3_version',
         ];
-        $areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details);
+        $areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details, $pdo);
         foreach ($areas as $area) {
             if ($area['status'] === 'fail') {
                 $add('critical', $ts3_area_tip_keys[$area['key']]);
@@ -2703,9 +2705,10 @@ function bk_summary_pressure_line(PDO $pdo, array $monitor, array $details): ?st
         return is_numeric($raw) && (float)$raw > 0 ? (float)$raw : null;
     };
 
+    $eff_thr = bk_monitor_thresholds($pdo, $monitor);
     $watched = [
-        ['cpu', 'cpu_usage', $threshold_of($monitor['cpu_threshold'] ?? null), 'cpu'],
-        ['ram', 'ram_usage', $threshold_of($monitor['ram_threshold'] ?? null), 'ram'],
+        ['cpu', 'cpu_usage', $threshold_of($eff_thr['cpu']), 'cpu'],
+        ['ram', 'ram_usage', $threshold_of($eff_thr['ram']), 'ram'],
     ];
 
     foreach ($watched as [$key, $column, $threshold, $kind]) {
@@ -3035,10 +3038,13 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     // Alert Regions - threshold bands pro metriky s nastavitelným prahem
     $warn_threshold = null;
     $crit_threshold = null;
-    $threshold_map = ['cpu' => 'cpu_threshold', 'ram' => 'ram_threshold', 'hdd' => 'hdd_threshold'];
-    if (isset($threshold_map[$metric_key]) && !empty($monitor[$threshold_map[$metric_key]])) {
-        $crit_threshold = (float)$monitor[$threshold_map[$metric_key]];
-        $warn_threshold = max(0, $crit_threshold - 15); // Warning zone 15% pod critical
+    $threshold_map = ['cpu' => 'cpu', 'ram' => 'ram', 'hdd' => 'hdd'];
+    if (isset($threshold_map[$metric_key])) {
+        $eff_band = bk_monitor_thresholds($pdo, $monitor)[$threshold_map[$metric_key]];
+        if ($eff_band !== null && $eff_band > 0) {
+            $crit_threshold = (float)$eff_band;
+            $warn_threshold = max(0, $crit_threshold - 15); // Warning zone 15% pod critical
+        }
     }
     ?>
 <!DOCTYPE html>
@@ -4418,7 +4424,7 @@ function bk_compute_health_score(array $areas) {
  * (obsahuje cpu/ram a případně ts3_process, pokud je na VPS propojený agent),
  * $check_stages je dekódovaný monitor_logs.check_stages z posledního běhu.
  */
-function build_teamspeak_health_areas($monitor, $current_status, $check_stages, $agent_data) {
+function build_teamspeak_health_areas($monitor, $current_status, $check_stages, $agent_data, $pdo = null) {
     $areas = [];
 
     // Dostupnost (35 %)
@@ -4461,8 +4467,9 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
 
     // Výkon VPS (10 %) - jen pokud agent hlásí cpu/ram
     if (is_array($agent_data) && isset($agent_data['cpu'], $agent_data['ram'])) {
-        $cpu_threshold = (float)($monitor['cpu_threshold'] ?? 90);
-        $ram_threshold = (float)($monitor['ram_threshold'] ?? 95);
+        $eff_perf = bk_monitor_thresholds($pdo instanceof PDO ? $pdo : null, (array)$monitor);
+        $cpu_threshold = (float)($eff_perf['cpu'] ?? 90);
+        $ram_threshold = (float)($eff_perf['ram'] ?? 95);
         $cpu_ok = (float)$agent_data['cpu'] < $cpu_threshold;
         $ram_ok = (float)$agent_data['ram'] < $ram_threshold;
         $perf_score = ($cpu_ok && $ram_ok) ? 100 : (($cpu_ok || $ram_ok) ? 60 : 20);
@@ -4611,6 +4618,21 @@ function bk_effective_threshold(?array $preset, $monitor_value, string $key): ?i
         return $preset[$key];
     }
     return $monitor_value !== null && $monitor_value !== '' ? (int)$monitor_value : null;
+}
+
+/**
+ * Effective cpu/ram/hdd thresholds for a monitor - preset first, then the
+ * monitor's own value, then null. Written together with
+ * bk_effective_threshold(), which had tests but no production caller: the
+ * preset editor offered thresholds, and nothing anywhere read them.
+ */
+function bk_monitor_thresholds(?PDO $pdo, array $monitor): array {
+    $preset = ($pdo !== null && !empty($monitor['preset_id'])) ? bk_get_preset($pdo, $monitor['preset_id']) : null;
+    return [
+        'cpu' => bk_effective_threshold($preset, $monitor['cpu_threshold'] ?? null, 'cpu'),
+        'ram' => bk_effective_threshold($preset, $monitor['ram_threshold'] ?? null, 'ram'),
+        'hdd' => bk_effective_threshold($preset, $monitor['hdd_threshold'] ?? null, 'hdd'),
+    ];
 }
 
 function bk_get_enabled_metrics($monitor, $pdo = null) {

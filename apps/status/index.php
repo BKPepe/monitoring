@@ -909,7 +909,7 @@ $portal_url = trim(get_setting('portal_url'));
                                             $ts3_clients_labels = [];
                                             $ts3_clients_data = [];
                                             if ($m_type === 'teamspeak') {
-                                                $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details);
+                                                $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages_shared, $details, $pdo);
                                                 $health_score = bk_compute_health_score($health_areas);
 
                                                 // Přesunuto sem nahoru (dřív se počítalo až u samotné sekce grafu) -

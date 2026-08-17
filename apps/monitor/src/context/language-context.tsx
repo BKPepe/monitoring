@@ -22,14 +22,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'nav.settings': { cs: 'Nastavení', en: 'Settings' },
 
   // Common UI
-  'common.loading': { cs: 'Načítání dat...', en: 'Loading data...' },
   'common.saving': { cs: 'Ukládám…', en: 'Saving…' },
-  'common.error': { cs: 'Chyba při načítání', en: 'Error loading data' },
   'common.save': { cs: 'Uložit změny', en: 'Save Changes' },
   'common.cancel': { cs: 'Zrušit', en: 'Cancel' },
   'common.delete': { cs: 'Smazat', en: 'Delete' },
   'common.edit': { cs: 'Upravit', en: 'Edit' },
-  'common.search': { cs: 'Hledat...', en: 'Search...' },
   'common.all': { cs: 'Vše', en: 'All' },
   'common.online': { cs: 'Online', en: 'Online' },
   'common.offline': { cs: 'Offline', en: 'Offline' },
@@ -47,13 +44,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'common.last_change': { cs: 'Poslední změna stavu', en: 'Last Status Change' },
   'asset.ago_days': { cs: 'Před {d} dny', en: '{d} days ago' },
   'asset.ago_months': { cs: 'Před {m} měsíci', en: '{m} months ago' },
-  'asset.change_reason': { cs: 'Důvod: {reason}', en: 'Reason: {reason}' },
   'common.uptime': { cs: 'Uptime', en: 'Uptime' },
   'common.cpu': { cs: 'Využití CPU', en: 'CPU Usage' },
   'common.ram': { cs: 'Využití RAM', en: 'RAM Usage' },
   'common.hdd': { cs: 'Využití disku', en: 'Disk Usage' },
-  'common.details': { cs: 'Detaily', en: 'Details' },
-  'common.confirm': { cs: 'Potvrdit', en: 'Confirm' },
   // Auditní protokol uživatelských akcí - dřív byl vidět jen ve staré
   // administraci, React ukazoval pod stejným názvem výsledky kontrol z cronu.
   'uaudit.title': { cs: 'Auditní protokol uživatelů', en: 'User audit log' },
@@ -128,35 +122,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'speed.last': { cs: 'Poslední měření: {at}', en: 'Last measurement: {at}' },
   'common.refresh': { cs: 'Obnovit', en: 'Refresh' },
   'common.login_required': { cs: 'Vyžaduje přihlášení', en: 'Login Required' },
-  'common.admin_only': { cs: 'Pouze pro administrátory', en: 'Admin Only' },
   'common.open_details': { cs: 'Otevřít detail', en: 'Open Details' },
-  'common.back': { cs: 'Zpět', en: 'Back' },
   'common.close': { cs: 'Zavřít', en: 'Close' },
-  'common.create': { cs: 'Vytvořit', en: 'Create' },
-  'common.yes': { cs: 'Ano', en: 'Yes' },
-  'common.no': { cs: 'Ne', en: 'No' },
 
   // Buttons & Status Labels
   'btn.login': { cs: 'Přihlásit se', en: 'Log In' },
-  'btn.logout': { cs: 'Odhlásit se', en: 'Log Out' },
-  'btn.save': { cs: 'Uložit změny', en: 'Save Changes' },
-  'btn.test': { cs: 'Odeslat testovací notifikaci', en: 'Send Test Notification' },
-  'btn.collapse': { cs: 'Sbalit navigaci', en: 'Collapse Sidebar' },
-  'btn.expand': { cs: 'Rozbalit navigaci', en: 'Expand Sidebar' },
   'status.healthy': { cs: 'Všechny systémy v pořádku', en: 'All Systems Operational' },
-  'status.degraded': { cs: 'Zhoršená latence / Výpadek', en: 'Degraded Performance / Outage' },
-  'status.down': { cs: 'Detekován výpadek', en: 'Outage Detected' },
 
   // Banner
-  'banner.live_data': { cs: 'Živá data z databáze', en: 'Live Database Metrics' },
-  'banner.live_data_desc': {
-    cs: 'Data se automaticky obnovují každých 10s přímo z MySQL/PostgreSQL backendu.',
-    en: 'Metrics auto-refresh every 10s directly from MySQL/PostgreSQL backend.',
-  },
-  'banner.status_offline': {
-    cs: 'Backend /status je nedostupný (HTTP 500 nebo chyba databáze)',
-    en: 'Backend /status is unavailable (HTTP 500 or database error)',
-  },
   'banner.loading_status': { cs: 'Načítám stav infrastruktury…', en: 'Loading infrastructure status…' },
   'banner.load_failed': { cs: 'Stav infrastruktury se nepodařilo načíst', en: 'Failed to load infrastructure status' },
   'banner.all_healthy': {
@@ -252,7 +225,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.stat_online': { cs: 'Online', en: 'Online' },
   'public.stat_down': { cs: 'Mimo provoz', en: 'Down' },
   'public.stat_uptime': { cs: 'Dostupnost 30 dní', en: 'Availability, 30 days' },
-  'public.stat_agents': { cs: 'Agenti online', en: 'Agents online' },
   'public.regions': { cs: 'Místa měření', en: 'Measurement locations' },
   'public.loading_services': { cs: 'Načítám služby…', en: 'Loading services…' },
   'public.uncategorised': { cs: 'Ostatní', en: 'Other' },
@@ -453,13 +425,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.healthy_pct': { cs: 'Zdravých', en: 'Healthy' },
   'dashboard.healthy_hint': { cs: 'Měřící uzly v pořádku', en: 'Monitoring nodes OK' },
   'dashboard.avg_response': { cs: 'Průměrná odezva', en: 'Average Latency' },
-  'dashboard.avg_response_hint': { cs: 'Měřeno ze všech sond', en: 'Measured across all probes' },
   'dashboard.uptime_30d': { cs: 'Uptime (30 dní)', en: '30-Day Uptime' },
-  'dashboard.uptime_hint': { cs: 'Global SLA target: 99.9 %', en: 'Global SLA target: 99.9%' },
-  'dashboard.filter_all': { cs: 'Vše', en: 'All' },
-  'dashboard.filter_online': { cs: 'Online', en: 'Online' },
-  'dashboard.filter_warning': { cs: 'Varování', en: 'Warning' },
-  'dashboard.filter_offline': { cs: 'Offline', en: 'Offline' },
   'dashboard.search_placeholder': { cs: 'Hledat monitory…', en: 'Search monitors…' },
   'dashboard.recent_alerts': { cs: 'Poslední alerty', en: 'Recent Alerts' },
   'dashboard.no_active_alerts': {
@@ -734,14 +700,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'infra.os': { cs: 'Operační systém', en: 'Operating System' },
   'infra.time_since_change': { cs: 'Doba od poslední změny stavu', en: 'Time since last status change' },
   'infra.select_device': { cs: 'Vyberte zařízení ze seznamu vlevo.', en: 'Select a device from the list on the left.' },
-  'infra.tabs_all': { cs: 'Všechny uzly', en: 'All Nodes' },
-  'infra.tabs_vps': { cs: 'Linux / VPS Servery', en: 'Linux / VPS Servers' },
-  'infra.tabs_teamspeak': { cs: 'TeamSpeak 3', en: 'TeamSpeak 3' },
-  'infra.tabs_minecraft': { cs: 'Minecraft Servery', en: 'Minecraft Servers' },
-  'infra.tabs_openwrt': { cs: 'OpenWrt / Routery', en: 'OpenWrt / Routers' },
-  'infra.clients_online': { cs: 'Připojení klienti', en: 'Connected Clients' },
-  'infra.players_online': { cs: 'Hráči online', en: 'Players Online' },
-  'infra.open_detail': { cs: 'Otevřít detail', en: 'Open Details' },
 
   // Asset Detail
   'asset.loading': {
@@ -763,11 +721,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.ssl_valid': { cs: '🟢 Platný SSL/TLS Certifikát', en: '🟢 Valid SSL/TLS Certificate' },
   'asset.ssl_issuer': { cs: 'Vydavatel:', en: 'Issuer:' },
   'asset.ssl_valid_until': { cs: 'Platnost do:', en: 'Valid Until:' },
-  'asset.ssl_channel_active': { cs: 'SSL/TLS Šifrovací Kanál Aktivní', en: 'SSL/TLS Encryption Channel Active' },
-  'asset.ssl_verified': {
-    cs: 'HTTPS / TLS 1.3 ověřeno. Certifikát je platný a funkční.',
-    en: 'HTTPS / TLS 1.3 verified. The certificate is valid and functional.',
-  },
   'asset.tab_overview': { cs: 'Přehled & Výkon', en: 'Overview & Performance' },
   'asset.tab_processes': { cs: 'Nejvytíženější procesy', en: 'Top Processes' },
   'asset.tab_processes_short': { cs: 'Procesy', en: 'Processes' },
@@ -777,13 +730,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'asset.tab_services': { cs: 'Služby & Certifikáty', en: 'Services & Certificates' },
   'asset.tab_events': { cs: 'Události', en: 'Events' },
-  'asset.tab_history': { cs: 'Historie měření', en: 'Metrics History' },
-  'asset.tab_actions': { cs: 'Vzdálené akce (Remote Actions)', en: 'Remote Actions' },
   'asset.smart_status': { cs: 'Stav SMART / S.M.A.R.T. Disku', en: 'SMART / Disk Health Status' },
   'asset.edit_monitor': { cs: 'Upravit monitor', en: 'Edit Monitor' },
   'asset.proc_name': { cs: 'Název procesu / Příkaz', en: 'Process Name / Command' },
-  'asset.proc_cpu': { cs: 'Zátěž CPU (%)', en: 'CPU Usage (%)' },
-  'asset.proc_ram': { cs: 'Využití paměti (MB)', en: 'Memory Usage (MB)' },
   'asset.mem_usage': { cs: 'Spotřeba RAM', en: 'RAM Consumption' },
   'asset.process_load': { cs: 'Zátěž procesů serveru ({name})', en: 'Server Process Load ({name})' },
   'asset.process_load_desc': {
@@ -803,17 +752,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Zkontrolujte STATS_KEY v cpanel_config.php vedle exporteru a klíč v cpanel_stats_url monitoru.',
     en: "Check STATS_KEY in cpanel_config.php next to the exporter and the key in the monitor's cpanel_stats_url.",
   },
-  'asset.no_processes': { cs: 'Žádná data o procesech nejsou k dispozici.', en: 'No process data available.' },
   'asset.services_title': { cs: 'Stav Služeb & Šifrovací Certifikáty', en: 'Service Status & Encryption Certificates' },
   'asset.services_desc': {
     cs: 'Stav protokolů a šifrovacích certifikátů.',
     en: 'Status of protocols and encryption certificates.',
   },
   'asset.ssl_cert': { cs: 'TLS/SSL Certifikát', en: 'TLS/SSL Certificate' },
-  'asset.ssl_not_wired': {
-    cs: 'Kontrola certifikátu zatím není napojená',
-    en: 'Certificate check is not wired up yet',
-  },
   'asset.proto_router': {
     cs: 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)',
     en: 'OpenWrt Router telemetry (ubus / Linux agent without TLS)',
@@ -827,10 +771,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'TeamSpeak 3 UDP Voice socket without TLS layer',
   },
   'asset.proto_none': { cs: 'Protokol nepoužívá SSL/TLS vrstvu', en: 'Protocol does not use an SSL/TLS layer' },
-  'asset.ssl_expiry_unread': {
-    cs: 'Datum expirace certifikátu se zatím z monitoru nečte.',
-    en: 'Certificate expiry date is not yet read from the monitor.',
-  },
   'asset.service_status': { cs: 'Stav Služby', en: 'Service Status' },
   'asset.agent_found_services': { cs: 'Agent objevil běžící služby', en: 'Services discovered by the agent' },
   'asset.agent_found_hint': {
@@ -866,13 +806,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Sledování opotřebení NVMe buněk, zaoceánovaných chyb a reallocated sektorů z rozhraní smartctl.',
     en: 'Tracking NVMe cell wear, uncorrectable errors, and reallocated sectors via the smartctl interface.',
   },
-  'asset.svc_name': { cs: 'Služba', en: 'Service' },
-  'asset.svc_type': { cs: 'Typ', en: 'Type' },
-  'asset.svc_port': { cs: 'Port', en: 'Port' },
-  'asset.svc_confidence': { cs: 'Spolehlivost detekce', en: 'Detection Confidence' },
-  'asset.no_services': { cs: 'Žádné detekované služby.', en: 'No discovered services.' },
-  'asset.trigger_action': { cs: 'Spustit vzdálenou akci', en: 'Trigger Remote Action' },
-  'asset.actions_title': { cs: 'Správa akcí a přehled', en: 'Actions Management & Overview' },
   'asset.edit_monitor_title': { cs: 'Upravit nastavení monitoru', en: 'Edit Monitor Settings' },
   'asset.events_history': {
     cs: 'Historie událostí & Protokol měření ({name})',
@@ -897,10 +830,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_monitor_added': { cs: 'Monitor přidán', en: 'Monitor Added' },
   'asset.tl_monitor_updated': { cs: 'Monitor upraven', en: 'Monitor Updated' },
   'asset.summary_title': { cs: 'Executive Summary', en: 'Executive Summary' },
-  'asset.health_score': { cs: 'Health Score: {score}/100', en: 'Health Score: {score}/100' },
-  'asset.summary_desc': { cs: 'Živý stav měření z databáze', en: 'Live measurement status from the database' },
   'asset.params_title': { cs: 'Parametry monitoru / serveru', en: 'Monitor / Server Parameters' },
-  'asset.recent_events': { cs: 'Poslední události', en: 'Recent Events' },
   'asset.no_agent_cpanel_hint': {
     cs: 'Webhosting nemá systémového agenta, výpis procesů proto není k dispozici. Zdroje hostingu (RAM, disk, databáze, bandwidth) z cPanel exporteru najdete na záložce „Procesy".',
     en: 'This webhosting has no system agent, so a process list is not available. Hosting resources (RAM, disk, databases, bandwidth) from the cPanel exporter are on the "Processes" tab.',
@@ -921,7 +851,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Nebyla nalezena žádná naměřená historie časových řad pro zadaný rozsah {range}.',
     en: 'No measured time-series history was found for the selected range {range}.',
   },
-  'common.na': { cs: 'N/A', en: 'N/A' },
   'common.protocol': { cs: 'Protokol', en: 'Protocol' },
   'asset.ts3_clients': { cs: 'Připojení klienti TS3', en: 'Connected TS3 Clients' },
   'asset.ts3_clients_value': { cs: '{online} / {max} uživatelů', en: '{online} / {max} users' },
@@ -1037,7 +966,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.outage_start': { cs: 'Začátek výpadku', en: 'Outage Start' },
   'incidents.outage_end': { cs: 'Konec výpadku', en: 'Outage End' },
   'incidents.duration': { cs: 'Doba trvání', en: 'Duration' },
-  'incidents.reason': { cs: 'Důvod / Příčina', en: 'Reason / Cause' },
   'incidents.probing_nodes': {
     cs: 'Stav měřících uzlů a agentů (Probing Infrastructure)',
     en: 'Probing Infrastructure & Agent Status',
@@ -1084,11 +1012,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'insights.disk_pred': { cs: 'Predikce Disku (Servery & VPS)', en: 'Disk Usage Prediction (Servers & VPS)' },
   'insights.disk_pred_desc': { cs: 'Lineární regrese (7 dnů)', en: 'Linear Regression (7 Days)' },
-  'insights.cpu_matrix': { cs: 'Hodinová Matice Špiček Vytížení (Hourly Peak Heatmap)', en: 'Hourly Peak Heatmap' },
-  'insights.cpu_matrix_desc': {
-    cs: 'Přehled hodin v týdnu s nejvyšší zátěží procesorů a síťového provozu',
-    en: 'Weekly overview of peak CPU load and network throughput hours',
-  },
   'insights.recommendations': {
     cs: 'Automatické analýzy a doporučení pro servery a infrastrukturu',
     en: 'Automated Analysis & Recommendations for Infrastructure',
@@ -1157,13 +1080,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Real data from the monitoring database — uptime, outages, recovery time (MTTR), and outage causes.',
   },
   'reports.export_pdf': { cs: 'Tisknout / PDF', en: 'Print / PDF' },
-  'reports.period': { cs: 'Období reportu', en: 'Report Period' },
-  'reports.period_30d': { cs: 'Posledních 30 dní', en: 'Last 30 Days' },
-  'reports.period_90d': { cs: 'Posledních 90 dní', en: 'Last 90 Days' },
-  'reports.target_sla': { cs: 'Cílové SLA', en: 'SLA Target' },
-  'reports.actual_sla': { cs: 'Reálné SLA', en: 'Actual SLA' },
   'reports.mttr': { cs: 'Průměrná doba obnovení (MTTR)', en: 'Mean Time To Recovery (MTTR)' },
-  'reports.outage_time': { cs: 'Celkový čas výpadku', en: 'Total Outage Time' },
   'reports.no_api_data': {
     cs: 'Žádná data z API. Zkontrolujte, že cron.php běží a monitor_logs obsahuje záznamy.',
     en: 'No data from the API. Check that cron.php is running and monitor_logs contains records.',
@@ -1238,17 +1155,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.reason_label': { cs: 'Důvod:', en: 'Reason:' },
   'reports.no_outage_30d': { cs: 'Žádný výpadek za posledních {days} dní.', en: 'No outage in the last {days} days.' },
   'reports.view_detail': { cs: 'Otevřít detail', en: 'View Detail' },
-  'reports.csv_export_title': { cs: 'Měsíční SLA Výkaz (CSV Export)', en: 'Monthly SLA Report (CSV Export)' },
-  'reports.csv_export_desc': {
-    cs: 'Stáhněte si kompletní CSV soubor s detailním výpočtem Uptime %, počty výpadků a latencí.',
-    en: 'Download a complete CSV file with detailed Uptime % calculations, outage counts, and latency.',
-  },
-  'reports.csv_export_btn': { cs: 'Stáhnout CSV report', en: 'Download CSV Report' },
   'reports.prometheus_title': { cs: 'Prometheus Exportér Metrik', en: 'Prometheus Metrics Exporter' },
-  'reports.prometheus_desc': {
-    cs: 'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru.',
-    en: 'Integration interface for connecting external systems, Grafana, or a Prometheus server.',
-  },
   'reports.prometheus_btn': { cs: 'Otevřít Prometheus výstup', en: 'Open Prometheus Output' },
   'reports.prometheus_active': { cs: 'Aktivní', en: 'Active' },
   'reports.prometheus_desc_active': {
@@ -1347,17 +1254,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.',
     en: 'Agent versions, security update checks, HMAC keys, and installation.',
   },
-  'api_agents.install_cmd': {
-    cs: 'Jednorázový instalační příkaz agenta (Linux / Debian / Ubuntu / OpenWrt)',
-    en: 'One-line Agent Installation Command (Linux / Debian / Ubuntu / OpenWrt)',
-  },
   'api_agents.copy_cmd': { cs: 'Kopírovat příkaz', en: 'Copy Command' },
-  'api_agents.installed_agents': {
-    cs: 'Stav verzí a aktualizací spuštěných agentů',
-    en: 'Installed Agents Version & Status',
-  },
-  'api_agents.agent_os': { cs: 'Operační systém', en: 'Operating System' },
-  'api_agents.agent_version': { cs: 'Verze agenta', en: 'Agent Version' },
   'api_agents.login_required_title': { cs: 'Přihlášení vyžadováno', en: 'Login Required' },
   'api_agents.desc_linux': {
     cs: 'Automatický sběr CPU, RAM, zátěže disku, běžících procesů a služeb pro Debian, Ubuntu, CentOS a RHEL.',
@@ -1411,10 +1308,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'api_agents.version_status_title': {
     cs: 'Stav verzí & Automatické aktualizace agentů ({count})',
     en: 'Version Status & Automatic Agent Updates ({count})',
-  },
-  'api_agents.recommended_version': {
-    cs: 'Aktuální doporučená verze systému:',
-    en: 'Current recommended system version:',
   },
   'api_agents.status_outdated': {
     cs: '🔴 Zjištěna neaktuální verze agenta!',
@@ -1537,7 +1430,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Správa parametrů platformy, notifikačních kanálů, OAuth integrací a brandingu.',
     en: 'Manage platform parameters, notification channels, OAuth integrations, and branding.',
   },
-  'settings.save_success': { cs: 'Nastavení bylo úspěšně uloženo.', en: 'Settings saved successfully.' },
   'settings.notifications': { cs: 'Notifikace & Upozornění', en: 'Notifications & Alerts' },
   'settings.load_error': { cs: 'Nepodařilo se načíst nastavení z API.', en: 'Failed to load settings from the API.' },
   'settings.save_error': { cs: 'Chyba při ukládání.', en: 'Error while saving.' },
@@ -1785,7 +1677,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Správa API klíčů a instalačních skriptů je přístupná pouze přihlášeným administrátorům.',
     en: 'Managing API keys and installation scripts is only accessible to logged-in administrators.',
   },
-  'dashboard.col_monitor': { cs: 'Zobrazit', en: 'Show' },
   'dashboard.showing': {
     cs: 'Zobrazeno {shown} z {total} monitorovaných služeb',
     en: 'Showing {shown} of {total} monitored services',
@@ -1836,23 +1727,11 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Prohlížení incidentů je veřejné. Pro ruční zakládání a úpravu incidentů se přihlaste.',
     en: 'Browsing incidents is public. Log in to manually create or edit incidents.',
   },
-  'status_pages.desc': {
-    cs: 'Zobrazuje stav sledovaných služeb v reálném čase a příchozí plánované údržby.',
-    en: 'Displays the real-time status of monitored services and upcoming scheduled maintenance.',
-  },
-  'status_pages.subtitle': {
-    cs: 'Zobrazuje veřejnou status stránku dostupnosti všech sledovaných služeb a plánovaných údržeb v reálném čase.',
-    en: 'Shows the public status page for the availability of all monitored services and scheduled maintenance in real time.',
-  },
-  'status_pages.title': { cs: 'Veřejná Status Stránka', en: 'Public Status Page' },
-  'status_pages.default_title': { cs: 'Hlavní Status Portál', en: 'Main Status Portal' },
-  'status_pages.open_portal': { cs: 'Otevřít veřejný portál', en: 'Open Public Portal' },
   'websites.public_notice': {
     cs: 'Přehled stavu webů a cPanelu je veřejně přístupný. Pro přidávání nových domén se prosím přihlaste.',
     en: 'The website and cPanel status overview is publicly visible. Please log in to add new domains.',
   },
   'websites.responding_count': { cs: 'Z {count} odpovídajících webů', en: 'From {count} responding websites' },
-  'websites.ssl_hint': { cs: 'Všechny certifikáty platné', en: 'All certificates valid' },
 
   // Sidebar
   'sidebar.main_nav_aria': { cs: 'Hlavní navigace', en: 'Main Navigation' },
@@ -1876,13 +1755,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Agenti zjistili tyto běžící služby, které se zatím nesledují. Import vytvoří nový monitor ve stejném assetu.',
     en: 'Agents detected these running services that are not monitored yet. Importing creates a new monitor in the same asset.',
   },
-  'discovery.detected_on': { cs: 'Zjištěno na: {name}', en: 'Detected on: {name}' },
   'discovery.agent_header': { cs: 'Agent: {name}', en: 'Agent: {name}' },
   'discovery.running_on': { cs: 'běžící na {host}', en: 'running on {host}' },
-  'discovery.found_these': {
-    cs: 'Objevil tyto zatím nesledované služby:',
-    en: 'Discovered these not-yet-monitored services:',
-  },
   'discovery.evidence': { cs: 'Důkazy', en: 'Evidence' },
   'discovery.missing': { cs: 'Chybí', en: 'Missing' },
   'discovery.importing': { cs: 'Importuji…', en: 'Importing…' },
@@ -2436,7 +2310,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   // Chart Card
   'chart_card.days_to_full': { cs: 'Plno za {days} dní', en: 'Full in {days} days' },
   'chart_card.no_data': { cs: 'Pro tuto metriku nejsou data', en: 'No data for this metric' },
-  'chart_card.loading': { cs: 'Načítám {title}', en: 'Loading {title}' },
 
   // Audit Log
   'audit_log.cat_all': { cs: 'Vše', en: 'All' },
@@ -2469,10 +2342,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Choose which sections are shown for this monitor, both publicly and in administration. Recommended items are enabled.',
   },
   'infra.body_keyword_placeholder': { cs: 'Např. Blood Kings', en: 'e.g. Blood Kings' },
-  'infra.agent_detected_prefix': {
-    cs: 'Agent rozpoznán a aktivní na routeru (Verze:',
-    en: 'Agent detected and active on the router (Version:',
-  },
   'infra.last_report': { cs: 'Poslední report:', en: 'Last report:' },
   'infra.agent_connected_badge': { cs: 'Agent Připojen ✅', en: 'Agent Connected ✅' },
   'infra.monitored_processes_placeholder': { cs: 'Např. ts3server, nginx, mysql', en: 'e.g. ts3server, nginx, mysql' },
