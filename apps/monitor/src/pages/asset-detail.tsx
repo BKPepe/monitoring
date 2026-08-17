@@ -1215,8 +1215,6 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
           <Row label="IPv4" value={d.wan_ipv4} />
           <Row label="IPv6" value={d.wan_ipv6} />
           <Row label={t('net.gateway', 'Brána')} value={d.wan_gateway} />
-          <Row label={t('net.public_ip', 'Veřejná IP (pohled serveru)')} value={d.public_ip} />
-          <Row label="ASN / ISP" value={[d.asn, d.asn_name].filter(Boolean).join(' · ') || null} />
           <Row label="DNS" value={d.wan_dns} />
           <Row label={t('net.wan_uptime', 'WAN uptime')} value={fmtDur(d.wan_uptime)} />
           <Row label={t('net.reconnects', 'Reconnecty (od startu)')} value={d.wan_reconnect_count} />

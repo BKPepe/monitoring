@@ -1,6 +1,6 @@
 <?php
 /**
- * Monitorovací funkce a odesílání notifikací
+ * Monitoring functions and notification delivery
  */
 
 if (ini_get('session.gc_divisor') === '0' || ini_get('session.gc_divisor') === false) {
@@ -9,16 +9,16 @@ if (ini_get('session.gc_divisor') === '0' || ini_get('session.gc_divisor') === f
 
 require_once __DIR__ . '/db.php';
 
-// CDN verze frontend knihoven - JEDINÉ místo, které se upravuje při aktualizaci.
-// apps/status/package.json zrcadlí stejná čísla jen kvůli Dependabotu (žádný
-// build krok tu není, Dependabot ale potřebuje manifest, aby vůbec věděl, že
-// tahle verze existuje a dá se sledovat) - najdeš je i tam, ale nejsou svázané
-// automaticky, aktualizace se musí udělat na obou místech ručně.
-// ECharts je jediná knihovna pro grafy v celé appce (index.php i Level 3 detail
-// stránka) - Chart.js byl odstraněný, aby se nemusely držet dvě různé knihovny
-// pro totéž. Má dostupnou 6.x větev, ale je to major verze s možnými breaking
-// changes v obou místech, co ji používají - záměrně necháno na 5.5.1, dokud
-// to někdo neověří v prohlížeči (tady není jak).
+// CDN versions of frontend libraries - the ONLY place edited on upgrade.
+// apps/status/package.json mirrors the same numbers just for Dependabot (there
+// is no build step here, but Dependabot needs a manifest to even know the
+// version exists and can be tracked) - you will find them there too, but they
+// are not linked automatically, an upgrade must touch both places by hand.
+// ECharts is the only charting library in the whole app (index.php and the
+// Level 3 detail page) - Chart.js was removed so two libraries would not be
+// kept for the same job. A 6.x branch exists, but it is a major version with
+// possible breaking changes in both usage sites - deliberately kept at 5.5.1
+// until someone verifies it in a browser (no way to do that from here).
 define('BK_CDN_FONTAWESOME', 'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.1/css/all.min.css');
 define('BK_CDN_FONTAWESOME_SRI', 'sha384-qrALq7+6jBOZIQsNnT6xGkMDru64qD6uTlDra39xrt2SoXl4pO3FX6Roz/RpR/BS');
 define('BK_CDN_ECHARTS', 'https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js');
@@ -27,13 +27,13 @@ define('BK_CDN_QRCODE', 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.m
 define('BK_CDN_QRCODE_SRI', 'sha384-dykayVHnol2xD+KCZ38PbDk0WZnbP5x/sO6gOXKU3h+bodE3ILyIk1FOEfwO1hya');
 
 /**
- * Konfigurace podporovaných OAuth poskytovatelů - jedno místo pro všechny 4,
- * místo separátní kopie GitHub-specifické logiky pro každého zvlášť. Scope je
- * vždy jen "přečti mi stabilní ID účtu", nic víc (žádný e-mail) - přihlášení
- * i propojení účtu se řeší výhradně přes users.oauth_provider/oauth_id
- * (nastavuje se jen explicitním propojením ve vlastním Profilu, nikdy
- * automaticky podle e-mailu - viz bezpečnostní poznámka u OAuth callbacku
- * v admin.php, proč byl e-mail jako identifikátor problém).
+ * Configuration of the supported OAuth providers - one place for all 4,
+ * instead of a separate copy of GitHub-specific logic for each. The scope is
+ * always just "read my stable account ID", nothing more (no e-mail) - both
+ * sign-in and account linking run exclusively through users.oauth_provider/oauth_id
+ * (set only by explicit linking in one's own Profile, never automatically
+ * by e-mail - see the security note at the OAuth callback in admin.php on
+ * why e-mail as an identifier was a problem).
  */
 function bk_oauth_providers() {
     return [
@@ -85,9 +85,9 @@ function bk_oauth_providers() {
 }
 
 /**
- * Provede OAuth token exchange (code -> access_token) + načtení stabilního ID
- * uživatele u zadaného poskytovatele. Vrací ['ok' => bool, 'id' => string|null,
- * 'error' => string|null] - nikdy nevyhazuje výjimku, volající si jen ověří 'ok'.
+ * Performs the OAuth token exchange (code -> access_token) + reads the user's
+ * stable ID at the given provider. Returns ['ok' => bool, 'id' => string|null,
+ * 'error' => string|null] - never throws, the caller just checks 'ok'.
  */
 function bk_oauth_fetch_identity($provider_key, $code, $redirect_uri) {
     $providers = bk_oauth_providers();
@@ -139,9 +139,9 @@ function bk_oauth_fetch_identity($provider_key, $code, $redirect_uri) {
 }
 
 /**
- * Vrátí HTML ikonu pro daný typ monitoru (+ cíl u typu 'web', pro favicon).
- * Sdíleno mezi index.php (veřejný dashboard) a admin.php (seznam monitorů),
- * aby oba místa vždy zobrazovaly stejnou ikonu pro stejný typ.
+ * Returns the HTML icon for a monitor type (+ the target for 'web', for the favicon).
+ * Shared between index.php (public dashboard) and admin.php (monitor list),
+ * so both places always show the same icon for the same type.
  */
 function monitor_type_icon(string $type, string $target = '', string $size = '1.1rem'): string {
     switch ($type) {
@@ -183,9 +183,9 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
 }
 
 /**
- * Mapování agent_type -> soubor agenta na serveru. Jediné místo, které oba
- * spotřebitelé (kontrola aktualizace v agent_api.php i zobrazení verze na
- * dashboardu) sdílí, aby se nikde neopakoval hardcoded seznam.
+ * Maps agent_type -> agent file on the server. The single place both
+ * consumers (the update check in agent_api.php and the version display on
+ * the dashboard) share, so no hardcoded list repeats anywhere.
  */
 function bk_agent_files() {
     return [
@@ -197,15 +197,15 @@ function bk_agent_files() {
 }
 
 /**
- * Přečte AGENT_VERSION přímo z live souboru agenta na serveru (jediné místo
- * pravdy - stejná hodnota, kterou agent skutečně obsahuje), podle typu, který
- * agent sám nahlásil. Vrací null, pokud typ neznáme nebo soubor nejde přečíst
- * (např. stará data bez uloženého agent_type) - volající pak nedělá žádné
- * srovnání verzí, místo srovnávání proti cizímu/neplatnému číslu.
+ * Reads AGENT_VERSION straight from the live agent file on the server (the
+ * single source of truth - the very value the agent actually contains), by the
+ * type the agent itself reported. Returns null when the type is unknown or the
+ * file unreadable (e.g. old data without a stored agent_type) - the caller then
+ * skips version comparison instead of comparing against a foreign/invalid number.
  */
 /**
- * Je verze $have starší než $latest? Porovnává se po číselných složkách,
- * ne řetězcově - "1.10.0" < "1.9.0" by jinak vyšlo jako novější.
+ * Is version $have older than $latest? Compared by numeric components,
+ * not as strings - "1.10.0" < "1.9.0" would otherwise come out newer.
  */
 function bk_version_is_older(?string $have, ?string $latest): bool {
     if (!$have || !$latest) {
@@ -231,7 +231,7 @@ function bk_get_agent_latest_version($agent_type) {
 }
 
 /**
- * Zformátuje sekundy uptimu do české gramatiky
+ * Formats uptime seconds with Czech grammar
  */
 function format_uptime_cz($seconds) {
     if (!$seconds || $seconds <= 0) return 'N/A';
@@ -267,7 +267,7 @@ function format_uptime_cz($seconds) {
 }
 
 /**
- * Vykreslí grid a detaily z VPS agenta (CPU, RAM, Disk, Uptime, SMART, Porty)
+ * Renders the grid and details from the VPS agent (CPU, RAM, Disk, Uptime, SMART, Ports)
  */
 function render_vps_agent_details($details, $monitor = null) {
     if (!isset($details['cpu'])) return '';
@@ -297,7 +297,7 @@ function render_vps_agent_details($details, $monitor = null) {
         <div>
             <?php
             $ram_detail_str = '';
-            // used chodí vždy spolu s total; bez něj by "0 MB / X MB" bylo vymyšlené.
+            // used always travels with total; without it "0 MB / X MB" would be invented.
             if (!empty($details['ram_total_mb']) && isset($details['ram_used_mb'])) {
                 $tot_mb = (int)$details['ram_total_mb'];
                 $used_mb = (int)$details['ram_used_mb'];
@@ -337,9 +337,9 @@ function render_vps_agent_details($details, $monitor = null) {
         <div style="margin-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.85rem; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.45rem;">
             <?php if (isset($details['version'])):
                 $v_reported = trim($details['version']);
-                // Správné "nejnovější" číslo se odvíjí od toho, KTERÝ agent
-                // hlásí (VPS Python/Bash/PowerShell a OpenWrt agent mají
-                // vlastní, na sobě nezávislé verzování) - viz bk_get_agent_latest_version().
+                // The right "latest" number depends on WHICH agent reports
+                // (the VPS Python/Bash/PowerShell and OpenWrt agents have their
+                // own independent versioning) - see bk_get_agent_latest_version().
                 $latest_v = bk_get_agent_latest_version($details['agent_type'] ?? '');
                 $has_update = $latest_v !== null && version_compare($v_reported, $latest_v, '<');
             ?>
@@ -478,7 +478,7 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php endif; ?>
             
             <?php if ($monitor && $monitor['type'] === 'vps' && !empty($details['ports'])): 
-                // Porty mohou přijít jako pole nebo čárkou oddělený řetězec
+                // Ports may arrive as an array or a comma-separated string
                 $ports_arr = is_array($details['ports']) ? $details['ports'] : array_filter(array_map('trim', explode(',', $details['ports'])));
             ?>
                 <div style="margin-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.45rem;">
@@ -554,19 +554,19 @@ function render_vps_agent_details($details, $monitor = null) {
 }
 
 /**
- * Knowledge layer - vrátí pole tipů vysvětlujících, co znamená aktuálně
- * překročený práh u některé z metrik. Nevymýšlí nové prahy - každé pravidlo
- * zrcadlí práh, který už dnes rozhoduje o červené/žluté barvě jinde v kódu
- * (render_vps_agent_details() výše, SSL karta a check pipeline v index.php,
- * status polí z build_teamspeak_health_areas()). Tipy dědí viditelnost od
- * metriky, kterou vysvětlují (viz $enabled_metrics) - nejsou samostatně
- * vypínatelné, protože bez zobrazené metriky by tip nedával smysl.
+ * Knowledge layer - returns tips explaining what a currently exceeded
+ * threshold on a metric means. Invents no new thresholds - every rule
+ * mirrors a threshold that already drives red/yellow elsewhere in the code
+ * (render_vps_agent_details() above, the SSL card and check pipeline in index.php,
+ * the status fields from build_teamspeak_health_areas()). Tips inherit visibility
+ * from the metric they explain (see $enabled_metrics) - they cannot be disabled
+ * separately, because a tip without its metric would make no sense.
  *
  * @return array<int, array{icon: string, severity: string, text: string}>
  */
 /**
- * Zjistí, jak dlouho (v minutách) je metrika nad daným prahem.
- * Vrací null pokud není dostatek dat nebo metrika aktuálně pod prahem je.
+ * Determines how long (in minutes) a metric has been above a threshold.
+ * Returns null when there is not enough data or the metric is currently below it.
  */
 function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookback_hours = 24) {
     try {
@@ -583,11 +583,11 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
 
     if (empty($rows)) return null;
 
-    // Aktuální hodnota musí být nad prahem
+    // The current value must be above the threshold
     $latest = (float)$rows[0]['val'];
     if ($latest <= $threshold) return null;
 
-    // Projdi od nejnovějšího zpět a najdi první vzorek pod prahem
+    // Walk back from the newest sample and find the first one below the threshold
     $above_since = strtotime($rows[0]['checked_at']);
     foreach ($rows as $row) {
         if ((float)$row['val'] <= $threshold) {
@@ -601,59 +601,59 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
 }
 
 /**
- * Zformátuje dobu trvání v minutách do čitelného řetězce (ČR/EN).
+ * Formats a duration in minutes into a readable string (CZ/EN).
  */
 /**
- * Vykreslení naměřené hodnoty: číslo, nebo pomlčka když se nezměřilo.
+ * Renders a measured value: the number, or a dash when unmeasured.
  *
- * Existuje proto, aby se nemuselo psát `$x ?? 0` - nula je platné měření
- * ("disk je z 0 % plný"), takže jí nesmí nahrazovat chybějící údaj.
+ * Exists so nobody has to write `$x ?? 0` - zero is a valid measurement
+ * ("the disk is 0 % full"), so it must not stand in for a missing value.
  *
- * @param mixed  $value    hodnota z details/JSON (může být null nebo chybět)
- * @param string $unit     jednotka připojená za číslo (" %", " MB", " ms"…)
- * @param int    $decimals počet desetinných míst
+ * @param mixed  $value    value from details/JSON (may be null or absent)
+ * @param string $unit     unit appended after the number (" %", " MB", " ms"...)
+ * @param int    $decimals number of decimal places
  */
 /**
- * Má rozhraní nenulový počet chybových paketů?
+ * Does the interface have a non-zero error-packet count?
  *
- * Neznámý počet chyb NENÍ nula chyb - vrací false (nebarví se červeně),
- * ale bez předstírání, že je vše v pořádku změřené.
+ * An unknown error count is NOT zero errors - returns false (no red
+ * colouring), but without pretending everything was measured fine.
  */
 /**
- * Dostupnost monitoru za posledních N dní z reálných kontrol.
+ * Monitor availability over the last N days from real checks.
  *
- * Vrací null, když v okně není ani jedno měření - widget/odznak pak ukáže
- * pomlčku místo vymyšlených 100 %. Vznikla proto, že widget.php i badge.php
- * volaly funkci calculate_uptime(), která v kódu vůbec neexistovala, a obě
- * stránky proto končily fatální chybou.
+ * Returns null when the window has no measurement at all - the widget/badge
+ * then shows a dash instead of an invented 100 %. Exists because widget.php
+ * and badge.php both called calculate_uptime(), which never existed in the
+ * code, and both pages died with a fatal error.
  */
 /**
- * Přepočte denní souhrny dostupnosti z monitor_logs.
+ * Recomputes the daily availability rollups from monitor_logs.
  *
- * Volá se z cronu TĚSNĚ PŘED mazáním starých logů - jinak by se data, která
- * se právě chystají zmizet, do souhrnu nikdy nedostala.
+ * Called from cron RIGHT BEFORE old logs are pruned - otherwise data about
+ * to disappear would never reach the rollup.
  *
- * Přepisuje celé dny (INSERT ... ON DUPLICATE KEY UPDATE), takže opakované
- * spuštění nic nezdvojí a dnešek se v průběhu dne postupně zpřesňuje.
+ * Overwrites whole days (INSERT ... ON DUPLICATE KEY UPDATE), so repeated
+ * runs duplicate nothing and today keeps refining during the day.
  *
- * Do jmenovatele jdou jen skutečná měření - 'maintenance' a 'unknown' se
- * nepočítají, protože plánovaná odstávka není výpadek a nezměřený stav
- * není měření.
+ * Only real measurements enter the denominator - 'maintenance' and 'unknown'
+ * do not count, because a planned outage is not a failure and an unmeasured
+ * state is not a measurement.
  *
- * @param int $days Kolik posledních dnů přepočítat (výchozí 2 = dnešek
- *                  a včerejšek, což stačí při běhu každou minutu).
- * @return int Počet zapsaných/aktualizovaných dnů.
+ * @param int $days How many recent days to recompute (default 2 = today
+ *                  and yesterday, enough when running every minute).
+ * @return int Number of days written/updated.
  */
 /**
- * Číselná metrika z hlášení agenta, nebo NULL.
+ * A numeric metric from the agent's report, or NULL.
  *
- * Jádro pravidla celého projektu na jednom místě: chybějící, prázdná nebo
- * nečíselná hodnota je NULL, nikdy nula. Nula znamená „naměřeno nula" -
- * u zahozených paketů nebo teploty je to úplně jiná informace než
+ * The whole project's core rule in one place: a missing, empty or
+ * non-numeric value is NULL, never zero. Zero means "measured zero" -
+ * for dropped packets or temperature that is a completely different message than
  * „agent tuhle hodnotu neposlal".
  *
- * Shell agenti posílají nezměřené hodnoty jako JSON null, ale starší verze
- * poslaly řetězec "null" - ten se proto bere taky jako chybějící.
+ * Shell agents send unmeasured values as JSON null, but older versions
+ * sent the string "null" - it therefore counts as missing too.
  */
 function bk_agent_num(array $data, string $key): ?float {
     if (!array_key_exists($key, $data)) {
@@ -666,29 +666,29 @@ function bk_agent_num(array $data, string $key): ?float {
     return is_numeric($value) ? (float)$value : null;
 }
 
-/** Celočíselná varianta bk_agent_num() - pro počítadla a počty. */
+/** Integer variant of bk_agent_num() - for counters and counts. */
 function bk_agent_int(array $data, string $key): ?int {
     $num = bk_agent_num($data, $key);
     return $num === null ? null : (int)round($num);
 }
 
 /**
- * Denní agregace metrik agentů do `metrics_daily`.
+ * Daily aggregation of agent metrics into `metrics_daily`.
  *
- * Syrové `vps_metrics` se po 30 dnech mažou. Dostupnost tuhle hranici
- * přežívala díky `uptime_daily`, metriky ne - takže na otázku „jak rostlo
- * zaplnění disku za půl roku" neexistovala odpověď a odhad „disk bude plný
- * za X dní" se navždy počítal nejvýš z třiceti dnů.
+ * Raw `vps_metrics` is pruned after 30 days. Availability outlived that
+ * boundary thanks to `uptime_daily`, metrics did not - so "how did disk
+ * usage grow over half a year" had no answer and the "disk full in X days"
+ * estimate was forever computed from at most thirty days.
  *
- * Ukládá se min/průměr/max a počet vzorků. Průměr sám by schoval špičky,
- * na které se kapacitní plánování ptá především; max bez počtu vzorků by
- * zase nešlo odlišit od jediného výkyvu.
+ * Stored are min/average/max and the sample count. The average alone would
+ * hide the spikes capacity planning asks about most; max without a sample
+ * count could not be told apart from a single blip.
  *
- * Dny se přepočítávají znovu (ON DUPLICATE KEY UPDATE), aby doběhnutí
- * pozdních dat dnešek opravilo.
+ * Days are recomputed (ON DUPLICATE KEY UPDATE) so late-arriving data
+ * corrects today.
  *
- * @param int $days Kolik posledních dnů přepočítat (výchozí 2 = dnešek a včerejšek).
- * @return int Počet zapsaných/aktualizovaných řádků.
+ * @param int $days How many recent days to recompute (default 2 = today and yesterday).
+ * @return int Number of rows written/updated.
  */
 /**
  * Retention for process history.
@@ -755,8 +755,8 @@ function bk_rollup_daily_metrics(PDO $pdo, int $days = 2): int {
         if ($col === null) {
             continue;
         }
-        // Název sloupce nejde předat jako parametr; bere se z vlastní mapy
-        // v kódu, ne ze vstupu, ale pro jistotu se ověří tvar.
+        // A column name cannot be a bound parameter; it comes from our own map
+        // in code, not from input, but its shape is verified just in case.
         if (!preg_match('/^[a-z0-9_]+$/', $col)) {
             continue;
         }
@@ -781,8 +781,8 @@ function bk_rollup_daily_metrics(PDO $pdo, int $days = 2): int {
             $stmt->execute([$metric_key, $days]);
             $written += $stmt->rowCount();
         } catch (Throwable $e) {
-            // Chybějící sloupec u starší databáze nesmí shodit celou agregaci -
-            // ostatní metriky se zpracují dál.
+            // A column missing on an older database must not kill the whole
+            // aggregation - the remaining metrics still get processed.
             error_log("[rollup] Metrika {$metric_key} ({$col}) selhala: " . $e->getMessage());
         }
     }
@@ -820,16 +820,16 @@ function bk_period_minutes(string $period): ?int {
 /**
  * Mapa metrik na sloupce ve `vps_metrics`.
  *
- * Bydlela v api.php, ale potřebuje ji i cron kvůli denní agregaci. Kdyby
- * existovala dvakrát, rozejdou se - a chybějící metrika v agregaci se pozná
- * až za měsíc, kdy už syrová data nejsou.
+ * Lived in api.php, but cron needs it too for the daily rollups. If it
+ * existed twice they would drift apart - and a metric missing from the
+ * rollup shows only a month later, when the raw data is already gone.
  */
 function bk_metric_column_map(): array {
-    // Pozor na `net` vs `net_ipv4`/`net_ipv6`: NEJSOU to části téhož celku.
-    // `net` je rx+tx jen na WAN rozhraní, zatímco protokolové čítače jdou
-    // z /proc/net/netstat, tedy přes VŠECHNA rozhraní včetně LAN. Součet
-    // IPv4+IPv6 proto bývá vyšší než `net` a postavit je vedle sebe jako
-    // rozpad jednoho čísla by uživateli ukázalo součet, který nesedí.
+    // Mind `net` vs `net_ipv4`/`net_ipv6`: they are NOT parts of one whole.
+    // `net` is rx+tx on the WAN interface only, while the protocol counters
+    // come from /proc/net/netstat, i.e. across ALL interfaces including LAN.
+    // The IPv4+IPv6 sum therefore tends to exceed `net`, and placing them side
+    // by side as a breakdown of one number would show a sum that does not add up.
     return [
     'cpu' => ['col' => 'cpu_usage', 'unit' => '%', 'label' => 'Využití CPU'],
     'ram' => ['col' => 'ram_usage', 'unit' => '%', 'label' => 'Využití paměti'],
@@ -845,10 +845,10 @@ function bk_metric_column_map(): array {
     'net_errors' => ['col' => 'net_errors', 'unit' => '', 'label' => 'Síťové chyby'],
     'iowait' => ['col' => 'iowait_pct', 'unit' => '%', 'label' => 'Čekání na I/O'],
     'inode_usage' => ['col' => 'inode_usage_pct', 'unit' => '%', 'label' => 'Využití inodů'],
-    // Tyhle dvě řady čtou TÝŽ sloupec (kolik lidí je online) a liší se jen
-    // pojmenováním. 'only' je proto omezuje na typ monitoru, kterému dávají
-    // smysl - jinak by detail Discordu ukazoval dva identické grafy, z toho
-    // jeden nadepsaný "TeamSpeak Klienti".
+    // These two series read the SAME column (how many people are online) and
+    // differ only in naming. 'only' therefore restricts them to the monitor
+    // type they make sense for - otherwise the Discord detail would show two
+    // identical charts, one titled "TeamSpeak Clients".
     'ts_clients' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'TeamSpeak Klienti', 'only' => ['teamspeak']],
     'discord_presence' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Online na Discordu', 'only' => ['discord']],
     'mc_players' => ['col' => 'ts_clients_online', 'unit' => '', 'label' => 'Hráči online', 'only' => ['minecraft']],
@@ -857,13 +857,13 @@ function bk_metric_column_map(): array {
     'net_ipv4' => ['col' => 'net_ipv4_kbps', 'unit' => 'KB/s', 'label' => 'IPv4 provoz (všechna rozhraní)'],
     'net_ipv6' => ['col' => 'net_ipv6_kbps', 'unit' => 'KB/s', 'label' => 'IPv6 provoz (všechna rozhraní)'],
     'temperature_c' => ['col' => 'temperature_c', 'unit' => '°C', 'label' => 'Teplota CPU'],
-    // Sloupce, které se roky ukládaly, ale žádný graf je nečetl (audit 2026-08-05):
+    // Columns stored for years that no chart ever read (audit 2026-08-05):
     'zombie_count' => ['col' => 'zombie_count', 'unit' => '', 'label' => 'Zombie procesy'],
     'fork_rate' => ['col' => 'fork_rate', 'unit' => '/s', 'label' => 'Fork rate'],
     'wifi_clients' => ['col' => 'wifi_clients_total', 'unit' => '', 'label' => 'Wi-Fi klienti'],
     'conntrack' => ['col' => 'conntrack_pct', 'unit' => '%', 'label' => 'Conntrack tabulka'],
-    // Metriky doplněné 08/2026: agenti je posílali každou minutu, ale
-    // ukládal se jen poslední snímek, takže z nich nezbyla historie.
+    // Metrics added 08/2026: agents sent them every minute, but only the
+    // last snapshot was stored, so no history survived.
     'wan_latency_ms' => ['col' => 'wan_latency_ms', 'unit' => 'ms', 'label' => 'Latence WAN'],
     'dns_latency_ms' => ['col' => 'dns_latency_ms', 'unit' => 'ms', 'label' => 'Latence DNS'],
     'entropy' => ['col' => 'entropy_avail', 'unit' => 'bit', 'label' => 'Dostupná entropie'],
@@ -903,11 +903,11 @@ function bk_metric_column_map(): array {
 }
 
 /**
- * Rozsahy Cloudflare, ze kterých smíme věřit hlavičce s IP návštěvníka.
+ * Cloudflare ranges from which the visitor-IP header may be trusted.
  *
- * Zdroj: https://www.cloudflare.com/ips/ - mění se řádově jednou za roky,
- * ale při rozšíření je potřeba tenhle seznam doplnit. Kdo Cloudflare
- * nepoužívá, nemusí dělat nic: bez shody se prostě použije REMOTE_ADDR.
+ * Source: https://www.cloudflare.com/ips/ - changes about once in years,
+ * but an expansion means updating this list. Anyone not using Cloudflare
+ * does nothing: without a match, REMOTE_ADDR is simply used.
  */
 const BK_CLOUDFLARE_RANGES = [
     '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
@@ -919,11 +919,11 @@ const BK_CLOUDFLARE_RANGES = [
 ];
 
 /**
- * Spadá IP do rozsahu zapsaného v CIDR? Umí IPv4 i IPv6.
+ * Does the IP fall into a CIDR range? Handles IPv4 and IPv6.
  *
- * Porovnává se po bitech nad binární podobou z inet_pton - řetězcové
- * porovnání prefixu by u IPv6 selhalo na zkráceném zápisu (2400:cb00::
- * a 2400:cb00:0:0:0:0:0:0 jsou tatáž adresa).
+ * Compared bit by bit over the binary form from inet_pton - a string prefix
+ * comparison would fail on shortened IPv6 notation (2400:cb00:: and
+ * 2400:cb00:0:0:0:0:0:0 are the same address).
  */
 function bk_ip_in_cidr(string $ip, string $cidr): bool {
     if (!str_contains($cidr, '/')) {
@@ -937,7 +937,7 @@ function bk_ip_in_cidr(string $ip, string $cidr): bool {
     if ($ip_bin === false || $subnet_bin === false) {
         return false;
     }
-    // Nemíchat IPv4 a IPv6 - délka binární podoby se liší (4 vs 16 bajtů).
+    // Do not mix IPv4 and IPv6 - the binary length differs (4 vs 16 bytes).
     if (strlen($ip_bin) !== strlen($subnet_bin)) {
         return false;
     }
@@ -960,22 +960,22 @@ function bk_ip_in_cidr(string $ip, string $cidr): bool {
 }
 
 /**
- * IP adresa návštěvníka - ta skutečná, ne adresa proxy.
+ * The visitor's IP address - the real one, not the proxy's.
  *
- * Aplikace běží za Cloudflare, takže REMOTE_ADDR je adresa jejich edge uzlu.
- * Audit log kvůli tomu zaznamenával u přihlášení IP Cloudflare a k dohledání,
- * kdo se odkud přihlásil, byl nepoužitelný. Horší dopad měl na zamykání účtu
- * po neúspěšných pokusech: to počítá pokusy podle jména NEBO IP, takže se
- * z IP části stalo buď nic, nebo způsob, jak zamknout přihlášení někomu
- * cizímu, kdo se trefil do stejného edge uzlu.
+ * The app runs behind Cloudflare, so REMOTE_ADDR is their edge node. The
+ * audit log therefore recorded Cloudflare IPs for sign-ins and was useless
+ * for tracing who signed in from where. Worse was the effect on account
+ * lockout after failed attempts: it counts attempts by name OR IP, so the
+ * IP part became either nothing, or a way to lock out someone else who
+ * happened to hit the same edge node.
  *
- * Hlavičce se věří JEN tehdy, když request opravdu přišel z Cloudflare.
- * Bez té podmínky si může kdokoli poslat `CF-Connecting-IP: 1.2.3.4` a
- * zapsat si do protokolu libovolnou adresu - nebo se vyhnout zamykání tím,
- * že ji bude při každém pokusu měnit.
+ * The header is trusted ONLY when the request really came from Cloudflare.
+ * Without that condition anyone can send `CF-Connecting-IP: 1.2.3.4` and
+ * write an arbitrary address into the log - or dodge the lockout by
+ * changing it on every attempt.
  *
- * Vlastní proxy (nginx, HAProxy) jde přidat nastavením `trusted_proxies`
- * jako čárkou oddělený seznam CIDR.
+ * A custom proxy (nginx, HAProxy) can be added via the `trusted_proxies`
+ * setting as a comma-separated CIDR list.
  */
 function bk_client_ip(): ?string {
     $remote = $_SERVER['REMOTE_ADDR'] ?? null;
@@ -1001,8 +1001,8 @@ function bk_client_ip(): ?string {
 
     foreach ($trusted as $range) {
         if (bk_ip_in_cidr($remote, $range)) {
-            // Hlavička může nést i nesmysl - bez ověření tvaru by se do
-            // protokolu dostal libovolný řetězec.
+            // The header may carry nonsense too - without a shape check an
+            // arbitrary string would land in the log.
             return filter_var($forwarded, FILTER_VALIDATE_IP) !== false ? $forwarded : $remote;
         }
     }
@@ -1011,10 +1011,10 @@ function bk_client_ip(): ?string {
 }
 
 /**
- * Prohlížeč/klient, který požadavek poslal.
+ * The browser/client that sent the request.
  *
- * Ořezáno na 255 znaků: sloupec má tuhle délku a delší User-Agent existují
- * (některé korporátní prohlížeče posílají stovky znaků).
+ * Trimmed to 255 characters: the column has that length and longer
+ * User-Agents exist (some corporate browsers send hundreds of characters).
  */
 function bk_client_user_agent(): ?string {
     $ua = trim((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
@@ -1027,21 +1027,21 @@ function bk_client_user_agent(): ?string {
 /**
  * Rozhodne, jestli incident zraje na eskalaci.
  *
- * Upozornění na výpadek dnes odejde jednou a tím to končí. Když ho nikdo
- * nevidí - je noc, telefon je ztlumený, Discord přehlušila jiná konverzace -
- * výpadek běží dál a monitoring má splněno. Eskalace je pojistka: co nikdo
- * nepřevzal do nastavené doby, se ohlásí znovu a jinam.
+ * An outage alert goes out once and that is it. When nobody sees it -
+ * it is night, the phone is muted, Discord drowned it in another
+ * conversation - the outage keeps running and monitoring calls it a day.
+ * Escalation is the safety net: whatever nobody acknowledged in time is announced again, elsewhere.
  *
- * Podmínky jsou schválně přísné, protože eskalace budí člověka:
- *   - incident není vyřešený (na vyřešený nemá smysl upozorňovat)
- *   - nikdo ho nepotvrdil (acknowledged_at je prázdné)
- *   - od vzniku uplynula nastavená doba
- *   - ještě neeskaloval (escalated_at je prázdné) - jinak by se opakoval
- *     při každém běhu cronu a naučil by se ignorovat stejně jako ten první
+ * The conditions are strict on purpose, because escalation wakes a human:
+ *   - the incident is not resolved (alerting on a resolved one is pointless)
+ *   - nobody acknowledged it (acknowledged_at is empty)
+ *   - the configured time has passed since creation
+ *   - it has not escalated yet (escalated_at is empty) - otherwise it would
+ *     repeat on every cron run and train people to ignore it like the first one
  *
- * @param array $incident Řádek z `incidents`
- * @param int   $after_mins Po kolika minutách bez převzetí eskalovat
- * @param ?int  $now Čas vyhodnocení; NULL = teď (parametr kvůli testům)
+ * @param array $incident Row from `incidents`
+ * @param int   $after_mins Minutes without acknowledgement before escalating
+ * @param ?int  $now Evaluation time; NULL = now (parameter for tests)
  * @return array{escalate: bool, reason: string, waiting_secs: ?int}
  */
 function bk_escalation_due(array $incident, int $after_mins, ?int $now = null): array {
@@ -1063,8 +1063,8 @@ function bk_escalation_due(array $incident, int $after_mins, ?int $now = null): 
     $created_raw = $incident['created_at'] ?? null;
     $created_ts = ($created_raw !== null && $created_raw !== '') ? strtotime((string)$created_raw) : false;
     if ($created_ts === false) {
-        // Bez času vzniku nejde spočítat, jak dlouho čeká. Eskalovat "pro
-        // jistotu" by znamenalo budit člověka kvůli poškozenému záznamu.
+        // Without a creation time there is no computing how long it waited.
+        // Escalating "just in case" would wake a human over a corrupt record.
         return ['escalate' => false, 'reason' => 'incident nemá použitelný čas vzniku', 'waiting_secs' => null];
     }
 
@@ -1077,11 +1077,11 @@ function bk_escalation_due(array $incident, int $after_mins, ?int $now = null): 
 }
 
 /**
- * Projde otevřené incidenty a ty nepřevzaté ohlásí na eskalační kanál.
+ * Walks the open incidents and reports the unacknowledged ones to the escalation channel.
  *
- * Volá se z cronu po kontrole monitorů. Kanál je schválně jiný než ten
- * běžný: eskalace má smysl jen tehdy, když se ozve někde, kde první
- * upozornění zapadlo.
+ * Called from cron after the monitor checks. The channel is deliberately different from the one
+ * regular one: escalation only makes sense somewhere the first alert
+ * did not just sink.
  *
  * @return array{checked: int, escalated: int, skipped_no_channel: int}
  */
@@ -1118,9 +1118,9 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
             continue;
         }
 
-        // Bez nastaveného kanálu se razítko NEDÁVÁ. Kdyby se dalo, incident by
-        // se tvářil jako eskalovaný a po doplnění kanálu by se už neozval -
-        // tiché selhání přesně tam, kde má pojistka fungovat.
+        // Without a configured channel the stamp is NOT set. If it were, the
+        // incident would look escalated and never speak up once a channel was
+        // added - a silent failure exactly where the safety net must work.
         if ($webhook === '') {
             $result['skipped_no_channel']++;
             continue;
@@ -1135,8 +1135,8 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
             . '**Limit na převzetí:** ' . $after_mins . " min\n"
             . 'Původní upozornění odešlo a nikdo na něj nezareagoval.';
 
-        // Payload nese `content` i `text`: Discord čte první, Slack druhý a
-        // neznámý klíč obě strany ignorují. Jeden kanál tak pokryje obojí.
+        // The payload carries both `content` and `text`: Discord reads the first,
+        // Slack the second, and both ignore an unknown key. One channel covers both.
         send_webhook_post($webhook, json_encode(['content' => $text, 'text' => $text], JSON_UNESCAPED_UNICODE));
 
         try {
@@ -1159,36 +1159,36 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
 }
 
 /**
- * Vygeneruje tajemství pro heartbeat URL.
+ * Generates the secret for a heartbeat URL.
  *
- * Token je jediné, co úlohu autorizuje - proto z CSPRNG a dost dlouhý na to,
- * aby se nedal uhádnout. Hex, aby přežil průchod curl, wget i Task Schedulerem
- * bez escapování.
+ * The token is all that authorises the job - hence from a CSPRNG and long
+ * enough not to be guessable. Hex, so it survives curl, wget and Task
+ * Scheduler without escaping.
  */
 function bk_heartbeat_generate_token(): string {
     return bin2hex(random_bytes(24));
 }
 
 /**
- * Vyhodnotí stav heartbeat monitoru z toho, kdy se úloha naposledy ozvala.
+ * Evaluates a heartbeat monitor's state from when the job last reported.
  *
- * Obrácený směr než zbytek monitoringu: neptáme se my služby, ale ona se hlásí
- * nám. Pokrývá to, na co aktivní kontrola nedosáhne - zálohy, cronjoby a dávky,
- * u kterých není co pingnout a jejichž selhání se dnes pozná až ve chvíli, kdy
- * je záloha potřeba.
+ * The opposite direction from the rest of monitoring: we do not ask the
+ * service, it reports to us. Covers what an active check cannot reach -
+ * backups, cronjobs and batches with nothing to ping, whose failure today
+ * shows only the moment the backup is needed.
  *
- * Rozlišují se tři stavy, ne dva:
- *   up      - signál přišel včas a úloha hlásí úspěch
- *   down    - buď se úloha neozvala do intervalu + tolerance, nebo přímo
- *             ohlásila selhání (?status=fail)
- *   unknown - ještě se neozvala ani jednou, nebo nemá nastavený interval
+ * Three states are distinguished, not two:
+ *   up      - the signal arrived in time and the job reports success
+ *   down    - either the job missed the interval + grace, or it directly
+ *             reported failure (?status=fail)
+ *   unknown - it never reported yet, or has no interval configured
  *
- * To poslední je důležité: monitor, který nikdy nedostal signál, NENÍ dole.
- * Nevíme o něm nic. Kdyby se založil jako 'down', přišel by alert na výpadek,
- * který se nestal, a to je stejná lež jako vymyšlená nula v grafu.
+ * The last one matters: a monitor that never got a signal is NOT down.
+ * We know nothing about it. Created as 'down' it would alert on an outage
+ * that never happened - the same lie as an invented zero in a chart.
  *
- * @param array $monitor Řádek z `monitors` (heartbeat_* sloupce)
- * @param ?int  $now     Čas vyhodnocení; NULL = teď (parametr kvůli testům)
+ * @param array $monitor Row from `monitors` (the heartbeat_* columns)
+ * @param ?int  $now     Evaluation time; NULL = now (parameter for tests)
  * @return array{status: string, error: ?string, age_secs: ?int, deadline_secs: ?int, overdue_secs: ?int}
  */
 function bk_heartbeat_evaluate(array $monitor, ?int $now = null): array {
@@ -1208,7 +1208,7 @@ function bk_heartbeat_evaluate(array $monitor, ?int $now = null): array {
         ];
     }
 
-    // Tolerance je volitelná; bez ní se hlídá přesně na interval.
+    // Grace is optional; without it the interval is enforced exactly.
     $grace = isset($monitor['heartbeat_grace']) && $monitor['heartbeat_grace'] !== null
         ? max(0, (int)$monitor['heartbeat_grace'])
         : 0;
@@ -1227,13 +1227,13 @@ function bk_heartbeat_evaluate(array $monitor, ?int $now = null): array {
         ];
     }
 
-    // Záporný věk = signál z budoucnosti (rozejité hodiny na stroji s úlohou).
-    // Bereme ho jako čerstvý, ale nula by tvrdila, že dorazil právě teď.
+    // Negative age = a signal from the future (skewed clock on the job's
+    // machine). Treated as fresh, but zero would claim it arrived just now.
     $age = $now - $last_ts;
 
-    // Ohlášené selhání má přednost před stářím: úloha doběhla včas, ale
-    // skončila chybou. Mlčet o tom jen proto, že signál přišel, by z hlídače
-    // udělalo kontrolu, že cron vůbec startuje - ne že záloha vznikla.
+    // A reported failure beats age: the job ran on time but ended in error.
+    // Staying silent just because the signal arrived would reduce the watchdog
+    // to checking that cron starts - not that the backup was made.
     if (($monitor['heartbeat_last_result'] ?? null) === 'fail' && $age <= $deadline) {
         $msg = trim((string)($monitor['heartbeat_last_message'] ?? ''));
         return [
@@ -1273,10 +1273,10 @@ function bk_heartbeat_evaluate(array $monitor, ?int $now = null): array {
 }
 
 /**
- * Doba v sekundách jako čitelný text ("2 h 5 min").
+ * A duration in seconds as readable text ("2 h 5 min").
  *
- * Hlášky o heartbeatu čte člověk uprostřed noci - "neozvala se 7 320 s" nutí
- * počítat, "neozvala se 2 h 2 min" ne.
+ * Heartbeat messages are read by a human in the middle of the night -
+ * "silent for 7,320 s" forces arithmetic, "silent for 2 h 2 min" does not.
  */
 function bk_format_duration_secs(int $secs): string {
     if ($secs < 0) {
@@ -1299,16 +1299,16 @@ function bk_format_duration_secs(int $secs): string {
 }
 
 /**
- * Vyhodnotí, jestli je odezva monitoru trvale zhoršená.
+ * Evaluates whether a monitor's latency is persistently degraded.
  *
- * Monitoring dosud uměl říct jen „služba je dole". Web, který zpomalil
- * z 80 ms na 900 ms a tam zůstal, byl přitom pořád „up" a nikdo se to
- * nedozvěděl.
+ * Monitoring could only say "the service is down". A site that slowed from
+ * 80 ms to 900 ms and stayed there was still "up" and nobody ever learned.
  *
- * Podmínka je záměrně přísná: PRŮMĚR i VŠECHNY kontroly ve sledovaném okně
- * musí být nad prahem. Jedna pomalá odpověď (přetížený DNS resolver,
- * náhodný packet loss) je šum, ne incident - a alert, který houká na šum,
- * se během týdne naučí každý ignorovat.
+ *
+ * The condition is strict on purpose: both the AVERAGE and ALL checks in the
+ * window must sit above the threshold. One slow response (overloaded DNS
+ * resolver, random packet loss) is noise, not an incident - and an alert
+ * that cries at noise teaches everyone to ignore it within a week.
  *
  * @return array{state: string, avg_ms: ?float, checks: int}
  *         state: 'degraded' | 'recovered' | 'ok'
@@ -1342,7 +1342,7 @@ function bk_evaluate_latency(PDO $pdo, array $monitor, bool $alert_already_sent)
     }
 
     $checks = (int)($row['checks'] ?? 0);
-    // Aspoň dvě měření - z jednoho se trvalost poznat nedá.
+    // At least two measurements - persistence cannot be judged from one.
     if ($checks < 2) {
         return ['state' => 'ok', 'avg_ms' => null, 'checks' => $checks];
     }
@@ -1355,8 +1355,8 @@ function bk_evaluate_latency(PDO $pdo, array $monitor, bool $alert_already_sent)
         return ['state' => 'degraded', 'avg_ms' => round($avg, 1), 'checks' => $checks];
     }
     if (!$degraded && $alert_already_sent) {
-        // Zotavení se hlásí, jakmile se aspoň jedna kontrola vejde pod práh -
-        // jinak by upozornění „trvá to dál" viselo i po návratu do normálu.
+        // Recovery is reported as soon as one check fits under the threshold -
+        // otherwise the "still ongoing" notice would hang after the return to normal.
         return ['state' => 'recovered', 'avg_ms' => round($avg, 1), 'checks' => $checks];
     }
     return ['state' => 'ok', 'avg_ms' => round($avg, 1), 'checks' => $checks];
@@ -1388,8 +1388,8 @@ function bk_rollup_daily_uptime(PDO $pdo, int $days = 2): int {
         $stmt->execute([$days]);
         return $stmt->rowCount();
     } catch (Throwable $e) {
-        // Bez tabulky (stará DB) se souhrn přeskočí; SLA pak stále funguje
-        // nad syrovými logy v rámci jejich retence.
+        // Without the table (old DB) the rollup is skipped; SLA still works
+        // over raw logs within their retention.
         error_log('[rollup] uptime_daily skipped: ' . $e->getMessage());
         return 0;
     }
@@ -1411,7 +1411,7 @@ function bk_uptime_30d(PDO $pdo, int $monitor_id, int $days = 30): ?float {
             return ((int)$row['up_count'] / (int)$row['total']) * 100;
         }
     } catch (Throwable $e) {
-        // Bez dat zůstává null.
+        // Stays null without data.
     }
     return null;
 }
@@ -1423,11 +1423,11 @@ function bk_iface_has_errors(array $iface): bool {
 }
 
 /**
- * Odstraní diakritiku, aby šel z názvu udělat slug do URL.
+ * Strips diacritics so a name can become a URL slug.
  *
- * iconv//TRANSLIT je na různých systémech nekonzistentní (a na některých
- * OpenWrt/Alpine buildech chybí úplně), takže se česká písmena mapují
- * explicitně - "Veřejný přehled" -> "verejny prehled".
+ * iconv//TRANSLIT is inconsistent across systems (and entirely missing on
+ * some OpenWrt/Alpine builds), so Czech letters map explicitly -
+ * "Verejny prehled" -> "verejny prehled" (Czech letters mapped explicitly).
  */
 function bk_slug_ascii(string $text): string {
     $map = [
@@ -1458,11 +1458,11 @@ function bk_format_duration($minutes) {
 }
 
 /**
- * Obohacení threshold tipu o důkazy - kvalita podle laťky uživatele
- * (2026-07-21): "CPU je nad 85 % po dobu 18 minut. Nejvíce zatěžuje:
+ * Enriching a threshold tip with evidence - quality per the user's bar
+ * (2026-07-21): "CPU has been above 85 % for 18 minutes. Top consumer:
  * hostapd (61 %). Load average: 2.8/2.4/2.1. Wi-Fi klienti: 27.
- * Doporučení: ...". Skládá se JEN ze skutečně dostupných dat - bez top
- * procesů se věta o viníkovi prostě vynechá.
+ * Recommendation: ...". Built ONLY from actually available data - without
+ * top processes the culprit sentence is simply omitted.
  */
 function bk_enrich_threshold_tip(
     array $details,
@@ -1475,12 +1475,12 @@ function bk_enrich_threshold_tip(
     $top_key = $metric === 'ram' ? 'top_ram_processes' : 'top_cpu_processes';
     $top = (!empty($details[$top_key]) && is_array($details[$top_key])) ? ($details[$top_key][0] ?? null) : null;
 
-    // Viník za celou dobu, ne jen za poslední minutu.
+    // The culprit over the whole period, not just the last minute.
     //
-    // Poslední snímek říká, kdo zatěžuje stroj teď. U stavu, který trvá tři
-    // hodiny, to ale nemusí být ten, kdo ho způsobil - a když agent zrovna
-    // žebříček neposlal, není tu nikdo. Historie procesů (od 14. 8. 2026) umí
-    // odpovědět za celé okno; když ji nemáme, zůstává snímek.
+    // The latest snapshot says who loads the machine now. For a state lasting
+    // three hours that need not be who caused it - and when the agent just
+    // skipped the ranking, there is nobody. Process history (since 14 Aug 2026)
+    // can answer for the whole window; without it, the snapshot remains.
     if ($pdo instanceof PDO && $monitor !== null && $duration_secs !== null && $duration_secs > 0) {
         $from = time() - $duration_secs;
         $historic = bk_top_process_in_window($pdo, (int)$monitor['id'], $from, time(), $metric === 'ram' ? 'ram' : 'cpu');
@@ -1506,7 +1506,7 @@ function bk_enrich_threshold_tip(
         $parts[] = sprintf(t('kt_load_avg'), $details['load1'], $details['load5'], $details['load15']);
     }
 
-    // Kontext podle viníka - jen když příslušná telemetrie existuje.
+    // Context by culprit - only when the telemetry actually exists.
     $rec_key = 'kt_rec_generic';
     if (strpos($proc_name, 'hostapd') !== false) {
         if (isset($details['wifi_clients_count'])) {
@@ -1564,27 +1564,27 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         ];
     };
 
-    // Prahy tipů se řídí nastavením monitoru, ne konstantou v kódu.
+    // Tip thresholds follow the monitor's settings, not a constant in code.
     //
-    // Dřív tu bylo natvrdo 80/50 pro CPU, 85/60 pro paměť a 90/70 pro disk,
-    // zatímco pásma v grafu se kreslí podle monitors.cpu_threshold (výchozí 90)
-    // a Executive Summary počítá tlak z téhož nastavení. Kdo si zvedl práh na
-    // 95, dostával přesto kritický tip už při 81 % - tři různé názory na "moc
+    // This used to hardcode 80/50 for CPU, 85/60 for memory and 90/70 for disk,
+    // while the chart bands draw from monitors.cpu_threshold (default 90)
+    // and the Executive Summary computes pressure from the same setting. Anyone
+    // who raised their threshold to 95 still got a critical tip at 81 % - three
     // vysoko" v jednom produktu.
     //
-    // Varovná úroveň je 15 bodů pod kritickou, stejně jako varovné pásmo
-    // v grafu. Bez nastaveného prahu zůstávají původní hodnoty, aby se chování
-    // u nikoho neposunulo bez jeho vědomí.
+    // The warning level sits 15 points below critical, like the chart's warning
+    // band. Without a configured threshold the original values remain, so
+    // nobody's behaviour shifts without their knowledge.
     $tip_threshold = static function ($configured, float $fallback_crit, float $fallback_warn): array {
         $crit = is_numeric($configured) && (float)$configured > 0 ? (float)$configured : $fallback_crit;
         $warn = $crit === $fallback_crit ? $fallback_warn : max(1.0, $crit - 15);
         return [$crit, $warn];
     };
-    // Preset > monitor > výchozí - stejné pořadí jako u alertů v agent_api.
+    // Preset > monitor > default - the same order as the alerts in agent_api.
     $kt_eff_thr = bk_monitor_thresholds($pdo instanceof PDO ? $pdo : null, (array)$monitor);
 
-    // --- VPS / agent (platí pro jakýkoli typ s propojeným agentem, stejně
-    // jako render_vps_agent_details() sama není omezená na type=vps) ---
+    // --- VPS / agent (applies to any type with an attached agent, just as
+    // render_vps_agent_details() itself is not limited to type=vps) ---
     if (is_array($details)) {
         if (isset($details['cpu'])) {
             $cpu = floatval($details['cpu']);
@@ -1682,7 +1682,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         }
     }
 
-    // --- TeamSpeak Health Score areas - jen pokud je tabulka vůbec zobrazená ---
+    // --- TeamSpeak Health Score areas - only when the table shows at all ---
     if ($monitor && $monitor['type'] === 'teamspeak' && $health_score_enabled) {
         $ts3_area_tip_keys = [
             'availability' => 'knowledge_tip_ts3_availability',
@@ -1738,8 +1738,8 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
 }
 
 /**
- * Vykreslí panel s Knowledge tipy (viz bk_get_knowledge_tips()). Prázdné pole
- * = prázdný řetězec, žádný panel se nezobrazí.
+ * Renders the Knowledge tips panel (see bk_get_knowledge_tips()). Empty array
+ * = empty string, no panel shows.
  */
 function render_knowledge_panel(array $tips) {
     if (empty($tips)) return '';
@@ -1762,14 +1762,14 @@ function render_knowledge_panel(array $tips) {
 }
 
 /**
- * Sdílená matematika pro Insights (Level 1 Forecasting) - rozdělí seřazenou
- * (podle checked_at ASC) řadu vzorků na starší/novější polovinu, porovná
- * průměry a vrátí rychlost změny za den. Deterministické, žádná AI - stejný
- * princip pro disk/RAM i pro latenci, proto jedna sdílená funkce.
+ * Shared math for Insights (Level 1 Forecasting) - splits a series sorted
+ * by checked_at ASC into an older/newer half, compares the means and
+ * returns the rate of change per day. Deterministic, no AI - the same
+ * principle for disk/RAM and latency, hence one shared function.
  *
- * @param array $rows Řádky s klíči $time_key (datum) a $value_key (číslo)
+ * @param array $rows Rows with keys $time_key (date) and $value_key (number)
  * @return array{avg_older: float, avg_newer: float, latest: float, rate_per_day: float}|null
- *         null, pokud je dat málo na to, aby extrapolace dávala smysl.
+ *         null when there is too little data for the extrapolation to make sense.
  */
 function bk_half_window_rate(array $rows, string $value_key, string $time_key = 'checked_at') {
     $rows = array_values(array_filter($rows, fn($r) => isset($r[$value_key]) && $r[$value_key] !== null));
@@ -1804,12 +1804,12 @@ function bk_half_window_rate(array $rows, string $value_key, string $time_key = 
 }
 
 /**
- * Insights v1 (Level 1 Forecasting) - trendová matematika nad historií, kterou
- * už sbíráme (vps_metrics/monitor_logs, oboje 30denní retence - viz cron.php).
- * Záměrně nezahrnuje SSL expiraci (tu už pokrývá knowledge_tip_ssl_expiring
- * v bk_get_knowledge_tips() - duplicitní hlášení stejné věci by jen otravovalo)
- * ani sloučení s Knowledge panelem (viz plán - samostatné rozhodnutí až bude
- * víc typů insightů hotovo).
+ * Insights v1 (Level 1 Forecasting) - trend math over history we already
+ * collect (vps_metrics/monitor_logs, both 30-day retention - see cron.php).
+ * Deliberately excludes SSL expiry (already covered by knowledge_tip_ssl_expiring
+ * in bk_get_knowledge_tips() - reporting the same thing twice would only annoy)
+ * and the Knowledge panel merge (see the plan - a separate decision once
+ * more insight types exist).
  */
 function bk_get_forecast_insights($pdo, $monitor) {
     $insights = [];
@@ -1817,10 +1817,10 @@ function bk_get_forecast_insights($pdo, $monitor) {
 
     // --- Disk / RAM growth forecast ---
     //
-    // Denní agregace místo syrových měření: jde o trend růstu, ne o rozptyl,
-    // takže denní průměr je pro extrapolaci lepší vstup (míň šumu) a hlavně
-    // je to 14 řádků místo dvaceti tisíc. Sloupce se jmenují stejně jako
-    // dřív, aby bk_half_window_rate() zůstala beze změny.
+    // Daily aggregates instead of raw measurements: this is about growth trend,
+    // not variance, so the daily mean is the better extrapolation input (less
+    // noise) and above all 14 rows instead of twenty thousand. Columns keep
+    // their old names so bk_half_window_rate() stays untouched.
     $stmt = $pdo->prepare("
         SELECT day AS checked_at,
                MAX(CASE WHEN metric_key = 'hdd' THEN avg_val END) AS hdd_usage,
@@ -1834,9 +1834,9 @@ function bk_get_forecast_insights($pdo, $monitor) {
     $stmt->execute([$monitor_id]);
     $metrics_rows = $stmt->fetchAll();
 
-    // Záloha pro případ, že denní agregace ještě neproběhla (čerstvá instalace,
-    // první půlhodina po nasazení) nebo se zasekla. Bez ní by předpověď tiše
-    // zmizela a vypadalo by to, že disk neroste - což je horší než pomalý dotaz.
+    // Fallback for when the daily rollup has not run yet (fresh install, the
+    // first half hour after deploy) or got stuck. Without it the forecast would
+    // silently vanish and the disk would appear not to grow - worse than a slow query.
     if (count($metrics_rows) < 5) {
         $stmt_raw = $pdo->prepare("
             SELECT checked_at, hdd_usage, ram_usage
@@ -1867,8 +1867,8 @@ function bk_get_forecast_insights($pdo, $monitor) {
     }
 
     // --- Latency trend ---
-    // Denní průměr odezvy už se ukládá kvůli dlouhodobému SLA, takže se
-    // sem nemusí tahat čtrnáct dní jednotlivých kontrol.
+    // The daily latency average is already stored for long-term SLA, so
+    // fourteen days of individual checks need not be dragged in here.
     $stmt2 = $pdo->prepare("
         SELECT day AS checked_at, avg_response_ms AS response_time
         FROM uptime_daily
@@ -1910,8 +1910,8 @@ function bk_get_forecast_insights($pdo, $monitor) {
 }
 
 /**
- * Vykreslí panel s Insights (viz bk_get_forecast_insights()). Stejný tvar
- * jako render_knowledge_panel() - prázdné pole = prázdný řetězec.
+ * Renders the Insights panel (see bk_get_forecast_insights()). Same shape
+ * as render_knowledge_panel() - empty array = empty string.
  */
 function render_insights_panel(array $insights) {
     if (empty($insights)) return '';
@@ -1936,35 +1936,35 @@ function render_insights_panel(array $insights) {
 }
 
 /**
- * Insights v2 (Level 2 Anomaly Detection) - sdílená matematika. Na rozdíl od
- * Knowledge tipů (pevný práh stejný pro všechny monitory) se tu zjišťuje, jestli
- * je aktuální hodnota neobvyklá VZHLEDEM K VLASTNÍ historii tohoto konkrétního
- * monitoru - server, který běžně jede na 85 % CPU, tu nikdy nenaskočí, i kdyby
- * pevný Knowledge práh (>80 %) hlásil "vysoké" pořád.
+ * Insights v2 (Level 2 Anomaly Detection) - shared math. Unlike Knowledge
+ * tips (a fixed threshold shared by all monitors), this asks whether the
+ * current value is unusual RELATIVE TO this monitor's OWN history -
+ * a server that routinely runs at 85 % CPU never triggers here, even though
+ * the fixed Knowledge threshold (>80 %) would report "high" nonstop.
  *
- * @param array $baseline_values Číselné hodnoty z "klidového" období (bez posledních pár dní)
- * @param float $current Aktuální (nejnovější) hodnota, mimo baseline okno
- * @param float $min_sigma Podlaha pro efektivní sigma - brání falešným poplachům
- *        na monitoru s podezřele plochou historií (sigma blízko 0)
- * @param float $sigma_multiplier Kolik efektivních sigma od průměru už je "neobvyklé"
+ * @param array $baseline_values Numeric values from the "calm" period (excluding the last few days)
+ * @param float $current The current (latest) value, outside the baseline window
+ * @param float $min_sigma Floor for the effective sigma - guards against false
+ *        alarms on a monitor with a suspiciously flat history (sigma near 0)
+ * @param float $sigma_multiplier How many effective sigmas from the mean count as "unusual"
  * @return array{low: float, high: float, mean: float, current: float}|null
- *         null = nedost dat, nebo hodnota je v normálu
+ *         null = insufficient data, or the value is normal
  */
 /**
- * Totéž co bk_compute_baseline_anomaly(), ale ze statistik spočítaných v SQL.
+ * Same as bk_compute_baseline_anomaly(), but from statistics computed in SQL.
  *
- * Původní verze si kvůli průměru a odchylce tahala do PHP celých 30 dní
- * měření - u agenta hlásícího každou minutu přes 43 000 řádků na monitor.
- * Na status stránce se to dělo pro každý monitor zvlášť a byla to největší
- * část z těch patnácti sekund, co se stránka skládala.
+ * The original pulled all 30 days of measurements into PHP for the mean and
+ * deviation - over 43,000 rows per monitor for an agent reporting every
+ * minute. The status page did that per monitor, and it was the largest
+ * share of the fifteen seconds the page took to assemble.
  *
- * AVG a STDDEV_POP počítají přesně totéž, co se dřív počítalo v cyklu
- * (populační rozptyl, dělí se n), takže se práh nikam neposunul.
+ * AVG and STDDEV_POP compute exactly what the loop used to (population
+ * variance, divides by n), so the threshold moved nowhere.
  *
- * @param ?float $mean  Průměr základny; NULL = nedostatek dat
- * @param ?float $sigma Populační směrodatná odchylka
- * @param ?int   $count Počet hodnot, ze kterých statistika vznikla.
- *                      NULL = dotaz nic nevrátil, což není totéž co nula vzorků.
+ * @param ?float $mean  Baseline mean; NULL = insufficient data
+ * @param ?float $sigma Population standard deviation
+ * @param ?int   $count Number of values behind the statistic.
+ *                      NULL = the query returned nothing, which is not the same as zero samples.
  */
 function bk_baseline_anomaly_from_stats(?float $mean, ?float $sigma, ?int $count, float $current, float $min_sigma, float $sigma_multiplier = 2.5) {
     if ($mean === null || $sigma === null || $count === null || $count < 20) {
@@ -2009,8 +2009,8 @@ function bk_compute_baseline_anomaly(array $baseline_values, float $current, flo
 }
 
 /**
- * Network Insights - rolling-window analýza síťových dat pro OpenWrt/VPS monitory.
- * Vrací pole insightů ve stejném formátu jako bk_get_anomaly_insights().
+ * Network Insights - rolling-window analysis of network data for OpenWrt/VPS monitors.
+ * Returns insights in the same format as bk_get_anomaly_insights().
  */
 function bk_get_network_insights($pdo, $monitor, $details) {
     $insights = [];
@@ -2115,7 +2115,7 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     }
 
-    // Vytížení Wi-Fi kanálu (busy/active z iwinfo survey, sbíráno od v1.5.4)
+    // Wi-Fi channel utilisation (busy/active from iwinfo survey, collected since v1.5.4)
     if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
         foreach ($details['wifi_radios'] as $radio) {
             $busy = isset($radio['busy_pct']) && $radio['busy_pct'] !== null ? (float)$radio['busy_pct'] : null;
@@ -2132,7 +2132,7 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     }
 
-    // OOM killer zásahy (od startu systému)
+    // OOM killer interventions (since system start)
     if (isset($details['oom_kills']) && (int)$details['oom_kills'] > 0) {
         $insights[] = [
             'type' => 'network',
@@ -2143,7 +2143,7 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         ];
     }
 
-    // Pomalé DNS odpovědi (měřený dotaz, sbíráno od v1.5.4/1.7.2)
+    // Slow DNS answers (a measured query, collected since v1.5.4/1.7.2)
     if (isset($details['dns_latency_ms']) && $details['dns_latency_ms'] !== null) {
         $dl = (float)$details['dns_latency_ms'];
         if ($dl >= 150) {
@@ -2157,7 +2157,7 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     }
 
-    // Chybovost v systémovém logu
+    // Error rate in the system log
     if (isset($details['log_errors_24h']) && (int)$details['log_errors_24h'] >= 50) {
         $le = (int)$details['log_errors_24h'];
         $insights[] = [
@@ -2169,8 +2169,8 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         ];
     }
 
-    // Skutečné WAN reconnecty (event 'wan_reconnected' loguje agent_api
-    // z delty čítače agenta - přesnější než pády celého monitoru výše)
+    // Real WAN reconnects (the 'wan_reconnected' event is logged by agent_api
+    // from the agent's counter delta - more precise than whole-monitor drops above)
     try {
         $stmt_wr = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = ? AND event_type = 'wan_reconnected' AND occurred_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
         $stmt_wr->execute([$monitor_id]);
@@ -2186,7 +2186,7 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     } catch (PDOException $e) {}
 
-    // Nestabilní IPv6 prefix (event loguje agent_api při změně /64)
+    // Unstable IPv6 prefix (agent_api logs the event on a /64 change)
     try {
         $stmt_p6 = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = ? AND event_type = 'ipv6_prefix_changed' AND occurred_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
         $stmt_p6->execute([$monitor_id]);
@@ -2235,21 +2235,21 @@ function bk_get_network_insights($pdo, $monitor, $details) {
 }
 
 /**
- * Insights v2 (Level 2 Anomaly Detection) - tři pravidla (CPU/RAM/latence),
- * všechna nad bk_compute_baseline_anomaly(). Baseline okno je 3-30 dní zpět
- * (mezera před "teď", aby trvající anomálie nezkreslila vlastní baseline),
- * aktuální hodnota je poslední skutečný vzorek mimo toto okno.
+ * Insights v2 (Level 2 Anomaly Detection) - three rules (CPU/RAM/latency),
+ * all over bk_compute_baseline_anomaly(). The baseline window is 3-30 days
+ * back (a gap before "now", so an ongoing anomaly does not skew its own
+ * baseline), the current value is the latest real sample outside that window.
  */
 function bk_get_anomaly_insights($pdo, $monitor) {
     $insights = [];
     $monitor_id = $monitor['id'];
 
-    // --- CPU / RAM anomálie (vps_metrics) ---
+    // --- CPU / RAM anomalies (vps_metrics) ---
     //
-    // Průměr a odchylku počítá databáze. Dřív se sem načítalo celých 30 dní
-    // měření - u agenta hlásícího každou minutu přes 43 000 řádků na monitor,
-    // a to pro každý monitor na stránce zvlášť. STDDEV_POP je populační
-    // odchylka, tedy přesně to, co se dřív počítalo v cyklu; práh se neposunul.
+    // The database computes the mean and deviation. All 30 days of measurements
+    // used to be loaded here - over 43,000 rows per monitor for an agent
+    // reporting every minute, and per monitor on the page at that. STDDEV_POP
+    // is the population deviation, exactly what the loop computed; the threshold moved nowhere.
     $stmt = $pdo->prepare("
         SELECT COUNT(cpu_usage) AS cpu_n, AVG(cpu_usage) AS cpu_mean, STDDEV_POP(cpu_usage) AS cpu_sd,
                COUNT(ram_usage) AS ram_n, AVG(ram_usage) AS ram_mean, STDDEV_POP(ram_usage) AS ram_sd
@@ -2261,8 +2261,8 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     $stmt->execute([$monitor_id]);
     $baseline = $stmt->fetch() ?: [];
 
-    // Poslední měření za poslední tři dny - to je hodnota, která se proti
-    // základně porovnává.
+    // The latest measurement within the last three days - the value compared
+    // against the baseline.
     $stmt_last = $pdo->prepare("
         SELECT cpu_usage, ram_usage
         FROM vps_metrics
@@ -2276,9 +2276,9 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     if ($latest) {
         $to_float = fn($v) => ($v === null || $v === '') ? null : (float)$v;
 
-        // Nezměřená hodnota se dřív přetypovala na 0.0 a proti základně
-        // vyšla jako anomálie - hlásili jsme "CPU je 0 %" u agenta, který
-        // CPU vůbec neposlal.
+        // An unmeasured value used to be cast to 0.0 and came out as an anomaly
+        // against the baseline - we reported "CPU is 0 %" for an agent that
+        // never sent CPU at all.
         $cpu_current = $to_float($latest['cpu_usage']);
         $ram_current = $to_float($latest['ram_usage']);
 
@@ -2317,9 +2317,9 @@ function bk_get_anomaly_insights($pdo, $monitor) {
         }
     }
 
-    // --- Latence anomálie (monitor_logs) ---
-    // Stejný důvod jako u CPU/RAM výše: statistika se počítá v databázi,
-    // ne přenosem třiceti dnů kontrol do PHP.
+    // --- Latency anomalies (monitor_logs) ---
+    // Same reason as CPU/RAM above: the statistic is computed in the database,
+    // not by shipping thirty days of checks into PHP.
     $stmt2 = $pdo->prepare("
         SELECT COUNT(response_time) AS lat_n, AVG(response_time) AS lat_mean, STDDEV_POP(response_time) AS lat_sd
         FROM monitor_logs
@@ -2369,12 +2369,12 @@ function bk_get_anomaly_insights($pdo, $monitor) {
 
 
 /**
- * Sloučí monitor_events (přidání/odebrání, DNS/cert/schéma, agent
- * connect/disconnect, limity, config změny...), agent_actions (Remote
- * Actions historie) a stavové přechody odvozené z monitor_logs do jednoho
- * chronologického seznamu (nejnovější první). Čistě datová funkce - den/den
- * skupinové popisky ("Dnes"/"Včera") a i18n štítky řeší až šablona, aby
- * zůstala testovatelná bez závislosti na t()/aktuálním datu.
+ * Merges monitor_events (add/remove, DNS/cert/schema, agent connect/
+ * disconnect, limits, config changes...), agent_actions (Remote Actions
+ * history) and status transitions derived from monitor_logs into one
+ * chronological list (newest first). A pure data function - day grouping
+ * labels ("Today"/"Yesterday") and i18n labels belong to the template, so
+ * this stays testable without t()/the current date.
  * @return array<int, array{event_type: string, description: ?string, ts: string}>
  */
 function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
@@ -2391,7 +2391,7 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
             ];
         }
     } catch (PDOException $e) {
-        // Tabulka/sloupec chybí (stará instalace před migrací) - timeline bude jen částečná
+        // Table/column missing (old install before migration) - the timeline will just be partial
     }
 
     try {
@@ -2411,15 +2411,15 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
     } catch (PDOException $e) {
     }
 
-    // Změny stavu hledá databáze, ne PHP.
+    // The database finds the status changes, not PHP.
     //
-    // Dřív se sem načetlo 30 dní VŠECH kontrol - u monitoru kontrolovaného
-    // každou minutu přes 43 000 řádků - a v cyklu se z nich vybralo těch
-    // pár, kde se stav změnil. Na status stránce se to dělo pro každý
-    // monitor zvlášť a byl to největší jednotlivý přenos na celé stránce.
+    // 30 days of ALL checks used to be loaded here - over 43,000 rows for a
+    // monitor checked every minute - and a loop picked the few where the
+    // status changed. The status page did that per monitor and it was the
+    // single largest transfer on the whole page.
     //
-    // LAG() vrátí rovnou jen zlomy. Starší MariaDB/MySQL bez okenních funkcí
-    // spadne na výjimku a použije se původní cesta - proto ten catch.
+    // LAG() returns just the transitions directly. Older MariaDB/MySQL without
+    // window functions throws and the original path is used - hence the catch.
     $rows = [];
     $used_window_fn = false;
     try {
@@ -2450,8 +2450,8 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
 
         $prev_status = null;
         foreach ($rows as $row) {
-            // S okenní funkcí jsou v $rows rovnou jen zlomy, takže se podmínka
-            // vyhodnotí vždy; bez ní se prochází vše jako dřív.
+            // With the window function $rows holds only transitions, so the
+            // condition always fires; without it everything is walked as before.
             if ($used_window_fn || ($prev_status !== null && $row['status'] !== $prev_status)) {
                 $desc = null;
                 if (in_array($row['status'], ['down', 'warning'], true) && !empty($row['error_message'])) {
@@ -2482,13 +2482,13 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
 }
 
 /**
- * Asset-level Timeline - sloučí události ze všech monitorů patřících pod asset.
- * Každá událost nese navíc monitor_name pro identifikaci zdroje.
+ * Asset-level Timeline - merges events from all monitors under the asset.
+ * Each event additionally carries monitor_name to identify the source.
  */
 function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
     $timeline = [];
 
-    // Získej všechny monitory assetu
+    // Fetch all the asset's monitors
     $stmt = $pdo->prepare("SELECT id, name FROM monitors WHERE asset_id = ?");
     $stmt->execute([$asset_id]);
     $monitors = $stmt->fetchAll();
@@ -2572,12 +2572,12 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
 }
 
 /**
- * Poskládá krátké shrnutí monitoru (1-2 věty: celkový stav + nejzávažnější
- * aktuální problém, pokud nějaký je) z už existujících dat - health score,
- * Knowledge tips, Insights (forecast/anomaly). Záměrně neopakuje nic, co už
- * je vidět jinde v Overview tabu (Server Information) nebo v Timeline tabu.
- * Čistě deterministická skládačka šablon (t() + sprintf), žádné AI volání -
- * stejná filozofie jako zbytek Insights enginu.
+ * Assembles a short monitor summary (1-2 sentences: overall state + the most
+ * severe current problem, if any) from already-existing data - health score,
+ * Knowledge tips, Insights (forecast/anomaly). Deliberately repeats nothing
+ * already visible in the Overview tab (Server Information) or the Timeline tab.
+ * A purely deterministic template assembly (t() + sprintf), no AI calls -
+ * the same philosophy as the rest of the Insights engine.
  */
 /**
  * How long a metric has been sitting above its threshold, without interruption.
@@ -2695,12 +2695,12 @@ function bk_top_process_in_window(PDO $pdo, int $monitor_id, int $from_ts, int $
  * current issues" without contradicting itself in the next sentence.
  */
 function bk_summary_pressure_line(PDO $pdo, array $monitor, array $details): ?string {
-    // Chybějící práh je null, ne nula.
+    // A missing threshold is null, not zero.
     //
-    // `?? 0` by znamenalo práh nula procent, tedy že všechno je vždycky nad
-    // ním. Tady by se to sice hned zase vyfiltrovalo podmínkou, ale je to
-    // přesně ten zápis, ze kterého jinde vznikla vymyšlená hodnota - proto
-    // rovnou null a explicitní kontrola.
+    // `?? 0` would mean a zero-percent threshold, i.e. everything is always
+    // above it. It would get filtered right out again here, but it is exactly
+    // the notation that bred invented values elsewhere - hence null outright
+    // and an explicit check.
     $threshold_of = static function ($raw): ?float {
         return is_numeric($raw) && (float)$raw > 0 ? (float)$raw : null;
     };
@@ -2739,9 +2739,9 @@ function bk_summary_pressure_line(PDO $pdo, array $monitor, array $details): ?st
             }
         }
 
-        // Kontext, který dává doporučení smysl. Vypisuje se jen to, co agent
-        // opravdu poslal - chybějící údaj se mlčky vynechá, místo aby se do
-        // věty dostala nula.
+        // The context that makes the recommendation make sense. Only what the
+        // agent really sent is printed - a missing value is silently omitted
+        // rather than letting a zero into the sentence.
         $context = [];
         if (isset($details['load1']) && is_numeric($details['load1'])) {
             $context[] = sprintf(t('exec_summary_ctx_load'), (float)$details['load1']);
@@ -2763,7 +2763,7 @@ function bk_build_executive_summary($monitor, $health_score, array $knowledge_ti
     $sentences = [];
     $name = $monitor['name'] ?? '';
 
-    // 1. Celkový stav
+    // 1. Overall state
     if (($monitor['status'] ?? '') !== 'up') {
         $sentences[] = sprintf(t('exec_summary_down'), $name);
     } elseif (is_array($health_score) && isset($health_score['score'])) {
@@ -2779,7 +2779,7 @@ function bk_build_executive_summary($monitor, $health_score, array $knowledge_ti
         $sentences[] = sprintf(t('exec_summary_up'), $name);
     }
 
-    // 2. Nejzávažnější aktuální problém (critical tip > warn tip > insight)
+    // 2. The most severe current problem (critical tip > warn tip > insight)
     $top_concern = null;
     foreach ($knowledge_tips as $tip) {
         if (($tip['severity'] ?? '') === 'critical') { $top_concern = $tip['text']; break; }
@@ -2792,11 +2792,11 @@ function bk_build_executive_summary($monitor, $health_score, array $knowledge_ti
     if ($top_concern === null && !empty($insights)) {
         $top_concern = $insights[0]['text'] ?? null;
     }
-    // Tlak se počítá dřív, než se rozhodne o větě "žádné problémy".
+    // Pressure is computed before the "no problems" sentence is decided.
     //
-    // Kdyby se přidával až za ni, shrnutí by si odporovalo v jednom dechu:
-    // "Žádné aktuální problémy nebyly zjištěny. CPU je na 91 % už 18 minut."
-    // Chycené na ukázce se skutečnými daty, ne úvahou.
+    // Added after it, the summary would contradict itself in one breath:
+    // "No current problems detected. CPU has been at 91 % for 18 minutes."
+    // Caught on a demo with real data, not by reasoning.
     $pressure_line = ($pdo instanceof PDO && ($monitor['status'] ?? '') === 'up')
         ? bk_summary_pressure_line($pdo, $monitor, $details)
         : null;
@@ -2811,16 +2811,16 @@ function bk_build_executive_summary($monitor, $health_score, array $knowledge_ti
         $sentences[] = $pressure_line;
     }
 
-    // Dřív tu byla i "nejnovější událost" a "stáří dat" věta - odstraněno,
-    // duplikovalo se to se sekcí Server Information v Overview tabu (Poslední
-    // kontrola / Poslední změna stavu) a s Timeline tabem, který má tu samou
-    // událost v plném kontextu. Shrnutí obsahuje jen to, co jinde vidět není.
+    // A "latest event" and "data age" sentence used to live here too - removed,
+    // it duplicated the Server Information section in the Overview tab (Last
+    // check / Last status change) and the Timeline tab, which has the same
+    // event in full context. The summary keeps only what is visible nowhere else.
     return implode(' ', $sentences);
 }
 
 /**
- * Hrubý relativní popisek času ("dnes", "včera", "N dní zpět") - sdílený
- * mezi Executive Summary a Timeline, aby oboje mluvily stejnou řečí.
+ * A coarse relative time label ("today", "yesterday", "N days ago") - shared
+ * between the Executive Summary and the Timeline so both speak the same language.
  */
 function bk_relative_time_label($timestamp) {
     $ts = strtotime((string)$timestamp);
@@ -2834,14 +2834,14 @@ function bk_relative_time_label($timestamp) {
 }
 
 /**
- * Vykoná $builder() s t() dočasně přepnutým na $lang, bez ohledu na to, jaký
- * jazyk (pokud vůbec nějaký) má aktuálně nastavený request/cookie - e-maily
- * nemají návštěvníka, jejich jazyk určuje jen nastavení email_lang admina.
- * t() (lang.php) čte $GLOBALS['BK_LANG']/['BK_STRINGS'] při každém volání
- * znovu, takže dočasná výměna těchhle dvou globálů kolem $builder() stačí -
- * není potřeba žádný objekt/singleton refaktoring. Bezpečné i z CLI (cron.php)
- * - lang.php bez $_GET/$_COOKIE prostě zůstane na výchozí 'cs', než ho tahle
- * funkce přepíše, a setcookie() bez HTTP hlaviček je tichý no-op.
+ * Runs $builder() with t() temporarily switched to $lang, regardless of what
+ * language (if any) the current request/cookie has - e-mails have no visitor,
+ * their language is set solely by the admin's email_lang setting.
+ * t() (lang.php) re-reads $GLOBALS['BK_LANG']/['BK_STRINGS'] on every call,
+ * so temporarily swapping those two globals around $builder() suffices -
+ * no object/singleton refactoring needed. Safe from the CLI too (cron.php)
+ * - without $_GET/$_COOKIE lang.php just stays at the default 'cs' until this
+ * function switches it, and setcookie() without HTTP headers is a silent no-op.
  */
 function bk_with_email_lang(string $lang, callable $builder) {
     require_once __DIR__ . '/lang.php';
@@ -2852,8 +2852,8 @@ function bk_with_email_lang(string $lang, callable $builder) {
     $lang = in_array($lang, ['cs', 'en'], true) ? $lang : 'cs';
     $GLOBALS['BK_LANG'] = $lang;
     $GLOBALS['BK_STRINGS'] = require __DIR__ . "/lang/{$lang}.php";
-    // lang.php samo nastavuje CS_FALLBACK jen když je BK_LANG !== 'cs' (viz tam) -
-    // stejná podmínka i tady, aby chybějící klíč nikdy nespadl na holý t()['key'] warning.
+    // lang.php itself sets CS_FALLBACK only when BK_LANG !== 'cs' (see there) -
+    // the same condition here, so a missing key never hits a bare t()['key'] warning.
     $GLOBALS['BK_STRINGS_CS_FALLBACK'] = $lang === 'cs' ? null : require __DIR__ . '/lang/cs.php';
 
     try {
@@ -2866,10 +2866,10 @@ function bk_with_email_lang(string $lang, callable $builder) {
 }
 
 /**
- * Registr metrik dostupných na Level 3 Metric Detail stránce (index.php
- * ?view=metric). Jeden zdroj pravdy pro klíč->sloupec mapování, sdílený mezi
- * api.php (dotaz do vps_metrics) a renderem stránky (popisky/jednotky/Related
- * Metrics odkazy) - viz project_dashboard_ia_redesign.md v paměti.
+ * Registry of metrics available on the Level 3 Metric Detail page (index.php
+ * ?view=metric). One source of truth for the key->column mapping, shared by
+ * api.php (the vps_metrics query) and the page render (labels/units/Related
+ * Metrics links) - see project_dashboard_ia_redesign.md in memory.
  */
 function bk_get_metric_registry() {
     return [
@@ -2896,11 +2896,11 @@ function bk_get_metric_registry() {
 }
 
 /**
- * Sáhne do vps_metrics pro jednu metriku (sloupec z bk_get_metric_registry())
- * v daném období a vrátí syrové body [timestamp, hodnota, špička]. Sdíleno
- * mezi api.php (JSON pro graf) a render_metric_detail_page() (číslo pro stat
- * kartu při prvním vykreslení stránky) - jedna SQL logika, ne dvě kopie.
- * $column musí pocházet z bk_get_metric_registry(), nikdy přímo z $_GET.
+ * Reaches into vps_metrics for one metric (a column from bk_get_metric_registry())
+ * over the period and returns raw points [timestamp, value, peak]. Shared by
+ * api.php (chart JSON) and render_metric_detail_page() (the stat-card number on
+ * first render) - one SQL logic, not two copies.
+ * $column must come from bk_get_metric_registry(), never straight from $_GET.
  */
 function bk_fetch_metric_series($pdo, $monitor_id, $column, $period) {
     $points = [];
@@ -2938,11 +2938,11 @@ function bk_fetch_metric_series($pdo, $monitor_id, $column, $period) {
 }
 
 /**
- * Current/average/peak/trend pro jednu metriku - $points je výstup
- * bk_fetch_metric_series() ([timestamp, hodnota, špička] řádky, chronologicky
- * vzestupně). Trend se počítá stejnou technikou jako bk_half_window_rate()
- * (starší/novější polovina okna), jen vrací procentuální změnu místo rate/den
- * - pro stat kartu chceme "o kolik % je to jinak než dřív", ne projekci.
+ * Current/average/peak/trend for one metric - $points is the output of
+ * bk_fetch_metric_series() ([timestamp, value, peak] rows, chronologically
+ * ascending). The trend uses the same technique as bk_half_window_rate()
+ * (older/newer half of the window), only returning a percentage change instead
+ * of a rate per day - the stat card wants "how much % different", not a projection.
  * @return array{current: ?float, average: ?float, peak: ?float, trend_pct: ?float}
  */
 function bk_compute_metric_stats(array $points) {
@@ -2971,19 +2971,19 @@ function bk_compute_metric_stats(array $points) {
         if (abs($older_avg) > 0.01) {
             $trend_pct = round((($newer_avg - $older_avg) / $older_avg) * 100, 1);
         }
-        // Růst z nuly nemá smysluplné procento - dřívější sentinel "+100 %"
-        // vypadal jako spočítaný trend; null nechá UI trend prostě nevypsat.
+        // Growth from zero has no meaningful percentage - the earlier "+100 %"
+        // sentinel looked like a computed trend; null lets the UI just omit it.
     }
 
     return ['current' => round($current, 1), 'average' => $average, 'peak' => $peak, 'trend_pct' => $trend_pct];
 }
 
 /**
- * Level 3 Metric Detail stránka (index.php?view=metric&monitor=X&metric=Y) -
- * vlastní samostatná HTML stránka (ne tab v panelu), protože potřebuje být
- * adresovatelná URL kvůli breadcrumbům a Related Metrics odkazům. Ukončuje
- * request sama (exit), volající (index.php) do ní jen předá $pdo/$monitor/
- * $metric_key/$is_admin a nic dalšího po ní nerenderuje.
+ * Level 3 Metric Detail page (index.php?view=metric&monitor=X&metric=Y) - its
+ * own standalone HTML page (not a panel tab), because it needs an addressable
+ * URL for breadcrumbs and Related Metrics links. It ends the request itself
+ * (exit); the caller (index.php) only hands it $pdo/$monitor/
+ * $metric_key/$is_admin and renders nothing after it.
  */
 function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     $registry = bk_get_metric_registry();
@@ -3003,8 +3003,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
     $points_24h = bk_fetch_metric_series($pdo, $monitor['id'], $column, '24h');
     $stats = bk_compute_metric_stats($points_24h);
 
-    // Related Metrics - jen ty, u kterých tenhle monitor reálně hlásí data
-    // (poslední řádek vps_metrics), aby se neproklikávalo do prázdna.
+    // Related Metrics - only those this monitor actually reports data for
+    // (latest vps_metrics row), so nobody clicks through into a void.
     $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
     $stmt_latest->execute([$monitor['id']]);
     $latest_row = $stmt_latest->fetch();
@@ -3018,8 +3018,8 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
         }
     }
 
-    // "Proč" vrstva - poslední pozoruhodná událost za stejné okno jako graf (24h),
-    // stejný zdroj dat jako Timeline (Phase 1) a Executive Summary.
+    // The "why" layer - the last notable event over the same window as the chart (24h),
+    // the same data source as the Timeline (Phase 1) and the Executive Summary.
     $recent_events = bk_get_monitor_timeline($pdo, $monitor['id'], 1);
     $latest_event_line = null;
     if (!empty($recent_events)) {
@@ -3035,7 +3035,7 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
         $trend_dir = $stats['trend_pct'] > 2 ? 'up' : ($stats['trend_pct'] < -2 ? 'down' : 'flat');
     }
 
-    // Alert Regions - threshold bands pro metriky s nastavitelným prahem
+    // Alert Regions - threshold bands for metrics with a configurable threshold
     $warn_threshold = null;
     $crit_threshold = null;
     $threshold_map = ['cpu' => 'cpu', 'ram' => 'ram', 'hdd' => 'hdd'];
@@ -3304,9 +3304,9 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
             if (compareToggle.checked) url += '&compare=yesterday';
             else if (compareWeekToggle.checked) url += '&compare=last_week';
             if (baselineToggle.checked) url += '&baseline=7d';
-            // Poznámky se tahají zvlášť a přimíchávají mezi události, které graf
-            // už umí vykreslit jako špendlíky. Kdyby se nenačetly, graf se
-            // vykreslí i bez nich - poznámka navíc není důvod nezobrazit data.
+            // Notes are fetched separately and mixed among events the chart
+            // already draws as pins. If they fail to load, the chart still
+            // renders - a note is no reason to withhold the data.
             var annUrl = 'api.php?action=annotations&monitor_id=' + encodeURIComponent(monitorId)
                 + '&metric=' + encodeURIComponent(metricKey)
                 + '&hours=' + (period === '30d' ? 720 : (period === '7d' ? 168 : 24));
@@ -3394,9 +3394,9 @@ function render_metric_detail_page($pdo, $monitor, $metric_key, $is_admin) {
 }
 
 /**
- * Vrátí informace o aktuální verzi aplikace.
- * Ve produkci čte soubor version.php vygenerovaný GitHub Actions deployem.
- * Lokálně (dev) se jako záloha pokusí o git log.
+ * Returns info about the current application version.
+ * In production it reads the version.php file generated by the GitHub Actions deploy.
+ * Locally (dev) it falls back to git log.
  * @return array ['hash' => '...', 'date' => '...', 'label' => '...']
  */
 function get_app_version() {
@@ -3416,7 +3416,7 @@ function get_app_version() {
         return $version;
     }
 
-    // Lokální vývoj: záloha přes git log (nevolá se v produkci)
+    // Local development: fallback via git log (not called in production)
     $hash = '';
     $date = '';
     $git_dir = dirname(__DIR__);
@@ -3444,10 +3444,10 @@ function get_app_version() {
 }
 
 /**
- * Vytáhne informace o TLS certifikátu (issuer, CN, SAN, platnost) přes vlastní
- * samostatné spojení - záměrně nesdílí handle s hlavní HTTP kontrolou, aby tato
- * (čistě informativní) fáze nemohla nijak ovlivnit chování/timing check_http().
- * Vrací null při jakémkoli selhání (nehttps cíl, timeout, chyba parsování).
+ * Extracts TLS certificate info (issuer, CN, SAN, validity) over its own
+ * separate connection - deliberately not sharing the handle with the main HTTP
+ * check, so this (purely informative) stage cannot affect check_http() behaviour/timing.
+ * Returns null on any failure (non-https target, timeout, parse error).
  */
 function get_ssl_certificate_info($host, $port = 443, $timeout = 5) {
     $context = stream_context_create([
@@ -3532,9 +3532,9 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
     }
     $dns_time_ms = round((microtime(true) - $dns_start) * 1000);
 
-    // Rozpad kontroly na jednotlivé fáze (DNS/TCP/TLS/HTTP/body) pro diagnostický
-    // "check pipeline" na detailu monitoru. Nic z tohoto nemá vliv na $status níže -
-    // ten určuje výhradně HTTP kód/cURL chyba stejně jako dřív.
+    // Breakdown of the check into stages (DNS/TCP/TLS/HTTP/body) for the
+    // diagnostic "check pipeline" on the monitor detail. None of this affects
+    // $status below - that is still decided solely by the HTTP code/cURL error.
     $check_stages = [
         'dns' => [
             'ok' => $host ? ($has_ipv4 || $has_ipv6) : false,
@@ -3543,7 +3543,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         ],
     ];
 
-    // Zjistíme zda je k dispozici cURL
+    // Determine whether cURL is available
     if (function_exists('curl_init')) {
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
@@ -3603,8 +3603,8 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             'time_ms' => round($connect_time * 1000),
         ];
 
-        // TLS certifikát jen u úspěšně navázaných https spojení - u nedostupného
-        // hostu by samostatný SSL pokus jen zdvojil čekání na timeout zbytečně.
+        // TLS certificate only for successfully established https connections - for
+        // an unreachable host a separate SSL attempt would only double the timeout wait.
         if ($response !== false && stripos((string)$scheme, 'https') !== false && $host) {
             $tls_port = parse_url($url, PHP_URL_PORT) ?: 443;
             $cert_info = get_ssl_certificate_info($host, $tls_port, min($timeout, 5));
@@ -3701,7 +3701,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             ], $conn_details);
         }
         
-        // Získání HTTP kódu z hlaviček
+        // Extract the HTTP code from the headers
         $http_code = 200;
         $resp_headers = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : ($http_response_header ?? []);
         if (!empty($resp_headers[0])) {
@@ -3728,28 +3728,28 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
 }
 
 /**
- * Zapíše jednu událost do monitor_events (přidání/odebrání monitoru, změna
- * schématu/DNS/certifikátu, připojení/odpojení agenta atd.) - lehký event log,
- * ze kterého čerpá infrastructure report (weekly/monthly digest).
+ * Writes one event into monitor_events (monitor added/removed, schema/DNS/
+ * certificate change, agent connect/disconnect, ...) - the light event log
+ * that feeds the infrastructure report (weekly/monthly digest).
  */
 function log_monitor_event($pdo, $monitor_id, $monitor_name, $monitor_type, $event_type, $description = null) {
     try {
         $stmt = $pdo->prepare("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description) VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([$monitor_id, $monitor_name, $monitor_type, $event_type, $description]);
     } catch (PDOException $e) {
-        // Nezastavovat běh cronu kvůli chybě v logování události
+        // Do not stop the cron run over an event-logging error
     }
 }
 
 /**
- * Porovná aktuální stav 'web' monitoru (schéma, DNS, platnost certifikátu) proti
- * poslednímu uloženému snímku (monitors.config_snapshot) a při změně zapíše
- * událost do monitor_events. Snímek se poté vždy přepíše na aktuální hodnoty
- * (tick/tock porovnání), bez ohledu na to, zda k nějaké změně došlo.
+ * Compares the current state of a 'web' monitor (schema, DNS, certificate
+ * validity) against the last stored snapshot (monitors.config_snapshot) and on
+ * change writes an event into monitor_events. The snapshot is then always
+ * overwritten with the current values (tick/tock), whether anything changed or not.
  *
- * Záměrně nesleduje vyjednanou verzi TLS protokolu (1.2 vs 1.3) - PHP/cURL
- * takovou informaci na rozdíl od jiných jazyků nevystavuje (jen interní C API
- * libcurl), takže by šlo jen o odhad, ne o spolehlivá data.
+ * Deliberately does not track the negotiated TLS protocol version (1.2 vs 1.3) -
+ * unlike other languages PHP/cURL does not expose it (only libcurl's internal
+ * C API), so it would be a guess, not reliable data.
  */
 function detect_config_changes($pdo, $monitor, $check_result) {
     if (empty($check_result['check_stages'])) {
@@ -3781,7 +3781,7 @@ function detect_config_changes($pdo, $monitor, $check_result) {
             log_monitor_event($pdo, $monitor['id'], $monitor['name'], $monitor['type'], 'dns_recovered', 'DNS opět odpovídá');
         }
 
-        // Certifikát obnoven (nová platnost do budoucna, pozdější než ta stará)
+        // Certificate renewed (new validity in the future, later than the old one)
         if (!empty($old_snapshot['cert_valid_to']) && !empty($new_snapshot['cert_valid_to'])
             && $new_snapshot['cert_valid_to'] !== $old_snapshot['cert_valid_to']
             && strtotime($new_snapshot['cert_valid_to']) > strtotime($old_snapshot['cert_valid_to'])
@@ -3799,18 +3799,18 @@ function detect_config_changes($pdo, $monitor, $check_result) {
 }
 
 /**
- * ICMP ping - vrátí odezvu v ms nebo null při selhání.
- * Používá systémový `ping` s 1 paketem a 2s timeoutem.
+ * ICMP ping - returns latency in ms or null on failure.
+ * Uses the system `ping` with 1 packet and a 2s timeout.
  */
 function bk_ping_host($host, $timeout_ms = 2000) {
     if (empty($host)) return null;
     $host = escapeshellarg($host);
     $timeout_s = max(1, (int)ceil($timeout_ms / 1000));
-    // Linux ping: -c 1 paket, -W timeout ve sekundách
+    // Linux ping: -c 1 packet, -W timeout in seconds
     $cmd = "ping -c 1 -W $timeout_s $host 2>/dev/null";
     $output = @shell_exec($cmd);
     if ($output === null) return null;
-    // Parsování "time=1.23 ms" nebo "time=1 ms"
+    // Parses "time=1.23 ms" or "time=1 ms"
     if (preg_match('/time[=<]\s*([0-9.]+)\s*ms/i', $output, $m)) {
         return round((float)$m[1], 1);
     }
@@ -3818,11 +3818,11 @@ function bk_ping_host($host, $timeout_ms = 2000) {
 }
 
 /**
- * Kontrola přes TCP Socket (port check / TCP ping)
+ * TCP socket check (port check / TCP ping)
  */
 function check_socket($host, $port, $timeout = 5) {
     $start = microtime(true);
-    // Odstranění protokolu z hostitele, pokud byl zadán
+    // Strip the protocol from the host if one was given
     $host = preg_replace('~^https?://~', '', $host);
     
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
@@ -3845,18 +3845,18 @@ function check_socket($host, $port, $timeout = 5) {
 }
 
 /**
- * Minecraft Server Query přes Server List Ping (SLP)
+ * Minecraft server query via Server List Ping (SLP)
  */
 /**
- * Záložní dotaz na Minecraft server přes veřejné API mcsrvstat.us
+ * Fallback Minecraft query via the public mcsrvstat.us API
  */
 /**
- * Source RCON protokol (Valve/Source engine RCON - stejný binární protokol
- * používá Minecraft Paper/Spigot i Source-based hry). Nezávislé na
- * konkrétním herním software - jen packet framing (int32 délka/id/typ +
- * null-terminated tělo). Auth -> exec command -> přečti odpověď.
+ * Source RCON protocol (Valve/Source engine RCON - the same binary protocol
+ * is used by Minecraft Paper/Spigot and Source-based games). Independent of
+ * the game software - just packet framing (int32 length/id/type +
+ * null-terminated body). Auth -> exec command -> read the response.
  *
- * @return string|null Text odpovědi na příkaz, nebo null při chybě spojení/autentizace.
+ * @return string|null The command response text, or null on connection/auth failure.
  */
 function bk_rcon_execute($host, $port, $password, $command, $timeout = 3) {
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
@@ -3901,9 +3901,9 @@ function bk_rcon_execute($host, $port, $password, $command, $timeout = 3) {
     $auth_id = random_int(1, 2147483646);
     $send_packet($socket, $auth_id, 3, $password); // SERVERDATA_AUTH
 
-    // Auth response (typ 2) - někteří servery před ním pošlou i prázdný
-    // SERVERDATA_RESPONSE_VALUE paket, proto čteme, dokud typ 2 nedorazí
-    // (nebo spojení neskončí).
+    // Auth response (type 2) - some servers precede it with an empty
+    // SERVERDATA_RESPONSE_VALUE packet, so we read until type 2 arrives
+    // (or the connection ends).
     $auth_ok = false;
     for ($i = 0; $i < 3; $i++) {
         $resp = $read_packet($socket);
@@ -3932,12 +3932,12 @@ function bk_rcon_execute($host, $port, $password, $command, $timeout = 3) {
 }
 
 /**
- * TPS přes Paper/Spigot příkaz "/tps" (RCON) - vanilla tento příkaz nemá.
- * Formát výstupu je u Paperu stabilní už řadu let: "TPS from last 1m, 5m,
- * 15m: X, Y, Z" (obvykle s §-barevnými kódy) - odstraníme barevné kódy
- * (v obou možných kódováních, aby se náhodou nesloučil kód-číslice s reálným
- * číslem, např. "§220.0" by se bez ošetření četlo jako 220.0) a vytáhneme
- * první trojici čísel oddělených čárkou.
+ * TPS via the Paper/Spigot "/tps" command (RCON) - vanilla lacks it.
+ * Paper's output format has been stable for years: "TPS from last 1m, 5m,
+ * 15m: X, Y, Z" (usually with §-colour codes) - the colour codes are removed
+ * (in both possible encodings, so a code digit cannot merge with a real
+ * number, e.g. "§220.0" would read as 220.0 untreated) and the first
+ * comma-separated triple of numbers is extracted.
  */
 function check_minecraft_rcon($host, $rcon_port, $rcon_password, $timeout = 3) {
     if (empty($rcon_port) || empty($rcon_password)) {
@@ -4012,18 +4012,18 @@ function check_minecraft_api_fallback($host, $start, $timeout = 3) {
 }
 
 /**
- * Blood Kings Status - Minecraft SLP kontrola s jedním rychlým opakováním
+ * Blood Kings Status - Minecraft SLP check with a single quick retry
  *
- * Krátký timeout a čtení odpovědi po jednotlivých bytech dělá jednorázový
- * pokus náchylný na běžné síťové zádrhele (server odpoví o zlomek sekundy
- * později, než limit dovolí) - proto se před přechodem na fallback API a
- * případným nahlášením výpadku zkusí spojení ještě jednou.
+ * The short timeout and byte-by-byte response reading make a single attempt
+ * prone to ordinary network snags (the server answers a fraction of a second
+ * later than the limit allows) - so before falling back to the API and
+ * possibly reporting an outage, the connection is tried once more.
  */
 function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, $rcon_password = null) {
     $start = microtime(true);
     $host = preg_replace('~^https?://~', '', $host);
 
-    // Rozdělení hostitele a portu, pokud je zadáno jako host:port
+    // Split host and port when given as host:port
     $parts = explode(':', $host);
     if (count($parts) === 2) {
         $host = $parts[0];
@@ -4032,14 +4032,14 @@ function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, 
 
     $result = check_minecraft_slp_attempt($host, $port, $timeout, $start);
     if ($result === null) {
-        // Krátká prodleva a druhý pokus - odchytí přechodné výpadky/zpoždění
+        // A short pause and a second attempt - catches transient failures/delays
         usleep(300000); // 0.3 s
         $result = check_minecraft_slp_attempt($host, $port, $timeout, $start);
     }
     if ($result !== null) {
-        // TPS přes RCON je volitelné (Paper/Spigot only) a nikdy nesmí
-        // rozbít základní SLP kontrolu - best-effort, tiše se přeskočí,
-        // pokud RCON není nakonfigurovaný nebo selže.
+        // TPS via RCON is optional (Paper/Spigot only) and must never break
+        // the basic SLP check - best-effort, silently skipped when RCON
+        // is unconfigured or fails.
         if ($result['status'] === 'up' && !empty($rcon_port) && !empty($rcon_password)) {
             $tps = check_minecraft_rcon($host, $rcon_port, $rcon_password, $timeout);
             if ($tps !== null) {
@@ -4062,10 +4062,10 @@ function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, 
 }
 
 /**
- * Jeden pokus o SLP handshake. Vrací null při selhání spojení/čtení
- * (volající pak zkusí znovu nebo přejde na fallback API), jinak vrací
- * hotové pole výsledku (status up i down - down se vrací jen v případech,
- * kde je odpověď jednoznačně platná, ale zjevně chybná, např. neplatné ID paketu).
+ * One SLP handshake attempt. Returns null on connection/read failure (the
+ * caller then retries or moves to the fallback API), otherwise returns a
+ * finished result array (status up or down - down is returned only where the
+ * response is clearly valid yet plainly wrong, e.g. an invalid packet ID).
  */
 function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
@@ -4121,16 +4121,16 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
 
     $packetLength = $readVarInt($socket);
     if ($packetLength === false) {
-        // Nejde odlišit "server neběží" od "byte dorazil o zlomek sekundy později" -
-        // necháváme volajícího zkusit znovu, než se sáhne po fallback API.
+        // "Server is down" cannot be told apart from "the byte arrived a fraction
+        // late" - let the caller retry before reaching for the fallback API.
         @fclose($socket);
         return null;
     }
 
     $packetId = $readVarInt($socket);
     if ($packetId !== 0x00) {
-        // Tady server reálně odpověděl, jen jiným ID paketu - opakování by
-        // nepomohlo, jde o skutečný nesoulad protokolu/portu.
+        // Here the server genuinely replied, just with another packet ID - a retry
+        // would not help, it is a real protocol/port mismatch.
         @fclose($socket);
         $fb = check_minecraft_api_fallback($host, $start, $timeout);
         if ($fb) return $fb;
@@ -4180,7 +4180,7 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     $playersMax = isset($data['players']['max']) ? (int)$data['players']['max'] : 0;
     $version = isset($data['version']['name']) ? $data['version']['name'] : 'Neznámá';
     
-    // Získání seznamu hráčů
+    // Fetch the player list
     $playersList = [];
     if (isset($data['players']['sample']) && is_array($data['players']['sample'])) {
         foreach ($data['players']['sample'] as $p) {
@@ -4190,7 +4190,7 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
         }
     }
     
-    // Získání a očistění MOTD
+    // Fetch and clean the MOTD
     $motd = '';
     if (isset($data['description'])) {
         if (is_string($data['description'])) {
@@ -4229,9 +4229,9 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
  */
 
 /**
- * Dekóduje TS3 ServerQuery escape sekvence v přijaté hodnotě (plná tabulka -
- * dřívější verze řešila jen \s, \/, \p, což stačilo na pár polí serverinfo,
- * ale u jmen kanálů/klientů je potřeba kompletní sada).
+ * Decodes TS3 ServerQuery escape sequences in a received value (the full table -
+ * an earlier version handled only \s, \/, \p, enough for a few serverinfo
+ * fields, but channel/client names need the complete set).
  */
 function bk_ts3_escape_decode($value) {
     static $map = null;
@@ -4246,8 +4246,8 @@ function bk_ts3_escape_decode($value) {
 }
 
 /**
- * Zakóduje hodnotu pro odeslání v ServerQuery příkazu (opak bk_ts3_escape_decode) -
- * potřeba např. pro přihlašovací jméno/heslo, pokud obsahují mezery nebo jiné znaky.
+ * Encodes a value for sending in a ServerQuery command (inverse of bk_ts3_escape_decode) -
+ * needed e.g. for a login name/password containing spaces or other characters.
  */
 function bk_ts3_escape_encode($value) {
     static $map = null;
@@ -4262,8 +4262,8 @@ function bk_ts3_escape_encode($value) {
 }
 
 /**
- * Pošle ServerQuery příkaz a čte odpověď, dokud se neobjeví ukončovací
- * "error id=..." řádek (nebo dokud nevyprší bezpečnostní limity).
+ * Sends a ServerQuery command and reads the response until the terminating
+ * "error id=..." line appears (or the safety limits run out).
  */
 function bk_ts3_send_command($socket, $command, $max_bytes = 65536, $max_seconds = 5) {
     @fwrite($socket, $command . "\n");
@@ -4280,8 +4280,8 @@ function bk_ts3_send_command($socket, $command, $max_bytes = 65536, $max_seconds
 }
 
 /**
- * Vytáhne číselný "error id=" z odpovědi ServerQuery. Vrací null, pokud chybí
- * (spojení spadlo dřív, než přišla ukončovací hláška).
+ * Extracts the numeric "error id=" from a ServerQuery response. Returns null
+ * when missing (the connection died before the terminating line).
  */
 function bk_ts3_parse_error_id($response) {
     if (preg_match('/error id=(\d+)/', $response, $m)) {
@@ -4291,8 +4291,8 @@ function bk_ts3_parse_error_id($response) {
 }
 
 /**
- * Rozparsuje jednořádkovou odpověď typu "klic=hodnota klic2=hodnota2 ..." (např.
- * serverinfo) do asociativního pole, s plným escape dekódováním hodnot.
+ * Parses a single-line "key=value key2=value2 ..." response (e.g. serverinfo)
+ * into an associative array, with full escape decoding of values.
  */
 function bk_ts3_parse_kv_line($line) {
     $details = [];
@@ -4307,9 +4307,9 @@ function bk_ts3_parse_kv_line($line) {
 }
 
 /**
- * Rozparsuje seznamovou odpověď (channellist/clientlist/servergrouplist) - záznamy
- * oddělené "|", v každém záznamu klic=hodnota páry oddělené mezerou. Ukončovací
- * "error id=..." řádek se odřízne, ne je součástí posledního záznamu.
+ * Parses a list response (channellist/clientlist/servergrouplist) - records
+ * separated by "|", each holding key=value pairs separated by spaces. The
+ * terminating "error id=..." line is cut off, not part of the last record.
  */
 function bk_ts3_parse_list_response($response) {
     $err_pos = strrpos($response, 'error id=');
@@ -4332,9 +4332,9 @@ function bk_ts3_parse_list_response($response) {
 }
 
 /**
- * Rychlá TCP kontrola ServerQuery a FileTransfer portů. Voice port (výchozí 9987)
- * je UDP a nelze ho stejným způsobem "connect probovat" - jeho stav je jen odvozený
- * z úspěšného serverinfo výše, proto má 'ok' => null (nezávisle neověřeno).
+ * Quick TCP check of the ServerQuery and FileTransfer ports. The voice port
+ * (default 9987) is UDP and cannot be connect-probed the same way - its state
+ * is only derived from a successful serverinfo above, hence 'ok' => null (not independently verified).
  */
 function check_ts3_ports($host, $query_port, $filetransfer_port, $timeout = 2) {
     $ft_ok = false;
@@ -4351,10 +4351,10 @@ function check_ts3_ports($host, $query_port, $filetransfer_port, $timeout = 2) {
 }
 
 /**
- * Aproximace kvality hlasového spojení z jitteru (směrodatné odchylky) posledních
- * ServerQuery TCP odezev za poslední hodinu. NENÍ to skutečné měření hlasového
- * (UDP) packet loss - to z PHP na sdíleném hostingu spolehlivě neumíme změřit -
- * jde jen o proxy signál "jak stabilní je spojení k serveru v poslední době".
+ * Approximates voice quality from the jitter (standard deviation) of the last
+ * hour's ServerQuery TCP latencies. It is NOT a real measurement of voice (UDP)
+ * packet loss - that cannot be measured reliably from PHP on shared hosting -
+ * just a proxy signal for "how stable the connection to the server has been lately".
  */
 function bk_ts3_voice_quality($pdo, $monitor_id) {
     $stmt = $pdo->prepare("
@@ -4392,12 +4392,12 @@ function bk_ts3_voice_quality($pdo, $monitor_id) {
 }
 
 /**
- * Obecný vážený Health Score kalkulátor - typově agnostický, použitelný pro
- * jakýkoli budoucí Service Profile, ne jen TeamSpeak. $areas je pole
+ * Generic weighted Health Score calculator - type-agnostic, usable for any
+ * future Service Profile, not just TeamSpeak. $areas is an array
  * [['label'=>, 'weight_pct'=>, 'score_pct'=>0-100, 'status'=>'ok'|'warn'|'fail'|'na'], ...].
- * Oblasti se status='na' (nelze změřit - typicky chybí propojený agent) se z
- * výpočtu vynechají a jejich váha se poměrně přerozdělí mezi měřitelné oblasti,
- * místo aby uměle doplňovaly 100 % nebo nespravedlivě strhávaly skóre na 0.
+ * Areas with status='na' (unmeasurable - typically no attached agent) are
+ * left out of the computation and their weight redistributes proportionally
+ * among the measurable areas, instead of padding to 100 % or unfairly dragging the score to 0.
  */
 function bk_compute_health_score(array $areas) {
     $weighted_sum = 0.0;
@@ -4418,11 +4418,11 @@ function bk_compute_health_score(array $areas) {
 
 
 /**
- * Sestaví 7 vážených oblastí Health Score pro TeamSpeak monitor:
- * Dostupnost 35 % / Proces 20 % / ServerQuery 15 % / Porty 10 % / Výkon VPS 10 % /
- * Klienti-limity 5 % / Verze 5 %. $agent_data je dekódovaný monitors.last_details
- * (obsahuje cpu/ram a případně ts3_process, pokud je na VPS propojený agent),
- * $check_stages je dekódovaný monitor_logs.check_stages z posledního běhu.
+ * Builds the 7 weighted Health Score areas for a TeamSpeak monitor:
+ * Availability 35 % / Process 20 % / ServerQuery 15 % / Ports 10 % / VPS performance 10 % /
+ * Client limits 5 % / Version 5 %. $agent_data is the decoded monitors.last_details
+ * (holds cpu/ram and possibly ts3_process when an agent is attached to the VPS),
+ * $check_stages is the decoded monitor_logs.check_stages from the last run.
  */
 function build_teamspeak_health_areas($monitor, $current_status, $check_stages, $agent_data, $pdo = null) {
     $areas = [];
@@ -4431,11 +4431,11 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
     $avail_ok = $current_status === 'up';
     $areas[] = ['key' => 'availability', 'label' => 'Dostupnost', 'weight_pct' => 35, 'score_pct' => $avail_ok ? 100 : 0, 'status' => $avail_ok ? 'ok' : 'fail'];
 
-    // TeamSpeak proces (20 %) - jen pokud je agent propojený a hlásí ts3_process
+    // TeamSpeak process (20 %) - only when an agent is attached and reports ts3_process
     if (is_array($agent_data) && isset($agent_data['ts3_process']) && is_array($agent_data['ts3_process'])) {
         $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 100, 'status' => 'ok'];
     } elseif (is_array($agent_data) && !empty($agent_data['cpu'])) {
-        // Agent je propojený, ale proces ts3server nenašel
+        // The agent is attached but found no ts3server process
         $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 0, 'status' => 'fail'];
     } else {
         $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 0, 'status' => 'na'];
@@ -4449,7 +4449,7 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
         $areas[] = ['key' => 'serverquery', 'label' => 'ServerQuery', 'weight_pct' => 15, 'score_pct' => 0, 'status' => 'na'];
     }
 
-    // Porty (10 %) - voice port se do poměru nepočítá (nezávisle neověřený, ok=null)
+    // Ports (10 %) - the voice port does not count into the ratio (not independently verified, ok=null)
     if (is_array($check_stages) && isset($check_stages['ports']) && is_array($check_stages['ports'])) {
         $port_total = 0;
         $port_ok = 0;
@@ -4465,7 +4465,7 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
         $areas[] = ['key' => 'ports', 'label' => 'Porty', 'weight_pct' => 10, 'score_pct' => 0, 'status' => 'na'];
     }
 
-    // Výkon VPS (10 %) - jen pokud agent hlásí cpu/ram
+    // VPS performance (10 %) - only when the agent reports cpu/ram
     if (is_array($agent_data) && isset($agent_data['cpu'], $agent_data['ram'])) {
         $eff_perf = bk_monitor_thresholds($pdo instanceof PDO ? $pdo : null, (array)$monitor);
         $cpu_threshold = (float)($eff_perf['cpu'] ?? 90);
@@ -4478,7 +4478,7 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
         $areas[] = ['key' => 'vps', 'label' => 'Výkon VPS', 'weight_pct' => 10, 'score_pct' => 0, 'status' => 'na'];
     }
 
-    // Počet klientů / limity (5 %)
+    // Client count / limits (5 %)
     $slot_pct = $check_stages['service']['slot_usage_pct'] ?? null;
     if ($slot_pct !== null) {
         $clients_score = $slot_pct < 90 ? 100 : ($slot_pct < 100 ? 60 : 20);
@@ -4487,7 +4487,7 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
         $areas[] = ['key' => 'clients', 'label' => 'Klienti / limity', 'weight_pct' => 5, 'score_pct' => 0, 'status' => 'na'];
     }
 
-    // Verze (5 %) - jen pokud je ručně vyplněná "poslední známá verze" v nastavení
+    // Version (5 %) - only when a "last known version" is filled in manually in settings
     $latest_version = trim((string)get_setting('ts3_latest_version', ''));
     $current_version = is_array($check_stages) ? (string)($check_stages['version'] ?? '') : '';
     if ($latest_version !== '' && $current_version !== '') {
@@ -4502,15 +4502,15 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
 
 /**
  * Registr Service Profiles - label/ikona/health-score funkce podle typu monitoru.
- * Zatím jen 'teamspeak' má reálnou implementaci; tvar registru je to, co dělá z
- * jednorázového TeamSpeak Health Score obecný framework - přidání dalšího typu
- * (web/minecraft/...) v budoucnu znamená jeden nový záznam, ne přepis.
+ * Only 'teamspeak' has a real implementation so far; the registry shape is what
+ * turns the one-off TeamSpeak Health Score into a general framework - adding
+ * another type (web/minecraft/...) later means one new entry, not a rewrite.
  */
 /**
- * Registr Service Profiles - pro každý typ monitoru definuje popisek/ikonu pro
- * vizuální picker v admin.php a (u typů, které to podporují) seznam
- * togglovatelných sekcí dashboardu. Typy bez klíče 'metrics' nemají v adminu
- * checklist a jejich dashboard se negatuje - zobrazuje se vše jako dosud
+ * Service Profiles registry - defines the label/icon for the visual picker in
+ * admin.php per monitor type and (for types that support it) the list of
+ * togglable dashboard sections. Types without a 'metrics' key have no checklist
+ * in the admin and their dashboard is not gated - everything shows as before
  * (viz bk_get_enabled_metrics()).
  */
 function get_service_profiles() {
@@ -4563,17 +4563,17 @@ function get_service_profiles() {
 }
 
 /**
- * Vrátí pole klíčů zapnutých metrik pro daný monitor, nebo NULL pokud se pro
- * jeho typ gating neprovádí (typ bez 'metrics' v get_service_profiles() -
- * dashboard se chová jako dřív, zobrazuje vše). Volající vždy kontrolují
- * `$enabled_metrics === null || in_array('klíč', $enabled_metrics)`.
+ * Returns the list of enabled metric keys for a monitor, or NULL when its type
+ * is not gated (a type without 'metrics' in get_service_profiles() - the
+ * dashboard behaves as before and shows everything). Callers always check
+ * `$enabled_metrics === null || in_array('key', $enabled_metrics)`.
  */
 /**
- * Metriky a prahy z presetu přiřazeného monitoru.
+ * Metrics and thresholds from the preset assigned to a monitor.
  *
- * Preset je pojmenovaná sada „co se u téhle služby zobrazuje a kdy je to
- * problém". Monitor bez presetu funguje jako dřív (doporučené metriky
- * profilu + vlastní prahy), takže zavedení presetů nic nerozbije.
+ * A preset is a named set of "what shows for this service and when it is a
+ * problem". A monitor without a preset works as before (the profile's
+ * recommended metrics + its own thresholds), so introducing presets breaks nothing.
  *
  * @return array|null ['metrics' => string[]|null, 'cpu' => ?int, 'ram' => ?int, 'hdd' => ?int]
  */
@@ -4596,22 +4596,22 @@ function bk_get_preset($pdo, $preset_id): ?array {
         $metrics = json_decode($row['metrics'] ?? '', true);
         return $cache[$preset_id] = [
             'metrics' => is_array($metrics) ? $metrics : null,
-            // Prahy jsou volitelné - preset může řešit jen sadu metrik.
+            // Thresholds are optional - a preset may govern only the metric set.
             'cpu' => $row['cpu_threshold'] !== null ? (int)$row['cpu_threshold'] : null,
             'ram' => $row['ram_threshold'] !== null ? (int)$row['ram_threshold'] : null,
             'hdd' => $row['hdd_threshold'] !== null ? (int)$row['hdd_threshold'] : null,
         ];
     } catch (Throwable $e) {
-        // Bez tabulky (stará DB) se preset prostě neuplatní.
+        // Without the table (old DB) the preset simply does not apply.
         return $cache[$preset_id] = null;
     }
 }
 
 /**
- * Účinný práh pro metriku: preset má přednost před hodnotou na monitoru.
+ * Effective threshold for a metric: the preset beats the monitor's own value.
  *
- * Vrací null, když není nastaveno ani jedno - volající pak práh neuplatní
- * místo toho, aby si vymyslel výchozí číslo.
+ * Returns null when neither is set - the caller then applies no threshold
+ * instead of inventing a default number.
  */
 function bk_effective_threshold(?array $preset, $monitor_value, string $key): ?int {
     if ($preset !== null && $preset[$key] !== null) {
@@ -4640,8 +4640,8 @@ function bk_get_enabled_metrics($monitor, $pdo = null) {
     if (!$profile || empty($profile['metrics'])) {
         return null;
     }
-    // Preset (pokud je přiřazený) přebíjí sadu uloženou u monitoru - to je
-    // celý smysl presetu: změna na jednom místě se projeví všude.
+    // The preset (when assigned) overrides the set stored on the monitor - that
+    // is the whole point of a preset: one change shows everywhere.
     if ($pdo !== null && !empty($monitor['preset_id'])) {
         $preset = bk_get_preset($pdo, $monitor['preset_id']);
         if ($preset !== null && is_array($preset['metrics']) && !empty($preset['metrics'])) {
@@ -4652,22 +4652,22 @@ function bk_get_enabled_metrics($monitor, $pdo = null) {
     if (is_array($stored) && !empty($stored)) {
         return $stored;
     }
-    // Nic explicitně uloženo (nový/needitovaný monitor) - použijí se recommended
-    // výchozí hodnoty, které přesně odpovídají tomu, co se dnes vždy zobrazuje.
+    // Nothing explicitly stored (a new/unedited monitor) - the recommended
+    // defaults are used, which match exactly what has always been displayed.
     return array_column(array_filter($profile['metrics'], fn($m) => !empty($m['recommended'])), 'key');
 }
 
 /**
- * Kontrola TeamSpeak serveru přes ServerQuery. Základní anonymní sekvence
- * (use + serverinfo) je záměrně beze změny oproti dřívější verzi - je to
- * produkční kontrola běžící každou 1-5 minutu, nic navíc ji nesmí nově shodit.
- * Nové věci (přihlášení, channely, server groups, hlasová aktivita, porty) jsou
- * čistě přídavné a jejich případné selhání (chybějící oprávnění, chybějící
- * přihlašovací údaje) nikdy nemění výsledné 'status'.
+ * TeamSpeak server check via ServerQuery. The basic anonymous sequence
+ * (use + serverinfo) is deliberately unchanged from the earlier version - it is
+ * a production check running every 1-5 minutes, nothing new may bring it down.
+ * The new things (login, channels, server groups, voice activity, ports) are
+ * purely additive and their failure (missing permissions, missing
+ * credentials) never changes the resulting 'status'.
  */
 
 function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null, $sq_password = null, $filetransfer_port = null) {
-    // Rozdělení voice portu a query portu (např. host:voice_port)
+    // Splitting the voice port from the query port (e.g. host:voice_port)
     $voice_port = 9987;
     $parts = explode(':', $host);
     if (count($parts) === 2) {
@@ -4716,7 +4716,7 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 
     stream_set_timeout($socket, $timeout);
 
-    // Čtení úvodního pozdravu ze ServerQuery (přesně 2 řádky: TS3 a Welcome zpráva)
+    // Read the ServerQuery greeting (exactly 2 lines: TS3 and the Welcome message)
     $greeting = '';
     $line1 = @fgets($socket, 256);
     $line2 = @fgets($socket, 256);
@@ -4735,12 +4735,12 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 
     $query_start = microtime(true);
 
-    // Zvolíme virtuální server na hlasovém portu
+    // Select the virtual server on the voice port
     @fwrite($socket, "use port=$voice_port\n");
     $use_resp = @fgets($socket, 256);
 
     if ($use_resp && strpos($use_resp, 'error id=0') === false) {
-        // Pokud zadaný voice port neexistuje nebo je neplatný, automaticky detekujeme port přes serverlist
+        // If the given voice port does not exist or is invalid, auto-detect the port via serverlist
         @fwrite($socket, "serverlist\n");
         $s_list = @fgets($socket, 4096);
         if ($s_list && preg_match('/virtualserver_port=(\d+)/', $s_list, $m_port)) {
@@ -4750,7 +4750,7 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
         }
     }
 
-    // Dotaz na info o serveru (nezměněno - toto je baseline, na kterém stojí up/down)
+    // Query the server info (unchanged - this is the baseline up/down rests on)
     @fwrite($socket, "serverinfo\n");
     $info = @fgets($socket, 4096);
 
@@ -4777,9 +4777,9 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
     }
 
     $details = bk_ts3_parse_kv_line($info);
-    // ServerQuery hlásí skutečný filetransfer port přímo v serverinfo - použijeme
-    // ho místo ručně nastavené hodnoty, pokud je k dispozici (server se nemůže mýlit
-    // sám o sobě, na rozdíl od ručně vyplněného pole v administraci).
+    // ServerQuery reports the real filetransfer port right in serverinfo - use it
+    // instead of the manually configured value when available (the server cannot
+    // be wrong about itself, unlike a hand-filled field in the admin).
     if (isset($details['virtualserver_filetransfer_port']) && (int)$details['virtualserver_filetransfer_port'] > 0) {
         $filetransfer_port = (int)$details['virtualserver_filetransfer_port'];
     }
@@ -4788,8 +4788,8 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
     $clients_max = isset($details['virtualserver_maxclients']) ? (int)$details['virtualserver_maxclients'] : 0;
     $real_clients_online = max(0, $clients_online - $query_clients);
 
-    // --- Od tady jsou to čistě přídavné dotazy (check pipeline) - nic z tohoto
-    // --- nemůže shodit status určený serverinfo výše. ---
+    // --- From here on these are purely additive queries (check pipeline) - none
+    // --- of this can bring down the status determined by serverinfo above. ---
     $query_steps = ['serverinfo' => true];
     $authenticated = false;
 
@@ -4800,7 +4800,7 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
         $authenticated = (bk_ts3_parse_error_id($login_resp) === 0);
         $query_steps['login'] = $authenticated;
         if ($authenticated) {
-            // Po přihlášení je nutné virtuální server vybrat znovu (ServerQuery to vyžaduje)
+            // After login the virtual server must be selected again (ServerQuery requires it)
             bk_ts3_send_command($socket, "use port=$voice_port");
         }
     }
@@ -4957,7 +4957,7 @@ function check_discord($guild_id, $timeout = 3) {
     
     $presence_count = isset($data['presence_count']) ? (int)$data['presence_count'] : 0;
     
-    // Projdeme členy a seskupíme je do hlasových kanálů
+    // Walk the members and group them into voice channels
     $channels_with_users = [];
     $members_list = [];
     if (isset($data['members']) && is_array($data['members'])) {
@@ -4979,7 +4979,7 @@ function check_discord($guild_id, $timeout = 3) {
         }
     }
     
-    // Doplníme názvy kanálů
+    // Fill in the channel names
     $voice_channels = [];
     if (isset($data['channels']) && is_array($data['channels'])) {
         foreach ($data['channels'] as $ch) {
@@ -5006,15 +5006,15 @@ function check_discord($guild_id, $timeout = 3) {
 }
 
 /**
- * Odeslání e-mailu přes PHPMailer (SMTP autentizace) nebo PHP mail() jako záloha
+ * Sends an e-mail via PHPMailer (SMTP auth) or PHP mail() as fallback
  */
 function send_email($to, $subject, $html_body) {
     $GLOBALS['last_mail_error'] = '';
-    // 'smtp' = ověřené odeslání přes autentizovaný SMTP server (silný signál
-    // úspěchu), 'fallback' = neautentizovaný PHP mail() - vrátí true, i když
-    // to jen znamená "místní MTA to přijal ke zpracování", ne že to reálně
-    // dorazilo. Volající (digest apod.) podle tohohle rozlišuje, jak sebejistě
-    // formulovat hlášku o úspěchu - viz send_digest_report_inner().
+    // 'smtp' = verified delivery through an authenticated SMTP server (a strong
+    // success signal), 'fallback' = unauthenticated PHP mail() - returns true even
+    // when it only means "the local MTA accepted it for processing", not that it
+    // actually arrived. Callers (the digest etc.) use this to calibrate how
+    // confidently to word the success message - see send_digest_report_inner().
     $GLOBALS['last_mail_method'] = null;
 
     $smtp_host = get_setting('smtp_host', '');
@@ -5026,7 +5026,7 @@ function send_email($to, $subject, $html_body) {
     
     $lib_path = __DIR__ . '/lib/';
     
-    // Pokud jsou SMTP přihlašovací údaje nastaveny a PHPMailer je dostupný, použijeme ho
+    // When SMTP credentials are configured and PHPMailer is available, use it
     if (!empty($smtp_host) && !empty($smtp_user) && !empty($smtp_pass) && file_exists($lib_path . 'PHPMailer.php')) {
         require_once $lib_path . 'Exception.php';
         require_once $lib_path . 'SMTP.php';
@@ -5060,9 +5060,9 @@ function send_email($to, $subject, $html_body) {
         }
     }
     
-    // Záloha: PHP mail() bez SMTP autentizace (funguje jen pokud webhosting povoluje)
-    // noreply@example.com je záměrně obecná - IANA vyhrazená doména pro dokumentaci
-    // (RFC 2606), ne odhad skutečné domény nasazení.
+    // Fallback: PHP mail() without SMTP auth (works only if the hosting allows it)
+    // noreply@example.com is deliberately generic - the IANA-reserved documentation
+    // domain (RFC 2606), not a guess at the real deployment domain.
     $from = !empty($smtp_user) ? $smtp_user : 'noreply@example.com';
     $headers = [
         'MIME-Version: 1.0',
@@ -5086,22 +5086,22 @@ function send_email($to, $subject, $html_body) {
 }
 
 /**
- * Odeslání SMS přes Twilio nebo SMSbrana.cz
+ * Sends an SMS via Twilio or SMSbrana.cz
  */
 function send_sms($phone, $message, $user_whatsapp_apikey = '', $force_gateway = '') {
     $gateway = !empty($force_gateway) ? $force_gateway : get_setting('sms_gateway_type', '');
     
     if ($gateway === 'whatsapp') {
-        // CallMeBot klíč je vázaný na konkrétní telefonní číslo, takže existuje
-        // jen jako osobní klíč každého uživatele - žádný globální fallback.
+        // A CallMeBot key is bound to a specific phone number, so it exists
+        // only as each user's personal key - no global fallback.
         $apikey = $user_whatsapp_apikey;
         if (empty($apikey) || empty($phone)) {
             return false;
         }
         
-        // Vyčistit telefonní číslo pro CallMeBot (pouze číslice)
+        // Clean the phone number for CallMeBot (digits only)
         $clean_phone = preg_replace('/[^0-9]/', '', $phone);
-        // Pokud číslo nezačíná mezinárodní předvolbou (má 9 číslic), doplníme české +420
+        // If the number lacks an international prefix (has 9 digits), prepend the Czech +420
         if (strlen($clean_phone) === 9) {
             $clean_phone = '420' . $clean_phone;
         }
@@ -5157,7 +5157,7 @@ function send_sms($phone, $message, $user_whatsapp_apikey = '', $force_gateway =
             return false;
         }
         
-        // SMS Brána API odeslání SMS (HTTP GET/POST)
+        // SMS Brana API SMS send (HTTP GET/POST)
         $url = "https://api.smsbrana.cz/sms/apixml.xml";
         $xml = '<?xml version="1.0" encoding="utf-8"?>
         <apirequest>
@@ -5191,7 +5191,7 @@ function send_sms($phone, $message, $user_whatsapp_apikey = '', $force_gateway =
 }
 
 /**
- * Pomocná funkce pro zjištění, zda je monitor v plánované údržbě
+ * Helper telling whether a monitor is in planned maintenance
  */
 function is_in_maintenance($monitor) {
     if ((int)($monitor['maintenance'] ?? 0) !== 1) {
@@ -5210,16 +5210,16 @@ function is_in_maintenance($monitor) {
 }
 
 /**
- * Spuštění notifikačního procesu při změně stavu monitoru
+ * Runs the notification process on a monitor status change
  */
 /**
- * Životní cyklus incidentů navázaných na monitor.
+ * Lifecycle of incidents tied to a monitor.
  *
- * Výpadek automaticky založí incident (jednou - dokud je otevřený, další
- * down průchody cronu nic nepřidávají), obnovení ho automaticky uzavře
- * se záznamem v timeline. Ruční kroky (převzetí, poznámky, postmortem)
- * dělá admin přes API - tohle jen garantuje, že žádný výpadek nezmizí
- * bez záznamu.
+ * An outage automatically opens an incident (once - while it is open, further
+ * down passes of cron add nothing), recovery automatically closes it with a
+ * timeline record. Manual steps (acknowledge, notes, postmortem) are done
+ * by the admin via the API - this only guarantees no outage vanishes
+ * without a record.
  */
 function bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg = '') {
     $monitor_id = (int)($monitor['id'] ?? 0);
@@ -5247,7 +5247,7 @@ function bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg = '') {
             }
         }
     } catch (Throwable $e) {
-        // Incident je doprovodný záznam - jeho selhání nesmí zastavit notifikace.
+        // The incident is an auxiliary record - its failure must not stop notifications.
     }
 }
 
@@ -5258,9 +5258,9 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     $target = $monitor['target'];
     $port = $monitor['port'];
 
-    // Notifikace o neaktivitě agenta se řídí přímo časovým limitem (0 = zcela vypnuto, viz cron.php)
-    // - žádný samostatný přepínač pro ně proto není potřeba.
-    // Upozornění na překročení limitů CPU/RAM/HDD lze v nastavení vypnout samostatně.
+    // Agent inactivity notifications follow the timeout directly (0 = fully disabled, see cron.php)
+    // - no separate toggle is needed for them.
+    // CPU/RAM/HDD threshold alerts can be disabled separately in settings.
     $is_agent_event = in_array($new_status, ['agent_offline', 'vps_warning'], true);
     if ($new_status === 'vps_warning' && get_setting('agent_notifications_enabled', '1') !== '1') {
         return;
@@ -5281,14 +5281,14 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $status_text = 'VPS METRIKY - VAROVÁNÍ';
         $emoji = '⚠️';
     } elseif ($new_status === 'latency_degraded') {
-        // Služba běží, jen pomalu - proto varování, ne výpadek.
+        // The service runs, just slowly - hence a warning, not an outage.
         $status_text = 'ZPOMALENÍ (služba odpovídá pomalu)';
         $emoji = '🐢';
     } elseif ($new_status === 'latency_recovered') {
         $status_text = 'ODEZVA ZPĚT V NORMÁLU';
         $emoji = '🟢';
     }
-    // Načtení všech příjemců notifikací (odběratelé + administrátoři bez přímého nastavení odběru)
+    // Load all notification recipients (subscribers + administrators without an explicit subscription)
     $stmt = $pdo->prepare("
         SELECT u.id, u.email, u.phone, u.role, u.whatsapp_apikey, u.email_lang,
                COALESCE(s.email_notifications, m.email_notifications) as email_notifications,
@@ -5302,7 +5302,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     $stmt->execute([$monitor['id']]);
     $recipients = $stmt->fetchAll();
 
-    // Události VPS agenta jsou ve výchozím stavu interní - chodí pouze administrátorům, ne běžným odběratelům
+    // VPS agent events are internal by default - they go to administrators only, not regular subscribers
     if ($is_agent_event && get_setting('agent_notify_admin_only', '1') === '1') {
         $recipients = array_values(array_filter($recipients, function ($r) {
             return ($r['role'] ?? '') === 'admin';
@@ -5311,7 +5311,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 
     $time = date('d.m.Y H:i:s');
 
-    // HTML Šablona pro E-mail v barvách Blood Kings (červeno-černá)
+    // HTML e-mail template in Blood Kings colours (red-black)
     $color_theme = '#c1121f'; // red
     if ($new_status === 'up') {
         $color_theme = '#1ec773'; // teal
@@ -5319,10 +5319,10 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $color_theme = '#f39c12'; // orange
     }
 
-    // Jazyk e-mailového kanálu se řídí nastavením email_lang (viz bk_with_email_lang()),
-    // ne prohlížečem příjemce ani prostředím (cron/agent_api), ve kterém tahle funkce běží.
-    // SMS/WhatsApp a Discord/Slack/Telegram/Pushover/PagerDuty zprávy níže zůstávají
-    // beze změny na $status_text (česky) - přeložit se má jen e-mailový kanál.
+    // The e-mail channel's language follows the email_lang setting (see bk_with_email_lang()),
+    // not the recipient's browser nor the environment (cron/agent_api) this function runs in.
+    // The SMS/WhatsApp and Discord/Slack/Telegram/Pushover/PagerDuty messages below stay
+    // on $status_text (Czech) unchanged - only the e-mail channel is translated.
     $alert_status_keys = [
         'down' => 'alert_status_down',
         'up' => 'alert_status_up',
@@ -5332,13 +5332,13 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     ];
     $alert_status_key = $alert_status_keys[$new_status] ?? 'alert_status_down';
 
-    // Vše inline (+ reálné <table>), ne v <style> bloku - Gmail, Outlook a
-    // většina webmailů <style>/<head> při doručení ořízne, e-mail by dorazil
-    // bez formátování. Viz stejný přístup u render_email_wrapper() (digest).
+    // Everything inline (+ real <table>), not a <style> block - Gmail, Outlook and
+    // most webmails strip <style>/<head> on delivery and the e-mail would arrive
+    // unformatted. Same approach as render_email_wrapper() (the digest).
     $font = "font-family: Arial, Helvetica, sans-serif;";
-    // E-mail se renderuje per jazyk příjemce (users.email_lang, NULL = globální
-    // email_lang) - jednou na jazyk, ne jednou na příjemce. SMS/WhatsApp a
-    // webhooky níže zůstávají jednojazyčné.
+    // The e-mail renders per recipient language (users.email_lang, NULL = the global
+    // email_lang) - once per language, not once per recipient. The SMS/WhatsApp and
+    // webhooks below stay single-language.
     $default_email_lang = get_setting('email_lang', 'cs');
     $render_alert_email = function (string $lang) use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
         return bk_with_email_lang($lang, function () use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
@@ -5394,22 +5394,22 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         return [$subject, $html_body];
         });
     };
-    // Cache vyrenderovaných variant - klíčem je jazyk.
+    // Cache of rendered variants - keyed by language.
     $alert_email_by_lang = [];
 
-    // SMS / WhatsApp Zpráva
+    // SMS / WhatsApp message
     $sms_body = "$emoji Monitor $name je $status_text. Čas: $time.";
     if ($new_status === 'maintenance') {
         $sms_body = "$emoji Monitor $name byl přepnut do režimu plánované údržby. Důvod: $error_msg";
     } elseif ($new_status === 'down' && !empty($error_msg)) {
         $sms_body .= " Chyba: " . substr($error_msg, 0, 100);
     } elseif ($is_agent_event && !empty($error_msg)) {
-        // U událostí agenta (neaktivní agent, překročené limity) vždy uvést důvod, co se stalo
+    // For agent events (inactive agent, exceeded limits) always state the reason
         $sms_body .= " Důvod: " . substr($error_msg, 0, 220);
     }
     
     foreach ($recipients as $rec) {
-        // E-mailové notifikace - v jazyce příjemce (fallback globální email_lang)
+        // E-mail notifications - in the recipient's language (fallback: global email_lang)
         if ($rec['email_notifications'] && !empty($rec['email'])) {
             $rec_lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_email_lang;
             if (!isset($alert_email_by_lang[$rec_lang])) {
@@ -5419,7 +5419,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             send_email($rec['email'], $email_subject, $html_body);
         }
         
-        // SMS notifikace (Twilio / SMSbrana) - nezávislé na WhatsApp
+        // SMS notifications (Twilio / SMSbrana) - independent of WhatsApp
         $gateway_type = get_setting('sms_gateway_type', '');
         if ($rec['sms_notifications'] && !empty($rec['phone'])) {
             if ($gateway_type === 'twilio' || $gateway_type === 'smsbrana') {
@@ -5427,14 +5427,14 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             }
         }
 
-        // WhatsApp notifikace (CallMeBot) - nezávislé na SMS bráně, vlastní kanál.
-        // Klíč je vázaný na konkrétní telefonní číslo, takže existuje jen per-user.
+        // WhatsApp notifications (CallMeBot) - independent of the SMS gateway, its own channel.
+        // The key is bound to a specific phone number, so it exists per-user only.
         if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
             send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
         }
     }
 
-    // Odeslání systémových/monitorových webhooků (Discord, Slack, Telegram) - spouští se pouze 1x na událost
+    // System/monitor webhooks (Discord, Slack, Telegram) - fired only once per event
     $discord_webhook = !empty($monitor['discord_webhook_url']) ? $monitor['discord_webhook_url'] : get_setting('discord_webhook_url');
     $telegram_token = !empty($monitor['telegram_bot_token']) ? $monitor['telegram_bot_token'] : get_setting('telegram_bot_token');
     $telegram_chat = !empty($monitor['telegram_chat_id']) ? $monitor['telegram_chat_id'] : get_setting('telegram_chat_id');
@@ -5485,7 +5485,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 }
 
 /**
- * Pomocná funkce pro odeslání HTTP POST požadavků (webhooků)
+ * Helper for sending HTTP POST requests (webhooks)
  */
 function send_webhook_post($url, $payload_json) {
     $ch = curl_init($url);
@@ -5503,19 +5503,19 @@ function send_webhook_post($url, $payload_json) {
 }
 
 /**
- * Sestaví a odešle pravidelný souhrnný report (týdenní/měsíční) na e-maily
- * všech administrátorů. Volá se z cron.php (automaticky, s ochranou proti
- * duplicitnímu odeslání) a z admin.php (ruční okamžité odeslání).
+ * Builds and sends the periodic summary report (weekly/monthly) to the e-mails
+ * of all administrators. Called from cron.php (automatically, guarded against
+ * duplicate sending) and from admin.php (manual immediate send).
  *
  * @param PDO $pdo
  * @param string $period 'weekly' nebo 'monthly'
- * @return bool True, pokud se report podařilo odeslat alespoň jednomu administrátorovi.
+ * @return bool True when the report reached at least one administrator.
  */
 function send_digest_report($pdo, $period = 'weekly') {
     $GLOBALS['last_mail_error'] = '';
     try {
-        // Jazyková obálka se přesunula dovnitř - digest se renderuje per
-        // jazyk příjemce (users.email_lang), ne jednou globálně.
+        // The language wrapper moved inside - the digest renders per recipient
+        // language (users.email_lang), not once globally.
         return send_digest_report_inner($pdo, $period);
     } catch (Exception $e) {
         $GLOBALS['last_mail_error'] = $e->getMessage();
@@ -5528,8 +5528,8 @@ function send_digest_report($pdo, $period = 'weekly') {
  */
 
 /**
- * Určí směr trendu mezi aktuální a předchozí hodnotou. Vrací null, pokud
- * předchozí hodnota není k dispozici (první report, žádný snapshot).
+ * Determines the trend direction between the current and previous value. Returns
+ * null when no previous value is available (first report, no snapshot).
  */
 function bk_trend_direction($current, $previous, $threshold = 0.01) {
     if ($previous === null || $current === null) {
@@ -5543,8 +5543,8 @@ function bk_trend_direction($current, $previous, $threshold = 0.01) {
 }
 
 /**
- * Latence -> skóre 0-100 pro výpočet Infrastructure Score. 100 do 150 ms,
- * lineárně klesá na 40 při 1000 ms a výš.
+ * Latency -> 0-100 score for the Infrastructure Score. 100 up to 150 ms,
+ * linearly falling to 40 at 1000 ms and beyond.
  */
 function bk_latency_score($avg_latency_ms) {
     if ($avg_latency_ms === null) {
@@ -5560,9 +5560,9 @@ function bk_latency_score($avg_latency_ms) {
 }
 
 /**
- * Infrastructure Score (0-100) - vlastní heuristika, ne standardizovaná
- * metrika. Váhy: dostupnost 55 %, latence 20 %, incidenty 15 %, certifikáty 10 %.
- * Snadno laditelné, pokud se ukáže, že váhy neodpovídají realitě.
+ * Infrastructure Score (0-100) - our own heuristic, not a standardised
+ * metric. Weights: availability 55 %, latency 20 %, incidents 15 %, certificates 10 %.
+ * Easy to tune if the weights turn out not to match reality.
  */
 function bk_infra_score($availability, $avg_latency_ms, $incident_count, $expiring_certs, $expired_certs) {
     $availability_component = min(100, $availability) * 0.55;
@@ -5573,16 +5573,16 @@ function bk_infra_score($availability, $avg_latency_ms, $incident_count, $expiri
 }
 
 /**
- * Asset Overview - univerzální health score (0-100) pro libovolný typ monitoru.
- * Váhy: uptime 30%, thresholdy 30%, konektivita 20%, čerstvost dat 20%.
+ * Asset Overview - universal health score (0-100) for any monitor type.
+ * Weights: uptime 30%, thresholds 30%, connectivity 20%, data freshness 20%.
  */
 function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_metrics) {
     $score = 0.0;
     $weight_used = 0.0;
 
-    // 1. Uptime (30%) - z posledních 30 dní. Bez jediné kontroly (nebo při
-    // chybě DB) se komponenta vynechá a skóre se přenormuje na zbylé váhy -
-    // dřívější dosazení 100 dávalo plný kredit za dostupnost, o které nic nevíme.
+    // 1. Uptime (30%) - from the last 30 days. Without a single check (or on a
+    // DB error) the component is skipped and the score renormalises over the
+    // remaining weights - substituting 100 used to give full credit for availability we know nothing about.
     $uptime_pct = null;
     try {
         $stmt = $pdo->prepare("SELECT SUM(status='up') as up_cnt, COUNT(*) as total FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status IN ('up','down','warning')");
@@ -5612,7 +5612,7 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
     $threshold_score = max(0, 100 - $violations * 33);
     $score += $threshold_score * 0.30;
 
-    // 3. Konektivita (20%) - aktuální status
+    // 3. Connectivity (20%) - the current status
     $status_score = match($monitor['status']) {
         'up' => 100,
         'maintenance' => 80,
@@ -5621,7 +5621,7 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
     };
     $score += $status_score * 0.20;
 
-    // 4. Čerstvost (20%) - jak dávno agent/check reportoval
+    // 4. Freshness (20%) - how long ago the agent/check reported
     $freshness = 100;
     $last_seen = $details['agent_last_seen'] ?? null;
     if ($last_seen) {
@@ -5637,12 +5637,12 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
     $score += $freshness * 0.20;
     $weight_used += 0.70; // thresholdy + konektivita + čerstvost se počítají vždy
 
-    // Přenormování na skutečně změřené komponenty (0-100).
+    // Renormalise over the actually measured components (0-100).
     return (int)round(min(100, max(0, $score / $weight_used)));
 }
 
 /**
- * Asset Overview - kontext metriky (průměr/min/max za 24h, trend, top proces).
+ * Asset Overview - metric context (24h average/min/max, trend, top process).
  */
 function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
     $ctx = ['avg' => null, 'min' => null, 'max' => null, 'trend' => 'stable', 'top_process' => null];
@@ -5676,7 +5676,7 @@ function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
 }
 
 /**
- * Asset Overview - 30 denních teček zdraví (zelená/žlutá/červená).
+ * Asset Overview - 30 daily health dots (green/yellow/red).
  */
 function bk_get_30day_health_dots($pdo, $monitor_id) {
     $dots = [];
@@ -5713,8 +5713,8 @@ function bk_get_30day_health_dots($pdo, $monitor_id) {
 }
 
 /**
- * Asset Overview - profil karet pro daný typ monitoru.
- * Vrací pole ['key' => ['icon'=>, 'label_key'=>, 'source'=>]]
+ * Asset Overview - card profile for the given monitor type.
+ * Returns an array ['key' => ['icon'=>, 'label_key'=>, 'source'=>]]
  */
 function bk_get_type_card_profile($type) {
     $profiles = [
@@ -5764,10 +5764,10 @@ function bk_get_type_card_profile($type) {
 }
 
 /**
- * Sestaví veškerá data pro infrastructure report (weekly/monthly). Čistě
- * výpočetní funkce bez vedlejších efektů, kromě zápisu trend-snapshotu do
- * settings na konci (potřebný pro příští report, retence logů to jinak
- * neumožňuje - viz komentář u digest_snapshot_* níže).
+ * Builds all the data for the infrastructure report (weekly/monthly). A purely
+ * computational function without side effects, except writing the trend
+ * snapshot into settings at the end (needed for the next report; log retention
+ * makes it impossible otherwise - see the digest_snapshot_* comment below).
  */
 function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $days = ($period === 'monthly') ? 30 : 7;
@@ -5775,20 +5775,20 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $range_from = date('d.m.Y', strtotime("-$days days"));
     $range_to = date('d.m.Y');
 
-    // --- Hlavní server / hub lokace (pro vyloučení z regionů, stejná logika jako index.php) ---
+    // --- Main server / hub location (excluded from regions, same logic as index.php) ---
     $hub_location = trim(get_setting('cron_location', ''));
     if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
         $hub_location = trim(get_setting('ip_loc_local', ''));
     }
 
-    // --- Trend snapshot z minulého období ---
+    // --- Trend snapshot from the previous period ---
     $snapshot_key = 'digest_snapshot_' . $period;
     $prev_snapshot = json_decode(get_setting($snapshot_key, ''), true);
     if (!is_array($prev_snapshot)) {
         $prev_snapshot = null;
     }
 
-    // --- Základní KPI ---
+    // --- Core KPIs ---
     $stmt_overall = $pdo->prepare("
         SELECT
             SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -5806,7 +5806,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $incident_count = (int)($overall['down_count'] ?? 0);
     $avg_latency = $overall['avg_latency'] !== null ? (int)round($overall['avg_latency']) : null;
 
-    // --- Agenti (jen ty, které se někdy reálně ozvaly - stejná logika jako index.php) ---
+    // --- Agents (only those that ever actually reported - same logic as index.php) ---
     $offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
     $agent_count = 0;
     $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != ''");
@@ -5817,7 +5817,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         }
     }
 
-    // --- Regiony (per checked_from, dostupnost + latence za období) ---
+    // --- Regions (per checked_from, availability + latency over the period) ---
     $stmt_regions = $pdo->prepare("
         SELECT checked_from,
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -5833,8 +5833,8 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $regions_raw = $stmt_regions->fetchAll();
     $regions = [];
     foreach ($regions_raw as $r) {
-        // Region, ze kterého v okně nepřišla jediná měřená kontrola, se
-        // vynechá - dřív dostal vymyšlených 100.0 % uptime.
+        // A region with no measured check in the window is left out -
+        // it used to get an invented 100.0 % uptime.
         if ((int)$r['total_count'] <= 0) {
             continue;
         }
@@ -5847,10 +5847,10 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $region_count = count($regions);
 
     // --- Infrastructure Score ---
-    // SSL/DNS souhrn se počítá níže, ale skóre potřebuje počty expirujících/expirovaných certifikátů -
-    // proto se SSL data počítají dřív a skóre až po nich (viz níže po sekci SSL).
+    // --- The SSL/DNS summary is computed below, but the score needs the expiring/expired
+    // certificate counts - so SSL data comes first and the score after it (see below, after the SSL section).
 
-    // --- Nejlepší / nejhorší monitory ---
+    // --- Best / worst monitors ---
     $stmt_worst = $pdo->prepare("
         SELECT m.name, m.type,
                SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -5884,7 +5884,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     });
     $best_monitors = array_slice($best_monitors, 0, 4);
 
-    // --- Agent Health (poslední vps_metrics řádek za monitor v okně) ---
+    // --- Agent Health (the last vps_metrics row per monitor in the window) ---
     $stmt_agent_health = $pdo->prepare("
         SELECT vm.cpu_usage, vm.ram_usage, vm.hdd_usage, m.name, m.cpu_threshold, m.ram_threshold, m.hdd_threshold
         FROM vps_metrics vm
@@ -5899,7 +5899,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $stmt_agent_health->execute([$days]);
     $agent_health = $stmt_agent_health->fetchAll();
 
-    // --- SSL souhrn (poslední check_stages za 'web' monitor v okně) ---
+    // --- SSL summary (the last check_stages per 'web' monitor in the window) ---
     $stmt_ssl = $pdo->prepare("
         SELECT l.check_stages, m.name
         FROM monitor_logs l
@@ -5943,7 +5943,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
     usort($expiring_list, function ($a, $b) { return $a['days_remaining'] <=> $b['days_remaining']; });
 
-    // --- Config change eventy tohoto období (renewed počítáme z eventů, ne z aktuálního stavu) ---
+    // --- Config change events of this period (renewed is counted from events, not the current state) ---
     $stmt_events_summary = $pdo->prepare("
         SELECT event_type, COUNT(*) as cnt
         FROM monitor_events
@@ -5971,11 +5971,11 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $config_change_examples = [];
     foreach ($recent_events as $ev) {
         if ($ev['event_type'] === 'monitor_added') {
-            // monitor_id tu ještě existuje (monitor právě přibyl) - jde proklik.
+            // monitor_id still exists here (the monitor was just added) - the link works.
             $new_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => $ev['monitor_id']];
         } elseif ($ev['event_type'] === 'monitor_removed') {
-            // monitor_id je tu vždycky NULL (ON DELETE SET NULL - monitor už
-            // neexistuje, proto se to vůbec loguje), proklik proto nejde nikdy.
+            // monitor_id is always NULL here (ON DELETE SET NULL - the monitor no
+            // longer exists, which is why this is logged at all), so the link never works.
             $removed_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => null];
         } elseif (in_array($ev['event_type'], ['scheme_upgraded', 'dns_lost', 'dns_recovered', 'cert_renewed', 'agent_connected', 'agent_disconnected'], true)) {
             $config_change_examples[] = $ev['monitor_name'] . ': ' . $ev['description'];
@@ -5983,10 +5983,10 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
     $certs_renewed = $event_counts['cert_renewed'] ?? 0;
 
-    // --- Infrastructure Score (po SSL datech, viz výše) ---
+    // --- Infrastructure Score (after the SSL data, see above) ---
     $score = bk_infra_score($availability, $avg_latency, $incident_count, $certs_expiring, $certs_expired);
 
-    // --- Trendy vs. minulé období ---
+    // --- Trends vs. the previous period ---
     $trend_availability = bk_trend_direction($availability, $prev_snapshot['availability'] ?? null);
     $trend_latency = bk_trend_direction($avg_latency, $prev_snapshot['avg_latency'] ?? null);
     $trend_score = bk_trend_direction($score, $prev_snapshot['score'] ?? null, 1);
@@ -6001,7 +6001,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $dns_health = $total_checks > 0 && count($ssl_rows) > 0 ? round((1 - $dns_failures / count($ssl_rows)) * 100, 1) : 100.0;
     $trend_dns = bk_trend_direction($dns_health, $prev_snapshot['dns_health'] ?? null, 0.5);
 
-    // --- Biggest changes (latence podle regionu vs. uložený snapshot) ---
+    // --- Biggest changes (latency by region vs. the stored snapshot) ---
     $biggest_changes = [];
     $prev_regions = $prev_snapshot['regions'] ?? [];
     foreach ($regions as $r) {
@@ -6020,7 +6020,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     });
     $biggest_changes = array_slice($biggest_changes, 0, 3);
 
-    // --- Performance (nejlepší/nejhorší region podle latence) ---
+    // --- Performance (best/worst region by latency) ---
     $perf_best = null;
     $perf_worst = null;
     foreach ($regions as $r) {
@@ -6029,7 +6029,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         if ($perf_worst === null || $r['avg_latency'] > $perf_worst['avg_latency']) $perf_worst = $r;
     }
 
-    // --- Biggest incident (aproximace: souvislé úseky 'down' řádků, mezera > 15 min = nový incident) ---
+    // --- Biggest incident (approximation: contiguous runs of 'down' rows, a gap > 15 min = a new incident) ---
     $stmt_down = $pdo->prepare("
         SELECT l.monitor_id, m.name, l.checked_at, l.checked_from, l.error_message, m.status as current_status
         FROM monitor_logs l
@@ -6076,7 +6076,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         }
     }
 
-    // --- Doporučení (znovupoužita i jako počet "warnings") ---
+    // --- Recommendations (reused as the "warnings" count too) ---
     $recommendations = [];
     foreach ($expiring_list as $c) {
         if ($c['days_remaining'] <= 0) {
@@ -6093,7 +6093,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     if ($dns_failures > 0) {
         $recommendations[] = sprintf(t('digest_dns_failing'), $dns_failures);
     }
-    // Monitory bez IPv6 (aktuální last_details, jen 'web' typ)
+    // Monitors without IPv6 (current last_details, 'web' type only)
     $stmt_ipv6 = $pdo->query("SELECT name, last_details FROM monitors WHERE type = 'web'");
     foreach ($stmt_ipv6->fetchAll() as $m) {
         $ld = json_decode($m['last_details'] ?? '', true);
@@ -6106,7 +6106,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
     $warning_count = count($recommendations);
 
-    // --- Executive Summary (pravidly generované věty, ne AI) ---
+    // --- Executive Summary (rule-generated sentences, not AI) ---
     $executive_summary = [];
     if ($score >= 95) {
         $executive_summary[] = t('digest_summary_healthy');
@@ -6174,9 +6174,9 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         $data['monthly'] = build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts);
     }
 
-    // --- Uložit snapshot pro příští období (dostupnost, latence, skóre, regiony atd.) ---
-    // Přeskočeno u náhledu (preview) - opakované prohlížení by jinak přepisovalo
-    // srovnávací základ dřív, než reálně proběhne odpovídající období.
+    // --- Store the snapshot for the next period (availability, latency, score, regions, ...) ---
+    // Skipped for previews - repeated viewing would otherwise overwrite the
+    // comparison base before the corresponding period actually runs.
     if ($save_snapshot) {
         $region_latency_map = [];
         foreach ($regions as $r) {
@@ -6191,7 +6191,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             $stmt_snap = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
             $stmt_snap->execute([$snapshot_key, json_encode($new_snapshot, JSON_UNESCAPED_UNICODE)]);
         } catch (PDOException $e) {
-            // Ignorujeme - report se i tak odešle, jen příští trend nebude mít srovnání
+            // Ignored - the report still goes out, only the next trend will lack a comparison
         }
     }
 
@@ -6199,12 +6199,12 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
 }
 
 /**
- * Doplňkové sekce jen pro měsíční report (SLA, nejlepší/nejhorší den, heatmapy, růst).
+ * Extra sections for the monthly report only (SLA, best/worst day, heatmaps, growth).
  */
 function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts) {
     $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
 
-    // Nejlepší/nejhorší den (poměr se dopočítává v PHP, ne v ORDER BY - stejný důvod jako u worst monitors výše)
+    // Best/worst day (the ratio is computed in PHP, not in ORDER BY - same reason as worst monitors above)
     $stmt_days = $pdo->prepare("
         SELECT DATE(checked_at) as d,
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -6225,7 +6225,7 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         if ($worst_day === null || $uptime < $worst_day['uptime']) $worst_day = $entry;
     }
 
-    // Nejlepší/nejhorší region (z už spočtených dat)
+    // Best/worst region (from already computed data)
     $best_region = null;
     $worst_region = null;
     foreach ($regions as $r) {
@@ -6233,7 +6233,7 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         if ($worst_region === null || $r['uptime'] < $worst_region['uptime']) $worst_region = $r;
     }
 
-    // Incident heatmap podle dne v týdnu (agregováno přes celý měsíc)
+    // Incident heatmap by day of week (aggregated over the whole month)
     $stmt_dow = $pdo->prepare("
         SELECT DAYOFWEEK(checked_at) as dow, COUNT(*) as cnt
         FROM monitor_logs
@@ -6241,10 +6241,10 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         GROUP BY DAYOFWEEK(checked_at)
     ");
     $stmt_dow->execute([$days]);
-    // MySQL DAYOFWEEK: 1=neděle..7=sobota -> mapujeme na neutrální klíče mon-sun.
-    // Klíče musí zůstat jazykově neutrální (ne 'Po'/'Út'/...), protože se překlad
-    // řeší až při renderu (render_digest_html) - jinak by přepnutí email_lang na
-    // 'en' muselo měnit i strukturu tohohle pole, ne jen zobrazený popisek.
+    // MySQL DAYOFWEEK: 1=Sunday..7=Saturday -> mapped to neutral mon-sun keys.
+    // The keys must stay language-neutral (not Czech day abbreviations), because translation
+    // happens at render time (render_digest_html) - otherwise switching email_lang
+    // to 'en' would have to change this array's structure, not just the displayed label.
     $dow_map = [2 => 'mon', 3 => 'tue', 4 => 'wed', 5 => 'thu', 6 => 'fri', 7 => 'sat', 1 => 'sun'];
     $incident_heatmap = ['mon' => 0, 'tue' => 0, 'wed' => 0, 'thu' => 0, 'fri' => 0, 'sat' => 0, 'sun' => 0];
     foreach ($stmt_dow->fetchAll() as $row) {
@@ -6252,7 +6252,7 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         if ($label !== null) $incident_heatmap[$label] = (int)$row['cnt'];
     }
 
-    // Latency heatmap - z regionů, obarveno podle pásma
+    // Latency heatmap - from the regions, coloured by band
     $latency_heatmap = [];
     foreach ($regions as $r) {
         if ($r['avg_latency'] === null) continue;
@@ -6260,7 +6260,7 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         $latency_heatmap[] = ['region' => $r['name'], 'ms' => $r['avg_latency'], 'band' => $band];
     }
 
-    // Růst
+    // Growth
     $new_monitors_count = $event_counts['monitor_added'] ?? 0;
     $stmt_new_users = $pdo->prepare("SELECT COUNT(*) FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)");
     $stmt_new_users->execute([$days]);
@@ -6278,13 +6278,13 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
 }
 
 /**
- * Sdílený obal (header/footer/základní styly) pro e-maily infrastructure reportu.
- * Odděleno od šablony upozornění v trigger_notifications() - ta zůstává beze změny.
+ * Shared wrapper (header/footer/base styles) for infrastructure report e-mails.
+ * Separate from the alert template in trigger_notifications() - that one stays unchanged.
  */
 function render_email_wrapper($title, $subtitle, $accent_color, $body_html) {
-    // Veškerý layout je inline (+ reálné <table>), ne v <style> bloku - Gmail,
-    // Outlook a většina webmailů <style>/<head> při doručení ořízne, takže by
-    // e-mail dorazil bez formátování. Viz stejný přístup u trigger_notifications().
+    // The whole layout is inline (+ real <table>), not a <style> block - Gmail,
+    // Outlook and most webmails strip <style>/<head> on delivery, so the e-mail
+    // would arrive unformatted. Same approach as trigger_notifications().
     $font = "font-family: Arial, Helvetica, sans-serif;";
     return '
     <!DOCTYPE html>
@@ -6338,8 +6338,8 @@ function bk_email_stat_box($value, $label) {
 }
 
 /**
- * Obalí několik bk_email_stat_box() buněk do skutečné <table><tr> - e-mailoví
- * klienti CSS "display: table" (dřívější .stat-grid) nerespektují.
+ * Wraps several bk_email_stat_box() cells into a real <table><tr> - e-mail
+ * clients do not respect CSS "display: table" (the former .stat-grid).
  */
 function bk_email_stat_grid($cells_html) {
     return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; margin-bottom:8px;"><tr>' . $cells_html . '</tr></table>';
@@ -6354,9 +6354,9 @@ function bk_email_section($title, $inner_html) {
 }
 
 /**
- * Otevírací <table><thead> pro report-table sekce digestu (nahrazuje dřívější
- * .report-table CSS třídu, kterou e-mailoví klienti ignorují). $headers je pole
- * popisků; první je vlevo, zbytek zarovnaný vpravo (číselné sloupce).
+ * Opening <table><thead> for the digest's report-table sections (replaces the
+ * former .report-table CSS class, which e-mail clients ignore). $headers is an
+ * array of labels; the first sits left, the rest align right (numeric columns).
  */
 function bk_email_report_table_open(array $headers) {
     $th_base = 'padding:7px 10px; color:#888896; font-size:11px; text-transform:uppercase; border-bottom:1px solid #22222f;';
@@ -6390,8 +6390,8 @@ function bk_email_kv($label, $value_html) {
 }
 
 /**
- * Vykreslí kompletní infrastructure report (weekly i monthly) do HTML e-mailu.
- * Struktura odpovídá 4 blokům: Executive Summary / Operational Overview /
+ * Renders the complete infrastructure report (weekly and monthly) into an HTML
+ * e-mail. The structure matches 4 blocks: Executive Summary / Operational Overview /
  * Technical Insights / Recommendations.
  */
 function render_digest_html($data) {
@@ -6423,7 +6423,7 @@ function render_digest_html($data) {
     }
     $body .= '<div style="background-color:#12121a; border-radius:6px; padding:16px 18px; margin-bottom:26px;">' . $exec_html . '</div>';
 
-    // --- Operational Overview: KPI mřížka ---
+    // --- Operational Overview: the KPI grid ---
     $na = t('digest_na');
     $stat_html = bk_email_stat_box(number_format($data['availability'], 3, ',', ' ') . '%', t('digest_stat_availability'))
         . bk_email_stat_box(($data['avg_latency'] !== null ? $data['avg_latency'] . ' ms' : $na), t('digest_stat_latency'))
@@ -6444,7 +6444,7 @@ function render_digest_html($data) {
     }
     $body .= bk_email_section(t('digest_section_trend'), $trend_html);
 
-    // --- Nejlepší / nejhorší monitory ---
+    // --- Best / worst monitors ---
     if (!empty($data['best_monitors']) || !empty($data['worst_monitors'])) {
         $bw_html = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; border-collapse:collapse; font-size:13px; margin-top:4px;"><thead><tr>'
             . '<th style="text-align:left; padding:7px 10px; color:#888896; font-size:11px; text-transform:uppercase; border-bottom:1px solid #22222f;">' . htmlspecialchars(t('digest_col_monitor')) . '</th>'
@@ -6464,7 +6464,7 @@ function render_digest_html($data) {
         $body .= bk_email_section(t('digest_section_best_worst_monitors'), $bw_html);
     }
 
-    // --- Největší změny ---
+    // --- Biggest changes ---
     if (!empty($data['biggest_changes'])) {
         $chg_html = '';
         foreach ($data['biggest_changes'] as $c) {
@@ -6536,7 +6536,7 @@ function render_digest_html($data) {
     }
     $body .= bk_email_section(t('digest_section_performance'), $perf_html);
 
-    // --- Nové / odstraněné servery ---
+    // --- New / removed servers ---
     if (!empty($data['new_servers']) || !empty($data['removed_servers'])) {
         $ns_html = '';
         $site_url = rtrim((string)get_setting('site_url', ''), '/');
@@ -6548,13 +6548,13 @@ function render_digest_html($data) {
             $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . $ns_label . '</div>';
         }
         foreach ($data['removed_servers'] as $s) {
-            // Odstraněný monitor už neexistuje - proklik cíleně nejde (viz build_digest_data()).
+            // A removed monitor no longer exists - the link deliberately does not work (see build_digest_data()).
             $ns_html .= '<div style="color:#ef233c; font-size:13px; padding:3px 0;">- ' . htmlspecialchars($s['name']) . ' <span style="color:#888896;">(' . htmlspecialchars($s['type']) . ')</span></div>';
         }
         $body .= bk_email_section(t('digest_section_new_removed_servers'), $ns_html);
     }
 
-    // --- Změny konfigurace ---
+    // --- Configuration changes ---
     if (!empty($data['config_change_examples'])) {
         $cc_html = '';
         foreach ($data['config_change_examples'] as $c) {
@@ -6587,9 +6587,9 @@ function render_digest_html($data) {
             $body .= bk_email_section(t('digest_section_best_worst_region'), $reg2_html);
         }
 
-        // Incident heatmap - barevné buňky tabulky (email klienti neumí CSS grid).
-        // $day je neutrální klíč (mon/tue/...) z build_monthly_digest_extras() -
-        // zobrazený popisek se překládá až tady přes digest_day_*.
+        // Incident heatmap - coloured table cells (e-mail clients cannot do CSS grid).
+        // $day is the neutral key (mon/tue/...) from build_monthly_digest_extras() -
+        // the displayed label is translated only here via digest_day_*.
         $hm_html = '<table style="width:100%; border-collapse:collapse;"><tr>';
         foreach ($mo['incident_heatmap'] as $day => $cnt) {
             $bgcolor = $cnt === 0 ? '#1ec773' : ($cnt <= 2 ? '#f39c12' : '#ef233c');
@@ -6598,7 +6598,7 @@ function render_digest_html($data) {
         $hm_html .= '</tr></table>';
         $body .= bk_email_section(t('digest_section_incident_heatmap'), $hm_html);
 
-        // Latency heatmap - jeden řádek na region
+        // Latency heatmap - one row per region
         if (!empty($mo['latency_heatmap'])) {
             $lhm_html = '<table style="width:100%; border-collapse:collapse;">';
             foreach ($mo['latency_heatmap'] as $lh) {
@@ -6636,11 +6636,11 @@ function render_digest_html($data) {
 }
 
 function send_digest_report_inner($pdo, $period = 'weekly') {
-    // Data jsou jazykově neutrální a staví se jednou; jazyk se uplatní až
-    // při renderu HTML - jednou na každý jazyk mezi příjemci.
+    // The data is language-neutral and built once; the language applies only at
+    // HTML render time - once per language among the recipients.
     $data = build_digest_data($pdo, $period);
 
-    // Příjemci - všichni administrátoři se zadaným e-mailem, včetně jejich jazyka
+    // Recipients - all administrators with an e-mail set, including their language
     $stmt_admins = $pdo->query("SELECT email, email_lang FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
     $admins = $stmt_admins->fetchAll();
     if (empty($admins)) {
@@ -6672,7 +6672,7 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
 }
 
 /**
- * Převod dvoumístného kódu země (např. CZ, DE) na emoji vlaječku
+ * Converts a two-letter country code (e.g. CZ, DE) to an emoji flag
  */
 function get_country_emoji($country_code) {
     $code = strtoupper($country_code);
@@ -6683,7 +6683,7 @@ function get_country_emoji($country_code) {
 }
 
 /**
- * Automatická detekce geografické lokace a ASN serveru přes veřejné API
+ * Automatic detection of the server's geographic location and ASN via a public API
  */
 function detect_server_location() {
     if (!function_exists('curl_init')) {
@@ -6724,7 +6724,7 @@ function detect_server_location() {
 }
 
 /**
- * Kontrola cPanel status endpointu a načtení statistik
+ * Checks the cPanel status endpoint and loads the statistics
  */
 function check_cpanel($url, $timeout = 5) {
     $start = microtime(true);
@@ -6771,7 +6771,7 @@ function check_cpanel($url, $timeout = 5) {
                     'bandwidth' => $data['bandwidth'] ?? null,
                     'postgresql' => $data['postgresql'] ?? null,
                     // cpanel_stats.php exportuje i cpuusage (uapi StatsBar) - bez
-                    // tohohle passthrough cron četl $cp_res['cpu'] vždy jako null
+                    // without this passthrough cron always read $cp_res['cpu'] as null
                     // a do vps_metrics zapisoval CPU trvale 0.0.
                     'cpu' => $data['cpu'] ?? null
                 ];
@@ -6900,11 +6900,11 @@ function bk_totp_verify_code($secret, $code, $discrepancy = 1) {
 }
 
 /**
- * Vykreslí kartu pro zapnutí/vypnutí 2FA na vlastním účtu (Profil administrátora
- * i běžného uživatele - obě sdílí tuhle jednu implementaci). QR kód se generuje
- * čistě na klientovi (knihovna qrcode z CDN) - secret se tak nikdy neposílá žádné třetí
- * straně jako u veřejných QR-generátorových API, jen zůstává v odpovědi vlastní
- * autentizované stránky.
+ * Renders the card for enabling/disabling 2FA on one's own account (the admin
+ * and regular-user Profile share this one implementation). The QR code is
+ * generated purely client-side (the qrcode CDN library) - the secret is thus never
+ * sent to any third party like with public QR-generator APIs, it only stays in the
+ * response of one's own authenticated page.
  */
 function bk_render_totp_section($me, $site_title) {
     $html = '<div class="admin-card" id="totp-section">'
@@ -6923,7 +6923,7 @@ function bk_render_totp_section($me, $site_title) {
         $account = rawurlencode($me['username'] ?? 'admin');
         $otpauth_uri = "otpauth://totp/{$issuer}:{$account}?secret={$secret}&issuer={$issuer}&algorithm=SHA1&digits=6&period=30";
 
-        // Verze BK_CDN_QRCODE (viz konstanty na začátku souboru).
+        // The BK_CDN_QRCODE version (see the constants at the top of the file).
         $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Naskenujte QR kód v autentikační aplikaci (např. Proton Pass) a potvrďte 6místným kódem.</p>'
             . '<canvas id="totp-qr" style="margin: 0.75rem 0; background: #fff; padding: 8px; border-radius: 6px;"></canvas>'
             . '<p style="font-size: 0.75rem; color: var(--text-muted);">Nebo zadejte ručně: <code style="user-select: all;">' . htmlspecialchars($secret) . '</code></p>'
@@ -6945,9 +6945,9 @@ function bk_render_totp_section($me, $site_title) {
 }
 
 /**
- * Vykreslí kartu propojených OAuth účtů (Profil) - jen jeden poskytovatel
- * najednou (schema má jediný oauth_provider/oauth_id sloupec na uživatele).
- * Propojení jde jen skrz link_oauth (viz admin.php), nikdy podle e-mailu.
+ * Renders the linked OAuth accounts card (Profile) - only one provider at a
+ * time (the schema has a single oauth_provider/oauth_id column pair per user).
+ * Linking goes only through link_oauth (see admin.php), never by e-mail.
  */
 function bk_render_oauth_section($me) {
     $providers = bk_oauth_providers();
@@ -6981,11 +6981,11 @@ function bk_render_oauth_section($me) {
 }
 
 /**
- * CSRF ochrana (synchronizer token pattern) - jeden token na session, líné
- * vygenerování při první potřebě. bk_csrf_field() se vkládá do každého
- * <form>, bk_csrf_check() se volá na začátku každého handleru, co mění stav
- * (mazání, přepínání, odesílání e-mailů...). Čtecí/needitující akce (login
- * formulář samotný, logout, náhledy, prefill editace) token nepotřebují.
+ * CSRF protection (synchronizer token pattern) - one token per session, lazily
+ * generated on first need. bk_csrf_field() goes into every <form>,
+ * bk_csrf_check() is called at the start of every state-changing handler
+ * (deleting, toggling, sending e-mails...). Read-only actions (the login form
+ * itself, logout, previews, edit prefills) need no token.
  */
 function bk_csrf_token() {
     if (empty($_SESSION['csrf_token'])) {
@@ -7007,10 +7007,10 @@ function bk_csrf_check() {
 }
 
 /**
- * Zápis do audit logu - kdo/kdy/co. $actor_user_id/$actor_username se berou
- * ze session, pokud nejsou předané explicitně (potřeba jen pro neúspěšný
- * login, kde přihlášený uživatel ještě neexistuje). Nikdy nevyhazuje výjimku
- * ven - audit log nesmí shodit samotnou akci, kterou zaznamenává.
+ * Audit log write - who/when/what. $actor_user_id/$actor_username come from
+ * the session unless passed explicitly (needed only for a failed login,
+ * where no logged-in user exists yet). Never lets an exception escape -
+ * the audit log must not bring down the very action it records.
  */
 function bk_audit_log($pdo, $action, $description = '', $target_type = null, $target_id = null, $actor_user_id = null, $actor_username = null) {
     if ($actor_user_id === null && isset($_SESSION['admin_id'])) {
@@ -7019,31 +7019,31 @@ function bk_audit_log($pdo, $action, $description = '', $target_type = null, $ta
     if ($actor_username === null && isset($_SESSION['admin_username'])) {
         $actor_username = $_SESSION['admin_username'];
     }
-    // Skutečná IP návštěvníka, ne adresa Cloudflare - viz bk_client_ip().
+    // The visitor's real IP, not Cloudflare's address - see bk_client_ip().
     $ip = bk_client_ip();
     $ua = bk_client_user_agent();
     try {
         $stmt = $pdo->prepare("INSERT INTO audit_log (actor_user_id, actor_username, action, target_type, target_id, description, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([$actor_user_id, $actor_username, $action, $target_type, $target_id, $description, $ip, $ua]);
     } catch (PDOException $e) {
-        // Tabulka ještě neexistuje nebo DB chyba - audit log je best-effort, nesmí shodit hlavní akci
+        // Table missing yet or DB error - the audit log is best-effort and must not kill the main action
     }
 }
 
 /**
  * Rate limiting / lockout pro login.
- * Vrací počet zbývajících sekund lockoutu (0 = není zamčeno).
- * Limit: 5 neúspěšných pokusů za 15 minut → lockout 15 minut.
+ * Returns the remaining lockout seconds (0 = not locked).
+ * Limit: 5 failed attempts in 15 minutes -> a 15-minute lockout.
  */
 function bk_login_lockout_seconds($pdo, $username) {
     $max_attempts = 5;
     $window_min = 15;
     $lockout_min = 15;
-    // Bez skutečné IP by se zamykání opíralo o adresu Cloudflare, tedy
-    // o hodnotu společnou všem návštěvníkům z téhož edge uzlu.
+    // Without the real IP the lockout would key on Cloudflare's address, i.e.
+    // a value shared by every visitor from the same edge node.
     $ip = bk_client_ip() ?? '';
     try {
-        // Počet neúspěšných pokusů pro toto jméno NEBO tuto IP v posledním okně
+        // Failed attempts for this name OR this IP within the window
         $stmt = $pdo->prepare("
             SELECT COUNT(*) FROM audit_log
             WHERE action = 'login_failed'
@@ -7054,7 +7054,7 @@ function bk_login_lockout_seconds($pdo, $username) {
         $attempts = (int)$stmt->fetchColumn();
         if ($attempts < $max_attempts) return 0;
 
-        // Najít čas posledního neúspěšného pokusu → od něj běží lockout
+        // Find the last failed attempt's time -> the lockout runs from it
         $stmt2 = $pdo->prepare("
             SELECT created_at FROM audit_log
             WHERE action = 'login_failed'
@@ -7074,10 +7074,10 @@ function bk_login_lockout_seconds($pdo, $username) {
 }
 
 /**
- * Samostatná stránka s posledními záznamy audit logu (kdo/kdy/co) - jen pro
- * admina, read-only (žádný CSRF token potřeba). Vlastní shell místo napojení
- * na hlavní admin.php šablonu, aby to nezáviselo na proměnných z hlavního
- * requestu (stejný přístup jako bk_render_setup_wizard()).
+ * A standalone page with the latest audit log records (who/when/what) - admin
+ * only, read-only (no CSRF token needed). Its own shell instead of hooking into
+ * the main admin.php template, so it does not depend on the main request's
+ * variables (same approach as bk_render_setup_wizard()).
  */
 function bk_render_audit_log_page($pdo, $site_title) {
     $page = max(1, (int)($_GET['page'] ?? 1));
@@ -7151,10 +7151,10 @@ function bk_render_audit_log_page($pdo, $site_title) {
 }
 
 /**
- * Vygeneruje token na nastavení hesla (pozvánka nového uživatele i zapomenuté
- * heslo sdílí tenhle mechanismus) - do DB se ukládá jen sha256 hash tokenu,
- * ne token samotný, aby ho případný únik DB dumpu nešel rovnou použít. Vrací
- * SUROVÝ token pro sestavení odkazu v e-mailu.
+ * Generates a password-setup token (new-user invitations and forgotten
+ * passwords share this mechanism) - only the token's sha256 hash is stored in
+ * the DB, not the token itself, so a leaked DB dump cannot be used directly.
+ * Returns the RAW token for building the e-mail link.
  */
 function bk_issue_password_reset_token($pdo, $user_id, $ttl_seconds = 172800) {
     $raw_token = bin2hex(random_bytes(32));
@@ -7166,9 +7166,9 @@ function bk_issue_password_reset_token($pdo, $user_id, $ttl_seconds = 172800) {
 }
 
 /**
- * Absolutní URL na aktuální admin.php odvozená z requestu - stejný přístup
- * jako u OAuth redirect_uri. Na rozdíl od digest e-mailů (cron, žádný request)
- * tady vždycky běžíme uvnitř HTTP requestu, takže site_url setting není potřeba.
+ * Absolute URL of the current admin.php derived from the request - same
+ * approach as the OAuth redirect_uri. Unlike digest e-mails (cron, no request)
+ * this always runs inside an HTTP request, so the site_url setting is not needed.
  */
 function bk_current_admin_url() {
     $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
@@ -7176,19 +7176,19 @@ function bk_current_admin_url() {
 }
 
 /**
- * Vystaví token pro obnovu hesla a pošle na e-mail odkaz.
+ * Issues a password reset token and e-mails the link.
  *
- * Vzniklo vytažením z bk_render_forgot_password_page(), aby totéž mohlo dělat
- * i API pro React - tam se dosud volala akce `forgot_password`, která v api.php
- * vůbec nebyla. Uživatel dostal 200, aplikace napsala „návod byl odeslán" a
- * žádný e-mail nikdy nepřišel.
+ * Extracted from bk_render_forgot_password_page() so the React API path could
+ * do the same - it used to call a `forgot_password` action that did not exist
+ * in api.php at all. The user got a 200, the app said "instructions sent",
+ * and no e-mail ever arrived.
  *
- * Odkaz míří vždycky na admin.php, i když request běží nad api.php: stránku
- * pro nastavení hesla obsluhuje administrace.
+ * The link always points to admin.php even when the request runs through
+ * api.php: the password-setup page is served by the admin.
  *
- * @return bool Jestli e-mail odpovídal existujícímu účtu. Volající to NESMÍ
- *              prozradit ven - jinak jde formulářem zjišťovat, kdo je
- *              zaregistrovaný.
+ * @return bool Whether the e-mail matched an existing account. The caller MUST
+ *              NOT reveal it - otherwise the form can probe who is registered.
+ *
  */
 function bk_password_reset_request(PDO $pdo, string $email, string $site_title): bool {
     $email = trim($email);
@@ -7205,8 +7205,8 @@ function bk_password_reset_request(PDO $pdo, string $email, string $site_title):
 
     $raw_token = bk_issue_password_reset_token($pdo, $user['id'], 7200);
 
-    // Odkaz míří do React aplikace. Stará adresa admin.php?action=set_password
-    // zůstává funkční kvůli e-mailům, které už odešly.
+    // The link points into the React app. The old admin.php?action=set_password
+    // address keeps working for e-mails already sent.
     $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
     $set_link = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . '/app/set-password?token=' . $raw_token;
 
@@ -7223,16 +7223,16 @@ function bk_password_reset_request(PDO $pdo, string $email, string $site_title):
 }
 
 /**
- * "Zapomenuté heslo" - formulář na zadání e-mailu + odeslání odkazu. Odpověď
- * je vždy stejná bez ohledu na to, jestli e-mail v systému existuje, jinak by
- * šel formulář zneužít k ověřování, které e-maily jsou zaregistrované.
+ * "Forgotten password" - the e-mail form + sending the link. The response is
+ * always the same whether the e-mail exists or not, otherwise the form could
+ * be abused to verify which e-mails are registered.
  */
 function bk_render_forgot_password_page($pdo, $site_title) {
     $sent = false;
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['forgot_password_request'])) {
         bk_csrf_check();
-        // Vlastní odeslání je v bk_password_reset_request(), aby totéž uměla
-        // i API cesta pro React a text e-mailu existoval jen na jednom místě.
+        // The actual sending lives in bk_password_reset_request() so the React
+        // API path can do the same and the e-mail text exists in one place only.
         bk_password_reset_request($pdo, trim($_POST['email'] ?? ''), $site_title);
         $sent = true;
     }
@@ -7258,9 +7258,9 @@ function bk_render_forgot_password_page($pdo, $site_title) {
 }
 
 /**
- * Nastavení hesla přes e-mailový odkaz - slouží pro pozvánku nového uživatele
- * (viz save_user v admin.php) i zapomenuté heslo (viz výše). Token dokazuje
- * vlastnictví e-mailu, ne totožnost jinak.
+ * Password setup via an e-mail link - serves both the new-user invitation
+ * (see save_user in admin.php) and the forgotten password (see above). The
+ * token proves e-mail ownership, nothing else about identity.
  */
 function bk_render_set_password_page($pdo, $site_title) {
     $raw_token = trim($_GET['token'] ?? $_POST['token'] ?? '');
@@ -7323,11 +7323,11 @@ function bk_render_set_password_page($pdo, $site_title) {
 }
 
 /**
- * Vynucený setup wizard po čerstvé instalaci - 3 kroky (účet, cron_key,
- * základy webu), po dokončení nastaví jediný zdroj pravdy setup_completed
- * v settings. admin.php volá tuhle funkci a rovnou ukončuje request, dokud
- * flag není '1' - žádná jiná admin akce se dřív neprovede (viz volání níže).
- * Nahrazuje dřívější porovnávání natvrdo psaného hashe hesla v security banneru.
+ * The forced setup wizard after a fresh install - 3 steps (account, cron_key,
+ * site basics); on completion it sets the single source of truth
+ * setup_completed in settings. admin.php calls this function and ends the
+ * request outright until the flag is '1' - no other admin action runs first
+ * (see the call below). Replaces the former hardcoded password-hash comparison in the security banner.
  */
 function bk_render_setup_wizard($pdo, $me) {
     $step = (int)($_GET['step'] ?? 1);
@@ -7435,7 +7435,7 @@ function bk_render_setup_wizard($pdo, $me) {
 }
 
 /**
- * Odeslání Push notifikace přes Pushover API
+ * Sends a push notification via the Pushover API
  */
 function send_pushover_alert($user_key, $api_token, $title, $message, $priority = 0) {
     if (empty($user_key) || empty($api_token)) return false;
@@ -7451,7 +7451,7 @@ function send_pushover_alert($user_key, $api_token, $title, $message, $priority 
 }
 
 /**
- * Odeslání události přes PagerDuty Events v2 API
+ * Sends an event via the PagerDuty Events v2 API
  */
 function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Blood Kings Monitoring') {
     if (empty($routing_key)) return false;
@@ -7469,7 +7469,7 @@ function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Bl
 }
 
 /**
- * Převede počet bajtů na lidsky čitelný formát (např. 188.22 GB, 3.62 TB).
+ * Converts a byte count to a human-readable format (e.g. 188.22 GB, 3.62 TB).
  */
 function bk_format_bytes_cz($bytes) {
     $bytes = (float)$bytes;
@@ -7481,7 +7481,7 @@ function bk_format_bytes_cz($bytes) {
 }
 
 /**
- * Převede počet paketů na lidsky čitelný formát (např. 707M Pkts, 2.57B Pkts).
+ * Converts a packet count to a human-readable format (e.g. 707M Pkts, 2.57B Pkts).
  */
 function bk_format_packets_cz($cnt) {
     $cnt = (float)$cnt;
@@ -7492,7 +7492,7 @@ function bk_format_packets_cz($cnt) {
 }
 
 /**
- * Získá kumulativní přenesená data (RX/TX bajty a pakety) pro všechna rozhraní daného monitoru pro různá období.
+ * Fetches cumulative transferred data (RX/TX bytes and packets) for all of a monitor's interfaces over several periods.
  */
 function bk_get_interface_traffic_stats($pdo, $monitor_id) {
     $result = [];
@@ -7556,54 +7556,14 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
     return $result;
 }
 
-/**
- * ASN lookup přes Team Cymru DNS (origin.asn.cymru.com) - žádná externí
- * HTTP API: jeden TXT dotaz z hostingu, který ven nese jen IP, na kterou
- * se ptáme (a tu už server stejně zná z REMOTE_ADDR agenta). Privátní
- * rozsahy se nedotazují vůbec.
- * Vrací [asn ("AS12345"|null), jméno sítě (string|null)].
- */
-function bk_lookup_asn(string $ip): array {
-    try {
-        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-            return [null, null];
-        }
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            $q = implode('.', array_reverse(explode('.', $ip))) . '.origin.asn.cymru.com';
-        } else {
-            $hex = bin2hex(inet_pton($ip));
-            $q = implode('.', array_reverse(str_split($hex))) . '.origin6.asn.cymru.com';
-        }
-        $rec = @dns_get_record($q, DNS_TXT);
-        if (empty($rec[0]['txt'])) {
-            return [null, null];
-        }
-        // "23033 | 85.195.64.0/18 | CZ | ripencc | 2004-04-05"
-        $parts = array_map('trim', explode('|', $rec[0]['txt']));
-        $asn_num = preg_replace('/[^0-9].*$/', '', $parts[0] ?? '');
-        if ($asn_num === '') {
-            return [null, null];
-        }
-        $asn_name = null;
-        $rec2 = @dns_get_record("AS{$asn_num}.asn.cymru.com", DNS_TXT);
-        if (!empty($rec2[0]['txt'])) {
-            // "23033 | CZ | ripencc | 2004-04-05 | WEDOS, CZ"
-            $p2 = array_map('trim', explode('|', $rec2[0]['txt']));
-            $asn_name = $p2[count($p2) - 1] ?? null;
-        }
-        return ['AS' . $asn_num, $asn_name];
-    } catch (Throwable $e) {
-        return [null, null];
-    }
-}
 
 /**
- * Zápis výsledku agent-side kontroly do monitoru typu 'agent_service'.
+ * Writes an agent-side check result into an 'agent_service' monitor.
  *
- * Služby na privátní síti (kresd na routeru, MQTT broker na LAN) hosting
- * nikdy nedosáhne - kontrolu proto dělá agent přímo na stroji a server tu
- * jen poctivě zaznamená výsledek: přechod stavu, log BEZ response_time
- * (agent neměří latenci, nula by byla vymyšlená) a notifikaci při změně.
+ * Private-network services (kresd on the router, an MQTT broker on the LAN)
+ * are forever unreachable from the hosting - so the agent checks them right
+ * on the machine and the server just honestly records the result: the status
+ * transition, a log WITHOUT response_time (the agent measures no latency, a zero would be invented) and a notification on change.
  */
 function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, string $detail): void {
     $new_status = $running ? 'up' : 'down';
@@ -7615,8 +7575,8 @@ function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, 
         $stmt->execute([$new_status, $svc_monitor['id']]);
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
         $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
-        // Notifikace jen pro reálné up/down přechody; přechod z 'unknown'
-        // na 'up' při prvním výsledku nikoho budit nemusí.
+        // Notify only on real up/down transitions; the first result's
+        // 'unknown' -> 'up' need not wake anyone.
         if (in_array($old_status, ['up', 'down'], true) || $new_status === 'down') {
             trigger_notifications($pdo, $svc_monitor, $new_status, (string)$error_msg);
         }
@@ -7629,24 +7589,24 @@ function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, 
 }
 
 /**
- * Validace cíle monitoru importovaného ze Service Discovery.
+ * Validates the target of a monitor imported from Service Discovery.
  *
- * Cíl pochází od AGENTA (discovery payload i hostname fallback) - tedy od
- * nižší úrovně důvěry než admin, který import jen odklikává. Kontroly navíc
- * běží z webhostingu: loopback, privátní a link-local rozsahy odsud nikdy
- * nejsou dosažitelné, takže by kontrola jen věčně selhávala a mířila do
- * vnitřní sítě poskytovatele hostingu. Ruční tvorba monitoru přes admin
- * (save_monitor) zůstává bez tohoto omezení - admin je plně důvěryhodný.
+ * The target comes from the AGENT (both the discovery payload and the hostname
+ * fallback) - a lower trust level than the admin who merely confirms the
+ * import. The checks also run from the webhosting: loopback, private and
+ * link-local ranges are never reachable from there, so the check would fail
+ * forever while aiming into the hosting provider's internal network. Manual
+ * monitor creation via the admin (save_monitor) stays unrestricted - the admin is fully trusted.
  *
- * Vrací text chyby pro uživatele, nebo null, když je cíl v pořádku.
+ * Returns an error text for the user, or null when the target is fine.
  */
 function bk_validate_import_target(string $target): ?string {
     $host = trim($target);
-    // Případná URL (web služby) - zajímá nás jen host.
+    // A possible URL (web service) - only the host matters.
     if (preg_match('#^[a-z][a-z0-9+.-]*://([^/]+)#i', $host, $m)) {
         $host = $m[1];
     }
-    // Oddělení portu: [ipv6]:port, host:port. Holé IPv6 (víc dvojteček) se nechává být.
+    // Port separation: [ipv6]:port, host:port. Bare IPv6 (more colons) is left alone.
     if ($host !== '' && $host[0] === '[') {
         if (preg_match('/^\[([^\]]+)\](?::\d+)?$/', $host, $m)) {
             $host = $m[1];
@@ -7680,22 +7640,22 @@ function bk_validate_import_target(string $target): ?string {
 }
 
 /**
- * Propojí a sloučí detaily z agenta (ts3_process, discovered_services, top_cpu_processes, interfaces atd.)
- * pro libovolný monitor (např. TeamSpeak, Minecraft, Web), i když uživatel ručně nenastavil asset_id.
+ * Links and merges agent details (ts3_process, discovered_services, top_cpu_processes, interfaces, ...)
+ * for any monitor (e.g. TeamSpeak, Minecraft, Web), even when the user never set an asset_id manually.
  */
 /**
- * Detekce výpadků SBĚRU dat pro jeden monitor - ne výpadků služby samotné.
- * Zásada (2026-08-05, po dvou týdnech neviditelně mrtvého cpanel sběru):
- * když se data přestanou sbírat, frontend musí řvát, ne tiše nic neukazovat.
- * Vrací pole položek {type, message, since}; prázdné pole = sběr zdravý.
- * Sdílené mezi api.php (React SPA) a index.php (veřejná status stránka).
+ * Detection of data COLLECTION outages for one monitor - not outages of the service.
+ * The principle (2026-08-05, after two weeks of invisibly dead cpanel collection):
+ * when data stops being collected, the frontend must scream, not silently show nothing.
+ * Returns items {type, message, since}; an empty array = collection healthy.
+ * Shared between api.php (React SPA) and index.php (the public status page).
  */
 function bk_get_collection_issues(array $monitor_row, array $details, int $agent_offline_timeout_secs = 3000): array {
     $issues = [];
     $status = strtolower($monitor_row['status'] ?? '');
 
-    // 1. Selhávající sběr cPanel statistik (zapisuje cron.php při každém
-    //    neúspěšném check_cpanel; klíč nese i důvod a začátek výpadku).
+    // 1. Failing cPanel stats collection (written by cron.php on every failed
+    //    check_cpanel; the key carries the reason and the outage start too).
     if (!empty($details['cpanel_stats_error']) && is_array($details['cpanel_stats_error'])) {
         $issues[] = [
             'type' => 'cpanel_stats',
@@ -7705,8 +7665,8 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
         ];
     }
 
-    // 2. Agent přestal hlásit (agent_last_seen starší než offline timeout).
-    //    Jen pro monitory, které někdy agenta měly - jinak by řval každý web.
+    // 2. The agent stopped reporting (agent_last_seen older than the offline
+    //    timeout). Only for monitors that ever had an agent - otherwise every web would scream.
     $agent_last_seen = (int)($details['agent_last_seen'] ?? 0);
     if ($agent_last_seen > 0 && (time() - $agent_last_seen) > $agent_offline_timeout_secs) {
         $issues[] = [
@@ -7716,8 +7676,8 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
         ];
     }
 
-    // 3. Kontroly samotné neběží (mrtvý cron pro tento monitor). Pauza a
-    //    údržba jsou legitimní stavy bez kontrol - ty se nehlásí.
+    // 3. The checks themselves are not running (dead cron for this monitor).
+    //    Pause and maintenance are legitimate no-check states - not reported.
     if (!in_array($status, ['paused', 'maintenance'], true) && !empty($monitor_row['last_checked'])) {
         $last_checked_ts = strtotime($monitor_row['last_checked']);
         if ($last_checked_ts && (time() - $last_checked_ts) > 15 * 60) {
@@ -7741,7 +7701,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
     $target = trim($monitor['target'] ?? '');
     $sib_details_raw = null;
 
-    // 1. Zkusit párování přes asset_id (pokud je nastaven)
+    // 1. Try matching via asset_id (when set)
     if (!empty($asset_id)) {
         try {
             $stmt = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL AND agent_key IS NOT NULL AND agent_key != '' LIMIT 1");
@@ -7750,22 +7710,22 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
         } catch (Exception $e) {}
     }
 
-    // 2. Zkusit párování přes Target IP / Hostname
+    // 2. Try matching via the target IP / hostname
     if (!$sib_details_raw && !empty($target)) {
         try {
             $host_or_ip = parse_url($target, PHP_URL_HOST) ?: $target;
 
-            // DNS dotaz jen tehdy, když cíl vůbec vypadá jako adresa.
+            // A DNS query only when the target looks like an address at all.
             //
-            // U agentových monitorů bývá v `target` lidský popisek - třeba
-            // "Turris - domov". gethostbyname() se ho přesto pokusí přeložit
-            // a čeká na timeout resolveru: na produkci to dělalo šest sekund
-            // při každém vykreslení, a to synchronně uprostřed stránky.
-            // Detail toho monitoru se tím protáhl na osm sekund, zatímco
-            // ostatní se vykreslovaly do jedné.
+            // Agent monitors tend to carry a human label in `target` - e.g.
+            // "Turris - domov". gethostbyname() tries to resolve it anyway and
+            // waits for the resolver timeout: six seconds per render in
+            // production, synchronously in the middle of the page. That
+            // monitor's detail stretched to eight seconds while the others
+            // rendered within one.
             //
-            // gethostbyname() navíc při neúspěchu vrací vstup beze změny,
-            // takže se tímhle o nic nepřichází - jen se nečeká.
+            // gethostbyname() moreover returns its input unchanged on failure,
+            // so nothing is lost this way - only the wait goes away.
             $looks_like_address = filter_var($host_or_ip, FILTER_VALIDATE_IP) !== false
                 || preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i', $host_or_ip) === 1;
             $resolved_ip = $looks_like_address ? gethostbyname($host_or_ip) : $host_or_ip;
@@ -7781,7 +7741,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
         } catch (Exception $e) {}
     }
 
-    // 3. Pro TeamSpeak: Pokud stále nemáme ts3_process, najít LIBOVOLNÉHO agenta, který hlásí aktivní ts3_process
+    // 3. For TeamSpeak: if ts3_process is still missing, find ANY agent reporting an active ts3_process
     if (!$sib_details_raw && ($monitor['type'] ?? '') === 'teamspeak') {
         try {
             $stmt = $pdo->prepare("
@@ -7796,7 +7756,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
         } catch (Exception $e) {}
     }
 
-    // 4. Pokud jsme našli detaily agenta, doplníme chybějící položky do $details
+    // 4. When agent details were found, fill the gaps in $details
     if ($sib_details_raw) {
         $sib_det = json_decode($sib_details_raw, true);
         if (is_array($sib_det)) {

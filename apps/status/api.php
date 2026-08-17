@@ -2,7 +2,7 @@
 /**
  * Blood Kings - Public Status & SPA API
  * 
- * Poskytuje živý stav herních serverů, webů, uzlů a uživatelů z MySQL databáze.
+ * Serves the live status of game servers, websites, nodes and users from the MySQL database.
  */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -11,11 +11,11 @@ $request_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? '
 $host = $_SERVER['HTTP_HOST'] ?? 'bloodkings.eu';
 $default_origin = $request_scheme . '://' . $host;
 
-// CORS: dřív se sem odrážel JAKÝKOLIV Origin i s Allow-Credentials: true -
-// důvěrnost všech přihlášených odpovědí pak držela jen na SameSite=Lax
-// atributu cookie. Povolený je výhradně vlastní origin (SPA i legacy stránky
-// běží na téže doméně jako API); cizímu originu se hlavičky nepošlou vůbec
-// a prohlížeč mu odpověď nevydá.
+// CORS: ANY Origin used to be reflected here, with Allow-Credentials: true -
+// the confidentiality of every authenticated response then rested solely on
+// the cookie's SameSite=Lax attribute. Only the site's own origin is allowed
+// (the SPA and the legacy pages run on the same domain as the API); a foreign
+// origin gets no headers at all and the browser withholds the response from it.
 $origin = (string)($_SERVER['HTTP_ORIGIN'] ?? '');
 $bk_host_no_port = strtolower(explode(':', (string)$host)[0]);
 $bk_allowed_origins = [
@@ -68,17 +68,17 @@ if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SE
 }
 
 /**
- * Write guard: každá stav měnící akce musí přijít jako POST a každý
- * session-autentizovaný zápis musí nést CSRF token session (hlavička
- * X-CSRF-Token, u multipart formulářů pole csrf_token).
+ * Write guard: every state-changing action must arrive as POST, and every
+ * session-authenticated write must carry the session's CSRF token
+ * (X-CSRF-Token header, csrf_token field for multipart forms).
  *
- * Do této chvíle byla jedinou cross-site ochranou SameSite=Lax na cookie -
- * jediný atribut mezi "bezpečné" a "každý web smí volat adminské akce".
- * A protože Lax cookie POSÍLÁ při top-level GET navigaci, akce čtoucí
- * parametry z $_GET (send_digest) šly spustit obyčejným odkazem.
+ * Until now the only cross-site protection was SameSite=Lax on the cookie -
+ * a single attribute between "safe" and "any website may call admin actions".
+ * And because a Lax cookie IS sent on top-level GET navigation, actions reading
+ * parameters from $_GET (send_digest) could be fired by a plain link.
  */
 $bk_post_only_actions = [
-    // session-autentizované zápisy (vyžadují i CSRF)
+    // session-authenticated writes (these also require CSRF)
     'save_monitor', 'delete_monitor', 'import_discovered_service', 'upload_logo',
     'trigger_remote_action', 'convert_to_agent_check', 'save_settings',
     'generate_metrics_token', 'incident_action', 'create_incident',
@@ -86,11 +86,11 @@ $bk_post_only_actions = [
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
     'save_annotation', 'save_user', 'delete_user',
-    // session teprve zakládají / autentizují se jinak než cookie - POST ano, CSRF ne
+    // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
     'login', 'logout', 'setup', 'forgot_password', 'set_password',
 ];
 $bk_csrf_exempt = ['login', 'logout', 'setup', 'forgot_password', 'set_password'];
-// alerts_read_state a dashboard_layout jsou GET čtení + POST zápis v jedné akci.
+// alerts_read_state and dashboard_layout are GET read + POST write in one action.
 $bk_csrf_on_post = array_merge(
     array_values(array_diff($bk_post_only_actions, $bk_csrf_exempt)),
     ['alerts_read_state', 'dashboard_layout']
@@ -110,13 +110,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $bk_csrf_on_post,
     }
 }
 
-// 1. Kontrola stavu relace (přihlášení z admin.php / PHP session)
+// 1. Session state check (login from admin.php / PHP session)
 if ($action === 'session') {
     $is_logged_in = !empty($_SESSION['admin_logged_in']);
     $user = null;
     if ($is_logged_in) {
-        // E-mail se dřív vracel natvrdo jako 'admin@bloodkings.eu' bez ohledu
-        // na to, kdo je přihlášený. Kdo měl jiný, viděl cizí adresu jako svou.
+        // The e-mail used to be hardcoded as 'admin@bloodkings.eu' regardless
+        // of who was logged in. Anyone else saw a stranger's address as their own.
         $u_email = null;
         $u_totp = null;
         try {
@@ -134,24 +134,24 @@ if ($action === 'session') {
         $user = [
             'id' => $_SESSION['admin_id'] ?? 1,
             'username' => $_SESSION['admin_username'] ?? 'admin',
-            // NULL = adresu neznáme; vymyslet ji je horší než ji neukázat.
+            // NULL = address unknown; inventing one is worse than not showing it.
             'email' => $u_email,
             'role' => $_SESSION['admin_role'] ?? 'admin',
-            // NULL = nepodařilo se zjistit; false by tvrdilo "vypnuto".
+            // NULL = could not determine; false would claim "disabled".
             'totpEnabled' => $u_totp,
         ];
     }
 
-    // `installed` aplikace čte, aby poznala, jestli má nabídnout založení
-    // prvního účtu, nebo přihlášení. Dosud se neposílalo vůbec, takže React
-    // zůstával na výchozím `true` a průvodce instalací byl nedosažitelný.
+    // The app reads `installed` to decide between offering first-account
+    // creation and the login form. It was never sent before, so React stayed
+    // on its default `true` and the setup wizard was unreachable.
     $has_users = null;
     try {
         $has_users = ((int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn()) > 0;
     } catch (PDOException $e) {
-        // Bez tabulky users nejde říct nic. `null` znamená „nevíme" - aplikace
-        // s tím naloží líp než s vymyšleným `false`, které by nabídlo
-        // založení účtu do nepojmenovaného stavu databáze.
+        // Without the users table nothing can be said. `null` means "we do not
+        // know" - the app handles that better than an invented `false`, which
+        // would offer account creation on top of an unnamed database state.
         error_log('[api] session: stav instalace se nepodařilo zjistit: ' . $e->getMessage());
     }
 
@@ -246,18 +246,18 @@ if ($action === 'logout') {
     exit;
 }
 
-// 2. Seznam všech monitorů z databáze
+// 2. List of all monitors from the database
 if ($action === 'monitors') {
     $is_admin = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
     $monitors = [];
 
-    // Základní seznam. response_time/cpu_usage/ram_usage/hdd_usage NEJSOU
-    // sloupce tabulky monitors (nikdy nebyly - potvrzeno živě: "Unknown column
-    // 'response_time'") - to jsou poslední naměřené hodnoty z monitor_logs
-    // (kontroly dostupnosti) a vps_metrics (hlášení agenta), doplněné
-    // poddotazem/joinem. Tohle NESMÍ selhat kvůli rozšířeným polím níže
-    // (na produkci se přesně tohle stalo: jeden dotaz na 20+ sloupců naráz,
-    // jedna neshoda schématu = celý seznam monitorů zmizel a s ním celá appka).
+    // The base list. response_time/cpu_usage/ram_usage/hdd_usage are NOT
+    // columns of the monitors table (never were - confirmed live: "Unknown column
+    // 'response_time'") - they are the latest measured values from monitor_logs
+    // (availability checks) and vps_metrics (agent reports), attached via
+    // subquery/join. This must NOT fail because of the extended fields below
+    // (exactly that happened in production: one query for 20+ columns at once,
+    // one schema mismatch = the whole monitor list gone, and the app with it).
     try {
         $stmt = $pdo->query("
             SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
@@ -277,27 +277,27 @@ if ($action === 'monitors') {
         $agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         foreach ($stmt->fetchAll() as $r) {
             $details = json_decode($r['last_details'] ?? '', true) ?: [];
-            // Provozní diagnostika (chybové hlášky sběru, hinty s názvy
-            // konfiguračních souborů) patří administrátorovi, ne veřejnému
-            // dashboardu - veřejná odpověď ji neobsahuje vůbec.
+            // Operational diagnostics (collection error messages, hints naming
+            // config files) belong to the administrator, not the public
+            // dashboard - the public response does not contain them at all.
             $details_out = $details;
             if (!$is_admin) {
                 unset($details_out['cpanel_stats_error']);
-                // Síťová identita infrastruktury (WAN adresy, brána, vnitřní
-                // subnet, SSID, WireGuard endpointy, výpis rozhraní) je mapa
-                // pro útočníka - anonymní odpověď nese jen agregáty (počty,
-                // procenta), ne adresy. Stará status stránka to gatuje stejně.
+                // The infrastructure's network identity (WAN addresses, gateway,
+                // internal subnet, SSIDs, WireGuard endpoints, interface lists) is
+                // a map for an attacker - the anonymous response carries only
+                // aggregates (counts, percentages), no addresses. The old status page gates it the same way.
                 foreach (['wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'lan_subnet', 'wifi_radios', 'wireguard_peers', 'interfaces', 'dns_servers', 'mwan3_policies', 'service_restarts', 'public_ip', 'asn', 'asn_name'] as $priv_key) {
                     unset($details_out[$priv_key]);
                 }
 
-                // Seznam výše je výčet ZNÁMÝCH klíčů, jenže agent_api dnes
-                // propouští i klíče, o kterých server předem neví - výčet by
-                // je nepokryl a nová metrika s adresou by unikla anonymnímu
-                // návštěvníkovi. Proto se navíc filtruje podle názvu.
+                // The list above enumerates KNOWN keys, but agent_api nowadays
+                // passes through keys the server has never heard of - the
+                // enumeration would miss them and a new metric carrying an address
+                // would leak to an anonymous visitor. Hence the extra name-based filter.
                 //
-                // Vzory míří na síťovou identitu a tajemství. Agregáty
-                // (počty, procenta, latence) sem záměrně nespadají.
+                // The patterns target network identity and secrets. Aggregates
+                // (counts, percentages, latency) deliberately do not match.
                 foreach (array_keys($details_out) as $priv_key) {
                     if (preg_match('/(ipv4|ipv6|(^|_)ip($|_)|addr|gateway|subnet|ssid|(^|_)mac($|_)|endpoint|peer|serial|hostname|token|secret|passw|_key$|^key$)/i', (string)$priv_key)) {
                         unset($details_out[$priv_key]);
@@ -321,7 +321,7 @@ if ($action === 'monitors') {
                 'cpu' => $r['cpu_usage'] !== null ? (float)$r['cpu_usage'] : null,
                 'ram' => $r['ram_usage'] !== null ? (float)$r['ram_usage'] : null,
                 'hdd' => $r['hdd_usage'] !== null ? (float)$r['hdd_usage'] : null,
-                // Doba od poslední změny stavu (ne fixní hodnota) - 0 dokud první kontrola neproběhne.
+                // Time since the last status change (not a fixed value) - 0 until the first check runs.
                 'uptimeSeconds' => ($last_change_ts && strtolower($r['status'] ?? '') === 'up') ? max(0, time() - $last_change_ts) : 0,
                 // Announced maintenance is public by design - the legacy page
                 // prints the description and window in a public banner. Only
@@ -335,9 +335,9 @@ if ($action === 'monitors') {
                 'hostname' => $details['hostname'] ?? $r['target'],
                 'os' => $details['os'] ?? $r['type'],
                 'details' => $details_out,
-                // Výpadky SBĚRU dat (ne služby) - frontend je MUSÍ zobrazit,
-                // tiché zahazování dat je zakázané (viz bk_get_collection_issues).
-                // Jen pro admina: je to provozní diagnostika, ne veřejný stav služeb.
+                // Outages of data COLLECTION (not of the service) - the frontend MUST
+                // show them, silently dropping data is forbidden (see bk_get_collection_issues).
+                // Admin only: operational diagnostics, not public service status.
                 'collectionIssues' => $is_admin ? bk_get_collection_issues($r, $details, $agent_offline_secs) : [],
             ];
         }
@@ -347,10 +347,10 @@ if ($action === 'monitors') {
         exit;
     }
 
-    // Konfigurační pole (mohou obsahovat interní údaje typu ServerQuery uživatel,
-    // webhook URL apod.) se vrací jen přihlášenému administrátorovi. Samostatný
-    // dotaz a samostatný try/catch - chybějící/nekompatibilní sloupec tady smí
-    // připravit admina jen o tahle rozšířená pole, nikdy o základní seznam.
+    // Configuration fields (may contain internals like the ServerQuery user,
+    // webhook URLs, ...) are returned to a logged-in administrator only. A separate
+    // query and separate try/catch - a missing/incompatible column here may cost
+    // the admin these extended fields, never the base list.
     if ($is_admin && !empty($monitors)) {
         try {
             $stmt2 = $pdo->query("
@@ -392,17 +392,17 @@ if ($action === 'monitors') {
                 $monitors[$mid]['enabledMetrics'] = $r['enabled_metrics'] ? (json_decode($r['enabled_metrics'], true) ?: []) : [];
                 $monitors[$mid]['remoteActionsEnabled'] = (bool)$r['remote_actions_enabled'];
                 $monitors[$mid]['allowedActions'] = $r['allowed_actions'] ? explode(',', $r['allowed_actions']) : [];
-                // Nabídka aktualizace agenta: srovnání verze z posledního reportu
-                // s verzí souboru agenta na serveru. Jen když obě známe.
-                // Ochrana proti "věčně offline" monitorům: aktivní kontrola
-                // z hostingu na cíl v privátní síti nikdy neuspěje. Když má
-                // asset agenta, nabídneme převod na agent-side kontrolu
-                // místo tichého generování falešných výpadků.
-                // POZOR: $r je řádek z dotazu na rozšířená pole, který
-                // asset_id/type/target NEVYBÍRÁ - čtení z něj bylo tiché
-                // "undefined array key" a podmínka nikdy neplatila, takže se
-                // upozornění na nedosažitelný cíl nikdy nezobrazilo.
-                // Základní údaje už jsou složené výš v $monitors[$mid].
+                // Agent update offer: compares the version from the last report
+                // with the agent file's version on the server. Only when both are known.
+                // Protection against "forever offline" monitors: an active check
+                // from the hosting against a private-network target never succeeds.
+                // When the asset has an agent, offer converting to an agent-side
+                // check instead of silently generating false outages.
+                // CAREFUL: $r is a row from the extended-fields query, which does
+                // NOT select asset_id/type/target - reading them from it was a silent
+                // "undefined array key" and the condition never held, so the
+                // unreachable-target warning never showed.
+                // The base fields are already assembled above in $monitors[$mid].
                 $base_row = $monitors[$mid];
                 if (
                     ($base_row['assetId'] ?? null) !== null
@@ -418,10 +418,10 @@ if ($action === 'monitors') {
                 if ($agent_ver && $agent_type_key && function_exists('bk_get_agent_latest_version')) {
                     $latest_agent = bk_get_agent_latest_version($agent_type_key);
                     if ($latest_agent !== null) {
-                        // Verze SOUBORU agenta na serveru - jediný zdroj pravdy.
-                        // Frontend dřív porovnával proti natvrdo zapsané '3.13.8'
-                        // (což je verze TeamSpeak serveru, ne agenta) a stringovým
-                        // '<', takže hlásil "neaktuální" i u čerstvě nasazeného agenta.
+                        // The agent FILE's version on the server - the single source of truth.
+                        // The frontend used to compare against a hardcoded '3.13.8'
+                        // (which is the TeamSpeak server version, not the agent's) with
+                        // string '<', reporting "outdated" even for a freshly deployed agent.
                         $monitors[$mid]['agentLatestVersion'] = $latest_agent;
                         if (bk_version_is_older($agent_ver, $latest_agent)) {
                             $monitors[$mid]['agentUpdateAvailable'] = $latest_agent;
@@ -438,7 +438,7 @@ if ($action === 'monitors') {
     exit;
 }
 
-// 2b. Uložení nového nebo stávajícího monitoru přímo do MySQL databáze
+// 2b. Insert or update a monitor directly in the MySQL database
 if ($action === 'save_monitor') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -532,8 +532,8 @@ if ($action === 'save_monitor') {
 
     try {
         if ($id > 0) {
-            // Hesla (ServerQuery, RCON) se přepíšou, jen když administrátor zadal novou
-            // hodnotu - prázdné pole ve formuláři pro editaci nesmí smazat už uložené heslo.
+            // Passwords (ServerQuery, RCON) are overwritten only when the administrator
+            // typed a new value - an empty edit-form field must not erase a stored password.
             $stmt = $pdo->prepare("
                 UPDATE monitors
                 SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, latency_threshold_ms = ?, latency_threshold_mins = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?, heartbeat_interval = ?, heartbeat_grace = ?
@@ -569,12 +569,12 @@ if ($action === 'save_monitor') {
 }
 
 /**
- * Údaje pro nastavení heartbeatu - adresa, na kterou se má úloha hlásit.
+ * Heartbeat setup info - the address the job should report to.
  *
- * Token je jediné, co endpoint autorizuje, takže se sem nedostane nikdo bez
- * přihlášení a nevrací se ani v běžném seznamu monitorů. Kdyby unikl, cizí
- * člověk může heartbeat posílat za vás a monitor bude svítit zeleně, i když
- * záloha dávno neběží - tichý výpadek, přesně ten druh, kvůli kterému tenhle
+ * The token is all the endpoint authorises, so nobody gets here without
+ * logging in and it is not returned in the regular monitor list either. If it
+ * leaked, a stranger could send heartbeats on your behalf and the monitor
+ * would stay green while the backup has long stopped - a silent failure, exactly the kind this
  * typ monitoru vznikl.
  */
 if ($action === 'heartbeat_info') {
@@ -598,8 +598,8 @@ if ($action === 'heartbeat_info') {
             exit;
         }
 
-        // Token chybí u monitorů založených dřív, než tenhle typ existoval,
-        // a při vědomé výměně. Obojí se řeší stejně - vyrobit nový.
+        // The token is missing on monitors created before this type existed,
+        // and on deliberate rotation. Both are handled the same - mint a new one.
         if ($regenerate || empty($hb['heartbeat_token'])) {
             $hb['heartbeat_token'] = bk_heartbeat_generate_token();
             $stmt_tok = $pdo->prepare("UPDATE monitors SET heartbeat_token = ? WHERE id = ?");
@@ -617,8 +617,8 @@ if ($action === 'heartbeat_info') {
             'monitorId' => (int)$hb['id'],
             'name' => $hb['name'],
             'token' => $hb['heartbeat_token'],
-            // NULL, když se adresa nedá složit (CLI kontext) - vymyslet doménu
-            // by znamenalo dát administrátorovi URL, která nikam nevede.
+            // NULL when the address cannot be built (CLI context) - inventing a
+            // domain would hand the administrator a URL that leads nowhere.
             'url' => $url,
             'intervalSecs' => $hb['heartbeat_interval'] !== null ? (int)$hb['heartbeat_interval'] : null,
             'graceSecs' => $hb['heartbeat_grace'] !== null ? (int)$hb['heartbeat_grace'] : null,
@@ -637,7 +637,7 @@ if ($action === 'heartbeat_info') {
     exit;
 }
 
-// 2b2. Smazání monitoru z MySQL databáze
+// 2b2. Delete a monitor from the MySQL database
 if ($action === 'delete_monitor') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -662,10 +662,10 @@ if ($action === 'delete_monitor') {
     exit;
 }
 
-// 2b2b. Seznam objevených, ale zatím nesledovaných služeb (Service Discovery).
-// Agenti tohle ukládají do monitors.last_details.discovered_services už dlouho
-// (agent_api.php), admin.php to i umí importovat, ale žádné z front-end appek
-// (apps/monitor React SPA) to nikdy nečetlo zpátky - proto tenhle endpoint.
+// 2b2b. List of discovered but not-yet-monitored services (Service Discovery).
+// Agents have long stored this in monitors.last_details.discovered_services
+// (agent_api.php) and admin.php can import it, but none of the front-end apps
+// (apps/monitor React SPA) ever read it back - hence this endpoint.
 if ($action === 'discovered_services') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -673,8 +673,8 @@ if ($action === 'discovered_services') {
         exit;
     }
     try {
-        // Už monitorované služby se nenavrhují znovu - jinak importovaná
-        // služba zůstala v panelu viset jako "nesledovaná" (hlášeno: kresd 2×).
+        // Already-monitored services are not proposed again - otherwise an
+        // imported service stayed in the panel as "unmonitored" (reported: kresd twice).
         $existing_names = [];
         $existing_port_asset = [];
         $stmt_ex = $pdo->query("SELECT LOWER(name) AS lname, port, asset_id FROM monitors");
@@ -700,10 +700,10 @@ if ($action === 'discovered_services') {
                 if (isset($existing_names[strtolower((string)$svc['name'])])) continue;
                 if ($port !== null && $asset_id !== null && isset($existing_port_asset[$asset_id . ':' . $port])) continue;
 
-                // Cíl budoucí kontroly: adresa od agenta, jinak hostname
-                // z jeho reportu, jinak target zdrojového monitoru. Dřív se
-                // tu dosazovalo JMÉNO monitoru ("Router - Praha"), které
-                // pak import po právu odmítl jako nevalidní adresu.
+                // Target of the future check: the agent's address, else the hostname
+                // from its report, else the source monitor's target. This used to
+                // insert the monitor NAME ("Router - Praha"), which the import
+                // then rightly rejected as an invalid address.
                 $resolved_target = trim((string)($svc['target'] ?? ''));
                 if ($resolved_target === '' || $resolved_target === '127.0.0.1' || $resolved_target === 'localhost') {
                     $resolved_target = trim((string)($details['hostname'] ?? ''));
@@ -711,21 +711,21 @@ if ($action === 'discovered_services') {
                 if ($resolved_target === '') {
                     $resolved_target = trim((string)($row['target'] ?? ''));
                 }
-                // Předběžná validace: služba, kterou z hostingu nelze
-                // kontrolovat (privátní adresa, žádná adresa), se u agentních
-                // monitorů (vps/openwrt) nabídne jako agent-side kontrola -
-                // ověří ji lokálně sám agent. Blokace zůstává jen tam, kde
-                // není agent, který by kontrolu převzal.
+                // Pre-validation: a service that cannot be checked from the hosting
+                // (private address, no address) is offered as an agent-side check
+                // on agent monitors (vps/openwrt) - the agent verifies it locally.
+                // Blocking remains only where there is no agent to take the
+                // check over.
                 $import_blocked = $resolved_target === ''
                     ? 'Agent nehlásí žádnou adresu, přes kterou by šla služba z hostingu testovat.'
                     : bk_validate_import_target($resolved_target);
-                // Volba režimu kontroly:
-                //  - aktivní (z hostingu) jen když má služba veřejně dosažitelný
-                //    cíl A typ/port, který cron umí testovat,
-                //  - jinak agent-side, pokud zdrojový monitor JE agent a služba
-                //    má název procesu nebo port (agent ověří lokálně) - sem
-                //    patří i démoni bez portu (Turris Sentinel apod.),
-                //  - blokace zůstává jen tam, kde nezbývá žádná cesta.
+                // Choosing the check mode:
+                //  - active (from the hosting) only when the service has a publicly
+                //    reachable target AND a type/port cron can test,
+                //  - otherwise agent-side, when the source monitor IS an agent and the
+                //    service has a process name or port (the agent verifies locally) -
+                //    this includes portless daemons (Turris Sentinel etc.),
+                //  - blocking remains only where no path is left.
                 $src_is_agent = in_array(strtolower((string)($row['type'] ?? '')), ['vps', 'openwrt'], true);
                 $svc_proc = isset($svc['process']) && $svc['process'] !== '' ? (string)$svc['process'] : null;
                 $cron_checkable_types = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord'];
@@ -761,7 +761,7 @@ if ($action === 'discovered_services') {
                 ];
             }
         }
-        // Nejjistější návrhy nahoře - admin obvykle chce importovat nejdřív ty.
+        // Most confident proposals first - the admin usually wants those imported first.
         usort($services, fn($a, $b) => $b['confidence'] <=> $a['confidence']);
         echo json_encode(['services' => $services], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -770,8 +770,8 @@ if ($action === 'discovered_services') {
     exit;
 }
 
-// 2b2c. Import jedné objevené služby jako nový monitor (Service Discovery -
-// "propose -> confirm" krok). Zrcadlí admin.php action_import_service,
+// 2b2c. Import one discovered service as a new monitor (Service Discovery -
+// the "propose -> confirm" step). Mirrors admin.php action_import_service,
 // jen jako JSON API pro React SPA.
 if ($action === 'import_discovered_service') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
@@ -792,9 +792,9 @@ if ($action === 'import_discovered_service') {
         exit;
     }
 
-    // Režim 'agent': službu na privátní síti kontroluje lokálně sám agent
-    // (proces + port), server jen přijímá výsledky. Cíl monitoru je pak
-    // NÁZEV PROCESU, ne síťová adresa - veřejná validace cíle se přeskočí.
+    // 'agent' mode: a private-network service is checked locally by the agent
+    // itself (process + port), the server only receives results. The monitor's
+    // target is then the PROCESS NAME, not a network address - public target validation is skipped.
     $s_mode = ($input['mode'] ?? '') === 'agent' ? 'agent' : 'active';
     $s_process = trim((string)($input['process'] ?? ''));
     if ($s_mode === 'agent') {
@@ -807,10 +807,10 @@ if ($action === 'import_discovered_service') {
         }
     }
 
-    // Cron umí aktivně kontrolovat jen tyhle typy. Cokoli jiného (dns, smtp,
-    // samba...) se importuje jako kontrola portu - jinak monitor jen každou
-    // minutu generoval neměřitelné 'unknown' záznamy (takhle dostal kresd
-    // 0 % SLA, ačkoli ho nikdy žádná kontrola netestovala).
+    // Cron can actively check only these types. Anything else (dns, smtp,
+    // samba...) imports as a port check - otherwise the monitor just generated
+    // unmeasurable 'unknown' records every minute (that is how kresd got
+    // 0 % SLA despite never being tested by any check).
     $cron_checkable = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord', 'vps', 'openwrt', 'agent_service'];
     if (!in_array($s_type, $cron_checkable, true)) {
         if (!$s_port) {
@@ -822,9 +822,9 @@ if ($action === 'import_discovered_service') {
     }
 
     try {
-        // Objevující monitor běží na stejném fyzickém stroji, takže nový
+        // The discovering monitor runs on the same physical machine, so the new
         // monitor rovnou dostane jeho asset I kategorii - bez kategorie by
-        // import skončil ve skupině "Ostatní", což mate (hlášeno uživatelem).
+        // import ended up in the "Other" group, which confuses (reported by the user).
         $discovered_asset_id = null;
         $discovered_category = null;
         if ($source_monitor_id) {
@@ -838,10 +838,10 @@ if ($action === 'import_discovered_service') {
                 if (!empty($src_row['category'])) {
                     $discovered_category = $src_row['category'];
                 }
-                // Kontrola běží z hostingu, takže cíl musí být adresa stroje,
-                // na kterém agent službu objevil - ne localhost ani jméno
-                // monitoru. Bez použitelného cíle se vezme target zdrojového
-                // monitoru, případně hostname z jeho posledního reportu.
+                // The check runs from the hosting, so the target must be the address
+                // of the machine where the agent discovered the service - not localhost
+                // and not the monitor name. Without a usable target, take the source
+                // monitor's target, or the hostname from its last report.
                 if ($s_target === '' || $s_target === '127.0.0.1' || $s_target === 'localhost') {
                     $src_details = json_decode($src_row['last_details'] ?? '{}', true) ?: [];
                     $fallback_target = trim((string)($src_row['target'] ?? ''));
@@ -854,11 +854,11 @@ if ($action === 'import_discovered_service') {
                 }
             }
         }
-        // Finální cíl (ať přišel z discovery payloadu agenta, nebo z fallbacku
-        // výše) se validuje VŽDY - agent je nižší úroveň důvěry než admin
-        // a kontroly běží z hostingu, kam privátní/interní cíle nepatří.
-        // Validace běží před založením assetu, aby po odmítnutí nezůstal sirotek.
-        // Výjimka: agent-side kontrola žádnou veřejnou adresu nemá (cíl = proces).
+        // The final target (whether from the agent's discovery payload or the
+        // fallback above) is validated ALWAYS - an agent is a lower trust level
+        // than an admin and checks run from the hosting, where private/internal
+        // targets do not belong. Validation runs before creating the asset so a reject leaves no orphan.
+        // Exception: an agent-side check has no public address (target = process).
         $target_error = $s_mode === 'agent' ? null : bk_validate_import_target($s_target);
         if ($target_error !== null) {
             http_response_code(400);
@@ -889,11 +889,11 @@ if ($action === 'import_discovered_service') {
     exit;
 }
 
-// 2b2d. Upload vlastního loga (admin-only). Přijímá jen rastrové formáty
-// ověřené přes getimagesize (magic bytes, ne příponu) - SVG je záměrně
-// odmítnuté: umí nést skripty a přímé otevření nahrané URL by je spustilo
-// na naší doméně. Soubor se ukládá pod pevným jménem do uploads/ a URL se
-// rovnou zapíše do nastavení custom_logo_url.
+// 2b2d. Custom logo upload (admin-only). Accepts only raster formats verified
+// via getimagesize (magic bytes, not the extension) - SVG is rejected on
+// purpose: it can carry scripts and opening the uploaded URL directly would
+// run them on our domain. The file is stored under a fixed name in uploads/
+// and the URL goes straight into the custom_logo_url setting.
 if ($action === 'upload_logo') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -936,7 +936,7 @@ if ($action === 'upload_logo') {
         if (!move_uploaded_file($f['tmp_name'], $dest)) {
             throw new RuntimeException('Soubor se nepodařilo uložit.');
         }
-        // Cache-bust přes mtime, aby výměna loga nebyla rukojmím browser cache.
+        // Cache-bust via mtime so a logo swap is not hostage to the browser cache.
         $url = '/status/uploads/custom-logo.' . $ext . '?v=' . filemtime($dest);
         $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('custom_logo_url', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
         $stmt->execute([$url]);
@@ -949,8 +949,8 @@ if ($action === 'upload_logo') {
     exit;
 }
 
-// 2b2e. Veřejná konfigurace vzhledu pro React app - stejná data, která už
-// veřejně renderuje index.php (titulek, logo, vlastní odkazy v menu).
+// 2b2e. Public appearance config for the React app - the same data index.php
+// already renders publicly (title, logo, custom menu links).
 if ($action === 'ui_config') {
     $links_raw = json_decode(get_setting('custom_nav_links'), true);
     $links = [];
@@ -974,10 +974,10 @@ if ($action === 'ui_config') {
     exit;
 }
 
-// 2b2f. Zařazení Remote Action do fronty (admin-only) - JSON obdoba
-// formuláře v admin.php, pro Actions dropdown v React detailu zařízení.
-// Stejná dvojitá kontrola souhlasu: globální seznam typů + per-monitor
-// allowed_actions; restart_service navíc vyžaduje validní název služby.
+// 2b2f. Queue a Remote Action (admin-only) - the JSON counterpart of the
+// admin.php form, for the Actions dropdown in the React device detail.
+// The same double consent check: global type list + per-monitor
+// allowed_actions; restart_service additionally requires a valid service name.
 if ($action === 'trigger_remote_action') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1023,9 +1023,9 @@ if ($action === 'trigger_remote_action') {
     exit;
 }
 
-// 2b2g. Převod monitoru na agent-side kontrolu (admin-only). Používá se
-// u monitorů, jejichž cíl leží v privátní síti - aktivní kontrola z
-// hostingu u nich nikdy neuspěje a jen generuje falešné výpadky.
+// 2b2g. Convert a monitor to an agent-side check (admin-only). Used for
+// monitors whose target sits on a private network - an active check from the
+// hosting never succeeds there and only generates false outages.
 if ($action === 'convert_to_agent_check') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1049,7 +1049,7 @@ if ($action === 'convert_to_agent_check') {
             echo json_encode(['error' => 'Monitor nenalezen nebo nemá přiřazené zařízení (asset).'], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        // Na assetu musí být agent, který kontrolu převezme.
+        // The asset must have an agent to take the check over.
         $stmt_ag = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ? AND type IN ('vps', 'openwrt')");
         $stmt_ag->execute([$cv_mon['asset_id']]);
         if ((int)$stmt_ag->fetchColumn() === 0) {
@@ -1057,8 +1057,8 @@ if ($action === 'convert_to_agent_check') {
             echo json_encode(['error' => 'Na tomto zařízení není agent, který by kontrolu převzal.'], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        // Historie zůstává (měníme jen typ a cíl), stav se resetuje na
-        // 'unknown' - do prvního výsledku od agenta nic netvrdíme.
+        // History stays (only type and target change), the status resets to
+        // 'unknown' - nothing is claimed until the agent's first result.
         $stmt_up = $pdo->prepare("UPDATE monitors SET type = 'agent_service', target = ?, status = 'unknown', last_status_change = NOW() WHERE id = ?");
         $stmt_up->execute([$cv_proc, $cv_id]);
         log_monitor_event($pdo, $cv_id, $cv_mon['name'], 'agent_service', 'monitor_updated', 'Převedeno na kontrolu agentem (proces ' . $cv_proc . ')');
@@ -1071,8 +1071,8 @@ if ($action === 'convert_to_agent_check') {
     exit;
 }
 
-// 2b2h. Stav přečtených upozornění (per uživatel, ne per prohlížeč).
-// GET vrací poslední přečtené monitor_logs.id, POST ho posune.
+// 2b2h. Read-alert state (per user, not per browser).
+// GET returns the last read monitor_logs.id, POST advances it.
 if ($action === 'alerts_read_state') {
     if (empty($_SESSION['admin_logged_in'])) {
         echo json_encode(['readUpToId' => 0], JSON_UNESCAPED_UNICODE);
@@ -1097,11 +1097,11 @@ if ($action === 'alerts_read_state') {
     exit;
 }
 
-// 2b2i. Katalog dostupných dlaždic dashboardu + uživatelské rozložení.
-// Odpovídá na "co vlastně sbíráme": katalog se odvozuje z REÁLNÝCH dat
-// (mapa metrik ve vps_metrics + klíče, které agenti opravdu poslali), ne
-// z pevného seznamu - dlaždice, pro kterou nikdo nikdy nic nezměřil, se
-// nenabízí.
+// 2b2i. Catalogue of available dashboard tiles + the user's layout.
+// Answers "what do we actually collect": the catalogue derives from REAL data
+// (the metric map in vps_metrics + keys agents really sent), not
+// a fixed list - a tile nobody ever measured anything for is not offered.
+
 if ($action === 'dashboard_layout') {
     $uid = (int)($_SESSION['admin_id'] ?? 0);
 
@@ -1134,12 +1134,12 @@ if ($action === 'dashboard_layout') {
     }
 
     try {
-        // 1. Co se skutečně měří: sloupce vps_metrics, které mají alespoň
-        //    jednu nenulovou hodnotu za posledních 7 dní.
-        // Katalog nabízí jen metriky, které dashboard umí vykreslit z dat,
-        // co endpoint monitors reálně vrací (cpu/ram/hdd na řádku monitoru).
-        // Další metriky (teplota, load, wifi klienti…) sem přibudou až s
-        // vykreslením - nabízet přepínač bez implementace je mrtvý spínač.
+        // 1. What is actually measured: vps_metrics columns with at least
+        //    one non-null value over the last 7 days.
+        // The catalogue offers only metrics the dashboard can draw from data
+        // the monitors endpoint really returns (cpu/ram/hdd on the monitor row).
+        // Further metrics (temperature, load, wifi clients...) join once they
+        // render - offering a switch without an implementation is a dead switch.
         $metric_defs = [
             'cpu' => ['col' => 'cpu_usage', 'label' => t('metric_label_cpu'), 'unit' => '%'],
             'ram' => ['col' => 'ram_usage', 'label' => t('metric_label_ram'), 'unit' => '%'],
@@ -1157,7 +1157,7 @@ if ($action === 'dashboard_layout') {
             $measured[$key] = ['label' => $def['label'], 'unit' => $def['unit'], 'samples' => $count];
         }
 
-        // 2. Pevné panely dashboardu (nejsou metrika, ale sekce stránky).
+        // 2. Fixed dashboard panels (not metrics, but page sections).
         $panels = [
             'health' => t('tile_health'),
             'attention' => t('tile_attention'),
@@ -1177,7 +1177,7 @@ if ($action === 'dashboard_layout') {
                 'key' => 'metric_' . $key,
                 'label' => $info['label'] . ($info['unit'] !== '' ? " ({$info['unit']})" : ''),
                 'kind' => 'metric',
-                // Dlaždice metriky, kterou nikdo neměří, by ukazovala jen pomlčky.
+                // A tile for a metric nobody measures would only show dashes.
                 'available' => $info['samples'] > 0,
                 'samples' => $info['samples'],
             ];
@@ -1230,7 +1230,7 @@ if ($action === 'dashboard_layout') {
     exit;
 }
 
-// 2b3. Načtení systémových nastavení (admin-only, maskovaná hesla)
+// 2b3. Read the system settings (admin-only, masked passwords)
 if ($action === 'get_settings') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1251,7 +1251,7 @@ if ($action === 'get_settings') {
         if ($is_env) {
             $env_locked[] = $key;
         }
-        // Maskovat hesla/tokeny: prázdné zůstanou prázdné, jinak ••••••+poslední 4 znaky
+        // Mask passwords/tokens: empty stays empty, otherwise ••••••+last 4 chars
         if (in_array($key, $secret_keys, true) && $val !== '') {
             $suffix = mb_strlen($val) >= 4 ? mb_substr($val, -4) : $val;
             $val = '••••••' . $suffix;
@@ -1263,7 +1263,7 @@ if ($action === 'get_settings') {
     exit;
 }
 
-// 2b4. Uložení systémových nastavení (admin-only)
+// 2b4. Save the system settings (admin-only)
 if ($action === 'save_settings') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1291,7 +1291,7 @@ if ($action === 'save_settings') {
 
             $val = is_string($val) ? trim($val) : (string)$val;
 
-            // Pokud uživatel nezměnil maskované heslo, přeskočíme
+            // If the user left a masked password untouched, skip it
             if (in_array($key, $secret_keys, true) && str_starts_with($val, '••••••')) {
                 continue;
             }
@@ -1309,7 +1309,7 @@ if ($action === 'save_settings') {
     exit;
 }
 
-// 2b5. Vygenerování a aktivace Prometheus tokenu (admin-only)
+// 2b5. Generate and activate the Prometheus token (admin-only)
 if ($action === 'generate_metrics_token') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1319,9 +1319,9 @@ if ($action === 'generate_metrics_token') {
 
     try {
         $new_token = bin2hex(random_bytes(16));
-        // Tabulka settings má sloupce key_name/key_value - dřívější
-        // setting_key/setting_value tu shazovalo INSERT a tlačítko
-        // "Aktivovat token" končilo pětistovkou.
+        // The settings table has key_name/key_value columns - the earlier
+        // setting_key/setting_value crashed the INSERT here and the
+        // "Activate token" button ended in a 500.
         $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
         $stmt->execute([$new_token]);
 
@@ -1333,18 +1333,18 @@ if ($action === 'generate_metrics_token') {
     exit;
 }
 
-// 2c. Historie posledních událostí z DB (monitor_logs)
+// 2c. Recent event history from the DB (monitor_logs)
 if ($action === 'events') {
     try {
         $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
 
-        // Posledních N řádků POKRYJE JEN PÁR DESÍTEK MINUT (cron zapisuje každou
-        // minutu za každý monitor), takže výpadky starší než okno v odpovědi
-        // vůbec nebyly a UI tvrdilo "vše pass", i když historie výpadky má.
-        // Proto se k čerstvému oknu vždy přimíchají i poslední down/warning
-        // záznamy bez ohledu na stáří - stejný princip, jakým veřejná status
-        // stránka plní svůj seznam incidentů (filtrovaný dotaz, ne tail logu).
+        // The last N rows COVER ONLY A FEW DOZEN MINUTES (cron writes every
+        // minute per monitor), so outages older than the window were simply
+        // absent and the UI claimed "all pass" while history had outages.
+        // The fresh window therefore always gets the latest down/warning rows
+        // mixed in regardless of age - the same principle the public status
+        // page uses to fill its incident list (a filtered query, not a log tail).
         $where_monitor = $monitor_id > 0 ? 'AND l.monitor_id = ?' : '';
         $select_cols = "l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time,
                        m.id as monitor_id, m.name as monitor_name, m.target, m.type";
@@ -1379,12 +1379,12 @@ if ($action === 'events') {
         $rows = array_values($rows_by_id);
         $events = [];
 
-        // Vypočítat dobu výpadku: pro down záznamy najít nejbližší up záznam po něm
+        // Compute the outage duration: for down rows find the nearest up row after them
         foreach ($rows as $i => $r) {
             $outage_duration = null;
             $outage_end = null;
             if ($r['status'] === 'down') {
-                // Hledat ve starších záznamech (nižší index = novější) nejbližší up
+                // Search older records (lower index = newer) for the nearest up
                 for ($j = $i - 1; $j >= 0; $j--) {
                     if ($rows[$j]['monitor_id'] == $r['monitor_id'] && $rows[$j]['status'] === 'up') {
                         $start = strtotime($r['checked_at']);
@@ -1404,9 +1404,9 @@ if ($action === 'events') {
                 'monitorName' => $r['monitor_name'],
                 'target' => $r['target'],
                 'type' => strtoupper($r['type']),
-                // Neznámé místo kontroly zůstává null. Dřív se sem doplňovala
-                // natvrdo konkrétní lokalita (Frankfurt/RackNerd) - u 37 ze 40
-                // událostí to bylo vymyšlené, protože sloupec byl prázdný.
+                // An unknown check location stays null. A hardcoded location
+                // (Frankfurt/RackNerd) used to be filled in here - for 37 of 40
+                // events it was invented, because the column was empty.
                 'location' => $r['checked_from'] ?: null,
                 'status' => $r['status'] === 'down' ? 'VÝPADEK' : ($r['status'] === 'warning' ? 'VAROVÁNÍ' : 'OK'),
                 'rawStatus' => $r['status'],
@@ -1425,10 +1425,10 @@ if ($action === 'events') {
 }
 
 // 2c1a2. Executive Summary + Timeline pro jeden monitor. Tahle logika (health
-// score, knowledge tips, forecast/anomaly/network insights, textový souhrn)
-// v PHP existuje a běží na veřejné status stránce (index.php/monitor.php) už
-// dlouho - React SPA ji ale nikdy nevolala a místo toho si na klientovi
-// skládala vlastní obecnou šablonovou větu ("Monitor X (typ) běží na cíli Y...").
+// score, knowledge tips, forecast/anomaly/network insights, textual summary)
+// has existed in PHP and served the public status page (index.php/monitor.php)
+// for a long time - but the React SPA never called it and instead assembled
+// its own generic template sentence on the client ("Monitor X (type) runs on target Y...").
 // Tenhle endpoint vystavuje tu samou serverovou logiku jako JSON.
 if ($action === 'monitor_insights') {
     $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
@@ -1469,8 +1469,8 @@ if ($action === 'monitor_insights') {
             bk_get_network_insights($pdo, $monitor, $details)
         );
 
-        // Health score se dnes počítá jen pro TeamSpeak (build_teamspeak_health_areas) -
-        // stejné omezení jako na veřejné status stránce, ne nedopatření tady.
+        // The health score is currently computed only for TeamSpeak (build_teamspeak_health_areas) -
+        // the same limitation as on the public status page, not an accident here.
         $health_score = null;
         if (strtolower($monitor['type'] ?? '') === 'teamspeak') {
             $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details, $pdo);
@@ -1509,19 +1509,19 @@ if ($action === 'monitor_insights') {
     exit;
 }
 
-// 2c1c. Agregované postřehy pro dashboard (mockup: "System Insights" řada).
-// Reuse stejných per-monitor builderů jako monitor_insights - forecast
-// (regrese disku/RAM), anomálie latence a síťové postřehy - jen posbírané
-// přes všechny monitory. Prázdné pole je legitimní odpověď: žádné vymyšlené
-// "vše v pořádku" karty se negenerují.
+// 2c1c. Aggregated insights for the dashboard (mockup: the "System Insights" row).
+// Reuses the same per-monitor builders as monitor_insights - forecast
+// (disk/RAM regression), latency anomalies and network insights - just
+// collected across all monitors. An empty array is a legitimate answer: no
+// invented "all good" cards are generated.
 if ($action === 'dashboard_insights') {
     try {
         $limit = min(8, max(1, (int)($_GET['limit'] ?? 4)));
 
-        // Analýzy běží nad historií všech monitorů (regrese, baseline,
-        // rolling okna) - na sdíleném hostingu to trvá jednotky sekund a
-        // dashboard na to čekal při každém načtení. Výsledek se proto
-        // cachuje 5 minut; data se stejně mění v řádu minut, ne sekund.
+        // The analyses run over every monitor's history (regression, baselines,
+        // rolling windows) - single-digit seconds on shared hosting, and the
+        // dashboard waited for it on every load. The result is therefore
+        // cached for 5 minutes; the data changes on the scale of minutes anyway.
         $cache_key = 'dashboard_insights_cache';
         $cached_raw = get_setting($cache_key, '');
         if ($cached_raw !== '') {
@@ -1552,7 +1552,7 @@ if ($action === 'dashboard_insights') {
                 ];
             }
         }
-        // Kritičtější druhy dopředu: síť/anomálie před dlouhodobými trendy.
+        // More critical kinds first: network/anomalies before long-term trends.
         $rank = ['network' => 0, 'anomaly' => 1, 'forecast' => 2, 'trend' => 3];
         usort($items, fn($a, $b) => ($rank[$a['kind']] ?? 4) <=> ($rank[$b['kind']] ?? 4));
         try {
@@ -1567,8 +1567,8 @@ if ($action === 'dashboard_insights') {
     exit;
 }
 
-// 2c1b. Denní rozpad dostupnosti za posledních N dní (pro heatmapu na dashboardu) -
-// skutečné agregace z monitor_logs, ne odhad z aktuálního stavu monitoru.
+// 2c1b. Daily availability breakdown for the last N days (dashboard heatmap) -
+// real aggregates from monitor_logs, not a guess from the monitor's current state.
 if ($action === 'daily_uptime') {
     try {
         $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
@@ -1609,21 +1609,21 @@ if ($action === 'daily_uptime') {
                 $day_display = date('j.n.', strtotime($day_key));
                 $d = $by_monitor[$mid][$day_key] ?? null;
 
-                // 'unknown' záznamy (typy bez aktivní kontroly) nejsou měření -
-                // do dostupnosti se nepočítají vůbec, jinak by monitor, který
-                // nikdy nikdo netestoval, vykazoval falešné výpadky.
+                // 'unknown' rows (types without an active check) are not measurements -
+                // they do not count into availability at all, otherwise a monitor
+                // nobody ever tested would show false outages.
                 $up = $d ? (int)$d['up_count'] : 0;
                 $down = $d ? (int)$d['down_count'] : 0;
                 $warn = $d ? (int)$d['warning_count'] : 0;
                 $maint = $d ? (int)$d['maint_count'] : 0;
                 $measured = $up + $down + $warn;
 
-                // Průměrná odezva dne pro latenční sparkline - null, dokud v
-                // tom dni nic reálně neodpovědělo (0 by tvrdila okamžitou odezvu).
+                // The day's average response for the latency sparkline - null until
+                // something actually answered that day (0 would claim instant responses).
                 $avg_ms = ($d && $d['avg_rt'] !== null) ? (int)round((float)$d['avg_rt']) : null;
 
                 if ($measured === 0 && $maint === 0) {
-                    // Den bez jediné měřené kontroly nemá 0% uptime - nemá žádný.
+                    // A day without a single measured check has no 0% uptime - it has none.
                     $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => null, 'avgMs' => $avg_ms, 'detail' => t('day_no_data')];
                     continue;
                 }
@@ -1663,10 +1663,10 @@ if ($action === 'daily_uptime') {
     exit;
 }
 
-// Dostupnost za víc oken najednou (24 h / 7 d / 30 d / 90 d) pro veřejnou
-// stránku. Jeden průchod 90 dny logů místo čtyř volání sla_report - to by
-// čtyřikrát počítalo i percentily a poslední výpadky, které tu nikdo nechce.
-// Okno bez jediné měřené kontroly je null, ne 100.
+// Availability over several windows at once (24 h / 7 d / 30 d / 90 d) for the
+// public page. One pass over 90 days of logs instead of four sla_report calls -
+// those would also compute percentiles and last outages four times, which nobody here wants.
+// A window without a single measured check is null, not 100.
 if ($action === 'uptime_windows') {
     try {
         $uw_selects = [];
@@ -1689,8 +1689,8 @@ if ($action === 'uptime_windows') {
             }
             $uw_out[(int)$r['monitor_id']] = $row;
         }
-        // (object): prázdný výsledek i sekvenční id musí zůstat objektem,
-        // frontend do něj sahá podle id monitoru.
+        // (object): an empty result and sequential ids must both stay an object,
+        // the frontend indexes into it by monitor id.
         echo json_encode(['windows' => (object)$uw_out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         http_response_code(500);
@@ -1699,10 +1699,10 @@ if ($action === 'uptime_windows') {
     exit;
 }
 
-// Vložitelný SVG odznak stavu - `<img src=".../api.php?action=badge&monitor_id=N">`
-// na cizím webu. Bez id shrnuje celou flotilu. Poctivost platí i tady:
-// neznámý stav je šedý "neznámý", ne zelené "online", a neexistující monitor
-// je 404, ne vymyšlený odznak.
+// Embeddable SVG status badge - `<img src=".../api.php?action=badge&monitor_id=N">`
+// on a foreign site. Without an id it summarises the fleet. Honesty applies
+// here too: an unknown state is grey "unknown", not green "online", and a
+// nonexistent monitor is 404, not an invented badge.
 if ($action === 'badge') {
     $bdg_lang = ($_GET['lang'] ?? '') === 'en' ? 'en' : 'cs';
     $bdg_words = [
@@ -1740,7 +1740,7 @@ if ($action === 'badge') {
                 $bdg_value = $bdg_words[$bdg_state];
             }
         } else {
-            // Souhrn: down > údržba > vše online. Prázdná flotila není "online".
+            // Summary: down > maintenance > all online. An empty fleet is not "online".
             $stmt_bdg = $pdo->query("
                 SELECT COUNT(*) AS total,
                        SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_c,
@@ -1769,21 +1769,21 @@ if ($action === 'badge') {
         exit;
     }
 
-    // Šířka odhadem ~6.2 px na znak při 11px Verdaně - stejný trik jako
-    // shields.io; na pixel přesná míra tu není potřeba.
+    // Width by estimate, ~6.2 px per character at 11px Verdana - the same trick
+    // shields.io uses; pixel-perfect measurement is not needed here.
     $bdg_lw = (int)max(40, round(strlen($bdg_label) * 6.2) + 12);
     $bdg_vw = (int)max(40, round(mb_strlen($bdg_value) * 6.2) + 12);
     $bdg_w = $bdg_lw + $bdg_vw;
     $bdg_color = $bdg_colors[$bdg_state];
     $bdg_label_x = htmlspecialchars($bdg_label, ENT_QUOTES);
     $bdg_value_x = htmlspecialchars($bdg_value, ENT_QUOTES);
-    // Středy obou polí pro text-anchor="middle".
+    // Centres of both fields for text-anchor="middle".
     $bdg_lw2 = (int)round($bdg_lw / 2);
     $bdg_vw2 = $bdg_lw + (int)round($bdg_vw / 2);
 
     header('Content-Type: image/svg+xml; charset=utf-8');
-    // Krátká cache: odznak na cizím webu nemá mlátit do DB při každém
-    // zobrazení, ale nesmí ani hodinu tvrdit "online" o mrtvém serveru.
+    // Short cache: a badge on a foreign site must not hammer the DB on every
+    // view, but must not claim "online" about a dead server for an hour either.
     header('Cache-Control: public, max-age=60');
     echo <<<SVG
 <svg xmlns="http://www.w3.org/2000/svg" width="{$bdg_w}" height="20" role="img" aria-label="{$bdg_label_x}: {$bdg_value_x}">
@@ -1803,7 +1803,7 @@ SVG;
     exit;
 }
 
-// 2c2. Incidenty a výpadky z DB (incidents a monitor_logs)
+// 2c2. Incidents and outages from the DB (incidents and monitor_logs)
 function bk_duration_text(int $diff): string {
     $diff = max(0, $diff);
     $days_d = floor($diff / 86400);
@@ -1820,9 +1820,9 @@ if ($action === 'incidents') {
     try {
         $incidents = [];
 
-        // Výpadky CÍLOVÝCH monitorů, co jsou down PRÁVĚ TEĎ - bere se poslední 'down'
-        // záznam pro každý aktuálně nedostupný monitor, ne každý historický down
-        // řádek (ten by ukazoval dávno vyřešené výpadky jako stále probíhající).
+        // Outages of TARGET monitors that are down RIGHT NOW - takes the latest
+        // 'down' row per currently unavailable monitor, not every historical down
+        // row (that would show long-resolved outages as still ongoing).
         try {
             $stmt_logs = $pdo->query("
                 SELECT l.id, l.monitor_id, l.checked_at, l.error_message,
@@ -1836,9 +1836,9 @@ if ($action === 'incidents') {
             ");
             $log_rows = $stmt_logs ? $stmt_logs->fetchAll() : [];
 
-            // Otevřené DB incidenty podle monitoru - živý výpadek se na ně
-            // naváže, aby šel z UI převzít/uzavřít (lifecycle je zakládá
-            // automaticky při přechodu na down).
+            // Open DB incidents by monitor - a live outage links to them so it
+            // can be acknowledged/closed from the UI (the lifecycle creates them
+            // automatically on the transition to down).
             $open_by_monitor = [];
             try {
                 $stmt_open = $pdo->query("SELECT id, acknowledged_by, acknowledged_at FROM incidents WHERE status != 'resolved' AND monitor_id IS NOT NULL");
@@ -1868,8 +1868,8 @@ if ($action === 'incidents') {
             }
         } catch (Throwable $t) {}
 
-        // Ručně nahlášené / globální incidenty (tabulka `incidents` - title/impact/status,
-        // bez vazby na konkrétní monitor).
+        // Manually reported / global incidents (the `incidents` table - title/impact/status,
+        // without a link to a specific monitor).
         $manual_incidents = [];
         try {
             $stmt_inc = $pdo->query("
@@ -1915,9 +1915,9 @@ if ($action === 'incidents') {
     exit;
 }
 
-// 2c2x. Akce nad incidentem (admin-only): převzetí, poznámka/změna stavu,
-// vyřešení s poznámkou, postmortem. Každý krok se zapisuje do
-// incident_updates - timeline je tak úplná bez ohledu na to, kdo co udělal.
+// 2c2x. Actions on an incident (admin-only): acknowledge, note/status change,
+// resolve with a note, postmortem. Every step is written into
+// incident_updates - the timeline stays complete no matter who did what.
 if ($action === 'incident_action') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1987,8 +1987,8 @@ if ($action === 'incident_action') {
     exit;
 }
 
-// 2c3. Ruční nahlášení incidentu (admin-only) - zapisuje do `incidents` + první
-// zprávu do `incident_updates`.
+// 2c3. Manual incident report (admin-only) - writes into `incidents` + the first
+// message into `incident_updates`.
 if ($action === 'create_incident') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -2024,17 +2024,17 @@ if ($action === 'create_incident') {
     exit;
 }
 
-// 2d. SLA Report — reálná uptime a outage data z monitor_logs za posledních 30 dní
-// 2b2j. Přehled SLA pro stránku webů: dostupnost 7/30/365 dní na monitor.
-// sla_report trvá i 3,7 s (detailní výpadky, MTTR) - stránka webů potřebuje
-// jen procenta, takže se počítají jedním oknovaným dotazem a cachují 10 minut.
-// 2b2k. Přehled měřicích míst: odkud se kontroly opravdu prováděly.
-// Skupinuje monitor_logs podle checked_from (uzly zapisují svou lokalitu
-// přes node_api.php, cron nechává výchozí hodnotu). Vrací jen to, co je
-// v datech - žádná mapa s vymyšlenými body po světě.
-// 2b2l. Presety metrik: pojmenované sady „co se zobrazuje a kdy je to
-// problém", přiřaditelné monitorům. Čtení je veřejné (UI je potřebuje
-// k vykreslení), zápis jen pro přihlášeného admina.
+// 2d. SLA Report - real uptime and outage data from monitor_logs over the last 30 days
+// 2b2j. SLA overview for the websites page: 7/30/365-day availability per monitor.
+// sla_report can take 3.7 s (detailed outages, MTTR) - the websites page needs
+// just the percentages, so they come from one windowed query cached for 10 minutes.
+// 2b2k. Vantage point overview: where the checks really ran from.
+// Groups monitor_logs by checked_from (nodes write their location via
+// node_api.php, cron keeps the default). Returns only what is in the
+// data - no map with invented dots across the world.
+// 2b2l. Metric presets: named sets of "what shows and when it is a problem",
+// assignable to monitors. Reading is public (the UI needs them to render),
+// writing is for a logged-in admin only.
 if ($action === 'presets') {
     try {
         $presets = [];
@@ -2047,14 +2047,14 @@ if ($action === 'presets') {
                 'description' => $r['description'],
                 'serviceType' => $r['service_type'],
                 'metrics' => is_array($metrics) ? $metrics : [],
-                // null = preset práh neřeší a nechá hodnotu na monitoru
+                // null = the preset does not govern the threshold and leaves it to the monitor
                 'cpuThreshold' => $r['cpu_threshold'] !== null ? (int)$r['cpu_threshold'] : null,
                 'ramThreshold' => $r['ram_threshold'] !== null ? (int)$r['ram_threshold'] : null,
                 'hddThreshold' => $r['hdd_threshold'] !== null ? (int)$r['hdd_threshold'] : null,
             ];
         }
 
-        // Kolik monitorů preset používá - aby šlo poznat, co smazání ovlivní.
+        // How many monitors use the preset - so a delete's impact is visible.
         $usage = [];
         try {
             $stmt_u = $pdo->query("SELECT preset_id, COUNT(*) AS c FROM monitors WHERE preset_id IS NOT NULL GROUP BY preset_id");
@@ -2067,7 +2067,7 @@ if ($action === 'presets') {
         }
         unset($p);
 
-        // Katalog dostupných metrik podle typu služby (zdroj: profily).
+        // Catalogue of available metrics per service type (source: the profiles).
         $catalog = [];
         foreach (get_service_profiles() as $type => $profile) {
             if (empty($profile['metrics'])) {
@@ -2113,8 +2113,8 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
                     $metrics[] = $clean;
                 }
             }
-            // Prázdný práh = preset ho neřeší; nula je platná hodnota, proto
-            // se rozlišuje '' od 0 a nedosazuje se výchozí číslo.
+            // An empty threshold = the preset does not govern it; zero is a valid
+            // value, hence '' is distinguished from 0 and no default is substituted.
             $thr = function ($v) {
                 if ($v === null || $v === '') {
                     return null;
@@ -2147,8 +2147,8 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
 
         if ($action === 'delete_preset') {
             $id = (int)($input['id'] ?? 0);
-            // Monitory preset jen ztratí a vrátí se k vlastnímu nastavení -
-            // mazání presetu nesmí nikomu shodit monitorování.
+            // Monitors merely lose the preset and return to their own settings -
+            // deleting a preset must not take anyone's monitoring down.
             $pdo->prepare("UPDATE monitors SET preset_id = NULL WHERE preset_id = ?")->execute([$id]);
             $pdo->prepare("DELETE FROM metric_presets WHERE id = ?")->execute([$id]);
             bk_audit_log($pdo, 'preset_deleted', "Preset #{$id} smazán", 'preset', $id);
@@ -2156,7 +2156,7 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
             exit;
         }
 
-        // assign_preset: přiřazení jednomu nebo více monitorům (0 = odebrat)
+        // assign_preset: assign to one or more monitors (0 = remove)
         $preset_id = (int)($input['presetId'] ?? 0);
         $monitor_ids = array_values(array_filter(array_map('intval', (array)($input['monitorIds'] ?? []))));
         if (empty($monitor_ids)) {
@@ -2176,11 +2176,11 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
     exit;
 }
 
-// 2b2m. Rozpad poslední kontroly (DNS -> TCP -> TLS -> HTTP).
+// 2b2m. Breakdown of the last check (DNS -> TCP -> TLS -> HTTP).
 //
-// Data existují od začátku, jen se ukládala výhradně do monitor_logs a
-// žádné API je nevydávalo - v aplikaci proto nešlo zjistit, ve které fázi
-// se web zdržel. Vrací poslední kontrolu, která rozpad skutečně nese.
+// The data existed from the start, but was stored solely in monitor_logs and
+// no API served it - so the app had no way to tell in which stage a site
+// stalled. Returns the latest check that actually carries the breakdown.
 if ($action === 'check_stages') {
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     if ($monitor_id <= 0) {
@@ -2200,7 +2200,7 @@ if ($action === 'check_stages') {
         $row = $stmt->fetch();
 
         if (!$row) {
-            // Žádný rozpad zatím není - není to chyba, jen se ještě neměřilo.
+            // No breakdown yet - not an error, it just has not been measured.
             echo json_encode(['stages' => null], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -2219,10 +2219,10 @@ if ($action === 'check_stages') {
     exit;
 }
 
-// 2b2n. Veřejné status stránky: vlastní výběr monitorů pod vlastním slugem.
+// 2b2n. Public status pages: a custom monitor selection under a custom slug.
 //
-// Čtení je veřejné (stránka má být veřejná), ale skryté stránky vidí jen
-// admin a monitory se vrací jen ty, které stránka opravdu obsahuje.
+// Reading is public (the page is meant to be public), but hidden pages are
+// admin-only and only the monitors the page really contains are returned.
 // 2b2o. Export konfigurace (admin-only).
 //
 // Self-hosted nastroj na sdilenem hostingu: kdyz se ucet rusi nebo stehuje,
@@ -2561,8 +2561,8 @@ if ($action === 'status_page') {
         }
 
         $sp_ids = json_decode($sp_row['monitor_ids'] ?? '', true);
-        // Volby se vrací VŽDY kompletní s doplněnými výchozími hodnotami -
-        // klient pak nemusí vědět, co znamená chybějící klíč.
+        // The options always come back complete with defaults filled in - the
+        // client then does not need to know what a missing key means.
         $sp_opts = json_decode($sp_row['display_options'] ?? '', true) ?: [];
         echo json_encode([
             'title' => $sp_row['title'],
@@ -2602,7 +2602,7 @@ if ($action === 'status_pages') {
                 'slug' => $r['slug'],
                 'description' => $r['description'],
                 'isPublic' => $public,
-                // Prázdný seznam = stránka ukazuje všechny monitory.
+                // An empty list = the page shows all monitors.
                 'monitorIds' => is_array($ids) ? array_values(array_map('intval', $ids)) : [],
                 'displayOptions' => (function () use ($r) {
                     $o = json_decode($r['display_options'] ?? '', true) ?: [];
@@ -2646,8 +2646,8 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
             exit;
         }
 
-        // Slug jde do URL, proto jen bezpečné znaky. Z názvu se odvodí,
-        // když ho uživatel nevyplní.
+        // The slug goes into the URL, hence safe characters only. Derived from
+        // the title when the user leaves it empty.
         $slug = strtolower(trim((string)($input['slug'] ?? '')));
         if ($slug === '') {
             $slug = $title;
@@ -2666,9 +2666,9 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
             }
         }
 
-        // Volby zobrazení: jen známé klíče, aby se do databáze nedal uložit
-        // libovolný JSON. Když jsou všechny na výchozí hodnotě, ukládá se
-        // NULL - stránka bez konfigurace a stránka "ukázat vše" jsou totéž.
+        // Display options: known keys only, so arbitrary JSON cannot be stored
+        // in the database. When everything is at its default, NULL is stored -
+        // an unconfigured page and a "show everything" page are the same thing.
         $display = null;
         if (isset($input['displayOptions']) && is_array($input['displayOptions'])) {
             $opts = [];
@@ -2705,7 +2705,7 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
         }
         echo json_encode(['success' => true, 'id' => $id, 'slug' => $slug], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
-        // Duplicitní slug je chyba uživatele, ne serveru - řekni to srozumitelně.
+        // A duplicate slug is the user's error, not the server's - say it clearly.
         $duplicate = str_contains($e->getMessage(), 'uniq_status_page_slug') || $e->getCode() === '23000';
         http_response_code($duplicate ? 400 : 500);
         echo json_encode([
@@ -2763,13 +2763,13 @@ if ($action === 'regions') {
         foreach ($stmt->fetchAll() as $r) {
             $checks = (int)$r['checks'];
             $regions[] = [
-                // null = uzel svou lokalitu nehlásí; UI to řekne narovinu.
+                // null = the node does not report its location; the UI says so plainly.
                 'location' => $r['checked_from'] !== null && $r['checked_from'] !== '' ? $r['checked_from'] : null,
                 'checks' => $checks,
                 'upChecks' => (int)$r['up_checks'],
                 'downChecks' => (int)$r['down_checks'],
                 'successRate' => $checks > 0 ? round(((int)$r['up_checks'] / $checks) * 100, 2) : null,
-                // Průměr přes NULLIF(...,0): nulová odezva není měření.
+                // Average via NULLIF(...,0): a zero response is not a measurement.
                 'avgResponseMs' => $r['avg_response'] !== null ? round((float)$r['avg_response']) : null,
                 'monitors' => (int)$r['monitors'],
                 'firstSeen' => $r['first_seen'],
@@ -2803,10 +2803,10 @@ if ($action === 'websites_overview') {
             }
         }
 
-        // Krátká okna ze syrových logů (přesná, data tam jsou), dlouhá okna
-        // z denních souhrnů - monitor_logs se maže po 30 dnech, takže roční
-        // hodnota z nich dřív vycházela shodná s třicetidenní a tvrdila
-        // dostupnost za rok, kterou nikdo neměřil.
+        // Short windows from raw logs (exact, the data is there), long windows
+        // from daily rollups - monitor_logs is pruned after 30 days, so the
+        // yearly value used to come out identical to the 30-day one and claimed
+        // a year of availability nobody measured.
         $stmt = $pdo->query("
             SELECT monitor_id,
                    SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS up7,
@@ -2821,7 +2821,7 @@ if ($action === 'websites_overview') {
         ");
         $sla = [];
         $pct = function ($up, $tot) {
-            // Okno bez jediného měření = null, ne vymyšlených 100 %.
+            // A window without a single measurement = null, not an invented 100 %.
             return (int)$tot > 0 ? round((int)$up / (int)$tot * 100, 3) : null;
         };
         while ($row = $stmt->fetch()) {
@@ -2834,8 +2834,8 @@ if ($action === 'websites_overview') {
             ];
         }
 
-        // Dlouhá okna z uptime_daily. Vrací se i skutečná délka historie,
-        // aby UI mohlo říct "za 47 dní" místo aby předstíralo rok.
+        // Long windows from uptime_daily. The real history length is returned
+        // too, so the UI can say "over 47 days" instead of pretending a year.
         try {
             $stmt_long = $pdo->query("
                 SELECT monitor_id,
@@ -2859,7 +2859,7 @@ if ($action === 'websites_overview') {
                 }
             }
         } catch (Throwable $e) {
-            // Bez tabulky souhrnů zůstává dlouhé okno null - viditelně prázdné.
+            // Without the rollup table the long window stays null - visibly empty.
         }
 
         $data = [
@@ -2870,7 +2870,7 @@ if ($action === 'websites_overview') {
             $stmt2 = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('websites_overview_cache', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
             $stmt2->execute([json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE)]);
         } catch (Throwable $e) {
-            // Cache je optimalizace - když se neuloží, endpoint jen počítá častěji.
+            // The cache is an optimisation - if it fails to store, the endpoint just computes more often.
         }
         echo json_encode($data, JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -2884,7 +2884,7 @@ if ($action === 'sla_report') {
     try {
         $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
 
-        // Per-monitor uptime a výpadky
+        // Per-monitor uptime and outages
         $stmt = $pdo->prepare("
             SELECT m.id, m.name, m.target, m.type, m.status as current_status, m.last_status_change,
                    COUNT(l.id) as total_checks,
@@ -2900,14 +2900,14 @@ if ($action === 'sla_report') {
         $stmt->execute([$days]);
         $monitors = $stmt->fetchAll();
 
-        // Dřív tu smyčka pálila 3 dotazy NA KAŽDÝ monitor (poslední výpadek,
-        // jeho konec, percentily) - N+1 v čisté podobě. Teď tři dávkové
-        // dotazy před smyčkou; výsledky drží mapy podle monitor_id a hodnoty
-        // jsou bit po bitu stejné (přibité integračními testy).
+        // The loop here used to fire 3 queries PER monitor (last outage, its
+        // end, percentiles) - N+1 in its purest form. Now three batched
+        // queries before the loop; results live in maps keyed by monitor_id and
+        // the values are bit-for-bit identical (pinned by integration tests).
         $sla_outage_by_mid = [];
         try {
-            // Poslední down řádek každého monitoru + nejbližší následující up
-            // (korelovaný poddotaz běží jen pro monitory, které kdy spadly).
+            // The latest down row of every monitor + the nearest following up
+            // (the correlated subquery runs only for monitors that ever went down).
             $stmt_out_all = $pdo->query("
                 SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
                        (SELECT u.checked_at FROM monitor_logs u
@@ -2924,9 +2924,9 @@ if ($action === 'sla_report') {
 
         $sla_pct_by_mid = [];
         try {
-            // Přesné percentily jedním průchodem: ROW_NUMBER/COUNT po monitorech
-            // a ven jdou JEN řádky na pozicích percentilů. Vzorec pozice je
-            // týž jako v původním PHP: idx = floor(p*(n-1)), rn = idx+1.
+            // Exact percentiles in one pass: ROW_NUMBER/COUNT per monitor and
+            // only the rows at percentile positions leave the query. The position
+            // formula matches the original PHP: idx = floor(p*(n-1)), rn = idx+1.
             $stmt_pct = $pdo->prepare("
                 SELECT monitor_id, rn, cnt, response_time FROM (
                     SELECT monitor_id, response_time,
@@ -2946,7 +2946,7 @@ if ($action === 'sla_report') {
                 $p_rn = (int)$prow['rn'];
                 $p_cnt = (int)$prow['cnt'];
                 $p_val = (int)$prow['response_time'];
-                // Jeden řádek může obsadit víc pozic najednou (malé n).
+                // One row can occupy several positions at once (small n).
                 foreach ([['p50', 0.50], ['p95', 0.95], ['p99', 0.99]] as [$pk, $pp]) {
                     if ($p_rn === (int)floor($pp * ($p_cnt - 1)) + 1) {
                         $sla_pct_by_mid[$p_mid][$pk] = $p_val;
@@ -2961,12 +2961,12 @@ if ($action === 'sla_report') {
             $non_maint = (int)$m['non_maint_checks'];
             $up = (int)$m['up_checks'];
             $down = (int)$m['down_checks'];
-            // Monitor bez jediné měřené kontroly v okně nemá SLA - null,
-            // ne dokonalých 100.0 do reportu, který nikdo nenaměřil.
+            // A monitor without a single measured check in the window has no SLA -
+            // null, not a perfect 100.0 in a report nobody measured.
             $uptimePct = $non_maint > 0 ? round(($up / $non_maint) * 100, 3) : null;
 
-            // Poslední výpadek z dávkové mapy - konec výpadku je nejbližší
-            // následující 'up' záznam, stejně jako u action=events.
+            // The last outage from the batched map - the outage end is the nearest
+            // following 'up' row, same as action=events.
             $last_outage = null;
             $out_row = $sla_outage_by_mid[$mid] ?? null;
             if ($out_row) {
@@ -3013,8 +3013,8 @@ if ($action === 'sla_report') {
         }
 
         $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
-        // Průměr jen z monitorů, které mají skutečně naměřené SLA; bez
-        // jediného takového je výsledek null, ne vymyšlených 100 %.
+        // Average only over monitors with actually measured SLA; without a
+        // single one the result is null, not an invented 100 %.
         $uptime_vals = array_filter(array_column($report, 'uptimePercent'), fn($v) => $v !== null);
         $overall_uptime = count($uptime_vals) > 0
             ? round(array_sum($uptime_vals) / count($uptime_vals), 3)
@@ -3023,10 +3023,10 @@ if ($action === 'sla_report') {
         $mttr_values = array_filter(array_column($report, 'mttrSec'), fn($v) => $v !== null);
         $overall_mttr = !empty($mttr_values) ? round(array_sum($mttr_values) / count($mttr_values)) : null;
 
-        // Prometheus token je credential - do odpovědi patří JEN pro
-        // přihlášeného administrátora. sla_report je jinak veřejný endpoint,
-        // takže bez téhle podmínky si token mohl přečíst kdokoli, kdo
-        // otevřel /app/reports (a metrics.php by mu pak reálně odpovídalo).
+        // The Prometheus token is a credential - it belongs in the response ONLY
+        // for a logged-in administrator. sla_report is otherwise a public endpoint,
+        // so without this condition anyone who opened /app/reports could read the
+        // token (and metrics.php would genuinely answer them).
         $is_admin_session = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
         $metrics_token = $is_admin_session ? trim((string)get_setting('metrics_token')) : '';
         $site_title = trim((string)get_setting('site_title', 'Blood Kings Monitoring'));
@@ -3043,23 +3043,23 @@ if ($action === 'sla_report') {
             'customLogoUrl' => $custom_logo_url,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        // Dřív se tu při chybě DB vracelo 100% uptime a 0 minut výpadků -
-        // dokonalé SLA přesně ve chvíli, kdy o skutečném stavu nevíme nic.
+        // A DB error here used to return 100% uptime and 0 outage minutes -
+        // a perfect SLA precisely when nothing is known about the real state.
         http_response_code(500);
         echo json_encode(['error' => 'Nepodařilo se sestavit SLA report.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
 
-// 2e. Auditní logy z databáze (změny nastavení, přihlášení, auditní protokol)
+// 2e. Audit logs from the database (settings changes, sign-ins, audit trail)
 if ($action === 'audit_logs') {
     try {
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
 
-        // Stejný problém jako u action=events: tail logu pokryje jen pár
-        // desítek minut, starší chybové záznamy z okna vypadnou a protokol
-        // pak lže, že je vše OK. Poslední down/warning řádky se proto
-        // přimíchávají vždy.
+        // The same problem as action=events: the log tail covers only a few
+        // dozen minutes, older error rows fall out of the window and the trail
+        // then lies that all is OK. The latest down/warning rows are therefore
+        // always mixed in.
         $audit_cols = "l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, m.name as monitor_name, m.type as monitor_type";
         $stmt = $pdo->prepare("
             SELECT $audit_cols
@@ -3114,11 +3114,11 @@ if ($action === 'audit_logs') {
     exit;
 }
 
-// 2g. Časové řady a metriky pro grafy (metric_series)
-// Mapa klíčů metrik (viz apps/monitor/src/api/types.ts MetricKey) na skutečné
-// sloupce ve `vps_metrics`. 'response_time'/'latency' je zvlášť - to se měří
-// při každé kontrole do monitor_logs, ne při agent reportu do vps_metrics.
-// Definice je ve functions.php - potřebuje ji i cron kvůli denní agregaci.
+// 2g. Time series and metrics for charts (metric_series)
+// Map of metric keys (see apps/monitor/src/api/types.ts MetricKey) to real
+// columns in `vps_metrics`. 'response_time'/'latency' is special - it is
+// measured on every check into monitor_logs, not on agent reports into vps_metrics.
+// The definition lives in functions.php - cron needs it too for daily rollups.
 $BK_METRIC_COLUMN_MAP = bk_metric_column_map();
 
 if ($action === 'metric_series') {
@@ -3127,8 +3127,8 @@ if ($action === 'metric_series') {
     $period = $_GET['period'] ?? '24h';
     $minutes = bk_period_minutes($period) ?? 1440;
 
-    // Období delší než retence syrových dat (30 dní) se čte z denní agregace
-    // `metrics_daily`. 0 = běžné okno nad vps_metrics.
+    // Periods longer than the raw-data retention (30 days) read from the daily rollup
+    // `metrics_daily`. 0 = the regular window over vps_metrics.
     $long_term_days = $period === '1y' ? 365 : ($period === '180d' ? 180 : ($period === '90d' ? 90 : 0));
     $daily_range = [];
 
@@ -3161,19 +3161,19 @@ if ($action === 'metric_series') {
             $col = $def['col'];
             $unit = $def['unit'];
             $label = $def['label'];
-            // Kumulativní počítadla (firewall, DNS, TCP retransmise) se ukládají
-            // tak, jak je hlásí jádro - tedy stále rostoucí. Kreslit je přímo by
-            // dalo jen stoupající rampu, ze které nic nepoznáš. Graf proto
-            // dostává PŘÍRŮSTEK mezi měřeními.
+            // Cumulative counters (firewall, DNS, TCP retransmissions) are stored
+            // as the kernel reports them - ever-growing. Drawing them directly
+            // would give a rising ramp that tells nothing. The chart therefore
+            // gets the DELTA between measurements.
             $is_counter = !empty($def['counter']);
             if ($is_counter) {
                 $label .= ' (přírůstek)';
             }
 
             if ($long_term_days > 0) {
-                // Syrová data se po 30 dnech mažou, takže z nich rok sestavit
-                // nejde. Bod je denní PRŮMĚR; min/max jde vedle, aby se daly
-                // poznat špičky, které by průměr schoval.
+                // Raw data is pruned after 30 days, so a year cannot be built from
+                // it. A point is the daily AVERAGE; min/max ride along so spikes
+                // the average would hide stay visible.
                 $stmt = $pdo->prepare("
                     SELECT UNIX_TIMESTAMP(day) as ts, avg_val, min_val, max_val, samples
                     FROM metrics_daily
@@ -3186,8 +3186,8 @@ if ($action === 'metric_series') {
                         continue;
                     }
                     if ($is_counter) {
-                        // U počítadla je denní přírůstek rozdíl mezi maximem a
-                        // minimem toho dne. Průměr počítadla nic neznamená.
+                        // For a counter the daily increment is the difference between the
+                        // day's max and min. The average of a counter means nothing.
                         if ($r['max_val'] === null || $r['min_val'] === null) {
                             continue;
                         }
@@ -3212,10 +3212,10 @@ if ($action === 'metric_series') {
                 $stmt->execute([$real_id, $minutes]);
 
                 if ($is_counter) {
-                    // Přírůstek proti předchozímu měření. Když hodnota klesne,
-                    // počítadlo se vynulovalo (reboot, restart firewallu) -
-                    // bod se přeskočí. Dopočítat ho z nuly by vyrobilo špičku,
-                    // která se nestala.
+                    // The delta against the previous measurement. When the value drops,
+                    // the counter was reset (reboot, firewall restart) - the point is
+                    // skipped. Computing it from zero would fabricate a spike that
+                    // never happened.
                     $prev = null;
                     foreach ($stmt->fetchAll() as $r) {
                         $val = (float)$r['val'];
@@ -3235,12 +3235,12 @@ if ($action === 'metric_series') {
             exit;
         }
 
-        // Žádná fabrikace: prázdná řada znamená, že agent tuhle metriku zatím
-        // neposlal nebo pro zadané období nejsou záznamy - ne že si to vymyslíme.
+        // No fabrication: an empty series means the agent has not sent this
+        // metric yet or the period has no records - not that we make one up.
         $series_payload = ['unit' => $unit, 'label' => $label, 'points' => $points];
         if ($long_term_days > 0) {
-            // Klient musí poznat, že nekouká na jednotlivá měření, ale na denní
-            // průměry - jinak by z grafu četl přesnost, kterou ta data nemají.
+            // The client must be able to tell it is looking at daily averages,
+            // not individual measurements - otherwise it would read precision into the chart the data does not have.
             $series_payload['resolution'] = 'daily';
             $series_payload['dailyRange'] = $daily_range;
         }
@@ -3319,8 +3319,8 @@ if ($action === 'metric_detail') {
 
         // Thresholds exist only for metrics that can be watched. Elsewhere a band
         // in the chart would pretend a limit nobody ever set.
-        // Preset > monitor - stejné pořadí jako u alertů v agent_api; pásma
-        // v grafu musí kreslit tutéž mez, při které se skutečně alertuje.
+        // Preset > monitor - the same order as the alerts in agent_api; the chart
+        // bands must draw the same limit that actually alerts.
         $threshold_key = ['cpu' => 'cpu', 'ram' => 'ram', 'hdd' => 'hdd'][$metric] ?? null;
         $eff_detail = bk_monitor_thresholds($pdo, $mon);
         $critical = ($threshold_key !== null && $eff_detail[$threshold_key] !== null && (float)$eff_detail[$threshold_key] > 0)
@@ -3370,19 +3370,19 @@ if ($action === 'metric_detail') {
     exit;
 }
 
-// 2g1c. Co běželo na stroji v daném časovém okně.
+// 2g1c. What was running on the machine in a given time window.
 //
-// Odpovídá na otázku, kterou graf sám nezodpoví: vidím špičku CPU v 19:40, ale
-// čím byla? Čte se výhradně odsud, na vyžádání - žádná stránka tenhle dotaz
-// nedělá při načtení, protože process_samples je největší tabulka v databázi.
-// Krycí index ji zvládá i tak (změřeno nad 1,7 milionu řádků: 0,089 ms,
-// prohledá 60 řádků), ale spouštět to při každém zobrazení dashboardu by
-// znamenalo platit za data, na která se nikdo nedívá.
+// Answers the question the chart alone cannot: I can see a CPU spike at 19:40,
+// but what caused it? Read exclusively from here, on demand - no page issues
+// this query on load, because process_samples is the largest table in the database.
+// The covering index handles it regardless (measured over 1.7 million rows:
+// 0.089 ms, 60 rows examined), but running it on every dashboard view would
+// mean paying for data nobody is looking at.
 if ($action === 'process_history') {
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $kind = ($_GET['kind'] ?? 'cpu') === 'ram' ? 'ram' : 'cpu';
-    // Střed okna v UNIXových sekundách (bod, na který uživatel klikl v grafu)
-    // a poloměr v minutách.
+    // Window centre in UNIX seconds (the point the user clicked in the chart)
+    // and the radius in minutes.
     $around = (int)($_GET['at'] ?? 0);
     $radius = min(180, max(1, (int)($_GET['radius'] ?? 10)));
 
@@ -3393,14 +3393,14 @@ if ($action === 'process_history') {
     }
 
     try {
-        // Okno se počítá v SQL, ne v PHP.
+        // The window is computed in SQL, not in PHP.
         //
-        // `sampled_at` zapisuje agent_api.php přes NOW(), tedy v zóně databáze,
-        // zatímco PHP tady běží v zóně aplikace - na testovacím prostředí je
-        // mezi nimi dvě hodiny. Kdyby se hranice skládaly přes date(), dotaz by
-        // se ptal na jiné dvě hodiny než ve kterých data leží, a panel by
-        // navždy hlásil "pro tuhle chvíli nic nemáme". FROM_UNIXTIME sdílí
-        // zónu s NOW(), takže obě strany mluví o téže chvíli.
+        // `sampled_at` is written by agent_api.php via NOW(), i.e. in the database
+        // zone, while PHP here runs in the application zone - two hours apart on
+        // the test environment. If the bounds were built with date(), the query
+        // would ask about a different two hours than where the data lies, and the
+        // panel would forever report "nothing for this moment". FROM_UNIXTIME
+        // shares the zone with NOW(), so both sides speak about the same moment.
         $stmt = $pdo->prepare(
             "SELECT sampled_at, name, pid, cpu_pct, ram_mb, kept_reason
                FROM process_samples
@@ -3413,8 +3413,8 @@ if ($action === 'process_history') {
         $stmt->execute([$monitor_id, $kind, $around, $radius, $around, $radius]);
         $rows = $stmt->fetchAll();
 
-        // Hranice okna hlásí databáze, aby se v UI zobrazil tentýž čas,
-        // podle kterého se opravdu hledalo.
+        // The window bounds are reported by the database, so the UI displays the
+        // same time the search really used.
         $stmt_win = $pdo->prepare(
             "SELECT DATE_SUB(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_from,
                     DATE_ADD(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_to"
@@ -3434,7 +3434,7 @@ if ($action === 'process_history') {
                 'at' => $r['sampled_at'],
                 'name' => $r['name'],
                 'pid' => $r['pid'] !== null ? (int)$r['pid'] : null,
-                // Nezměřená dimenze zůstává null - v tabulce bude pomlčka.
+                // An unmeasured dimension stays null - the table will show a dash.
                 'cpuPct' => $r['cpu_pct'] !== null ? round((float)$r['cpu_pct'], 1) : null,
                 'ramMb' => $r['ram_mb'] !== null ? round((float)$r['ram_mb'], 1) : null,
             ];
@@ -3444,11 +3444,11 @@ if ($action === 'process_history') {
             'samples' => $samples,
             'from' => $from,
             'to' => $to,
-            // Prázdný výsledek má dvě různé příčiny a klient je musí rozlišit:
-            // buď historie není zapnutá, nebo v tom okně opravdu nic nebylo.
+            // An empty result has two different causes and the client must tell
+            // them apart: either history is not enabled, or the window really had nothing.
             'enabled' => (int)get_setting('process_history_days', '30') > 0,
-            // V prořezaném okně zbyly jen špičky - "nic tu není" pak neznamená
-            // "nic neběželo", ale "běželo, jen nic výrazného".
+            // A thinned window keeps only the peaks - "nothing here" then means
+            // "things ran, just nothing significant", not "nothing ran".
             'pruned' => $pruned,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -3459,8 +3459,8 @@ if ($action === 'process_history') {
     exit;
 }
 
-// 2g2. Dávkové načtení všech grafů zařízení jedním DB dotazem (místo 9 samostatných
-// požadavků na metric_series) - výrazně rychlejší načtení stránky detailu zařízení.
+// 2g2. Batched load of all device charts in one DB query (instead of 9 separate
+// metric_series requests) - a much faster device-detail page load.
 if ($action === 'metric_series_batch') {
     $monitor_id = (int)($_GET['monitor_id'] ?? $_GET['id'] ?? 1);
     $period = $_GET['period'] ?? '24h';
@@ -3480,7 +3480,7 @@ if ($action === 'metric_series_batch') {
 
         $series = [];
 
-        // Latence - z monitor_logs (jeden řádek na kontrolu)
+        // Latency - from monitor_logs (one row per check)
         $stmt_lat = $pdo->prepare("
             SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
             FROM monitor_logs
@@ -3494,7 +3494,7 @@ if ($action === 'metric_series_batch') {
         }
         $series['response_time'] = ['unit' => 'ms', 'label' => 'Doba odezvy (HTTP/Ping)', 'points' => $lat_points];
 
-        // Všechny agentí metriky - z vps_metrics (jeden řádek na agent report), jedním dotazem.
+        // All agent metrics - from vps_metrics (one row per agent report), in one query.
         $cols = array_column($BK_METRIC_COLUMN_MAP, 'col');
         $col_list = implode(', ', array_map(fn($c) => "`$c`", $cols));
         $stmt_vm = $pdo->prepare("
@@ -3507,7 +3507,7 @@ if ($action === 'metric_series_batch') {
         $vm_rows = $stmt_vm->fetchAll();
 
         foreach ($BK_METRIC_COLUMN_MAP as $metric_key => $def) {
-            // Řada omezená na jiný typ monitoru se vůbec nenabízí.
+            // A series restricted to another monitor type is not offered at all.
             if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
                 continue;
             }
@@ -3527,7 +3527,7 @@ if ($action === 'metric_series_batch') {
     exit;
 }
 
-// 2f. Ruční odeslání digestu (admin-only)
+// 2f. Manual digest send (admin-only)
 if ($action === 'send_digest') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -3549,7 +3549,7 @@ if ($action === 'send_digest') {
     exit;
 }
 
-// 2f. Odběry notifikací pro aktuálního uživatele
+// 2f. Notification subscriptions of the current user
 if ($action === 'get_subscriptions') {
     if (empty($_SESSION['admin_logged_in'])) {
         http_response_code(401);
@@ -3591,7 +3591,7 @@ if ($action === 'get_subscriptions') {
     exit;
 }
 
-// 2g. Uložení odběrů notifikací
+// 2g. Save the notification subscriptions
 if ($action === 'save_subscriptions') {
     if (empty($_SESSION['admin_logged_in'])) {
         http_response_code(401);
@@ -3626,11 +3626,11 @@ if ($action === 'save_subscriptions') {
 }
 
 
-// 3. Seznam uživatelů z databáze (vyžaduje přihlášení)
-// Správa uživatelů pro React (/app/users). Do 2026-08-17 tyhle akce
-// NEEXISTOVALY: appApi posílal save_user/delete_user, neznámá akce propadla
-// na výchozí odpověď s HTTP 200 bez klíče error - a UI hlásilo "uloženo",
-// zatímco se nestalo vůbec nic. Stejná logika jako handlery v admin.php.
+// 3. User list from the database (requires login)
+// User management for the React app (/app/users). Until 2026-08-17 these
+// actions DID NOT EXIST: appApi posted save_user/delete_user, the unknown
+// action fell through to the default response with HTTP 200 and no error key -
+// and the UI reported "saved" while nothing happened at all. Same logic as the admin.php handlers.
 if ($action === 'save_user' || $action === 'delete_user') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -3687,8 +3687,8 @@ if ($action === 'save_user' || $action === 'delete_user') {
 
     try {
         if ($su_id > 0) {
-            // Staré hodnoty kvůli auditu - tichá změna e-mailu cizího účtu je
-            // vektor převzetí, audit musí říct, co přesně se změnilo.
+            // Old values for the audit - silently changing someone else's e-mail
+            // is a takeover vector, the audit must say what exactly changed.
             $stmt_old = $pdo->prepare("SELECT username, email, phone, role FROM users WHERE id = ?");
             $stmt_old->execute([$su_id]);
             $su_old = $stmt_old->fetch();
@@ -3716,7 +3716,7 @@ if ($action === 'save_user' || $action === 'delete_user') {
         }
 
         if ($su_password !== '') {
-            // Heslo zadal admin ručně - žádná pozvánka.
+            // The admin typed the password by hand - no invitation.
             $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
                 ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT)]);
             $su_new_id = (int)$pdo->lastInsertId();
@@ -3725,8 +3725,8 @@ if ($action === 'save_user' || $action === 'delete_user') {
             exit;
         }
 
-        // Bez hesla: placeholder hash, který žádnému plaintextu neodpovídá,
-        // a pozvánkový odkaz - admin heslo uživatele nikdy nezná.
+        // Without a password: a placeholder hash matching no plaintext, and an
+        // invitation link - the admin never knows the user's password.
         $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
             ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash(bin2hex(random_bytes(32)), PASSWORD_BCRYPT)]);
         $su_new_id = (int)$pdo->lastInsertId();
@@ -3738,8 +3738,8 @@ if ($action === 'save_user' || $action === 'delete_user') {
             . '<p><a href="' . htmlspecialchars($su_link) . '">' . htmlspecialchars($su_link) . '</a></p>';
         bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', pozvánka e-mailem)', 'user', $su_new_id);
         $su_sent = send_email($su_email, 'Nastavení hesla - ' . $su_site, $su_body);
-        // invited=false při selhání mailu: UI pak po pravdě řekne "účet vznikl,
-        // ale pozvánka neodešla" místo lživého "pozvánka odeslána".
+        // invited=false when the mail fails: the UI then truthfully says "account
+        // created, but the invitation did not go out" instead of a lying "invitation sent".
         echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => (bool)$su_sent], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         if ((string)$e->getCode() === '23000') {
@@ -3836,21 +3836,21 @@ if ($action === 'metrics_history') {
         }
         $rows = $stmt->fetchAll();
 
-        // Žádné řádky = žádný graf. Dřív se tu generovala syntetická sinusová
-        // řada "pro přirozený průběh" - tedy vymyšlená data vydávaná za měření.
-        // Prázdné pole nechá frontend říct "žádná data", což je pravda.
+        // No rows = no chart. A synthetic sine series used to be generated here
+        // "for a natural look" - invented data passed off as measurements.
+        // An empty array lets the frontend say "no data", which is the truth.
         foreach ($rows as $r) {
             $result['labels'][] = $r['label'];
-            // NULL v metrice (např. cpuusage bez CloudLinux) zůstává NULL -
-            // graf ukáže mezeru, ne falešnou nulu.
+            // A NULL metric (e.g. cpuusage without CloudLinux) stays NULL -
+            // the chart shows a gap, not a false zero.
             $result['cpu'][] = $r['cpu'] !== null ? round((float)$r['cpu'], 1) : null;
             $result['ram'][] = $r['ram'] !== null ? round((float)$r['ram'], 1) : null;
             $result['hdd'][] = $r['hdd'] !== null ? round((float)$r['hdd'], 1) : null;
             $result['net'][] = $r['net'] !== null ? round((float)$r['net'], 1) : null;
         }
 
-        // Průměry/maxima jen ze skutečně naměřených hodnot; bez jediné hodnoty
-        // zůstává null a frontend vypíše pomlčku místo nuly.
+        // Averages/maxima only from actually measured values; without a single
+        // value it stays null and the frontend prints a dash instead of a zero.
         foreach (['cpu', 'ram', 'hdd', 'net'] as $mk) {
             $valid = array_filter($result[$mk], fn($v) => $v !== null);
             if (!empty($valid)) {
@@ -3867,31 +3867,31 @@ if ($action === 'metrics_history') {
     exit;
 }
 
-// 5. Veřejný agregovaný přehled
+// 5. Public aggregated overview
 /**
- * Stav sběru dat - pro hlídače, který běží mimo tenhle server.
+ * Data-collection health - for a watchdog running outside this server.
  *
- * Odpovídá na jedinou otázku: běží ještě cron? Když přestane, aplikace se
- * nerozbije - bude dál ukazovat poslední známé stavy a vypadat zdravě.
- * Ze všech způsobů, jak může monitoring selhat, je tenhle nejzákeřnější,
- * protože o sobě nedá vědět.
+ * Answers a single question: is cron still running? When it stops, the app
+ * does not break - it keeps showing the last known states and looks healthy.
+ * Of all the ways monitoring can fail, this one is the most insidious,
+ * because it does not announce itself.
  *
- * Endpoint je veřejný záměrně: hlídač se nemá čím přihlašovat a nic citlivého
- * se odsud nedozví - jen čas posledního běhu a počty. Zároveň je to nejlevnější
- * možná odpověď, aby se dala volat každých pár minut.
+ * The endpoint is deliberately public: the watchdog has nothing to log in
+ * with and learns nothing sensitive here - just the last run time and counts.
+ * It is also the cheapest possible response, so it can be polled every few minutes.
  */
 if ($action === 'collection_health') {
     try {
         $last_run = get_setting('last_cron_run', '');
         $last_run_ts = $last_run !== '' ? strtotime($last_run) : false;
 
-        // Za jak dlouho se má cron ozvat, než to začneme brát jako problém.
-        // Interval spouštění je 1-5 minut; výchozí 15 minut dává prostor
-        // pomalému běhu i přeskočenému tiku, ale ne hodinovému výpadku.
+        // How soon cron must report before it counts as a problem.
+        // The run interval is 1-5 minutes; the default 15 minutes allows a slow
+        // run or a skipped tick, but not an hour-long outage.
         $max_age = max(60, (int)get_setting('collection_max_age_secs', '900'));
 
-        // Nikdy neběžel = nevíme, že je zle, ale rozhodně nevíme, že je dobře.
-        // Hlídač si to musí přebrat jako problém, ne jako "zatím v pořádku".
+        // Never ran = we do not know things are bad, but we surely do not know
+        // they are good. The watchdog must treat it as a problem, not as "fine so far".
         $age = $last_run_ts !== false ? (time() - $last_run_ts) : null;
 
         $duration_raw = get_setting('last_cron_duration_ms', '');
@@ -3902,8 +3902,8 @@ if ($action === 'collection_health') {
             'ageSecs' => $age,
             'maxAgeSecs' => $max_age,
             'stale' => $age === null || $age > $max_age,
-            // Prázdný řetězec znamená "cron s tímhle zápisem ještě neběžel",
-            // ne nulovou dobu běhu - proto NULL, ne 0.
+            // An empty string means "cron never ran with this stamp", not a zero
+            // duration - hence NULL, not 0.
             'lastDurationMs' => $duration_raw !== '' ? (int)$duration_raw : null,
             'monitorsChecked' => $monitors_raw !== '' ? (int)$monitors_raw : null,
             'serverTime' => date('c'),
@@ -3956,9 +3956,9 @@ if ($action === 'public_status') {
             }
         } catch (Throwable $t) {}
 
-        // response_time není sloupec monitors - bere se poslední hodnota z
-        // monitor_logs. Beze jména/výpadku fallbacku: chybí-li reálné uzly,
-        // vrací se prázdný seznam, ne natvrdo napsané "Donald"/"Router - Praha".
+        // response_time is not a monitors column - the latest value comes from
+        // monitor_logs. No name/outage fallback: with no real nodes an empty
+        // list is returned, not a hardcoded "Donald"/"Router - Praha".
         $nodes = [];
         try {
             $stmt_nodes = $pdo->query("
@@ -4007,8 +4007,8 @@ if ($action === 'public_status') {
             'nodes' => $nodes,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        // Nikdy nevracet vymyšlený "healthy" stav při chybě - klient musí poznat,
-        // že se stav infrastruktury nepodařilo zjistit, ne dostat falešné "vše OK".
+        // Never return an invented "healthy" state on error - the client must see
+        // that the infrastructure state could not be determined, not a false "all OK".
         http_response_code(500);
         echo json_encode(['error' => 'Nepodařilo se zjistit stav infrastruktury.'], JSON_UNESCAPED_UNICODE);
     }
@@ -4016,15 +4016,15 @@ if ($action === 'public_status') {
 }
 
 /**
- * Historie měření rychlosti linky a průměry za období.
+ * Link speed measurement history and per-period averages.
  *
- * Router měří přes librespeed-cli a výsledky si ukládá do /tmp, tedy do
- * ramdisku - po restartu jsou pryč. Agent je posílá sem, takže tohle je
- * jediné místo, kde historie opravdu přežije.
+ * The router measures via librespeed-cli and stores results in /tmp, a
+ * ramdisk - gone after a reboot. The agent sends them here, so this is
+ * the only place where the history truly survives.
  *
- * Průměry se počítají jen z toho, co v daném okně skutečně naměřeno bylo;
- * `samples` říká z kolika měření, aby šlo poznat rozdíl mezi "průměr ze
- * třiceti měření" a "průměr z jednoho".
+ * Averages are computed only from what was actually measured in the window;
+ * `samples` says from how many measurements, so "average of thirty" can be
+ * told apart from "average of one".
  */
 if ($action === 'speedtest_history') {
     $sp_monitor_id = (int)($_GET['monitor_id'] ?? 0);
@@ -4044,8 +4044,8 @@ if ($action === 'speedtest_history') {
         foreach ($stmt->fetchAll() as $r) {
             $measurements[] = [
                 'measuredAt' => $r['measured_at'],
-                // NULL zůstává NULL: librespeed občas nevrátí jitter a nula
-                // by tvrdila dokonale stabilní linku.
+                // NULL stays NULL: librespeed sometimes returns no jitter and a zero
+                // would claim a perfectly stable line.
                 'downloadMbps' => $r['download_mbps'] !== null ? round((float)$r['download_mbps'], 2) : null,
                 'uploadMbps' => $r['upload_mbps'] !== null ? round((float)$r['upload_mbps'], 2) : null,
                 'pingMs' => $r['ping_ms'] !== null ? round((float)$r['ping_ms'], 1) : null,
@@ -4069,8 +4069,8 @@ if ($action === 'speedtest_history') {
             $averages[$label] = [
                 'days' => $days,
                 'samples' => $samples,
-                // Bez měření není co průměrovat - nula by vypadala jako
-                // naměřená nulová rychlost.
+                // Nothing measured, nothing to average - a zero would look like
+                // a measured zero speed.
                 'downloadMbps' => $samples > 0 && $row['dl'] !== null ? round((float)$row['dl'], 2) : null,
                 'uploadMbps' => $samples > 0 && $row['ul'] !== null ? round((float)$row['ul'], 2) : null,
                 'pingMs' => $samples > 0 && $row['ping'] !== null ? round((float)$row['ping'], 1) : null,
@@ -4090,16 +4090,16 @@ if ($action === 'speedtest_history') {
 }
 
 /**
- * Skutečný auditní protokol - kdo se přihlásil, kdo co změnil.
+ * The real audit trail - who signed in, who changed what.
  *
- * Tabulka `audit_log` se plní z 62 míst a legacy administrace nad ní má
- * vlastní stránku, jenže React ji nikdy nezobrazil: jeho „protokol" volá
- * `audit_logs` (s „s"), což jsou výsledky kontrol z cronu s natvrdo
- * dosazeným uživatelem „Systémový Agent (Cron)". Filtry na přihlášení
- * a změny konfigurace tak nemohly najít nic.
+ * The `audit_log` table is filled from 62 places and the legacy admin has
+ * its own page over it, but React never showed it: its "log" called
+ * `audit_logs` (with an "s"), which is cron check results with a hardcoded
+ * "System Agent (Cron)" user. Filters for sign-ins and config changes
+ * could therefore never find anything.
  *
- * Jen pro administrátora: je v tom, kdo se odkud přihlásil, včetně
- * neúspěšných pokusů a IP adres.
+ * Admin-only: it contains who signed in from where, including failed
+ * attempts and IP addresses.
  */
 if ($action === 'user_audit_log') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
@@ -4126,16 +4126,16 @@ if ($action === 'user_audit_log') {
                 'id' => (int)$row['id'],
                 'time' => $row['created_at'],
                 'action' => $row['action'],
-                // NULL, když akci provedl někdo nepřihlášený (neúspěšný pokus
-                // o přihlášení neznámým jménem) - dosadit sem „systém" by
-                // tvrdilo, že to udělala aplikace.
+                // NULL when someone unauthenticated performed the action (a failed
+                // sign-in attempt with an unknown name) - substituting "system"
+                // would claim the application did it.
                 'actor' => $row['actor_username'],
                 'targetType' => $row['target_type'],
                 'targetId' => $row['target_id'] !== null ? (int)$row['target_id'] : null,
                 'description' => $row['description'],
                 'ip' => $row['ip_address'],
-                // NULL u záznamů z doby, kdy se user agent ještě neukládal,
-                // a u akcí z cronu (ten žádný prohlížeč nemá).
+                // NULL for records predating user-agent storage and for cron
+                // actions (cron has no browser).
                 'userAgent' => $row['user_agent'],
             ];
         }
@@ -4150,14 +4150,14 @@ if ($action === 'user_audit_log') {
 }
 
 /**
- * Žádost o obnovu hesla z Reactu.
+ * Password reset request from React.
  *
- * Tahle akce v api.php nikdy nebyla. Aplikace přitom kontrolovala jen
- * `res.ok`, a protože neznámá akce vracela 200, napsala pokaždé „návod
- * k obnovení hesla byl odeslán" - a nikdy žádný e-mail neodešel.
+ * This action never existed in api.php. The app only checked `res.ok`, and
+ * because an unknown action returned 200, it printed "password reset
+ * instructions were sent" every time - and no e-mail ever went out.
  *
- * Odpověď je záměrně stejná pro existující i neexistující e-mail, jinak by
- * šlo formulářem zjišťovat, kdo má u nás účet.
+ * The response is deliberately identical for existing and nonexistent
+ * e-mails, otherwise the form could be used to probe who has an account.
  */
 if ($action === 'forgot_password') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -4172,8 +4172,8 @@ if ($action === 'forgot_password') {
     try {
         bk_password_reset_request($pdo, $fp_email, get_setting('site_title', 'Blood Kings'));
     } catch (Throwable $e) {
-        // Ani chyba odesílání nesmí prozradit, jestli účet existuje. Do logu
-        // ano, do odpovědi ne.
+        // Even a send failure must not reveal whether the account exists. Into
+        // the log yes, into the response no.
         error_log('[api] forgot_password selhal: ' . $e->getMessage());
     }
 
@@ -4185,15 +4185,15 @@ if ($action === 'forgot_password') {
 }
 
 /**
- * Založení prvního administrátorského účtu z Reactového průvodce.
+ * Creating the first administrator account from the React wizard.
  *
- * Akce chyběla, takže průvodce hlásil „Instalace úspěšná" a nezaložil nic.
- * Nedošlo k tomu v praxi jen proto, že `action=session` nikdy nevracelo pole
- * `installed` a aplikace zůstávala na výchozím `true` - dvě poloviny jedné
- * nedodělané funkce, každá skrývající tu druhou.
+ * The action was missing, so the wizard reported "Installation successful"
+ * and created nothing. It never happened in practice only because
+ * `action=session` never returned the `installed` field and the app stayed
+ * on its default `true` - two halves of one unfinished feature, each hiding the other.
  *
- * Účet jde založit JEN do prázdné tabulky uživatelů. Jinak by šlo přes
- * veřejný endpoint přidat administrátora do běžící instalace.
+ * An account can be created ONLY into an empty users table. Otherwise a
+ * public endpoint could add an administrator to a running installation.
  */
 if ($action === 'setup') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -4234,8 +4234,8 @@ if ($action === 'setup') {
         $stmt->execute([$su_username, $su_email, password_hash($su_password, PASSWORD_BCRYPT, ['cost' => 12])]);
         $new_user_id = (int)$pdo->lastInsertId();
 
-        // Rovnou přihlásit - jinak by průvodce skončil na přihlašovacím
-        // formuláři s účtem, který právě sám založil.
+        // Sign in right away - otherwise the wizard would end on a login form
+        // for the account it just created itself.
         $_SESSION['admin_logged_in'] = true;
         $_SESSION['admin_id'] = $new_user_id;
         $_SESSION['admin_username'] = $su_username;
@@ -4254,12 +4254,12 @@ if ($action === 'setup') {
 /**
  * Export historie kontrol jednoho monitoru do CSV.
  *
- * Tlačítko „Export CSV" na detailu monitoru na tuhle akci odkazovalo, ale
- * ta nikdy neexistovala - návštěvník si místo tabulky stáhl výchozí JSON
- * přehled služeb s kódem 200 a nemohl poznat, že se něco pokazilo.
+ * The "Export CSV" button on the monitor detail pointed at this action, but
+ * it never existed - the visitor downloaded the default JSON service
+ * overview with a 200 instead of a table and had no way to see the failure.
  *
- * Chybové hlášky se vydávají jen přihlášenému: stránka monitoru je veřejná
- * a texty chyb můžou nést interní jména serverů, která na ní vidět nejsou.
+ * Error texts go only to the logged-in: the monitor page is public and error
+ * messages can carry internal server names that are not visible on it.
  */
 if ($action === 'export_csv') {
     $csv_monitor_id = (int)($_GET['monitor_id'] ?? 0);
@@ -4285,14 +4285,14 @@ if ($action === 'export_csv') {
         ");
         $stmt_logs->execute([$csv_monitor_id, $csv_days]);
 
-        // Hlavička JSON je nastavená nahoře v souboru; pro stahování se musí
-        // přepsat, jinak prohlížeč soubor zobrazí místo uložení.
+        // The JSON header is set at the top of the file; for a download it must
+        // be overridden, or the browser displays the file instead of saving it.
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="monitor-' . $csv_monitor_id . '-' . date('Y-m-d') . '.csv"');
         header('Cache-Control: no-store');
 
         $out = fopen('php://output', 'w');
-        // BOM, aby Excel poznal UTF-8 a nerozsypal diakritiku v názvech.
+        // BOM so Excel recognises UTF-8 and does not scramble the diacritics in names.
         fwrite($out, "\xEF\xBB\xBF");
 
         $header = ['Čas kontroly', 'Stav', 'Odezva (ms)', 'Měřeno z'];
@@ -4305,8 +4305,8 @@ if ($action === 'export_csv') {
             $row = [
                 $log['checked_at'],
                 $log['status'],
-                // Nezměřená odezva zůstává prázdná, ne nula - nula by v tabulce
-                // vypadala jako bleskově rychlá odpověď.
+                // An unmeasured response stays empty, not zero - a zero would read
+                // as a lightning-fast answer in the table.
                 $log['response_time'] !== null ? (int)$log['response_time'] : '',
                 $log['checked_from'] ?? '',
             ];
@@ -4325,12 +4325,12 @@ if ($action === 'export_csv') {
 }
 
 /**
- * Poznámky ke grafům metrik („tady byl deploy", „vyměněný disk").
+ * Annotations for the metric charts ("deploy happened here", "disk swapped").
  *
- * Tabulka `metric_annotations` byla v databázi od začátku a graf měl klikací
- * ovládání, jenže endpoint, na který odesílal, nikdy neexistoval. Poznámka
- * se tiše zahodila a uživatel dostal 200. Za celou dobu se do té tabulky
- * nezapsal jediný řádek.
+ * The `metric_annotations` table existed in the database from the start and
+ * the chart had clickable controls, but the endpoint they posted to never
+ * existed. The note was silently dropped and the user got a 200. Not a
+ * single row was ever written into that table.
  */
 if ($action === 'save_annotation') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
@@ -4374,11 +4374,11 @@ if ($action === 'save_annotation') {
     exit;
 }
 
-/** Poznámky pro vykreslení do grafu. Provozní poznámky vidí jen přihlášený. */
+/** Annotations to draw into the chart. Operational notes are for the logged-in only. */
 if ($action === 'annotations') {
     if (empty($_SESSION['admin_logged_in'])) {
-        // Ne 403: pro anonymního návštěvníka graf prostě žádné poznámky nemá,
-        // což není chyba, na kterou by měl frontend reagovat hláškou.
+        // Not 403: for an anonymous visitor the chart simply has no notes,
+        // which is not an error the frontend should surface.
         echo json_encode(['annotations' => []], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -4408,8 +4408,8 @@ if ($action === 'annotations') {
                 'id' => (int)$a['id'],
                 'ts' => (int)$a['ts'],
                 'note' => $a['note'],
-                // NULL, když autor mezitím zmizel - vymýšlet „admin" by
-                // připsalo poznámku někomu, kdo ji nenapsal.
+                // NULL when the author has since vanished - inventing "admin" would
+                // attribute the note to someone who did not write it.
                 'author' => $a['username'],
             ];
         }
@@ -4423,16 +4423,16 @@ if ($action === 'annotations') {
 }
 
 /**
- * Neznámá akce musí být slyšet.
+ * An unknown action must be heard.
  *
- * Sem propadne všechno, co neodpovídalo žádnému handleru výše, a dosud to
- * tiše dostalo výchozí přehled služeb s kódem 200. Překlep v názvu akce se
- * tak tvářil jako úspěch - přesně proto se roky nevšimlo, že `save_annotation`
- * (poznámky do grafů) a `setup` (průvodce prvním spuštěním) v api.php vůbec
- * nejsou. Volající dostal 200, poznámka se zahodila a nikdo se nic nedozvěděl.
+ * Everything that matched no handler above falls through here, and it used to
+ * silently receive the default service overview with a 200. A typo in an
+ * action name thus looked like success - exactly why nobody noticed for years
+ * that `save_annotation` (chart notes) and `setup` (the first-run wizard) were
+ * missing from api.php. The caller got 200, the note was dropped, nobody learned anything.
  *
- * Prázdná akce si výchozí přehled ponechává - je to staré chování a nechci
- * odstřihnout něco, co na něj venku spoléhá.
+ * An empty action keeps the default overview - it is old behaviour and I do
+ * not want to cut off whatever relies on it out there.
  */
 if ($action !== '') {
     http_response_code(400);
@@ -4442,7 +4442,7 @@ if ($action !== '') {
     exit;
 }
 
-// 6. Výchozí JSON přehled služeb z DB
+// 6. Default JSON service overview from the DB
 $response = [
     'teamspeak' => ['online' => false, 'clients_online' => null, 'clients_max' => null, 'name' => 'TeamSpeak Server'],
     'minecraft' => ['online' => false, 'players_online' => null, 'players_max' => null, 'version' => ''],
@@ -4459,7 +4459,7 @@ try {
         $details = json_decode($ts['last_details'] ?? '', true);
         if ($details && isset($details['clients_online'])) {
             $response['teamspeak']['clients_online'] = (int)$details['clients_online'];
-            // Neznámá kapacita zůstává null - "X / 100" s vymyšleným limitem neukazujeme.
+            // Unknown capacity stays null - no "X / 100" with an invented limit.
             $response['teamspeak']['clients_max'] = isset($details['clients_max']) ? (int)$details['clients_max'] : null;
         }
     }

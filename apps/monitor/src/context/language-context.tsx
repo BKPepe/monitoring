@@ -2192,7 +2192,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.log_warnings': { cs: 'Varování v logu (24 h)', en: 'Log warnings (24 h)' },
   'net.entropy': { cs: 'Entropie', en: 'Entropy' },
   'net.service_restarts': { cs: 'Restarty služeb (od startu agenta):', en: 'Service restarts (since agent start):' },
-  'net.public_ip': { cs: 'Veřejná IP (pohled serveru)', en: 'Public IP (as seen by server)' },
   'net.dns_latency': { cs: 'Latence dotazu', en: 'Query latency' },
   'net.oom_kills': { cs: 'OOM kills (od startu)', en: 'OOM kills (since boot)' },
   'net.boot_time': { cs: 'Systém běží od', en: 'System up since' },

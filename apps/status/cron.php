@@ -1,14 +1,14 @@
 <?php
 /**
- * Cron skript pro pravidelnou kontrolu monitorovaných služeb
- * Doporučený interval spouštění: každé 1 až 5 minut.
- * Příklad volání: php cron.php nebo curl https://status.bloodkings.eu/cron.php
+ * Cron script running the periodic checks of monitored services
+ * Recommended interval: every 1 to 5 minutes.
+ * Invocation: php cron.php or curl https://status.bloodkings.eu/cron.php
  */
 
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
-// Spouštění pouze z CLI (příkazová řádka) nebo se správným bezpečnostním klíčem v URL
+// Runs only from the CLI or with the correct security key in the URL
 $is_cli = (php_sapi_name() === 'cli' || !isset($_SERVER['HTTP_HOST']));
 $cron_key = get_setting('cron_key', '');
 
@@ -21,10 +21,10 @@ if (!$is_cli && !empty($cron_key)) {
 
 echo "Spouštím kontrolu monitorů... \n";
 
-// Začátek běhu si pamatujeme kvůli zápisu na konci (viz `last_cron_run`).
+// Remember the run start for the write at the end (see `last_cron_run`).
 $bk_cron_started = microtime(true);
 
-// --- Schema self-test (1x denně) --- detekuje chybějící sloupce dřív než agent narazí na chybu
+// --- Schema self-test (once a day) --- catches missing columns before an agent hits the error
 $last_schema_check = get_setting('last_schema_check', '');
 if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 hours')) {
     try {
@@ -37,14 +37,14 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
             error_log('[cron] ' . $warn);
             echo "VAROVÁNÍ: $warn\n";
         }
-        // Hodiny databáze proti hodinám PHP.
+        // Database clock versus PHP clock.
         //
-        // Na několika místech se porovnává čas zapsaný databází (NOW()) s
-        // časem z PHP (time()) - třeba u agentů, kteří přestali hlásit.
-        // Dokud mají obě strany stejnou zónu, funguje to; jakmile se rozejdou,
-        // začne monitoring hlásit výpadky, které se nestaly, a nikdo nepozná
-        // proč. Tady se to jen ohlásí: přenastavit zónu za běhu by udělalo
-        // skok v už uložených datech.
+        // Several places compare a database-written time (NOW()) against a
+        // PHP time (time()) - e.g. for agents that stopped reporting.
+        // As long as both sides share a zone it works; once they drift apart
+        // monitoring starts reporting outages that never happened and nobody
+        // can tell why. Here it is only reported: changing the zone at runtime
+        // would put a jump into already-stored data.
         $db_now = $pdo->query("SELECT NOW()")->fetchColumn();
         $skew = abs(strtotime((string)$db_now) - time());
         if ($skew > 120) {
@@ -62,7 +62,7 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
     }
 }
 
-// Načtení všech monitorů
+// Load all monitors
 $stmt = $pdo->query("SELECT * FROM monitors");
 $monitors = $stmt->fetchAll();
 
@@ -76,7 +76,7 @@ foreach ($monitors as $monitor) {
     $old_status = $monitor['status'];
     
     // Kontrola neaktivity VPS agenta (pokud je propojen)
-    // Časový limit 0 = detekce neaktivity agenta je zcela vypnutá
+    // Timeout 0 = agent inactivity detection is fully disabled
     $offline_timeout_mins = intval(get_setting('agent_offline_timeout', '50'));
     if (!empty($monitor['agent_key']) && $offline_timeout_mins > 0) {
         $details_arr = json_decode($monitor['last_details'] ?? '{}', true);
@@ -128,7 +128,7 @@ foreach ($monitors as $monitor) {
             $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'maintenance', last_checked = NOW(), last_status_change = NOW(), last_details = NULL WHERE id = ?");
             $stmt_up->execute([$id]);
             
-            // Odeslat upozornění o zahájení údržby
+            // Send the maintenance-start notification
             trigger_notifications($pdo, $monitor, 'maintenance', $log_msg);
         } else {
             $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW() WHERE id = ?");
@@ -137,10 +137,10 @@ foreach ($monitors as $monitor) {
         continue;
     }
     
-    // Agent-side kontrola (služby na LAN, z hostingu nedosažitelné): stav
-    // zapisuje agent_api při reportu agenta. Cron tu hlídá jen čerstvost -
-    // když výsledky přestanou chodit (agent mlčí), monitor nesmí věčně
-    // svítit poslední známou barvou. 'unknown' se do SLA nepočítá.
+    // Agent-side check (LAN services unreachable from the hosting): the state
+    // is written by agent_api on the agent's report. Cron only watches
+    // freshness here - when results stop arriving (the agent is silent), the
+    // monitor must not keep its last colour forever. 'unknown' does not count into SLA.
     if ($type === 'agent_service') {
         $offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         $last_checked_ts = $monitor['last_checked'] ? strtotime($monitor['last_checked']) : 0;
@@ -156,9 +156,9 @@ foreach ($monitors as $monitor) {
         continue;
     }
 
-    // Heartbeat: úloha se hlásí sama na heartbeat.php, tady se jen kouká na
-    // hodiny. Vyhodnocení je v bk_heartbeat_evaluate(), aby se dalo otestovat
-    // bez databáze i bez čekání na skutečné zpoždění.
+    // Heartbeat: the job reports itself to heartbeat.php, this only watches the
+    // clock. Evaluation lives in bk_heartbeat_evaluate() so it can be tested
+    // without a database and without waiting for a real delay.
     if ($type === 'heartbeat') {
         $hb = bk_heartbeat_evaluate($monitor);
         $new_status = $hb['status'];
@@ -167,9 +167,9 @@ foreach ($monitors as $monitor) {
         if (!is_array($hb_details)) {
             $hb_details = [];
         }
-        // Odezva se u heartbeatu neměří - měřit by šlo leda zpoždění signálu,
-        // což je něco jiného. Do response_time proto nepatří nic (NULL),
-        // rozhodně ne nula, která by v grafu vypadala jako bleskový server.
+        // Heartbeats measure no response time - at best one could measure signal
+        // delay, which is something else. So response_time gets nothing (NULL),
+        // definitely not a zero that would look like a lightning-fast server in charts.
         $hb_details['heartbeat'] = [
             'lastSignalAt' => $monitor['last_heartbeat'] ?? null,
             'ageSecs' => $hb['age_secs'],
@@ -188,8 +188,8 @@ foreach ($monitors as $monitor) {
             $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
             $stmt_up->execute([$new_status, $hb_details_json, $id]);
 
-            // 'unknown' není událost, o které má smysl budit člověka - znamená
-            // jen, že se úloha ještě neozvala. Notifikace odcházejí pro up/down.
+            // 'unknown' is not an event worth waking a human for - it only means
+            // the job has not reported yet. Notifications go out for up/down.
             if ($new_status === 'up' || $new_status === 'down') {
                 trigger_notifications($pdo, $monitor, $new_status, $hb['error']);
             }
@@ -208,18 +208,18 @@ foreach ($monitors as $monitor) {
         'error' => null
     ];
     
-    // Pasivní kontrola VPS/OpenWrt zátěže (agenta) - obojí čeká na push z
-    // agenta, žádná aktivní síťová kontrola tu neprobíhá.
+    // Passive VPS/OpenWrt load check (the agent) - both wait for the agent's
+    // push, no active network check happens here.
     if ($type === 'vps' || $type === 'openwrt') {
-        // Časový limit 0 = detekce neaktivity je vypnutá - monitor zůstává v posledním nahlášeném stavu
+        // Timeout 0 = inactivity detection is off - the monitor stays in its last reported state
         if ($offline_timeout_mins === 0) {
             echo "OK (Detekce neaktivity vypnuta)\n";
         } elseif ($old_status !== 'down') {
             $details_arr = json_decode($monitor['last_details'] ?? '{}', true);
-            // Pokud agent ještě nikdy nehlásil, počítáme timeout od vytvoření
-            // monitoru (ne od epochy 1970) - nový monitor tak dostane stejnou
-            // "grace" dobu (offline_timeout_mins), než ho poprvé označíme jako
-            // DOWN, jako monitor, kterému agent přestal hlásit po prvním hlášení.
+            // If the agent has never reported, the timeout counts from the
+            // monitor's creation (not from the 1970 epoch) - a new monitor gets
+            // the same grace period (offline_timeout_mins) before its first
+            // DOWN as a monitor whose agent went silent after its first report.
             $last_report = $details_arr['agent_last_seen']
                 ?? ($monitor['last_checked'] ? strtotime($monitor['last_checked']) : null)
                 ?? (!empty($monitor['created_at']) ? strtotime($monitor['created_at']) : 0);
@@ -228,7 +228,7 @@ foreach ($monitors as $monitor) {
             $timeout_threshold = time() - $offline_timeout_secs;
 
             if ($last_report < $timeout_threshold) {
-                // Agent neodpovídá
+                // The agent is not responding
                 $new_status = 'down';
                 $last_report_str = $last_report > 0 ? date('d.m.Y H:i', intval($last_report)) : 'nikdy';
                 $error_msg = "VPS Agent neodpovídá déle než {$offline_timeout_mins} minut (poslední hlášení: {$last_report_str}). "
@@ -242,7 +242,7 @@ foreach ($monitors as $monitor) {
                 $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (?, ?, ?)");
                 $stmt_log->execute([$id, $new_status, $error_msg]);
                 
-                // Odeslání notifikace
+                // Send the notification
                 trigger_notifications($pdo, $monitor, $new_status, $error_msg);
                 echo "DOWN (Agent neodpovídá)\n";
             } else {
@@ -254,13 +254,13 @@ foreach ($monitors as $monitor) {
         continue;
     }
     
-    // Aktivní kontroly z hostingu podle typu
+    // Active checks from the hosting, by type
     switch ($type) {
         case 'web':
             $check_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
             detect_config_changes($pdo, $monitor, $check_result);
             
-            // Kontrola expirace SSL certifikátu oproti konfiguraci ssl_alert_days
+            // SSL certificate expiry check against the ssl_alert_days setting
             if (isset($check_result['check_stages']['tls']['cert']['days_remaining'])) {
                 $days_rem = (int)$check_result['check_stages']['tls']['cert']['days_remaining'];
                 $ssl_threshold = (int)get_setting('ssl_alert_days', '14');
@@ -305,22 +305,22 @@ foreach ($monitors as $monitor) {
             break;
 
         default:
-            // Typ bez aktivní kontroly (např. starší import z Service
-            // Discovery s typem 'dns'). Dřív tudy každou minutu propadl
-            // výchozí 'unknown' výsledek až do monitor_logs a SLA report
-            // pak monitoru ukazoval 0 % uptime, přestože ho nikdy nikdo
-            // nekontroloval. Bez měření žádný zápis.
+            // A type with no active check (e.g. an older Service Discovery
+            // import typed 'dns'). The default 'unknown' result used to fall
+            // through here into monitor_logs every minute and the SLA report
+            // then showed the monitor at 0 % uptime even though nobody ever
+            // checked it. No measurement, no write.
             $stmt_skip = $pdo->prepare("UPDATE monitors SET last_checked = NOW() WHERE id = ?");
             $stmt_skip->execute([$id]);
             echo "SKIP (typ '{$type}' nemá aktivní kontrolu)\n";
             continue 2;
     }
 
-    // Okamžitý druhý pokus při selhání - jediný přechodný 5s timeout (síťový
-    // hiccup, chvilkové přetížení sdíleného hostingu) dřív okamžitě překlopil
-    // stav na down a vystřelil notifikace (WhatsApp/SMS/e-mail), aby se za
-    // minutu vše vrátilo s druhou notifikací. Skutečný výpadek selže i
-    // napodruhé; blip tímhle zmizí úplně a žádná notifikace neodejde.
+    // Immediate retry on failure - a single transient 5s timeout (network
+    // hiccup, momentary shared-hosting overload) used to flip the state
+    // to down instantly and fire the notifications (WhatsApp/SMS/e-mail),
+    // only for everything to come back a minute later with a second wave. A real
+    // outage fails the retry too; a blip disappears entirely and nothing is sent.
     if (($check_result['status'] ?? '') === 'down') {
         sleep(2);
         $retry_result = null;
@@ -350,12 +350,12 @@ foreach ($monitors as $monitor) {
         }
     }
 
-    // cPanel fallback pro web monitory: když HTTP kontrola selže i napodruhé,
-    // ale cPanel exporter na stejném hostingu normálně odpovídá, server žije -
-    // problém je v HTTP cestě (Cloudflare, PHP-FPM apod.), ne v celém stroji.
-    // Zapíše se down s doplněnou informací, ale stejná logika jako agent
-    // fallback níže se tady záměrně NEaplikuje - web, který nevrací stránky,
-    // JE nedostupný pro návštěvníky, jen chceme do notifikace přesnější kontext.
+    // cPanel fallback for web monitors: when the HTTP check fails twice but
+    // the cPanel exporter on the same hosting responds normally, the server
+    // is alive - the problem is in the HTTP path (Cloudflare, PHP-FPM, ...),
+    // not the whole machine. A down is written with the extra context, but the
+    // agent-fallback logic below deliberately does NOT apply - a web that
+    // serves no pages IS down for visitors, we just want a more precise notification.
     if (($check_result['status'] ?? '') === 'down' && $type === 'web' && !empty($monitor['cpanel_stats_url'])) {
         $cp_probe = check_cpanel($monitor['cpanel_stats_url'], min($timeout, 5));
         if (($cp_probe['status'] ?? '') === 'up') {
@@ -369,7 +369,7 @@ foreach ($monitors as $monitor) {
     $error_msg = $check_result['error'];
     $details = null;
     
-    // ZÁLOŽNÍ FALLBACK: Pokud aktivní kontrola selže, zkusíme se dotázat na data z lokálně běžícího VPS agenta
+    // BACKUP FALLBACK: if the active check fails, ask the locally running VPS agent for data
     if ($new_status === 'down') {
         $details_decoded = json_decode($monitor['last_details'] ?? '{}', true);
         $agent_last_seen = $details_decoded['agent_last_seen'] ?? 0;
@@ -442,7 +442,7 @@ foreach ($monitors as $monitor) {
         }
     }
     
-    // Sestavení detailních informací pro specifické typy
+    // Build the type-specific detail info
     if ($details === null && $new_status === 'up') {
         if ($type === 'minecraft') {
             $details = json_encode([
@@ -475,8 +475,8 @@ foreach ($monitors as $monitor) {
             }
         } elseif ($type === 'teamspeak') {
             $details = json_encode([
-                // Nezjištěný počet hráčů není nula - prázdný server a
-                // neúspěšný dotaz jsou dvě různé věci.
+                // An undetermined player count is not zero - an empty server and
+                // a failed query are two different things.
                 'clients_online' => $check_result['clients_online'] ?? null,
                 'clients_max' => $check_result['clients_max'] ?? null,
                 // Nezjistene jmeno serveru zustava null - UI pak ukaze nazev monitoru,
@@ -493,8 +493,8 @@ foreach ($monitors as $monitor) {
             bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details);
             $ts3_process_cpu = null;
             $ts3_process_ram = null;
-            // Bez metrik od agenta zůstává NULL - fiktivní nuly by v přehledu
-            // vypadaly jako naprosto nezatížený stroj.
+            // Without agent metrics it stays NULL - fictional zeros would make
+            // the overview look like a completely idle machine.
             $ts3_host_cpu = null;
             $ts3_host_ram = null;
             $ts3_host_hdd = null;
@@ -518,8 +518,8 @@ foreach ($monitors as $monitor) {
             ]);
         } elseif ($type === 'discord') {
             $details = json_encode([
-                // Nezjištěný počet online NENÍ nula - selhaný dotaz a prázdný
-                // server jsou dvě různé věci.
+                // An unknown online count is NOT zero - a failed query and an
+                // empty server are two different things.
                 'presence_count' => $check_result['presence_count'] ?? null,
                 'name' => $check_result['name'] ?? null,
                 'instant_invite' => $check_result['instant_invite'] ?? null,
@@ -528,10 +528,10 @@ foreach ($monitors as $monitor) {
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
 
-            // Počet online se dosud ukládal jen jako aktuální snímek v details,
-            // takže Discord neměl žádný graf kromě odezvy - data se sbírala
-            // každou minutu a hned zahazovala. Ukládá se do stejného sloupce,
-            // jaký používá TeamSpeak (kolik lidí je online).
+            // The online count used to be stored only as a snapshot in details,
+            // so Discord had no chart except latency - data was collected every
+            // minute and thrown away. It goes into the same column TeamSpeak
+            // uses (how many people are online).
             if (isset($check_result['presence_count']) && $check_result['presence_count'] !== null) {
                 try {
                     $stmt_dc = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, ts_clients_online) VALUES (?, ?)");
@@ -591,22 +591,22 @@ foreach ($monitors as $monitor) {
                     ];
                     $details_arr['cpanel_stats_error'] = null;
 
-                    // Uložit do vps_metrics pro historii grafů. Chybějící metrika
-                    // se ukládá jako NULL, ne 0.0 - nula je reálná hodnota a
-                    // vymyšlená nula by v grafech vypadala jako "server se fláká"
-                    // (StatsBar bez CloudLinux např. cpuusage vůbec nevrací).
+                    // Store into vps_metrics for chart history. A missing metric is
+                    // stored as NULL, not 0.0 - zero is a real value and an invented
+                    // zero would read as "the server is slacking" in charts
+                    // (StatsBar without CloudLinux returns no cpuusage at all).
                     $cpu_val = isset($cp_res['cpu']['percent']) ? floatval($cp_res['cpu']['percent']) : null;
                     $ram_val = isset($cp_res['memory']['percent']) ? floatval($cp_res['memory']['percent']) : null;
                     $hdd_val = isset($cp_res['disk']['percent']) ? floatval($cp_res['disk']['percent']) : null;
                     $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
                     $stmt_metrics->execute([$id, $cpu_val, $ram_val, $hdd_val]);
                 } else {
-                    // Selhání sběru cPanel statistik dřív jen tiše přeskočilo zápis -
-                    // data zmizela bez jediné stopy (přesně tak umřel sběr 21.7.,
-                    // když deploy přepsal na serveru ručně vložený STATS_KEY).
-                    // Chyba se teď ukládá do details, aby byla vidět v UI/API;
-                    // `since` drží začátek výpadku napříč běhy cronu a `hint`
-                    // říká adminovi, jak KONKRÉTNĚ tenhle druh selhání opravit.
+                    // A failed cPanel stats collection used to skip the write silently -
+                    // data vanished without a trace (exactly how collection died on
+                    // 21 Jul, when a deploy overwrote the hand-edited STATS_KEY).
+                    // The error now goes into details so the UI/API can show it;
+                    // `since` keeps the outage start across cron runs and `hint`
+                    // tells the admin how to fix THIS particular failure.
                     $cp_http = $cp_res['http_code'] ?? null;
                     if ($cp_http === 404) {
                         $cp_hint = t('cpanel_hint_404');
@@ -642,7 +642,7 @@ foreach ($monitors as $monitor) {
             ], JSON_UNESCAPED_UNICODE);
             
             if ($new_status === 'up') {
-                // NULL pro chybějící metriky - stejný důvod jako u web monitorů výše.
+                // NULL for missing metrics - same reason as for web monitors above.
                 $cpu_val = isset($check_result['cpu']['percent']) ? floatval($check_result['cpu']['percent']) : null;
                 $ram_val = isset($check_result['memory']['percent']) ? floatval($check_result['memory']['percent']) : null;
                 $hdd_val = isset($check_result['disk']['percent']) ? floatval($check_result['disk']['percent']) : null;
@@ -652,7 +652,7 @@ foreach ($monitors as $monitor) {
         }
     }
     
-    // Sjednotit staré detaily (např. z VPS agenta) s novými z aktivní kontroly
+    // Merge old details (e.g. from the VPS agent) with the fresh active-check ones
     if ($details !== null) {
         $old_details = json_decode($monitor['last_details'] ?? '{}', true);
         if (!is_array($old_details)) {
@@ -661,11 +661,11 @@ foreach ($monitors as $monitor) {
         $new_details_arr = json_decode($details, true);
         if (is_array($new_details_arr)) {
             $merged_details_arr = array_merge($old_details, $new_details_arr);
-            // Otisk verze nasazení do details - diagnostika, KTERÝ soubor cron.php
-            // reálně běží. FTP deploy porovnává jen proti vlastnímu stavovému
-            // souboru, takže ručně přepsaný soubor na serveru (nebo cron job
-            // mířící na starou kopii mimo public_html/status/) z gitu nepoznáme
-            // jinak než touhle stopou v datech.
+            // Deployment version stamp in details - diagnoses WHICH cron.php
+            // file actually runs. The FTP deploy compares only against its own
+            // state file, so a manually replaced file on the server (or a cron
+            // job pointing at an old copy outside public_html/status/) is
+            // invisible from git except through this trace in the data.
             @include_once __DIR__ . '/version.php';
             $merged_details_arr['cron_version'] = defined('APP_VERSION_HASH') ? APP_VERSION_HASH : 'dev';
             $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
@@ -674,49 +674,49 @@ foreach ($monitors as $monitor) {
         $details = $monitor['last_details'];
     }
     
-    // Zapsat výsledek do historie logů
+    // Write the result into the log history
     $loc = get_setting('cron_location', '');
-    // Pokud je nastaveno AUTO, prázdné nebo zbývá výchozí Praha fallback → použít auto-detekovanou lokaci
+    // If set to AUTO, empty, or still the default Prague fallback -> use the auto-detected location
     $loc_is_auto = empty($loc) || $loc === 'AUTO' || $loc === '🇨🇿 Praha, CZ';
     if ($loc_is_auto) {
         $loc = get_setting('ip_loc_local', '');
         if (empty($loc)) {
             $loc = detect_server_location();
-            // Uložíme do settings cache
+            // Store into the settings cache
             $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
             $stmt_set->execute(['ip_loc_local', $loc, $loc]);
         }
     }
-    // check_stages (rozpad DNS/TCP/TLS/HTTP/body fází u 'web', ServerQuery/service/
-    // ports/license u 'teamspeak') existuje jen u těchto dvou typů - u ostatních je
-    // vždy null, žádná změna chování pro ně.
+    // check_stages (DNS/TCP/TLS/HTTP/body breakdown for 'web', ServerQuery/service/
+    // ports/license for 'teamspeak') exists only for these two types - for the
+    // rest it is always null, no behaviour change for them.
     $check_stages_json = (in_array($type, ['web', 'teamspeak'], true) && isset($check_result['check_stages']))
         ? json_encode($check_result['check_stages'], JSON_UNESCAPED_UNICODE)
         : null;
     $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages) VALUES (?, ?, ?, ?, ?, ?)");
     $stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);
     
-    // Zjistit změnu stavu
+    // Detect a status change
     if ($old_status !== $new_status) {
-        // Uložit nový stav a čas změny
+        // Store the new status and the change time
         $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
         $stmt_up->execute([$new_status, $details, $id]);
         
-        // Odeslat notifikace o změně stavu
+        // Send the status-change notifications
         trigger_notifications($pdo, $monitor, $new_status, $error_msg);
         echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
     } else {
-        // Pouze aktualizovat čas poslední kontroly
+        // Only update the last-check time
         $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
         $stmt_up->execute([$details, $id]);
         echo strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
     }
 
-    // --- Trvale zhoršená odezva ------------------------------------------
+    // --- Persistently degraded latency -----------------------------------
     //
-    // Běží až po zápisu logu, aby do okna spadla i právě proběhlá kontrola.
-    // Vyhodnocuje se jen u běžících služeb - u těch, co jsou dole, je
-    // "pomalá odpověď" nesmysl a upozornění na výpadek už odešlo.
+    // Runs after the log write so the just-finished check falls into the window.
+    // Evaluated only for running services - for those that are down, a
+    // "slow response" is nonsense and the outage alert already went out.
     if ($new_status === 'up') {
         $lat_details = json_decode($details ?: '{}', true);
         if (!is_array($lat_details)) {
@@ -755,29 +755,29 @@ foreach ($monitors as $monitor) {
     }
 }
 
-// Denní souhrny se musí přepočítat PŘED mazáním - jinak by se data, která
-// se za okamžik smažou, do dlouhodobé historie nikdy nedostala.
+// Daily rollups must be recomputed BEFORE pruning - otherwise data deleted
+// a moment later would never make it into the long-term history.
 //
-// Poprvé se prochází celá dosavadní retence (31 dní), aby se nezahodila
-// historie, která v DB už je; potom stačí posledních 5 dnů, což pokryje
-// i výpadek cronu na pár dní. Příznak drží v settings, ne v db.php -
-// tam funkce ještě není načtená (functions.php se includuje až po něm).
+// The first pass walks the whole retained range (31 days) so history already
+// in the DB is not thrown away; afterwards the last 5 days suffice, which
+// also covers a few days of cron downtime. The flag lives in settings, not in
+// db.php - the function is not loaded there yet (functions.php comes after it).
 $backfill_done = get_setting('uptime_daily_backfilled', '');
 $rollup_days = $backfill_done === '1' ? 5 : 31;
 $rolled = bk_rollup_daily_uptime($pdo, $rollup_days);
 
-// Denní agregace metrik agentů. Nejde každou minutu: je to 26 dotazů
-// (jeden na metriku) a pořád nad stejným oknem, takže půlhodinový interval
-// bohatě stačí - okno je pětidenní, takže ani výpadek cronu na pár dní
-// o nic nepřipraví.
+// Daily aggregation of agent metrics. Not every minute: it is 26 queries
+// (one per metric) over the same window, so a half-hour interval is
+// plenty - the window is five days, so even a few days of cron downtime
+// loses nothing.
 try {
     $last_metrics_rollup = get_setting('last_metrics_rollup', '');
     $metrics_due = $last_metrics_rollup === '' || strtotime($last_metrics_rollup) < time() - 1800;
     if ($metrics_due) {
-        // Vlastní příznak, ne ten od dostupnosti. Uptime backfill dávno
-        // proběhl, takže $rollup_days je 5 - a agregace metrik, která běží
-        // až teď, by z existujících 30 dnů zpracovala jen posledních pět.
-        // Zbytek by tiše smazala retence dřív, než by ho kdo zagregoval.
+        // Its own flag, not the availability one. The uptime backfill ran long
+        // ago, so $rollup_days is 5 - and the metric aggregation, which only
+        // starts now, would process just the last five of the existing 30 days.
+        // Retention would silently delete the rest before anyone aggregated it.
         $metrics_backfilled = get_setting('metrics_daily_backfilled', '');
         $metric_days = $metrics_backfilled === '1' ? 5 : 31;
 
@@ -804,23 +804,23 @@ if ($backfill_done !== '1') {
 }
 echo "Denní souhrny dostupnosti: {$rolled} zápisů (okno {$rollup_days} dní).\n";
 
-// Vyčištění starých logů (starších než 30 dní) kvůli úspoře místa v DB
+// Prune old logs (older than 30 days) to save DB space
 try {
     $pdo->exec("DELETE FROM monitor_logs WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
     $pdo->exec("DELETE FROM vps_metrics WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
-    // Audit log: delší retence (90 dní) - bezpečnostní záznamy
+    // Audit log: longer retention (90 days) - security records
     $pdo->exec("DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)");
     echo "Vyčištění starých dat dokončeno.\n";
 
-    // --- Historie procesů -------------------------------------------------
+    // --- Process history --------------------------------------------------
     //
-    // Retence je nastavitelná, protože tahle tabulka roste nejrychleji ze všech
-    // (deset řádků na monitor a minutu). Výchozích 30 dní vyjde u čtyř agentů
-    // zhruba na 1,7 milionu řádků a 250 MB - změřeno, ne odhadnuto.
+    // Retention is configurable because this table grows fastest of all
+    // (ten rows per monitor per minute). The default 30 days comes to roughly
+    // 1.7 million rows and 250 MB with four agents - measured, not estimated.
     //
-    // Volitelné prořezání nechá po zadaném počtu dní jen vzorky ze špiček.
-    // Ty si nesou kept_reason='peak', aby šlo poznat rozdíl mezi "tady se
-    // opravdu nic nedělo" a "tady jsme to smazali".
+    // Optional thinning keeps only peak samples after the configured days.
+    // Those carry kept_reason='peak', so "nothing really happened here" can
+    // be told apart from "we deleted this".
     $proc = bk_prune_process_samples(
         $pdo,
         max(0, (int)get_setting('process_history_days', '30')),
@@ -837,16 +837,16 @@ try {
     echo "Chyba při čištění starých logů: " . $e->getMessage() . "\n";
 }
 
-// Invalidace cache dashboardu - po doběhu kontrol se agregace přepočítají s čerstvými daty
+// Invalidate the dashboard cache - after the checks, aggregations recompute with fresh data
 @unlink(__DIR__ . '/cache/dashboard_agg.json');
 
-// Kontrola a odeslání pravidelných digestů (týdenní v pondělí, měsíční 1. v měsíci)
+// Check and send the scheduled digests (weekly on Monday, monthly on the 1st)
 try {
     $today_day = date('w'); // 0 (Sun) - 6 (Sat)
     $today_date = date('j'); // 1 - 31
     $current_hour = (int)date('G');
     
-    // Týdenní digest – každé pondělí (day 1) mezi 08:00 a 12:00
+    // Weekly digest - every Monday (day 1) between 08:00 and 12:00
     if ($today_day == 1 && $current_hour >= 8 && $current_hour < 12) {
         $last_weekly = get_setting('last_weekly_digest_sent', '');
         $current_week = date('Y-W');
@@ -860,7 +860,7 @@ try {
         }
     }
     
-    // Měsíční digest – 1. den v měsíci mezi 08:00 a 12:00
+    // Monthly digest - 1st day of the month between 08:00 and 12:00
     if ($today_date == 1 && $current_hour >= 8 && $current_hour < 12) {
         $last_monthly = get_setting('last_monthly_digest_sent', '');
         $current_month = date('Y-m');
@@ -877,11 +877,11 @@ try {
     echo "Chyba při automatickém odesílání digestů: " . $e->getMessage() . "\n";
 }
 
-// --- Eskalace nepřevzatých incidentů -------------------------------------
+// --- Escalation of unacknowledged incidents -------------------------------
 //
-// Upozornění na výpadek dosud odešlo jednou a tím to skončilo. Když ho nikdo
-// neviděl, výpadek běžel dál a monitoring měl splněno. Tohle je pojistka:
-// co nikdo nepřevzal do nastavené doby, se ohlásí znovu a na jiný kanál.
+// The outage notification used to go out once and that was it. If nobody saw
+// it, the outage kept running and monitoring considered its job done. This is
+// the safety net: whatever nobody acknowledged in time is announced again, elsewhere.
 try {
     $esc = bk_process_escalations($pdo);
     if ($esc['escalated'] > 0) {
@@ -894,15 +894,15 @@ try {
     error_log('[cron] Eskalace selhala: ' . $e->getMessage());
 }
 
-// --- Otisk vlastního běhu ------------------------------------------------
+// --- Stamp of this run ----------------------------------------------------
 //
-// Bez tohohle záznamu nemá nikdo jak poznat, že sběr dat přestal běžet.
-// Aplikace by dál zobrazovala poslední známé stavy a tvářila se, že je klid -
-// což je nejhorší možný způsob, jak monitoring selže: tiše a spolehlivě.
+// Without this record there is no way to tell that data collection stopped.
+// The app would keep showing the last known states and pretend all is calm -
+// the worst possible way for monitoring to fail: silently and reliably.
 //
-// Zapisuje se až na konci, takže `last_cron_run` znamená "běh doběhl celý",
-// ne "běh začal". Sleduje to hlídač zvenku (apps/worker), který se ozve, když
-// hodnota zestárne.
+// Written at the very end, so `last_cron_run` means "the run finished whole",
+// not "the run started". An external watchdog (apps/worker) tracks it and
+// speaks up when the value grows stale.
 try {
     $bk_cron_duration_ms = (int)round((microtime(true) - $bk_cron_started) * 1000);
     $stmt_run = $pdo->prepare(

@@ -1,6 +1,6 @@
 <?php
 /**
- * Databázové připojení a načtení nastavení
+ * Database connection and settings bootstrap
  */
 
 if (!file_exists(__DIR__ . '/config.php') && file_exists(__DIR__ . '/config.sample.php')) {
@@ -14,16 +14,16 @@ if (file_exists(__DIR__ . '/config.php')) {
     die('<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Konfigurace nenalezena | Blood Kings</title><style>body{background:#0b0c10;color:#fff;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}.card{background:#14161d;border:1px solid rgba(176,0,32,0.4);border-radius:12px;padding:2.5rem;max-width:480px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.5);}h2{color:#b00020;margin-top:0;}p{color:#aaa;line-height:1.6;font-size:0.95rem;}code{background:rgba(255,255,255,0.08);padding:0.2rem 0.4rem;border-radius:4px;color:#fff;}</style></head><body><div class="card"><h2>Blood Kings Monitoring</h2><p>Konfigurační soubor <code>config.php</code> nebyl na serveru nalezen.</p><p>Zkopírujte na serveru soubor <code>config.sample.php</code> na <code>config.php</code> a vyplňte vaše přihlašovací údaje k MySQL databázi, nebo spusťte deploy z GitHubu s vyplněným secretem <code>STATUS_CONFIG_PHP</code>.</p></div></body></html>');
 }
 
-// Čísla do JSON v nejkratším zápisu, který se zpětně načte na tutéž hodnotu.
+// Numbers in JSON use the shortest representation that round-trips to the same value.
 //
-// Bez tohohle vypisuje json_encode() plný desetinný rozvoj doublu, takže se
+// Without this json_encode() prints the double's full decimal expansion, so
 // z hodnoty 35,2 (sloupec FLOAT) stane 35.20000000000000284217094304040074348
-// a z 0,4 padesátiznakový řetězec. Na status stránce se každých 24 h vkládá
-// 1 728 bodů na čtyřech řadách u každého monitoru - tímhle narostla stránka
-// na 1,6 MB a server ji tak dlouho skládal.
+// 0.4 becomes a fifty-character string. The status page embeds 1,728 points
+// on four series per monitor every 24 h - this alone grew the page
+// to 1.6 MB and made the server spend that long assembling it.
 //
-// PHP má -1 jako výchozí od verze 7.1, tenhle hosting to má přenastavené.
-// Nastavuje se tady, protože přes db.php prochází každá stránka i API.
+// PHP defaults to -1 since 7.1; this hosting has it overridden.
+// Set here because every page and API request passes through db.php.
 ini_set('serialize_precision', '-1');
 
 try {
@@ -32,9 +32,9 @@ try {
         $db_port = defined('DB_PORT') ? DB_PORT : 5432;
         $dsn = "pgsql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME;
     } else {
-        // DB_PORT se dřív používal jen u Postgresu, takže MySQL na jiném
-        // než výchozím portu se nepřipojila a uživatel viděl jen obecnou
-        // hlášku "Chyba připojení k databázi".
+        // DB_PORT used to apply only to Postgres, so MySQL on a non-default
+        // port never connected and the user only saw the generic
+        // "Database connection error" message.
         $db_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
         $dsn = "mysql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME . ";charset=utf8mb4";
     }
@@ -45,8 +45,8 @@ try {
     ];
     $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
 
-    // Verze schématu - při změně migrací níže zvyšte hodnotu (a v schema.sql).
-    // Migrace se díky tomu spouští jen jednou, ne při každém requestu.
+    // Schema version - bump when changing the migrations below (and schema.sql).
+    // Thanks to this, migrations run only once, not on every request.
     define('BK_SCHEMA_VERSION', '20260817b');
 
     $bk_current_schema = false;
@@ -54,33 +54,33 @@ try {
         $stmt_ver = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'");
         $bk_current_schema = $stmt_ver->fetchColumn();
     } catch (PDOException $e) {
-        // Tabulka settings ještě neexistuje - migrace se pokusí doběhnout níže
+        // The settings table does not exist yet - migrations below will try to finish
     }
 
     if ($bk_current_schema !== BK_SCHEMA_VERSION) {
 
-    // Automatická migrace - přidání sloupce checked_from do tabulky monitor_logs
+    // Automatic migration - add the checked_from column to monitor_logs
     try {
         $pdo->exec("ALTER TABLE monitor_logs ADD COLUMN checked_from VARCHAR(50) DEFAULT 'Main Server'");
     } catch (PDOException $e) {
-        // Sloupec již existuje nebo tabulka neexistuje (např. před importem), ignorujeme
+        // Column already exists or the table is missing (e.g. before import) - ignore
     }
     
-    // Automatická migrace - přidání sloupce role do tabulky users
+    // Automatic migration - add the role column to users
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'");
     } catch (PDOException $e) {
-        // Sloupec již existuje, ignorujeme
+        // Column already exists - ignore
     }
     
-    // Zajištění, že první registrovaný uživatel (hlavní administrátor) má roli admin
+    // Make sure the first registered user (the main administrator) has the admin role
     try {
         $pdo->exec("UPDATE users SET role = 'admin' WHERE id = 1");
     } catch (PDOException $e) {
         // Ignorujeme
     }
     
-    // Vytvoření vazební tabulky pro odběry notifikací uživatelů
+    // Create the join table for user notification subscriptions
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS `user_subscriptions` (
             `user_id` INT NOT NULL,
@@ -95,35 +95,35 @@ try {
         // Ignorujeme
     }
     
-    // Automatická migrace - přidání sloupce notes do tabulky monitors
+    // Automatic migration - add the notes column to monitors
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN notes TEXT DEFAULT NULL");
     } catch (PDOException $e) {
         // Ignorujeme
     }
 
-    // Automatická migrace - přidání sloupce maintenance do tabulky monitors
+    // Automatic migration - add the maintenance column to monitors
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN maintenance TINYINT(1) DEFAULT 0");
     } catch (PDOException $e) {
         // Ignorujeme
     }
 
-    // Automatická migrace - přidání sloupce monitored_processes do tabulky monitors
+    // Automatic migration - add the monitored_processes column to monitors
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN monitored_processes TEXT DEFAULT NULL");
     } catch (PDOException $e) {
         // Ignorujeme
     }
     
-    // Automatická migrace - přidání sloupce whatsapp_apikey do tabulky users
+    // Automatic migration - add the whatsapp_apikey column to users
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN whatsapp_apikey VARCHAR(100) DEFAULT NULL");
     } catch (PDOException $e) {
-        // Sloupec již existuje, ignorujeme
+        // Column already exists - ignore
     }
 
-    // Automatická migrace - přidání sloupců pro OAuth v tabulce users
+    // Automatic migration - add the OAuth columns to users
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN oauth_provider VARCHAR(50) DEFAULT NULL");
     } catch (PDOException $e) {}
@@ -131,31 +131,31 @@ try {
         $pdo->exec("ALTER TABLE users ADD COLUMN oauth_id VARCHAR(100) DEFAULT NULL");
     } catch (PDOException $e) {}
     
-    // Automatická migrace - přidání sloupce sms_notifications do tabulky users
+    // Automatic migration - add the sms_notifications column to users
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN sms_notifications TINYINT(1) DEFAULT 0");
     } catch (PDOException $e) {
-        // Sloupec již existuje, ignorujeme
+        // Column already exists - ignore
     }
 
-    // Automatická migrace - přidání sloupců pro plánovanou údržbu do tabulky monitors
+    // Automatic migration - add the planned-maintenance columns to monitors
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN maintenance_description TEXT DEFAULT NULL");
     } catch (PDOException $e) {
-        // Ignorujeme, pokud sloupec již existuje
+        // Ignore if the column already exists
     }
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN maintenance_start DATETIME DEFAULT NULL");
     } catch (PDOException $e) {
-        // Ignorujeme, pokud sloupec již existuje
+        // Ignore if the column already exists
     }
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN maintenance_end DATETIME DEFAULT NULL");
     } catch (PDOException $e) {
-        // Ignorujeme, pokud sloupec již existuje
+        // Ignore if the column already exists
     }
 
-    // Automatická migrace - zajištění délky sloupce status v monitors a monitor_logs
+    // Automatic migration - ensure the status column length in monitors and monitor_logs
     try {
         $pdo->exec("ALTER TABLE monitors MODIFY COLUMN status VARCHAR(20) DEFAULT 'unknown'");
     } catch (PDOException $e) {}
@@ -163,14 +163,14 @@ try {
         $pdo->exec("ALTER TABLE monitor_logs MODIFY COLUMN status VARCHAR(20) NOT NULL");
     } catch (PDOException $e) {}
 
-    // Automatická migrace - přidání sloupce cpanel_stats_url do tabulky monitors
+    // Automatic migration - add the cpanel_stats_url column to monitors
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN cpanel_stats_url VARCHAR(255) DEFAULT NULL");
     } catch (PDOException $e) {
-        // Ignorujeme, pokud sloupec již existuje
+        // Ignore if the column already exists
     }
 
-    // Automatická migrace - převod starých cpanel monitorů na web monitory s cpanel_stats_url
+    // Automatic migration - convert old cpanel monitors to web monitors with
     try {
         $stmt_check_cpanel = $pdo->query("SELECT * FROM monitors WHERE type = 'cpanel'");
         $cpanel_monitors = $stmt_check_cpanel->fetchAll();
@@ -185,21 +185,21 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - přidání sloupce whatsapp_notifications do tabulky users
+    // Automatic migration - add the whatsapp_notifications column to users
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN whatsapp_notifications TINYINT(1) DEFAULT 0");
     } catch (PDOException $e) {
         // Ignorujeme
     }
 
-    // Automatická migrace - přidání sloupce whatsapp_notifications do tabulky user_subscriptions
+    // Automatic migration - add the whatsapp_notifications column to user_subscriptions
     try {
         $pdo->exec("ALTER TABLE user_subscriptions ADD COLUMN whatsapp_notifications TINYINT(1) DEFAULT 0");
     } catch (PDOException $e) {
         // Ignorujeme
     }
 
-    // Automatická migrace - vygenerování agent_key pro všechny existující monitory bez klíče
+    // Automatic migration - generate an agent_key for every existing monitor without one
     try {
         $stmt_null_keys = $pdo->query("SELECT id FROM monitors WHERE agent_key IS NULL OR agent_key = ''");
         $null_monitors = $stmt_null_keys->fetchAll();
@@ -213,7 +213,7 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - zvětšení sloupce status na VARCHAR(20) pro podporu 'maintenance' (11 znaků)
+    // Automatic migration - widen the status column to VARCHAR(20) to fit 'maintenance' (11 chars)
     try {
         $pdo->exec("ALTER TABLE monitors MODIFY COLUMN status VARCHAR(20) DEFAULT 'unknown'");
     } catch (PDOException $e) {
@@ -225,7 +225,7 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - přidání prahových hodnot pro VPS agenta
+    // Automatic migration - threshold values for the VPS agent
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN cpu_threshold INT DEFAULT 90");
     } catch (PDOException $e) {
@@ -242,15 +242,15 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - propustnost sítě (KB/s) hlášená agenty; NULL u starších
-    // řádků a u agentů, kteří síť ještě nehlásí (chybí předchozí vzorek pro výpočet).
+    // Automatic migration - network throughput (KB/s) reported by agents; NULL on older
+    // rows and for agents that do not report network yet (no previous sample to diff against).
     try {
         $pdo->exec("ALTER TABLE vps_metrics ADD COLUMN net_usage FLOAT DEFAULT NULL");
     } catch (PDOException $e) {
         // Ignorujeme
     }
 
-    // Automatická migrace - check pipeline (DNS/TCP/TLS/HTTP/body fáze u 'web' monitorů)
+    // Automatic migration - check pipeline (DNS/TCP/TLS/HTTP/body stages for 'web' monitors)
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN body_keyword VARCHAR(255) DEFAULT NULL");
     } catch (PDOException $e) {
@@ -262,7 +262,7 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - infrastructure report digest (config change tracking + event log)
+    // Automatic migration - infrastructure report digest (config change tracking + event log)
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN config_snapshot TEXT DEFAULT NULL");
     } catch (PDOException $e) {
@@ -293,8 +293,8 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - hloubkový TeamSpeak monitoring + Host/VPS vrstva (load average,
-    // CPU steal, swap, disk I/O, síťové chyby) a TeamSpeak proces/klienti pro grafy historie.
+    // Automatic migration - deep TeamSpeak monitoring + Host/VPS layer (load average,
+    // CPU steal, swap, disk I/O, network errors) and the TeamSpeak process/clients for history charts.
     foreach ([
         "ALTER TABLE vps_metrics ADD COLUMN load_avg_1 FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN load_avg_5 FLOAT DEFAULT NULL",
@@ -325,9 +325,9 @@ try {
         // Ignorujeme
     }
 
-    // Automatická migrace - dokončení Level 2 Host vrstvy (IO wait, inode usage,
-    // zombie procesy, fork rate, teplota). Vše volitelné/NULL, starší agenti tato
-    // pole neposílají vůbec.
+    // Automatic migration - finishing the Level 2 Host layer (IO wait, inode usage,
+    // zombie processes, fork rate, temperature). All optional/NULL, older agents
+    // do not send these fields at all.
     foreach ([
         "ALTER TABLE vps_metrics ADD COLUMN iowait_pct FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN inode_usage_pct FLOAT DEFAULT NULL",
@@ -393,10 +393,10 @@ try {
         ");
     } catch (PDOException $e) {}
 
-    // Automatická migrace - Service Profiles: uživatel si zapíná/vypíná, které
-    // sekce dashboardu se pro daný monitor zobrazují (viz get_service_profiles()).
-    // NULL = žádný explicitní výběr, dashboard použije "recommended" výchozí
-    // hodnoty profilu, které přesně odpovídají tomu, co se zobrazovalo dosud.
+    // Automatic migration - Service Profiles: the user toggles which dashboard
+    // sections show for a given monitor (see get_service_profiles()).
+    // NULL = no explicit selection, the dashboard uses the profile's "recommended"
+    // defaults, which match exactly what used to be displayed before.
     foreach ([
         "ALTER TABLE monitors ADD COLUMN enabled_metrics TEXT DEFAULT NULL",
     ] as $migration_sql) {
@@ -407,8 +407,8 @@ try {
         }
     }
 
-    // Automatická migrace - RCON přihlášení pro Minecraft (TPS přes Paper/Spigot
-    // příkaz "tps"). Volitelné - bez vyplnění se používá jen SLP jako dosud.
+    // Automatic migration - RCON login for Minecraft (TPS via the Paper/Spigot
+    // "tps" command). Optional - left empty, plain SLP is used as before.
     foreach ([
         "ALTER TABLE monitors ADD COLUMN rcon_port INT DEFAULT NULL",
         "ALTER TABLE monitors ADD COLUMN rcon_password VARCHAR(255) DEFAULT NULL",
@@ -432,12 +432,12 @@ try {
         }
     }
 
-    // Automatická migrace - Remote Actions: chybějící per-monitor souhlas.
-    // Předchozí implementace (ed31853) měla HMAC podpis a časové okno správně,
-    // ale žádnou serverovou kontrolu, jestli daný router vzdálené akce vůbec
-    // povolil - kdokoliv admin mohl zařadit reboot pro libovolný monitor.
-    // Výchozí hodnota 0/NULL = žádný monitor nemá nic povoleno, dokud si to
-    // admin v jeho nastavení výslovně nezapne.
+    // Automatic migration - Remote Actions: the missing per-monitor consent.
+    // The previous implementation (ed31853) had the HMAC signature and time
+    // window right but no server-side check that the router had actually
+    // allowed remote actions - any admin could queue a reboot for any monitor.
+    // Default 0/NULL = no monitor has anything allowed until the admin
+    // explicitly turns it on in its settings.
     foreach ([
         "ALTER TABLE monitors ADD COLUMN remote_actions_enabled TINYINT(1) DEFAULT 0",
         "ALTER TABLE monitors ADD COLUMN allowed_actions VARCHAR(255) DEFAULT NULL",
@@ -449,13 +449,13 @@ try {
         }
     }
 
-    // Automatická migrace - Assets: fyzické/logické zařízení, které může
-    // sdružovat víc monitorů (dřív tuhle vazbu nešlo vyjádřit vůbec - každý
-    // monitor byl nezávislý). Každý existující monitor bez asset_id dostane
-    // svůj vlastní nový 1:1 asset - žádné hádání, které monitory spolu
-    // "opravdu" patří (pro to není spolehlivý signál - agent_key je vždy
-    // unikátní, category je jen popisek). Slučování víc monitorů do jednoho
-    // assetu je od teď výhradně ruční akce administrátora (viz admin.php).
+    // Automatic migration - Assets: a physical/logical device that can
+    // group several monitors (this relationship could not be expressed at
+    // all before - every monitor was independent). Every existing monitor
+    // without an asset_id gets its own new 1:1 asset - no guessing which
+    // monitors "really" belong together (there is no reliable signal for
+    // that - agent_key is always unique, category is just a label). Merging
+    // monitors into one asset is strictly a manual admin action (see admin.php).
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS `assets` (`id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(150) NOT NULL, `icon` VARCHAR(30) DEFAULT NULL, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     } catch (PDOException $e) {
@@ -463,12 +463,12 @@ try {
     try {
         $pdo->exec("ALTER TABLE monitors ADD COLUMN asset_id INT DEFAULT NULL");
     } catch (PDOException $e) {
-        // Sloupec už existuje, ignorujeme
+        // Column already exists - ignore
     }
     try {
         $pdo->exec("ALTER TABLE monitors ADD CONSTRAINT fk_monitors_asset_id FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL");
     } catch (PDOException $e) {
-        // Constraint už existuje (nebo hosting nepodporuje pojmenované FK přes ALTER) - bez tvrdého selhání
+        // Constraint already exists (or the hosting cannot do named FKs via ALTER) - no hard failure
     }
     try {
         $stmt_unassigned = $pdo->query("SELECT id, name FROM monitors WHERE asset_id IS NULL");
@@ -479,47 +479,47 @@ try {
             $stmt_assign->execute([(int)$pdo->lastInsertId(), $um['id']]);
         }
     } catch (PDOException $e) {
-        // Tabulka monitors/assets ještě neexistuje (čerstvá instalace před importem schema.sql) - ignorujeme
+        // The monitors/assets table does not exist yet (fresh install before schema.sql import) - ignore
     }
 
-    // Per-user jazyk e-mailů: NULL = řídí se globálním nastavením email_lang
+    // Per-user e-mail language: NULL = follow the global email_lang setting
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN email_lang VARCHAR(5) DEFAULT NULL");
     } catch (PDOException $e) {
-        // Sloupec už existuje, ignorujeme
+        // Column already exists - ignore
     }
 
-    // Metriky ve vps_metrics smí být NULL - když zdroj (StatsBar bez CloudLinux,
-    // agent bez čidla) hodnotu nevrací, ukládá se NULL místo vymyšlené nuly
+    // Metrics in vps_metrics may be NULL - when the source (StatsBar without CloudLinux,
+    // an agent without the sensor) returns nothing, NULL is stored instead of an invented zero
     try {
         $pdo->exec("ALTER TABLE vps_metrics MODIFY COLUMN cpu_usage FLOAT NULL, MODIFY COLUMN ram_usage FLOAT NULL, MODIFY COLUMN hdd_usage FLOAT NULL");
     } catch (PDOException $e) {
-        // Tabulka ještě neexistuje (čerstvá instalace) - ignorujeme
+        // Table does not exist yet (fresh install) - ignore
     }
 
-    // restart_service potřebuje vědět KTEROU službu restartovat - bez sloupce
-    // se jméno nikdy nepřeneslo a akce u všech agentů končila "failed".
+    // restart_service needs to know WHICH service to restart - without the column
+    // the name never travelled and the action ended "failed" on every agent.
     try {
         $pdo->exec("ALTER TABLE agent_actions ADD COLUMN service_name VARCHAR(64) DEFAULT NULL");
     } catch (PDOException $e) {
-        // Sloupec už existuje, ignorujeme
+        // Column already exists - ignore
     }
 
-    // Přečtená upozornění se drží na uživateli, ne v localStorage prohlížeče -
-    // jinak "označit vše jako přečtené" platí jen na jednom počítači.
+    // Read-alert state lives on the user, not in the browser's localStorage -
+    // otherwise "mark all as read" only holds on a single computer.
     try {
         $pdo->exec("ALTER TABLE users ADD COLUMN alerts_read_log_id INT DEFAULT 0");
     } catch (PDOException $e) {
-        // Sloupec už existuje, ignorujeme
+        // Column already exists - ignore
     }
 
-    // Výkon: seznam monitorů se ptá na POSLEDNÍ řádek podle id pro každý
-    // monitor (odezva z logů, metriky z agenta). Bez indexu (monitor_id, id)
+    // Performance: the monitor list asks for the LATEST row by id for every
+    // monitor (response time from logs, metrics from the agent). Without the (monitor_id, id) index
     // to znamenalo scan - endpoint monitors trval ~0,7 s a brzdil celou appku.
     foreach ([
-        // Incidenty jako plnohodnotné objekty: vazba na monitor, převzetí
-        // (acknowledge) a postmortem. NULLable - ručně založené incidenty
-        // vazbu na monitor nemají.
+        // Incidents as first-class objects: link to a monitor, acknowledge
+        // and postmortem. NULLable - manually created incidents have
+        // no monitor link.
         // Editovatelne presety: pojmenovana sada zobrazenych metrik a prahu,
         // kterou lze priradit vice monitorum najednou. Nahrazuje situaci, kdy
         // sly menit jen prahy jednotlivych monitoru a sada metrik byla
@@ -579,16 +579,16 @@ try {
         "ALTER TABLE incidents ADD COLUMN acknowledged_by VARCHAR(64) NULL",
         "ALTER TABLE incidents ADD COLUMN acknowledged_at DATETIME NULL",
         "ALTER TABLE incidents ADD COLUMN postmortem TEXT NULL",
-        // Eskalace: incident, který nikdo nepřevzal, se po nastavené době
-        // ohlásí ještě jednou a jinam. Razítko brání tomu, aby se to
-        // opakovalo při každém běhu cronu.
+        // Escalation: an incident nobody acknowledged is announced once more,
+        // elsewhere, after the configured time. The timestamp prevents it
+        // from repeating on every cron run.
         "ALTER TABLE incidents ADD COLUMN escalated_at DATETIME NULL",
-        // Audit log dosud nezaznamenával, čím se kdo přihlásil. U neúspěšných
-        // pokusů je to často jediné vodítko, jestli šlo o člověka, nebo o bota.
+        // The audit log never recorded what people signed in with. For failed
+        // attempts it is often the only clue whether it was a human or a bot.
         "ALTER TABLE audit_log ADD COLUMN user_agent VARCHAR(255) NULL",
 
-        // Výsledky měření rychlosti z routeru - trvale, protože router
-        // si je drží jen v /tmp.
+        // Speed test results from the router - kept permanently, because the router
+        // only holds them in /tmp.
         "CREATE TABLE IF NOT EXISTS `speedtest_results` (
           `id` INT AUTO_INCREMENT PRIMARY KEY,
           `monitor_id` INT NOT NULL,
@@ -605,21 +605,21 @@ try {
           KEY `idx_speedtest_measured` (`measured_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-        // Regions dotaz (dostupnost podle místa měření) agregoval 30 dní
-        // monitor_logs bez použitelného indexu - 3,7 s na produkci, zatímco
-        // ostatní dotazy veřejné stránky jsou pod vteřinou. Krycí index dá
-        // MySQL všechno, co dotaz čte, bez sahání do řádků tabulky.
+        // The regions query (availability by vantage point) aggregated 30 days of
+        // monitor_logs without a usable index - 3.7 s in production while the
+        // other public page queries stay under a second. A covering index gives
+        // MySQL everything the query reads without touching table rows.
         "CREATE INDEX idx_logs_regions ON monitor_logs (checked_at, checked_from, status, response_time, monitor_id)",
 
-        // Volby zobrazení status stránky - které sekce veřejná stránka ukáže.
-        // NULL = všechno, aby se stránky založené dřív nezměnily.
+        // Status page display options - which sections the public page shows.
+        // NULL = everything, so pages created earlier do not change.
         "ALTER TABLE status_pages ADD COLUMN display_options TEXT DEFAULT NULL",
 
-        // Historie procesů - kdo v danou chvíli žral CPU a paměť.
+        // Process history - who was eating CPU and memory at a given moment.
         //
-        // Agenti tyhle žebříčky posílají každou minutu už dlouho, ale ukládal
-        // se jen poslední snímek do last_details, který další hlášení přepsalo.
-        // Z grafu tedy šlo vidět, že v 19:40 vyskočilo CPU, ale ne čím.
+        // Agents have been sending these rankings every minute for a long time,
+        // but only the last snapshot was stored in last_details and overwritten
+        // by the next report. The chart showed CPU jumping at 19:40, but not why.
         "CREATE TABLE IF NOT EXISTS `process_samples` (
           `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
           `monitor_id` INT NOT NULL,
@@ -636,7 +636,7 @@ try {
           CONSTRAINT `fk_procsamples_monitor` FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-        // Metriky, které agenti posílali, ale ukládal se jen poslední snímek.
+        // Metrics the agents kept sending while only the last snapshot was stored.
         "ALTER TABLE vps_metrics ADD COLUMN wan_latency_ms FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN dns_latency_ms FLOAT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN entropy_avail INT DEFAULT NULL",
@@ -673,8 +673,8 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN sqm_dropped BIGINT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN wan_reconnect_count BIGINT DEFAULT NULL",
 
-        // Denní agregace metrik - jediný způsob, jak mít řadu delší než
-        // retence syrových dat (30 dní).
+        // Daily metric aggregation - the only way to have a series longer than
+        // the raw-data retention (30 days).
         "CREATE TABLE IF NOT EXISTS `metrics_daily` (
           `monitor_id` INT NOT NULL,
           `day` DATE NOT NULL,
@@ -688,11 +688,11 @@ try {
           KEY `idx_metrics_daily_day` (`day`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "CREATE INDEX idx_logs_monitor_id_desc ON monitor_logs (monitor_id, id)",
-        // Okenní SLA agregace (websites_overview) filtruje rok logů podle času.
+        // The windowed SLA aggregation (websites_overview) filters a year of logs by time.
         "CREATE INDEX idx_logs_checked_at ON monitor_logs (checked_at)",
         "CREATE INDEX idx_vpsm_monitor_id_desc ON vps_metrics (monitor_id, id)",
 
-        // Anomalie CPU/RAM pocitaji AVG a STDDEV nad 30 dny. Bez krycího indexu
+        // CPU/RAM anomalies compute AVG and STDDEV over 30 days. Without a covering index
         // to byl full scan pres celou tabulku - a ta ma po rozsireni o dalsi
         // metriky pres 60 sloupcu, takze se z disku cetlo mnohonasobne vic dat,
         // nez ten dotaz potrebuje.
@@ -704,21 +704,21 @@ try {
         try {
             $pdo->exec($idx_sql);
         } catch (PDOException $e) {
-            // Index už existuje (nebo tabulka ještě ne) - ignorujeme
+            // Index already exists (or the table does not yet) - ignore
         }
     }
 
-    // Uložení aktuální verze schématu - migrace se příště přeskočí
+    // Store the current schema version - migrations get skipped next time
     try {
         $stmt_ver = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
         $stmt_ver->execute([BK_SCHEMA_VERSION]);
     } catch (PDOException $e) {
-        // Tabulka settings neexistuje (před importem schematu) - migrace proběhnou znovu
+        // The settings table does not exist (before schema import) - migrations will run again
     }
 
     } // konec bloku migrací (schema_version)
 } catch (PDOException $e) {
-    // Pokud se nepodaří připojit, zobrazíme srozumitelné chybové hlášení
+    // If the connection fails, show an intelligible error message
     http_response_code(500);
     ?>
     <!DOCTYPE html>
@@ -745,7 +745,7 @@ try {
     exit;
 }
 
-// Funkce pro načtení dynamických nastavení z databáze
+// Loads dynamic settings from the database
 function get_settings($pdo) {
     $settings = [];
     try {
@@ -754,43 +754,43 @@ function get_settings($pdo) {
             $settings[$row['key_name']] = $row['key_value'];
         }
     } catch (PDOException $e) {
-        // Tabulka ještě neexistuje (např. před importem) - ignorujeme
+        // Table does not exist yet (e.g. before import) - ignore
     }
     return $settings;
 }
 
 $system_settings = get_settings($pdo);
 
-// Pomocná funkce pro ověření, zda je nastavení definováno bezpečně v config.php nebo v prostředí serveru
+// Helper: checks whether a setting is defined safely in config.php or the server environment
 function is_setting_env_defined($key) {
     $const_name = strtoupper($key);
     return defined($const_name) || getenv($const_name) !== false || isset($_SERVER[$const_name]);
 }
 
-// Pomocná funkce pro získání konkrétního nastavení s výchozí hodnotou (s prioritou pro config.php/prostředí)
-// Nikdy nevrací null (kvůli PHP 8.1+ deprecacím při předání do htmlspecialchars apod.)
+// Helper: fetch one setting with a default (config.php/environment take precedence)
+// Never returns null (PHP 8.1+ deprecations when passed to htmlspecialchars etc.)
 function get_setting($key, $default = '') {
     global $system_settings;
 
     $const_name = strtoupper($key);
 
-    // 1. Priorita: Konstanta definovaná v config.php
+    // Priority 1: a constant defined in config.php
     if (defined($const_name) && constant($const_name) !== null) {
         return constant($const_name);
     }
 
-    // 2. Priorita: Proměnná prostředí (getenv)
+    // Priority 2: an environment variable (getenv)
     $env_val = getenv($const_name);
     if ($env_val !== false) {
         return $env_val;
     }
 
-    // 3. Priorita: Serverová proměnná (např. z .htaccess)
+    // Priority 3: a server variable (e.g. from .htaccess)
     if (isset($_SERVER[$const_name])) {
         return $_SERVER[$const_name];
     }
 
-    // 4. Fallback: Hodnota uložená v databázi
+    // Priority 4: the value stored in the database
     $val = $system_settings[$key] ?? $default;
     return $val === null ? $default : $val;
 }

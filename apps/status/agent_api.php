@@ -1,20 +1,20 @@
 <?php
 /**
- * API Endpoint pro příjem dat z VPS agenta
+ * API endpoint receiving VPS agent reports
  */
 
 header('Content-Type: application/json');
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
-// Povolit pouze POST požadavky
+// Allow POST requests only
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['success' => false, 'message' => 'Metoda není povolena. Použijte POST.']);
     exit;
 }
 
-// Načtení JSON dat z těla požadavku
+// Read the JSON body of the request
 $raw_data = file_get_contents('php://input');
 $data = json_decode($raw_data, true);
 
@@ -25,11 +25,11 @@ if (!$data) {
     exit;
 }
 
-// --- Samostatné potvrzení výsledku Remote Action ---
-// Agent (agent_openwrt.sh) tohle posílá jako lehký follow-up POST hned po
-// provedení akce, odděleně od hlavní telemetrie (ta už pro tenhle cyklus
-// odešla). Nemá cpu/ram/hdd, takže musí projít dřív, než na ně narazí
-// běžná validace povinných telemetrických polí níže.
+// --- Standalone Remote Action result acknowledgement ---
+// The agent (agent_openwrt.sh) sends this as a lightweight follow-up POST
+// right after executing an action, separately from the main telemetry
+// (already sent for this cycle). It has no cpu/ram/hdd, so it must be
+// handled before the usual required-telemetry validation below.
 if (isset($data['action_result']) && is_array($data['action_result']) && !isset($data['cpu'])) {
     $ar_agent_key = trim($data['agent_key'] ?? '');
     if (empty($ar_agent_key)) {
@@ -60,11 +60,11 @@ if (isset($data['action_result']) && is_array($data['action_result']) && !isset(
     exit;
 }
 
-// --- Výsledky agent-side kontrol služeb (OpenWrt v1.5.3+) ---
-// Samostatný mini-request stejně jako action_result: agent po hlavním
-// reportu lokálně ověří služby ze seznamu service_checks v odpovědi
-// a pošle výsledky. Výsledek se smí zapsat jen do 'agent_service'
-// monitorů STEJNÉHO assetu, jakému patří agent_key.
+// --- Agent-side service check results (OpenWrt v1.5.3+) ---
+// A standalone mini-request just like action_result: after the main report
+// the agent locally verifies the services from the service_checks list in
+// the response and sends the results. A result may only be written to
+// 'agent_service' monitors of the SAME asset the agent_key belongs to.
 if (isset($data['service_check_results']) && is_array($data['service_check_results']) && !isset($data['cpu'])) {
     $sc_agent_key = trim($data['agent_key'] ?? '');
     if (empty($sc_agent_key)) {
@@ -99,12 +99,12 @@ if (isset($data['service_check_results']) && is_array($data['service_check_resul
     exit;
 }
 
-// --- Zpracování automatické registrace agenta ---
+// --- Automatic agent registration ---
 if (isset($data['action']) && $data['action'] === 'register') {
     $token = trim($data['token'] ?? '');
     $reg_token = get_setting('agent_registration_token');
     
-    // Pokud registrační token není v nastavení, použije se záložní cron_key
+    // When no registration token is configured, the cron_key acts as fallback
     if (empty($reg_token)) {
         $reg_token = get_setting('cron_key');
     }
@@ -138,16 +138,16 @@ if (isset($data['action']) && $data['action'] === 'register') {
     exit;
 }
 
-// Ověření povinných údajů
+// Validate the required fields
 $agent_key = isset($data['agent_key']) ? trim($data['agent_key']) : '';
 $cpu = isset($data['cpu']) ? floatval($data['cpu']) : null;
 $ram = isset($data['ram']) ? floatval($data['ram']) : null;
 $hdd = isset($data['hdd']) ? floatval($data['hdd']) : null;
-// Propustnost sítě (KB/s) je volitelná - starší agenti ji neposílají vůbec a
-// nový agent ji vrací až od druhého běhu (potřebuje předchozí vzorek pro výpočet).
+// Network throughput (KB/s) is optional - older agents do not send it at all and
+// a new agent returns it only from its second run (needs a previous sample to diff).
 $net = (isset($data['net']) && $data['net'] !== null) ? floatval($data['net']) : null;
 
-// Host vrstva (Level 2) - vše volitelné, starší agenti tato pole neposílají vůbec.
+// Host layer (Level 2) - all optional, older agents do not send these fields at all.
 $cpu_steal = (isset($data['cpu_steal']) && $data['cpu_steal'] !== null) ? floatval($data['cpu_steal']) : null;
 $swap = (isset($data['swap']) && $data['swap'] !== null) ? floatval($data['swap']) : null;
 $load1 = (isset($data['load1']) && $data['load1'] !== null) ? floatval($data['load1']) : null;
@@ -157,11 +157,11 @@ $disk_io_read = (isset($data['disk_io_read']) && $data['disk_io_read'] !== null)
 $disk_io_write = (isset($data['disk_io_write']) && $data['disk_io_write'] !== null) ? floatval($data['disk_io_write']) : null;
 $net_errors = (isset($data['net_errors']) && $data['net_errors'] !== null) ? intval($data['net_errors']) : null;
 
-// TeamSpeak proces (pokud agent běží na stejném VPS jako ts3server)
+// TeamSpeak process (when the agent runs on the same VPS as ts3server)
 $ts3_process = (isset($data['ts3_process']) && is_array($data['ts3_process'])) ? $data['ts3_process'] : null;
 
-// Dokončení Level 2 Host vrstvy - vše volitelné, starší agenti tato pole
-// neposílají vůbec (nebo je platforma nepodporuje, viz agent.ps1).
+// Completion of the Level 2 Host layer - all optional, older agents do not
+// send these fields at all (or the platform lacks them, see agent.ps1).
 $iowait = (isset($data['iowait']) && $data['iowait'] !== null) ? floatval($data['iowait']) : null;
 $inode_usage = (isset($data['inode_usage']) && $data['inode_usage'] !== null) ? floatval($data['inode_usage']) : null;
 $fork_rate = (isset($data['fork_rate']) && $data['fork_rate'] !== null) ? intval($data['fork_rate']) : null;
@@ -178,8 +178,8 @@ $virtualization = (isset($data['virtualization']) && $data['virtualization'] !==
 $tcp_retrans = (isset($data['tcp_retrans']) && $data['tcp_retrans'] !== null) ? intval($data['tcp_retrans']) : null;
 $conntrack_count = (isset($data['conntrack_count']) && $data['conntrack_count'] !== null) ? intval($data['conntrack_count']) : null;
 
-// OpenWrt profil - identita routeru + stav WAN rozhraní (viz agent_openwrt.sh).
-// hostname/kernel/os výše jsou generické a router je vyplňuje beze změny zde.
+// OpenWrt profile - router identity + WAN interface state (see agent_openwrt.sh).
+// hostname/kernel/os above are generic and the router fills them in unchanged here.
 $ow_model = (isset($data['model']) && $data['model'] !== null && $data['model'] !== '') ? trim($data['model']) : null;
 $ow_board_name = (isset($data['board_name']) && $data['board_name'] !== null && $data['board_name'] !== '') ? trim($data['board_name']) : null;
 $ow_wan_up = isset($data['wan_up']) ? (bool)$data['wan_up'] : null;
@@ -269,7 +269,7 @@ if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
     exit;
 }
 
-// Vyhledání monitoru podle agent_key (libovolného typu, jelikož agenta lze propojit k jakémukoliv monitoru)
+// Look the monitor up by agent_key (any type - an agent can be attached to any monitor)
 $stmt = $pdo->prepare("SELECT * FROM monitors WHERE agent_key = ? LIMIT 1");
 $stmt->execute([$agent_key]);
 $monitor = $stmt->fetch();
@@ -284,10 +284,10 @@ if (!$monitor) {
 $monitor_id = $monitor['id'];
 $old_status = $monitor['status'];
 
-// Auto-doplnění cíle (target) pro čistě agentové typy (vps/openwrt) - admin.php
-// u nich cíl nevyžaduje, protože buď nemá síťový význam (vps) nebo ho agent
-// stejně zjistí sám (openwrt). Nikdy nepřepisuje cíl, který si uživatel sám
-// vyplnil - jen doplňuje prázdný.
+// Auto-fill the target for purely agent-based types (vps/openwrt) - admin.php
+// does not require one for them, because it either has no network meaning (vps)
+// or the agent discovers it itself (openwrt). Never overwrites a target the
+// user filled in - only completes an empty one.
 if (in_array($monitor['type'], ['vps', 'openwrt'], true) && trim((string)$monitor['target']) === '') {
     $auto_target = null;
     if ($monitor['type'] === 'openwrt') {
@@ -302,7 +302,7 @@ if (in_array($monitor['type'], ['vps', 'openwrt'], true) && trim((string)$monito
     }
 }
 
-// Kontrola procesů u VPS
+// Process checks for the VPS
 $missing_processes = [];
 $monitored_processes_str = $monitor['monitored_processes'] ?? '';
 if (!empty($monitored_processes_str)) {
@@ -323,7 +323,7 @@ if (!empty($missing_processes)) {
     $error_msg = null;
 }
 
-// Přepsání stavu pokud je aktivní údržba
+// Override the status while maintenance is active
 if (is_in_maintenance($monitor)) {
     $new_status = 'maintenance';
     $m_desc = $monitor['maintenance_description'] ?: 'Plánovaná údržba';
@@ -334,14 +334,14 @@ if (is_in_maintenance($monitor)) {
 try {
     $pdo->beginTransaction();
 
-    // Načíst minulé stavy výstrah pro zamezení spamu
+    // Load past alert states to avoid spamming
     $old_details = json_decode($monitor['last_details'] ?? '{}', true);
     $cpu_alert_sent = $old_details['cpu_alert_sent'] ?? false;
     $ram_alert_sent = $old_details['ram_alert_sent'] ?? false;
     $hdd_alert_sent = $old_details['hdd_alert_sent'] ?? false;
 
-    // Pokud byl agent naposledy označen jako neaktivní (cron.php), tak tímto
-    // úspěšným reportem se právě zotavil - zaznamenat do event logu pro digest.
+    // If the agent was last marked inactive (cron.php), this successful
+    // report is its recovery - record it in the event log for the digest.
     if (!empty($old_details['agent_alert_sent'])) {
         log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'agent_connected', 'Agent se znovu ozval');
     }
@@ -421,16 +421,16 @@ try {
         'virtualization' => $virtualization,
         'missing_processes' => $missing_processes,
         'version' => isset($data['version']) ? trim($data['version']) : null,
-        // Explicitní klíč: 'version' se při slučování detailů (TS3 apod.)
-        // přepisuje verzí SLUŽBY - verze agenta musí přežít pod vlastním jménem.
+        // Explicit key: 'version' gets overwritten by the SERVICE version
+        // when details are merged (TS3 etc.) - the agent version must survive under its own name.
         'agent_version' => isset($data['version']) ? trim($data['version']) : null,
         'uptime' => isset($data['uptime']) ? intval($data['uptime']) : null,
         'smart' => isset($data['smart']) ? trim($data['smart']) : null,
         'ports' => isset($data['ports']) && is_array($data['ports']) ? $data['ports'] : [],
         'os' => isset($data['os']) ? trim($data['os']) : null,
-        // Který agent hlásí (bash/python/powershell/openwrt) - uloženo, aby
-        // dashboard mohl srovnávat nahlášenou verzi se správným "nejnovějším"
-        // číslem (viz bk_get_agent_latest_version() ve functions.php).
+        // Which agent reports (bash/python/powershell/openwrt) - stored so the
+        // dashboard can compare the reported version against the right "latest"
+        // number (see bk_get_agent_latest_version() in functions.php).
         'agent_type' => isset($data['agent_type']) ? strtolower(trim($data['agent_type'])) : null,
         'model' => $ow_model,
         'board_name' => $ow_board_name,
@@ -507,21 +507,21 @@ try {
         'agent_last_seen' => time()
     ];
 
-    // --- Propuštění neznámých klíčů od agenta -----------------------------
+    // --- Passing through unknown agent keys ---------------------------------
     //
-    // Výše je explicitní seznam polí, která server umí (typová kontrola,
-    // přepočty, výchozí hodnoty). Cokoli mimo něj se dosud TIŠE ZAHODILO:
-    // agent poslal novou metriku, ta se nikde neobjevila a přišlo se na to
-    // až při ručním hledání (naposledy LTE přes ubus). Chyba se navíc nedá
-    // odhalit v UI - chybějící údaj vypadá stejně jako "zatím nezměřeno".
+    // Above is the explicit list of fields the server understands (type
+    // checks, conversions, defaults). Anything else used to be DROPPED
+    // SILENTLY: the agent sent a new metric, it showed up nowhere, and it
+    // was only found by manual digging (most recently LTE via ubus). The bug
+    // cannot even be spotted in the UI - a missing value looks exactly like "not measured yet".
     //
-    // Neznámé skalární klíče a malá pole se proto propustí beze změny.
-    // Explicitní seznam zůstává tam, kde je potřeba převod nebo validace,
-    // a má přednost - hodnota z něj se propuštěním nikdy nepřepíše.
+    // Unknown scalar keys and small arrays therefore pass through unchanged.
+    // The explicit list stays where conversion or validation is needed,
+    // and takes precedence - a value from it is never overwritten by pass-through.
     $bk_passthrough_skip = [
-        // Autentizace a řízení - do details nepatří.
+        // Authentication and control - not part of details.
         'agent_key', 'api_key', 'token', 'secret', 'password',
-        // Zpracováno vlastní cestou (round-trip akcí, kontrol služeb).
+        // Handled by their own paths (action round-trip, service checks).
         'action_result', 'service_check_results', 'pending_action',
     ];
     $bk_passthrough_added = 0;
@@ -529,7 +529,7 @@ try {
         if (!is_string($bk_key) || $bk_key === '') {
             continue;
         }
-        // Klíč, který server zná, se nepřepisuje - jeho verze je typovaná.
+        // A key the server knows is not overwritten - its version is typed.
         if (array_key_exists($bk_key, $new_data) || in_array($bk_key, $bk_passthrough_skip, true)) {
             continue;
         }
@@ -540,21 +540,21 @@ try {
             $new_data[$bk_key] = $bk_val;
             $bk_passthrough_added++;
         } elseif (is_array($bk_val)) {
-            // Strop na velikost: details se ukládají do jednoho sloupce
-            // a agent nesmí umět nafouknout řádek libovolně.
+            // Size cap: details go into a single column and the agent
+            // must not be able to inflate the row without limit.
             $encoded = json_encode($bk_val, JSON_UNESCAPED_UNICODE);
             if ($encoded !== false && strlen($encoded) <= 8192) {
                 $new_data[$bk_key] = $bk_val;
                 $bk_passthrough_added++;
             }
         }
-        // Strop na počet nových klíčů - tentýž důvod.
+        // Cap on the number of new keys - same reason.
         if ($bk_passthrough_added >= 64) {
             break;
         }
     }
     
-    // Zpracování TeamSpeak statistik z agenta (pokud je poslal)
+    // Process the TeamSpeak statistics from the agent (when sent)
     if (isset($data['teamspeak_servers']) && is_array($data['teamspeak_servers'])) {
         $m_port = $monitor['port'] ?: 9987;
         $parts = explode(':', $monitor['target']);
@@ -572,8 +572,8 @@ try {
         }
     }
 
-    // TeamSpeak proces (pokud agent běží na stejném VPS jako ts3server) - PID se
-    // porovná s posledním hlášením; změna PID = proces byl restartován.
+    // TeamSpeak process (when the agent runs on the same VPS as ts3server) - the PID
+    // is compared with the last report; a changed PID = the process was restarted.
     if ($ts3_process !== null) {
         $old_ts3_pid = $old_details['ts3_process']['pid'] ?? null;
         $new_ts3_pid = $ts3_process['pid'] ?? null;
@@ -586,20 +586,20 @@ try {
     if (isset($data['discovered_services']) && is_array($data['discovered_services'])) {
         $new_data['discovered_services'] = $data['discovered_services'];
 
-        // Detekce změn v discovered services - logování událostí
+        // Detect changes in discovered services - event logging
         $old_svcs = $old_details['discovered_services'] ?? [];
         $new_svcs = $data['discovered_services'];
         $old_names = [];
         foreach ($old_svcs as $os) { if (($os['confidence'] ?? 0) >= 50) $old_names[$os['name'] ?? ''] = $os; }
         $new_names = [];
         foreach ($new_svcs as $ns) { if (($ns['confidence'] ?? 0) >= 50) $new_names[$ns['name'] ?? ''] = $ns; }
-        // Nově objevená služba
+        // Newly discovered service
         foreach ($new_names as $sname => $svc) {
             if (!isset($old_names[$sname]) && !empty($old_svcs)) {
                 log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'service_discovered', "Nová služba: {$sname} (" . ($svc['confidence'] ?? 0) . "%)");
             }
         }
-        // Zmizelá služba
+        // Vanished service
         foreach ($old_names as $sname => $svc) {
             if (!isset($new_names[$sname]) && !empty($new_svcs)) {
                 log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'service_lost', "Služba zmizela: {$sname}");
@@ -607,17 +607,17 @@ try {
         }
     }
 
-    // --- Události pro rolling-window Network Insights ---
-    // Čítač reconnectů agenta je kumulativní od jeho startu; delta mezi
-    // reporty se zapisuje jako událost, aby šla WAN stabilita hodnotit
-    // v klouzavém okně ("odpojila se 14× za 7 dní"), ne jen snapshotem.
+    // --- Events for the rolling-window Network Insights ---
+    // The agent's reconnect counter is cumulative since its start; the delta
+    // between reports is written as an event so WAN stability can be judged
+    // over a sliding window ("disconnected 14x in 7 days"), not just a snapshot.
     try {
         $prev_wr = isset($old_details['wan_reconnect_count']) ? (int)$old_details['wan_reconnect_count'] : null;
         $new_wr = isset($new_data['wan_reconnect_count']) ? (int)$new_data['wan_reconnect_count'] : null;
         if ($prev_wr !== null && $new_wr !== null && $new_wr > $prev_wr) {
             log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'wan_reconnected', 'WAN reconnect (' . $prev_wr . ' -> ' . $new_wr . ')');
         }
-        // Změna IPv6 prefixu (/64): časté střídání = nestabilní delegace od ISP.
+        // IPv6 prefix (/64) change: frequent flapping = unstable delegation from the ISP.
         $prev_v6 = (string)($old_details['wan_ipv6'] ?? '');
         $new_v6 = (string)($new_data['wan_ipv6'] ?? '');
         if ($prev_v6 !== '' && $new_v6 !== '' && $prev_v6 !== $new_v6) {
@@ -631,23 +631,13 @@ try {
         }
     } catch (Throwable $e) {}
 
-    // --- Veřejná IP + ASN agenta (server-side, žádná externí HTTP API) ---
-    // Veřejnou adresu server VIDÍ přímo na spojení (REMOTE_ADDR) - agent
-    // nikam ven volat nemusí. ASN se zjišťuje DNS TXT dotazem na Team Cymru
-    // a cachuje 24 h / do změny IP, ať se neptáme každou minutu.
-    $agent_public_ip = $_SERVER['REMOTE_ADDR'] ?? null;
-    if ($agent_public_ip) {
-        $new_data['public_ip'] = $agent_public_ip;
-        $prev_ip = $old_details['public_ip'] ?? null;
-        $prev_checked = (int)($old_details['asn_checked_at'] ?? 0);
-        if ($agent_public_ip !== $prev_ip || (time() - $prev_checked) > 86400) {
-            [$asn_code, $asn_label] = bk_lookup_asn($agent_public_ip);
-            $new_data['asn'] = $asn_code;
-            $new_data['asn_name'] = $asn_label;
-            $new_data['asn_checked_at'] = time();
-        }
-        // beze změny: staré asn/asn_name/asn_checked_at přežijí merge
-    }
+    // Public IP + ASN collection removed 2026-08-17 at the user's request:
+    // the ASN half asked Team Cymru DNS, which ships the router's IP to a
+    // third party on every change - against the project's no-third-party
+    // stance - and the whole feature is being redesigned. The scrub below
+    // actively drops previously collected values, so a stale IP does not
+    // linger in last_details pretending to be current.
+    unset($old_details['public_ip'], $old_details['asn'], $old_details['asn_name'], $old_details['asn_checked_at']);
 
     $merged_details_arr = array_merge($old_details, $new_data);
 
@@ -662,18 +652,18 @@ try {
     }
     $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
 
-    // Zapsat metriky do databáze - včetně TeamSpeak klientů/procesu, pokud jsou
-    // k dispozici (viz výše), aby graf historie měl data z tohoto běhu.
-    // Non-fatal: pokud INSERT selže (chybějící sloupec ve staré DB), agent stále
-    // dostane validní odpověď s update info - chyba se zaloguje do error_logu.
+    // Write the metrics to the database - including TeamSpeak clients/process when
+    // available (see above), so the history chart has data from this run.
+    // Non-fatal: if the INSERT fails (missing column in an old DB), the agent still
+    // gets a valid response with update info - the error goes to error_log.
     $ts3_clients_online = $new_data['ts3_clients_online'] ?? null;
     $ts3_clients_max = $new_data['ts3_clients_max'] ?? null;
     $ts3_process_cpu = $ts3_process['cpu'] ?? null;
     $ts3_process_ram = $ts3_process['ram_mb'] ?? null;
     try {
-        // Sloupec => hodnota. Dřív to byl poziční INSERT s desítkami
-        // otazníků; posunutí jediné hodnoty by tiše zapsalo teplotu do
-        // sloupce se zaplněním disku a nikdo by si toho nevšiml.
+        // Column => value. This used to be a positional INSERT with dozens of
+        // question marks; shifting a single value would silently write the
+        // temperature into the disk-usage column and nobody would notice.
         $metric_row = [
             'cpu_usage' => $cpu,
             'ram_usage' => $ram,
@@ -683,9 +673,9 @@ try {
             'load_avg_5' => $load5,
             'load_avg_15' => $load15,
             'cpu_steal' => $cpu_steal,
-            // VPS agent posílá `swap`, OpenWrt `swap_pct` - obojí je totéž
-            // procento. Ukládal se jen ten první, takže swap na routeru
-            // historii vůbec neměl (našel to run_agent_metric_lint.php).
+            // The VPS agent sends `swap`, OpenWrt `swap_pct` - both are the same
+            // percentage. Only the first was stored, so router swap had
+            // no history at all (found by run_agent_metric_lint.php).
             'swap_usage' => $swap ?? $ow_swap_pct,
             'disk_io_read_kbps' => $disk_io_read,
             'disk_io_write_kbps' => $disk_io_write,
@@ -705,8 +695,8 @@ try {
             'net_ipv6_kbps' => $ow_net_ipv6_kbps,
             'lte_rsrp' => $ow_lte_rsrp,
 
-            // Nově ukládané metriky - dřív se posílaly každou minutu a
-            // přepisovaly se v last_details, takže z nich nezbyla historie.
+            // Newly stored metrics - they were sent every minute before and
+            // overwritten in last_details, so no history survived.
             'wan_latency_ms' => bk_agent_num($data, 'wan_latency_ms'),
             'dns_latency_ms' => bk_agent_num($data, 'dns_latency_ms'),
             'entropy_avail' => bk_agent_num($data, 'entropy'),
@@ -744,7 +734,7 @@ try {
             'wan_reconnect_count' => bk_agent_int($data, 'wan_reconnect_count'),
         ];
 
-        // Názvy sloupců pocházejí z kódu výše, ne ze vstupu agenta.
+        // Column names come from the code above, not from agent input.
         $metric_cols = array_keys($metric_row);
         $stmt_metrics = $pdo->prepare(
             "INSERT INTO vps_metrics (monitor_id, " . implode(", ", $metric_cols) . ")"
@@ -756,15 +746,15 @@ try {
         error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $metrics_error);
     }
 
-    // Historie procesů - kdo v tuhle minutu žral CPU a paměť.
+    // Process history - who was eating CPU and memory this minute.
     //
-    // Tyhle žebříčky agenti posílají už dlouho, ale končily jen v last_details,
-    // kde je hlášení o minutu později přepsalo. Z grafu tedy šlo vidět, ŽE
-    // v 19:40 vyskočilo CPU, ale ne ČÍM. Zapisuje se sem stejný snímek
-    // s časovým razítkem, aby se to dalo dohledat zpětně.
+    // Agents have been sending these rankings for a long time, but they ended
+    // in last_details where the next report overwrote them a minute later.
+    // The chart showed THAT the CPU jumped at 19:40, but not WHAT did it.
+    // The same snapshot is written here with a timestamp so it can be traced back.
     //
-    // Ukládá se, jen když je historie zapnutá (process_history_days > 0) -
-    // na malém hostingu ať si to jde vypnout.
+    // Stored only while history is enabled (process_history_days > 0) -
+    // small hostings should be able to turn it off.
     $bk_proc_days = (int)get_setting('process_history_days', '30');
     if ($bk_proc_days > 0) {
         $bk_proc_rows = [];
@@ -772,7 +762,7 @@ try {
             if (!is_array($bk_list)) {
                 continue;
             }
-            // Strop na počet: agent posílá pět, ale nesmí umět zapsat tisíc.
+            // Cap on the count: the agent sends five, it must not be able to write a thousand.
             foreach (array_slice($bk_list, 0, 10) as $bk_proc) {
                 if (!is_array($bk_proc)) {
                     continue;
@@ -781,8 +771,8 @@ try {
                 if ($bk_name === '') {
                     continue;
                 }
-                // Chybějící hodnota zůstává NULL. Nula by tvrdila "změřeno,
-                // proces nic nedělal" - to je něco jiného než "nevíme".
+                // A missing value stays NULL. Zero would claim "measured,
+                // the process did nothing" - which is different from "we do not know".
                 $bk_cpu = isset($bk_proc['cpu']) && is_numeric($bk_proc['cpu']) ? (float)$bk_proc['cpu'] : null;
                 $bk_ram = isset($bk_proc['ram_mb']) && is_numeric($bk_proc['ram_mb']) ? (float)$bk_proc['ram_mb'] : null;
                 if ($bk_cpu === null && $bk_ram === null) {
@@ -803,14 +793,14 @@ try {
                     $bk_stmt_proc->execute($bk_row);
                 }
             } catch (PDOException $e) {
-                // Historie procesů je doplněk - když se nezapíše, hlášení
-                // agenta tím padnout nesmí. Metriky jsou důležitější.
+                // Process history is an extra - if it fails to write, the
+                // agent's report must not fail with it. Metrics matter more.
                 error_log('[agent_api] process_samples INSERT failed (monitor ' . $monitor_id . '): ' . $e->getMessage());
             }
         }
     }
 
-    // Sběr kumulativního provozu rozhraní (LAN, WAN, pppoe-wan apod.) s ochranou proti rebootu
+    // Cumulative interface traffic (LAN, WAN, pppoe-wan, ...) with reboot protection
     $interfaces_payload = (isset($data['interfaces']) && is_array($data['interfaces'])) ? $data['interfaces'] : null;
     if (!empty($interfaces_payload)) {
         $today_str = date('Y-m-d');
@@ -818,8 +808,8 @@ try {
             $ifname = trim($ifitem['iface'] ?? '');
             if (!$ifname || in_array($ifname, ['lo', 'ifb0', 'ifb1'], true)) continue;
 
-            // Chybějící čítač NENÍ nula - z takového "měření" by vyšla
-            // nesmyslná delta (skok na plnou hodnotu při dalším reportu).
+            // A missing counter is NOT zero - such a "measurement" would produce
+            // a nonsense delta (a jump to the full value on the next report).
             if (!isset($ifitem['rx_bytes'], $ifitem['tx_bytes'])) {
                 continue;
             }
@@ -872,57 +862,57 @@ try {
     }
 
     if (in_array($monitor['type'], ['vps', 'openwrt'], true)) {
-        // Odezvu si měří agent sám (wan_latency_ms) - ping z hostingu na WAN IP
-        // routeru stejně neprojde. Bez měření zůstává NULL.
+        // The agent measures latency itself (wan_latency_ms) - a ping from the hosting
+        // to the router's WAN IP would not get through anyway. Without a measurement it stays NULL.
         $ping_ms = null;
         if ($monitor['type'] === 'openwrt') {
             $ping_target = $ow_wan_ipv4 ?: ($monitor['target'] ?: null);
             if ($ping_target) {
-                // Selhaný ping není 0 ms - do logu jde NULL a UI ukáže pomlčku.
+                // A failed ping is not 0 ms - NULL goes to the log and the UI shows a dash.
                 $ping_ms = bk_ping_host($ping_target);
             }
         }
-        // Agent v1.5.7+ posílá vlastní měření odezvy (ping z routeru na WAN
-        // bránu) - to je pro router smysluplnější číslo než ping zvenku.
+        // Agent v1.5.7+ sends its own latency measurement (ping from the router to
+        // the WAN gateway) - a more meaningful number for a router than an outside ping.
         if ($ping_ms === null && isset($data['wan_latency_ms']) && is_numeric($data['wan_latency_ms'])) {
             $ping_ms = (float)$data['wan_latency_ms'];
         }
 
-        // Zapsat běžný log kontroly
+        // Write the regular check log
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");
         $stmt_log->execute([$monitor_id, $new_status, $ping_ms, $error_msg]);
         
-        // Kontrola změny stavu
+        // Check for a status change
         if ($old_status !== $new_status) {
             $stmt_update = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
             $stmt_update->execute([$new_status, $details, $monitor_id]);
             
-            // Změna stavu - trigger notifikace (pouze pokud nejde o údržbu)
+            // Status change - trigger notifications (unless in maintenance)
             if ($new_status !== 'maintenance') {
                 trigger_notifications($pdo, $monitor, $new_status, $error_msg ?: 'Server opět komunikuje.');
             }
         } else {
-            // Pouze aktualizovat čas poslední kontroly a metriky
+            // Only update the last-check time and metrics
             $stmt_update = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
             $stmt_update->execute([$details, $monitor_id]);
         }
     } else {
-        // Pro ostatní typy monitorů pouze uložíme data o zátěži (stav ovládá síťová kontrola v cronu)
+        // For other monitor types just store the load data (status is driven by the network check in cron)
         $stmt_update = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
         $stmt_update->execute([$details, $monitor_id]);
     }
     
     /**
-     * Výsledky měření rychlosti linky (librespeed-cli na routeru).
+     * Link speed test results (librespeed-cli on the router).
      *
-     * Router si je odkládá do /tmp, což je na OpenWrt ramdisk - po restartu
-     * jsou pryč. Agent je proto posílá sem a trvalé úložiště je tahle
-     * tabulka; unikátní klíč na (monitor, čas měření) zajistí, že opakované
-     * odeslání téhož souboru nic nezduplikuje.
+     * The router parks them in /tmp, which is a ramdisk on OpenWrt - gone
+     * after a reboot. The agent therefore sends them here and this table is
+     * the durable storage; the unique key on (monitor, measurement time)
+     * makes re-sending the same file a no-op.
      */
     if (isset($data['speedtests']) && is_array($data['speedtests'])) {
-        // Strop na dávku: agent při prvním běhu pošle historii, ale hlášení
-        // nesmí nabobtnat donekonečna.
+        // Cap on the batch: the agent sends its history on the first run, but the
+        // report must not grow without bound.
         $speed_batch = array_slice($data['speedtests'], 0, 50);
 
         try {
@@ -939,8 +929,8 @@ try {
                 $ts_raw = trim((string)($st['timestamp'] ?? ''));
                 $ts = $ts_raw !== '' ? strtotime($ts_raw) : false;
                 if ($ts === false) {
-                    // Bez času měření nejde říct, kdy to platilo - takový
-                    // záznam je k ničemu a dosazovat "teď" by lhalo.
+                    // Without a measurement time there is no saying when it applied -
+                    // such a record is useless and substituting "now" would lie.
                     continue;
                 }
 
@@ -956,8 +946,8 @@ try {
                 ]);
             }
         } catch (PDOException $e) {
-            // Měření rychlosti je doplněk - když se neuloží, nesmí to shodit
-            // příjem telemetrie.
+            // Speed measurements are an extra - failing to store them must not
+            // bring down telemetry ingestion.
             error_log('[agent_api] Uložení speedtestu selhalo: ' . $e->getMessage());
         }
     }
@@ -980,19 +970,19 @@ try {
 
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
     
-    // Pokud metrics INSERT selhal, informovat agenta (viditelné v jeho logu)
+    // If the metrics INSERT failed, tell the agent (visible in its log)
     if (!empty($metrics_error)) {
         $response_payload['schema_warning'] = 'DB schema out of date - metrics not saved. Please update database schema.';
     }
 
-    // Kontrola nevyřízených akcí ve frontě pro tohoto agenta. Souhlas se
-    // ověřuje znovu tady (ne jen při zařazení v admin.php) - monitor mohl být
-    // mezitím překonfigurován a konkrétní akci už nemusí povolovat.
-    // --- Agent-side kontroly služeb ---
-    // 'agent_service' monitory stejného assetu: agenti, kteří v reportu
-    // posílají živé seznamy portů/procesů (agent.sh, agent.py), se vyhodnotí
-    // rovnou tady; ostatním (OpenWrt) se v odpovědi pošle seznam kontrol
-    // a výsledky dorazí vzápětí jako service_check_results.
+    // Check the pending action queue for this agent. Consent is verified
+    // again here (not only at enqueue time in admin.php) - the monitor may
+    // have been reconfigured meanwhile and may no longer allow the action.
+    // --- Agent-side service checks ---
+    // 'agent_service' monitors of the same asset: agents that include live
+    // port/process lists in their report (agent.sh, agent.py) are evaluated
+    // right here; the others (OpenWrt) get a check list in the response
+    // and the results arrive shortly after as service_check_results.
     try {
         if ($monitor['asset_id'] !== null) {
             $stmt_svcs = $pdo->prepare("SELECT * FROM monitors WHERE asset_id = ? AND type = 'agent_service' AND id != ?");
@@ -1009,8 +999,8 @@ try {
                         $svc_proc = trim((string)$svc_row['target']);
                         $port_ok = $svc_port !== null && $report_ports !== null ? in_array($svc_port, $report_ports, true) : null;
                         $proc_ok = $svc_proc !== '' && $report_procs !== null ? in_array($svc_proc, $report_procs, true) : null;
-                        // Bez jediného ověřitelného signálu se nezapisuje nic -
-                        // "nevíme" není měření.
+                        // Without a single verifiable signal nothing is written -
+                        // "we do not know" is not a measurement.
                         if ($port_ok === null && $proc_ok === null) continue;
                         $running = ($port_ok === true) || ($proc_ok === true);
                         $detail = $running ? '' : sprintf(
@@ -1048,7 +1038,7 @@ try {
                 $timestamp = time();
                 $nonce = bin2hex(random_bytes(8));
 
-                // HMAC-SHA256 podpis požadavku klíčem monitoru ($monitor['agent_key'])
+                // HMAC-SHA256 signature of the request with the monitor's key ($monitor['agent_key'])
                 $sig_payload = "action={$action_type}|ts={$timestamp}|nonce={$nonce}";
                 $signature = hash_hmac('sha256', $sig_payload, $monitor['agent_key']);
 
@@ -1059,27 +1049,27 @@ try {
                     'nonce' => $nonce,
                     'signature' => $signature
                 ];
-                // service_name jede mimo podepsaný řetězec - rozšíření podpisu
-                // by rozbilo už nasazené agenty (počítají HMAC z action|ts|nonce).
-                // Agenti jméno validují regexem [A-Za-z0-9_.@-] a transport je HTTPS.
+                // service_name travels outside the signed string - extending the signature
+                // would break already-deployed agents (they compute HMAC from action|ts|nonce).
+                // Agents validate the name with the [A-Za-z0-9_.@-] regex and transport is HTTPS.
                 if (!empty($pending_act['service_name'])) {
                     $response_payload['pending_action']['service_name'] = $pending_act['service_name'];
                 }
 
-                // Označit jako 'sent' HNED, ne až po potvrzení agentem - jinak
-                // by stejná (stále 'pending') akce byla znovu podepsána a
-                // odeslána při každém dalším pollu, dokud nedorazí ack. U
-                // reboot_router by to znamenalo smyčku restartů u routeru,
-                // který se stihne vzpamatovat pomaleji než jeden cron interval.
+                // Mark as 'sent' IMMEDIATELY, not only after the agent acks - otherwise
+                // the same (still 'pending') action would be re-signed and re-sent
+                // on every subsequent poll until the ack arrives. For reboot_router
+                // that would mean a reboot loop on a router that recovers more
+                // slowly than one cron interval.
                 $stmt_mark_sent = $pdo->prepare("UPDATE agent_actions SET status = 'sent' WHERE id = ?");
                 $stmt_mark_sent->execute([$action_id]);
             }
         }
     } catch (PDOException $e) {}
 
-    // Informace o dostupné aktualizaci agenta - verzi čteme přímo ze souborů
-    // agentů na serveru (viz bk_get_agent_latest_version() ve functions.php),
-    // takže se udržuje na jediném místě (v samotném skriptu).
+    // Available agent update info - the version is read straight from the agent
+    // files on the server (see bk_get_agent_latest_version() in functions.php),
+    // so it is maintained in exactly one place (the script itself).
     $agent_type = isset($data['agent_type']) ? strtolower(trim($data['agent_type'])) : '';
     $client_version = isset($data['version']) ? trim($data['version']) : '';
     $agent_files = bk_agent_files();
