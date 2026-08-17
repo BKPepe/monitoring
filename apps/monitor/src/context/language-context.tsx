@@ -1602,13 +1602,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.webhooks_title': { cs: 'Webhooky & Externí Notifikace', en: 'Webhooks & External Notifications' },
   'settings.test_discord': { cs: 'Test Discord', en: 'Test Discord' },
   'settings.test_telegram': { cs: 'Test Telegram', en: 'Test Telegram' },
-  'settings.whatsapp_desc': {
-    cs: 'Konfigurace WhatsApp API pro doručování výstrah (Twilio WhatsApp, UltraMsg nebo Meta Cloud API).',
-    en: 'Configure the WhatsApp API for delivering alerts (Twilio WhatsApp, UltraMsg, or Meta Cloud API).',
-  },
-  'settings.whatsapp_token_label': { cs: 'WhatsApp Access Token / Token', en: 'WhatsApp Access Token' },
-  'settings.whatsapp_phone_label': { cs: 'Cílové / Odesílací číslo WhatsApp', en: 'Target / Sending WhatsApp Number' },
-  'settings.test_whatsapp': { cs: 'Test WhatsApp Gateway', en: 'Test WhatsApp Gateway' },
   'settings.digest_title': { cs: 'Týdenní & Měsíční Digest Report', en: 'Weekly & Monthly Digest Report' },
   'settings.digest_desc': {
     cs: 'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.',
