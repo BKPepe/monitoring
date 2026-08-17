@@ -1526,7 +1526,8 @@ if ($action === 'daily_uptime') {
                    SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_count,
                    SUM(CASE WHEN status = 'warning' THEN 1 ELSE 0 END) AS warning_count,
                    SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) AS maint_count,
-                   COUNT(*) AS total_count
+                   COUNT(*) AS total_count,
+                   AVG(CASE WHEN response_time > 0 THEN response_time END) AS avg_rt
             FROM monitor_logs
             WHERE checked_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
             GROUP BY monitor_id, DATE(checked_at)
@@ -1561,9 +1562,13 @@ if ($action === 'daily_uptime') {
                 $maint = $d ? (int)$d['maint_count'] : 0;
                 $measured = $up + $down + $warn;
 
+                // Průměrná odezva dne pro latenční sparkline - null, dokud v
+                // tom dni nic reálně neodpovědělo (0 by tvrdila okamžitou odezvu).
+                $avg_ms = ($d && $d['avg_rt'] !== null) ? (int)round((float)$d['avg_rt']) : null;
+
                 if ($measured === 0 && $maint === 0) {
                     // Den bez jediné měřené kontroly nemá 0% uptime - nemá žádný.
-                    $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => null, 'detail' => t('day_no_data')];
+                    $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => null, 'avgMs' => $avg_ms, 'detail' => t('day_no_data')];
                     continue;
                 }
 
@@ -1583,7 +1588,7 @@ if ($action === 'daily_uptime') {
                     $detail = sprintf(t('day_up_detail'), $measured);
                 }
 
-                $day_list[] = ['date' => $day_display, 'status' => $status, 'uptimePct' => $uptimePct, 'detail' => $detail];
+                $day_list[] = ['date' => $day_display, 'status' => $status, 'uptimePct' => $uptimePct, 'avgMs' => $avg_ms, 'detail' => $detail];
             }
 
             $series[$mid] = $day_list;
@@ -1599,6 +1604,132 @@ if ($action === 'daily_uptime') {
     } catch (Throwable $e) {
         echo json_encode(['series' => (object)[]], JSON_UNESCAPED_UNICODE);
     }
+    exit;
+}
+
+// Dostupnost za víc oken najednou (24 h / 7 d / 30 d / 90 d) pro veřejnou
+// stránku. Jeden průchod 90 dny logů místo čtyř volání sla_report - to by
+// čtyřikrát počítalo i percentily a poslední výpadky, které tu nikdo nechce.
+// Okno bez jediné měřené kontroly je null, ne 100.
+if ($action === 'uptime_windows') {
+    try {
+        $uw_selects = [];
+        foreach ([1, 7, 30, 90] as $w) {
+            $uw_selects[] = "SUM(CASE WHEN checked_at >= DATE_SUB(NOW(), INTERVAL {$w} DAY) AND status = 'up' THEN 1 ELSE 0 END) AS up{$w}";
+            $uw_selects[] = "SUM(CASE WHEN checked_at >= DATE_SUB(NOW(), INTERVAL {$w} DAY) AND status IN ('up','down','warning') THEN 1 ELSE 0 END) AS total{$w}";
+        }
+        $stmt_uw = $pdo->query("
+            SELECT monitor_id, " . implode(', ', $uw_selects) . "
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+            GROUP BY monitor_id
+        ");
+        $uw_out = [];
+        foreach ($stmt_uw->fetchAll() as $r) {
+            $row = [];
+            foreach ([1, 7, 30, 90] as $w) {
+                $total = (int)$r["total{$w}"];
+                $row["d{$w}"] = $total > 0 ? round(((int)$r["up{$w}"] / $total) * 100, 2) : null;
+            }
+            $uw_out[(int)$r['monitor_id']] = $row;
+        }
+        // (object): prázdný výsledek i sekvenční id musí zůstat objektem,
+        // frontend do něj sahá podle id monitoru.
+        echo json_encode(['windows' => (object)$uw_out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Dostupnost se nepodařilo spočítat.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// Vložitelný SVG odznak stavu - `<img src=".../api.php?action=badge&monitor_id=N">`
+// na cizím webu. Bez id shrnuje celou flotilu. Poctivost platí i tady:
+// neznámý stav je šedý "neznámý", ne zelené "online", a neexistující monitor
+// je 404, ne vymyšlený odznak.
+if ($action === 'badge') {
+    $bdg_lang = ($_GET['lang'] ?? '') === 'en' ? 'en' : 'cs';
+    $bdg_words = [
+        'cs' => ['up' => 'online', 'down' => 'výpadek', 'warning' => 'zhoršeno', 'maintenance' => 'údržba', 'unknown' => 'neznámý', 'fleet_ok' => 'vše online', 'fleet_down' => 'výpadek'],
+        'en' => ['up' => 'online', 'down' => 'outage', 'warning' => 'degraded', 'maintenance' => 'maintenance', 'unknown' => 'unknown', 'fleet_ok' => 'all online', 'fleet_down' => 'outage'],
+    ][$bdg_lang];
+    $bdg_colors = ['up' => '#3fb950', 'down' => '#f85149', 'warning' => '#d29922', 'maintenance' => '#d29922', 'unknown' => '#8b949e'];
+
+    $bdg_mid = (int)($_GET['monitor_id'] ?? 0);
+    try {
+        if ($bdg_mid > 0) {
+            $stmt_bdg = $pdo->prepare("SELECT name, status FROM monitors WHERE id = ? LIMIT 1");
+            $stmt_bdg->execute([$bdg_mid]);
+            $bdg_row = $stmt_bdg->fetch();
+            if (!$bdg_row) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $bdg_label = (string)$bdg_row['name'];
+            $bdg_state = in_array($bdg_row['status'], ['up', 'down', 'warning', 'maintenance'], true) ? $bdg_row['status'] : 'unknown';
+            $bdg_value = $bdg_words[$bdg_state];
+        } else {
+            // Souhrn: down > údržba > vše online. Prázdná flotila není "online".
+            $stmt_bdg = $pdo->query("
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_c,
+                       SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) AS maint_c
+                FROM monitors
+            ");
+            $bdg_sum = $stmt_bdg->fetch() ?: ['total' => 0, 'down_c' => 0, 'maint_c' => 0];
+            $bdg_label = trim((string)get_setting('site_title', 'status')) ?: 'status';
+            if ((int)$bdg_sum['total'] === 0) {
+                $bdg_state = 'unknown';
+                $bdg_value = $bdg_words['unknown'];
+            } elseif ((int)$bdg_sum['down_c'] > 0) {
+                $bdg_state = 'down';
+                $bdg_value = $bdg_words['fleet_down'] . ' (' . (int)$bdg_sum['down_c'] . ')';
+            } elseif ((int)$bdg_sum['maint_c'] > 0) {
+                $bdg_state = 'maintenance';
+                $bdg_value = $bdg_words['maintenance'];
+            } else {
+                $bdg_state = 'up';
+                $bdg_value = $bdg_words['fleet_ok'];
+            }
+        }
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Stav se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // Šířka odhadem ~6.2 px na znak při 11px Verdaně - stejný trik jako
+    // shields.io; na pixel přesná míra tu není potřeba.
+    $bdg_lw = (int)max(40, round(strlen($bdg_label) * 6.2) + 12);
+    $bdg_vw = (int)max(40, round(mb_strlen($bdg_value) * 6.2) + 12);
+    $bdg_w = $bdg_lw + $bdg_vw;
+    $bdg_color = $bdg_colors[$bdg_state];
+    $bdg_label_x = htmlspecialchars($bdg_label, ENT_QUOTES);
+    $bdg_value_x = htmlspecialchars($bdg_value, ENT_QUOTES);
+    // Středy obou polí pro text-anchor="middle".
+    $bdg_lw2 = (int)round($bdg_lw / 2);
+    $bdg_vw2 = $bdg_lw + (int)round($bdg_vw / 2);
+
+    header('Content-Type: image/svg+xml; charset=utf-8');
+    // Krátká cache: odznak na cizím webu nemá mlátit do DB při každém
+    // zobrazení, ale nesmí ani hodinu tvrdit "online" o mrtvém serveru.
+    header('Cache-Control: public, max-age=60');
+    echo <<<SVG
+<svg xmlns="http://www.w3.org/2000/svg" width="{$bdg_w}" height="20" role="img" aria-label="{$bdg_label_x}: {$bdg_value_x}">
+  <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+  <clipPath id="r"><rect width="{$bdg_w}" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="{$bdg_lw}" height="20" fill="#555"/>
+    <rect x="{$bdg_lw}" width="{$bdg_vw}" height="20" fill="{$bdg_color}"/>
+    <rect width="{$bdg_w}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="{$bdg_lw2}" y="14">{$bdg_label_x}</text>
+    <text x="{$bdg_vw2}" y="14">{$bdg_value_x}</text>
+  </g>
+</svg>
+SVG;
     exit;
 }
 

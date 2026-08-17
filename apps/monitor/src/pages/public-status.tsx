@@ -4,7 +4,7 @@ import { Activity, CheckCircle2, Moon, Radio, Rss, Sun, Wrench } from 'lucide-re
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { usePublicStatus } from '@/api/use-asset-charts';
-import { PublicMonitorCard, type PublicMonitor } from '@/components/public/monitor-card';
+import { PublicMonitorCard, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
 import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import type { UptimeDay } from '@/components/public/uptime-strip';
@@ -31,6 +31,12 @@ interface PublicEvent {
   outageDurationSec: number | null;
 }
 
+interface IncidentUpdate {
+  status: string;
+  message: string;
+  at: string;
+}
+
 interface Incident {
   id: number;
   title: string;
@@ -40,6 +46,8 @@ interface Incident {
   createdAt: string;
   resolvedAt: string | null;
   durationText: string | null;
+  /** Průběh řešení (investigating -> identified -> ... ) z incident_updates. */
+  updates?: IncidentUpdate[];
 }
 
 /**
@@ -131,7 +139,7 @@ export function PublicStatusPage() {
     portalUrl: string;
     customNavLinks: { name: string; url: string }[];
   } | null>(null);
-  const [uptimeById, setUptimeById] = React.useState<Record<number, number | null>>({});
+  const [windowsById, setWindowsById] = React.useState<Record<number, UptimeWindows>>({});
   const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
 
   // Auto-refresh for everything the page shows, not just the headline stats:
@@ -139,8 +147,15 @@ export function PublicStatusPage() {
   // known data on screen - a blink to an empty page would claim an outage of
   // the STATUS PAGE as an outage of the services.
   const [refreshTick, setRefreshTick] = React.useState(0);
+  // "Teď" pro porovnávání oken údržby žije ve stavu - Date.now() přímo v
+  // renderu je nečisté (a lint to právem odmítá); minutová granularita tady
+  // bohatě stačí, okna údržby se neohlašují na sekundy.
+  const [nowTs, setNowTs] = React.useState(() => Date.now());
   React.useEffect(() => {
-    const id = window.setInterval(() => setRefreshTick((n) => n + 1), REFRESH_MS);
+    const id = window.setInterval(() => {
+      setRefreshTick((n) => n + 1);
+      setNowTs(Date.now());
+    }, REFRESH_MS);
     return () => window.clearInterval(id);
   }, []);
 
@@ -161,16 +176,15 @@ export function PublicStatusPage() {
         if (active && d.series && typeof d.series === 'object') setUptime(d.series);
       })
       .catch(() => {});
-    // Per-monitor 30-day availability - the number next to the strip, same as
-    // the legacy card's "Uptime (30 dní)". Computed server-side by sla_report;
-    // null stays null and renders as a dash, never as 100 %.
-    fetch('/status/api.php?action=sla_report&days=30')
+    // Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one request -
+    // the 30 d value sits next to the strip (same as the legacy card), the
+    // rest fills the expanded detail. null stays null and renders as a dash,
+    // never as 100 %.
+    fetch('/status/api.php?action=uptime_windows')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (!active || !Array.isArray(d.monitors)) return;
-        const map: Record<number, number | null> = {};
-        for (const m of d.monitors) map[m.id] = typeof m.uptimePercent === 'number' ? m.uptimePercent : null;
-        setUptimeById(map);
+        if (!active || d.windows == null || typeof d.windows !== 'object') return;
+        setWindowsById(d.windows);
       })
       .catch(() => {});
     // Branding from the admin settings - the same title and logo the legacy
@@ -423,6 +437,39 @@ export function PublicStatusPage() {
         </Card>
       )}
 
+      {/* Ohlášená BUDOUCÍ údržba - okno teprve přijde, služba zatím běží.
+          Návštěvník se o plánovaném oknu má dozvědět předem, ne až mu
+          služba zmizí. Běžící údržba je ve verdiktu a na kartě služby. */}
+      {(() => {
+        const upcoming = (visibleMonitors ?? []).filter(
+          (m) =>
+            m.maintenance === true &&
+            m.status !== 'maintenance' &&
+            m.maintenanceStart != null &&
+            new Date(m.maintenanceStart.replace(' ', 'T')).getTime() > nowTs
+        );
+        if (upcoming.length === 0) return null;
+        return (
+          <Card className="border-warning/30 space-y-2 p-5">
+            <h2 className="text-warning flex items-center gap-2 text-sm font-semibold">
+              <Wrench className="size-4" />
+              {t('public.upcoming_maintenance', 'Plánovaná údržba')}
+            </h2>
+            <ul className="space-y-1.5">
+              {upcoming.map((m) => (
+                <li key={m.id} className="text-xs">
+                  <span className="font-medium">{m.name}</span>
+                  {m.maintenanceDescription ? ` — ${m.maintenanceDescription}` : ''}
+                  <span className="text-muted-foreground ml-1 tabular-nums">
+                    {fmtWindow(m.maintenanceStart, m.maintenanceEnd)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        );
+      })()}
+
       {monitors === null ? (
         <p className="text-muted-foreground text-sm">{t('public.loading_services', 'Načítám služby…')}</p>
       ) : (
@@ -435,7 +482,8 @@ export function PublicStatusPage() {
                   key={m.id}
                   monitor={m}
                   uptime={opts.showUptime ? (uptime[String(m.id)] ?? []) : []}
-                  uptimePct={uptimeById[m.id] ?? null}
+                  uptimePct={windowsById[m.id]?.d30 ?? null}
+                  windows={windowsById[m.id] ?? null}
                   statusOnly={opts.detailLevel === 'status'}
                 />
               ))}
@@ -497,6 +545,20 @@ export function PublicStatusPage() {
                     ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
                     : ''}
                 </span>
+                {/* Průběh řešení - stejná timeline, kterou vidí admin.
+                    Status stránka, která umí říct jen "rozbité/spravené",
+                    nutí lidi ptát se na Discordu; tohle je ta odpověď. */}
+                {(inc.updates ?? []).length > 0 && (
+                  <ul className="w-full space-y-1 border-l border-border/60 pl-3">
+                    {(inc.updates ?? []).map((u, i) => (
+                      <li key={i} className="text-muted-foreground text-[11px]">
+                        <span className="text-foreground font-medium">{updateStatusLabel(u.status, t)}</span>
+                        {u.message ? ` — ${u.message}` : ''}
+                        <span className="ml-1 tabular-nums">({noSeconds(u.at)})</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>
@@ -547,6 +609,35 @@ export function PublicStatusPage() {
       </footer>
     </div>
   );
+}
+
+/** Okno údržby "od – do" bez sekund; chybějící konec = otevřený interval. */
+function fmtWindow(start: string | null | undefined, end: string | null | undefined): string {
+  const f = (v: string) => v.replace('T', ' ').slice(0, 16);
+  if (start && end) return `(${f(start)} – ${f(end)})`;
+  if (start) return `(od ${f(start)})`;
+  return '';
+}
+
+/** Stavy z incident_updates - výčtem, ať chybějící překlad neuteče do EN. */
+function updateStatusLabel(
+  status: string,
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
+): string {
+  switch (status) {
+    case 'open':
+      return t('public.upd_open', 'Nahlášeno');
+    case 'investigating':
+      return t('public.upd_investigating', 'Vyšetřuje se');
+    case 'identified':
+      return t('public.upd_identified', 'Příčina nalezena');
+    case 'monitoring':
+      return t('public.upd_monitoring', 'Sledujeme');
+    case 'resolved':
+      return t('public.upd_resolved', 'Vyřešeno');
+    default:
+      return status;
+  }
 }
 
 /** "08.08.2026 00:21:11" -> "08.08.2026 00:21" - seconds add wrap, not meaning. */

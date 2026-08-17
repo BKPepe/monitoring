@@ -345,9 +345,11 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 | `action=process_history&monitor_id=&kind=&at=&radius=` | veřejné | Které procesy běžely kolem daného okamžiku |
 | `action=metrics_history&monitor_id=&period=` | veřejné | Historie metrik agenta |
 | `action=daily_uptime&days=` | veřejné | Denní dostupnost z `uptime_daily` |
+| `action=uptime_windows` | veřejné | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d jedním průchodem; nezměřené okno je `null`, nikdy 100 |
 | `action=check_stages&monitor_id=` | veřejné | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | veřejné | Dostupnost podle místa měření (`checked_from`) |
 | `action=public_status` | veřejné | Souhrn pro veřejnou stránku (počty, průměrná dostupnost) |
+| `action=badge[&monitor_id=][&lang=en]` | veřejné | Vložitelný SVG odznak stavu (cache 60 s); bez `monitor_id` shrnuje celou flotilu, neznámý monitor je 404 |
 | `action=websites_overview` | veřejné | Weby s certifikáty a dostupností v okně |
 | `action=monitor_insights&monitor_id=` | veřejné | Odvozená pozorování k jednomu monitoru |
 | `action=dashboard_insights&limit=` | veřejné | Totéž napříč monitory, pro přehled |

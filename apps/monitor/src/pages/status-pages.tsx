@@ -136,6 +136,30 @@ export function StatusPagesPage() {
         </a>
       </Card>
 
+      {/* Vložitelný SVG odznak - živý stav na cizím webu (fórum, wiki, README).
+          Náhled je ten samý endpoint, takže co je vidět tady, je přesně to,
+          co dostane cizí stránka. */}
+      <Card className="space-y-2 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">{t('sp.badge_title', 'Vložitelný odznak stavu')}</p>
+            <p className="text-muted-foreground text-xs">
+              {t(
+                'sp.badge_desc',
+                'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.'
+              )}
+            </p>
+          </div>
+          <img src="/status/api.php?action=badge" alt={t('sp.badge_alt', 'Odznak stavu')} className="h-5" />
+        </div>
+        <code className="text-muted-foreground block overflow-x-auto rounded bg-secondary/40 px-2 py-1.5 text-[11px] whitespace-nowrap select-all">
+          {`<img src="${window.location.origin}/status/api.php?action=badge" alt="status">`}
+        </code>
+        <p className="text-muted-foreground text-[11px]">
+          {t('sp.badge_monitor_hint', 'Odznak jedné služby: přidejte &monitor_id=ID, anglická verze: &lang=en.')}
+        </p>
+      </Card>
+
       {pages === null ? (
         <p className="text-muted-foreground text-sm">{t('sp.loading', 'Načítám…')}</p>
       ) : pages.length === 0 ? (

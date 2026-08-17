@@ -35,7 +35,10 @@ export interface PublicMonitor {
   cpu: number | null;
   ram: number | null;
   hdd: number | null;
+  /** Příznak ohlášené údržby - i budoucí (status je pak stále 'up'). */
+  maintenance?: boolean;
   maintenanceDescription?: string | null;
+  maintenanceStart?: string | null;
   maintenanceEnd?: string | null;
 }
 
@@ -49,16 +52,26 @@ export interface PublicMonitor {
  * value produces no row rather than a dash-filled skeleton, because on a
  * public page an empty grid reads as broken.
  */
+/** Dostupnost po oknech z action=uptime_windows; null = okno bez měření. */
+export interface UptimeWindows {
+  d1: number | null;
+  d7: number | null;
+  d30: number | null;
+  d90: number | null;
+}
+
 export function PublicMonitorCard({
   monitor,
   uptime,
   uptimePct,
+  windows,
   statusOnly = false,
 }: {
   monitor: PublicMonitor;
   uptime: UptimeDay[];
-  /** 30denní dostupnost ze sla_report; null = zatím nezměřeno -> pomlčka. */
+  /** 30denní dostupnost; null = zatím nezměřeno -> pomlčka. */
   uptimePct: number | null;
+  windows?: UptimeWindows | null;
   /** Stránka s detailLevel 'status': žádné rozbalování, jen stav a čísla. */
   statusOnly?: boolean;
 }) {
@@ -155,6 +168,39 @@ export function PublicMonitorCard({
 
       {open && !statusOnly && (
         <div className="mt-3 space-y-2.5 pl-5">
+          {/* Dostupnost za víc oken - jako HetrixTools. Nezměřené okno je
+              pomlčka: čerstvý monitor nemá "100 % za 90 dní". */}
+          {windows && (
+            <div className="grid max-w-md grid-cols-4 gap-2">
+              {(
+                [
+                  ['d1', t('public.win_24h', '24 h')],
+                  ['d7', t('public.win_7d', '7 dní')],
+                  ['d30', t('public.win_30d', '30 dní')],
+                  ['d90', t('public.win_90d', '90 dní')],
+                ] as const
+              ).map(([key, label]) => (
+                <div key={key} className="rounded-md border border-border/60 px-2 py-1.5 text-center">
+                  <p className="text-muted-foreground text-[10px] font-medium">{label}</p>
+                  <p
+                    className={cn(
+                      'text-xs font-semibold tabular-nums',
+                      windows[key] === null
+                        ? 'text-muted-foreground'
+                        : windows[key]! >= 99
+                          ? 'text-up'
+                          : windows[key]! >= 95
+                            ? 'text-warning'
+                            : 'text-down'
+                    )}
+                  >
+                    {windows[key] === null ? '—' : `${windows[key]} %`}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+          <LatencySparkline days={uptime} t={t} />
           {/* Vytížení serveru - jen kde agent měří. */}
           {(monitor.cpu !== null || monitor.ram !== null || monitor.hdd !== null) && (
             <div className="space-y-1.5">
@@ -291,6 +337,57 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
           pruh, ne čitelnost. */}
       <span className="shrink-0 text-right whitespace-nowrap tabular-nums" title={detail}>
         {detail ?? `${percent} %`}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Denní průměry odezvy za 30 dní jako drobná čárka - netdata grafy patří do
+ * detailu metriky, tohle je jen tvar trendu. Dny bez měření trhají čáru na
+ * segmenty; spojitá čára přes díru by tvrdila měření, které neexistuje.
+ */
+function LatencySparkline({
+  days,
+  t,
+}: {
+  days: UptimeDay[];
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
+}) {
+  const vals = days.map((d) => (typeof d.avgMs === 'number' ? d.avgMs : null));
+  const measured = vals.filter((v): v is number => v !== null);
+  if (measured.length < 2) return null;
+  const max = Math.max(...measured);
+  const min = Math.min(...measured);
+  const W = 160;
+  const H = 28;
+  const PAD = 2;
+  const x = (i: number) => PAD + (i / Math.max(1, vals.length - 1)) * (W - 2 * PAD);
+  const y = (v: number) => (max === min ? H / 2 : PAD + (1 - (v - min) / (max - min)) * (H - 2 * PAD));
+
+  const segments: string[] = [];
+  let current: string[] = [];
+  vals.forEach((v, i) => {
+    if (v === null) {
+      if (current.length > 1) segments.push(current.join(' '));
+      current = [];
+      return;
+    }
+    current.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  });
+  if (current.length > 1) segments.push(current.join(' '));
+  if (segments.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-muted-foreground w-20 shrink-0">{t('public.latency_30d', 'Odezva 30 dní')}</span>
+      <svg width={W} height={H} className="shrink-0" role="img" aria-label={t('public.latency_30d', 'Odezva 30 dní')}>
+        {segments.map((pts, i) => (
+          <polyline key={i} points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-info" />
+        ))}
+      </svg>
+      <span className="text-muted-foreground shrink-0 whitespace-nowrap tabular-nums">
+        {min === max ? `${max} ms` : `${min}–${max} ms`}
       </span>
     </div>
   );

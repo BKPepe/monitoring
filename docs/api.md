@@ -350,9 +350,11 @@ command.
 | `action=process_history&monitor_id=&kind=&at=&radius=` | public | Which processes were running around a point in time |
 | `action=metrics_history&monitor_id=&period=` | public | Agent metric history |
 | `action=daily_uptime&days=` | public | Daily availability from `uptime_daily` |
+| `action=uptime_windows` | public | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one pass; an unmeasured window is `null`, never 100 |
 | `action=check_stages&monitor_id=` | public | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | public | Availability by measurement location (`checked_from`) |
 | `action=public_status` | public | Summary for the public page (counts, average availability) |
+| `action=badge[&monitor_id=][&lang=en]` | public | Embeddable SVG status badge (60 s cache); without `monitor_id` it summarises the fleet, an unknown monitor is 404 |
 | `action=websites_overview` | public | Sites with certificates and availability in the window |
 | `action=monitor_insights&monitor_id=` | public | Derived observations for one monitor |
 | `action=dashboard_insights&limit=` | public | The same across monitors, for the overview |

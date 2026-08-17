@@ -255,6 +255,43 @@ $pdo->exec("UPDATE monitors SET maintenance_description = NULL, maintenance_end 
 check('ui_config vrací HTTP 200', $code, 200);
 check_true('ui_config nese portalUrl', array_key_exists('portalUrl', $uicfg ?? []));
 
+// uptime_windows: čtyři okna jedním dotazem. Monitor 1 má nasetá up i down
+// měření (musí vyjít mezi 0 a 100), monitor 2 nemá jediný log - nesmí se
+// v odpovědi objevit vůbec (frontend z absence udělá pomlčku, ne 100 %).
+[$code, $uw] = api_get($base, 'action=uptime_windows');
+check('uptime_windows vrací HTTP 200', $code, 200);
+$uw_m1 = $uw['windows']['1'] ?? ($uw['windows'][1] ?? null);
+check_true('uptime_windows zná monitor 1', is_array($uw_m1));
+foreach (['d1', 'd7', 'd30', 'd90'] as $uw_key) {
+    check_true("okno {$uw_key} existuje", array_key_exists($uw_key, $uw_m1 ?? []));
+}
+check_true('d1 je mezi 0 a 100 (up i down v seedu)', is_numeric($uw_m1['d1'] ?? null) && $uw_m1['d1'] > 0 && $uw_m1['d1'] < 100);
+check_true('monitor bez logů v oknech není', !isset($uw['windows']['2']) && !isset($uw['windows'][2]));
+
+// daily_uptime nese avgMs pro latenční sparkline - průměr jen z reálných
+// odpovědí (down řádek s NULL odezvou průměr nesmí stáhnout).
+[, $du] = api_get($base, 'action=daily_uptime&days=7');
+$du_days = $du['series']['1'] ?? ($du['series'][1] ?? []);
+$du_has_120 = false;
+$du_has_key = false;
+foreach ($du_days as $du_day) {
+    if (array_key_exists('avgMs', $du_day)) $du_has_key = true;
+    if (($du_day['avgMs'] ?? null) === 120) $du_has_120 = true;
+}
+check_true('daily_uptime dny nesou klíč avgMs', $du_has_key);
+check_true('den s měřeními má avgMs 120', $du_has_120);
+
+// badge: vložitelné SVG. Neznámý monitor je 404, ne vymyšlený zelený odznak.
+[$code, , $bdg_raw] = api_get($base, 'action=badge');
+check('badge (flotila) vrací HTTP 200', $code, 200);
+check_true('badge je SVG', str_contains($bdg_raw, '<svg'));
+$bdg_name = $pdo->query("SELECT name FROM monitors WHERE id = 1")->fetchColumn();
+[$code, , $bdg_raw1] = api_get($base, 'action=badge&monitor_id=1');
+check('badge monitoru vrací HTTP 200', $code, 200);
+check_true('badge nese jméno monitoru', str_contains($bdg_raw1, htmlspecialchars((string)$bdg_name, ENT_QUOTES)));
+[$code] = api_get($base, 'action=badge&monitor_id=99999');
+check('badge neexistujícího monitoru je 404', $code, 404);
+
 // =======================================================================
 // 2. public_status - podklad pro veřejnou stránku i widget
 // =======================================================================
