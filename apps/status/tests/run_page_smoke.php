@@ -40,10 +40,15 @@ $pages = [
     '/index.php' => ['status stránka přímo', [200]],
     "/monitor.php?id={$monitor_id}" => ['detail monitoru', [200]],
     "/widget.php?id={$monitor_id}" => ['embed widget', [200]],
-    "/badge.php?id={$monitor_id}" => ['odznak (stav)', [200]],
-    "/badge.php?id={$monitor_id}&type=uptime" => ['odznak (dostupnost)', [200]],
+    // badge.php je od konsolidace 302 alias na api.php?action=badge -
+    // kontroluje se přesměrování I cílová akce (hned pod tím).
+    "/badge.php?id={$monitor_id}" => ['odznak (alias, stav)', [302]],
+    "/badge.php?id={$monitor_id}&type=uptime" => ['odznak (alias, dostupnost)', [302]],
     '/widget.php?id=999999' => ['widget s neexistujícím id', [200]],
-    '/badge.php?id=999999' => ['odznak s neexistujícím id', [200]],
+    '/badge.php?id=999999' => ['odznak s neexistujícím id (alias)', [302]],
+    '/api.php?action=badge' => ['odznak (API, flotila)', [200]],
+    "/api.php?action=badge&monitor_id={$monitor_id}&type=uptime" => ['odznak (API, dostupnost)', [200]],
+    '/api.php?action=badge&monitor_id=999999' => ['odznak API s neexistujícím id', [404]],
     '/error.php?code=404' => ['chybová stránka', [200, 404]],
     '/health.php' => ['health endpoint', [200, 403]],
     '/api.php?action=public_status' => ['veřejné API', [200]],
