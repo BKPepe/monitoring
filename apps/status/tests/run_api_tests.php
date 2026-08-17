@@ -1602,6 +1602,48 @@ if ($logged_in) {
     check('get_settings vrací všechny klíče, které save_settings přijímá', $missing, []);
 }
 
+// =======================================================================
+// Digest v jazyce příjemce - náhled přes admin.php renderuje stejnou
+// šablonou jako ostrý e-mail. EN verze nesmí propustit jediný český
+// řetězec šablony; česká data (názvy monitorů ze seedů) se před kontrolou
+// odstraní, protože ta se nepřekládají po právu.
+// =======================================================================
+if (isset($cookie_jar)) {
+    // admin.php má instalační bránu: přihlášený admin bez setup_completed
+    // dostane místo obsahu dokončení průvodce. Testovací DB průvodcem
+    // neprošla, flag se nastaví přímo.
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+    $digest_preview = function (string $lang) use ($pdo, $base, $cookie_jar): string {
+        $pdo->exec("UPDATE users SET email_lang = " . ($lang === '' ? 'NULL' : "'{$lang}'") . " WHERE username = 'admin'");
+        $ch = curl_init($base . '/admin.php?action=preview_weekly_digest');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_COOKIEJAR => $cookie_jar,
+            CURLOPT_COOKIEFILE => $cookie_jar,
+            CURLOPT_TIMEOUT => 30,
+        ]);
+        $body = (string)curl_exec($ch);
+        curl_close($ch);
+        return $body;
+    };
+
+    $digest_en = $digest_preview('en');
+    check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
+    // Data z DB zůstávají v původním jazyce - jen šablona se překládá.
+    $digest_en_clean = str_replace(['Testovací web', 'Router bez metrik', 'Síť', 'Weby'], '', $digest_en);
+    $digest_leaks = [];
+    if (preg_match_all('/[^\s>]*[ěščřžýáíéúůťďňóĚŠČŘŽÝÁÍÉÚŮŤĎŇ][^\s<]*/u', $digest_en_clean, $m)) {
+        $digest_leaks = array_slice(array_unique($m[0]), 0, 5);
+    }
+    check('EN digest nepropouští české řetězce šablony', $digest_leaks, []);
+
+    $digest_cs = $digest_preview('cs');
+    check_true('CS digest je česky', str_contains($digest_cs, 'Týdenní report'));
+
+    // Úklid: admin zpět na globální jazyk.
+    $digest_preview('');
+}
+
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {
     exit($failed > 0 ? 1 : 0);

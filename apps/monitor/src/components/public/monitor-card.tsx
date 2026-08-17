@@ -379,16 +379,27 @@ function LatencySparkline({
   if (segments.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-muted-foreground w-20 shrink-0">{t('public.latency_30d', 'Odezva 30 dní')}</span>
-      <svg width={W} height={H} className="shrink-0" role="img" aria-label={t('public.latency_30d', 'Odezva 30 dní')}>
-        {segments.map((pts, i) => (
-          <polyline key={i} points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-info" />
-        ))}
-      </svg>
-      <span className="text-muted-foreground shrink-0 whitespace-nowrap tabular-nums">
-        {min === max ? `${max} ms` : `${min}–${max} ms`}
-      </span>
+    <div className="space-y-0.5">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground w-20 shrink-0">{t('public.latency_30d', 'Odezva 30 dní')}</span>
+        <svg width={W} height={H} className="shrink-0" role="img" aria-label={t('public.latency_30d', 'Odezva 30 dní')}>
+          {segments.map((pts, i) => (
+            <polyline key={i} points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-info" />
+          ))}
+        </svg>
+        <span className="text-muted-foreground shrink-0 whitespace-nowrap tabular-nums">
+          {min === max ? `${max} ms` : `${min}–${max} ms`}
+        </span>
+      </div>
+      {/* Viditelný popisek, ne title= tooltip - na dotykových zařízeních
+          tooltip neexistuje (stejná lekce jako u pásu dostupnosti). Bez
+          vysvětlení je to jen anonymní čárka: co je osa, co znamená díra? */}
+      <p className="text-muted-foreground/70 pl-[5.5rem] text-[10px]">
+        {t(
+          'public.latency_hint',
+          'Každý bod je denní průměr odezvy; rozsah vpravo je nejlepší–nejhorší den. Mezera = den bez měření.'
+        )}
+      </p>
     </div>
   );
 }

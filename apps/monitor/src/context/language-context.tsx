@@ -279,6 +279,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.win_30d': { cs: '30 dní', en: '30 days' },
   'public.win_90d': { cs: '90 dní', en: '90 days' },
   'public.latency_30d': { cs: 'Odezva 30 dní', en: 'Latency 30 days' },
+  'public.latency_hint': {
+    cs: 'Každý bod je denní průměr odezvy; rozsah vpravo je nejlepší–nejhorší den. Mezera = den bez měření.',
+    en: 'Each point is a daily average response time; the range on the right is best–worst day. A gap = a day without measurements.',
+  },
   'public.upcoming_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled maintenance' },
   'public.upd_open': { cs: 'Nahlášeno', en: 'Reported' },
   'public.upd_investigating': { cs: 'Vyšetřuje se', en: 'Investigating' },
