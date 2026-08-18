@@ -816,6 +816,9 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Search router, Minecraft, TeamSpeak, or web...',
   },
   'infra.loading_devices': { cs: 'Načítám zařízení…', en: 'Loading devices…' },
+  // Filtering by status, arrived at from the health ring on the dashboard.
+  'infra.filtered_count': { cs: '{count} zařízení', en: '{count} devices' },
+  'infra.clear_filter': { cs: 'Zrušit filtr', en: 'Clear filter' },
   'infra.open_diagnostics': { cs: 'Otevřít detailní diagnostiku', en: 'Open Detailed Diagnostics' },
   'infra.device_type': { cs: 'Typ zařízení / Protokol', en: 'Device Type / Protocol' },
   'infra.agent_version': { cs: 'Telemetrický Agent & Verze', en: 'Telemetry Agent & Version' },

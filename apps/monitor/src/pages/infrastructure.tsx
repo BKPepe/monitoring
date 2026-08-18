@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
+import { filterAssets, parseStatusFilter } from '@/lib/asset-filter';
 import {
   Boxes,
   ChevronDown,
@@ -59,6 +60,7 @@ export function InfrastructurePage() {
   const { t } = useLanguage();
   const { session, isAdmin } = useSession();
   const [query, setQuery] = React.useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
   // Add/edit monitor modal, with the same full range of settings as PHP admin.php
@@ -452,13 +454,12 @@ export function InfrastructurePage() {
   };
 
   const allAssets = (tree ?? []).flatMap((g) => g.assets);
-  const filteredAssets = query
-    ? allAssets.filter(
-        (a) =>
-          a.name.toLowerCase().includes(query.toLowerCase()) ||
-          (a.hostname ?? '').toLowerCase().includes(query.toLowerCase())
-      )
-    : null;
+
+  // `?status=down` arrives from the health ring on the dashboard. Until now
+  // that ring was a dead end: it said two devices are offline and left you to
+  // find them yourself.
+  const activeStatus = parseStatusFilter(searchParams.get('status'));
+  const filteredAssets = filterAssets(allAssets, { query, status: activeStatus });
 
   const selectedAsset = allAssets.find((a) => a.id === selectedId) ?? allAssets[0];
   // The ref is filled in an effect, not during render - render must not touch refs.
@@ -1535,6 +1536,36 @@ export function InfrastructurePage() {
               className="pl-9 text-xs"
             />
           </div>
+
+          {/* A filter arriving from a link has to be visible and removable -
+              otherwise the list looks like the whole inventory with devices
+              missing. */}
+          {activeStatus && (
+            <div className="flex items-center gap-2 text-xs">
+              <Badge variant={badgeVariant[activeStatus]} dot>
+                {statusLabel[activeStatus]}
+              </Badge>
+              <span className="text-muted-foreground">
+                {t(
+                  'infra.filtered_count',
+                  { count: filteredAssets?.length ?? 0 },
+                  `${filteredAssets?.length ?? 0} zařízení`
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete('status');
+                  setSearchParams(next, { replace: true });
+                }}
+                className="text-muted-foreground hover:text-foreground ml-auto inline-flex items-center gap-1 underline"
+              >
+                <X className="size-3" />
+                {t('infra.clear_filter', 'Zrušit filtr')}
+              </button>
+            </div>
+          )}
 
           <div className="space-y-4">
             {monitorsError ? (

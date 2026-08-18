@@ -439,6 +439,9 @@ export function DashboardPage() {
             value: formatPercent(totalMonitors ? (healthyCount / totalMonitors) * 100 : 0),
             caption: t('dashboard.healthy_pct', 'Zdravých'),
           }}
+          // Each status leads to the device list narrowed to it - the ring
+          // named a problem and offered no way to reach it.
+          hrefFor={(segment) => `/infrastructure?status=${segment.variant}`}
           segments={[
             {
               label: t('common.online', 'Online'),
