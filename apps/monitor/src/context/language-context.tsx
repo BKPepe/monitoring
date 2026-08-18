@@ -214,8 +214,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   // Hour-by-day heatmap on the metric detail.
   'metric.heatmap_title': { cs: 'Denní rytmus (30 dní)', en: 'Daily rhythm (30 days)' },
   'metric.heatmap_note': {
-    cs: 'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.',
-    en: 'One cell is one hour’s average (for counters the hourly increment). The window is always the last 30 days regardless of the chart period - older raw samples are purged.',
+    cs: 'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.',
+    en: 'One cell is one hour’s average (for counters the hourly increment). The colour ramp spans the lowest to the highest measured value (see the numbers by the legend), not zero to maximum - otherwise a metric that varies within a narrow band would show no rhythm at all. The window is always the last 30 days regardless of the chart period - older raw samples are purged.',
   },
   'metric.heatmap_failed': { cs: 'Heatmapu se nepodařilo načíst', en: 'Could not load the heatmap' },
   'metric.heatmap_empty': {
@@ -229,8 +229,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'empty cell = an hour with no measurement',
   },
   'metric.heatmap_sr': {
-    cs: 'Heatmapa po hodinách za 30 dní, maximum {max} {unit}.',
-    en: 'Hourly heatmap over 30 days, maximum {max} {unit}.',
+    cs: 'Heatmapa po hodinách za 30 dní, naměřeno od {min} do {max} {unit}.',
+    en: 'Hourly heatmap over 30 days, measured from {min} to {max} {unit}.',
   },
   // Value histogram on the metric detail.
   'metric.hist_title': { cs: 'Rozložení hodnot', en: 'Value distribution' },

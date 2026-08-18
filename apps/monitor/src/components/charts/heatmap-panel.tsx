@@ -49,14 +49,22 @@ export function HeatmapPanel({
     [data, convert]
   );
 
-  const max = React.useMemo(() => {
-    let m = 0;
+  // The ramp spans the measured range, not 0..max. Latency that never leaves
+  // 1040-1047 ms would otherwise paint every cell the same full-strength
+  // colour and show no rhythm at all - which is exactly what production data
+  // did. The legend prints both ends, so the lightest cell never silently
+  // claims to be zero.
+  const { min, max } = React.useMemo(() => {
+    let lo: number | null = null;
+    let hi: number | null = null;
     for (const d of days) {
       for (const v of d.hours) {
-        if (v !== null && v > m) m = v;
+        if (v === null) continue;
+        if (lo === null || v < lo) lo = v;
+        if (hi === null || v > hi) hi = v;
       }
     }
-    return m;
+    return { min: lo ?? 0, max: hi ?? 0 };
   }, [days]);
 
   const measured = days.reduce((n, d) => n + d.hours.filter((v) => v !== null).length, 0);
@@ -68,9 +76,10 @@ export function HeatmapPanel({
     );
   }
 
-  // 0.12 floor: a measured zero must stay visible and distinct from "no
-  // sample" (which gets no fill at all).
-  const fillFor = (v: number) => withAlpha(color, max > 0 ? 0.12 + 0.88 * (v / max) : 0.12);
+  // 0.12 floor: the lowest measured value must stay visible and distinct from
+  // "no sample" (which gets no fill at all).
+  const span = max - min;
+  const fillFor = (v: number) => withAlpha(color, span > 0 ? 0.12 + 0.88 * ((v - min) / span) : 0.55);
 
   const fmt = (v: number) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString(locale) : v.toFixed(2));
 
@@ -171,8 +180,10 @@ export function HeatmapPanel({
 
       {/* Scale legend + the honesty note about empty cells. */}
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px]">
+        {/* Both ends are labelled: the ramp starts at the lowest measured
+            value, so an unlabelled light end would read as zero. */}
         <span className="flex items-center gap-1.5 tabular-nums">
-          0 {unit}
+          {fmt(min)} {unit}
           <span
             className="h-2 w-24 rounded-sm"
             style={{ background: `linear-gradient(to right, ${withAlpha(color, 0.12)}, ${color})` }}
@@ -188,8 +199,8 @@ export function HeatmapPanel({
       <p className="sr-only">
         {t(
           'metric.heatmap_sr',
-          { max: fmt(max), unit },
-          `Heatmapa po hodinách za 30 dní, maximum ${fmt(max)} ${unit}.`
+          { min: fmt(min), max: fmt(max), unit },
+          `Heatmapa po hodinách za 30 dní, naměřeno od ${fmt(min)} do ${fmt(max)} ${unit}.`
         )}
       </p>
     </div>

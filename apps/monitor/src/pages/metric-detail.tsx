@@ -469,7 +469,7 @@ export function MetricDetailPage() {
         <p className="text-muted-foreground text-[11px] leading-relaxed">
           {t(
             'metric.heatmap_note',
-            'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
+            'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
           )}
         </p>
       </Card>
