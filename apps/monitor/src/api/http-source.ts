@@ -1,6 +1,7 @@
 import type {
   ChartData,
   MetricDetail,
+  MetricHeatmapResponse,
   MetricKey,
   MetricPoint,
   MetricRange,
@@ -146,6 +147,16 @@ export const httpMetricsSource: MetricsSource = {
     // data" and hide the actual error.
     if (!Array.isArray(res?.points)) {
       throw new Error(res?.error ?? 'Neplatná odpověď metric_series.');
+    }
+    return res;
+  },
+
+  async getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse> {
+    const res = await getJson<MetricHeatmapResponse>(
+      `api.php?action=metric_heatmap&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&days=${days}`
+    );
+    if (!Array.isArray(res?.days)) {
+      throw new Error(res?.error ?? 'Neplatná odpověď metric_heatmap.');
     }
     return res;
   },

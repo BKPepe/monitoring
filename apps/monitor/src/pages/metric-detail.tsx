@@ -1,14 +1,38 @@
 import * as React from 'react';
 import { Link, useParams } from 'react-router';
-import { ArrowLeft, Activity, Crosshair, Network, TrendingDown, TrendingUp } from 'lucide-react';
+import {
+  ArrowLeft,
+  Activity,
+  BarChart3,
+  Crosshair,
+  LayoutGrid,
+  Network,
+  PenLine,
+  StickyNote,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { MetricChart } from '@/components/charts/metric-chart';
+import { HeatmapPanel } from '@/components/charts/heatmap-panel';
+import { HistogramPanel } from '@/components/charts/histogram-panel';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { ProcessCulprits } from '@/components/process-culprits';
 import { resolveSource } from '@/api/source';
-import type { ChartData, MetricDetail, MetricRange, MetricSeriesResponse, MetricTone } from '@/api/types';
+import { appApi, type ChartAnnotation } from '@/api/app-api';
+import { useSession } from '@/api/use-session';
+import type {
+  ChartData,
+  MetricDetail,
+  MetricHeatmapResponse,
+  MetricRange,
+  MetricSeriesResponse,
+  MetricTone,
+} from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { convertRate, formatRate, isRateMetric, suggestRateUnit, RATE_UNITS, type RateUnit } from '@/lib/rate-units';
 import { cn } from '@/lib/utils';
@@ -28,17 +52,30 @@ import { cn } from '@/lib/utils';
  */
 export function MetricDetailPage() {
   const { assetId, monitorId, metricKey } = useParams();
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
+  const { isAdmin } = useSession();
 
   const monId = Number(monitorId);
   const metric = String(metricKey ?? '');
+  const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
 
   const [range, setRange] = React.useState<MetricRange>('24h');
   // The moment the user clicked in the chart - the answer to "what caused it".
   const [pickedAt, setPickedAt] = React.useState<number | null>(null);
   const [detail, setDetail] = React.useState<MetricDetail | null>(null);
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);
+  const [heatmap, setHeatmap] = React.useState<MetricHeatmapResponse | null>(null);
+  const [heatmapFailed, setHeatmapFailed] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Chart notes. `null` = not loaded (the list stays hidden), [] = none exist.
+  const [anns, setAnns] = React.useState<ChartAnnotation[] | null>(null);
+  const [annMode, setAnnMode] = React.useState(false);
+  // The clicked moment a note is being written for (unix seconds).
+  const [annDraftTs, setAnnDraftTs] = React.useState<number | null>(null);
+  const [annText, setAnnText] = React.useState('');
+  const [annBusy, setAnnBusy] = React.useState(false);
+  const [annError, setAnnError] = React.useState<string | null>(null);
 
   // The context (metric description, thresholds, events) loads once - it does
   // not depend on the period. The series loads separately so switching the
@@ -77,6 +114,41 @@ export function MetricDetailPage() {
     };
   }, [monId, metric, range]);
 
+  // The heatmap has its own fixed window (30 days of raw samples) - switching
+  // the range picker must not repaint it, so it loads independently.
+  React.useEffect(() => {
+    let active = true;
+    setHeatmap(null);
+    setHeatmapFailed(false);
+    resolveSource()
+      .then(({ source }) => source.getMetricHeatmap(monId, metric, 30))
+      .then((h) => {
+        if (active) setHeatmap(h);
+      })
+      .catch(() => {
+        // Its own failure flag: rendering a loading state forever would claim
+        // the data is on its way when it is not.
+        if (active) setHeatmapFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [monId, metric]);
+
+  const loadAnnotations = React.useCallback(() => {
+    appApi
+      .getAnnotations(monId, metric, RANGE_HOURS[range])
+      .then(setAnns)
+      // `null` keeps the list hidden - an empty list would claim "no notes"
+      // about a window nobody could read.
+      .catch(() => setAnns(null));
+  }, [monId, metric, range]);
+
+  React.useEffect(() => {
+    setAnns(null);
+    loadAnnotations();
+  }, [loadAnnotations]);
+
   const rawPoints = React.useMemo(() => (series?.points ?? []).map(([ts, v]) => ({ t: ts * 1000, v })), [series]);
 
   const tone = toneFor(metric);
@@ -108,6 +180,11 @@ export function MetricDetailPage() {
         yMax: sourceUnit === '%' ? 100 : null,
         series: [{ key: metric, label: detail.metric.label, unit, tone, points }],
         events: detail.events.map((e) => ({ t: e.t, label: e.label })),
+        annotations: (anns ?? []).map((a) => ({
+          t: a.ts * 1000,
+          // The author belongs in the tooltip: a note is a claim and a claim has a claimant.
+          label: a.author ? `${a.note} (${a.author})` : a.note,
+        })),
         bands: buildBands(detail, sourceUnit, isRate ? activeUnit : null, t),
       }
     : null;
@@ -184,14 +261,115 @@ export function MetricDetailPage() {
 
       {/* Layer 2 - why. */}
       <Card className="space-y-3 p-5">
+        {isAdmin && points.length > 0 && (
+          <div className="flex items-center justify-end gap-2">
+            {annMode && !annDraftTs && (
+              <span className="text-muted-foreground text-[11px]">
+                {t('ann.mode_hint', 'Klikněte do grafu na okamžik, ke kterému poznámka patří')}
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant={annMode ? 'primary' : 'outline'}
+              aria-pressed={annMode}
+              onClick={() => {
+                setAnnMode((m) => !m);
+                setAnnDraftTs(null);
+                setAnnError(null);
+              }}
+              className="gap-1.5 text-xs"
+            >
+              <PenLine className="size-3.5" />
+              {annMode ? t('ann.mode_cancel', 'Zrušit režim poznámky') : t('ann.add', 'Přidat poznámku')}
+            </Button>
+          </div>
+        )}
+
         {chartData && points.length > 0 ? (
-          <MetricChart data={chartData} height={340} onPickTime={(ms) => setPickedAt(Math.round(ms / 1000))} />
+          <div className={cn(annMode && 'cursor-crosshair')}>
+            <MetricChart
+              data={chartData}
+              height={340}
+              minimap={!['15m', '1h', '6h'].includes(range)}
+              onPickTime={(ms) => {
+                if (annMode) {
+                  setAnnDraftTs(Math.round(ms / 1000));
+                  setAnnError(null);
+                } else {
+                  setPickedAt(Math.round(ms / 1000));
+                }
+              }}
+            />
+          </div>
         ) : (
           <div className="text-muted-foreground grid h-[340px] place-items-center text-center text-xs">
             {series === null
               ? t('metric.loading', 'Načítám měření…')
               : t('metric.no_data', 'Pro tuto metriku a období nejsou naměřená data')}
           </div>
+        )}
+
+        {annDraftTs !== null && (
+          <form
+            className="space-y-2 rounded-lg border border-border p-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const note = annText.trim();
+              if (!note || annBusy) return;
+              setAnnBusy(true);
+              setAnnError(null);
+              appApi
+                .saveAnnotation({
+                  monitor_id: monId,
+                  metric_key: metric,
+                  timestamp: new Date(annDraftTs * 1000).toISOString(),
+                  note,
+                })
+                .then(() => {
+                  setAnnDraftTs(null);
+                  setAnnText('');
+                  setAnnMode(false);
+                  loadAnnotations();
+                })
+                .catch((err: unknown) => {
+                  setAnnError(
+                    err instanceof Error ? err.message : t('ann.save_failed', 'Poznámku se nepodařilo uložit.')
+                  );
+                })
+                .finally(() => setAnnBusy(false));
+            }}
+          >
+            <p className="text-xs">
+              {t('ann.at', 'Poznámka k okamžiku')}{' '}
+              <span className="font-semibold tabular-nums">{new Date(annDraftTs * 1000).toLocaleString(locale)}</span>
+            </p>
+            <input
+              autoFocus
+              value={annText}
+              onChange={(e) => setAnnText(e.target.value)}
+              maxLength={500}
+              placeholder={t('ann.placeholder', 'Co se v tu chvíli stalo (deploy, výměna disku, změna konfigurace…)')}
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+            />
+            {annError && <p className="text-destructive text-xs font-semibold">{annError}</p>}
+            <div className="flex gap-2">
+              <Button type="submit" size="sm" disabled={!annText.trim() || annBusy} className="text-xs">
+                {annBusy ? t('ann.saving', 'Ukládám…') : t('ann.save', 'Uložit poznámku')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="text-xs"
+                onClick={() => {
+                  setAnnDraftTs(null);
+                  setAnnError(null);
+                }}
+              >
+                {t('common.cancel', 'Zrušit')}
+              </Button>
+            </div>
+          </form>
         )}
 
         <div className="text-muted-foreground space-y-1 text-[11px]">
@@ -221,6 +399,94 @@ export function MetricDetailPage() {
             </p>
           )}
         </div>
+      </Card>
+
+      {/* Chart notes. Only rendered once the list actually loaded - `anns`
+          staying null means the window could not be read, and "no notes"
+          must not be claimed about it. */}
+      {anns !== null && anns.length > 0 && (
+        <Card className="space-y-3 p-5">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <StickyNote className="size-4 text-primary" />
+            {t('ann.list_title', 'Poznámky v grafu')}
+          </h2>
+          <ul className="space-y-2">
+            {anns.map((a) => (
+              <li key={a.id} className="flex items-start gap-3 rounded-lg border border-border px-3 py-2 text-xs">
+                <span className="text-muted-foreground shrink-0 tabular-nums">
+                  {new Date(a.ts * 1000).toLocaleString(locale)}
+                </span>
+                <span className="min-w-0 flex-1 break-words">{a.note}</span>
+                {a.author && <span className="text-muted-foreground shrink-0">{a.author}</span>}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    aria-label={t('ann.delete', 'Smazat poznámku')}
+                    title={t('ann.delete', 'Smazat poznámku')}
+                    className="text-muted-foreground hover:text-destructive shrink-0 transition-colors"
+                    onClick={() => {
+                      appApi
+                        .deleteAnnotation(a.id)
+                        .then(loadAnnotations)
+                        .catch(() => loadAnnotations());
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="text-muted-foreground text-[11px]">
+            {t(
+              'ann.legend_note',
+              'Poznámky se v grafu kreslí jako plné svislé čáry vlastní barvou; tečkované čáry jsou naměřené události (výpadky, restarty).'
+            )}
+          </p>
+        </Card>
+      )}
+
+      {/* Daily rhythm - its own 30-day window on purpose, see the effect above. */}
+      <Card className="space-y-3 p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <LayoutGrid className="size-4 text-primary" />
+          {t('metric.heatmap_title', 'Denní rytmus (30 dní)')}
+        </h2>
+        {heatmap !== null ? (
+          <HeatmapPanel
+            data={heatmap}
+            tone={tone}
+            unit={unit}
+            convert={isRate ? (v) => convertRate(v, activeUnit) : undefined}
+          />
+        ) : (
+          <div className="text-muted-foreground grid h-32 place-items-center text-xs">
+            {heatmapFailed
+              ? t('metric.heatmap_failed', 'Heatmapu se nepodařilo načíst')
+              : t('metric.loading', 'Načítám měření…')}
+          </div>
+        )}
+        <p className="text-muted-foreground text-[11px] leading-relaxed">
+          {t(
+            'metric.heatmap_note',
+            'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
+          )}
+        </p>
+      </Card>
+
+      {/* Value distribution - the average of a bimodal load lies, the histogram does not. */}
+      <Card className="space-y-3 p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <BarChart3 className="size-4 text-primary" />
+          {t('metric.hist_title', 'Rozložení hodnot')}
+        </h2>
+        <HistogramPanel points={points} unit={unit} tone={tone} />
+        <p className="text-muted-foreground text-[11px] leading-relaxed">
+          {t(
+            'metric.hist_note',
+            'Kolik měření zvoleného období padlo do jednotlivých pásem hodnot. Dva vrcholy znamenají střídání dvou režimů - to průměr v grafu nahoře neukáže.'
+          )}
+        </p>
       </Card>
 
       {/* The "why" layer proper: a chart shows that CPU hit 90 % at 19:40 and
@@ -344,6 +610,22 @@ function UnitPicker({ value, onChange }: { value: RateUnit; onChange: (u: RateUn
 }
 
 const RANGES: MetricRange[] = ['15m', '1h', '6h', '24h', '7d', '30d', '90d', '1y'];
+
+/**
+ * How far back to ask for chart notes so every note visible in the chart's
+ * window is also in the list. Sub-day ranges still ask for a full day -
+ * a note from this morning is worth seeing next to a 15-minute view.
+ */
+const RANGE_HOURS: Record<MetricRange, number> = {
+  '15m': 24,
+  '1h': 24,
+  '6h': 24,
+  '24h': 24,
+  '7d': 7 * 24,
+  '30d': 30 * 24,
+  '90d': 90 * 24,
+  '1y': 365 * 24,
+};
 
 function RangePicker({ value, onChange }: { value: MetricRange; onChange: (r: MetricRange) => void }) {
   return (

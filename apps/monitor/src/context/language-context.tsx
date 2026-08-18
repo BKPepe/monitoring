@@ -211,6 +211,60 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Svislé čáry v grafu jsou události ({count} za 30 dní); najetím se zobrazí která.',
     en: 'Vertical lines in the chart are events ({count} in 30 days); hover to see which.',
   },
+  // Hour-by-day heatmap on the metric detail.
+  'metric.heatmap_title': { cs: 'Denní rytmus (30 dní)', en: 'Daily rhythm (30 days)' },
+  'metric.heatmap_note': {
+    cs: 'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.',
+    en: 'One cell is one hour’s average (for counters the hourly increment). The window is always the last 30 days regardless of the chart period - older raw samples are purged.',
+  },
+  'metric.heatmap_failed': { cs: 'Heatmapu se nepodařilo načíst', en: 'Could not load the heatmap' },
+  'metric.heatmap_empty': {
+    cs: 'Za posledních 30 dní nejsou žádná měření po hodinách',
+    en: 'No hourly measurements in the last 30 days',
+  },
+  'metric.heatmap_unmeasured': { cs: 'neměřeno', en: 'not measured' },
+  'metric.heatmap_samples': { cs: '{count} vzorků', en: '{count} samples' },
+  'metric.heatmap_empty_legend': {
+    cs: 'prázdné pole = hodina bez měření',
+    en: 'empty cell = an hour with no measurement',
+  },
+  'metric.heatmap_sr': {
+    cs: 'Heatmapa po hodinách za 30 dní, maximum {max} {unit}.',
+    en: 'Hourly heatmap over 30 days, maximum {max} {unit}.',
+  },
+  // Value histogram on the metric detail.
+  'metric.hist_title': { cs: 'Rozložení hodnot', en: 'Value distribution' },
+  'metric.hist_note': {
+    cs: 'Kolik měření zvoleného období padlo do jednotlivých pásem hodnot. Dva vrcholy znamenají střídání dvou režimů - to průměr v grafu nahoře neukáže.',
+    en: 'How many measurements of the selected period fell into each value band. Two peaks mean two alternating regimes - the average in the chart above cannot show that.',
+  },
+  'metric.hist_empty': {
+    cs: 'Pro histogram je ve zvoleném období příliš málo měření',
+    en: 'Too few measurements in the selected period for a histogram',
+  },
+  'metric.hist_measurements': { cs: 'měření', en: 'measurements' },
+  'metric.hist_aria': { cs: 'Histogram naměřených hodnot', en: 'Histogram of measured values' },
+  // Chart notes on the metric detail (annotations).
+  'ann.add': { cs: 'Přidat poznámku', en: 'Add a note' },
+  'ann.mode_cancel': { cs: 'Zrušit režim poznámky', en: 'Cancel note mode' },
+  'ann.mode_hint': {
+    cs: 'Klikněte do grafu na okamžik, ke kterému poznámka patří',
+    en: 'Click the moment in the chart the note belongs to',
+  },
+  'ann.at': { cs: 'Poznámka k okamžiku', en: 'Note for the moment' },
+  'ann.placeholder': {
+    cs: 'Co se v tu chvíli stalo (deploy, výměna disku, změna konfigurace…)',
+    en: 'What happened at that moment (deploy, disk swap, config change…)',
+  },
+  'ann.save': { cs: 'Uložit poznámku', en: 'Save note' },
+  'ann.saving': { cs: 'Ukládám…', en: 'Saving…' },
+  'ann.save_failed': { cs: 'Poznámku se nepodařilo uložit.', en: 'Could not save the note.' },
+  'ann.list_title': { cs: 'Poznámky v grafu', en: 'Chart notes' },
+  'ann.delete': { cs: 'Smazat poznámku', en: 'Delete note' },
+  'ann.legend_note': {
+    cs: 'Poznámky se v grafu kreslí jako plné svislé čáry vlastní barvou; tečkované čáry jsou naměřené události (výpadky, restarty).',
+    en: 'Notes draw as solid vertical lines in their own colour; dotted lines are measured events (outages, restarts).',
+  },
   // Screen-reader-only labels. They are invisible, so their missing translation
   // was invisible too - an English user with a screen reader heard Czech.
   'dialog.close': { cs: 'Zavřít', en: 'Close' },

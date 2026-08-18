@@ -1049,7 +1049,98 @@ if (!empty($cookie_jar)) {
         'monitor_id' => 1, 'metric_key' => 'cpu', 'timestamp' => date('Y-m-d H:i:s'), 'note' => 'pokus',
     ], tempnam(sys_get_temp_dir(), 'bk_anon'));
     check('anonym poznámku neuloží', $anon_save_code, 403);
+
+    // Deleting a note. The whole point of the delete endpoint is that a wrong
+    // note can be taken back - a note is a claim, and a false claim next to a
+    // chart is worse than no note.
+    //
+    // The returned id has to be the note's own. It used to be read after
+    // bk_audit_log(), so lastInsertId() reported the audit row instead - which
+    // stayed invisible for as long as nobody used the id for anything.
+    $ann_del_id = (int)($ann['id'] ?? 0);
+    $ann_real_id = (int)$pdo->query("SELECT id FROM metric_annotations ORDER BY id DESC LIMIT 1")->fetchColumn();
+    check('uložení vrací id poznámky, ne cizího řádku', $ann_del_id, $ann_real_id);
+
+    // Authorisation, not just the CSRF guard: a logged-in non-admin carries a
+    // valid token, so this is the only probe that reaches the role check. An
+    // anonymous attempt is stopped one layer earlier and proves nothing about
+    // the role. The account is created here because the shared one from the
+    // user-management block above has been deleted by its own test by now.
+    $ann_pw_hash = password_hash('PoznamkyTest123!', PASSWORD_BCRYPT);
+    $pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('ann_tester', 'ann@example.com', ?, 'user')")
+        ->execute([$ann_pw_hash]);
+    $ann_jar = tempnam(sys_get_temp_dir(), 'bk_test_ann');
+    [, $ann_login] = api_post($base, 'action=login', ['username' => 'ann_tester', 'password' => 'PoznamkyTest123!'], $ann_jar, '');
+    $ann_user_csrf = (string)($ann_login['csrfToken'] ?? '');
+    check_true('běžný uživatel se přihlásí (jinak by test roli nikdy neprověřil)', $ann_user_csrf !== '');
+    [$user_del_code] = api_post($base, 'action=delete_annotation', ['id' => $ann_del_id], $ann_jar, $ann_user_csrf);
+    check('běžný uživatel poznámku nesmaže', $user_del_code, 403);
+    [$user_save_code] = api_post($base, 'action=save_annotation', [
+        'monitor_id' => 1, 'metric_key' => 'cpu', 'timestamp' => date('Y-m-d H:i:s'), 'note' => 'nesmí projít',
+    ], $ann_jar, $ann_user_csrf);
+    check('běžný uživatel poznámku ani nezaloží', $user_save_code, 403);
+    @unlink($ann_jar);
+
+    [$anon_del_code] = api_post($base, 'action=delete_annotation', ['id' => $ann_del_id], tempnam(sys_get_temp_dir(), 'bk_anon'));
+    check('anonym poznámku nesmaže', $anon_del_code, 403);
+    check_true(
+        'a poznámka po všech pokusech pořád existuje',
+        (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations WHERE id = {$ann_del_id}")->fetchColumn() === 1
+    );
+
+    // The account leaves no trace behind - a later test asserts the exact
+    // number of accounts, and a leftover here would fail it from a distance.
+    $pdo->exec("DELETE FROM users WHERE username = 'ann_tester'");
+
+    [$del_code] = api_post($base, 'action=delete_annotation', ['id' => $ann_del_id], $cookie_jar);
+    check('admin poznámku smaže', $del_code, 200);
+    check_true(
+        'a v databázi po ní nic nezůstalo',
+        (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations WHERE id = {$ann_del_id}")->fetchColumn() === 0
+    );
+
+    [$del_missing_code] = api_post($base, 'action=delete_annotation', ['id' => 999999], $cookie_jar);
+    check('smazání neexistující poznámky vrací 404', $del_missing_code, 404);
 }
+
+// --- Metric heatmap (hour x day) -----------------------------------------
+//
+// The grid must be dense and honest: every one of the requested days, all 24
+// hours, and an hour with no sample stays null. A zero there would repaint a
+// sleeping agent as an idle server.
+[$hm_code, $hm] = api_get($base, 'action=metric_heatmap&monitor_id=1&metric=response_time&days=3');
+check('metric_heatmap vrací 200', $hm_code, 200);
+check_true('vrací mřížku dní', is_array($hm['days'] ?? null));
+check('a přesně tolik dní, kolik se žádalo', count($hm['days'] ?? []), 3);
+if (!empty($hm['days'])) {
+    $hm_first = $hm['days'][0];
+    check('každý den má 24 hodin', count($hm_first['hours'] ?? []), 24);
+    check('a stejný počet údajů o vzorcích', count($hm_first['samples'] ?? []), 24);
+    check_true('den je datum ve tvaru YYYY-MM-DD', (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($hm_first['day'] ?? '')));
+
+    // Honesty: an hour without measurements is null, never 0. Verified against
+    // the sample count, which is the server's own record of what it measured.
+    $hm_zero_faked = false;
+    foreach ($hm['days'] as $hm_day) {
+        foreach ($hm_day['hours'] as $hm_i => $hm_val) {
+            if (($hm_day['samples'][$hm_i] ?? 0) === 0 && $hm_val !== null) {
+                $hm_zero_faked = true;
+            }
+        }
+    }
+    check_false('hodina bez vzorků nemá vymyšlenou hodnotu', $hm_zero_faked);
+
+    $hm_days_seen = array_column($hm['days'], 'day');
+    check_true('dny jdou vzestupně a nic se neopakuje', $hm_days_seen === array_unique($hm_days_seen) && $hm_days_seen === (function ($d) { sort($d); return $d; })($hm_days_seen));
+}
+
+// The window is capped at the raw-sample retention - a longer request must not
+// silently answer with a shorter window pretending to be the requested one.
+[, $hm_cap] = api_get($base, 'action=metric_heatmap&monitor_id=1&metric=response_time&days=365');
+check('delší okno než retence se ořízne na 30 dní', count($hm_cap['days'] ?? []), 30);
+
+[, $hm_unknown] = api_get($base, 'action=metric_heatmap&monitor_id=1&metric=neexistujici_metrika');
+check_true('neznámá metrika se přizná chybou', ($hm_unknown['error'] ?? '') !== '' && ($hm_unknown['days'] ?? null) === []);
 
 // --- Public e-mail subscriptions -----------------------------------------
 //

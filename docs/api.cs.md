@@ -281,6 +281,7 @@ jako úspěch. **Dnes neznámá akce vrací 400** a hlídá to lint
 | `action=export_csv&monitor_id=&days=` | veřejné | Historie kontrol monitoru jako CSV. Sloupec s chybovou hláškou dostane jen přihlášený - stránka monitoru je veřejná a hlášky nesou interní jména |
 | `action=save_annotation` | admin | Poznámka ke grafu (`monitor_id`, `metric_key`, `timestamp`, `note`) |
 | `action=annotations&monitor_id=&metric=&hours=` | přihlášený | Poznámky pro vykreslení. Anonym dostane prázdný seznam, ne 403 - graf bez poznámek není chyba |
+| `action=delete_annotation` | admin, POST | Smaže poznámku podle `id`. Poznámka je tvrzení a chybné tvrzení u grafu musí jít vzít zpět |
 | `action=forgot_password` | veřejné, POST | Odešle odkaz na obnovu hesla. Odpověď je stejná pro existující i neexistující e-mail |
 | `action=setup` | veřejné, POST | Založí prvního administrátora. **Jen do prázdné tabulky uživatelů**, jinak 409 |
 | `action=user_audit_log&limit=` | admin | Skutečný auditní protokol (kdo se přihlásil, kdo co změnil) |
@@ -342,6 +343,7 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 | `action=metric_series&monitor_id=&metric=&period=` | veřejné | Jedna metrika v čase |
 | `action=metric_series_batch` | veřejné | Víc metrik jedním dotazem |
 | `action=metric_detail&monitor_id=&metric=` | veřejné | Kontext stránky detailu metriky |
+| `action=metric_heatmap&monitor_id=&metric=&days=` | veřejné | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0` |
 | `action=process_history&monitor_id=&kind=&at=&radius=` | veřejné | Které procesy běžely kolem daného okamžiku |
 | `action=metrics_history&monitor_id=&period=` | veřejné | Historie metrik agenta |
 | `action=daily_uptime&days=` | veřejné | Denní dostupnost z `uptime_daily` |

@@ -181,4 +181,25 @@ export const appApi = {
     mutate<{ success: true; id: number; invited?: boolean }>('save_user', user),
 
   deleteUser: (id: number) => mutate<{ success: true }>('delete_user', { id }),
+
+  /** Chart notes. An anonymous caller gets an empty list from the server, not an error. */
+  getAnnotations: (monitorId: number, metric: string, hours: number) =>
+    request<{ annotations: ChartAnnotation[] }>(
+      'annotations' + `&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&hours=${hours}`
+    ).then((r) => r.annotations),
+
+  saveAnnotation: (note: { monitor_id: number; metric_key: string; timestamp: string; note: string }) =>
+    mutate<{ success: true; id: number }>('save_annotation', note),
+
+  deleteAnnotation: (id: number) => mutate<{ success: true }>('delete_annotation', { id }),
 };
+
+/** One chart note as `action=annotations` returns it. */
+export interface ChartAnnotation {
+  id: number;
+  /** Unix seconds. */
+  ts: number;
+  note: string;
+  /** `null` when the author's account has since been deleted. */
+  author: string | null;
+}

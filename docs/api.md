@@ -283,6 +283,7 @@ and a lint guards it (`run_api_action_lint.php`).
 | `action=export_csv&monitor_id=&days=` | public | Check history of a monitor as CSV. The error-message column is only included for a logged-in user - the monitor page is public and the messages carry internal names |
 | `action=save_annotation` | admin | A note on a chart (`monitor_id`, `metric_key`, `timestamp`, `note`) |
 | `action=annotations&monitor_id=&metric=&hours=` | logged in | Notes for rendering. An anonymous caller gets an empty list, not a 403 - a chart without notes is not an error |
+| `action=delete_annotation` | admin, POST | Deletes a note by `id`. A note is a claim, and a wrong claim next to a chart has to be retractable |
 | `action=forgot_password` | public, POST | Sends a password reset link. The response is identical for existing and nonexistent addresses |
 | `action=setup` | public, POST | Creates the first administrator. **Only into an empty users table**, otherwise 409 |
 | `action=user_audit_log&limit=` | admin | The actual audit log (who logged in, who changed what) |
@@ -347,6 +348,7 @@ command.
 | `action=metric_series&monitor_id=&metric=&period=` | public | One metric over time |
 | `action=metric_series_batch` | public | Several metrics in one query |
 | `action=metric_detail&monitor_id=&metric=` | public | Context for the metric detail page |
+| `action=metric_heatmap&monitor_id=&metric=&days=` | public | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
 | `action=process_history&monitor_id=&kind=&at=&radius=` | public | Which processes were running around a point in time |
 | `action=metrics_history&monitor_id=&period=` | public | Agent metric history |
 | `action=daily_uptime&days=` | public | Daily availability from `uptime_daily` |

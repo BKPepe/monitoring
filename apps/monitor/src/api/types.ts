@@ -81,6 +81,12 @@ export interface ChartData {
   series: MetricSeries[];
   events?: ChartEvent[];
   /**
+   * User-written notes ("deploy happened here"). Drawn as vertical lines like
+   * events, but in their own colour - a note is a human's claim, an event is
+   * a measured fact, and the chart must not blur the two.
+   */
+  annotations?: ChartEvent[];
+  /**
    * Threshold bands (warning, critical) as horizontal areas.
    *
    * A single line at the critical limit does not tell you whether 78 % is
@@ -138,6 +144,24 @@ export interface MetricDetail {
   events: { t: number; type: string; label: string }[];
 }
 
+/**
+ * Response of `api.php?action=metric_heatmap` - hour-by-day grid over the
+ * raw-sample window (30 days at most; raw data is pruned after that).
+ */
+export interface MetricHeatmapResponse {
+  label: string;
+  unit: string;
+  days: {
+    /** `YYYY-MM-DD` in the server's timezone. */
+    day: string;
+    /** 24 cells; `null` = no sample that hour, never zero. */
+    hours: (number | null)[];
+    /** How many samples each cell's value stands on. */
+    samples: number[];
+  }[];
+  error?: string;
+}
+
 /** Response of `api.php?action=public_status`. */
 export interface PublicStatus {
   status: 'healthy' | 'degraded';
@@ -160,4 +184,5 @@ export interface MetricsSource {
   getPublicStatus(): Promise<PublicStatus>;
   getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail>;
   getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse>;
+  getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse>;
 }

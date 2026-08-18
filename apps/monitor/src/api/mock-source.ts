@@ -2,6 +2,7 @@ import { httpMetricsSource } from './http-source';
 import type {
   ChartData,
   MetricDetail,
+  MetricHeatmapResponse,
   MetricRange,
   MetricSeriesResponse,
   MetricsSource,
@@ -33,5 +34,9 @@ export const mockMetricsSource: MetricsSource = {
 
   async getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse> {
     return httpMetricsSource.getMetricSeries(monitorId, metric, range);
+  },
+
+  async getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse> {
+    return httpMetricsSource.getMetricHeatmap(monitorId, metric, days);
   },
 };

@@ -85,7 +85,7 @@ $bk_post_only_actions = [
     'save_preset', 'delete_preset', 'assign_preset',
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
-    'save_annotation', 'save_user', 'delete_user',
+    'save_annotation', 'delete_annotation', 'save_user', 'delete_user',
     'delete_public_subscriber',
     // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
     'login', 'logout', 'setup', 'forgot_password', 'set_password',
@@ -3293,6 +3293,97 @@ if ($action === 'metric_series') {
     exit;
 }
 
+// 2g1a. Hour-by-day heatmap of one metric over the raw-sample window.
+//
+// One cell = one hour of one day. The value is the hour's average (for
+// counters the hour's increment, max - min, the same rule the daily rollup
+// uses - the average of a counter means nothing). An hour with no sample is
+// NULL and stays NULL all the way to the UI: an empty cell, never a
+// fabricated zero, which for most metrics would read as "everything idle".
+if ($action === 'metric_heatmap') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $metric = $_GET['metric'] ?? 'response_time';
+    // Raw samples are pruned after 30 days - a longer window would silently
+    // render as this same 30-day one, so the cap keeps the label honest.
+    $hm_days = max(1, min(30, (int)($_GET['days'] ?? 30)));
+
+    try {
+        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        $real_id = $stmt_mon->fetchColumn();
+        if (!$real_id) {
+            echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($metric === 'response_time' || $metric === 'latency') {
+            $unit = 'ms';
+            $label = 'Doba odezvy (HTTP/Ping)';
+            $stmt = $pdo->prepare("
+                SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
+                       AVG(response_time) AS cell_val, COUNT(*) AS samples
+                FROM monitor_logs
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND response_time IS NOT NULL
+                GROUP BY d, h
+            ");
+            $stmt->execute([$real_id, $hm_days]);
+        } elseif (isset($BK_METRIC_COLUMN_MAP[$metric])) {
+            $def = $BK_METRIC_COLUMN_MAP[$metric];
+            $col = $def['col'];
+            $unit = $def['unit'];
+            $label = $def['label'];
+            $cell_expr = "AVG({$col})";
+            if (!empty($def['counter'])) {
+                $cell_expr = "MAX({$col}) - MIN({$col})";
+                $label .= ' (přírůstek)';
+            }
+            $stmt = $pdo->prepare("
+                SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
+                       {$cell_expr} AS cell_val, COUNT(*) AS samples
+                FROM vps_metrics
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND {$col} IS NOT NULL
+                GROUP BY d, h
+            ");
+            $stmt->execute([$real_id, $hm_days]);
+        } else {
+            echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Neznámá metrika'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $by_day = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $by_day[$r['d']][(int)$r['h']] = [
+                'v' => round((float)$r['cell_val'], 2),
+                'n' => (int)$r['samples'],
+            ];
+        }
+
+        // A dense grid: every day of the window, all 24 hours. The client then
+        // renders a gap as a gap without computing which days are missing -
+        // and a day the agent slept through shows as a visibly empty row.
+        // PHP's "today" and MySQL's DATE() must agree for the grid to line up;
+        // both follow the server timezone (no per-user TZ exists here).
+        $days_out = [];
+        for ($i = $hm_days - 1; $i >= 0; $i--) {
+            $day = date('Y-m-d', strtotime("-{$i} days"));
+            $hours = [];
+            $samples = [];
+            for ($h = 0; $h < 24; $h++) {
+                $cell = $by_day[$day][$h] ?? null;
+                $hours[] = $cell !== null ? $cell['v'] : null;
+                $samples[] = $cell !== null ? $cell['n'] : 0;
+            }
+            $days_out[] = ['day' => $day, 'hours' => $hours, 'samples' => $samples];
+        }
+
+        echo json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api] metric_heatmap selhal: ' . $e->getMessage());
+        echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Chyba při načítání heatmapy'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // 2g1b. Context for the metric detail page (Level 3).
 //
 // The chart data itself comes from `metric_series` - this endpoint supplies
@@ -4539,8 +4630,13 @@ if ($action === 'save_annotation') {
             $ann_note,
             $_SESSION['admin_id'] ?? null,
         ]);
+        // Read the id BEFORE the audit entry: bk_audit_log() inserts a row of
+        // its own, and lastInsertId() would then report the audit row's id.
+        // The response has been returning that foreign id all along - harmless
+        // while nobody used it, wrong the moment deletion did.
+        $ann_new_id = (int)$pdo->lastInsertId();
         bk_audit_log($pdo, 'annotation_created', mb_substr($ann_note, 0, 80), 'monitor', $ann_monitor_id);
-        echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['success' => true, 'id' => $ann_new_id], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] save_annotation selhal: ' . $e->getMessage());
         http_response_code(500);
@@ -4593,6 +4689,43 @@ if ($action === 'annotations') {
         error_log('[api] annotations selhaly: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'Poznámky se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/** Deleting a chart note. Admin-only, the same gate as creating one. */
+if ($action === 'delete_annotation') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $ann_id = (int)($input['id'] ?? 0);
+    if ($ann_id <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí id poznámky.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        // Read before delete: the audit entry names what vanished, not just a number.
+        $stmt = $pdo->prepare("SELECT monitor_id, note FROM metric_annotations WHERE id = ? LIMIT 1");
+        $stmt->execute([$ann_id]);
+        $ann_row = $stmt->fetch();
+        if (!$ann_row) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Poznámka nenalezena.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $pdo->prepare("DELETE FROM metric_annotations WHERE id = ?")->execute([$ann_id]);
+        bk_audit_log($pdo, 'annotation_deleted', mb_substr((string)$ann_row['note'], 0, 80), 'monitor', (int)$ann_row['monitor_id']);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] delete_annotation selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Poznámku se nepodařilo smazat.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

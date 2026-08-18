@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { EChartsCoreOption } from 'echarts/core';
 import { Chart, echarts } from './chart';
+import { withAlpha } from './color';
 import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
 import type { ChartTheme } from './use-chart-theme';
@@ -10,19 +11,27 @@ import type { ChartTheme } from './use-chart-theme';
  *
  * Series colours come from the `--chart-*` tokens, so CPU is green both here
  * and in the health-card sparkline. That is deliberate: the user should
- * barvy, ne podle legendy.
+ * recognise a metric by its colour, not by reading the legend.
  */
 export function MetricChart({
   data,
   height = 200,
   group,
   onPickTime,
+  minimap = false,
 }: {
   data: ChartData;
   height?: number;
   group?: string;
   /** A click into the chart returns the time in ms - see Chart.onPickTime. */
   onPickTime?: (timestampMs: number) => void;
+  /**
+   * A slider strip under the chart with the whole series drawn small - drag
+   * to narrow the view. The inside zoom (drag / ctrl+wheel) works either way;
+   * the slider adds a visible "where am I within the period" anchor, which
+   * matters on 30d+ views where a spike is three pixels wide.
+   */
+  minimap?: boolean;
 }) {
   const theme = useChartTheme();
   const reducedMotion = usePrefersReducedMotion();
@@ -50,14 +59,43 @@ export function MetricChart({
 
   const option = React.useMemo<EChartsCoreOption>(() => {
     const unit = data.series[0]?.unit ?? '';
+    const seriesColor = theme.series[data.series[0]?.tone ?? 'latency'];
 
     return {
       animation: !reducedMotion,
       animationDuration: 300,
-      grid: { top: 28, right: 12, bottom: 24, left: 44 },
+      grid: { top: 28, right: 12, bottom: minimap ? 58 : 24, left: 44 },
       // Zoom: dragging inside the chart (inside) and area selection (toolbox lens).
       // Charts in a group zoom together (echarts.connect).
-      dataZoom: [{ type: 'inside', throttle: 50, zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false }],
+      dataZoom: [
+        { type: 'inside', throttle: 50, zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false },
+        ...(minimap
+          ? [
+              {
+                type: 'slider' as const,
+                height: 22,
+                bottom: 6,
+                borderColor: theme.grid,
+                backgroundColor: 'transparent',
+                fillerColor: withAlpha(seriesColor, 0.1),
+                dataBackground: {
+                  lineStyle: { color: withAlpha(seriesColor, 0.5), width: 1 },
+                  areaStyle: { color: withAlpha(seriesColor, 0.12) },
+                },
+                selectedDataBackground: {
+                  lineStyle: { color: seriesColor, width: 1 },
+                  areaStyle: { color: withAlpha(seriesColor, 0.2) },
+                },
+                handleStyle: { color: theme.tooltipBg, borderColor: theme.textMuted },
+                // The move handle is a full-width bar; at full strength it reads
+                // louder than the data it sits above.
+                moveHandleStyle: { color: theme.grid },
+                emphasis: { moveHandleStyle: { color: theme.textMuted } },
+                textStyle: { color: theme.textMuted, fontSize: 10 },
+              },
+            ]
+          : []),
+      ],
       toolbox: {
         show: true,
         top: 0,
@@ -128,11 +166,12 @@ export function MetricChart({
           theme.textMuted,
           // Bands belong to the first series only - drawn twice they darken.
           i === 0 ? data.bands : undefined,
-          theme
+          theme,
+          i === 0 ? data.annotations : undefined
         )
       ),
     };
-  }, [data, theme, reducedMotion, exportCsv]);
+  }, [data, theme, reducedMotion, exportCsv, minimap]);
 
   return (
     <Chart
@@ -157,8 +196,31 @@ function buildSeries(
   events: ChartEvent[] | undefined,
   eventColor: string,
   bands: ChartData['bands'],
-  theme: ChartTheme
+  theme: ChartTheme,
+  annotations?: ChartEvent[]
 ) {
+  // Events (measured facts) and notes (human claims) share one markLine -
+  // ECharts allows a single markLine per series, so the styling rides on each
+  // item instead.
+  //
+  // The two are told apart by colour AND line style: muted dotted for an
+  // event, the annotation hue solid for a note (the pair clears CVD ΔE 12.5,
+  // so the style is a second channel rather than the only one). Against the
+  // data itself the separator is form - a vertical rule versus a curve; no hue
+  // could do that job alone, because the six series colours cover nearly the
+  // whole wheel.
+  const markLineData = [
+    ...(events ?? []).map((e) => ({
+      xAxis: e.t,
+      name: `${new Date(e.t).toLocaleString('cs-CZ')} — ${e.label}`,
+    })),
+    ...(annotations ?? []).map((a) => ({
+      xAxis: a.t,
+      name: `${new Date(a.t).toLocaleString('cs-CZ')} — ${a.label}`,
+      lineStyle: { color: theme.annotation, type: 'solid' as const, width: 1.4 },
+      emphasis: { lineStyle: { color: theme.annotation, width: 2.2 } },
+    })),
+  ];
   return {
     // Threshold bands as horizontal areas. A single line at the critical limit
     // does not say whether the current value sits just below it or far away.
@@ -199,10 +261,13 @@ function buildSeries(
           }
         : undefined,
     connectNulls: false,
-    // Events (outage, restart, config change) as vertical lines.
+    // Events (outage, restart, config change) and notes as vertical lines.
     // silent: false - hovering the line shows WHAT happened at that moment.
-    markLine: events?.length
+    markLine: markLineData.length
       ? {
+          // Symbols off for every line: ECharts ignores a per-item `symbol` on
+          // an xAxis marker, so leaving this out draws its default arrows and
+          // squares on events too.
           symbol: 'none',
           silent: false,
           lineStyle: { color: eventColor, type: 'dotted' as const, width: 1.2 },
@@ -211,30 +276,10 @@ function buildSeries(
           tooltip: {
             formatter: (params: { name?: string }) => params.name ?? '',
           },
-          data: events.map((e) => ({
-            xAxis: e.t,
-            name: `${new Date(e.t).toLocaleString('cs-CZ')} — ${e.label}`,
-          })),
+          data: markLineData,
         }
       : undefined,
   };
-}
-
-/** Adds an alpha channel to a hex colour from a token. */
-function withAlpha(color: string, alpha: number): string {
-  if (!color.startsWith('#')) return color;
-  const hex =
-    color.length === 4
-      ? color
-          .slice(1)
-          .split('')
-          .map((c) => c + c)
-          .join('')
-      : color.slice(1);
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 /**

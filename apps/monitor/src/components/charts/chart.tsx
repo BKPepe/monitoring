@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as echarts from 'echarts/core';
-import { LineChart } from 'echarts/charts';
+import { BarChart, LineChart } from 'echarts/charts';
 import {
   DataZoomComponent,
   GridComponent,
@@ -27,6 +27,8 @@ import { cn } from '@/lib/utils';
  */
 echarts.use([
   LineChart,
+  // The value histogram on the metric detail - the only bar form drawn so far.
+  BarChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,

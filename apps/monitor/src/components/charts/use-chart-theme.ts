@@ -17,6 +17,11 @@ export interface ChartTheme {
   series: Record<SeriesTone, string>;
   /** Fill of the threshold bands. Weak enough not to overpower the data line. */
   band: Record<'warning' | 'critical', string>;
+  /**
+   * Colour of user-written chart notes. Deliberately not any series tone and
+   * not the event gray - a note is a human's claim, not a measurement.
+   */
+  annotation: string;
   /** Key for the `key` prop — forces a chart re-render after a theme change. */
   key: string;
 }
@@ -50,6 +55,7 @@ function readTokens(): ChartTheme {
       warning: isDark ? 'rgba(250,204,21,0.10)' : 'rgba(202,138,4,0.09)',
       critical: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(220,38,38,0.10)',
     },
+    annotation: token('--chart-annotation', isDark ? '#d946ef' : '#c026d3'),
     key: isDark ? 'dark' : 'light',
   };
 }

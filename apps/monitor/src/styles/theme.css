@@ -66,6 +66,11 @@
   --chart-temperature: #fb923c;
   --chart-disk: #a78bfa;
   --chart-latency: #facc15;
+  /* Poznámky psané člověkem (svislé čáry v grafu). Purpurová sedí proto, že
+     musí být rozeznatelná od šedých naměřených událostí - ověřeno: CVD ΔE 12.5,
+     normální vidění 24.9, kontrast 4,7:1. Vůči sériím ji barva sama neuhlídá
+     (série pokrývají skoro celý kruh), proto anotace navíc nese značku. */
+  --chart-annotation: #c026d3;
 
   --radius: 0.625rem;
 }
@@ -110,6 +115,9 @@
   --status-warning: #facc15;
   --status-info: #60a5fa;
   --status-paused: #71717a;
+
+  /* Na tmavém podkladu potřebuje purpurová víc světla, aby držela kontrast. */
+  --chart-annotation: #d946ef;
 }
 
 /* Mapování tokenů do Tailwind utility tříd (bg-card, text-muted-foreground…). */
