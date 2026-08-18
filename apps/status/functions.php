@@ -903,6 +903,92 @@ function bk_metric_column_map(): array {
 }
 
 /**
+ * Pearson correlation of two aligned series.
+ *
+ * Pairs where either side is null are skipped - the two metrics come from the
+ * same measurement row, but an agent may report one and not the other.
+ *
+ * Returns NULL, never 0, when the coefficient is undefined: fewer than
+ * $min_pairs usable pairs, or a series that never changes (a swap that sat at
+ * 0 % all week has no variance to correlate). Zero would be a statement -
+ * "these two are unrelated" - and that is not what an undefined result says.
+ *
+ * @param array<int,float|null> $xs
+ * @param array<int,float|null> $ys
+ * @return array{r: float|null, pairs: int, reason: string|null}
+ */
+function bk_pearson(array $xs, array $ys, int $min_pairs = 10): array {
+    $x = [];
+    $y = [];
+    foreach ($xs as $i => $xv) {
+        $yv = $ys[$i] ?? null;
+        if ($xv === null || $yv === null) {
+            continue;
+        }
+        $x[] = (float)$xv;
+        $y[] = (float)$yv;
+    }
+
+    $n = count($x);
+    if ($n < $min_pairs) {
+        return ['r' => null, 'pairs' => $n, 'reason' => 'few_samples'];
+    }
+
+    $mean_x = array_sum($x) / $n;
+    $mean_y = array_sum($y) / $n;
+    $cov = 0.0;
+    $var_x = 0.0;
+    $var_y = 0.0;
+    for ($i = 0; $i < $n; $i++) {
+        $dx = $x[$i] - $mean_x;
+        $dy = $y[$i] - $mean_y;
+        $cov += $dx * $dy;
+        $var_x += $dx * $dx;
+        $var_y += $dy * $dy;
+    }
+
+    if ($var_x <= 0.0 || $var_y <= 0.0) {
+        return ['r' => null, 'pairs' => $n, 'reason' => 'constant'];
+    }
+
+    // Rounding keeps the result off the edge: accumulated float error can push
+    // a perfect correlation to 1.0000000002, and |r| > 1 is not a number the
+    // UI should ever have to explain.
+    $r = $cov / sqrt($var_x * $var_y);
+    return ['r' => round(max(-1.0, min(1.0, $r)), 3), 'pairs' => $n, 'reason' => null];
+}
+
+/**
+ * Turns a cumulative counter into per-measurement increments.
+ *
+ * Counters (firewall packets, DNS queries) only ever grow, so correlating
+ * their raw values would find every pair of counters near-perfectly related -
+ * they all just count upwards with time. A drop means the counter reset
+ * (reboot); that increment is unknowable, so it becomes null rather than a
+ * fabricated spike. The first sample has no predecessor and is null too, which
+ * keeps the array aligned with the other metrics' rows.
+ *
+ * @param array<int,float|null> $values
+ * @return array<int,float|null>
+ */
+function bk_counter_deltas(array $values): array {
+    $out = [];
+    $prev = null;
+    foreach ($values as $i => $v) {
+        if ($v === null) {
+            $out[$i] = null;
+            // A gap breaks the chain: the next reading's increment would span
+            // an unknown stretch of time.
+            $prev = null;
+            continue;
+        }
+        $out[$i] = ($prev !== null && $v >= $prev) ? (float)$v - $prev : null;
+        $prev = (float)$v;
+    }
+    return $out;
+}
+
+/**
  * Cloudflare ranges from which the visitor-IP header may be trusted.
  *
  * Source: https://www.cloudflare.com/ips/ - changes about once in years,

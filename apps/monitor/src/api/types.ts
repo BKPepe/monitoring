@@ -162,6 +162,35 @@ export interface MetricHeatmapResponse {
   error?: string;
 }
 
+/**
+ * Response of `api.php?action=metric_correlations` - how the device's other
+ * metrics moved together with this one over the selected period.
+ */
+export interface MetricCorrelationsResponse {
+  label: string;
+  /** Measurement rows the calculation had available. */
+  samples: number;
+  /** Minimum usable pairs below which no coefficient is reported. */
+  minPairs: number;
+  /** How many metrics were compared in total (the list itself is the top few). */
+  total: number;
+  correlations: {
+    key: string;
+    label: string;
+    unit: string;
+    /**
+     * Pearson coefficient in [-1, 1], or `null` when it is undefined -
+     * a series that never changed, or too few overlapping samples. Never 0
+     * as a stand-in: that would assert the two are unrelated.
+     */
+    r: number | null;
+    pairs: number;
+    /** Why `r` is null: `constant` | `few_samples`. */
+    reason: string | null;
+  }[];
+  error?: string;
+}
+
 /** Response of `api.php?action=public_status`. */
 export interface PublicStatus {
   status: 'healthy' | 'degraded';
@@ -185,4 +214,5 @@ export interface MetricsSource {
   getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail>;
   getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse>;
   getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse>;
+  getMetricCorrelations(monitorId: number, metric: string, range: MetricRange): Promise<MetricCorrelationsResponse>;
 }

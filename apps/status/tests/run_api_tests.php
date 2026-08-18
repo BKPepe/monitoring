@@ -1142,6 +1142,79 @@ check('delší okno než retence se ořízne na 30 dní', count($hm_cap['days'] 
 [, $hm_unknown] = api_get($base, 'action=metric_heatmap&monitor_id=1&metric=neexistujici_metrika');
 check_true('neznámá metrika se přizná chybou', ($hm_unknown['error'] ?? '') !== '' && ($hm_unknown['days'] ?? null) === []);
 
+// --- Correlations between metrics (metric_correlations) -------------------
+//
+// Its own monitor with a known shape: CPU rises, iowait rises with it, RAM
+// falls against it, and swap never moves. Deliberately not monitor 1 or 2 -
+// those carry fixtures other tests assert on, and adding rows there would
+// break them from a distance.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category)
+            VALUES (90, 'Korelační fixture', 'vps', '10.0.0.90', 'up', 'Test')");
+for ($i = 0; $i < 30; $i++) {
+    $cpu = 10 + $i * 2;
+    $iow = 5 + $i;            // rises with CPU - correlation near +1
+    $ram = 90 - $i * 2;       // falls against it - correlation near -1
+    // A weak positive one on purpose: with only |r| = 1 values in the fixture,
+    // ordering by strength and ordering by signed value look identical, and a
+    // test cannot tell a correct sort from a broken one.
+    $temp = 40 + $i * 0.4 + ($i % 6) * 6;   // r about +0.48
+    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, iowait_pct, ram_usage, swap_usage, temperature_c, checked_at)
+                VALUES (90, {$cpu}, {$iow}, {$ram}, 0, {$temp}, DATE_SUB(NOW(), INTERVAL " . (30 - $i) . " MINUTE))");
+}
+
+[$corr_code, $corr] = api_get($base, 'action=metric_correlations&monitor_id=90&metric=cpu&period=24h');
+check('metric_correlations vrací 200', $corr_code, 200);
+check('a počítá ze všech vzorků', $corr['samples'] ?? 0, 30);
+
+$by_key = [];
+foreach ($corr['correlations'] ?? [] as $c) {
+    $by_key[$c['key']] = $c;
+}
+check_true('metrika rostoucí s cílem má korelaci blízko +1', ($by_key['iowait']['r'] ?? 0) > 0.98);
+check_true('metrika klesající proti cíli má korelaci blízko -1', ($by_key['ram']['r'] ?? 0) < -0.98);
+
+// The rule that matters most here: a metric that never moved has no
+// correlation to report. A zero would claim the two are unrelated.
+check_true('neměnná metrika nemá koeficient', array_key_exists('swap', $by_key) && $by_key['swap']['r'] === null);
+check('a přizná, že je konstantní', $by_key['swap']['reason'] ?? '', 'constant');
+
+// Ordering is by strength in either direction, so the strongest relationship
+// is the first thing read - a strong negative one must not sink below a weak
+// positive one.
+$first = $corr['correlations'][0] ?? null;
+check_true('nejsilnější vztah je první', $first !== null && abs($first['r'] ?? 0) > 0.98);
+check_true('slabší kladná korelace se spočítá', ($by_key['temperature_c']['r'] ?? 0) > 0.3 && ($by_key['temperature_c']['r'] ?? 1) < 0.7);
+// The point of ordering by |r|: a strong negative relationship must outrank a
+// weak positive one, not sink below it.
+$pos_ram = array_search('ram', array_column($corr['correlations'], 'key'), true);
+$pos_temp = array_search('temperature_c', array_column($corr['correlations'], 'key'), true);
+check_true('silná záporná korelace je před slabou kladnou', $pos_ram !== false && $pos_temp !== false && $pos_ram < $pos_temp);
+$r_values = array_map(fn($c) => $c['r'] === null ? -1 : abs($c['r']), $corr['correlations'] ?? []);
+$r_sorted = $r_values;
+rsort($r_sorted);
+check_true('a pořadí je podle síly bez ohledu na znaménko', $r_values === $r_sorted);
+
+// The target must not be correlated with itself, nor with an alias reading
+// the same column - a guaranteed 1.0 that says nothing.
+check_false('cílová metrika není ve vlastním seznamu', array_key_exists('cpu', $by_key));
+
+[, $corr_rt] = api_get($base, 'action=metric_correlations&monitor_id=90&metric=response_time');
+check_true(
+    'metrika mimo vps_metrics se odmítne s vysvětlením',
+    ($corr_rt['error'] ?? '') !== '' && ($corr_rt['correlations'] ?? null) === []
+);
+
+// A monitor whose agent never reported anything has no rows to correlate -
+// and must not invent a list of zeroes.
+[, $corr_empty] = api_get($base, 'action=metric_correlations&monitor_id=1&metric=cpu');
+check('bez naměřených dat je seznam prázdný', $corr_empty['correlations'] ?? null, []);
+check('a přiznaný počet vzorků je nula', $corr_empty['samples'] ?? -1, 0);
+
+// The fixture leaves no trace - later tests count monitors and would fail
+// from a distance over a leftover row.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 90");
+$pdo->exec("DELETE FROM monitors WHERE id = 90");
+
 // --- Public e-mail subscriptions -----------------------------------------
 //
 // Double opt-in end-to-end: sign-up stores a row (nothing confirmed), the

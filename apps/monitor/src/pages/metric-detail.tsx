@@ -7,6 +7,7 @@ import {
   Crosshair,
   LayoutGrid,
   Network,
+  GitCompareArrows,
   PenLine,
   StickyNote,
   Trash2,
@@ -19,6 +20,7 @@ import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { MetricChart } from '@/components/charts/metric-chart';
 import { HeatmapPanel } from '@/components/charts/heatmap-panel';
 import { HistogramPanel } from '@/components/charts/histogram-panel';
+import { CorrelationPanel } from '@/components/charts/correlation-panel';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { ProcessCulprits } from '@/components/process-culprits';
@@ -27,6 +29,7 @@ import { appApi, type ChartAnnotation } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import type {
   ChartData,
+  MetricCorrelationsResponse,
   MetricDetail,
   MetricHeatmapResponse,
   MetricRange,
@@ -66,6 +69,10 @@ export function MetricDetailPage() {
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);
   const [heatmap, setHeatmap] = React.useState<MetricHeatmapResponse | null>(null);
   const [heatmapFailed, setHeatmapFailed] = React.useState(false);
+  const [corr, setCorr] = React.useState<MetricCorrelationsResponse | null>(null);
+  // `null` while loading, `false` once we know this metric cannot have any
+  // (response_time is not stored alongside the agent's metrics).
+  const [corrAvailable, setCorrAvailable] = React.useState<boolean | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   // Chart notes. `null` = not loaded (the list stays hidden), [] = none exist.
@@ -134,6 +141,29 @@ export function MetricDetailPage() {
       active = false;
     };
   }, [monId, metric]);
+
+  // Correlations follow the range picker: "what moved with this" over the last
+  // hour and over the last month are different questions.
+  React.useEffect(() => {
+    let active = true;
+    setCorr(null);
+    setCorrAvailable(null);
+    resolveSource()
+      .then(({ source }) => source.getMetricCorrelations(monId, metric, range))
+      .then((c) => {
+        if (!active) return;
+        setCorr(c);
+        setCorrAvailable(true);
+      })
+      .catch(() => {
+        // Either the metric is out of scope or the request failed; both mean
+        // the panel has nothing truthful to show, so it stays hidden.
+        if (active) setCorrAvailable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [monId, metric, range]);
 
   const loadAnnotations = React.useCallback(() => {
     appApi
@@ -473,6 +503,24 @@ export function MetricDetailPage() {
           )}
         </p>
       </Card>
+
+      {/* What else moved with this metric. Hidden entirely when the metric is
+          out of scope (response_time is not stored with the agent's rows) -
+          an empty card would suggest "nothing correlates", which is a claim
+          nobody measured. */}
+      {corrAvailable !== false && (
+        <Card className="space-y-3 p-5">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <GitCompareArrows className="size-4 text-primary" />
+            {t('corr.title', 'Co se hýbalo spolu s touto metrikou')}
+          </h2>
+          {corr ? (
+            <CorrelationPanel data={corr} assetId={assetId ?? detail?.monitor.assetId ?? undefined} monitorId={monId} />
+          ) : (
+            <p className="text-muted-foreground text-xs">{t('metric.loading', 'Načítám měření…')}</p>
+          )}
+        </Card>
+      )}
 
       {/* Value distribution - the average of a bimodal load lies, the histogram does not. */}
       <Card className="space-y-3 p-5">

@@ -1,6 +1,7 @@
 import type {
   ChartData,
   MetricDetail,
+  MetricCorrelationsResponse,
   MetricHeatmapResponse,
   MetricKey,
   MetricPoint,
@@ -157,6 +158,20 @@ export const httpMetricsSource: MetricsSource = {
     );
     if (!Array.isArray(res?.days)) {
       throw new Error(res?.error ?? 'Neplatná odpověď metric_heatmap.');
+    }
+    return res;
+  },
+
+  async getMetricCorrelations(
+    monitorId: number,
+    metric: string,
+    range: MetricRange
+  ): Promise<MetricCorrelationsResponse> {
+    const res = await getJson<MetricCorrelationsResponse>(
+      `api.php?action=metric_correlations&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}`
+    );
+    if (!Array.isArray(res?.correlations)) {
+      throw new Error(res?.error ?? 'Neplatná odpověď metric_correlations.');
     }
     return res;
   },

@@ -26,6 +26,8 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_agent_num',
     'bk_agent_int',
     'bk_period_minutes',
+    'bk_pearson',
+    'bk_counter_deltas',
 ]);
 
 
@@ -338,6 +340,64 @@ if (function_exists('bk_period_minutes')) {
     check_true('90d jde přes denní agregaci', bk_period_minutes('90d') === null);
     check_true('1y jde přes denní agregaci', bk_period_minutes('1y') === null);
     check('neznámé období spadne na den', bk_period_minutes('nesmysl'), 1440);
+}
+
+// --- Correlations between metrics (metric_correlations) -------------------
+//
+// The statistics here are easy to get subtly wrong in ways that still produce
+// a plausible-looking number, which is worse than producing none.
+if (function_exists('bk_pearson')) {
+    $rising = range(1, 20);
+    $falling = array_reverse($rising);
+
+    $r_same = bk_pearson($rising, $rising);
+    check('dokonalá shoda je r = 1', $r_same['r'], 1.0);
+    check_true('a nepřeteče přes 1 zaokrouhlením', $r_same['r'] <= 1.0);
+    check('opačný průběh je r = -1', bk_pearson($rising, $falling)['r'], -1.0);
+    check('a počítá se ze všech párů', $r_same['pairs'], 20);
+
+    // The core honesty rule of this endpoint: a series that never moves has no
+    // correlation to report. Zero would claim "these two are unrelated",
+    // which is a different - and unearned - statement.
+    $flat = array_fill(0, 20, 5.0);
+    $const = bk_pearson($rising, $flat);
+    check_true('konstantní řada nemá korelaci (null, ne nula)', $const['r'] === null);
+    check('a přizná proč', $const['reason'], 'constant');
+
+    // Too little data must not yield a coefficient either - with three points
+    // almost anything correlates.
+    $few = bk_pearson([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]);
+    check_true('málo vzorků nedá koeficient', $few['r'] === null);
+    check('a řekne to', $few['reason'], 'few_samples');
+
+    // Pairs are formed only where both metrics measured something; the agent
+    // may report CPU and skip temperature in the same row.
+    $with_gaps = $rising;
+    $with_gaps[3] = null;
+    $with_gaps[7] = null;
+    $gapped = bk_pearson($with_gaps, $rising);
+    check('dvojice s chybějícím měřením se nepočítá', $gapped['pairs'], 18);
+    check('zbytek dá pořád dokonalou shodu', $gapped['r'], 1.0);
+
+    // A real-world shape: related but not identical.
+    $noisy = array_map(fn($v) => $v * 2 + (($v % 3) - 1), $rising);
+    $partial = bk_pearson($rising, $noisy);
+    check_true('zašuměná závislost vyjde vysoká, ale ne dokonalá', $partial['r'] > 0.9 && $partial['r'] < 1.0);
+}
+
+if (function_exists('bk_counter_deltas')) {
+    // Counters only grow, so their raw values correlate with everything that
+    // grows. The panel compares increments instead.
+    check('počítadlo se převádí na přírůstky', bk_counter_deltas([10.0, 12.0, 15.0]), [null, 2.0, 3.0]);
+    // A drop means the counter reset (reboot) - that increment is unknowable.
+    $reset = bk_counter_deltas([10.0, 12.0, 3.0, 5.0]);
+    check_true('po restartu počítadla je přírůstek neznámý, ne záporný', $reset[2] === null);
+    check('a další přírůstek se počítá od nové hodnoty', $reset[3], 2.0);
+    // A missing measurement breaks the chain: the next increment would span
+    // an unknown stretch of time.
+    $gap = bk_counter_deltas([10.0, null, 20.0, 22.0]);
+    check_true('po výpadku měření se přírůstek nedopočítává', $gap[2] === null);
+    check('a navazuje se až dalším měřením', $gap[3], 2.0);
 }
 
 $failed = bk_test_report('čisté funkce');

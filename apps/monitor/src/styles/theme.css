@@ -72,6 +72,12 @@
      (série pokrývají skoro celý kruh), proto anotace navíc nese značku. */
   --chart-annotation: #c026d3;
 
+  /* Korelace: rozcestná (diverging) škála. Kladný a záporný vztah nejsou dobrý
+     a špatný, takže se sem záměrně nesmí dostat stavové zelená/červená -
+     modrá a oranžová nesou jen směr. Ověřeno: CVD ΔE 31, kontrast nad 3:1. */
+  --chart-corr-positive: #2563eb;
+  --chart-corr-negative: #ea580c;
+
   --radius: 0.625rem;
 }
 
@@ -118,6 +124,8 @@
 
   /* Na tmavém podkladu potřebuje purpurová víc světla, aby držela kontrast. */
   --chart-annotation: #d946ef;
+  --chart-corr-positive: #60a5fa;
+  --chart-corr-negative: #fb923c;
 }
 
 /* Mapování tokenů do Tailwind utility tříd (bg-card, text-muted-foreground…). */

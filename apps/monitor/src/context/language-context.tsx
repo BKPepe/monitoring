@@ -244,6 +244,33 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'metric.hist_measurements': { cs: 'měření', en: 'measurements' },
   'metric.hist_aria': { cs: 'Histogram naměřených hodnot', en: 'Histogram of measured values' },
+  // Correlations between the metrics of one device.
+  'corr.title': { cs: 'Co se hýbalo spolu s touto metrikou', en: 'What moved together with this metric' },
+  'corr.note': {
+    cs: 'Spočítáno z {samples} měření, která agent poslal za zvolené období. Číslo je míra souběhu od -1 do +1: kladné znamená, že metriky rostly společně, záporné, že šly proti sobě. Souběh ale neříká nic o příčině - obojí může mít společného původce, nebo jít o náhodu.',
+    en: 'Computed from {samples} measurements the agent sent over the selected period. The number rates how closely the two moved, from -1 to +1: positive means they rose together, negative that they went opposite ways. Moving together says nothing about cause - both may share a third cause, or it may be coincidence.',
+  },
+  'corr.truncated': {
+    cs: 'Zobrazeno {shown} nejsilnějších z {total} porovnávaných metrik.',
+    en: 'Showing the {shown} strongest of {total} compared metrics.',
+  },
+  'corr.no_samples': {
+    cs: 'Za zvolené období nejsou od agenta žádná měření, ze kterých by šlo počítat.',
+    en: 'The agent sent no measurements for the selected period, so there is nothing to compute from.',
+  },
+  'corr.no_others': {
+    cs: 'Toto zařízení nehlásí žádnou další metriku, se kterou by šlo porovnávat.',
+    en: 'This device reports no other metric to compare against.',
+  },
+  'corr.reason_constant': {
+    cs: 'hodnota se za celé období nezměnila, vztah nelze spočítat',
+    en: 'the value never changed over the period, so no relationship can be computed',
+  },
+  'corr.reason_few': {
+    cs: 'měření se překrývají jen v {pairs} bodech, na výpočet je to málo',
+    en: 'the measurements overlap in only {pairs} points, too few to compute from',
+  },
+  'corr.bar_title': { cs: 'Míra souběhu {value}', en: 'Moved together by {value}' },
   // Chart notes on the metric detail (annotations).
   'ann.add': { cs: 'Přidat poznámku', en: 'Add a note' },
   'ann.mode_cancel': { cs: 'Zrušit režim poznámky', en: 'Cancel note mode' },

@@ -3384,6 +3384,137 @@ if ($action === 'metric_heatmap') {
     exit;
 }
 
+// 2g1a2. Which other metrics of the same device moved with this one.
+//
+// The chart says CPU peaked at 19:40; "what was running" answers with
+// processes. This answers with the device's OTHER metrics - the peak came
+// with iowait, or with nothing at all.
+//
+// Only metrics stored in vps_metrics take part, and that is what makes the
+// result trustworthy: they share one measurement row, so samples pair up
+// exactly instead of being averaged into common time buckets. Averaging
+// smooths both series and inflates the coefficient - a correlation nobody
+// measured. response_time lives in monitor_logs and is therefore not offered.
+if ($action === 'metric_correlations') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $metric = $_GET['metric'] ?? '';
+    $period = $_GET['period'] ?? '24h';
+    $minutes = bk_period_minutes($period) ?? 1440;
+    // Raw samples only - the daily rollup keeps no per-metric alignment.
+    $minutes = min($minutes, 30 * 24 * 60);
+    $corr_min_pairs = 10;
+    $corr_top = 8;
+
+    if (!isset($BK_METRIC_COLUMN_MAP[$metric])) {
+        echo json_encode([
+            'correlations' => [],
+            'error' => 'Korelace se počítají jen pro metriky hlášené agentem.',
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        $mon_row = $stmt_mon->fetch();
+        if (!$mon_row) {
+            echo json_encode(['correlations' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $real_id = (int)$mon_row['id'];
+        $mon_type = (string)($mon_row['type'] ?? '');
+
+        // Candidates: every mapped metric except the target, minus the ones
+        // restricted to another monitor type. The same-column check below is a
+        // guard, not a live filter: today the only shared column
+        // (ts_clients_online, read by ts_clients / discord_presence /
+        // mc_players) is already split by 'only', so nothing reaches it. It
+        // stays because an alias added without 'only' would otherwise show up
+        // as a perfect correlation of a metric with itself under another name.
+        $candidates = [];
+        foreach ($BK_METRIC_COLUMN_MAP as $key => $def) {
+            if ($key === $metric) {
+                continue;
+            }
+            if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
+                continue;
+            }
+            if ($def['col'] === $BK_METRIC_COLUMN_MAP[$metric]['col']) {
+                continue;
+            }
+            $candidates[$key] = $def;
+        }
+
+        $columns = [$BK_METRIC_COLUMN_MAP[$metric]['col']];
+        foreach ($candidates as $def) {
+            $columns[] = $def['col'];
+        }
+        $columns = array_values(array_unique($columns));
+        $select = implode(', ', array_map(fn($c) => "`{$c}`", $columns));
+
+        $stmt = $pdo->prepare("
+            SELECT {$select}
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+            ORDER BY checked_at ASC
+        ");
+        $stmt->execute([$real_id, $minutes]);
+        $rows = $stmt->fetchAll();
+
+        $series = [];
+        foreach ($columns as $col) {
+            $series[$col] = array_map(fn($r) => $r[$col] === null ? null : (float)$r[$col], $rows);
+        }
+
+        $target_def = $BK_METRIC_COLUMN_MAP[$metric];
+        $target = !empty($target_def['counter'])
+            ? bk_counter_deltas($series[$target_def['col']])
+            : $series[$target_def['col']];
+
+        $out = [];
+        foreach ($candidates as $key => $def) {
+            $values = !empty($def['counter']) ? bk_counter_deltas($series[$def['col']]) : $series[$def['col']];
+            $res = bk_pearson($target, $values, $corr_min_pairs);
+            // A metric the agent never reported is absent, not uncorrelated -
+            // listing it would fill the panel with rows about nothing.
+            if ($res['pairs'] === 0) {
+                continue;
+            }
+            $out[] = [
+                'key' => $key,
+                'label' => $def['label'] . (!empty($def['counter']) ? ' (přírůstek)' : ''),
+                'unit' => $def['unit'],
+                'r' => $res['r'],
+                'pairs' => $res['pairs'],
+                'reason' => $res['reason'],
+            ];
+        }
+
+        // Strongest relationship first, in either direction - a strong negative
+        // correlation is every bit as interesting as a positive one. Rows
+        // without a coefficient sink to the bottom instead of being hidden.
+        usort($out, function ($a, $b) {
+            $ra = $a['r'] === null ? -1 : abs($a['r']);
+            $rb = $b['r'] === null ? -1 : abs($b['r']);
+            return $rb <=> $ra;
+        });
+
+        $total = count($out);
+        echo json_encode([
+            'metric' => $metric,
+            'label' => $target_def['label'],
+            'samples' => count($rows),
+            'minPairs' => $corr_min_pairs,
+            'total' => $total,
+            'correlations' => array_slice($out, 0, $corr_top),
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api] metric_correlations selhal: ' . $e->getMessage());
+        echo json_encode(['correlations' => [], 'error' => 'Chyba při výpočtu korelací'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // 2g1b. Context for the metric detail page (Level 3).
 //
 // The chart data itself comes from `metric_series` - this endpoint supplies
