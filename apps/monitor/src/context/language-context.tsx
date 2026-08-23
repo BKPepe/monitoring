@@ -347,13 +347,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'pubsub.box_placeholder': { cs: 'vas@email.cz', en: 'you@example.com' },
   'pubsub.box_subscribe': { cs: 'Odebírat', en: 'Subscribe' },
   'pubsub.box_sending': { cs: 'Odesílám…', en: 'Sending…' },
+  // One neutral wording for every outcome: the server must not reveal whether
+  // the address was new, already subscribed, or in the resend cooldown.
   'pubsub.box_check_inbox': {
-    cs: 'Hotovo - potvrďte odběr kliknutím na odkaz v e-mailu.',
-    en: 'Done - confirm the subscription via the link in your inbox.',
-  },
-  'pubsub.box_saved_nomail': {
-    cs: 'Uloženo, ale potvrzovací e-mail se nepodařilo odeslat. Zkuste to prosím později.',
-    en: 'Stored, but the confirmation e-mail failed to send. Please try again later.',
+    cs: 'Hotovo. Pokud adresa ještě odběr nemá, přišel na ni potvrzovací e-mail - odběr začne až po kliknutí na odkaz v něm.',
+    en: 'Done. If the address is not subscribed yet, a confirmation e-mail is on its way - the subscription starts once you click the link in it.',
   },
   'pubsub.box_hint': {
     cs: 'Pošleme jen výpadky a jejich obnovení. Odhlášení jedním klikem v každém e-mailu.',

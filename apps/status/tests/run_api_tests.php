@@ -1222,7 +1222,12 @@ $pdo->exec("DELETE FROM monitors WHERE id = 90");
 // injected via SQL - the raw ones live only in e-mails the test cannot read.
 [$pss_code, $pss] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
 check('public_subscribe vrací 200', $pss_code, 200);
-check_true('odpověď nese poctivý emailSent příznak', array_key_exists('emailSent', $pss ?? []));
+// The response carries nothing beyond success. It used to report an
+// `emailSent` flag for honesty about delivery, but only a not-yet-subscribed
+// address triggers a send, so that flag identified subscribers whenever
+// sending failed (2026-08-23 audit). Delivery problems now go to the server
+// log, where they belong.
+check('odpověď je konstantní a nic neprozrazuje', $pss, ['success' => true]);
 $pss_row = $pdo->query("SELECT confirmed_at, confirm_token_hash, unsubscribe_token FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetch();
 check_true('řádek vznikl a čeká na potvrzení', $pss_row !== false && $pss_row['confirmed_at'] === null);
 check_true('potvrzovací token je hash, odhlašovací raw', strlen((string)$pss_row['confirm_token_hash']) === 64 && strlen((string)$pss_row['unsubscribe_token']) === 48);
@@ -1239,18 +1244,24 @@ check_true('a v DB je potvrzeno', $pdo->query("SELECT confirmed_at FROM public_s
 check('použitý potvrzovací token podruhé neprojde', $psc2_code, 400);
 
 // Already-confirmed address: the response must be INDISTINGUISHABLE from a
-// fresh successful signup, or emailSent becomes a one-request membership
-// oracle for anyone (found in the 2026-08-23 audit). A brand-new address that
-// sends fine returns emailSent:true, so the confirmed address must too.
-[$pss_fresh_code, $pss_fresh] = api_post($base, 'action=public_subscribe', ['email' => 'cerstvy@example.com', 'lang' => 'cs'], $cookie_jar, '');
+// fresh signup, or it becomes a one-request membership oracle (2026-08-23
+// audit). The comparison is on the WHOLE body on purpose - an earlier fix
+// reported a fixed `emailSent:true` for the confirmed case, which merely
+// inverted the leak wherever sending fails (CI has no mail server, and it
+// caught exactly that). Comparing bodies holds in both environments.
+[$pss_fresh_code, $pss_fresh, $pss_fresh_raw] = api_post($base, 'action=public_subscribe', ['email' => 'cerstvy@example.com', 'lang' => 'cs'], $cookie_jar, '');
 check('nová adresa vrací 200', $pss_fresh_code, 200);
-[$pss2_code, $pss2] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
+[$pss2_code, $pss2, $pss2_raw] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
 check('opakované přihlášení je neutrálních 200', $pss2_code, 200);
-check_true(
-    'potvrzená adresa nejde odlišit od čerstvé (žádný enumerační oracle)',
-    array_key_exists('emailSent', $pss2) && $pss2['emailSent'] === ($pss_fresh['emailSent'] ?? null)
+check(
+    'potvrzená adresa vrací bajtově stejnou odpověď jako čerstvá (žádný oracle)',
+    $pss2_raw,
+    $pss_fresh_raw
 );
-check_true('a konkrétně to není prozrazující null', $pss2['emailSent'] !== null);
+// No delivery signal may reach an anonymous caller at all: only the
+// not-yet-subscribed path attempts a send, so any such field identifies
+// membership as soon as sending breaks.
+check_false('odpověď nenese žádný příznak o odeslání', array_key_exists('emailSent', $pss2 ?? []));
 $pdo->exec("DELETE FROM public_subscribers WHERE email = 'cerstvy@example.com'");
 
 // Admin přehled + neutrální odhlášení.

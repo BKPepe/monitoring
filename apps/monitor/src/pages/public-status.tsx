@@ -277,7 +277,6 @@ export function PublicStatusPage() {
   const [eventsShown, setEventsShown] = React.useState(10);
   const [subEmail, setSubEmail] = React.useState('');
   const [subState, setSubState] = React.useState<'idle' | 'busy' | 'done'>('idle');
-  const [subEmailSent, setSubEmailSent] = React.useState<boolean | null>(null);
   const [subError, setSubError] = React.useState<string | null>(null);
   const allFailureEvents = React.useMemo(
     () => (events ?? []).filter((e) => e.isDown || e.rawStatus === 'warning'),
@@ -591,13 +590,17 @@ export function PublicStatusPage() {
           {t('pubsub.box_title', 'Upozornění na výpadky e-mailem')}
         </h2>
         {subState === 'done' ? (
+          // One message for every outcome. The server deliberately no longer
+          // reports whether a mail went out: only a not-yet-subscribed address
+          // triggers a send, so any delivery signal would tell an anonymous
+          // caller who is already subscribed. This wording stays true whether
+          // the address is new, already confirmed, or within the resend
+          // cooldown - it promises nothing that did not happen.
           <p className="text-up text-xs font-medium">
-            {subEmailSent === false
-              ? t(
-                  'pubsub.box_saved_nomail',
-                  'Uloženo, ale potvrzovací e-mail se nepodařilo odeslat. Zkuste to prosím později.'
-                )
-              : t('pubsub.box_check_inbox', 'Hotovo - potvrďte odběr kliknutím na odkaz v e-mailu.')}
+            {t(
+              'pubsub.box_check_inbox',
+              'Hotovo. Pokud adresa ještě odběr nemá, přišel na ni potvrzovací e-mail - odběr začne až po kliknutí na odkaz v něm.'
+            )}
           </p>
         ) : (
           <form
@@ -614,7 +617,6 @@ export function PublicStatusPage() {
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-                setSubEmailSent(data.emailSent ?? null);
                 setSubState('done');
               } catch (err) {
                 setSubState('idle');

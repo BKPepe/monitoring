@@ -4444,19 +4444,24 @@ if ($action === 'public_subscribe') {
             exit;
         }
         $ps_token = bk_public_sub_issue($pdo, $ps_email, $ps_lang, $ps_ip);
-        $ps_sent = false;
-        if ($ps_token !== null) {
-            $ps_sent = bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_public_base_origin());
+        if ($ps_token !== null && !bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_public_base_origin())) {
+            // The operator needs to know delivery is broken; the visitor must
+            // not, because the answer would identify them. See below.
+            error_log('[public_subscribe] potvrzovací e-mail se nepodařilo odeslat');
         }
-        // emailSent must not reveal membership. A null token means the address
-        // is already confirmed OR within the resend cooldown; reporting a
-        // distinct value there (previously null) let an anonymous caller test,
-        // in one request, whether any address is a confirmed subscriber. It now
-        // reports the same `true` as a fresh successful send, so "already
-        // subscribed" is indistinguishable from "new, mail on its way". `false`
-        // stays honest - it appears only when an actual send attempt failed,
-        // which is a transient SMTP condition, not a membership signal.
-        echo json_encode(['success' => true, 'emailSent' => $ps_token !== null ? $ps_sent : true], JSON_UNESCAPED_UNICODE);
+        // The response is deliberately constant for every outcome - new address,
+        // already confirmed, or resend cooldown.
+        //
+        // It used to carry an `emailSent` flag, meant as honesty about delivery.
+        // But only the not-yet-subscribed path ever attempts a send, so ANY
+        // per-request delivery signal identifies membership the moment sending
+        // breaks: an attacker submits an address and reads "send failed" =>
+        // "not a subscriber". Reporting a fixed `true` instead just inverted
+        // that (CI, which has no mail server, made it obvious). Delivery health
+        // is an operator concern and goes to the log above; what the visitor is
+        // told stays true for every case and reveals nothing about who
+        // subscribes.
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[public_subscribe] ' . $e->getMessage());
         http_response_code(500);
