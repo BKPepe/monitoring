@@ -28,6 +28,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_period_minutes',
     'bk_pearson',
     'bk_counter_deltas',
+    'bk_trusted_link_host',
 ]);
 
 
@@ -398,6 +399,29 @@ if (function_exists('bk_counter_deltas')) {
     $gap = bk_counter_deltas([10.0, null, 20.0, 22.0]);
     check_true('po výpadku měření se přírůstek nedopočítává', $gap[2] === null);
     check('a navazuje se až dalším měřením', $gap[3], 2.0);
+}
+
+// --- Trusted host for links in public mail (bk_trusted_link_host) ---------
+//
+// A confirmation mail goes to an address the requester names, so an arbitrary
+// Host header must never end up in its link - that would be a signed phishing
+// mail pointing at the attacker.
+if (function_exists('bk_trusted_link_host')) {
+    $allow = ['localhost', '127.0.0.1'];
+    check('vlastní SERVER_NAME se přijme', bk_trusted_link_host('bloodkings.eu', 'bloodkings.eu', $allow), 'bloodkings.eu');
+    check_true(
+        'cizí Host se zahodí ve prospěch SERVER_NAME',
+        bk_trusted_link_host('evil.example', 'bloodkings.eu', $allow) === 'bloodkings.eu'
+    );
+    check('povolený vývojový host projde', bk_trusted_link_host('localhost:5273', 'localhost', $allow), 'localhost:5273');
+    check_true(
+        'host mimo allowlist i mimo SERVER_NAME se zahodí',
+        bk_trusted_link_host('attacker.test', 'app.internal', $allow) === 'app.internal'
+    );
+    check_true('prázdný Host spadne na SERVER_NAME', bk_trusted_link_host('', 'bloodkings.eu', $allow) === 'bloodkings.eu');
+    // Case-folding: a Host differing only in case must still match SERVER_NAME,
+    // or the check could be dodged with BloodKings.EU.
+    check('velikost písmen nerozhoduje', bk_trusted_link_host('BloodKings.EU', 'bloodkings.eu', $allow), 'bloodkings.eu');
 }
 
 $failed = bk_test_report('čisté funkce');

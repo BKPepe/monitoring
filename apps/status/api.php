@@ -4448,10 +4448,15 @@ if ($action === 'public_subscribe') {
         if ($ps_token !== null) {
             $ps_sent = bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_public_base_origin());
         }
-        // emailSent is honest: telling the visitor "check your inbox" when the
-        // mail failed to send would be a lie. null token = already subscribed
-        // or a recent resend - the neutral message covers both (no enumeration).
-        echo json_encode(['success' => true, 'emailSent' => $ps_token !== null ? $ps_sent : null], JSON_UNESCAPED_UNICODE);
+        // emailSent must not reveal membership. A null token means the address
+        // is already confirmed OR within the resend cooldown; reporting a
+        // distinct value there (previously null) let an anonymous caller test,
+        // in one request, whether any address is a confirmed subscriber. It now
+        // reports the same `true` as a fresh successful send, so "already
+        // subscribed" is indistinguishable from "new, mail on its way". `false`
+        // stays honest - it appears only when an actual send attempt failed,
+        // which is a transient SMTP condition, not a membership signal.
+        echo json_encode(['success' => true, 'emailSent' => $ps_token !== null ? $ps_sent : true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[public_subscribe] ' . $e->getMessage());
         http_response_code(500);
@@ -4758,7 +4763,10 @@ if ($action === 'save_annotation') {
             $ann_monitor_id,
             mb_substr($ann_metric, 0, 30),
             date('Y-m-d H:i:s', $ann_ts),
-            $ann_note,
+            // Cap the note server-side: the client sends maxLength=500, but the
+            // client is not a security boundary. The note is rendered escaped,
+            // so this is a size limit, not the XSS defence.
+            mb_substr($ann_note, 0, 500),
             $_SESSION['admin_id'] ?? null,
         ]);
         // Read the id BEFORE the audit entry: bk_audit_log() inserts a row of

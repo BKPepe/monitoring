@@ -1238,11 +1238,20 @@ check_true('a v DB je potvrzeno', $pdo->query("SELECT confirmed_at FROM public_s
 [$psc2_code] = api_post($base, 'action=public_subscribe_confirm', ['token' => 'test-confirm-token'], $cookie_jar, '');
 check('použitý potvrzovací token podruhé neprojde', $psc2_code, 400);
 
-// Už potvrzená adresa: neutrální odpověď, žádný nový mail (emailSent null).
+// Already-confirmed address: the response must be INDISTINGUISHABLE from a
+// fresh successful signup, or emailSent becomes a one-request membership
+// oracle for anyone (found in the 2026-08-23 audit). A brand-new address that
+// sends fine returns emailSent:true, so the confirmed address must too.
+[$pss_fresh_code, $pss_fresh] = api_post($base, 'action=public_subscribe', ['email' => 'cerstvy@example.com', 'lang' => 'cs'], $cookie_jar, '');
+check('nová adresa vrací 200', $pss_fresh_code, 200);
 [$pss2_code, $pss2] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
 check('opakované přihlášení je neutrálních 200', $pss2_code, 200);
-// array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
-check_true('a nic se neposílá (emailSent null)', array_key_exists('emailSent', $pss2) && $pss2['emailSent'] === null);
+check_true(
+    'potvrzená adresa nejde odlišit od čerstvé (žádný enumerační oracle)',
+    array_key_exists('emailSent', $pss2) && $pss2['emailSent'] === ($pss_fresh['emailSent'] ?? null)
+);
+check_true('a konkrétně to není prozrazující null', $pss2['emailSent'] !== null);
+$pdo->exec("DELETE FROM public_subscribers WHERE email = 'cerstvy@example.com'");
 
 // Admin přehled + neutrální odhlášení.
 [, $psl] = api_get_auth($base, 'action=public_subscribers', $cookie_jar);

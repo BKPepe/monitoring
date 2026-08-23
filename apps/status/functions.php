@@ -7152,14 +7152,54 @@ function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): voi
     }
 }
 
-/** Absolute origin for links in public mails - site_url setting first, request as fallback. */
+/**
+ * Absolute origin for links in public mails - the configured site_url first.
+ *
+ * The fallback must NOT trust the client-controlled Host header. A confirmation
+ * mail goes to an address the requester names, so `Host: evil.example` on an
+ * anonymous public_subscribe would produce a legitimately-signed mail whose
+ * "Confirm" button points at the attacker's site (phishing + token capture).
+ * With no site_url configured we accept Host only when it is on an allowlist
+ * (dev hosts by default, extendable via the BK_PUBLIC_LINK_HOSTS constant) or
+ * matches the web server's own SERVER_NAME; anything else falls back to
+ * SERVER_NAME, which the server config sets, not the request.
+ */
 function bk_public_base_origin(): string {
     $configured = trim((string)get_setting('site_url', ''));
     if ($configured !== '') {
         return rtrim($configured, '/');
     }
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    return $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $allow = array_filter(array_map(
+        'trim',
+        explode(',', defined('BK_PUBLIC_LINK_HOSTS') ? (string)BK_PUBLIC_LINK_HOSTS : 'localhost,127.0.0.1')
+    ));
+    $trusted = bk_trusted_link_host(
+        (string)($_SERVER['HTTP_HOST'] ?? ''),
+        (string)($_SERVER['SERVER_NAME'] ?? 'localhost'),
+        $allow
+    );
+    return $scheme . '://' . $trusted;
+}
+
+/**
+ * Decides which host may appear in a link inside mail to a third party.
+ *
+ * Pure and side-effect free so the trust rule can be tested directly. The
+ * client-supplied Host is honoured only when it matches the server's own
+ * SERVER_NAME or an explicit allowlist; otherwise SERVER_NAME wins. This is
+ * what stops `Host: evil.example` from poisoning a confirmation link.
+ *
+ * @param string[] $allow lowercased hostnames (no port) that may be trusted
+ */
+function bk_trusted_link_host(string $http_host, string $server_name, array $allow): string {
+    $host = strtolower(trim($http_host));
+    $server_name = strtolower(trim($server_name)) ?: 'localhost';
+    $host_no_port = explode(':', $host)[0];
+    if ($host !== '' && ($host_no_port === $server_name || in_array($host_no_port, $allow, true))) {
+        return $host;
+    }
+    return $server_name;
 }
 
 /**

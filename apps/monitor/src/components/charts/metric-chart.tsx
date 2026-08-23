@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { EChartsCoreOption } from 'echarts/core';
 import { Chart, echarts } from './chart';
-import { withAlpha } from './color';
+import { escapeHtml, withAlpha } from './color';
 import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
 import type { ChartTheme } from './use-chart-theme';
@@ -274,7 +274,10 @@ function buildSeries(
           label: { show: false },
           emphasis: { lineStyle: { width: 2 } },
           tooltip: {
-            formatter: (params: { name?: string }) => params.name ?? '',
+            // ECharts inserts this via innerHTML - the name carries a
+            // user-written annotation note and MUST be escaped, or a note like
+            // `<img src=x onerror=…>` is stored XSS for every chart viewer.
+            formatter: (params: { name?: string }) => escapeHtml(params.name ?? ''),
           },
           data: markLineData,
         }
