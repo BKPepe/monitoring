@@ -23,7 +23,16 @@ if (isset($_GET['lang']) && in_array($_GET['lang'], $bk_supported_langs, true)) 
 }
 
 $GLOBALS['BK_LANG'] = $bk_lang;
-$GLOBALS['BK_STRINGS'] = require __DIR__ . '/lang/' . $bk_lang . '.php';
+// Literal paths, not a path built from $bk_lang. The value is already
+// allowlisted above, so this changes no behaviour - but an include whose path
+// contains a request-derived variable is one edit away from a file-inclusion
+// bug, and static analysis cannot tell the two apart. Taint analysis flagged
+// this include and, because the dictionary loaded here feeds every t() call,
+// treated ALL translated output as attacker-controlled - dozens of false
+// reports downstream from this one line.
+$GLOBALS['BK_STRINGS'] = $bk_lang === 'en'
+    ? require __DIR__ . '/lang/en.php'
+    : require __DIR__ . '/lang/cs.php';
 
 /**
  * Returns the translated string for a key in the current language.

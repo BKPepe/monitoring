@@ -207,6 +207,47 @@ jobs:
           BK_TEST_DB_PASS: test
         run: php apps/status/tests/run_api_tests.php
 
+  phpstatic:
+    name: PHP statická analýza (PHPStan, Psalm taint)
+    runs-on: ubuntu-latest
+    # Proc tenhle job existuje: CodeQL skenuje jen javascript-typescript a go
+    # (viz codeql.yml) a PHP neumi vubec - cely backend, kde zije autorizace,
+    # CSRF i prace s tokeny, tedy nemel zadnou statickou analyzu. Audit
+    # 2026-08-23 nasel v PHP dve zranitelnosti, ktere CodeQL videt nemohl,
+    # a jeho zelena o backendu nevypovidala nic.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          # Stejna verze jako produkce (cPanel ea-php84).
+          php-version: '8.4'
+          extensions: mbstring, curl, pdo, pdo_mysql
+          # Verze pinnute zamerne: nova verze nastroje umi najit nove veci a
+          # shodila by build na zmene, kterou nikdo neudelal.
+          tools: phpstan:2.2.9, psalm:6.16.1
+
+      # config.php se necommituje (drzi pristupy k DB), ale kod ho vyzaduje.
+      - name: Doplnit config ze vzoru
+        run: cp apps/status/config.sample.php apps/status/config.php
+
+      # Hleda chyby, ktere `php -l` nevidi: volani neexistujici funkce nebo
+      # metody, spatny pocet argumentu. Presne tohle kdysi shodilo badge.php,
+      # ktery mesice vracel 500, protoze volal funkci, co v kodu nebyla.
+      # Level 0 hlasi na teto kodove zakladne nula falesnych poplachu, takze
+      # nema baseline a kazdy budouci pad je skutecny.
+      - name: PHPStan (level 0, bez baseline)
+        run: phpstan analyse --no-progress --memory-limit=1G
+
+      # Taint analyza: sleduje cestu od $_GET/$_POST/$_COOKIE/$_SERVER az k
+      # nebezpecnemu mistu (echo do HTML, SQL, include). Pri prvnim behu nasla
+      # skutecny XSS v admin.php. Baseline drzi nalezy, ktere revize vyhodnotila
+      # jako falesne (echo json_encode u JSON endpointu a guardy, ktere Psalm
+      # neumi precist) - viz psalm-taint-baseline.xml. Novy tok v baseline neni
+      # a build shodi.
+      - name: Psalm taint analýza
+        run: psalm --taint-analysis --no-cache --no-progress
+
   agents:
     name: Agent skripty (shell, python, powershell)
     runs-on: ubuntu-latest

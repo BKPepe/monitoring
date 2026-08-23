@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<!--
+  Taint analysis of the PHP backend.
+
+  Why: CodeQL scans only javascript-typescript and go, and has no PHP support
+  at all, so nothing was ever checking the backend for untrusted input reaching
+  a dangerous sink. Psalm's taint mode does exactly that, and on its first run
+  (2026-08-23) it found a real one: request input reaching an unescaped echo in
+  admin.php.
+
+  Psalm runs ONLY in taint mode here; its general type checks are left to
+  PHPStan (see phpstan.neon), so the two do not report the same thing twice.
+
+  The baseline records the findings that review showed to be false positives -
+  see psalm-taint-baseline.xml for what is in it and why. New flows are not
+  baselined and fail the build.
+-->
+<psalm
+    errorLevel="8"
+    resolveFromConfigFile="true"
+    findUnusedCode="false"
+    findUnusedBaselineEntry="false"
+    errorBaseline="psalm-taint-baseline.xml"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns="https://getpsalm.org/schema/config"
+>
+    <projectFiles>
+        <directory name="apps/status" />
+        <ignoreFiles>
+            <!-- Vendored PHPMailer/SMTP - third-party, not ours to fix. -->
+            <directory name="apps/status/lib" />
+            <!-- Test harnesses deliberately feed edge cases; they are not
+                 request-reachable code and would only add noise. -->
+            <directory name="apps/status/tests" />
+            <!-- config.php / version.php are not listed: Psalm requires every
+                 ignored path to exist, and both are written by the deploy
+                 workflow rather than committed. They hold only define()s, so
+                 analysing them where they do exist costs nothing. -->
+        </ignoreFiles>
+    </projectFiles>
+</psalm>

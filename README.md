@@ -114,6 +114,33 @@ After the history squash (2026-08) both the app and the agents restarted at
   version *difference* (not ordering), so a bump - or even a reset - reaches
   the fleet on its next report cycle.
 
+## 🔍 Static analysis
+
+CodeQL scans **only `javascript-typescript` and `go`** — GitHub CodeQL has no
+PHP support at all. Its green tick therefore says nothing about the PHP backend,
+where every authorisation, CSRF and token check lives. A security audit on
+2026-08-23 found two PHP-side issues that CodeQL was structurally incapable of
+seeing. The `phpstatic` job in the Quality Gate covers that blind spot:
+
+- **PHPStan** (`phpstan.neon`, level 0, no baseline) — catches what `php -l`
+  cannot: calls to functions, classes or methods that do not exist, and wrong
+  argument counts. That is the bug that once left `badge.php` returning 500 for
+  months. Level 0 reports zero false positives here, so every failure is real.
+- **Psalm taint analysis** (`psalm.xml`) — follows untrusted input
+  (`$_GET`/`$_POST`/`$_COOKIE`/`$_SERVER`) to dangerous sinks (echo into HTML,
+  SQL, `include`). Its first run found a real XSS in `admin.php`.
+  `psalm-taint-baseline.xml` holds the findings review judged false — chiefly
+  `echo json_encode()` on JSON endpoints, plus allowlist and `isset()` guards
+  Psalm cannot read. **The baseline is a list of reviewed non-issues, not a list
+  of accepted bugs**; anything new is unbaselined and fails the build.
+
+Run them locally (tools are not vendored — this app ships without Composer):
+
+```bash
+phpstan analyse --memory-limit=1G     # or: php phpstan.phar analyse …
+psalm --taint-analysis --no-cache
+```
+
 ## 📈 Design goals
 *   **Performance:** 100/100 on Lighthouse metrics via static Astro compilation with no heavy client-side JS framework, responsive from 360px to 4K.
 *   **Premium design:** minimal, dark-mode-first, red used only as an accent, smooth Vercel-style animations.

@@ -1,0 +1,34 @@
+# Static analysis of the PHP backend.
+#
+# Why this exists: CodeQL scans only javascript-typescript and go (see
+# .github/workflows/codeql.yml), and GitHub CodeQL has no PHP support at all -
+# so the entire backend, where every authorisation, CSRF and token check lives,
+# had no static analysis whatsoever. A security audit on 2026-08-23 found two
+# PHP-side issues that CodeQL was structurally incapable of seeing.
+#
+# Level 0 is deliberate, not timid. It catches the class of bug this project
+# actually shipped: badge.php called a function that did not exist and returned
+# 500 for months, because `php -l` only checks syntax and nobody opened the
+# page. Level 0 finds exactly that - unknown functions, classes, methods and
+# wrong argument counts - and it reports ZERO false positives here, so the gate
+# needs no baseline and every future failure is real.
+#
+# Higher levels are not used yet: level 1 adds ~550 "Variable $pdo might not be
+# defined" reports, which are an artefact of this codebase's require-based
+# wiring rather than defects. Raising the level would mean a large baseline,
+# and a baseline is a list of problems marked "ignore" - the opposite of what
+# this gate is for.
+parameters:
+    level: 0
+    paths:
+        - apps/status
+    excludePaths:
+        # `analyse`, not `analyseAndScan`: errors inside the vendored library
+        # are not ours to fix, but its symbols must stay visible or every
+        # `new PHPMailer(...)` in our own code becomes a false "class not found".
+        analyse:
+            - apps/status/lib
+        analyseAndScan:
+            # Written by the deploy workflow, absent in a checkout.
+            - apps/status/version.php (?)
+            - apps/status/config.php (?)

@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<files psalm-version="6.16.1@f1f5de594dc76faf8784e02d3dc4716c91c6f6ac">
+  <file src="apps/status/api.php">
+    <TaintedHtml>
+      <code><![CDATA[json_encode($series_payload, JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'metric' => $metric,
+            'label' => $target_def['label'],
+            'samples' => count($rows),
+            'minPairs' => $corr_min_pairs,
+            'total' => $total,
+            'correlations' => array_slice($out, 0, $corr_top),
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'monitor' => [
+                'id' => (int)$mon['id'],
+                'name' => $mon['name'],
+                'type' => $mon['type'],
+                'assetId' => $mon['asset_id'] !== null ? (int)$mon['asset_id'] : null,
+            ],
+            'metric' => [
+                'key' => $metric,
+                'label' => $def['label'],
+                'unit' => $def['unit'],
+                'counter' => !empty($def['counter']),
+            ],
+            'thresholds' => [
+                // The warning band sits 15 points below the critical limit - same
+                // as the legacy page, so both show the same thing.
+                'warning' => $critical !== null ? max(0.0, $critical - 15) : null,
+                'critical' => $critical,
+            ],
+            'related' => $related,
+            'events' => $events,
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'summary' => $summary,
+            'healthScore' => $health_score,
+            'tips' => array_map(fn($t) => ['severity' => $t['severity'], 'text' => $t['text']], $knowledge_tips),
+            'insights' => array_map(fn($i) => ['text' => $i['text'] ?? ''], $monitor_insights),
+            'timeline' => array_map(fn($e) => [
+                'type' => $e['event_type'],
+                'description' => $e['description'],
+                'at' => $e['ts'],
+                'relative' => bk_relative_time_label($e['ts']),
+            ], $timeline),
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+        'error' => sprintf('Neznámá akce „%s".', $action),
+    ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['services' => $services], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE)]]></code>
+    </TaintedHtml>
+    <TaintedTextWithQuotes>
+      <code><![CDATA[json_encode($series_payload, JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'metric' => $metric,
+            'label' => $target_def['label'],
+            'samples' => count($rows),
+            'minPairs' => $corr_min_pairs,
+            'total' => $total,
+            'correlations' => array_slice($out, 0, $corr_top),
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'monitor' => [
+                'id' => (int)$mon['id'],
+                'name' => $mon['name'],
+                'type' => $mon['type'],
+                'assetId' => $mon['asset_id'] !== null ? (int)$mon['asset_id'] : null,
+            ],
+            'metric' => [
+                'key' => $metric,
+                'label' => $def['label'],
+                'unit' => $def['unit'],
+                'counter' => !empty($def['counter']),
+            ],
+            'thresholds' => [
+                // The warning band sits 15 points below the critical limit - same
+                // as the legacy page, so both show the same thing.
+                'warning' => $critical !== null ? max(0.0, $critical - 15) : null,
+                'critical' => $critical,
+            ],
+            'related' => $related,
+            'events' => $events,
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'summary' => $summary,
+            'healthScore' => $health_score,
+            'tips' => array_map(fn($t) => ['severity' => $t['severity'], 'text' => $t['text']], $knowledge_tips),
+            'insights' => array_map(fn($i) => ['text' => $i['text'] ?? ''], $monitor_insights),
+            'timeline' => array_map(fn($e) => [
+                'type' => $e['event_type'],
+                'description' => $e['description'],
+                'at' => $e['ts'],
+                'relative' => bk_relative_time_label($e['ts']),
+            ], $timeline),
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+        'error' => sprintf('Neznámá akce „%s".', $action),
+    ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['services' => $services], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE)]]></code>
+    </TaintedTextWithQuotes>
+  </file>
+  <file src="apps/status/functions.php">
+    <TaintedHtml>
+      <code><![CDATA[json_encode(t('chart_estimated_full'))]]></code>
+    </TaintedHtml>
+    <TaintedTextWithQuotes>
+      <code><![CDATA[json_encode(t('chart_estimated_full'))]]></code>
+    </TaintedTextWithQuotes>
+  </file>
+  <file src="apps/status/index.php">
+    <TaintedHtml>
+      <code><![CDATA[$avg_uptime_known ? number_format($avg_uptime, 2, ',', ' ') . '%' : t('uptime_no_data')]]></code>
+      <code><![CDATA[$game_text]]></code>
+      <code><![CDATA[$ll_badge_text]]></code>
+      <code><![CDATA[$ll_badge_text]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$r_ago]]></code>
+      <code><![CDATA[$r_label]]></code>
+      <code><![CDATA[$time_str]]></code>
+      <code><![CDATA[$tooltip]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$val]]></code>
+      <code><![CDATA[$val]]></code>
+      <code><![CDATA[($inc['status'] === 'up') ? t('resp_online') : t('stat_down')]]></code>
+      <code><![CDATA[htmlspecialchars($m['username']) . $game_text]]></code>
+      <code><![CDATA[json_encode(t('js_metrics_load_error'))]]></code>
+      <code><![CDATA[json_encode(t('pagination_page_of'))]]></code>
+    </TaintedHtml>
+    <TaintedTextWithQuotes>
+      <code><![CDATA[$avg_uptime_known ? number_format($avg_uptime, 2, ',', ' ') . '%' : t('uptime_no_data')]]></code>
+      <code><![CDATA[$game_text]]></code>
+      <code><![CDATA[$ll_badge_text]]></code>
+      <code><![CDATA[$ll_badge_text]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$monitor['last_checked'] ? date('d.m.Y H:i:s', strtotime($monitor['last_checked'])) : t('never')]]></code>
+      <code><![CDATA[$r_ago]]></code>
+      <code><![CDATA[$r_label]]></code>
+      <code><![CDATA[$time_str]]></code>
+      <code><![CDATA[$tooltip]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$uptime_display]]></code>
+      <code><![CDATA[$val]]></code>
+      <code><![CDATA[$val]]></code>
+      <code><![CDATA[($inc['status'] === 'up') ? t('resp_online') : t('stat_down')]]></code>
+      <code><![CDATA[htmlspecialchars($m['username']) . $game_text]]></code>
+      <code><![CDATA[json_encode(t('js_metrics_load_error'))]]></code>
+      <code><![CDATA[json_encode(t('pagination_page_of'))]]></code>
+    </TaintedTextWithQuotes>
+  </file>
+  <file src="apps/status/monitor.php">
+    <TaintedHtml>
+      <code><![CDATA[json_encode($chart_configs)]]></code>
+    </TaintedHtml>
+    <TaintedTextWithQuotes>
+      <code><![CDATA[json_encode($chart_configs)]]></code>
+    </TaintedTextWithQuotes>
+  </file>
+  <file src="apps/status/rss.php">
+    <TaintedHtml>
+      <code><![CDATA[t('rss_not_found')]]></code>
+      <code><![CDATA[t('rss_unavailable')]]></code>
+    </TaintedHtml>
+    <TaintedTextWithQuotes>
+      <code><![CDATA[t('rss_not_found')]]></code>
+      <code><![CDATA[t('rss_unavailable')]]></code>
+    </TaintedTextWithQuotes>
+  </file>
+</files>

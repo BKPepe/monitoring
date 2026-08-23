@@ -1103,7 +1103,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) 
     $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
     $stmt_set->execute(['ip_loc_local', $loc, $loc]);
     bk_audit_log($pdo, 'location_redetected', $loc);
-    $success_msg = 'Lokace serveru byla úspěšně znovuzjištěna: ' . htmlspecialchars($loc);
+    // Not escaped here any more - the message is escaped where it is printed.
+    $success_msg = 'Lokace serveru byla úspěšně znovuzjištěna: ' . $loc;
 }
 
 // Ruční odeslání týdenního reportu/digestu (pouze pro Admina)
@@ -1357,12 +1358,17 @@ $site_title = get_setting('site_title', 'Blood Kings');
 
     <div class="container">
         
+        <?php /* Escaped at output: several of these messages interpolate values
+                 that came straight from $_POST (a discovered service's name,
+                 for one), so echoing them raw put request input into the page.
+                 Found by Psalm taint analysis, 2026-08-23. No message is meant
+                 to carry markup, so escaping here costs nothing. */ ?>
         <?php if (!empty($success_msg)): ?>
-            <div class="alert alert-success"><i class="fas fa-check"></i> <?php echo $success_msg; ?></div>
+            <div class="alert alert-success"><i class="fas fa-check"></i> <?php echo htmlspecialchars($success_msg, ENT_QUOTES, 'UTF-8'); ?></div>
         <?php endif; ?>
-        
+
         <?php if (!empty($error_msg)): ?>
-            <div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> <?php echo $error_msg; ?></div>
+            <div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> <?php echo htmlspecialchars($error_msg, ENT_QUOTES, 'UTF-8'); ?></div>
         <?php endif; ?>
 
         <?php
