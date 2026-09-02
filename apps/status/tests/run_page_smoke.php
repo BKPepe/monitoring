@@ -97,14 +97,19 @@ $results = [];
 const BK_SMOKE_RETRY_CODES = [0, 502, 503, 504, 520, 521, 522, 523, 524];
 const BK_SMOKE_MAX_ATTEMPTS = 3;
 
-foreach ($pages as $path => [$label, $expected]) {
+/**
+ * One request with the retry rule above.
+ *
+ * @return array{0: int, 1: string|false, 2: int} status, body, attempts
+ */
+function bk_smoke_request(string $url, array $expected): array {
     $attempts = 0;
     do {
         $attempts++;
         if ($attempts > 1) {
             sleep(3);
         }
-        $ch = curl_init($base . $path);
+        $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 20,
@@ -117,6 +122,12 @@ foreach ($pages as $path => [$label, $expected]) {
         // The expected status ends it; otherwise retry only for gateway errors.
         $transient = !in_array($code, $expected, true) && in_array($code, BK_SMOKE_RETRY_CODES, true);
     } while ($transient && $attempts < BK_SMOKE_MAX_ATTEMPTS);
+
+    return [$code, $body, $attempts];
+}
+
+foreach ($pages as $path => [$label, $expected]) {
+    [$code, $body, $attempts] = bk_smoke_request($base . $path, $expected);
 
     $problem = null;
     if ($body === false) {
@@ -140,6 +151,54 @@ foreach ($pages as $path => [$label, $expected]) {
     $results[] = [$path, $label, $code, $problem, $attempts];
 }
 
+/**
+ * The agent scripts served from /status/.
+ *
+ * Routers and servers download these when they self-update, and the install
+ * instructions send people straight to the URL. On 2026-09-02 agent.sh was
+ * missing from production while the other three were served fine: the deploy
+ * had uploaded it hours earlier ("File replace: agent.sh" in its log) and it
+ * was gone afterwards, so every bash agent was quietly stuck on its old
+ * version. Every page answered, the deploy reported success, and nothing
+ * ever asked for the agents.
+ *
+ * The body is checked, not just the status - a missing file answers with the
+ * styled error page, and a quarantined or half-written one would answer 200
+ * with nothing usable in it. The served version is only printed, not compared
+ * with the repository: the quality gate runs this test in parallel with the
+ * deploy, so right after a version bump the two legitimately differ for a
+ * minute.
+ */
+$agent_files = [
+    'agent.sh' => 'agent pro Linux (bash)',
+    'agent.py' => 'agent pro Linux (Python)',
+    'agent.ps1' => 'agent pro Windows (PowerShell)',
+    'agent_openwrt.sh' => 'agent pro OpenWrt',
+];
+
+foreach ($agent_files as $file => $label) {
+    [$code, $body, $attempts] = bk_smoke_request($base . '/' . $file, [200]);
+
+    $problem = null;
+    $version = null;
+    if ($body === false) {
+        $problem = 'požadavek selhal';
+    } elseif ($code !== 200) {
+        $problem = 'agent se neposkytuje (čekáno 200) - self-update i návod na instalaci vedou na tuhle adresu';
+    } elseif (!preg_match('/^\$?AGENT_VERSION\s*=\s*["\']([0-9][0-9A-Za-z.\-]*)["\']/m', $body, $vm)) {
+        // A styled 404 page, a quarantined stub or a truncated upload - all of
+        // them arrive as "something", none of them is the agent.
+        $problem = 'odpověď není skript agenta (chybí AGENT_VERSION)';
+    } else {
+        $version = $vm[1];
+    }
+
+    if ($problem !== null) {
+        $failed++;
+    }
+    $results[] = ['/' . $file, $label . ($version !== null ? " v{$version}" : ''), $code, $problem, $attempts];
+}
+
 /** printf counts bytes, so Czech diacritics would misalign the columns. */
 $pad = function (string $text, int $width): string {
     $len = mb_strlen($text, 'UTF-8');
@@ -149,7 +208,7 @@ $pad = function (string $text, int $width): string {
     return $text . str_repeat(' ', $width - $len);
 };
 
-echo $pad('stránka', 42) . ' ' . $pad('co to je', 28) . '   stav   výsledek' . "\n";
+echo $pad('adresa', 42) . ' ' . $pad('co to je', 34) . '   stav   výsledek' . "\n";
 foreach ($results as [$path, $label, $code, $problem, $attempts]) {
     $note = $problem === null ? 'ok' : 'CHYBA: ' . $problem;
     if ($attempts > 1) {
@@ -158,15 +217,17 @@ foreach ($results as [$path, $label, $code, $problem, $attempts]) {
     printf(
         "%s %s %6d   %s\n",
         $pad($path, 42),
-        $pad($label, 28),
+        $pad($label, 34),
         $code,
         $note
     );
 }
 
 if ($failed > 0) {
-    fwrite(STDERR, "\n{$failed} stránek je rozbitých.\n");
+    // 1 adresa / 2-4 adresy / 5+ adres - číslo v hlášce o chybě má být česky.
+    $noun = $failed === 1 ? '1 adresa je rozbitá' : ($failed < 5 ? "{$failed} adresy jsou rozbité" : "{$failed} adres je rozbitých");
+    fwrite(STDERR, "\n{$noun}.\n");
     exit(1);
 }
-echo "\nVšechny stránky odpovídají bez pádu.\n";
+echo "\nVšechny stránky odpovídají bez pádu a agenti se poskytují.\n";
 exit(0);
