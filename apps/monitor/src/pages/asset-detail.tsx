@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ChartCard } from '@/components/charts/chart-card';
 import { Sparkline } from '@/components/sparkline';
 import { lteBackupState } from '@/lib/lte-backup';
+import { wanLinkState } from '@/lib/wan-link';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
 import type { ChartData, MetricSeries } from '@/api/types';
 import { Timeline } from '@/components/timeline';
@@ -1203,14 +1204,26 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
       ? Object.entries(d.service_restarts).filter(([, v]) => Number(v) > 0)
       : [];
   const dnsTotal = (Number(d.dns_cache_hits) || 0) + (Number(d.dns_cache_misses) || 0);
+  // The same verdict the Services tile shows and the server alerts on
+  // (wan_lost) - this row used to say "Online" from wan_up alone while the
+  // tile next to it was red.
+  const wan = wanLinkState(d);
 
   return (
     <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-      {(d.wan_proto != null || d.wan_up != null) && (
+      {(d.wan_proto != null || d.wan_up != null || d.wan_internet != null) && (
         <Section title={`🌐 ${t('net.wan_title', 'WAN připojení')}`}>
           <Row
             label={t('common.status', 'Stav')}
-            value={d.wan_up == null ? null : d.wan_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}
+            value={
+              wan.ok === null
+                ? null
+                : wan.reason === 'no_internet'
+                  ? t('rsvc.wan_no_internet', 'Nahoře, ale bez internetu')
+                  : wan.ok
+                    ? t('common.online', 'Online')
+                    : t('common.offline', 'Offline')
+            }
           />
           <Row label={t('net.proto', 'Protokol')} value={d.wan_proto} />
           <Row label="IPv4" value={d.wan_ipv4} />
@@ -1896,11 +1909,15 @@ function mapInsightsTimeline(
     threshold_exceeded: t('asset.tl_threshold', 'Překročen limit'),
     lte_backup_lost: t('asset.tl_lte_lost', 'LTE záloha nefunkční'),
     lte_backup_restored: t('asset.tl_lte_restored', 'LTE záloha obnovena'),
+    wan_lost: t('asset.tl_wan_lost', 'Výpadek primárního připojení (WAN)'),
+    wan_restored: t('asset.tl_wan_restored', 'Primární připojení (WAN) obnoveno'),
     monitor_added: t('asset.tl_monitor_added', 'Monitor přidán'),
     monitor_updated: t('asset.tl_monitor_updated', 'Monitor upraven'),
   };
   const severityFor = (type: string): TimelineEvent['severity'] => {
-    if (type === 'status_changed_down') return 'down';
+    // A dead primary link is an outage of the line itself, even while the
+    // router still answers through the LTE backup.
+    if (type === 'status_changed_down' || type === 'wan_lost') return 'down';
     if (
       type === 'status_changed_warning' ||
       type === 'ssl_warning' ||
@@ -1908,7 +1925,7 @@ function mapInsightsTimeline(
       type === 'lte_backup_lost'
     )
       return 'warning';
-    if (type === 'status_changed_up' || type === 'lte_backup_restored') return 'up';
+    if (type === 'status_changed_up' || type === 'lte_backup_restored' || type === 'wan_restored') return 'up';
     return 'info';
   };
 

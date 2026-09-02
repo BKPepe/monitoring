@@ -68,6 +68,9 @@ $not_metrics = [
     // state word and the modem's raw status codes. A chart of "PIN required"
     // says nothing a red tile and an alert do not.
     'lte_connected', 'lte_sim_state', 'lte_conn_code', 'lte_sim_code', 'lte_service_code', 'lte_sim_status_code', 'lte_sim_pin_left',
+    // wan_internet: true/false verdict of one echo bound to the WAN device - state
+    // for the wan_lost alert, not a time series.
+    'wan_internet',
     'firewall_enabled',
     // Texty a adresy
     'wan_proto', 'wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'wan_last_reconnect',
@@ -99,7 +102,9 @@ sort($sent);
 
 // Keys agent_api.php reads from the input.
 preg_match_all("/\\\$data\['([a-z_0-9]+)'\]/", $api_src, $read_matches);
-$read = array_flip($read_matches[1] ?? []);
+// ...directly, or through the typed helpers (bk_agent_num/int/str/bool).
+preg_match_all("/bk_agent_(?:num|int|str|bool)\(\\\$data, '([a-z_0-9]+)'/", $api_src, $helper_reads);
+$read = array_flip(array_merge($read_matches[1] ?? [], $helper_reads[1] ?? []));
 
 // Keys that end up in a metrics table column.
 $stored = [];
@@ -121,8 +126,8 @@ if (preg_match('/\$metric_row = \[(.*?)\n        \];/s', $api_src, $row_match)) 
         }
     }
     foreach ($vars as $var) {
-        if (preg_match("/\\\$" . preg_quote($var, '/') . "\s*=\s*[^;]*?\\\$data\['([a-z_0-9]+)'\]/s", $api_src, $vm)) {
-            $stored[$vm[1]] = true;
+        if (preg_match("/\\\$" . preg_quote($var, '/') . "\s*=\s*[^;]*?(?:\\\$data\['([a-z_0-9]+)'\]|bk_agent_(?:num|int|str|bool)\(\\\$data, '([a-z_0-9]+)')/s", $api_src, $vm)) {
+            $stored[$vm[1] !== '' ? $vm[1] : ($vm[2] ?? '')] = true;
         }
     }
 }

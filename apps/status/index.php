@@ -1818,12 +1818,19 @@ $portal_url = trim(get_setting('portal_url'));
                                                             <?php endif; ?>
                                                         <?php endif; ?>
 
-                                                        <?php if (isset($details['wan_up'])): ?>
+                                                        <?php $bk_wan = bk_wan_link_state($details); ?>
+                                                        <?php if (array_key_exists('wan_up', $details) || $bk_wan['ok'] !== null): ?>
                                                             <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-globe-europe"></i> <?php echo htmlspecialchars(t('openwrt_wan_heading')); ?></div>
                                                             <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.78rem;">
                                                                 <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
                                                                     <span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_status')); ?>:</span>
-                                                                    <strong style="color: <?php echo $details['wan_up'] ? 'var(--color-green)' : 'var(--color-red)'; ?>; margin-left: 0.25rem;"><?php echo $details['wan_up'] ? htmlspecialchars(t('openwrt_wan_up')) : htmlspecialchars(t('openwrt_wan_down')); ?></strong>
+                                                                    <?php
+                                                                    // The same verdict the server alerts on (wan_lost): "up" with nothing getting out is red.
+                                                                    if ($bk_wan['ok'] === true) { $bk_wan_color = 'var(--color-green)'; $bk_wan_label = t('openwrt_wan_up'); }
+                                                                    elseif ($bk_wan['ok'] === false) { $bk_wan_color = 'var(--color-red)'; $bk_wan_label = $bk_wan['reason'] === 'no_internet' ? t('openwrt_wan_no_internet') : t('openwrt_wan_down'); }
+                                                                    else { $bk_wan_color = 'var(--text-muted)'; $bk_wan_label = t('openwrt_wan_unknown'); }
+                                                                    ?>
+                                                                    <strong style="color: <?php echo $bk_wan_color; ?>; margin-left: 0.25rem;"><?php echo htmlspecialchars($bk_wan_label); ?></strong>
                                                                 </div>
                                                                 <?php if (!empty($details['wan_proto'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_proto')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem;"><?php echo htmlspecialchars(strtoupper($details['wan_proto'])); ?></strong></div>

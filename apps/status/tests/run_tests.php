@@ -30,6 +30,9 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_counter_deltas',
     'bk_trusted_link_host',
     'bk_lte_backup_state',
+    'bk_wan_link_state',
+    'bk_agent_str',
+    'bk_agent_bool',
 ]);
 
 
@@ -460,6 +463,39 @@ if (function_exists('bk_lte_backup_state')) {
 
     $v = bk_lte_backup_state(['lte_up' => false, 'lte_connected' => null, 'lte_sim_state' => null]);
     check_true('vypnuté rozhraní = nefunkční', $v['ok'] === false && $v['reason'] === 'interface_down');
+}
+
+// --- WAN link verdict (bk_wan_link_state) -------------------------------------
+//
+// Mirrors wanLinkState() in apps/monitor/src/lib/wan-link.ts (vitest there).
+if (function_exists('bk_wan_link_state')) {
+    check_true('bez signálu = bez verdiktu', bk_wan_link_state([])['ok'] === null);
+    check_true('řetězec "true" není důkaz', bk_wan_link_state(['wan_up' => 'true'])['ok'] === null);
+    $v = bk_wan_link_state(['wan_up' => false, 'wan_internet' => true]);
+    check_true('vypnuté rozhraní vyhrává nad pingem', $v['ok'] === false && $v['reason'] === 'interface_down' && str_contains((string)$v['text'], 'WAN'));
+    $v = bk_wan_link_state(['wan_up' => true, 'wan_internet' => false]);
+    check_true('nahoře bez pingu = bez internetu', $v['ok'] === false && $v['reason'] === 'no_internet' && str_contains((string)$v['text'], 'ping'));
+    check_true('starý agent bez wan_internet: rozhraní up = funkční', bk_wan_link_state(['wan_up' => true])['ok'] === true);
+    // Agents before 0.1.1 sent false for "no interface called wan at all".
+    check_true('starý agent na AP: wan_up=false bez protokolu i pingu = bez verdiktu', bk_wan_link_state(['wan_up' => false])['ok'] === null);
+    check_true('ale s protokolem je vypnuté rozhraní opravdu výpadek', bk_wan_link_state(['wan_up' => false, 'wan_proto' => 'dhcp'])['ok'] === false);
+    check_true('a s pingem false taky (bez protokolu)', bk_wan_link_state(['wan_up' => false, 'wan_internet' => false])['ok'] === false);
+    check_true('oba signály dobré = funkční', bk_wan_link_state(['wan_up' => true, 'wan_internet' => true])['ok'] === true);
+}
+
+// --- Typed agent input (bk_agent_str / bk_agent_bool) --------------------------
+if (function_exists('bk_agent_str')) {
+    check('řetězec se ořízne a zkrátí', bk_agent_str(['h' => '  abc  '], 'h', 2), 'ab');
+    check_true('pole místo řetězce = null (ne TypeError v trim)', bk_agent_str(['h' => ['x']], 'h') === null);
+    check_true('"null" od starého agenta = null', bk_agent_str(['h' => 'null'], 'h') === null);
+    check_true('bool = null', bk_agent_str(['h' => true], 'h') === null);
+    check('číslo se vrátí jako řetězec', bk_agent_str(['h' => 12], 'h'), '12');
+}
+if (function_exists('bk_agent_bool')) {
+    check_true('true/false projdou', bk_agent_bool(['a' => true], 'a') === true && bk_agent_bool(['a' => false], 'a') === false);
+    check_true('1/0 a "1"/"0"', bk_agent_bool(['a' => 1], 'a') === true && bk_agent_bool(['a' => '0'], 'a') === false);
+    check_true('"false" je false, ne true jako u (bool)', bk_agent_bool(['a' => 'false'], 'a') === false);
+    check_true('pole, null a "maybe" = null', bk_agent_bool(['a' => []], 'a') === null && bk_agent_bool(['a' => null], 'a') === null && bk_agent_bool(['a' => 'maybe'], 'a') === null);
 }
 
 $failed = bk_test_report('čisté funkce');

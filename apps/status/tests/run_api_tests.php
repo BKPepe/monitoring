@@ -1505,6 +1505,90 @@ check_true('PIN alert nese důvod i zbývající pokusy', str_contains((string)$
 // Leave the monitor healthy for the tests that follow.
 $post_agent($lte_ok);
 
+// --- Primary link (WAN) alert ------------------------------------------------
+//
+// Same debounce and latch as the LTE backup, two signals: wan_up (interface)
+// and wan_internet (one echo bound to the WAN device, agent 0.1.1+).
+$wan_bad = ['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => false];
+$wan_ok = ['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true];
+check('WAN: 1. špatné hlášení agent přijme', $post_agent($wan_bad), 200);
+check('WAN: po jednom špatném hlášení se nealertuje (debounce)', $lte_events('wan_lost'), 0);
+$d = $lte_details();
+check_true('WAN: wan_internet=false je v details uloženo poctivě (false, ne 0 ani null)', array_key_exists('wan_internet', $d) && $d['wan_internet'] === false);
+check('WAN: 2. špatné hlášení agent přijme', $post_agent($wan_bad), 200);
+check('WAN: druhé špatné hlášení spustí alert', $lte_events('wan_lost'), 1);
+check_true('WAN: latch nastaven', !empty($lte_details()['wan_alert_sent']));
+$wan_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'wan_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('WAN: událost říká, že linka je nahoře, ale ping neprojde', str_contains((string)$wan_ev, 'ping'));
+check('WAN: 3. špatné hlášení agent přijme', $post_agent($wan_bad), 200);
+check('WAN: alert se neopakuje (latch)', $lte_events('wan_lost'), 1);
+check('WAN: hlášení bez WAN údajů agent přijme', $post_agent(['lte_up' => true]), 200);
+check_true('WAN: bez verdiktu latch přežije', !empty($lte_details()['wan_alert_sent']));
+check('WAN: dobré hlášení agent přijme', $post_agent($wan_ok), 200);
+check('WAN: obnovení se ohlásí jednou', $lte_events('wan_restored'), 1);
+check_true('WAN: latch se uvolní', empty($lte_details()['wan_alert_sent']));
+check('WAN: další dobré hlášení', $post_agent($wan_ok), 200);
+check('WAN: obnovení se neopakuje', $lte_events('wan_restored'), 1);
+// The interface being down is the other reason - and an older agent that
+// sends no wan_internet at all still gets the alert from wan_up alone.
+check('WAN: rozhraní dole (starý agent) 1×', $post_agent(['wan_up' => false, 'wan_proto' => 'dhcp']), 200);
+check('WAN: rozhraní dole 2×', $post_agent(['wan_up' => false, 'wan_proto' => 'dhcp']), 200);
+check('WAN: výpadek rozhraní alertuje', $lte_events('wan_lost'), 2);
+$wan_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'wan_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('WAN: důvod je vypnuté rozhraní', str_contains((string)$wan_ev, 'vypnuté'));
+check('WAN: starý agent hlásí rozhraní zpět', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp']), 200);
+check('WAN: obnovení i bez wan_internet', $lte_events('wan_restored'), 2);
+// An access point: no netifd interface called wan at all. Agents before
+// 0.1.1 sent wan_up=false for that - with no protocol and no echo it is no
+// verdict, not an outage.
+check('WAN: AP bez rozhraní wan (starý agent) 1×', $post_agent(['wan_up' => false]), 200);
+check('WAN: AP bez rozhraní wan 2×', $post_agent(['wan_up' => false]), 200);
+check('WAN: AP nespouští wan_lost', $lte_events('wan_lost'), 2);
+$post_agent($wan_ok);
+
+// --- Threshold hysteresis -----------------------------------------------------
+//
+// The CPU alert clears five points below the threshold, and a latch set under
+// a different threshold is stale. Default CPU threshold: 90.
+$thr_before = $lte_events('threshold_exceeded');
+$cpu_at = fn (float $cpu) => ['cpu' => $cpu, 'ram' => 10.0, 'hdd' => 10.0];
+check('hystereze: 95 % přijato', $post_agent($cpu_at(95)), 200);
+check('hystereze: překročení alertuje', $lte_events('threshold_exceeded'), $thr_before + 1);
+check('hystereze: 88 % přijato', $post_agent($cpu_at(88)), 200);
+check('hystereze: 95 % podruhé přijato', $post_agent($cpu_at(95)), 200);
+check('hystereze: kmitání kolem limitu (88 → 95) neposílá nový alert', $lte_events('threshold_exceeded'), $thr_before + 1);
+check('hystereze: 84 % přijato (pod pásmo)', $post_agent($cpu_at(84)), 200);
+check('hystereze: 95 % potřetí přijato', $post_agent($cpu_at(95)), 200);
+check('hystereze: po poklesu pod pásmo se překročení hlásí znovu', $lte_events('threshold_exceeded'), $thr_before + 2);
+if ($pdo->query("SHOW COLUMNS FROM monitors LIKE 'cpu_threshold'")->fetch()) {
+    // Latched at 95 with threshold 90; the admin raises the limit to 97.
+    // The original value is put back afterwards - later tests read it.
+    $thr_orig = $pdo->query("SELECT cpu_threshold FROM monitors WHERE id = 2")->fetchColumn();
+    $pdo->exec("UPDATE monitors SET cpu_threshold = 97 WHERE id = 2");
+    check('hystereze: 95 % po zvýšení limitu přijato', $post_agent($cpu_at(95)), 200);
+    check('hystereze: 98 % přijato', $post_agent($cpu_at(98)), 200);
+    check('hystereze: starý latch nepolyká překročení nového limitu', $lte_events('threshold_exceeded'), $thr_before + 3);
+    $pdo->prepare("UPDATE monitors SET cpu_threshold = ? WHERE id = 2")->execute([$thr_orig === false ? null : $thr_orig]);
+}
+$post_agent($cpu_at(12.5));
+
+// --- last_details is a 64 KB TEXT column ----------------------------------
+//
+// Twelve pass-through lists of ~6.6 KB each (every one under the 8 KB
+// per-key cap) add up to ~80 KB. That used to fail the UPDATE and, because
+// the next report merged onto the same blob, every report after it.
+$fat = [];
+for ($i = 0; $i < 12; $i++) {
+    $fat["bulk_list_$i"] = array_fill(0, 200, str_repeat('x', 30));
+}
+check('tlusté hlášení agent přijme', $post_agent($fat), 200);
+$raw = (string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
+check_true('details zůstaly validní JSON', json_decode($raw, true) !== null);
+check_true('details se vešly do sloupce (<= 60 000 B)', strlen($raw) <= 60000 && strlen($raw) > 0);
+$d = $lte_details();
+check_true('skalární hodnoty přežily ořez (cpu z hlášení)', isset($d['cpu']));
+check('a další hlášení po něm projde', $post_agent($wan_ok), 200);
+
 $ch_agent = curl_init($base . '/agent_api.php');
 curl_setopt_array($ch_agent, [
     CURLOPT_RETURNTRANSFER => true,

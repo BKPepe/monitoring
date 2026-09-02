@@ -298,6 +298,18 @@ jobs:
           if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           Write-Host "agent.ps1 se parsuje."
 
+      # Naostro, ne jen syntaxe: agent.sh a agent.py v Debianu (dva behy, aby
+      # vznikly delty; druhy pod zatezi), agent_openwrt.sh v busyboxu (ash,
+      # busybox awk/sed) se zastupnymi wg/mwan3/tc/uci/logread/iwinfo/nft/ubus.
+      # Kontroluje se validni JSON, poctive null pri prvnim behu a ze parsery
+      # ctou spravne sloupce - presne to, co syntaxe ani shellcheck nevidi
+      # (WireGuard dump posilal neplatny JSON a agent.py padal na NameError,
+      # oboje s cistym lintem).
+      - name: Agenti naostro (Docker e2e)
+        run: |
+          bash agents/tests/run_linux_e2e.sh
+          bash agents/tests/run_openwrt_e2e.sh
+
   go:
     name: Go backend (vet, testy)
     runs-on: ubuntu-latest

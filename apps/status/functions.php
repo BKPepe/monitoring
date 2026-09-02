@@ -673,6 +673,51 @@ function bk_agent_int(array $data, string $key): ?int {
 }
 
 /**
+ * String variant: a trimmed, length-capped string or NULL. A list or an
+ * object where a string was expected is NULL too - trim() on an array is a
+ * TypeError, and one bad key from an agent used to turn the whole report
+ * into a 500, every minute, until someone read the server log.
+ */
+/** Boolean variant: JSON true/false, 0/1 or "true"/"false"; anything else is NULL. */
+function bk_agent_bool(array $data, string $key): ?bool {
+    if (!array_key_exists($key, $data)) {
+        return null;
+    }
+    $value = $data[$key];
+    if (is_bool($value)) {
+        return $value;
+    }
+    if ($value === 0 || $value === 1 || $value === '0' || $value === '1') {
+        return (bool)(int)$value;
+    }
+    if (is_string($value)) {
+        $lower = strtolower(trim($value));
+        if ($lower === 'true') {
+            return true;
+        }
+        if ($lower === 'false') {
+            return false;
+        }
+    }
+    return null;
+}
+
+function bk_agent_str(array $data, string $key, int $max = 255): ?string {
+    if (!array_key_exists($key, $data)) {
+        return null;
+    }
+    $value = $data[$key];
+    if (is_array($value) || is_bool($value) || $value === null) {
+        return null;
+    }
+    $value = trim((string)$value);
+    if ($value === '' || $value === 'null') {
+        return null;
+    }
+    return mb_substr($value, 0, $max);
+}
+
+/**
  * Daily aggregation of agent metrics into `metrics_daily`.
  *
  * Raw `vps_metrics` is pruned after 30 days. Availability outlived that
@@ -2121,6 +2166,44 @@ function bk_compute_baseline_anomaly(array $baseline_values, float $current, flo
  *
  * @return array{ok: bool|null, reason: string|null, text: string|null}
  */
+/**
+ * Whether a router's primary link (WAN) carries traffic.
+ *
+ * Two signals from the OpenWrt agent: the interface state (`wan_up`, all
+ * versions) and one ICMP echo bound to the WAN device (`wan_internet`,
+ * agent 0.1.1+). Either one false means the primary link is dead - while
+ * the router itself may still report through the LTE backup, which is
+ * exactly when nobody would notice otherwise. An older agent that does not
+ * measure reachability is judged on the interface alone; no signal at all
+ * is no verdict.
+ *
+ * Mirrors wanLinkState() in apps/monitor/src/lib/wan-link.ts.
+ *
+ * @return array{ok: bool|null, reason: string|null, text: string|null}
+ */
+function bk_wan_link_state(array $d): array {
+    $up = array_key_exists('wan_up', $d) && is_bool($d['wan_up']) ? $d['wan_up'] : null;
+    $internet = array_key_exists('wan_internet', $d) && is_bool($d['wan_internet']) ? $d['wan_internet'] : null;
+    $proto = array_key_exists('wan_proto', $d) && is_string($d['wan_proto']) && $d['wan_proto'] !== '' ? $d['wan_proto'] : null;
+
+    if ($up === null && $internet === null) {
+        return ['ok' => null, 'reason' => null, 'text' => null];
+    }
+    // Agents before 0.1.1 sent wan_up=false for "no netifd interface called
+    // wan at all" (access points, uplink on wwan). No protocol and no echo
+    // alongside it means nothing was measured - no verdict, no alert.
+    if ($up === false && $internet === null && $proto === null) {
+        return ['ok' => null, 'reason' => null, 'text' => null];
+    }
+    if ($up === false) {
+        return ['ok' => false, 'reason' => 'interface_down', 'text' => 'Primární připojení (WAN) je vypnuté nebo bez linky.'];
+    }
+    if ($internet === false) {
+        return ['ok' => false, 'reason' => 'no_internet', 'text' => 'Primární připojení (WAN) je nahoře, ale ven přes něj neprojde ani ping (1.1.1.1 / 9.9.9.9).'];
+    }
+    return ['ok' => true, 'reason' => null, 'text' => null];
+}
+
 function bk_lte_backup_state(array $d): array {
     $up = array_key_exists('lte_up', $d) ? $d['lte_up'] : null;
     $connected = array_key_exists('lte_connected', $d) ? $d['lte_connected'] : null;
@@ -2382,6 +2465,20 @@ function bk_get_network_insights($pdo, $monitor, $details) {
             'color' => 'var(--color-red)',
             'text' => sprintf(t('net_insight_lte_backup'), t($reason_keys[$lte_backup['reason']] ?? 'net_insight_lte_reason_not_connected')),
             'detail' => t('net_insight_lte_backup_detail'),
+        ];
+    }
+
+    // Primary link that cannot carry traffic. The router keeps reporting
+    // through the LTE backup, so this insight (and the wan_lost alert) is the
+    // only place anybody would notice.
+    $wan_link = bk_wan_link_state($details);
+    if ($wan_link['ok'] === false) {
+        $insights[] = [
+            'type' => 'network',
+            'icon' => 'fa-ethernet',
+            'color' => 'var(--color-red)',
+            'text' => t($wan_link['reason'] === 'interface_down' ? 'net_insight_wan_down' : 'net_insight_wan_no_internet'),
+            'detail' => t('net_insight_wan_detail'),
         ];
     }
 
@@ -5436,8 +5533,11 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // lte_backup_lost/restored: the router's mobile backup stopped being able to
     // carry traffic (no SIM, PIN, not registered) and came back. Agent-class
     // like the threshold alerts - same admin-only default and the same switch.
-    $is_agent_event = in_array($new_status, ['agent_offline', 'vps_warning', 'lte_backup_lost', 'lte_backup_restored'], true);
-    if (in_array($new_status, ['vps_warning', 'lte_backup_lost', 'lte_backup_restored'], true)
+    // wan_lost/restored: the router's primary link stopped carrying traffic
+    // (interface down, or up but no echo gets out) - reported through the LTE
+    // backup, which is why it needs its own alert at all.
+    $is_agent_event = in_array($new_status, ['agent_offline', 'vps_warning', 'lte_backup_lost', 'lte_backup_restored', 'wan_lost', 'wan_restored'], true);
+    if (in_array($new_status, ['vps_warning', 'lte_backup_lost', 'lte_backup_restored', 'wan_lost', 'wan_restored'], true)
         && get_setting('agent_notifications_enabled', '1') !== '1') {
         return;
     }
@@ -5469,6 +5569,12 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     } elseif ($new_status === 'lte_backup_restored') {
         $status_text = 'LTE ZÁLOHA OBNOVENA';
         $emoji = '🟢';
+    } elseif ($new_status === 'wan_lost') {
+        $status_text = 'PRIMÁRNÍ PŘIPOJENÍ (WAN) VÝPADEK';
+        $emoji = '🔌';
+    } elseif ($new_status === 'wan_restored') {
+        $status_text = 'PRIMÁRNÍ PŘIPOJENÍ (WAN) OBNOVENO';
+        $emoji = '🟢';
     }
     // Load all notification recipients (subscribers + administrators without an explicit subscription)
     $stmt = $pdo->prepare("
@@ -5495,7 +5601,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 
     // HTML e-mail template in Blood Kings colours (red-black)
     $color_theme = '#c1121f'; // red
-    if ($new_status === 'up' || $new_status === 'lte_backup_restored') {
+    if ($new_status === 'up' || $new_status === 'lte_backup_restored' || $new_status === 'wan_restored') {
         $color_theme = '#1ec773'; // teal
     } elseif ($new_status === 'maintenance' || $new_status === 'vps_warning') {
         $color_theme = '#f39c12'; // orange
@@ -5513,6 +5619,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         'vps_warning' => 'alert_status_vps_warning',
         'lte_backup_lost' => 'alert_status_lte_backup_lost',
         'lte_backup_restored' => 'alert_status_lte_backup_restored',
+        'wan_lost' => 'alert_status_wan_lost',
+        'wan_restored' => 'alert_status_wan_restored',
     ];
     $alert_status_key = $alert_status_keys[$new_status] ?? 'alert_status_down';
 
@@ -6162,6 +6270,12 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $removed_servers = [];
     $config_change_examples = [];
     foreach ($recent_events as $ev) {
+        $bk_digest_link_events = [
+            'lte_backup_lost' => 'digest_event_lte_backup_lost',
+            'lte_backup_restored' => 'digest_event_lte_backup_restored',
+            'wan_lost' => 'digest_event_wan_lost',
+            'wan_restored' => 'digest_event_wan_restored',
+        ];
         if ($ev['event_type'] === 'monitor_added') {
             // monitor_id still exists here (the monitor was just added) - the link works.
             $new_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => $ev['monitor_id']];
@@ -6169,13 +6283,12 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             // monitor_id is always NULL here (ON DELETE SET NULL - the monitor no
             // longer exists, which is why this is logged at all), so the link never works.
             $removed_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => null];
-        } elseif ($ev['event_type'] === 'lte_backup_lost' || $ev['event_type'] === 'lte_backup_restored') {
+        } elseif (isset($bk_digest_link_events[$ev['event_type']])) {
             // Translated at render time, not copied from the stored description:
             // the description is the operator-language reason text ("SIM karta
             // čeká na PIN…"), and the digest renders per recipient language. The
             // reason itself stays in the timeline and in the alert that fired.
-            $config_change_examples[] = $ev['monitor_name'] . ': '
-                . t($ev['event_type'] === 'lte_backup_lost' ? 'digest_event_lte_backup_lost' : 'digest_event_lte_backup_restored');
+            $config_change_examples[] = $ev['monitor_name'] . ': ' . t($bk_digest_link_events[$ev['event_type']]);
         } elseif (in_array($ev['event_type'], ['scheme_upgraded', 'dns_lost', 'dns_recovered', 'cert_renewed', 'agent_connected', 'agent_disconnected'], true)) {
             $config_change_examples[] = $ev['monitor_name'] . ': ' . $ev['description'];
         }

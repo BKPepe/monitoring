@@ -1983,6 +1983,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'asset.tl_lte_lost': { cs: 'LTE záloha nefunkční', en: 'LTE backup down' },
   'asset.tl_lte_restored': { cs: 'LTE záloha obnovena', en: 'LTE backup restored' },
+  'asset.tl_wan_lost': { cs: 'Výpadek primárního připojení (WAN)', en: 'Primary link (WAN) down' },
+  'asset.tl_wan_restored': { cs: 'Primární připojení (WAN) obnoveno', en: 'Primary link (WAN) restored' },
   'net.lte_no_signal_data': {
     cs: 'Spojení běží, ale sílu signálu router nehlásí — modem ji nevystavuje ani přes ModemManager, ani přes HTTP API na své bráně. U modemu v mPCIe slotu pomůže doinstalovat balíček modemmanager nebo uqmi; modem připojený jako ethernet (HiLink) tudy signál nedá.',
     en: 'The link is up but the router reports no signal strength — the modem exposes it neither through ModemManager nor through an HTTP API on its gateway. For a modem in an mPCIe slot, installing modemmanager or uqmi helps; an ethernet-attached (HiLink) modem will not deliver signal that way.',
@@ -2006,6 +2008,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'rsvc.signal_fair': { cs: 'slabší', en: 'fair' },
   'rsvc.signal_poor': { cs: 'slabý', en: 'poor' },
   'rsvc.wan': { cs: 'Připojení WAN', en: 'WAN connection' },
+  'rsvc.wan_no_internet': { cs: 'Nahoře, ale bez internetu', en: 'Up, but no internet' },
+  'rsvc.wan_internet_ok': { cs: 'Ping ven přes WAN: OK', en: 'Echo out through WAN: OK' },
   'rsvc.lte': { cs: 'LTE / mobilní záloha', en: 'LTE / mobile backup' },
   // The LTE tile's verdict comes from the modem's own SIM/registration report,
   // not from the interface flag (which is up with no SIM in a HiLink modem).

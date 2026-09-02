@@ -68,9 +68,16 @@ $violations = [];
 
 foreach ($agents as $file) {
     $name = basename($file);
+    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
     $lines = file($file, FILE_IGNORE_NEW_LINES) ?: [];
+    // Python: the enclosing collector's name says what a bare `return 0`
+    // claims to have measured (get_ram_usage -> "ram usage").
+    $py_func = '';
 
     foreach ($lines as $no => $line) {
+        if ($ext === 'py' && preg_match('/^def\s+([a-z_][a-z0-9_]*)\s*\(/', $line, $fm)) {
+            $py_func = $fm[1];
+        }
         $trimmed = ltrim($line);
         // Comments describe the problem, they do not create it (e.g. this file).
         if ($trimmed === '' || str_starts_with($trimmed, '#') || str_starts_with($trimmed, '//')) {
@@ -103,6 +110,18 @@ foreach ($agents as $file) {
         } elseif (preg_match('/\|\|\s*echo\s+0\b/', $line)) {
             $checks[] = 'fallback "|| echo 0"';
             $var = null;
+        } elseif ($ext === 'ps1' && preg_match('/^\s*\$([a-z_][a-z0-9_]*)\s*=\s*0(?:\.0+)?\s*(?:#.*)?$/i', $line, $m)) {
+            // PowerShell: `$cpu = 0.0` before the measurement - every collector
+            // in agent.ps1 started that way, so a failed WMI query sent "idle".
+            $checks[] = "metrika inicializovaná nulou (\${$m[1]} = 0)";
+            $var = $m[1];
+        } elseif ($ext === 'py' && $py_func !== '' && preg_match('/^\s*return\s+0(?:\.0+)?(?:\s*,\s*0(?:\.0+)?)*\s*(?:#.*)?$/', $line)) {
+            // Python: a collector answering a failure with zero(s) instead of
+            // None (`return 0.0, 0.0, 0.0` in get_cpu_usage). The function
+            // name carries the metric; underscores become spaces so the word
+            // boundary below can see it.
+            $checks[] = "sběrač vrací nulu místo None (return 0 v {$py_func}())";
+            $var = str_replace('_', ' ', preg_replace('/^get_/', '', $py_func));
         } else {
             $var = null;
         }

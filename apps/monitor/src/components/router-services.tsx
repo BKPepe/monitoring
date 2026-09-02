@@ -5,6 +5,7 @@ import { Globe, Shield, Wifi, Lock, Gauge, Network } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { formatUptime } from '@/lib/utils';
 import { lteBackupState, type LteBackupReason } from '@/lib/lte-backup';
+import { wanLinkState } from '@/lib/wan-link';
 
 /**
  * The "Services" section for a router (OpenWrt/Turris).
@@ -42,21 +43,27 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
   const tiles: React.ReactNode[] = [];
 
   // --- WAN -----------------------------------------------------------
-  if (d.wan_up != null || d.wan_proto) {
+  if (d.wan_up != null || d.wan_proto || d.wan_internet != null) {
+    // The same verdict the server alerts on (wan_lost): interface state plus
+    // one echo bound to the WAN device. "Up" with nothing getting out is red.
+    const wan = wanLinkState(d);
     tiles.push(
       <Tile
         key="wan"
         icon={<Globe className="size-4" />}
         title={t('rsvc.wan', 'Připojení WAN')}
-        state={d.wan_up === false ? 'bad' : d.wan_up === true ? 'good' : 'unknown'}
+        state={wan.ok === false ? 'bad' : wan.ok === true ? 'good' : 'unknown'}
         stateText={
-          d.wan_up == null
+          wan.ok === null
             ? t('rsvc.unknown', 'Neznámý stav')
-            : d.wan_up
-              ? t('common.online', 'Online')
-              : t('common.offline', 'Offline')
+            : wan.reason === 'no_internet'
+              ? t('rsvc.wan_no_internet', 'Nahoře, ale bez internetu')
+              : wan.ok
+                ? t('common.online', 'Online')
+                : t('common.offline', 'Offline')
         }
         lines={[
+          d.wan_internet === true ? t('rsvc.wan_internet_ok', 'Ping ven přes WAN: OK') : null,
           d.wan_proto ? `${t('rsvc.protocol', 'Protokol')}: ${String(d.wan_proto).toUpperCase()}` : null,
           d.wan_ipv4 ? `IPv4: ${d.wan_ipv4}` : null,
           d.wan_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.wan_uptime)}` : null,
