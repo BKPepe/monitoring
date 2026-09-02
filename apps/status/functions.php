@@ -8019,12 +8019,17 @@ function bk_format_packets_cz($cnt) {
  * still open and runs until $now. Seconds are clamped to the window so a
  * month-old outage cannot inflate the total.
  *
+ * $open_since carries an outage that started BEFORE the window and never
+ * ended: its events are outside the query, so without it a router that has
+ * been on the backup for weeks reported "never on the backup" - a confident
+ * no for the exact situation this feature exists to show.
+ *
  * @param array<int, array{0: string, 1: int}> $events
  * @return array{periods: array<int, array{from: int|null, to: int|null, seconds: int}>, seconds: int, open: bool}
  */
-function bk_pair_link_periods(array $events, int $window_start, int $now): array {
+function bk_pair_link_periods(array $events, int $window_start, int $now, ?int $open_since = null): array {
     $periods = [];
-    $open_from = null;
+    $open_from = $open_since;
     foreach ($events as $ev) {
         $type = (string)($ev[0] ?? '');
         $ts = (int)($ev[1] ?? 0);
@@ -8074,7 +8079,10 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
         $out = ['iface' => $dev, 'today' => null, '7d' => null, '30d' => null, 'total' => null];
         if ($row) {
             foreach (['today' => 'today', '7d' => '7d', '30d' => '30d', 'total' => 'all'] as $w => $src) {
-                if (isset($row[$src])) {
+                // A window the router never reported into stays null. Zero
+                // bytes would claim the link was idle, which is a different
+                // statement from "the agent was not reporting".
+                if (isset($row[$src]) && (int)($row['days'][$src] ?? 0) > 0) {
                     $out[$w] = ['rx_bytes' => (float)$row[$src]['rx_bytes'], 'tx_bytes' => (float)$row[$src]['tx_bytes']];
                 }
             }
@@ -8085,6 +8093,20 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
     $now = time();
     $window_start = $now - $days * 86400;
     $events = [];
+    // An outage still running from before the window: the newest event older
+    // than the window decides. Without it the whole period is invisible and
+    // the answer becomes "never on the backup" for a router that is on the
+    // backup right now.
+    $open_since = null;
+    try {
+        $stmt_prev = $pdo->prepare("SELECT event_type, UNIX_TIMESTAMP(occurred_at) AS ts FROM monitor_events WHERE monitor_id = ? AND event_type IN ('wan_lost', 'wan_restored') AND occurred_at < DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY occurred_at DESC, id DESC LIMIT 1");
+        $stmt_prev->execute([$monitor_id, $days]);
+        $prev = $stmt_prev->fetch();
+        if ($prev && (string)$prev['event_type'] === 'wan_lost') {
+            $open_since = (int)$prev['ts'];
+        }
+    } catch (PDOException $e) {
+    }
     try {
         $stmt = $pdo->prepare("SELECT event_type, UNIX_TIMESTAMP(occurred_at) AS ts FROM monitor_events WHERE monitor_id = ? AND event_type IN ('wan_lost', 'wan_restored') AND occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY occurred_at ASC, id ASC");
         $stmt->execute([$monitor_id, $days]);
@@ -8093,7 +8115,7 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
         }
     } catch (PDOException $e) {
     }
-    $paired = bk_pair_link_periods($events, $window_start, $now);
+    $paired = bk_pair_link_periods($events, $window_start, $now, $open_since);
 
     return [
         'primary' => $pick($primary_dev),
@@ -8128,6 +8150,14 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
                    SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_bytes_total ELSE 0 END) as tx_30d,
                    SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_30d,
                    SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_30d,
+
+                   -- Days that actually carry a measurement. Without them a
+                   -- window with no reports at all is indistinguishable from
+                   -- one where nothing was transferred.
+                   SUM(CASE WHEN date = CURDATE() THEN 1 ELSE 0 END) as days_today,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as days_7d,
+                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as days_30d,
+                   COUNT(*) as days_all,
 
                    SUM(rx_bytes_total) as rx_total,
                    SUM(tx_bytes_total) as tx_total,
@@ -8164,6 +8194,14 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
                     'tx_bytes' => (float)$r['tx_total'],
                     'rx_pkts' => (int)$r['rx_pkts_total'],
                     'tx_pkts' => (int)$r['tx_pkts_total'],
+                ],
+                // How many days each window is built from - 0 means nothing
+                // was measured there, which is not the same as no traffic.
+                'days' => [
+                    'today' => (int)$r['days_today'],
+                    '7d' => (int)$r['days_7d'],
+                    '30d' => (int)$r['days_30d'],
+                    'all' => (int)$r['days_all'],
                 ],
             ];
         }

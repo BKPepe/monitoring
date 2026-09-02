@@ -505,6 +505,19 @@ if (function_exists('bk_pair_link_periods')) {
     $r = bk_pair_link_periods([['wan_lost', 2000], ['wan_lost', 2100], ['wan_restored', 2500]], $w, $now);
     check('dvojí výpadek za sebou se nepočítá dvakrát', count($r['periods']), 1);
     check('a měří se od prvního', $r['seconds'], 500);
+
+    // An outage that started before the window and never ended: its events are
+    // outside the query, so without the seed the answer was "nikdy".
+    $r = bk_pair_link_periods([], $w, $now, 200);
+    check_true('výpadek z doby před oknem stále běží', $r['open'] === true);
+    check('a počítá se od začátku okna do teď', $r['seconds'], $now - $w);
+    check('začátek zůstává skutečný, ne oříznutý', $r['periods'][0]['from'], 200);
+    $r = bk_pair_link_periods([['wan_restored', 1400]], $w, $now, 200);
+    check('obnovení uvnitř okna ho ukončí', $r['seconds'], 400);
+    check_true('a už není otevřený', $r['open'] === false);
+    $r = bk_pair_link_periods([['wan_restored', 1400], ['wan_lost', 4000]], $w, $now, 200);
+    check('po obnovení může začít další výpadek', count($r['periods']), 2);
+    check('a sečtou se obě období', $r['seconds'], 400 + ($now - 4000));
 }
 
 // --- Typed agent input (bk_agent_str / bk_agent_bool) --------------------------

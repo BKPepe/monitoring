@@ -3175,8 +3175,11 @@ if ($action === 'metric_series') {
     $daily_range = [];
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        // The id itself wins over "some monitor of that asset". With OR and a bare
+        // LIMIT 1, MySQL is free to return the sibling with the lower id, so an asset
+        // with several monitors answered chart requests with another monitor's data.
+        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
         $real_id = $stmt_mon->fetchColumn();
 
         if (!$real_id) {
@@ -3308,8 +3311,8 @@ if ($action === 'metric_heatmap') {
     $hm_days = max(1, min(30, (int)($_GET['days'] ?? 30)));
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
         $real_id = $stmt_mon->fetchColumn();
         if (!$real_id) {
             echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
@@ -3414,8 +3417,8 @@ if ($action === 'metric_correlations') {
     }
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
         $mon_row = $stmt_mon->fetch();
         if (!$mon_row) {
             echo json_encode(['correlations' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
@@ -3763,8 +3766,8 @@ if ($action === 'metric_series_batch') {
     $minutes = bk_period_minutes($period) ?? 1440;
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id]);
+        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
         $mon_row = $stmt_mon->fetch();
         $real_id = $mon_row['id'] ?? null;
         $mon_type = strtolower((string)($mon_row['type'] ?? ''));

@@ -286,6 +286,12 @@ jobs:
       - name: Honesty lint agentů (žádné vymyšlené nuly)
         run: php apps/status/tests/run_agent_honesty_lint.php
 
+      # Busybox se staví per cíl a OpenWrt kompiluje mensi sadu appletu nez
+      # obraz busybox:1.36, ve kterem bezi e2e harness. `stat -c %s` a
+      # `sort -t -k` proto prosly kazdym testem a na routeru tise nedelaly nic.
+      - name: Busybox lint (OpenWrt agent nepoužívá, co router nemá)
+        run: php apps/status/tests/run_openwrt_busybox_lint.php
+
       - name: Python agent
         run: python3 -m py_compile agents/vps-agent/agent.py
 

@@ -1251,8 +1251,11 @@ try {
     // Available agent update info - the version is read straight from the agent
     // files on the server (see bk_get_agent_latest_version() in functions.php),
     // so it is maintained in exactly one place (the script itself).
-    $agent_type = isset($data['agent_type']) ? strtolower(trim($data['agent_type'])) : '';
-    $client_version = isset($data['version']) ? trim($data['version']) : '';
+    // Typed like every other input: this runs after the commit, so a
+    // TypeError here answered 500 to an agent whose report was already
+    // stored - and it retried forever.
+    $agent_type = strtolower(bk_agent_str($data, 'agent_type', 32) ?? '');
+    $client_version = bk_agent_str($data, 'version', 32) ?? '';
     $agent_files = bk_agent_files();
 
     if ($client_version !== '' && isset($agent_files[$agent_type])) {

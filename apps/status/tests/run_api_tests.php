@@ -1600,6 +1600,16 @@ check('dnešní provoz zálohy (tx)', (float)($lt['backup']['today']['tx_bytes']
 check('období na záloze = dva výpadky z testů výše', count($lt['backup_periods'] ?? []), 2);
 check_true('teď na záloze není', ($lt['on_backup_now'] ?? null) === false);
 check_true('LAN se do rolí nepočítá, ale v seznamu rozhraní je', in_array('br-lan', $lt['interfaces'] ?? [], true) && ($lt['primary']['iface'] ?? '') !== 'br-lan');
+// A window with no rows at all is unknown, not "0 B transferred".
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'wwan0'");
+$pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total)
+            VALUES (2, 'wwan0', DATE_SUB(CURDATE(), INTERVAL 20 DAY), 500, 600)");
+[, $lt_gap] = api_get($base, 'action=link_traffic&monitor_id=2');
+// `??` would turn the null we are asserting on into the fallback - the very
+// trap this project has a rule about.
+check_true('okno bez jediného měření je null, ne nula bajtů',
+    is_array($lt_gap['backup'] ?? null) && array_key_exists('today', $lt_gap['backup']) && $lt_gap['backup']['today'] === null);
+check('a okno, kde měření je, se spočítá', (float)($lt_gap['backup']['30d']['rx_bytes'] ?? -1), 500.0);
 // An agent before 0.1.3 sends no wan_l3_device: the primary side is unknown, not guessed.
 check('hlášení starého agenta bez rolí', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp']), 200);
 [, $lt_old] = api_get($base, 'action=link_traffic&monitor_id=2');
@@ -1608,6 +1618,42 @@ check_true('a seznam rozhraní zůstává', in_array('eth0', $lt_old['interfaces
 [$lt404, ] = api_get($base, 'action=link_traffic&monitor_id=999999');
 check('neexistující monitor = 404', $lt404, 404);
 $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true, 'wan_l3_device' => 'eth0', 'lte_device' => 'wwan0']);
+
+// An outage that started before the window and never ended. Its events fall
+// outside the query, so the whole period used to vanish and the answer was
+// "never on the backup" for a router sitting on the backup right now.
+$pdo->exec("DELETE FROM monitor_events WHERE monitor_id = 2 AND event_type IN ('wan_lost', 'wan_restored')");
+$pdo->exec("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
+            VALUES (2, 'Router bez metrik', 'openwrt', 'wan_lost', 'Výpadek před oknem', DATE_SUB(NOW(), INTERVAL 5 DAY))");
+[, $lt_open] = api_get($base, 'action=link_traffic&monitor_id=2&days=2');
+check_true('výpadek z doby před oknem se neztratí', ($lt_open['on_backup_now'] ?? null) === true);
+check('a je z něj jedno běžící období', count($lt_open['backup_periods'] ?? []), 1);
+check_true('čas na záloze pokrývá celé okno', ($lt_open['backup_seconds'] ?? 0) >= 2 * 86400 - 120);
+$pdo->exec("DELETE FROM monitor_events WHERE monitor_id = 2 AND event_type IN ('wan_lost', 'wan_restored')");
+
+// --- One monitor of an asset must not answer for another -----------------
+//
+// `WHERE id = ? OR asset_id = ?` with a bare LIMIT 1 let MySQL return the
+// sibling with the lower id, so a chart could show a different monitor's data.
+$pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
+$pdo->exec("DELETE FROM assets WHERE id = 92");
+$pdo->exec("INSERT INTO assets (id, name) VALUES (92, 'Asset se dvěma monitory')");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, asset_id, category)
+            VALUES (91, 'Sourozenec s nižším id', 'web', '10.0.0.91', 'up', 92, 'Test'),
+                   (92, 'Cílový monitor', 'vps', '10.0.0.92', 'up', 92, 'Test')");
+for ($i = 0; $i < 3; $i++) {
+    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (92, 42, DATE_SUB(NOW(), INTERVAL " . ($i + 1) . " MINUTE))");
+}
+[$sib_code, $sib] = api_get($base, 'action=metric_series&monitor_id=92&metric=cpu&period=24h');
+check('metric_series pro monitor se sourozencem vrací 200', $sib_code, 200);
+check('a vrátí měření cílového monitoru, ne sourozencova', count($sib['points'] ?? []), 3);
+[, $sib_detail] = api_get($base, 'action=metric_detail&monitor_id=92&metric=cpu');
+check('metric_detail ukazuje ten správný monitor', $sib_detail['monitor']['name'] ?? null, 'Cílový monitor');
+[, $sib_corr] = api_get($base, 'action=metric_correlations&monitor_id=92&metric=cpu&period=24h');
+check('metric_correlations počítá z jeho vzorků', $sib_corr['samples'] ?? 0, 3);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
+$pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
+$pdo->exec("DELETE FROM assets WHERE id = 92");
 
 // --- last_details is a 64 KB TEXT column ----------------------------------
 //
