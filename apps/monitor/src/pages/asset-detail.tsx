@@ -1209,7 +1209,9 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
   if (data === null) {
     return (
       <Section title={title}>
-        <p className="text-xs text-muted-foreground">{t('net.link_failed', 'Provoz podle linky se nepodařilo načíst.')}</p>
+        <p className="text-xs text-muted-foreground">
+          {t('net.link_failed', 'Provoz podle linky se nepodařilo načíst.')}
+        </p>
       </Section>
     );
   }
@@ -1262,12 +1264,16 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
           {t('net.link_unknown_primary', 'Agent nehlásí WAN zařízení (verze před 0.1.3) - primární strana je neznámá.')}
         </p>
       )}
-      {!data.backup && <p className="text-xs text-muted-foreground mt-1">{t('net.link_no_backup', 'Bez LTE zařízení.')}</p>}
+      {!data.backup && (
+        <p className="text-xs text-muted-foreground mt-1">{t('net.link_no_backup', 'Bez LTE zařízení.')}</p>
+      )}
       <Row
         label={t('net.link_time_on_backup', 'Čas na záloze (30 dní)')}
         value={onBackupEver ? fmtDuration(data.backup_seconds) : t('net.link_never', 'nikdy')}
       />
-      {data.on_backup_now && <p className="text-xs text-down mt-1">{t('net.link_on_backup_now', 'Teď běží přes zálohu.')}</p>}
+      {data.on_backup_now && (
+        <p className="text-xs text-down mt-1">{t('net.link_on_backup_now', 'Teď běží přes zálohu.')}</p>
+      )}
       {data.backup_periods.length > 0 && (
         <div className="mt-2 text-xs">
           <div className="text-muted-foreground mb-1">{t('net.link_periods', 'Období na záloze')}</div>
@@ -1277,7 +1283,8 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
             .map((p, i) => (
               <div key={i} className="font-mono flex justify-between gap-2">
                 <span>
-                  {fmtTs(p.from, t('net.link_since_before', 'před začátkem okna'))} → {fmtTs(p.to, t('net.link_still', 'dosud'))}
+                  {fmtTs(p.from, t('net.link_since_before', 'před začátkem okna'))} →{' '}
+                  {fmtTs(p.to, t('net.link_still', 'dosud'))}
                 </span>
                 <span className="text-muted-foreground">{fmtDuration(p.seconds)}</span>
               </div>

@@ -229,28 +229,29 @@ function buildSeries(
     // ...and time ranges (the router on its LTE backup) as vertical shading in
     // the same markArea - ECharts allows one per series, and the two kinds do
     // not collide: a band spans values, a period spans time.
-    markArea: bands?.length || periods?.length
-      ? {
-          silent: true,
-          itemStyle: { opacity: 1 },
-          label: {
-            show: true,
-            position: 'insideTopLeft' as const,
-            color: theme.textMuted,
-            fontSize: 10,
-          },
-          data: [
-            ...(bands ?? []).map((b) => [
-              { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label },
-              { yAxis: b.to },
-            ]),
-            ...(periods ?? []).map((p) => [
-              { xAxis: p.from, itemStyle: { color: withAlpha(theme.textMuted, 0.18) }, name: p.label },
-              { xAxis: p.to },
-            ]),
-          ],
-        }
-      : undefined,
+    markArea:
+      bands?.length || periods?.length
+        ? {
+            silent: true,
+            itemStyle: { opacity: 1 },
+            label: {
+              show: true,
+              position: 'insideTopLeft' as const,
+              color: theme.textMuted,
+              fontSize: 10,
+            },
+            data: [
+              ...(bands ?? []).map((b) => [
+                { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label },
+                { yAxis: b.to },
+              ]),
+              ...(periods ?? []).map((p) => [
+                { xAxis: p.from, itemStyle: { color: withAlpha(theme.textMuted, 0.18) }, name: p.label },
+                { xAxis: p.to },
+              ]),
+            ],
+          }
+        : undefined,
     name: s.label,
     type: 'line' as const,
     // [timestamp, value] — null stays null, so a data gap draws as a
