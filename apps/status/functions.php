@@ -867,6 +867,7 @@ function bk_metric_column_map(): array {
     'wan_latency_ms' => ['col' => 'wan_latency_ms', 'unit' => 'ms', 'label' => 'Latence WAN'],
     'dns_latency_ms' => ['col' => 'dns_latency_ms', 'unit' => 'ms', 'label' => 'Latence DNS'],
     'entropy' => ['col' => 'entropy_avail', 'unit' => 'bit', 'label' => 'Dostupná entropie'],
+    'lte_rsrp' => ['col' => 'lte_rsrp', 'unit' => 'dBm', 'label' => 'LTE RSRP (síla signálu)'],
     'lte_rsrq' => ['col' => 'lte_rsrq', 'unit' => 'dB', 'label' => 'LTE RSRQ (kvalita)'],
     'lte_rssi' => ['col' => 'lte_rssi', 'unit' => 'dBm', 'label' => 'LTE RSSI (síla)'],
     'lte_sinr' => ['col' => 'lte_sinr', 'unit' => 'dB', 'label' => 'LTE SINR (odstup)'],
@@ -2098,6 +2099,67 @@ function bk_compute_baseline_anomaly(array $baseline_values, float $current, flo
  * Network Insights - rolling-window analysis of network data for OpenWrt/VPS monitors.
  * Returns insights in the same format as bk_get_anomaly_insights().
  */
+/**
+ * Whether the LTE backup of a router can actually carry traffic.
+ *
+ * `lte_up` alone is not evidence: on a HiLink modem the OpenWrt interface is
+ * a DHCP lease from the modem's own LAN side, handed out with no SIM inserted
+ * and with a wrong PIN alike. The router reported nine days of "LTE running"
+ * while the modem could not have registered to any network. The verdict
+ * therefore rests on what the modem itself says (agent 0.1.0+):
+ *
+ *   ok = true   registered to the network (ConnectionStatus 901) and the SIM
+ *               is not in a blocking state
+ *   ok = false  SIM missing / waiting for PIN or PUK / invalid, or the modem
+ *               reports itself disconnected, or the interface is down
+ *   ok = null   nothing to judge by - no LTE at all, or an interface that is
+ *               up but a modem that reports nothing (older agent, non-HiLink
+ *               modem). Unknown is reported as unknown, never as working.
+ *
+ * `text` is the operator-facing reason in the same language as the other
+ * agent alerts (Czech), `reason` a stable key the UI translates itself.
+ *
+ * @return array{ok: bool|null, reason: string|null, text: string|null}
+ */
+function bk_lte_backup_state(array $d): array {
+    $up = array_key_exists('lte_up', $d) ? $d['lte_up'] : null;
+    $connected = array_key_exists('lte_connected', $d) ? $d['lte_connected'] : null;
+    $sim = array_key_exists('lte_sim_state', $d) ? $d['lte_sim_state'] : null;
+    $pin_left = array_key_exists('lte_sim_pin_left', $d) ? $d['lte_sim_pin_left'] : null;
+    $conn_code = array_key_exists('lte_conn_code', $d) ? $d['lte_conn_code'] : null;
+    $sim_status = array_key_exists('lte_sim_status_code', $d) ? $d['lte_sim_status_code'] : null;
+
+    if ($up === null && $connected === null && $sim === null) {
+        return ['ok' => null, 'reason' => null, 'text' => null];
+    }
+    if ($up === false) {
+        return ['ok' => false, 'reason' => 'interface_down', 'text' => 'Rozhraní LTE je vypnuté.'];
+    }
+    switch ($sim) {
+        case 'no_sim':
+            return ['ok' => false, 'reason' => 'no_sim', 'text' => 'SIM karta nenalezena - modem hlásí, že není vložená nebo je neplatná.'];
+        case 'pin_required':
+            $attempts = is_numeric($pin_left) ? " (zbývá pokusů: {$pin_left})" : '';
+            return ['ok' => false, 'reason' => 'pin_required', 'text' => "SIM karta čeká na PIN - bez něj se modem do sítě nepřihlásí{$attempts}."];
+        case 'puk_required':
+            return ['ok' => false, 'reason' => 'puk_required', 'text' => 'SIM karta je zablokovaná a čeká na PUK.'];
+        case 'invalid':
+            // SimStatus 2/3/4: the network rejects the SIM - deactivated or blocked
+            // by the operator - while the PIN check reports it "ready".
+            $code = is_numeric($sim_status) ? " (SimStatus {$sim_status})" : '';
+            return ['ok' => false, 'reason' => 'invalid', 'text' => "SIM kartu síť nepřijímá{$code} - bývá deaktivovaná nebo zablokovaná operátorem."];
+    }
+    if ($connected === false) {
+        $code = is_numeric($conn_code) ? " (stav {$conn_code})" : '';
+        return ['ok' => false, 'reason' => 'not_connected', 'text' => "Modem není přihlášen do mobilní sítě{$code}."];
+    }
+    if ($connected === true) {
+        return ['ok' => true, 'reason' => null, 'text' => null];
+    }
+    // Interface up, modem silent about registration: not a verdict.
+    return ['ok' => null, 'reason' => null, 'text' => null];
+}
+
 function bk_get_network_insights($pdo, $monitor, $details) {
     $insights = [];
     if (!is_array($details)) return $insights;
@@ -2301,6 +2363,26 @@ function bk_get_network_insights($pdo, $monitor, $details) {
                 'detail' => t('net_insight_ups_battery_detail'),
             ];
         }
+    }
+
+    // LTE backup that cannot carry traffic (no SIM, PIN, not registered).
+    $lte_backup = bk_lte_backup_state($details);
+    if ($lte_backup['ok'] === false) {
+        $reason_keys = [
+            'no_sim' => 'net_insight_lte_reason_no_sim',
+            'pin_required' => 'net_insight_lte_reason_pin_required',
+            'puk_required' => 'net_insight_lte_reason_puk_required',
+            'invalid' => 'net_insight_lte_reason_invalid',
+            'not_connected' => 'net_insight_lte_reason_not_connected',
+            'interface_down' => 'net_insight_lte_reason_interface_down',
+        ];
+        $insights[] = [
+            'type' => 'network',
+            'icon' => 'fa-sim-card',
+            'color' => 'var(--color-red)',
+            'text' => sprintf(t('net_insight_lte_backup'), t($reason_keys[$lte_backup['reason']] ?? 'net_insight_lte_reason_not_connected')),
+            'detail' => t('net_insight_lte_backup_detail'),
+        ];
     }
 
     // LTE signal quality
@@ -5351,8 +5433,12 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // Agent inactivity notifications follow the timeout directly (0 = fully disabled, see cron.php)
     // - no separate toggle is needed for them.
     // CPU/RAM/HDD threshold alerts can be disabled separately in settings.
-    $is_agent_event = in_array($new_status, ['agent_offline', 'vps_warning'], true);
-    if ($new_status === 'vps_warning' && get_setting('agent_notifications_enabled', '1') !== '1') {
+    // lte_backup_lost/restored: the router's mobile backup stopped being able to
+    // carry traffic (no SIM, PIN, not registered) and came back. Agent-class
+    // like the threshold alerts - same admin-only default and the same switch.
+    $is_agent_event = in_array($new_status, ['agent_offline', 'vps_warning', 'lte_backup_lost', 'lte_backup_restored'], true);
+    if (in_array($new_status, ['vps_warning', 'lte_backup_lost', 'lte_backup_restored'], true)
+        && get_setting('agent_notifications_enabled', '1') !== '1') {
         return;
     }
 
@@ -5376,6 +5462,12 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $emoji = '🐢';
     } elseif ($new_status === 'latency_recovered') {
         $status_text = 'ODEZVA ZPĚT V NORMÁLU';
+        $emoji = '🟢';
+    } elseif ($new_status === 'lte_backup_lost') {
+        $status_text = 'LTE ZÁLOHA NEFUNKČNÍ';
+        $emoji = '📵';
+    } elseif ($new_status === 'lte_backup_restored') {
+        $status_text = 'LTE ZÁLOHA OBNOVENA';
         $emoji = '🟢';
     }
     // Load all notification recipients (subscribers + administrators without an explicit subscription)
@@ -5403,7 +5495,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 
     // HTML e-mail template in Blood Kings colours (red-black)
     $color_theme = '#c1121f'; // red
-    if ($new_status === 'up') {
+    if ($new_status === 'up' || $new_status === 'lte_backup_restored') {
         $color_theme = '#1ec773'; // teal
     } elseif ($new_status === 'maintenance' || $new_status === 'vps_warning') {
         $color_theme = '#f39c12'; // orange
@@ -5419,6 +5511,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         'maintenance' => 'alert_status_maintenance',
         'agent_offline' => 'alert_status_agent_offline',
         'vps_warning' => 'alert_status_vps_warning',
+        'lte_backup_lost' => 'alert_status_lte_backup_lost',
+        'lte_backup_restored' => 'alert_status_lte_backup_restored',
     ];
     $alert_status_key = $alert_status_keys[$new_status] ?? 'alert_status_down';
 
@@ -6075,6 +6169,13 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             // monitor_id is always NULL here (ON DELETE SET NULL - the monitor no
             // longer exists, which is why this is logged at all), so the link never works.
             $removed_servers[] = ['name' => $ev['monitor_name'], 'type' => $ev['monitor_type'], 'id' => null];
+        } elseif ($ev['event_type'] === 'lte_backup_lost' || $ev['event_type'] === 'lte_backup_restored') {
+            // Translated at render time, not copied from the stored description:
+            // the description is the operator-language reason text ("SIM karta
+            // čeká na PIN…"), and the digest renders per recipient language. The
+            // reason itself stays in the timeline and in the alert that fired.
+            $config_change_examples[] = $ev['monitor_name'] . ': '
+                . t($ev['event_type'] === 'lte_backup_lost' ? 'digest_event_lte_backup_lost' : 'digest_event_lte_backup_restored');
         } elseif (in_array($ev['event_type'], ['scheme_upgraded', 'dns_lost', 'dns_recovered', 'cert_renewed', 'agent_connected', 'agent_disconnected'], true)) {
             $config_change_examples[] = $ev['monitor_name'] . ': ' . $ev['description'];
         }

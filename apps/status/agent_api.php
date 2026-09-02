@@ -244,6 +244,18 @@ $ow_lte_plmn = (isset($data['lte_plmn']) && $data['lte_plmn'] !== null) ? trim((
 $ow_lte_device = (isset($data['lte_device']) && $data['lte_device'] !== null) ? trim((string)$data['lte_device']) : null;
 $ow_lte_uptime = (isset($data['lte_uptime']) && $data['lte_uptime'] !== null) ? (int)$data['lte_uptime'] : null;
 $ow_lte_ipv4 = (isset($data['lte_ipv4']) && $data['lte_ipv4'] !== null) ? trim((string)$data['lte_ipv4']) : null;
+// SIM and registration straight from the modem's HiLink API (agent 0.1.0+).
+// `lte_up` only proves the router reaches the modem's LAN side - a HiLink
+// modem hands out DHCP with no SIM inserted, so the backup looked alive for
+// nine days while it could not carry a packet. Absent = null, never a guess.
+$ow_lte_connected = (isset($data['lte_connected']) && is_bool($data['lte_connected'])) ? $data['lte_connected'] : null;
+$ow_lte_sim_state = (isset($data['lte_sim_state']) && is_string($data['lte_sim_state']) && $data['lte_sim_state'] !== '')
+    ? substr(trim($data['lte_sim_state']), 0, 20) : null;
+$ow_lte_conn_code = (isset($data['lte_conn_code']) && is_numeric($data['lte_conn_code'])) ? (int)$data['lte_conn_code'] : null;
+$ow_lte_sim_code = (isset($data['lte_sim_code']) && is_numeric($data['lte_sim_code'])) ? (int)$data['lte_sim_code'] : null;
+$ow_lte_service_code = (isset($data['lte_service_code']) && is_numeric($data['lte_service_code'])) ? (int)$data['lte_service_code'] : null;
+$ow_lte_sim_status_code = (isset($data['lte_sim_status_code']) && is_numeric($data['lte_sim_status_code'])) ? (int)$data['lte_sim_status_code'] : null;
+$ow_lte_sim_pin_left = (isset($data['lte_sim_pin_left']) && is_numeric($data['lte_sim_pin_left'])) ? (int)$data['lte_sim_pin_left'] : null;
 $ow_lte_carrier = (isset($data['lte_carrier']) && $data['lte_carrier'] !== null) ? trim($data['lte_carrier']) : null;
 $ow_service_restarts = (isset($data['service_restarts']) && is_array($data['service_restarts'])) ? $data['service_restarts'] : null;
 $ow_auto_update = isset($data['auto_update']) ? (int)(bool)$data['auto_update'] : null;
@@ -383,6 +395,38 @@ try {
     } else {
         $hdd_alert_sent = false;
     }
+
+    // LTE backup of a router. The verdict is bk_lte_backup_state() - the modem's
+    // own word on SIM and registration, not the interface flag (see there).
+    // Two consecutive bad reports before alerting: a modem re-registering for
+    // a minute is not a dead backup, and the latch mirrors the threshold ones
+    // so a lost backup is reported once and its recovery once.
+    $lte_backup_alert_sent = !empty($old_details['lte_backup_alert_sent']);
+    $lte_backup_bad_streak = (int)($old_details['lte_backup_bad_streak'] ?? 0);
+    $lte_backup = bk_lte_backup_state([
+        'lte_up' => $ow_lte_up,
+        'lte_connected' => $ow_lte_connected,
+        'lte_sim_state' => $ow_lte_sim_state,
+        'lte_sim_pin_left' => $ow_lte_sim_pin_left,
+        'lte_conn_code' => $ow_lte_conn_code,
+        'lte_sim_status_code' => $ow_lte_sim_status_code,
+    ]);
+    if ($lte_backup['ok'] === false) {
+        $lte_backup_bad_streak++;
+        if (!$lte_backup_alert_sent && $lte_backup_bad_streak >= 2) {
+            trigger_notifications($pdo, $monitor, 'lte_backup_lost', $lte_backup['text']);
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'lte_backup_lost', $lte_backup['text']);
+            $lte_backup_alert_sent = true;
+        }
+    } elseif ($lte_backup['ok'] === true) {
+        $lte_backup_bad_streak = 0;
+        if ($lte_backup_alert_sent) {
+            trigger_notifications($pdo, $monitor, 'lte_backup_restored', 'Modem je opět přihlášen do mobilní sítě, SIM je připravená.');
+            log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'lte_backup_restored', 'LTE záloha je opět funkční.');
+            $lte_backup_alert_sent = false;
+        }
+    }
+    // ok === null: no verdict this round - latch and streak carry over untouched.
     
     $old_details = json_decode($monitor['last_details'] ?? '{}', true);
     if (!is_array($old_details)) {
@@ -482,6 +526,13 @@ try {
         'lte_device' => $ow_lte_device,
         'lte_uptime' => $ow_lte_uptime,
         'lte_ipv4' => $ow_lte_ipv4,
+        'lte_connected' => $ow_lte_connected,
+        'lte_sim_state' => $ow_lte_sim_state,
+        'lte_conn_code' => $ow_lte_conn_code,
+        'lte_sim_code' => $ow_lte_sim_code,
+        'lte_service_code' => $ow_lte_service_code,
+        'lte_sim_status_code' => $ow_lte_sim_status_code,
+        'lte_sim_pin_left' => $ow_lte_sim_pin_left,
         'service_restarts' => $ow_service_restarts,
         'auto_update' => $ow_auto_update,
         'tailscale_up' => $ow_tailscale_up,
@@ -503,6 +554,8 @@ try {
         'cpu_alert_sent' => $cpu_alert_sent,
         'ram_alert_sent' => $ram_alert_sent,
         'hdd_alert_sent' => $hdd_alert_sent,
+        'lte_backup_alert_sent' => $lte_backup_alert_sent,
+        'lte_backup_bad_streak' => $lte_backup_bad_streak,
         'agent_alert_sent' => false,
         'agent_last_seen' => time()
     ];

@@ -21,6 +21,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ChartCard } from '@/components/charts/chart-card';
 import { Sparkline } from '@/components/sparkline';
+import { lteBackupState } from '@/lib/lte-backup';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
 import type { ChartData, MetricSeries } from '@/api/types';
 import { Timeline } from '@/components/timeline';
@@ -1349,17 +1350,36 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
           {/* The connection is detectable even without ModemManager (ubus
               the signal does not - hence reported separately, and missing metrics
               stay empty instead of an excuse. */}
+          {/* Interface state and backup verdict are two different things: the
+              interface is up with no SIM in a HiLink modem. Both are shown. */}
           <Row
             label={t('net.lte_state', 'LTE spojení')}
             value={
               d.lte_up == null
                 ? null
                 : d.lte_up
-                  ? `${t('common.online', 'Online')}${d.lte_device ? ` · ${d.lte_device}` : ''}${
+                  ? `${t('net.lte_iface_up', 'Rozhraní běží')}${d.lte_device ? ` · ${d.lte_device}` : ''}${
                       d.lte_uptime != null ? ` · ${formatUptime(d.lte_uptime)}` : ''
                     }`
                   : t('common.offline', 'Offline')
             }
+          />
+          <Row
+            label={t('net.lte_backup', 'LTE záloha')}
+            value={(() => {
+              const b = lteBackupState(d);
+              if (b.ok === true) return t('net.lte_backup_ok', 'Funkční - modem přihlášen, SIM připravená');
+              if (b.ok === false)
+                return {
+                  no_sim: t('net.lte_backup_no_sim', 'NEFUNKČNÍ - SIM karta nenalezena'),
+                  pin_required: t('net.lte_backup_pin', 'NEFUNKČNÍ - SIM čeká na PIN'),
+                  puk_required: t('net.lte_backup_puk', 'NEFUNKČNÍ - SIM zablokovaná (PUK)'),
+                  invalid: t('net.lte_backup_invalid', 'NEFUNKČNÍ - SIM neplatná'),
+                  not_connected: t('net.lte_backup_not_connected', 'NEFUNKČNÍ - modem není přihlášen do sítě'),
+                  interface_down: t('net.lte_backup_iface_down', 'NEFUNKČNÍ - rozhraní vypnuté'),
+                }[b.reason ?? 'not_connected'];
+              return d.lte_up === true ? t('net.lte_backup_unverified', 'Neověřeno - modem nehlásí stav SIM') : null;
+            })()}
           />
           <Row label={t('net.lte_ip', 'LTE adresa')} value={d.lte_ipv4} />
           <Row label="LTE RSRP" value={d.lte_rsrp != null ? `${d.lte_rsrp} dBm` : null} />
@@ -1874,13 +1894,21 @@ function mapInsightsTimeline(
     remote_action: t('asset.tl_remote_action', 'Vzdálená akce'),
     ssl_warning: t('asset.tl_ssl_warning', 'SSL varování'),
     threshold_exceeded: t('asset.tl_threshold', 'Překročen limit'),
+    lte_backup_lost: t('asset.tl_lte_lost', 'LTE záloha nefunkční'),
+    lte_backup_restored: t('asset.tl_lte_restored', 'LTE záloha obnovena'),
     monitor_added: t('asset.tl_monitor_added', 'Monitor přidán'),
     monitor_updated: t('asset.tl_monitor_updated', 'Monitor upraven'),
   };
   const severityFor = (type: string): TimelineEvent['severity'] => {
     if (type === 'status_changed_down') return 'down';
-    if (type === 'status_changed_warning' || type === 'ssl_warning' || type === 'threshold_exceeded') return 'warning';
-    if (type === 'status_changed_up') return 'up';
+    if (
+      type === 'status_changed_warning' ||
+      type === 'ssl_warning' ||
+      type === 'threshold_exceeded' ||
+      type === 'lte_backup_lost'
+    )
+      return 'warning';
+    if (type === 'status_changed_up' || type === 'lte_backup_restored') return 'up';
     return 'info';
   };
 

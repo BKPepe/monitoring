@@ -64,6 +64,10 @@ $not_metrics = [
     // States (true/false) - they belong in events, not charts. A line jumping
     // between 0 and 1 says less than a record "WAN dropped at 3:14".
     'wan_up', 'lte_up', 'tailscale_up', 'sqm_enabled', 'sqm_ecn', 'dns_encryption',
+    // LTE backup verdict inputs (agent 0.1.0+): a registration flag, a SIM
+    // state word and the modem's raw status codes. A chart of "PIN required"
+    // says nothing a red tile and an alert do not.
+    'lte_connected', 'lte_sim_state', 'lte_conn_code', 'lte_sim_code', 'lte_service_code', 'lte_sim_status_code', 'lte_sim_pin_left',
     'firewall_enabled',
     // Texty a adresy
     'wan_proto', 'wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'wan_last_reconnect',

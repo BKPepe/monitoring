@@ -29,6 +29,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_pearson',
     'bk_counter_deltas',
     'bk_trusted_link_host',
+    'bk_lte_backup_state',
 ]);
 
 
@@ -422,6 +423,43 @@ if (function_exists('bk_trusted_link_host')) {
     // Case-folding: a Host differing only in case must still match SERVER_NAME,
     // or the check could be dodged with BloodKings.EU.
     check('velikost písmen nerozhoduje', bk_trusted_link_host('BloodKings.EU', 'bloodkings.eu', $allow), 'bloodkings.eu');
+}
+
+// --- LTE backup verdict (bk_lte_backup_state) -------------------------------
+//
+// The bug this guards: a HiLink modem's interface is "up" with no SIM in it,
+// so the interface flag alone must never count as a working backup.
+if (function_exists('bk_lte_backup_state')) {
+    $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => 'ready']);
+    check_true('přihlášený modem s připravenou SIM = záloha funkční', $v['ok'] === true);
+
+    // THE regression: interface up, modem silent - that is not "working".
+    $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => null, 'lte_sim_state' => null]);
+    check_true('rozhraní up bez slova od modemu není funkční záloha (null, ne true)', $v['ok'] === null);
+
+    check_true('žádné LTE = žádný verdikt', bk_lte_backup_state([])['ok'] === null);
+    check_true('rozhraní up, connected z monitoringu, SIM neznámá = funkční (901 registraci dokazuje)',
+        bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => null])['ok'] === true);
+
+    foreach (['no_sim', 'pin_required', 'puk_required', 'invalid'] as $bad) {
+        $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => $bad]);
+        check_true("SIM ve stavu {$bad} = nefunkční i když modem tvrdí 901", $v['ok'] === false && $v['reason'] === $bad);
+        check_true("a nese text pro operátora ({$bad})", is_string($v['text']) && $v['text'] !== '');
+    }
+    // The real case from the user's Turris: PIN fine (257), yet SimStatus 4 -
+    // the network rejects the SIM - and the code must be in the text.
+    $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'invalid', 'lte_sim_status_code' => 4]);
+    check_true('SIM odmítnutá sítí nese SimStatus v textu', $v['reason'] === 'invalid' && str_contains($v['text'], 'SimStatus 4'));
+
+    $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => 'pin_required', 'lte_sim_pin_left' => 2]);
+    check_true('u PINu se hlásí zbývající pokusy', str_contains($v['text'], '2'));
+
+    $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'ready', 'lte_conn_code' => 902]);
+    check_true('SIM ok, ale modem odpojen = nefunkční', $v['ok'] === false && $v['reason'] === 'not_connected');
+    check_true('a stavový kód je v textu', str_contains($v['text'], '902'));
+
+    $v = bk_lte_backup_state(['lte_up' => false, 'lte_connected' => null, 'lte_sim_state' => null]);
+    check_true('vypnuté rozhraní = nefunkční', $v['ok'] === false && $v['reason'] === 'interface_down');
 }
 
 $failed = bk_test_report('čisté funkce');

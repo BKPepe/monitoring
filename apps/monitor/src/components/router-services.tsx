@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Globe, Shield, Wifi, Lock, Gauge, Network } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { formatUptime } from '@/lib/utils';
+import { lteBackupState, type LteBackupReason } from '@/lib/lte-backup';
 
 /**
  * The "Services" section for a router (OpenWrt/Turris).
@@ -98,21 +99,55 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
   const hasLteSignal = d.lte_rsrp != null || d.lte_rssi != null || d.lte_rsrq != null || d.lte_sinr != null;
 
   if (d.lte_up != null || hasLteSignal) {
+    // The verdict comes from the modem (SIM + registration), never from the
+    // interface flag alone: a HiLink modem's interface is up with no SIM in it,
+    // and this tile was green for nine days over a backup that could not carry
+    // a packet. Unknown stays unknown.
+    const backup = lteBackupState(d);
+    const reasonText: Record<LteBackupReason, string> = {
+      no_sim: t('rsvc.lte_reason_no_sim', 'SIM karta nenalezena'),
+      pin_required: t('rsvc.lte_reason_pin', 'SIM čeká na PIN'),
+      puk_required: t('rsvc.lte_reason_puk', 'SIM zablokovaná (PUK)'),
+      invalid: t('rsvc.lte_reason_invalid', 'SIM odmítnuta sítí'),
+      not_connected: t('rsvc.lte_reason_not_connected', 'Bez registrace v síti'),
+      interface_down: t('rsvc.lte_reason_interface_down', 'Rozhraní vypnuté'),
+    };
+    const simText: Record<string, string> = {
+      ready: t('rsvc.sim_ready', 'připravená'),
+      no_sim: t('rsvc.lte_reason_no_sim', 'SIM karta nenalezena'),
+      pin_required: t('rsvc.lte_reason_pin', 'SIM čeká na PIN'),
+      puk_required: t('rsvc.lte_reason_puk', 'SIM zablokovaná (PUK)'),
+      invalid: t('rsvc.lte_reason_invalid', 'SIM odmítnuta sítí'),
+    };
     tiles.push(
       <Tile
         key="lte"
         icon={<Network className="size-4" />}
         title={t('rsvc.lte', 'LTE / mobilní záloha')}
-        state={d.lte_up === true ? 'good' : d.lte_up === false ? 'muted' : 'unknown'}
+        state={backup.ok === true ? 'good' : backup.ok === false ? 'bad' : d.lte_up === true ? 'warn' : 'unknown'}
         stateText={
-          d.lte_up == null
-            ? t('rsvc.unknown', 'Neznámý stav')
-            : d.lte_up
-              ? t('common.online', 'Online')
-              : t('common.offline', 'Offline')
+          backup.ok === true
+            ? t('rsvc.lte_backup_ok', 'Záloha funkční')
+            : backup.ok === false && backup.reason
+              ? reasonText[backup.reason]
+              : d.lte_up === true
+                ? t('rsvc.lte_unverified', 'Neověřeno')
+                : t('rsvc.unknown', 'Neznámý stav')
         }
         lines={[
           d.lte_device ? `${t('rsvc.device', 'Rozhraní')}: ${d.lte_device}` : null,
+          typeof d.lte_sim_state === 'string'
+            ? `SIM: ${simText[d.lte_sim_state] ?? d.lte_sim_state}${
+                d.lte_sim_state === 'pin_required' && d.lte_sim_pin_left != null
+                  ? ` (${t('rsvc.pin_attempts', { count: d.lte_sim_pin_left }, `zbývá pokusů: ${d.lte_sim_pin_left}`)})`
+                  : ''
+              }`
+            : null,
+          d.lte_connected != null
+            ? `${t('rsvc.registration', 'Registrace v síti')}: ${
+                d.lte_connected ? t('rsvc.registered', 'přihlášen') : t('rsvc.not_registered', 'nepřihlášen')
+              }${d.lte_conn_code != null ? ` (${d.lte_conn_code})` : ''}`
+            : null,
           d.lte_ipv4 ? `IPv4: ${d.lte_ipv4}` : null,
           d.lte_uptime != null ? `${t('rsvc.uptime', 'Spojení běží')}: ${formatUptime(d.lte_uptime)}` : null,
           [d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null,
@@ -133,20 +168,27 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           d.lte_plmn != null ? `PLMN: ${d.lte_plmn}` : null,
         ]}
         note={
-          // "The modem said nothing about signal" is distinguished from "it
-          // spoke, just not RSRP". Merging them meant advising a package
-          // install to someone whose modem answers perfectly fine.
-          d.lte_up === true && !hasLteSignal
+          // An interface that is up while the modem says nothing about the SIM
+          // is the exact shape of the bug: it must read as unverified, not OK.
+          backup.ok === null && d.lte_up === true
             ? t(
-                'rsvc.lte_no_signal',
-                'Sílu signálu se nepodařilo zjistit — modem ji nehlásí přes ModemManager (uqmi/mmcli) ani přes HTTP API na své bráně.'
+                'rsvc.lte_unverified_note',
+                'Rozhraní k modemu běží, ale modem nehlásí stav SIM ani registraci - zálohu nelze potvrdit. Bez SIM nebo se špatným PINem vypadá rozhraní úplně stejně.'
               )
-            : d.lte_up === true && d.lte_rsrp == null
+            : // "The modem said nothing about signal" is distinguished from "it
+              // spoke, just not RSRP". Merging them meant advising a package
+              // install to someone whose modem answers perfectly fine.
+              d.lte_up === true && !hasLteSignal
               ? t(
-                  'rsvc.lte_rssi_only',
-                  'Modem hlásí RSSI, ale ne RSRP — tuhle hodnotu prostě nevyplňuje. Pro sílu signálu se řiďte RSSI.'
+                  'rsvc.lte_no_signal',
+                  'Sílu signálu se nepodařilo zjistit — modem ji nehlásí přes ModemManager (uqmi/mmcli) ani přes HTTP API na své bráně.'
                 )
-              : null
+              : d.lte_up === true && d.lte_rsrp == null
+                ? t(
+                    'rsvc.lte_rssi_only',
+                    'Modem hlásí RSSI, ale ne RSRP — tuhle hodnotu prostě nevyplňuje. Pro sílu signálu se řiďte RSSI.'
+                  )
+                : null
         }
       />
     );

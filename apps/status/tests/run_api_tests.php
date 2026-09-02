@@ -1439,6 +1439,72 @@ $agent_payload = [
     'oom_kills' => 'null',
 ];
 
+// --- LTE backup alert (SIM / registration from the modem) ------------------
+//
+// The bug this guards: a HiLink modem's interface stays up with no SIM in it,
+// so the old `lte_up` flag showed a working backup for nine days and nothing
+// ever notified anyone. The verdict now comes from the modem's own report,
+// with a two-report debounce and a latch (one alert, one recovery).
+$post_agent = function (array $extra) use ($base, $agent_payload): int {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(array_merge($agent_payload, $extra), JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$lte_events = function (string $type) use ($pdo): int {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
+    $st->execute([$type]);
+    return (int)$st->fetchColumn();
+};
+$lte_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+$lte_bad = ['lte_up' => true, 'lte_uptime' => 778603, 'lte_connected' => false, 'lte_sim_state' => 'no_sim', 'lte_conn_code' => 902, 'lte_sim_code' => 255];
+$lte_ok = ['lte_up' => true, 'lte_uptime' => 778700, 'lte_connected' => true, 'lte_sim_state' => 'ready', 'lte_conn_code' => 901, 'lte_sim_code' => 257];
+
+check('1. špatné hlášení agent přijme', $post_agent($lte_bad), 200);
+check('po jednom špatném hlášení se ještě nealertuje (debounce)', $lte_events('lte_backup_lost'), 0);
+$d = $lte_details();
+check('ale stav SIM je v details poctivě uložen', $d['lte_sim_state'] ?? null, 'no_sim');
+check('a rozhraní zůstává hlášeno jako up (to je ta past)', $d['lte_up'] ?? null, true);
+check('série špatných hlášení = 1', (int)($d['lte_backup_bad_streak'] ?? -1), 1);
+
+check('2. špatné hlášení agent přijme', $post_agent($lte_bad), 200);
+check('druhé špatné hlášení spustí alert', $lte_events('lte_backup_lost'), 1);
+check_true('latch je nastaven', !empty($lte_details()['lte_backup_alert_sent']));
+$lte_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'lte_backup_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('událost říká proč (SIM nenalezena)', str_contains((string)$lte_ev, 'SIM'));
+
+check('3. špatné hlášení agent přijme', $post_agent($lte_bad), 200);
+check('třetí špatné hlášení alert neopakuje (latch)', $lte_events('lte_backup_lost'), 1);
+
+// A round the modem says nothing: no verdict, so the latch must survive it.
+check('hlášení bez slova od modemu agent přijme', $post_agent(['lte_up' => true, 'lte_uptime' => 778800]), 200);
+check_true('bez verdiktu latch přežije (žádné falešné "obnoveno")', !empty($lte_details()['lte_backup_alert_sent']));
+check('a žádné obnovení se nehlásí', $lte_events('lte_backup_restored'), 0);
+
+check('dobré hlášení agent přijme', $post_agent($lte_ok), 200);
+check('obnovení zálohy se ohlásí jednou', $lte_events('lte_backup_restored'), 1);
+check_true('a latch se uvolní', empty($lte_details()['lte_backup_alert_sent']));
+check('série špatných se vynuluje', (int)($lte_details()['lte_backup_bad_streak'] ?? -1), 0);
+
+check('další dobré hlášení agent přijme', $post_agent($lte_ok), 200);
+check('obnovení se neopakuje', $lte_events('lte_backup_restored'), 1);
+
+// PIN state is a distinct reason, and carries the attempts left.
+check('hlášení s PINem agent přijme', $post_agent(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'pin_required', 'lte_sim_pin_left' => 2]), 200);
+check('hlášení s PINem podruhé', $post_agent(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'pin_required', 'lte_sim_pin_left' => 2]), 200);
+$lte_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'lte_backup_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('PIN alert nese důvod i zbývající pokusy', str_contains((string)$lte_ev, 'PIN') && str_contains((string)$lte_ev, '2'));
+// Leave the monitor healthy for the tests that follow.
+$post_agent($lte_ok);
+
 $ch_agent = curl_init($base . '/agent_api.php');
 curl_setopt_array($ch_agent, [
     CURLOPT_RETURNTRANSFER => true,
