@@ -3515,6 +3515,38 @@ if ($action === 'metric_correlations') {
     exit;
 }
 
+// 2g1c. Traffic split by link role - a router with an LTE backup: which bytes
+// went over the primary line and which over the backup, and when the router
+// was on the backup at all (wan_lost / wan_restored). See bk_get_link_traffic().
+if ($action === 'link_traffic') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $days = max(1, min(30, (int)($_GET['days'] ?? 30)));
+    try {
+        // The exact monitor id wins over "a monitor of that asset" - with
+        // OR + LIMIT 1 alone a sibling with a lower id answered instead.
+        $stmt_mon = $pdo->prepare("SELECT id, type, last_details FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
+        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
+        $mon_row = $stmt_mon->fetch();
+        if (!$mon_row) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $details = json_decode((string)($mon_row['last_details'] ?? ''), true);
+        if (!is_array($details)) {
+            $details = [];
+        }
+        $out = bk_get_link_traffic($pdo, (int)$mon_row['id'], $details, $days);
+        $out['monitor'] = ['id' => (int)$mon_row['id'], 'type' => (string)$mon_row['type']];
+        echo json_encode($out, JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api] link_traffic selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Chyba při načítání provozu podle linky'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // 2g1b. Context for the metric detail page (Level 3).
 //
 // The chart data itself comes from `metric_series` - this endpoint supplies

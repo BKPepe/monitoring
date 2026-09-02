@@ -24,6 +24,7 @@ export type MetricKey =
   | 'ram'
   | 'hdd'
   | 'net'
+  | 'net_lte'
   | 'load1'
   | 'load5'
   | 'load15'
@@ -93,6 +94,12 @@ export interface ChartData {
    * still fine or already on the edge. A band shows it without reading numbers.
    */
   bands?: { from: number; to: number; tone: 'warning' | 'critical'; label: string }[];
+  /**
+   * Time ranges shaded across the chart (ms) - the router running on its LTE
+   * backup. Bytes drawn inside such a band went over the backup, not the
+   * primary line.
+   */
+  periods?: { from: number; to: number; label: string }[];
   /**
    * Days remaining until full (100 %).
    *
@@ -191,6 +198,33 @@ export interface MetricCorrelationsResponse {
   error?: string;
 }
 
+/**
+ * Response of `api.php?action=link_traffic` - a router's traffic split by
+ * link role (primary line vs. LTE backup) and the periods spent on the backup.
+ */
+export interface LinkTrafficResponse {
+  /** `null` = the agent does not report the device for this role (before 0.1.3). */
+  primary: LinkTrafficSide | null;
+  backup: LinkTrafficSide | null;
+  days: number;
+  /** `from`/`to` are unix seconds; `from: null` = began before the window, `to: null` = still on the backup. */
+  backup_periods: { from: number | null; to: number | null; seconds: number }[];
+  backup_seconds: number;
+  on_backup_now: boolean;
+  /** Every interface the router reported traffic for, roles or not. */
+  interfaces: string[];
+  error?: string;
+}
+
+export interface LinkTrafficSide {
+  iface: string;
+  /** `null` = no traffic rows for this device yet. */
+  today: { rx_bytes: number; tx_bytes: number } | null;
+  '7d': { rx_bytes: number; tx_bytes: number } | null;
+  '30d': { rx_bytes: number; tx_bytes: number } | null;
+  total: { rx_bytes: number; tx_bytes: number } | null;
+}
+
 /** Response of `api.php?action=public_status`. */
 export interface PublicStatus {
   status: 'healthy' | 'degraded';
@@ -215,4 +249,5 @@ export interface MetricsSource {
   getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse>;
   getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse>;
   getMetricCorrelations(monitorId: number, metric: string, range: MetricRange): Promise<MetricCorrelationsResponse>;
+  getLinkTraffic(monitorId: number, days?: number): Promise<LinkTrafficResponse>;
 }

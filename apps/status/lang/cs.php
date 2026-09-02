@@ -201,6 +201,7 @@ return [
     'metric_label_ram' => 'RAM',
     'metric_label_hdd' => 'Disk (HDD)',
     'metric_label_net' => 'Síť',
+    'metric_label_net_lte' => 'Síť (LTE záloha)',
     'metric_label_load1' => 'Load average (1 min)',
     'metric_label_load5' => 'Load average (5 min)',
     'metric_label_load15' => 'Load average (15 min)',

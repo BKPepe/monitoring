@@ -31,6 +31,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_trusted_link_host',
     'bk_lte_backup_state',
     'bk_wan_link_state',
+    'bk_pair_link_periods',
     'bk_agent_str',
     'bk_agent_bool',
 ]);
@@ -481,6 +482,29 @@ if (function_exists('bk_wan_link_state')) {
     check_true('ale s protokolem je vypnuté rozhraní opravdu výpadek', bk_wan_link_state(['wan_up' => false, 'wan_proto' => 'dhcp'])['ok'] === false);
     check_true('a s pingem false taky (bez protokolu)', bk_wan_link_state(['wan_up' => false, 'wan_internet' => false])['ok'] === false);
     check_true('oba signály dobré = funkční', bk_wan_link_state(['wan_up' => true, 'wan_internet' => true])['ok'] === true);
+}
+
+// --- Periods on the backup link (bk_pair_link_periods) -------------------------
+if (function_exists('bk_pair_link_periods')) {
+    $w = 1000; $now = 5000;
+    $r = bk_pair_link_periods([], $w, $now);
+    check('bez událostí = žádná období', count($r['periods']), 0);
+    check('a nula sekund', $r['seconds'], 0);
+    $r = bk_pair_link_periods([['wan_lost', 2000], ['wan_restored', 2600]], $w, $now);
+    check('výpadek a obnovení = jedno období', count($r['periods']), 1);
+    check('délka je rozdíl časů', $r['seconds'], 600);
+    check_true('uzavřené období není otevřené', $r['open'] === false);
+    $r = bk_pair_link_periods([['wan_lost', 4000]], $w, $now);
+    check_true('výpadek bez obnovení běží do teď', $r['open'] === true && $r['periods'][0]['to'] === null);
+    check('a počítá se do teď', $r['seconds'], 1000);
+    $r = bk_pair_link_periods([['wan_restored', 1500]], $w, $now);
+    check('obnovení bez výpadku = výpadek před oknem, počítá se od začátku okna', $r['seconds'], 500);
+    check_true('a začátek je neznámý (null), ne vymyšlený', $r['periods'][0]['from'] === null);
+    $r = bk_pair_link_periods([['wan_lost', 500], ['wan_restored', 1200]], $w, $now);
+    check('období přesahující začátek okna se ořízne na okno', $r['seconds'], 200);
+    $r = bk_pair_link_periods([['wan_lost', 2000], ['wan_lost', 2100], ['wan_restored', 2500]], $w, $now);
+    check('dvojí výpadek za sebou se nepočítá dvakrát', count($r['periods']), 1);
+    check('a měří se od prvního', $r['seconds'], 500);
 }
 
 // --- Typed agent input (bk_agent_str / bk_agent_bool) --------------------------

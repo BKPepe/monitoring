@@ -3,6 +3,7 @@ import type {
   ChartData,
   MetricDetail,
   MetricCorrelationsResponse,
+  LinkTrafficResponse,
   MetricHeatmapResponse,
   MetricRange,
   MetricSeriesResponse,
@@ -47,5 +48,8 @@ export const mockMetricsSource: MetricsSource = {
     range: MetricRange
   ): Promise<MetricCorrelationsResponse> {
     return httpMetricsSource.getMetricCorrelations(monitorId, metric, range);
+  },
+  async getLinkTraffic(monitorId: number, days = 30): Promise<LinkTrafficResponse> {
+    return httpMetricsSource.getLinkTraffic(monitorId, days);
   },
 };

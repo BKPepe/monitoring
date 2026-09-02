@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `conntrack_pct` FLOAT DEFAULT NULL, -- Využití conntrack tabulky v % (OpenWrt/firewall)
   `net_ipv4_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv4 provozu v KB/s
   `net_ipv6_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv6 provozu v KB/s
+  `net_lte_kbps` FLOAT DEFAULT NULL, -- Provoz přes LTE zálohu v KB/s (NULL = žádné LTE zařízení nebo první běh)
   `lte_rsrp` FLOAT DEFAULT NULL, -- Síla LTE signálu v dBm (NULL = modem hodnotu nehlásí)
   -- Hodnoty, které agenti posílali každou minutu, ale ukládal se jen
   -- poslední snímek v last_details - takže šlo vidět aktuální číslo,

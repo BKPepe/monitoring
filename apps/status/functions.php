@@ -880,6 +880,7 @@ function bk_metric_column_map(): array {
     'ram' => ['col' => 'ram_usage', 'unit' => '%', 'label' => 'Využití paměti'],
     'hdd' => ['col' => 'hdd_usage', 'unit' => '%', 'label' => 'Zaplnění disku'],
     'net' => ['col' => 'net_usage', 'unit' => 'KB/s', 'label' => 'Síťový provoz na WAN'],
+    'net_lte' => ['col' => 'net_lte_kbps', 'unit' => 'KB/s', 'label' => 'Síťový provoz na LTE záloze'],
     'load1' => ['col' => 'load_avg_1', 'unit' => '', 'label' => 'Load Average (1 min)'],
     'load5' => ['col' => 'load_avg_5', 'unit' => '', 'label' => 'Load Average (5 min)'],
     'load15' => ['col' => 'load_avg_15', 'unit' => '', 'label' => 'Load Average (15 min)'],
@@ -3142,6 +3143,7 @@ function bk_get_metric_registry() {
         'ram' => ['column' => 'ram_usage', 'label_key' => 'metric_label_ram', 'unit' => '%'],
         'hdd' => ['column' => 'hdd_usage', 'label_key' => 'metric_label_hdd', 'unit' => '%'],
         'net' => ['column' => 'net_usage', 'label_key' => 'metric_label_net', 'unit' => 'KB/s'],
+        'net_lte' => ['column' => 'net_lte_kbps', 'label_key' => 'metric_label_net_lte', 'unit' => 'KB/s'],
         'load1' => ['column' => 'load_avg_1', 'label_key' => 'metric_label_load1', 'unit' => ''],
         'load5' => ['column' => 'load_avg_5', 'label_key' => 'metric_label_load5', 'unit' => ''],
         'load15' => ['column' => 'load_avg_15', 'label_key' => 'metric_label_load15', 'unit' => ''],
@@ -8006,6 +8008,102 @@ function bk_format_packets_cz($cnt) {
     if ($cnt >= 1000000) return round($cnt / 1000000, 2) . ' M Pkts.';
     if ($cnt >= 1000) return round($cnt / 1000, 1) . ' k Pkts.';
     return number_format($cnt, 0, ',', ' ') . ' Pkts.';
+}
+
+/**
+ * Pairs wan_lost / wan_restored events into "on the backup link" periods.
+ *
+ * Pure. Events arrive in ascending time order as [type, unix ts]. A restore
+ * with no loss before it means the line was down since before the window
+ * (from = null, counted from the window start); a loss with no restore is
+ * still open and runs until $now. Seconds are clamped to the window so a
+ * month-old outage cannot inflate the total.
+ *
+ * @param array<int, array{0: string, 1: int}> $events
+ * @return array{periods: array<int, array{from: int|null, to: int|null, seconds: int}>, seconds: int, open: bool}
+ */
+function bk_pair_link_periods(array $events, int $window_start, int $now): array {
+    $periods = [];
+    $open_from = null;
+    foreach ($events as $ev) {
+        $type = (string)($ev[0] ?? '');
+        $ts = (int)($ev[1] ?? 0);
+        if ($type === 'wan_lost') {
+            if ($open_from === null) {
+                $open_from = $ts;
+            }
+        } elseif ($type === 'wan_restored') {
+            $from = $open_from ?? $window_start;
+            $periods[] = ['from' => $open_from, 'to' => $ts, 'seconds' => max(0, $ts - max($from, $window_start))];
+            $open_from = null;
+        }
+    }
+    $open = $open_from !== null;
+    if ($open) {
+        $periods[] = ['from' => $open_from, 'to' => null, 'seconds' => max(0, $now - max($open_from, $window_start))];
+    }
+    $total = 0;
+    foreach ($periods as $p) {
+        $total += $p['seconds'];
+    }
+    return ['periods' => $periods, 'seconds' => $total, 'open' => $open];
+}
+
+/**
+ * Traffic split by link role for a router: the bytes that went over the
+ * primary line (wan_l3_device) and over the LTE backup (lte_device), plus
+ * the periods spent on the backup (wan_lost / wan_restored events).
+ *
+ * The daily per-interface totals existed for years; only the legacy page
+ * read them, under raw interface names, so "how much went over LTE" had no
+ * answer on the web. Roles come from what the agent reports, never guessed
+ * from names: an agent that does not send wan_l3_device (before 0.1.3) gets
+ * null for the primary side.
+ */
+function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 30): array {
+    $stats = bk_get_interface_traffic_stats($pdo, $monitor_id);
+    $primary_dev = (isset($details['wan_l3_device']) && is_string($details['wan_l3_device']) && $details['wan_l3_device'] !== '')
+        ? $details['wan_l3_device'] : null;
+    $backup_dev = (isset($details['lte_device']) && is_string($details['lte_device']) && $details['lte_device'] !== '' && $details['lte_device'] !== 'null')
+        ? $details['lte_device'] : null;
+    $pick = function (?string $dev) use ($stats): ?array {
+        if ($dev === null) {
+            return null;
+        }
+        $row = $stats[$dev] ?? null;
+        $out = ['iface' => $dev, 'today' => null, '7d' => null, '30d' => null, 'total' => null];
+        if ($row) {
+            foreach (['today' => 'today', '7d' => '7d', '30d' => '30d', 'total' => 'all'] as $w => $src) {
+                if (isset($row[$src])) {
+                    $out[$w] = ['rx_bytes' => (float)$row[$src]['rx_bytes'], 'tx_bytes' => (float)$row[$src]['tx_bytes']];
+                }
+            }
+        }
+        return $out;
+    };
+
+    $now = time();
+    $window_start = $now - $days * 86400;
+    $events = [];
+    try {
+        $stmt = $pdo->prepare("SELECT event_type, UNIX_TIMESTAMP(occurred_at) AS ts FROM monitor_events WHERE monitor_id = ? AND event_type IN ('wan_lost', 'wan_restored') AND occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY occurred_at ASC, id ASC");
+        $stmt->execute([$monitor_id, $days]);
+        foreach ($stmt->fetchAll() as $r) {
+            $events[] = [(string)$r['event_type'], (int)$r['ts']];
+        }
+    } catch (PDOException $e) {
+    }
+    $paired = bk_pair_link_periods($events, $window_start, $now);
+
+    return [
+        'primary' => $pick($primary_dev),
+        'backup' => $pick($backup_dev),
+        'days' => $days,
+        'backup_periods' => $paired['periods'],
+        'backup_seconds' => $paired['seconds'],
+        'on_backup_now' => $paired['open'],
+        'interfaces' => array_keys($stats),
+    ];
 }
 
 /**

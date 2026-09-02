@@ -71,6 +71,8 @@ $not_metrics = [
     // wan_internet: true/false verdict of one echo bound to the WAN device - state
     // for the wan_lost alert, not a time series.
     'wan_internet',
+    // wan_l3_device: the name of the WAN device - a role label for the traffic split, not a number.
+    'wan_l3_device',
     'firewall_enabled',
     // Texty a adresy
     'wan_proto', 'wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'wan_last_reconnect',

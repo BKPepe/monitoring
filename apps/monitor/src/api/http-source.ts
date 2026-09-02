@@ -2,6 +2,7 @@ import type {
   ChartData,
   MetricDetail,
   MetricCorrelationsResponse,
+  LinkTrafficResponse,
   MetricHeatmapResponse,
   MetricKey,
   MetricPoint,
@@ -172,6 +173,14 @@ export const httpMetricsSource: MetricsSource = {
     );
     if (!Array.isArray(res?.correlations)) {
       throw new Error(res?.error ?? 'Neplatná odpověď metric_correlations.');
+    }
+    return res;
+  },
+
+  async getLinkTraffic(monitorId: number, days = 30): Promise<LinkTrafficResponse> {
+    const res = await getJson<LinkTrafficResponse>(`api.php?action=link_traffic&monitor_id=${monitorId}&days=${days}`);
+    if (!Array.isArray(res?.backup_periods)) {
+      throw new Error(res?.error ?? 'Neplatná odpověď link_traffic.');
     }
     return res;
   },

@@ -24,7 +24,8 @@ import { Sparkline } from '@/components/sparkline';
 import { lteBackupState } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
-import type { ChartData, MetricSeries } from '@/api/types';
+import type { ChartData, LinkTrafficResponse, MetricSeries } from '@/api/types';
+import { resolveSource } from '@/api/source';
 import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
@@ -320,7 +321,7 @@ export function AssetDetailPage() {
 
         {hasNetworkData(asset.rawDetails) && (
           <TabsContent value="network">
-            <NetworkTab d={asset.rawDetails} />
+            <NetworkTab d={asset.rawDetails} monitorId={Number(asset.id)} />
           </TabsContent>
         )}
 
@@ -1163,7 +1164,131 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function NetworkTab({ d }: { d: Record<string, any> }) {
+/** Bytes the way the reader would say them. */
+function formatBytesShort(n: number | null | undefined): string | null {
+  if (n == null || !Number.isFinite(n) || n < 0) return null;
+  if (n >= 1073741824) return `${(n / 1073741824).toFixed(2)} GB`;
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${Math.round(n / 1024)} kB`;
+}
+
+/**
+ * Which bytes went over the primary line and which over the LTE backup, and
+ * how long the router spent on the backup. The daily totals per interface
+ * existed for years under raw device names; the roles come from what the
+ * agent reports (wan_l3_device / lte_device), never guessed from a name.
+ */
+function LinkTrafficSection({ monitorId }: { monitorId: number }) {
+  const { t, lang } = useLanguage();
+  // undefined = loading, null = the request failed
+  const [data, setData] = React.useState<LinkTrafficResponse | null | undefined>(undefined);
+  React.useEffect(() => {
+    let active = true;
+    setData(undefined);
+    resolveSource()
+      .then(({ source }) => source.getLinkTraffic(monitorId, 30))
+      .then((r) => {
+        if (active) setData(r);
+      })
+      .catch(() => {
+        if (active) setData(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [monitorId]);
+
+  const title = `🔀 ${t('net.link_traffic_title', 'Provoz podle linky')}`;
+  if (data === undefined) {
+    return (
+      <Section title={title}>
+        <p className="text-xs text-muted-foreground">{t('net.link_loading', 'Načítám…')}</p>
+      </Section>
+    );
+  }
+  if (data === null) {
+    return (
+      <Section title={title}>
+        <p className="text-xs text-muted-foreground">{t('net.link_failed', 'Provoz podle linky se nepodařilo načíst.')}</p>
+      </Section>
+    );
+  }
+
+  const windows: { key: 'today' | '7d' | '30d'; label: string }[] = [
+    { key: 'today', label: t('net.link_today', 'Dnes') },
+    { key: '7d', label: t('net.link_7d', '7 dní') },
+    { key: '30d', label: t('net.link_30d', '30 dní') },
+  ];
+  const cell = (side: LinkTrafficResponse['primary'], key: 'today' | '7d' | '30d') => {
+    if (!side) return '—';
+    const w = side[key];
+    if (!w) return t('net.link_no_data', 'zatím bez dat');
+    return `↓${formatBytesShort(w.rx_bytes) ?? '—'} ↑${formatBytesShort(w.tx_bytes) ?? '—'}`;
+  };
+  const fmtDuration = (s: number) => {
+    if (s < 60) return `${s} s`;
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}min` : `${m} min`;
+  };
+  const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+  const fmtTs = (ts: number | null, fallback: string) =>
+    ts == null ? fallback : new Date(ts * 1000).toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' });
+  const onBackupEver = data.backup_seconds > 0 || data.backup_periods.length > 0;
+
+  return (
+    <Section title={title}>
+      <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-1 text-xs">
+        <span />
+        <span className="font-medium">
+          {t('net.link_primary', 'Primární (WAN)')}
+          {data.primary ? <span className="text-muted-foreground font-mono"> · {data.primary.iface}</span> : null}
+        </span>
+        <span className="font-medium">
+          {t('net.link_backup', 'Záloha (LTE)')}
+          {data.backup ? <span className="text-muted-foreground font-mono"> · {data.backup.iface}</span> : null}
+        </span>
+        {windows.map((w) => (
+          <React.Fragment key={w.key}>
+            <span className="text-muted-foreground">{w.label}</span>
+            <span className="font-mono">{cell(data.primary, w.key)}</span>
+            <span className="font-mono">{cell(data.backup, w.key)}</span>
+          </React.Fragment>
+        ))}
+      </div>
+      {!data.primary && (
+        <p className="text-xs text-muted-foreground mt-2">
+          {t('net.link_unknown_primary', 'Agent nehlásí WAN zařízení (verze před 0.1.3) - primární strana je neznámá.')}
+        </p>
+      )}
+      {!data.backup && <p className="text-xs text-muted-foreground mt-1">{t('net.link_no_backup', 'Bez LTE zařízení.')}</p>}
+      <Row
+        label={t('net.link_time_on_backup', 'Čas na záloze (30 dní)')}
+        value={onBackupEver ? fmtDuration(data.backup_seconds) : t('net.link_never', 'nikdy')}
+      />
+      {data.on_backup_now && <p className="text-xs text-down mt-1">{t('net.link_on_backup_now', 'Teď běží přes zálohu.')}</p>}
+      {data.backup_periods.length > 0 && (
+        <div className="mt-2 text-xs">
+          <div className="text-muted-foreground mb-1">{t('net.link_periods', 'Období na záloze')}</div>
+          {data.backup_periods
+            .slice(-5)
+            .reverse()
+            .map((p, i) => (
+              <div key={i} className="font-mono flex justify-between gap-2">
+                <span>
+                  {fmtTs(p.from, t('net.link_since_before', 'před začátkem okna'))} → {fmtTs(p.to, t('net.link_still', 'dosud'))}
+                </span>
+                <span className="text-muted-foreground">{fmtDuration(p.seconds)}</span>
+              </div>
+            ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: number }) {
   const { t } = useLanguage();
 
   // "x minutes ago" labels need the clock, which is impure by definition.
@@ -1344,6 +1469,10 @@ function NetworkTab({ d }: { d: Record<string, any> }) {
             </div>
           ))}
         </Section>
+      )}
+
+      {(d.lte_device != null || d.wan_l3_device != null || d.lte_up != null) && (
+        <LinkTrafficSection monitorId={monitorId} />
       )}
 
       {(d.sqm_enabled != null || d.lte_rsrp != null || d.lte_up != null) && (

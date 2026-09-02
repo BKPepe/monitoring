@@ -1572,6 +1572,43 @@ if ($pdo->query("SHOW COLUMNS FROM monitors LIKE 'cpu_threshold'")->fetch()) {
 }
 $post_agent($cpu_at(12.5));
 
+// --- Traffic by link role (link_traffic) + the LTE throughput series -----------
+//
+// Roles come from the agent (wan_l3_device / lte_device); the daily totals per
+// interface are the existing table, the backup periods come from the wan_lost /
+// wan_restored events the WAN tests above produced.
+check('hlášení s rolemi linek a LTE rychlostí agent přijme', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true, 'wan_l3_device' => 'eth0', 'lte_device' => 'wwan0', 'net_lte' => 123.4]), 200);
+$lte_row = $pdo->query("SELECT net_lte_kbps FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch();
+check('LTE rychlost se uložila jako metrika', round((float)($lte_row['net_lte_kbps'] ?? -1), 1), 123.4);
+[$ls_code, $ls] = api_get($base, 'action=metric_series&monitor_id=2&metric=net_lte&period=24h');
+check('metric_series zná net_lte', $ls_code, 200);
+check_true('a vrací body', count($ls['points'] ?? []) >= 1);
+
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total) VALUES
+    (2, 'eth0', CURDATE(), 1000, 2000),
+    (2, 'eth0', DATE_SUB(CURDATE(), INTERVAL 3 DAY), 10000, 20000),
+    (2, 'wwan0', CURDATE(), 300, 400),
+    (2, 'br-lan', CURDATE(), 99999, 99999)");
+[$lt_code, $lt] = api_get($base, 'action=link_traffic&monitor_id=2');
+check('link_traffic vrací 200', $lt_code, 200);
+check('primární linka je zařízení z wan_l3_device', $lt['primary']['iface'] ?? null, 'eth0');
+check('záloha je zařízení z lte_device', $lt['backup']['iface'] ?? null, 'wwan0');
+check('dnešní provoz primární linky (rx)', (float)($lt['primary']['today']['rx_bytes'] ?? -1), 1000.0);
+check('7 dní primární linky sečte i starší den (tx)', (float)($lt['primary']['7d']['tx_bytes'] ?? -1), 22000.0);
+check('dnešní provoz zálohy (tx)', (float)($lt['backup']['today']['tx_bytes'] ?? -1), 400.0);
+check('období na záloze = dva výpadky z testů výše', count($lt['backup_periods'] ?? []), 2);
+check_true('teď na záloze není', ($lt['on_backup_now'] ?? null) === false);
+check_true('LAN se do rolí nepočítá, ale v seznamu rozhraní je', in_array('br-lan', $lt['interfaces'] ?? [], true) && ($lt['primary']['iface'] ?? '') !== 'br-lan');
+// An agent before 0.1.3 sends no wan_l3_device: the primary side is unknown, not guessed.
+check('hlášení starého agenta bez rolí', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp']), 200);
+[, $lt_old] = api_get($base, 'action=link_traffic&monitor_id=2');
+check_true('bez wan_l3_device je primární strana null', array_key_exists('primary', $lt_old) && $lt_old['primary'] === null);
+check_true('a seznam rozhraní zůstává', in_array('eth0', $lt_old['interfaces'] ?? [], true));
+[$lt404, ] = api_get($base, 'action=link_traffic&monitor_id=999999');
+check('neexistující monitor = 404', $lt404, 404);
+$post_agent(['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true, 'wan_l3_device' => 'eth0', 'lte_device' => 'wwan0']);
+
 // --- last_details is a 64 KB TEXT column ----------------------------------
 //
 // Twelve pass-through lists of ~6.6 KB each (every one under the 8 KB

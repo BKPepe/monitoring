@@ -165,6 +165,38 @@ export function MetricDetailPage() {
     };
   }, [monId, metric, range]);
 
+  // Periods the router spent on its LTE backup, shaded on the two link
+  // charts: bytes drawn inside them went over the backup, not the primary
+  // line. Only routers have them; every other metric leaves the shading off.
+  const [linkPeriods, setLinkPeriods] = React.useState<ChartData['periods']>(undefined);
+  const monitorType = detail?.monitor.type ?? null;
+  React.useEffect(() => {
+    let active = true;
+    setLinkPeriods(undefined);
+    if (monitorType !== 'openwrt' || (metric !== 'net' && metric !== 'net_lte')) return;
+    resolveSource()
+      .then(({ source }) => source.getLinkTraffic(monId, 30))
+      .then((lt) => {
+        if (!active) return;
+        const now = Date.now();
+        const windowStart = now - lt.days * 86400 * 1000;
+        setLinkPeriods(
+          lt.backup_periods.map((p) => ({
+            from: p.from != null ? p.from * 1000 : windowStart,
+            to: p.to != null ? p.to * 1000 : now,
+            label: t('net.link_period_label', 'Na LTE záloze'),
+          }))
+        );
+      })
+      .catch(() => {
+        // A failed request is not "never on the backup" - the shading simply stays off.
+        if (active) setLinkPeriods(undefined);
+      });
+    return () => {
+      active = false;
+    };
+  }, [monId, metric, monitorType, t]);
+
   const loadAnnotations = React.useCallback(() => {
     appApi
       .getAnnotations(monId, metric, RANGE_HOURS[range])
@@ -216,6 +248,7 @@ export function MetricDetailPage() {
           label: a.author ? `${a.note} (${a.author})` : a.note,
         })),
         bands: buildBands(detail, sourceUnit, isRate ? activeUnit : null, t),
+        periods: linkPeriods,
       }
     : null;
 

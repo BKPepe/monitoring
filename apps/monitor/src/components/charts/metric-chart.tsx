@@ -167,7 +167,8 @@ export function MetricChart({
           // Bands belong to the first series only - drawn twice they darken.
           i === 0 ? data.bands : undefined,
           theme,
-          i === 0 ? data.annotations : undefined
+          i === 0 ? data.annotations : undefined,
+          i === 0 ? data.periods : undefined
         )
       ),
     };
@@ -197,7 +198,8 @@ function buildSeries(
   eventColor: string,
   bands: ChartData['bands'],
   theme: ChartTheme,
-  annotations?: ChartEvent[]
+  annotations?: ChartEvent[],
+  periods?: ChartData['periods']
 ) {
   // Events (measured facts) and notes (human claims) share one markLine -
   // ECharts allows a single markLine per series, so the styling rides on each
@@ -224,7 +226,10 @@ function buildSeries(
   return {
     // Threshold bands as horizontal areas. A single line at the critical limit
     // does not say whether the current value sits just below it or far away.
-    markArea: bands?.length
+    // ...and time ranges (the router on its LTE backup) as vertical shading in
+    // the same markArea - ECharts allows one per series, and the two kinds do
+    // not collide: a band spans values, a period spans time.
+    markArea: bands?.length || periods?.length
       ? {
           silent: true,
           itemStyle: { opacity: 1 },
@@ -234,10 +239,16 @@ function buildSeries(
             color: theme.textMuted,
             fontSize: 10,
           },
-          data: bands.map((b) => [
-            { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label },
-            { yAxis: b.to },
-          ]),
+          data: [
+            ...(bands ?? []).map((b) => [
+              { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label },
+              { yAxis: b.to },
+            ]),
+            ...(periods ?? []).map((p) => [
+              { xAxis: p.from, itemStyle: { color: withAlpha(theme.textMuted, 0.18) }, name: p.label },
+              { xAxis: p.to },
+            ]),
+          ],
         }
       : undefined,
     name: s.label,

@@ -222,6 +222,11 @@ $ow_upgradable_packages = bk_agent_int($data, 'upgradable_packages');
 $ow_wifi_clients_count = bk_agent_int($data, 'wifi_clients_count');
 $ow_net_ipv4_kbps = bk_agent_num($data, 'net_ipv4_kbps');
 $ow_net_ipv6_kbps = bk_agent_num($data, 'net_ipv6_kbps');
+// Throughput over the LTE backup device and the name of the WAN device
+// (agent 0.1.3+): together with wan_lost/wan_restored they tell the two
+// links apart on the web.
+$ow_net_lte = bk_agent_num($data, 'net_lte');
+$ow_wan_l3_device = bk_agent_str($data, 'wan_l3_device', 32);
 $heavy_op_interval_hours = bk_agent_int($data, 'heavy_op_interval_hours') ?? 24;
 
 // OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
@@ -532,6 +537,7 @@ try {
         'board_name' => $ow_board_name,
         'wan_up' => $ow_wan_up,
         'wan_proto' => $ow_wan_proto,
+        'wan_l3_device' => $ow_wan_l3_device,
         'wan_ipv4' => $ow_wan_ipv4,
         'wan_ipv6' => $ow_wan_ipv6,
         'wan_gateway' => $ow_wan_gateway,
@@ -611,6 +617,7 @@ try {
         'hdd_alert_threshold' => $hdd_threshold,
         'lte_backup_alert_sent' => $lte_backup_alert_sent,
         'wan_internet' => $ow_wan_internet,
+        'net_lte' => $ow_net_lte,
         'wan_alert_sent' => $wan_alert_sent,
         'wan_bad_streak' => $wan_bad_streak,
         'lte_backup_bad_streak' => $lte_backup_bad_streak,
@@ -855,6 +862,7 @@ try {
             'conntrack_pct' => $ow_conntrack_pct,
             'net_ipv4_kbps' => $ow_net_ipv4_kbps,
             'net_ipv6_kbps' => $ow_net_ipv6_kbps,
+            'net_lte_kbps' => $ow_net_lte,
             'lte_rsrp' => $ow_lte_rsrp,
 
             // Newly stored metrics - they were sent every minute before and
