@@ -1755,6 +1755,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.webhooks_title': { cs: 'Webhooky & Externí Notifikace', en: 'Webhooks & External Notifications' },
   'settings.test_discord': { cs: 'Test Discord', en: 'Test Discord' },
   'settings.test_telegram': { cs: 'Test Telegram', en: 'Test Telegram' },
+  'settings.test_slack': { cs: 'Test Slack', en: 'Test Slack' },
   'settings.digest_title': { cs: 'Týdenní & Měsíční Digest Report', en: 'Weekly & Monthly Digest Report' },
   'settings.digest_desc': {
     cs: 'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.',

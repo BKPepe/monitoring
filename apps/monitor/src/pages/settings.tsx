@@ -771,6 +771,16 @@ export function SettingsPage() {
                   label="Slack Incoming Webhook URL"
                   placeholder="https://hooks.slack.com/services/..."
                 />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={testing !== null}
+                    onClick={() => handleSendTest('slack', 'Slack Webhook')}
+                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-amber-600 text-white text-xs font-semibold shadow-sm hover:bg-amber-500 transition-colors"
+                  >
+                    <Send className="size-3.5" /> {t('settings.test_slack', 'Test Slack')}
+                  </button>
+                </div>
               </div>
 
               {/* Telegram */}
