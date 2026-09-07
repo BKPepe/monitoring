@@ -31,11 +31,11 @@
     "check:exports": "node scripts/check-dead-exports.mjs",
     "check:i18n-dead": "node scripts/check-dead-i18n.mjs"
   },
-  "//overrides": "undici 7.0.0-7.28.0 je high (desync odpovedi mezi uzivateli); miniflare ho ma zamcene na 7.28.0 a wrangler opravenou verzi zatim nevydal. Po KAZDE zmene tohoto bloku je nutne pregenerovat package-lock.json - `npm ci` odmita bezet, kdyz override neni promitnuty v locku, a v CI to spadne az pri instalaci.",
+  "//overrides": "undici 7.0.0-7.28.0 je high (desync odpovedi mezi uzivateli); miniflare ho ma zamcene na 7.28.0 a wrangler opravenou verzi zatim nevydal. Po KAZDE zmene tohoto bloku je nutne pregenerovat package-lock.json - `npm ci` odmita bezet, kdyz override neni promitnuty v locku, a v CI to spadne az pri instalaci. Verze jsou PRESNE, ne rozsahy: npm 10 v CI porovnava rozsahovy override s registrem, takze cizi patch (undici 7.29.1, 4. 9. 2026) shodil build bez jedine zmeny v repozitari. Hlida to scripts/check-lock-sync.mjs.",
   "overrides": {
-    "sharp": "^0.35.0",
-    "undici": "^7.29.0",
-    "nanoid": "^3.3.18"
+    "sharp": "0.35.3",
+    "undici": "7.29.0",
+    "nanoid": "3.3.18"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

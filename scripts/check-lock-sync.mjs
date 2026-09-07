@@ -100,10 +100,26 @@ for (const [dir, pkg] of manifests) {
 // 2. Overrides. Prave tady vznikl puvodni pad: override je bezpecnostni
 //    zaplata, takze kdyz se do locku nepromitne, tise se dal instaluje
 //    zranitelna verze - i kdyby `npm ci` prosel.
+// Override musi byt PRESNA verze, ne rozsah. npm 10 (to, co ma Node 22 v
+// CI) pri `npm ci` rozsahovy override neporovnava s lockem, ale s registrem:
+// jakmile vyjde novy patch, hlasi "lock file's undici@7.29.0 does not satisfy
+// undici@7.29.1" a shodi kazdy build, aniz se v repozitari cokoli zmenilo.
+// Presne to se stalo 2026-09-07 (undici 7.29.1 vyslo 4. 9.). npm 11 to
+// toleruje, takze lokalne to znovu nejde videt. Rozsah tu navic nic nedava -
+// lock stejne pripne jednu verzi; zvyseni je vedoma zmena locku jako u
+// kazde jine zavislosti.
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
 const walkOverrides = (node, trail) => {
   for (const [name, value] of Object.entries(node ?? {})) {
     if (name.startsWith('//')) continue; // komentarove klice
     if (typeof value === 'string') {
+      if (!EXACT_VERSION.test(value)) {
+        problems.push(
+          `override ${name}: "${value}" je rozsah - npm 10 v CI ho porovnava s registrem, ne s lockem, ` +
+            `a prvni novy patch shodi npm ci. Pripnete presnou verzi (tu, kterou ma lock).`
+        );
+      }
       requireSatisfied(name, value, `package.json (overrides${trail})`, null);
     } else if (value && typeof value === 'object') {
       if (typeof value['.'] === 'string') requireSatisfied(name, value['.'], `package.json (overrides${trail})`, null);
