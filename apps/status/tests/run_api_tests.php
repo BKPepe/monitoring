@@ -1597,8 +1597,8 @@ check('záloha je zařízení z lte_device', $lt['backup']['iface'] ?? null, 'ww
 check('dnešní provoz primární linky (rx)', (float)($lt['primary']['today']['rx_bytes'] ?? -1), 1000.0);
 check('7 dní primární linky sečte i starší den (tx)', (float)($lt['primary']['7d']['tx_bytes'] ?? -1), 22000.0);
 check('dnešní provoz zálohy (tx)', (float)($lt['backup']['today']['tx_bytes'] ?? -1), 400.0);
-check('období na záloze = dva výpadky z testů výše', count($lt['backup_periods'] ?? []), 2);
-check_true('teď na záloze není', ($lt['on_backup_now'] ?? null) === false);
+check('výpadky primární linky = dva z testů výše', count($lt['wan_down_periods'] ?? []), 2);
+check_true('primární linka teď neleží', ($lt['wan_down_now'] ?? null) === false);
 check_true('LAN se do rolí nepočítá, ale v seznamu rozhraní je', in_array('br-lan', $lt['interfaces'] ?? [], true) && ($lt['primary']['iface'] ?? '') !== 'br-lan');
 // A window with no rows at all is unknown, not "0 B transferred".
 $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'wwan0'");
@@ -1626,9 +1626,9 @@ $pdo->exec("DELETE FROM monitor_events WHERE monitor_id = 2 AND event_type IN ('
 $pdo->exec("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
             VALUES (2, 'Router bez metrik', 'openwrt', 'wan_lost', 'Výpadek před oknem', DATE_SUB(NOW(), INTERVAL 5 DAY))");
 [, $lt_open] = api_get($base, 'action=link_traffic&monitor_id=2&days=2');
-check_true('výpadek z doby před oknem se neztratí', ($lt_open['on_backup_now'] ?? null) === true);
-check('a je z něj jedno běžící období', count($lt_open['backup_periods'] ?? []), 1);
-check_true('čas na záloze pokrývá celé okno', ($lt_open['backup_seconds'] ?? 0) >= 2 * 86400 - 120);
+check_true('výpadek z doby před oknem se neztratí', ($lt_open['wan_down_now'] ?? null) === true);
+check('a je z něj jedno běžící období', count($lt_open['wan_down_periods'] ?? []), 1);
+check_true('doba výpadku pokrývá celé okno', ($lt_open['wan_down_seconds'] ?? 0) >= 2 * 86400 - 120);
 $pdo->exec("DELETE FROM monitor_events WHERE monitor_id = 2 AND event_type IN ('wan_lost', 'wan_restored')");
 
 // --- One monitor of an asset must not answer for another -----------------

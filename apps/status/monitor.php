@@ -621,7 +621,7 @@ foreach ($timeline as $ev) {
                     <?php endif; ?>
                     <?php if (!empty($details['timezone'])): ?><div class="ao-sidebar-row"><span class="k">TZ</span><span class="v"><?php echo htmlspecialchars($details['timezone']); ?></span></div><?php endif; ?>
                     <?php if (isset($details['temperature'])): ?><div class="ao-sidebar-row"><span class="k">Temp</span><span class="v" style="color: <?php echo $details['temperature'] > 80 ? 'var(--color-red)' : 'var(--text-primary)'; ?>;"><?php echo $details['temperature']; ?>°C</span></div><?php endif; ?>
-                    <?php if (!empty($details['smart']) && strpos($details['smart'], 'chybí') === false && $details['smart'] !== 'N/A'): ?><div class="ao-sidebar-row"><span class="k">SMART</span><span class="v" style="color: <?php echo strpos($details['smart'], 'WARNING') !== false ? 'var(--color-red)' : 'var(--color-green)'; ?>;"><?php echo htmlspecialchars($details['smart']); ?></span></div><?php endif; ?>
+                    <?php if (!empty($details['smart']) && !bk_smart_is_missing($details['smart'])): ?><div class="ao-sidebar-row"><span class="k">SMART</span><span class="v" style="color: <?php echo strpos($details['smart'], 'WARNING') !== false ? 'var(--color-red)' : 'var(--color-green)'; ?>;"><?php echo htmlspecialchars($details['smart']); ?></span></div><?php endif; ?>
                     <?php if (!empty($details['reboot_required'])): ?><div class="ao-sidebar-row"><span class="k">Reboot</span><span class="v" style="color: var(--color-yellow);"><i class="fas fa-power-off"></i> Required</span></div><?php endif; ?>
                 </div>
             </div>

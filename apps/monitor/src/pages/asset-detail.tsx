@@ -1237,7 +1237,7 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
   const fmtTs = (ts: number | null, fallback: string) =>
     ts == null ? fallback : new Date(ts * 1000).toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' });
-  const onBackupEver = data.backup_seconds > 0 || data.backup_periods.length > 0;
+  const wanEverDown = data.wan_down_seconds > 0 || data.wan_down_periods.length > 0;
 
   return (
     <Section title={title}>
@@ -1261,23 +1261,29 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
       </div>
       {!data.primary && (
         <p className="text-xs text-muted-foreground mt-2">
-          {t('net.link_unknown_primary', 'Agent nehlásí WAN zařízení (verze před 0.1.3) - primární strana je neznámá.')}
+          {t(
+            'net.link_unknown_primary',
+            'Agent nehlásí WAN zařízení - buď je starší než 0.1.3, nebo router nemá rozhraní jménem wan. Primární strana je neznámá.'
+          )}
         </p>
       )}
       {!data.backup && (
         <p className="text-xs text-muted-foreground mt-1">{t('net.link_no_backup', 'Bez LTE zařízení.')}</p>
       )}
+      {/* What is measured is the primary link being down (wan_lost/wan_restored).
+          Whether the backup carried the traffic meanwhile is what its byte
+          counts above say - a router with no LTE has outages too. */}
       <Row
-        label={t('net.link_time_on_backup', 'Čas na záloze (30 dní)')}
-        value={onBackupEver ? fmtDuration(data.backup_seconds) : t('net.link_never', 'nikdy')}
+        label={t('net.link_time_on_backup', 'Výpadky primární linky (30 dní)')}
+        value={wanEverDown ? fmtDuration(data.wan_down_seconds) : t('net.link_never', 'žádný')}
       />
-      {data.on_backup_now && (
-        <p className="text-xs text-down mt-1">{t('net.link_on_backup_now', 'Teď běží přes zálohu.')}</p>
+      {data.wan_down_now && (
+        <p className="text-xs text-down mt-1">{t('net.link_on_backup_now', 'Primární linka je teď mimo provoz.')}</p>
       )}
-      {data.backup_periods.length > 0 && (
+      {data.wan_down_periods.length > 0 && (
         <div className="mt-2 text-xs">
-          <div className="text-muted-foreground mb-1">{t('net.link_periods', 'Období na záloze')}</div>
-          {data.backup_periods
+          <div className="text-muted-foreground mb-1">{t('net.link_periods', 'Období bez primární linky')}</div>
+          {data.wan_down_periods
             .slice(-5)
             .reverse()
             .map((p, i) => (

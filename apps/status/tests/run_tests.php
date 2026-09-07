@@ -33,6 +33,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_wan_link_state',
     'bk_pair_link_periods',
     'bk_agent_str',
+    'bk_smart_is_missing',
     'bk_agent_bool',
 ]);
 
@@ -521,6 +522,13 @@ if (function_exists('bk_pair_link_periods')) {
 }
 
 // --- Typed agent input (bk_agent_str / bk_agent_bool) --------------------------
+if (function_exists('bk_smart_is_missing')) {
+    foreach (['', 'N/A', 'N/A (smartctl chybí)', 'N/A (SMART nedostupné pro /dev/sda)', 'N/A (Storage modul neni k dispozici)', 'n/a'] as $missing) {
+        check_true("SMART '{$missing}' = neměřeno, ne zdravý disk", bk_smart_is_missing($missing) === true);
+    }
+    check_true('SMART OK je verdikt', bk_smart_is_missing('OK') === false);
+    check_true('SMART WARNING je verdikt', bk_smart_is_missing('WARNING (Disk /dev/sdb selhal v SMART)') === false);
+}
 if (function_exists('bk_agent_str')) {
     check('řetězec se ořízne a zkrátí', bk_agent_str(['h' => '  abc  '], 'h', 2), 'ab');
     check_true('pole místo řetězce = null (ne TypeError v trim)', bk_agent_str(['h' => ['x']], 'h') === null);

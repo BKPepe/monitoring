@@ -435,7 +435,7 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php endif; ?>
             <?php if (isset($details['smart'])): 
                 $smart_val = $details['smart'];
-                $smart_missing = (empty($smart_val) || strpos($smart_val, 'chybí') !== false || strpos($smart_val, 'missing') !== false || $smart_val === 'N/A');
+                $smart_missing = bk_smart_is_missing($smart_val);
                 if (!$smart_missing):
                     $smart_color = (strpos($smart_val, 'WARNING') !== false) ? 'var(--color-red)' : 'var(--color-green)';
             ?>
@@ -700,6 +700,24 @@ function bk_agent_bool(array $data, string $key): ?bool {
         }
     }
     return null;
+}
+
+/**
+ * Whether a SMART string from an agent means "not measured" rather than a
+ * verdict. The agents phrase it several ways - "N/A", "N/A (smartctl chybí)",
+ * "N/A (SMART nedostupné pro /dev/sda)", "N/A (Storage modul neni k
+ * dispozici)" - and the legacy pages matched two of them by hand and painted
+ * the rest green: a missing measurement shown as a healthy disk.
+ */
+function bk_smart_is_missing($value): bool {
+    $v = trim((string)$value);
+    if ($v === '') {
+        return true;
+    }
+    if (stripos($v, 'N/A') === 0) {
+        return true;
+    }
+    return (bool)preg_match('~chyb|missing|nedostupn|unavail~iu', $v);
 }
 
 function bk_agent_str(array $data, string $key, int $max = 255): ?string {
@@ -8106,6 +8124,9 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
             $open_since = (int)$prev['ts'];
         }
     } catch (PDOException $e) {
+        // Swallowing this answered a measured "no outages" for a query that
+        // never ran. The caller (api.php) logs it and answers 500.
+        throw $e;
     }
     try {
         $stmt = $pdo->prepare("SELECT event_type, UNIX_TIMESTAMP(occurred_at) AS ts FROM monitor_events WHERE monitor_id = ? AND event_type IN ('wan_lost', 'wan_restored') AND occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY occurred_at ASC, id ASC");
@@ -8114,6 +8135,7 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
             $events[] = [(string)$r['event_type'], (int)$r['ts']];
         }
     } catch (PDOException $e) {
+        throw $e;
     }
     $paired = bk_pair_link_periods($events, $window_start, $now, $open_since);
 
@@ -8121,9 +8143,12 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
         'primary' => $pick($primary_dev),
         'backup' => $pick($backup_dev),
         'days' => $days,
-        'backup_periods' => $paired['periods'],
-        'backup_seconds' => $paired['seconds'],
-        'on_backup_now' => $paired['open'],
+        // Named for what they measure: the primary link being down. Whether
+        // traffic really went over the backup in that time is what the backup
+        // device's byte counts say - a router with no LTE has outages too.
+        'wan_down_periods' => $paired['periods'],
+        'wan_down_seconds' => $paired['seconds'],
+        'wan_down_now' => $paired['open'],
         'interfaces' => array_keys($stats),
     ];
 }
@@ -8141,22 +8166,23 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
                    SUM(CASE WHEN date = CURDATE() THEN rx_packets_total ELSE 0 END) as rx_pkts_today,
                    SUM(CASE WHEN date = CURDATE() THEN tx_packets_total ELSE 0 END) as tx_pkts_today,
 
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN rx_bytes_total ELSE 0 END) as rx_7d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN tx_bytes_total ELSE 0 END) as tx_7d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_7d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_7d,
+                   -- Strictly after the boundary day: a >= against today minus 7 is eight calendar days.
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN rx_bytes_total ELSE 0 END) as rx_7d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN tx_bytes_total ELSE 0 END) as tx_7d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_7d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_7d,
 
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_bytes_total ELSE 0 END) as rx_30d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_bytes_total ELSE 0 END) as tx_30d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_30d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_30d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_bytes_total ELSE 0 END) as rx_30d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_bytes_total ELSE 0 END) as tx_30d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN rx_packets_total ELSE 0 END) as rx_pkts_30d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN tx_packets_total ELSE 0 END) as tx_pkts_30d,
 
                    -- Days that actually carry a measurement. Without them a
                    -- window with no reports at all is indistinguishable from
                    -- one where nothing was transferred.
                    SUM(CASE WHEN date = CURDATE() THEN 1 ELSE 0 END) as days_today,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as days_7d,
-                   SUM(CASE WHEN date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as days_30d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as days_7d,
+                   SUM(CASE WHEN date > DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as days_30d,
                    COUNT(*) as days_all,
 
                    SUM(rx_bytes_total) as rx_total,

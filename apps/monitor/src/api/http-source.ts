@@ -179,7 +179,7 @@ export const httpMetricsSource: MetricsSource = {
 
   async getLinkTraffic(monitorId: number, days = 30): Promise<LinkTrafficResponse> {
     const res = await getJson<LinkTrafficResponse>(`api.php?action=link_traffic&monitor_id=${monitorId}&days=${days}`);
-    if (!Array.isArray(res?.backup_periods)) {
+    if (!Array.isArray(res?.wan_down_periods)) {
       throw new Error(res?.error ?? 'Neplatná odpověď link_traffic.');
     }
     return res;

@@ -207,10 +207,15 @@ export interface LinkTrafficResponse {
   primary: LinkTrafficSide | null;
   backup: LinkTrafficSide | null;
   days: number;
-  /** `from`/`to` are unix seconds; `from: null` = began before the window, `to: null` = still on the backup. */
-  backup_periods: { from: number | null; to: number | null; seconds: number }[];
-  backup_seconds: number;
-  on_backup_now: boolean;
+  /**
+   * Primary-link outages (wan_lost -> wan_restored). Whether traffic really
+   * went over the backup during them is what `backup`'s byte counts say - a
+   * router with no LTE has outages too. `from`/`to` are unix seconds;
+   * `from: null` = began before the window, `to: null` = still down.
+   */
+  wan_down_periods: { from: number | null; to: number | null; seconds: number }[];
+  wan_down_seconds: number;
+  wan_down_now: boolean;
   /** Every interface the router reported traffic for, roles or not. */
   interfaces: string[];
   error?: string;

@@ -165,10 +165,10 @@ export function MetricDetailPage() {
     };
   }, [monId, metric, range]);
 
-  // Periods the router spent on its LTE backup, shaded on the two link
-  // charts: bytes drawn inside them went over the backup, not the primary
-  // line. Only routers have them; every other metric leaves the shading off.
-  const [linkPeriods, setLinkPeriods] = React.useState<ChartData['periods']>(undefined);
+  // Periods the primary link was down, shaded on the two link charts. Bytes
+  // drawn inside them could not have gone over the primary line; whether the
+  // backup carried them is what net_lte shows. Only routers have them.
+  const [linkPeriods, setLinkPeriods] = React.useState<{ from: number; to: number }[] | undefined>(undefined);
   const monitorType = detail?.monitor.type ?? null;
   React.useEffect(() => {
     let active = true;
@@ -181,10 +181,9 @@ export function MetricDetailPage() {
         const now = Date.now();
         const windowStart = now - lt.days * 86400 * 1000;
         setLinkPeriods(
-          lt.backup_periods.map((p) => ({
+          lt.wan_down_periods.map((p) => ({
             from: p.from != null ? p.from * 1000 : windowStart,
             to: p.to != null ? p.to * 1000 : now,
-            label: t('net.link_period_label', 'Na LTE záloze'),
           }))
         );
       })
@@ -195,7 +194,7 @@ export function MetricDetailPage() {
     return () => {
       active = false;
     };
-  }, [monId, metric, monitorType, t]);
+  }, [monId, metric, monitorType]);
 
   const loadAnnotations = React.useCallback(() => {
     appApi
@@ -248,7 +247,9 @@ export function MetricDetailPage() {
           label: a.author ? `${a.note} (${a.author})` : a.note,
         })),
         bands: buildBands(detail, sourceUnit, isRate ? activeUnit : null, t),
-        periods: linkPeriods,
+        // The label is attached here, not in the effect - `t` changes with the
+        // language and would refetch the periods and blank the shading.
+        periods: linkPeriods?.map((p) => ({ ...p, label: t('net.link_period_label', 'Primární linka mimo provoz') })),
       }
     : null;
 

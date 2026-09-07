@@ -245,8 +245,15 @@ function buildSeries(
                 { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label },
                 { yAxis: b.to },
               ]),
-              ...(periods ?? []).map((p) => [
-                { xAxis: p.from, itemStyle: { color: withAlpha(theme.textMuted, 0.18) }, name: p.label },
+              // The caption sits on the first period only: with several short
+              // outages one caption per band piled up unreadably.
+              ...(periods ?? []).map((p, idx) => [
+                {
+                  xAxis: p.from,
+                  itemStyle: { color: withAlpha(theme.textMuted, 0.18) },
+                  name: p.label,
+                  label: { show: idx === 0 },
+                },
                 { xAxis: p.to },
               ]),
             ],
