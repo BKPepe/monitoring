@@ -154,8 +154,11 @@ export function MetricChart({
       },
       yAxis: {
         type: 'value',
-        min: 0,
+        min: data.yMin === undefined ? 0 : (data.yMin ?? undefined),
         max: data.yMax ?? undefined,
+        // Without an explicit floor let ECharts pick a range that shows the
+        // variation instead of an axis that starts at zero by decree.
+        scale: data.yMin === null,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {

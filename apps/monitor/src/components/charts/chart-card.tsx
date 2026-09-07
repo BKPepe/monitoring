@@ -5,13 +5,21 @@ import { computeSeriesDelta, goodDirectionFor } from './series-delta';
 import type { ChartData } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
+import { Link } from 'react-router';
 
 /**
  * Chart card: a small title, a large current value and the delta over the shown
  * window (average of the last vs. the first quarter of points) - visual language per
  * mockupu dashboardu ("CPU Usage (%) / 23 % ↓ 5 %").
  */
-export function ChartCard({ data, group }: { data: ChartData; group?: string }) {
+/**
+ * @param to When given, the TITLE links to the metric detail. The card body
+ *   deliberately does not: the plot area belongs to the chart, whose toolbar
+ *   (zoom, PNG, CSV) and drag-to-pan are canvas handlers whose DOM clicks
+ *   bubble - wrapping the whole card in a link meant every export also
+ *   navigated away, and a pan ended on another page.
+ */
+export function ChartCard({ data, group, to }: { data: ChartData; group?: string; to?: string }) {
   const { t } = useLanguage();
   const primary = data.series[0];
   const latest = [...(primary?.points ?? [])].reverse().find((p) => p.v != null);
@@ -26,7 +34,18 @@ export function ChartCard({ data, group }: { data: ChartData; group?: string }) 
     <Card>
       <CardHeader>
         <div className="min-w-0">
-          <CardTitle className="text-muted-foreground text-xs font-medium">{data.title}</CardTitle>
+          <CardTitle className="text-muted-foreground text-xs font-medium">
+            {to ? (
+              <Link
+                to={to}
+                className="focus-visible:ring-ring hover:text-foreground rounded transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                {data.title}
+              </Link>
+            ) : (
+              data.title
+            )}
+          </CardTitle>
           {latest && (
             <div className="mt-0.5 flex items-baseline gap-2">
               <span className="tabular text-2xl font-bold tracking-tight">

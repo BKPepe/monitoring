@@ -32,28 +32,32 @@ const CHART_METRICS: {
   title: string;
   tone: MetricTone;
   yMax: number | null;
+  /** 0 = measured from zero; null = the chart derives the range from the data. */
+  yMin: number | null;
 }[] = [
   // The one metric even an agentless monitor (web/port/discord/...) has -
   // response_time is measured on every availability check (monitor_logs), not
   // just for agents. Without this entry an agentless monitor never had any
   // chart on the "Overview & Performance" tab even though its latency
   // history really exists (the SLA report and the events table use the same data).
-  { key: 'response_time', title: 'Doba odezvy (Latency)', tone: 'latency', yMax: null },
-  { key: 'cpu', title: 'Využití CPU', tone: 'cpu', yMax: 100 },
-  { key: 'ram', title: 'Využití paměti', tone: 'memory', yMax: 100 },
-  { key: 'hdd', title: 'Zaplnění disku', tone: 'disk', yMax: 100 },
-  { key: 'net', title: 'Síťový provoz (KB/s)', tone: 'network', yMax: null },
-  { key: 'iowait', title: 'Čekání na I/O', tone: 'latency', yMax: 100 },
-  { key: 'swap', title: 'Využití swapu', tone: 'temperature', yMax: 100 },
-  { key: 'load1', title: 'Load Average (1 min)', tone: 'cpu', yMax: null },
-  { key: 'ts_clients', title: 'TeamSpeak Klienti', tone: 'memory', yMax: null },
+  { key: 'response_time', title: 'Doba odezvy (Latency)', tone: 'latency', yMax: null, yMin: null },
+  { key: 'cpu', title: 'Využití CPU', tone: 'cpu', yMax: 100, yMin: 0 },
+  { key: 'ram', title: 'Využití paměti', tone: 'memory', yMax: 100, yMin: 0 },
+  { key: 'hdd', title: 'Zaplnění disku', tone: 'disk', yMax: 100, yMin: 0 },
+  { key: 'net', title: 'Síťový provoz (KB/s)', tone: 'network', yMax: null, yMin: 0 },
+  { key: 'iowait', title: 'Čekání na I/O', tone: 'latency', yMax: 100, yMin: 0 },
+  { key: 'swap', title: 'Využití swapu', tone: 'temperature', yMax: 100, yMin: 0 },
+  { key: 'load1', title: 'Load Average (1 min)', tone: 'cpu', yMax: null, yMin: null },
+  { key: 'ts_clients', title: 'TeamSpeak Klienti', tone: 'memory', yMax: null, yMin: 0 },
   // Discord: people online. The data was collected every minute but never
   // stored into history, so Discord had no chart except latency.
-  { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null },
-  { key: 'mc_players', title: 'Hráči online', tone: 'memory', yMax: null },
+  { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null, yMin: 0 },
+  { key: 'mc_players', title: 'Hráči online', tone: 'memory', yMax: null, yMin: 0 },
   // RSRP is in negative dBm, so no yMax - the chart derives the range from the data.
-  { key: 'lte_rsrp', title: 'Síla LTE signálu (RSRP)', tone: 'latency', yMax: null },
-  { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: 120 },
+  { key: 'lte_rsrp', title: 'Síla LTE signálu (RSRP)', tone: 'latency', yMax: null, yMin: null },
+  // A CPU lives between 40 and 70 degrees; on a fixed 0-120 axis that is a flat
+  // line at the bottom, so both bounds come from the data.
+  { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: null, yMin: null },
 ];
 
 /** Response of `action=metric_series_batch` - all device charts in one request. */
@@ -115,6 +119,7 @@ export const httpMetricsSource: MetricsSource = {
           id: metric.key,
           title: data.label || metric.title,
           yMax: metric.yMax,
+          yMin: metric.yMin,
           series: [
             {
               key: metric.key,

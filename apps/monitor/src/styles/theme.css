@@ -59,13 +59,16 @@
   /* --- Barvy sérií v grafech ------------------------------------------
      Pořadí je závazné: CPU vždy zelená, RAM modrá, síť tyrkysová, teplota
      oranžová. Uživatel čte stejnou metriku stejnou barvou napříč celou
-     aplikací, jinak musí pokaždé znovu louskat legendu. */
-  --chart-cpu: #22c55e;
-  --chart-memory: #60a5fa;
-  --chart-network: #2dd4bf;
-  --chart-temperature: #fb923c;
-  --chart-disk: #a78bfa;
-  --chart-latency: #facc15;
+     aplikací, jinak musí pokaždé znovu louskat legendu.
+     Hodnoty tady jsou pro SVĚTLÝ podklad, tmavé varianty jsou v .dark - stejně
+     jako u --status-*. Dokud tenhle blok platil pro obě témata, byla čára
+     latence na bílé kartě v kontrastu ~1,2:1, tedy prakticky neviditelná. */
+  --chart-cpu: #15803d;
+  --chart-memory: #2563eb;
+  --chart-network: #0d9488;
+  --chart-temperature: #c2410c;
+  --chart-disk: #7c3aed;
+  --chart-latency: #a16207;
   /* Poznámky psané člověkem (svislé čáry v grafu). Purpurová sedí proto, že
      musí být rozeznatelná od šedých naměřených událostí - ověřeno: CVD ΔE 12.5,
      normální vidění 24.9, kontrast 4,7:1. Vůči sériím ji barva sama neuhlídá
@@ -122,7 +125,13 @@
   --status-info: #60a5fa;
   --status-paused: #71717a;
 
-  /* Na tmavém podkladu potřebuje purpurová víc světla, aby držela kontrast. */
+  /* Na tmavém podkladu potřebují barvy víc světla, aby držely kontrast. */
+  --chart-cpu: #22c55e;
+  --chart-memory: #60a5fa;
+  --chart-network: #2dd4bf;
+  --chart-temperature: #fb923c;
+  --chart-disk: #a78bfa;
+  --chart-latency: #facc15;
   --chart-annotation: #d946ef;
   --chart-corr-positive: #60a5fa;
   --chart-corr-negative: #fb923c;
@@ -204,6 +213,18 @@
   /* Čísla metrik nesmí při live updatu přeskakovat do stran. */
   .tabular {
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Mobilní Safari zvětší celou stránku, jakmile má zaostřený prvek písmo
+     menší než 16 px - a stránka pak zůstane odzoomovaná. Řeší se to písmem,
+     ne `maximum-scale` v meta viewportu: tím bychom uživateli zakázali
+     přiblížení úplně, což je horší vada než tahle. */
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

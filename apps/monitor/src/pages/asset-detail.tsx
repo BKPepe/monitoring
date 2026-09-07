@@ -52,7 +52,7 @@ interface HealthMetric {
   value: string;
   tone?: 'latency' | 'cpu' | 'memory' | 'disk' | 'temperature';
   /** Mini trend for the chosen period (from already-loaded chart data - no extra fetch). */
-  series?: number[];
+  series?: (number | null)[];
   delta?: { pct: number; direction: 'up' | 'down'; good: boolean | null };
 }
 
@@ -838,7 +838,8 @@ function OverviewTab({
     return asset.health.map((m) => {
       const s = m.tone ? byTone.get(m.tone) : undefined;
       if (!s) return m;
-      const values = s.points.map((p) => p.v).filter((v): v is number => v != null);
+      // Nulls kept on purpose - an unmeasured point is a gap in the trace.
+      const values = s.points.map((p) => p.v);
       const delta = computeSeriesDelta(s);
       const goodDir = goodDirectionFor(s.tone);
       return {
@@ -1918,17 +1919,12 @@ function PerformanceCharts({
         // Link through to Level 3. The legacy page had a metric detail too, but
         // there was no way to reach it from here - and what cannot be reached
         // does not exist.
-        <Link
+        <ChartCard
           key={chart.id}
+          data={chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart}
+          group="asset-performance"
           to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
-          className="focus-visible:ring-ring rounded-xl transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none"
-          aria-label={`${chart.title} — detail`}
-        >
-          <ChartCard
-            data={chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart}
-            group="asset-performance"
-          />
-        </Link>
+        />
       ))}
     </div>
   );

@@ -47,6 +47,22 @@ type MonitorStatus = ApiMonitor['status'];
 
 type StatusFilter = 'all' | MonitorStatus;
 
+/**
+ * Order the fleet is read in: what is broken first, what is fine last. The
+ * table used to be in API order, so a dead service could sit below thirty
+ * green rows and only the Offline tab brought it up - which then hid the
+ * warnings. Children of an agent are placed by nestUnderAgents afterwards,
+ * so this only moves the parents.
+ */
+const SEVERITY_RANK: Record<MonitorStatus, number> = {
+  down: 0,
+  unknown: 1,
+  warning: 2,
+  maintenance: 3,
+  paused: 4,
+  up: 5,
+};
+
 export function DashboardPage() {
   const { t, lang } = useLanguage();
   const [query, setQuery] = React.useState('');
@@ -123,7 +139,7 @@ export function DashboardPage() {
 
   const visibleMonitors = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return monitors.filter((m) => {
+    const matched = monitors.filter((m) => {
       const matchesStatus = filter === 'all' || m.status === filter;
       const matchesQuery =
         !needle ||
@@ -131,6 +147,11 @@ export function DashboardPage() {
         (m.target ?? '').toLowerCase().includes(needle) ||
         (m.type ?? '').toLowerCase().includes(needle);
       return matchesStatus && matchesQuery;
+    });
+    return [...matched].sort((a, b) => {
+      const rank = SEVERITY_RANK[a.status] - SEVERITY_RANK[b.status];
+      if (rank !== 0) return rank;
+      return (b.sinceStatusChangeSeconds ?? 0) - (a.sinceStatusChangeSeconds ?? 0);
     });
   }, [query, filter, monitors]);
 
@@ -166,12 +187,22 @@ export function DashboardPage() {
       }
     });
 
-    return alertsList;
+    // Newest change first, and a row whose change time was never recorded goes
+    // last rather than to a random place. Unsorted, the timestamps in the
+    // right-hand column jumped around and the card read as random.
+    return alertsList.sort((a, b) => {
+      const ta = a.at ? Date.parse(a.at) : NaN;
+      const tb = b.at ? Date.parse(b.at) : NaN;
+      if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+      if (Number.isNaN(ta)) return 1;
+      if (Number.isNaN(tb)) return -1;
+      return tb - ta;
+    });
   }, [monitors, t]);
 
   // Mini latency trends for the table (mockup: a trend next to the value). One
   // light request per monitor after the list loads; without data there is simply no sparkline.
-  const [latencySeries, setLatencySeries] = React.useState<Record<number, number[]>>({});
+  const [latencySeries, setLatencySeries] = React.useState<Record<number, (number | null)[]>>({});
   // Keyed on the id list, not on the array: with the minute refresh a fresh
   // array would re-fire twelve requests every minute for a six-hour trend.
   const sparklineKey = React.useMemo(
@@ -196,10 +227,11 @@ export function DashboardPage() {
             (data) =>
               [
                 m.id,
+                // Nulls are kept: the sparkline draws a gap where nothing was
+                // measured. Filtering them out closed the gap and drew an
+                // outage as a smooth line.
                 Array.isArray(data?.points)
-                  ? data.points
-                      .map((p: [number, number]) => p[1])
-                      .filter((v: unknown): v is number => typeof v === 'number')
+                  ? data.points.map((p: [number, number]) => (typeof p[1] === 'number' ? p[1] : null))
                   : [],
               ] as const
           )
@@ -207,7 +239,7 @@ export function DashboardPage() {
       )
     ).then((entries) => {
       if (!active) return;
-      const map: Record<number, number[]> = {};
+      const map: Record<number, (number | null)[]> = {};
       for (const [id, vals] of entries) map[id] = vals;
       setLatencySeries(map);
     });
@@ -423,7 +455,10 @@ export function DashboardPage() {
   const alertsSection = (
     <Card>
       <CardHeader>
-        <CardTitle>{t('dashboard.recent_alerts', 'Poslední alerty')}</CardTitle>
+        {/* Named for what it holds: monitors that are down or degraded RIGHT
+            NOW, newest change first. It never contained history - a service
+            that failed and recovered an hour ago was never in it. */}
+        <CardTitle>{t('dashboard.active_alerts', 'Aktivní výstrahy')}</CardTitle>
         <Button variant="ghost" size="sm" asChild>
           <Link to="/incidents">{t('common.open_details', 'Zobrazit vše')}</Link>
         </Button>
@@ -678,12 +713,15 @@ export function DashboardPage() {
           icon={Signal}
           hint={t('dashboard.monitors_hint', { healthy: healthyCount, down: downMonitors })}
         />
+        {/* Both tones below are derived from the value. They used to be green
+            by construction: 40 % healthy and a 91 % uptime looked exactly as
+            reassuring as 100 % and 99.99 %. */}
         <MetricTile
           label={t('dashboard.healthy_pct', 'Zdravých')}
           value={healthyPct == null ? '—' : formatPercent(healthyPct)}
           icon={ShieldCheck}
-          tone="up"
-          hint={t('dashboard.healthy_hint', 'Měřící uzly v pořádku')}
+          tone={healthyPct == null ? undefined : downMonitors > 0 ? 'down' : healthyPct >= 100 ? 'up' : 'warning'}
+          hint={t('dashboard.healthy_of_total', { healthy: healthyCount, total: monitors.length })}
         />
         <MetricTile
           label={t('dashboard.outages', 'Výpadky')}
@@ -701,7 +739,7 @@ export function DashboardPage() {
           value={uptimeKnown ? uptime.toFixed(2) : '—'}
           unit={uptimeKnown ? '%' : undefined}
           icon={Activity}
-          tone={uptimeKnown ? 'up' : undefined}
+          tone={!uptimeKnown ? undefined : uptime >= 99.9 ? 'up' : uptime >= 99 ? 'warning' : 'down'}
           hint={
             !uptimeKnown
               ? t('dashboard.uptime_pending', 'Zatím žádná data za 30 dní')
@@ -761,7 +799,13 @@ const typeTint: Record<string, string> = {
   agent_service: 'bg-teal-500/15 text-teal-600 dark:text-teal-400',
 };
 
-function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeries: Record<number, number[]> }) {
+function MonitorTable({
+  rows,
+  latencySeries,
+}: {
+  rows: ApiMonitor[];
+  latencySeries: Record<number, (number | null)[]>;
+}) {
   const { t } = useLanguage();
 
   const statusText: Record<MonitorStatus, string> = {

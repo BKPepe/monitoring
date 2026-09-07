@@ -79,6 +79,14 @@ export interface ChartData {
   title: string;
   /** Upper Y-axis bound. `null` = derive from the data. */
   yMax: number | null;
+  /**
+   * Lower bound of the y axis. 0 for anything measured from zero (a share, a
+   * rate, a count); null lets the chart derive the range from the data, which
+   * is the only way to draw a metric in negative dBm - and the only way a
+   * temperature between 45 and 52 degrees is more than a flat line at the
+   * bottom of a 0-120 axis.
+   */
+  yMin?: number | null;
   series: MetricSeries[];
   events?: ChartEvent[];
   /**

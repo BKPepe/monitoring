@@ -573,11 +573,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.total_monitors': { cs: 'Monitorů celkem', en: 'Total Monitors' },
   'dashboard.monitors_hint': { cs: '{healthy} běží · {down} výpadků', en: '{healthy} running · {down} outages' },
   'dashboard.healthy_pct': { cs: 'Zdravých', en: 'Healthy' },
-  'dashboard.healthy_hint': { cs: 'Měřící uzly v pořádku', en: 'Monitoring nodes OK' },
+  'dashboard.healthy_of_total': {
+    cs: '{healthy} z {total} monitorů běží',
+    en: '{healthy} of {total} monitors running',
+  },
   'dashboard.avg_response': { cs: 'Průměrná odezva', en: 'Average Latency' },
   'dashboard.uptime_30d': { cs: 'Uptime (30 dní)', en: '30-Day Uptime' },
   'dashboard.search_placeholder': { cs: 'Hledat monitory…', en: 'Search monitors…' },
-  'dashboard.recent_alerts': { cs: 'Poslední alerty', en: 'Recent Alerts' },
+  'dashboard.active_alerts': { cs: 'Aktivní výstrahy', en: 'Active alerts' },
   'dashboard.no_active_alerts': {
     cs: 'Žádné aktivní výstrahy — všechny sledované služby jsou online.',
     en: 'No active alerts — all monitored services are online.',
@@ -2684,6 +2687,13 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       return 'cs';
     }
   });
+
+  // <html lang> decides which phonemes and hyphenation a screen reader uses.
+  // It was hardcoded to Czech in index.html, so an English session was still
+  // announced with Czech pronunciation.
+  React.useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
 
   const setLang = (newLang: Language) => {
     setLangState(newLang);

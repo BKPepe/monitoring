@@ -244,6 +244,9 @@ export function MetricDetailPage() {
             id: `${monId}-${metric}`,
             title: detail.metric.label,
             yMax: sourceUnit === '%' ? 100 : null,
+            // Percentages are read against their full scale; everything else
+            // (latency, temperature, load, negative dBm) gets a derived range.
+            yMin: sourceUnit === '%' ? 0 : null,
             series: [{ key: metric, label: detail.metric.label, unit, tone, points }],
             events: detail.events.map((e) => ({ t: e.t, label: e.label })),
             annotations: (anns ?? []).map((a) => ({
