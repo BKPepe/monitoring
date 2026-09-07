@@ -30,6 +30,7 @@ import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
+import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { useLanguage } from '@/context/language-context';
 import { cn, formatMs, formatPercent, formatUptime } from '@/lib/utils';
 import { RouterServices } from '@/components/router-services';
@@ -70,7 +71,6 @@ interface AssetDetail {
   smartStatus?: string | null;
   cpanelStats?: Record<string, { formatted?: string }> | null;
   cpanelStatsError?: { error?: string; hint?: string | null; since?: string } | null;
-  collectionIssues: { type: string; message: string; hint?: string | null; since: string | null }[];
   /** ISO time of the last check/report - every tab shows data from this moment. */
   lastCheck: string | null;
   /** Raw details from the last report - the Network tab reads OpenWrt telemetry from them. */
@@ -109,6 +109,12 @@ export function AssetDetailPage() {
   const idNum = Number(assetId) || 1;
 
   const [asset, setAsset] = React.useState<AssetDetail | null>(null);
+
+  // The raw row too: the shared collection-issues banner takes ApiMonitor,
+
+  // so the detail page reuses it instead of keeping its own copy.
+
+  const [rawMonitor, setRawMonitor] = React.useState<ApiMonitor | null>(null);
   const [range, setRange] = React.useState<TimeRange>('24h');
   const [loading, setLoading] = React.useState(true);
   const [events, setEvents] = React.useState<TimelineEvent[]>([]);
@@ -127,9 +133,13 @@ export function AssetDetailPage() {
           list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
           list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
         setAsset(match ? buildDynamicAsset(match, t) : null);
+        setRawMonitor(match ?? null);
       })
       .catch(() => {
-        if (active) setAsset(null);
+        if (active) {
+          setAsset(null);
+          setRawMonitor(null);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -300,7 +310,7 @@ export function AssetDetailPage() {
 
       <Hero asset={asset} />
 
-      <CollectionIssuesBanner issues={asset.collectionIssues} />
+      <CollectionIssuesBanner monitors={rawMonitor ? [rawMonitor] : []} />
 
       <Tabs defaultValue="overview" className="space-y-6">
         {/* Sticky under the header (h-16): on a long detail the tabs and
@@ -791,38 +801,6 @@ function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: 
         >
           {range}
         </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Data-collection outages. Rendered ABOVE the tab bar so the Network,
- * Processes and Services tabs carry the warning too - it used to live inside
- * the Overview tab only, and the other tabs showed stale data as current.
- */
-function CollectionIssuesBanner({
-  issues,
-}: {
-  issues: { type: string; message: string; hint?: string | null; since: string | null }[];
-}) {
-  const { t } = useLanguage();
-  if (issues.length === 0) return null;
-  return (
-    <div role="alert" className="rounded-lg border-2 border-down/60 bg-down/10 p-4 space-y-1.5">
-      <p className="font-bold text-sm text-down">⛔ {t('collection.heading', 'Výpadek sběru dat')}</p>
-      {issues.map((issue, i) => (
-        <div key={`${issue.type}-${i}`} className="text-xs space-y-0.5">
-          <p>
-            <span className="text-down font-medium">{issue.message}</span>
-            {issue.since && (
-              <span className="text-muted-foreground font-mono ml-2">
-                ({t('collection.since', 'od')} {new Date(issue.since).toLocaleString('cs-CZ')})
-              </span>
-            )}
-          </p>
-          {issue.hint && <p className="text-muted-foreground">💡 {issue.hint}</p>}
-        </div>
       ))}
     </div>
   );
@@ -2419,7 +2397,6 @@ function buildDynamicAsset(
     smartStatus: m.details?.smart ?? null,
     cpanelStats: m.details?.cpanel_stats ?? null,
     cpanelStatsError: m.details?.cpanel_stats_error ?? null,
-    collectionIssues: m.collectionIssues ?? [],
     lastCheck: m.lastCheck ?? null,
     rawDetails: m.details && typeof m.details === 'object' ? m.details : {},
     remoteActionsEnabled: Boolean(m.remoteActionsEnabled),
