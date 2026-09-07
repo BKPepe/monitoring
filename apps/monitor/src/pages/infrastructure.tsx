@@ -54,6 +54,8 @@ const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' |
   warning: 'warning',
   paused: 'paused',
   maintenance: 'info',
+  // The agent went silent - the server does not know the state. Not healthy.
+  unknown: 'warning',
 };
 
 export function InfrastructurePage() {
@@ -337,7 +339,9 @@ export function InfrastructurePage() {
         status: m.status,
         monitorCount: 1,
         hostname: m.hostname ?? m.target,
-        hasAgent: m.agentLastSeen != null || ['openwrt', 'vps', 'teamspeak'].includes((m.type || '').toLowerCase()),
+        // Only evidence of an agent counts - the type alone used to be enough,
+        // so a VPS whose agent never ran was shown with an agent.
+        hasAgent: m.agentLastSeen != null || Boolean(m.details?.agent_version),
       };
       if (!groups.has(catName)) {
         groups.set(catName, []);
@@ -476,6 +480,7 @@ export function InfrastructurePage() {
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
+    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
 
   return (
@@ -1052,8 +1057,12 @@ export function InfrastructurePage() {
                     {monitorType === 'openwrt' &&
                       (() => {
                         const mon = editingId ? rawMonitors.find((m) => m.id === editingId) : selectedMonitor;
-                        const hasActiveAgent =
-                          mon?.agentLastSeen != null || Boolean(mon?.details?.agent_version) || mon?.status === 'up';
+                        // Evidence of an agent that is still reporting. "status up" used
+                        // to count as evidence, so a router that answered ping looked
+                        // like it had an agent; and a silent agent stayed green.
+                        const agentKnown = mon?.agentLastSeen != null || Boolean(mon?.details?.agent_version);
+                        const agentKnownButSilent = agentKnown && Boolean(mon?.agentSilent);
+                        const hasActiveAgent = agentKnown && !agentKnownButSilent;
                         // Only the real agent version from the report - details.version is the
                         // SERVICE's version (e.g. the TS3 server) and the old '3.13.8' fallback was fiction.
                         const agentVer = mon?.details?.agent_version ?? null;
@@ -1113,14 +1122,18 @@ export function InfrastructurePage() {
                                 <span className="flex items-center gap-2">
                                   <AlertTriangle className="size-4 text-amber-500 shrink-0" />
                                   <span>
-                                    {t(
-                                      'infra.no_agent_detected',
-                                      'Zatím nebyl detekován žádný aktivní OpenWrt agent na cílové IP/doméně.'
-                                    )}
+                                    {agentKnownButSilent
+                                      ? `${t('infra.agent_silent', 'Agent mlčí, naposledy')} ${lastSeenText ?? '—'}`
+                                      : t(
+                                          'infra.no_agent_detected',
+                                          'Zatím nebyl detekován žádný aktivní OpenWrt agent na cílové IP/doméně.'
+                                        )}
                                   </span>
                                 </span>
                                 <Badge variant="warning" className="text-[10px]">
-                                  {t('infra.needs_install', 'Vyžaduje instalaci ⚠️')}
+                                  {agentKnownButSilent
+                                    ? t('infra.agent_silent_badge', 'Agent nehlásí ⚠️')
+                                    : t('infra.needs_install', 'Vyžaduje instalaci ⚠️')}
                                 </Badge>
                               </div>
                             )}
@@ -1701,13 +1714,30 @@ export function InfrastructurePage() {
                     {selectedAsset.hasAgent
                       ? selectedMonitor?.details?.agent_version
                         ? `v${selectedMonitor.details.agent_version}`
-                        : t('infra.agent_installed', 'Nainstalován a aktivní')
-                      : t('infra.no_agent_ping', 'Bez agenta (Aktivní Ping)')}
+                        : t('infra.agent_installed', 'Nainstalován')
+                      : // vps/openwrt are checked ONLY by the agent's report - nothing
+                        // pings them, so "Bez agenta (Aktivní Ping)" was a lie.
+                        ['vps', 'openwrt'].includes((selectedMonitor?.type ?? '').toLowerCase())
+                        ? t('infra.agent_never_reported', 'Agent se ještě neozval')
+                        : t('infra.no_agent_ping', 'Bez agenta (Aktivní Ping)')}
                   </p>
-                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && (
+                  {/* Green only while the agent is inside its reporting timeout - a
+                      report from 3 days ago used to read "Aktivní před 3 dny". */}
+                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && !selectedMonitor.agentSilent && (
                     <p className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
                       🟢 {t('infra.active_since', 'Aktivní')}{' '}
                       {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
+                    </p>
+                  )}
+                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && selectedMonitor.agentSilent && (
+                    <p className="text-[10px] font-semibold text-down mt-0.5">
+                      🔴 {t('infra.agent_silent', 'Agent mlčí, naposledy')}{' '}
+                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
+                    </p>
+                  )}
+                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen == null && (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {t('infra.agent_never_reported', 'Agent se ještě neozval')}
                     </p>
                   )}
                 </div>
@@ -1720,7 +1750,14 @@ export function InfrastructurePage() {
                     {t('infra.time_since_change', 'Doba od poslední změny stavu')}
                   </p>
                   <p className="font-bold text-sm text-foreground mt-0.5">
-                    {selectedMonitor?.uptimeSeconds != null ? formatUptime(selectedMonitor.uptimeSeconds) : '—'}
+                    {/* The label says "since the last status change" - that is
+                        sinceStatusChangeSeconds, whatever the status. uptimeSeconds
+                        is null while down, which used to render as a dash. */}
+                    {selectedMonitor?.sinceStatusChangeSeconds != null
+                      ? formatUptime(selectedMonitor.sinceStatusChangeSeconds)
+                      : selectedMonitor?.uptimeSeconds != null
+                        ? formatUptime(selectedMonitor.uptimeSeconds)
+                        : '—'}
                   </p>
                 </div>
               </div>
@@ -1744,6 +1781,7 @@ function AssetRow({ asset, isSelected, onSelect }: { asset: AssetNode; isSelecte
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
+    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
   const Icon = kindIcon[asset.kind] ?? Server;
   return (

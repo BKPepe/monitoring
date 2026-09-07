@@ -2200,6 +2200,96 @@ function bk_compute_baseline_anomaly(array $baseline_values, float $current, flo
  *
  * @return array{ok: bool|null, reason: string|null, text: string|null}
  */
+/**
+ * PagerDuty event for a notification status: 'trigger' for something that
+ * needs a human now, 'resolve' for its recovery, null for everything that
+ * belongs on other channels (warnings, maintenance, an expiring certificate).
+ */
+/**
+ * Severity class of a notification status: 'good' for a recovery, 'warn' for
+ * something to look at, 'bad' for an outage. The e-mail and the Discord embed
+ * read the same classification - Discord used to paint everything but "up"
+ * red, so a recovered WAN and an expiring certificate looked like outages.
+ */
+function bk_alert_color_class(string $status): string {
+    if (in_array($status, ['up', 'wan_restored', 'lte_backup_restored', 'latency_recovered'], true)) {
+        return 'good';
+    }
+    if (in_array($status, ['maintenance', 'vps_warning', 'latency_degraded', 'ssl_expiring', 'config_change'], true)) {
+        return 'warn';
+    }
+    return 'bad';
+}
+
+/**
+ * Whether a status change is worth telling humans about. The single silent
+ * case is the end of a planned window with no incident open: the window was
+ * announced, so "back online" is noise. If an incident IS open the outage
+ * started before the window - that transition is a real recovery and must go
+ * through the normal path, which is also what closes the incident.
+ */
+function bk_should_notify_status_change(string $old_status, string $new_status, bool $has_open_incident): bool {
+    if ($old_status === 'maintenance' && $new_status === 'up') {
+        return $has_open_incident;
+    }
+    return true;
+}
+
+/**
+ * Whether the monitor has an unresolved incident (auto-opened by an outage or
+ * created by hand).
+ */
+function bk_has_open_incident(PDO $pdo, int $monitor_id): bool {
+    if ($monitor_id <= 0) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved' LIMIT 1");
+        $stmt->execute([$monitor_id]);
+        return $stmt->fetchColumn() !== false;
+    } catch (Throwable $e) {
+        // No incidents table (an old install) - then there is nothing to close.
+        return false;
+    }
+}
+
+function bk_pagerduty_action(string $status): ?string {
+    if (in_array($status, ['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'], true)) {
+        return 'trigger';
+    }
+    if (in_array($status, ['up', 'wan_restored', 'lte_backup_restored'], true)) {
+        return 'resolve';
+    }
+    return null;
+}
+
+/**
+ * Whether an SSL-expiry warning is due: inside the alert window, and not
+ * warned about within the last day. Pure, so cron's behaviour can be tested
+ * without a certificate. The threshold is the ssl_alert_days setting - a
+ * second code path used to hardcode 14 days and a first one warned on every
+ * single run, labelled as "back online".
+ */
+function bk_ssl_alert_due(int $days_remaining, int $threshold_days, int $last_warn_ts, int $now): bool {
+    if ($days_remaining < 0 || $days_remaining > $threshold_days) {
+        return false;
+    }
+    return ($now - $last_warn_ts) > 86400;
+}
+
+/**
+ * A maintenance window whose end has passed. The flag used to stay on
+ * forever after the window - the list kept saying "maintenance" and the
+ * public page reasoned about a window in the past.
+ */
+function bk_maintenance_window_expired(array $monitor, int $now): bool {
+    if ((int)($monitor['maintenance'] ?? 0) !== 1 || empty($monitor['maintenance_end'])) {
+        return false;
+    }
+    $end = strtotime((string)$monitor['maintenance_end']);
+    return $end !== false && $now > $end;
+}
+
 function bk_wan_link_state(array $d): array {
     $up = array_key_exists('wan_up', $d) && is_bool($d['wan_up']) ? $d['wan_up'] : null;
     $internet = array_key_exists('wan_internet', $d) && is_bool($d['wan_internet']) ? $d['wan_internet'] : null;
@@ -5595,6 +5685,11 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     } elseif ($new_status === 'wan_restored') {
         $status_text = 'PRIMÁRNÍ PŘIPOJENÍ (WAN) OBNOVENO';
         $emoji = '🟢';
+    } elseif ($new_status === 'ssl_expiring') {
+        // A certificate about to expire is a warning about the future, not an
+        // outage now - it used to go out with the red DOWN label.
+        $status_text = 'SSL CERTIFIKÁT BRZY VYPRŠÍ';
+        $emoji = '🔒';
     }
     // Load all notification recipients (subscribers + administrators without an explicit subscription)
     $stmt = $pdo->prepare("
@@ -5621,9 +5716,10 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 
     // HTML e-mail template in Blood Kings colours (red-black)
     $color_theme = '#c1121f'; // red
-    if ($new_status === 'up' || $new_status === 'lte_backup_restored' || $new_status === 'wan_restored') {
+    $alert_class = bk_alert_color_class($new_status);
+    if ($alert_class === 'good') {
         $color_theme = '#1ec773'; // teal
-    } elseif ($new_status === 'maintenance' || $new_status === 'vps_warning') {
+    } elseif ($alert_class === 'warn') {
         $color_theme = '#f39c12'; // orange
     }
 
@@ -5641,6 +5737,12 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         'lte_backup_restored' => 'alert_status_lte_backup_restored',
         'wan_lost' => 'alert_status_wan_lost',
         'wan_restored' => 'alert_status_wan_restored',
+        // Without these three the e-mail subject and badge fell back to
+        // "DOWN (Výpadek)" - a slow response and an expiring certificate
+        // arrived looking like outages.
+        'latency_degraded' => 'alert_status_latency_degraded',
+        'latency_recovered' => 'alert_status_latency_recovered',
+        'ssl_expiring' => 'alert_status_ssl_expiring',
     ];
     $alert_status_key = $alert_status_keys[$new_status] ?? 'alert_status_down';
 
@@ -5761,7 +5863,9 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     $slack_webhook = !empty($monitor['slack_webhook_url']) ? $monitor['slack_webhook_url'] : get_setting('slack_webhook_url');
 
     if (!empty($discord_webhook)) {
-        $color = ($new_status === 'up') ? 3066993 : 15073280; // Zelená / Červená
+        // The same classification as the e-mail: recovery green, warning
+        // orange, only a real outage red.
+        $color = ['good' => 3066993, 'warn' => 15965202, 'bad' => 15073280][$alert_class];
         $payload = [
             "embeds" => [[
                 "title" => "Blood Kings Status Alert",
@@ -5799,17 +5903,32 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // PagerDuty notifikace
     $pd_key = get_setting('pagerduty_routing_key');
     if (!empty($pd_key)) {
-        $pd_action = ($new_status === 'down') ? 'trigger' : 'resolve';
-        send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg");
+        // Every status other than "down" used to be sent as "resolve" - so
+        // an agent going silent, a lost WAN or a lost LTE backup CLOSED the
+        // open PagerDuty incident instead of paging, and warnings closed it
+        // too. Now: outages page, recoveries resolve, warnings stay off
+        // PagerDuty (they have their own channels).
+        $pd_action = bk_pagerduty_action($new_status);
+        if ($pd_action !== null) {
+            // One key per monitor: the agent-silence page and the outage page
+            // are the same incident, and the recovery closes it.
+            send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg",
+                'Blood Kings Monitoring', 'bk-monitor-' . (int)($monitor['id'] ?? 0));
+        }
     }
 }
 
 /**
  * Helper for sending HTTP POST requests (webhooks)
  */
-function send_webhook_post($url, $payload_json) {
+/**
+ * POSTs a JSON payload to a webhook. Returns whether the endpoint accepted it
+ * (transport OK and a 2xx/3xx answer) - the settings page's test button
+ * reports this verdict; the alert paths ignore it, as before.
+ */
+function send_webhook_post($url, $payload_json): bool {
     $ch = curl_init($url);
-    if ($ch === false) return;
+    if ($ch === false) return false;
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload_json);
@@ -5818,8 +5937,85 @@ function send_webhook_post($url, $payload_json) {
         'User-Agent: BloodKingsStatus/1.3.0'
     ]);
     curl_setopt($ch, CURLOPT_TIMEOUT, 5);
-    curl_exec($ch);
+    $res = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    // A redirect is not a delivery: curl does not follow it for this POST, so
+    // the message never reached the endpoint. Only 2xx counts as accepted.
+    $ok = ($res !== false && $code >= 200 && $code < 300);
+    $GLOBALS['last_webhook_error'] = ($res === false) ? curl_error($ch) : ($ok ? null : "HTTP {$code}");
     curl_close($ch);
+    return $ok;
+}
+
+/**
+ * Sends one real test message through a notification channel using the SAVED
+ * global settings, and says whether it went. Backs the settings page's test
+ * buttons, which used to flash "Test OK" without calling anything.
+ *
+ * @return array{ok: bool, message: string}
+ */
+function bk_send_test_notification(string $channel, ?string $to_email, string $lang): array {
+    $time = date('d.m.Y H:i:s');
+    $text = "🧪 Testovací zpráva z Blood Kings Status ({$time}). Pokud ji vidíte, kanál funguje.";
+    switch ($channel) {
+        case 'email':
+            if (empty($to_email)) {
+                return ['ok' => false, 'message' => 'Přihlášený administrátor nemá nastavenou e-mailovou adresu.'];
+            }
+            [$subject, $body] = bk_with_email_lang($lang, function () use ($time) {
+                $body = '<h1>' . htmlspecialchars(t('test_email_heading')) . '</h1>'
+                    . '<p>' . htmlspecialchars(t('test_email_body1')) . '</p>'
+                    . '<p>' . htmlspecialchars(t('test_email_body2')) . '</p><hr>'
+                    . '<p>' . htmlspecialchars(t('test_email_sent_at')) . ' ' . $time . '</p>';
+                return [t('test_email_subject'), $body];
+            });
+            if (send_email($to_email, $subject, $body)) {
+                $fallback = ($GLOBALS['last_mail_method'] ?? null) === 'fallback';
+                return ['ok' => true, 'message' => $fallback
+                    ? "Předáno systémové funkci mail() (SMTP není nastaveno) na {$to_email} - zkontrolujte, zda opravdu dorazil."
+                    : "Odesláno na {$to_email}."];
+            }
+            $detail = !empty($GLOBALS['last_mail_error']) ? ' ' . $GLOBALS['last_mail_error'] : '';
+            return ['ok' => false, 'message' => 'Odeslání e-mailu selhalo.' . $detail];
+
+        case 'discord':
+            $url = (string)get_setting('discord_webhook_url', '');
+            if ($url === '') {
+                return ['ok' => false, 'message' => 'Discord webhook není v nastavení uložen.'];
+            }
+            $ok = send_webhook_post($url, json_encode(['embeds' => [[
+                'title' => 'Blood Kings Status - test',
+                'description' => $text,
+                'color' => 3447003,
+            ]]]));
+            break;
+
+        case 'slack':
+            $url = (string)get_setting('slack_webhook_url', '');
+            if ($url === '') {
+                return ['ok' => false, 'message' => 'Slack webhook není v nastavení uložen.'];
+            }
+            $ok = send_webhook_post($url, json_encode(['text' => $text]));
+            break;
+
+        case 'telegram':
+            $token = (string)get_setting('telegram_bot_token', '');
+            $chat = (string)get_setting('telegram_chat_id', '');
+            if ($token === '' || $chat === '') {
+                return ['ok' => false, 'message' => 'Telegram bot token nebo chat ID není v nastavení uložen.'];
+            }
+            $ok = send_webhook_post('https://api.telegram.org/bot' . $token . '/sendMessage',
+                json_encode(['chat_id' => $chat, 'text' => $text]));
+            break;
+
+        default:
+            return ['ok' => false, 'message' => 'Neznámý kanál.'];
+    }
+    if ($ok) {
+        return ['ok' => true, 'message' => 'Kanál zprávu přijal.'];
+    }
+    $err = $GLOBALS['last_webhook_error'] ?? null;
+    return ['ok' => false, 'message' => 'Kanál zprávu nepřijal.' . ($err ? " ({$err})" : '')];
 }
 
 /**
@@ -7990,7 +8186,13 @@ function send_pushover_alert($user_key, $api_token, $title, $message, $priority 
 /**
  * Sends an event via the PagerDuty Events v2 API
  */
-function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Blood Kings Monitoring') {
+/**
+ * @param string|null $dedup_key Identifies the alert across events. Without it
+ *   PagerDuty cannot pair a resolve with its trigger (the resolve was silently
+ *   rejected) and two triggers for one outage - agent silence plus the outage
+ *   it causes - open two incidents.
+ */
+function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Blood Kings Monitoring', ?string $dedup_key = null) {
     if (empty($routing_key)) return false;
     $url = "https://events.pagerduty.com/v2/enqueue";
     $payload = [
@@ -8002,6 +8204,9 @@ function send_pagerduty_event($routing_key, $event_type, $summary, $source = 'Bl
             'source' => $source
         ]
     ];
+    if ($dedup_key !== null && $dedup_key !== '') {
+        $payload['dedup_key'] = $dedup_key;
+    }
     return send_webhook_post($url, json_encode($payload));
 }
 

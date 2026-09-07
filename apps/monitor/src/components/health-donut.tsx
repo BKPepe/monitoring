@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 export interface HealthSegment {
   label: string;
   value: number;
-  variant: 'up' | 'warning' | 'down' | 'paused';
+  variant: 'up' | 'warning' | 'down' | 'paused' | 'maintenance' | 'unknown';
 }
 
 const strokeClass: Record<HealthSegment['variant'], string> = {
@@ -26,6 +26,8 @@ const strokeClass: Record<HealthSegment['variant'], string> = {
   warning: 'stroke-warning',
   down: 'stroke-down',
   paused: 'stroke-paused',
+  maintenance: 'stroke-info',
+  unknown: 'stroke-muted-foreground',
 };
 
 const dotClass: Record<HealthSegment['variant'], string> = {
@@ -33,6 +35,8 @@ const dotClass: Record<HealthSegment['variant'], string> = {
   warning: 'bg-warning',
   down: 'bg-down',
   paused: 'bg-paused',
+  maintenance: 'bg-info',
+  unknown: 'bg-muted-foreground',
 };
 
 const RADIUS = 54;

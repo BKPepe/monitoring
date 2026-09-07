@@ -32,6 +32,11 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_lte_backup_state',
     'bk_wan_link_state',
     'bk_pair_link_periods',
+    'bk_pagerduty_action',
+    'bk_alert_color_class',
+    'bk_should_notify_status_change',
+    'bk_ssl_alert_due',
+    'bk_maintenance_window_expired',
     'bk_agent_str',
     'bk_smart_is_missing',
     'bk_agent_bool',
@@ -483,6 +488,77 @@ if (function_exists('bk_wan_link_state')) {
     check_true('ale s protokolem je vypnuté rozhraní opravdu výpadek', bk_wan_link_state(['wan_up' => false, 'wan_proto' => 'dhcp'])['ok'] === false);
     check_true('a s pingem false taky (bez protokolu)', bk_wan_link_state(['wan_up' => false, 'wan_internet' => false])['ok'] === false);
     check_true('oba signály dobré = funkční', bk_wan_link_state(['wan_up' => true, 'wan_internet' => true])['ok'] === true);
+}
+
+// --- PagerDuty event per status (bk_pagerduty_action) ---------------------------
+//
+// Everything but "down" used to be sent as "resolve": a silent agent, a lost
+// WAN or a lost LTE backup CLOSED the open incident instead of paging.
+if (function_exists('bk_pagerduty_action')) {
+    foreach (['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'] as $s) {
+        check("{$s} pageuje", bk_pagerduty_action($s), 'trigger');
+    }
+    foreach (['up', 'wan_restored', 'lte_backup_restored'] as $s) {
+        check("{$s} uzavírá incident", bk_pagerduty_action($s), 'resolve');
+    }
+    foreach (['vps_warning', 'latency_degraded', 'latency_recovered', 'ssl_expiring', 'maintenance', 'config_change'] as $s) {
+        check("{$s} do PagerDuty nejde", bk_pagerduty_action($s), null);
+    }
+}
+
+// --- Alert colour class (bk_alert_color_class) ---------------------------------
+//
+// The Discord embed used to be green for "up" and red for everything else, so
+// a recovered WAN link and an expiring certificate looked like outages.
+if (function_exists('bk_alert_color_class')) {
+    foreach (['up', 'wan_restored', 'lte_backup_restored', 'latency_recovered'] as $s) {
+        check("{$s} je zelené", bk_alert_color_class($s), 'good');
+    }
+    foreach (['maintenance', 'vps_warning', 'latency_degraded', 'ssl_expiring'] as $s) {
+        check("{$s} je oranžové", bk_alert_color_class($s), 'warn');
+    }
+    foreach (['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'] as $s) {
+        check("{$s} je červené", bk_alert_color_class($s), 'bad');
+    }
+}
+
+// --- Notify on a status change? (bk_should_notify_status_change) ----------------
+//
+// The end of a planned window is not a recovery - but only when nothing was
+// open. An outage that started BEFORE the window still has to be closed and
+// announced, otherwise the incident stays open and escalates while the
+// service runs.
+if (function_exists('bk_should_notify_status_change')) {
+    check_false('konec ohlášené údržby mlčí', bk_should_notify_status_change('maintenance', 'up', false));
+    check_true('ale s otevřeným incidentem je to skutečné obnovení', bk_should_notify_status_change('maintenance', 'up', true));
+    check_true('výpadek během údržby se hlásí', bk_should_notify_status_change('maintenance', 'down', false));
+    check_true('běžný výpadek se hlásí', bk_should_notify_status_change('up', 'down', false));
+    check_true('běžné obnovení se hlásí', bk_should_notify_status_change('down', 'up', false));
+    check_true('začátek údržby se hlásí', bk_should_notify_status_change('up', 'maintenance', false));
+}
+
+// --- SSL expiry warning latch (bk_ssl_alert_due) -------------------------------
+if (function_exists('bk_ssl_alert_due')) {
+    $now = 1_800_000_000;
+    check_true('uvnitř okna a nikdy nevarováno = varovat', bk_ssl_alert_due(10, 14, 0, $now));
+    check_false('mimo okno = nevarovat', bk_ssl_alert_due(20, 14, 0, $now));
+    check_true('práh z nastavení, ne pevných 14 dní', bk_ssl_alert_due(20, 30, 0, $now));
+    check_false('varováno před hodinou = mlčet', bk_ssl_alert_due(10, 14, $now - 3600, $now));
+    check_true('varováno před 25 hodinami = znovu', bk_ssl_alert_due(10, 14, $now - 90000, $now));
+    check_false('prošlý certifikát řeší výpadek, ne varování', bk_ssl_alert_due(-1, 14, 0, $now));
+    check_true('poslední den je ještě varování', bk_ssl_alert_due(0, 14, 0, $now));
+}
+
+// --- Expired maintenance window (bk_maintenance_window_expired) -----------------
+if (function_exists('bk_maintenance_window_expired')) {
+    $now = strtotime('2026-09-07 12:00:00');
+    check_true('okno s koncem v minulosti vypršelo', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => '2026-09-07 11:00:00'], $now));
+    check_false('okno s koncem v budoucnu běží', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => '2026-09-07 13:00:00'], $now));
+    check_false('bez konce = ruční údržba, nikdy nevyprší', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => null], $now));
+    check_false('vypnutá údržba nemá co vypršet', bk_maintenance_window_expired(['maintenance' => 0, 'maintenance_end' => '2026-09-07 11:00:00'], $now));
+    check_false('řetězcová "1" bez konce', bk_maintenance_window_expired(['maintenance' => '1', 'maintenance_end' => ''], $now));
+    check_true('řetězcová "1" s prošlým koncem', bk_maintenance_window_expired(['maintenance' => '1', 'maintenance_end' => '2026-09-06 11:00:00'], $now));
+    check_false('nečitelný konec nevypršel', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => 'nesmysl'], $now));
 }
 
 // --- Periods on the backup link (bk_pair_link_periods) -------------------------

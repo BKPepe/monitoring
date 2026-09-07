@@ -80,7 +80,7 @@ if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SE
 $bk_post_only_actions = [
     // session-authenticated writes (these also require CSRF)
     'save_monitor', 'delete_monitor', 'import_discovered_service', 'upload_logo',
-    'trigger_remote_action', 'convert_to_agent_check', 'save_settings',
+    'trigger_remote_action', 'convert_to_agent_check', 'save_settings', 'test_notification',
     'generate_metrics_token', 'incident_action', 'create_incident',
     'save_preset', 'delete_preset', 'assign_preset',
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
@@ -334,8 +334,20 @@ if ($action === 'monitors') {
                 'cpu' => $r['cpu_usage'] !== null ? (float)$r['cpu_usage'] : null,
                 'ram' => $r['ram_usage'] !== null ? (float)$r['ram_usage'] : null,
                 'hdd' => $r['hdd_usage'] !== null ? (float)$r['hdd_usage'] : null,
-                // Time since the last status change (not a fixed value) - 0 until the first check runs.
-                'uptimeSeconds' => ($last_change_ts && strtolower($r['status'] ?? '') === 'up') ? max(0, time() - $last_change_ts) : 0,
+                // Time since the last status change. uptimeSeconds is only an
+                // uptime while the monitor is UP - it used to be 0 for a monitor
+                // that was down ("uptime 0 s", not "down for 3 h"), and 0 before
+                // the first check ran. Unknown -> null.
+                'uptimeSeconds' => ($last_change_ts && strtolower($r['status'] ?? '') === 'up') ? max(0, time() - $last_change_ts) : null,
+                'sinceStatusChangeSeconds' => $last_change_ts ? max(0, time() - $last_change_ts) : null,
+                // Whether an agent that has reported before has now been silent
+                // longer than agent_offline_timeout - the SPA has no other way
+                // to tell "active" from "was active once".
+                // agent_offline_timeout = 0 means the detection is off (cron says
+                // so too), so there is no verdict to give - null, not "silent".
+                'agentSilent' => ($agent_offline_secs > 0 && isset($details['agent_last_seen']))
+                    ? ((time() - (int)$details['agent_last_seen']) > $agent_offline_secs)
+                    : null,
                 // Announced maintenance is public by design - the legacy page
                 // prints the description and window in a public banner. Only
                 // while the flag is on; a stale description of a past window
@@ -1277,6 +1289,41 @@ if ($action === 'get_settings') {
 }
 
 // 2b4. Save the system settings (admin-only)
+// One real test message through a notification channel, with the SAVED
+// settings. The settings page's test buttons used to flash "Test OK" without
+// calling anything - a dead webhook looked fine until the first outage.
+if ($action === 'test_notification') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $tn_input = json_decode((string)file_get_contents('php://input'), true);
+    $tn_channel = is_array($tn_input) ? (string)($tn_input['channel'] ?? '') : '';
+    if (!in_array($tn_channel, ['email', 'discord', 'telegram', 'slack'], true)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Neznámý kanál (email, discord, telegram, slack).'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $tn_email = null;
+    $tn_lang = (string)get_setting('email_lang', 'cs');
+    try {
+        $stmt_tn = $pdo->prepare("SELECT email, email_lang FROM users WHERE id = ? LIMIT 1");
+        $stmt_tn->execute([(int)($_SESSION['admin_id'] ?? 0)]);
+        $tn_me = $stmt_tn->fetch() ?: [];
+        $tn_email = !empty($tn_me['email']) ? (string)$tn_me['email'] : null;
+        if (in_array($tn_me['email_lang'] ?? '', ['cs', 'en'], true)) {
+            $tn_lang = (string)$tn_me['email_lang'];
+        }
+    } catch (Exception $e) {
+        error_log('[api.php action=test_notification] user lookup failed: ' . $e->getMessage());
+    }
+    $tn_result = bk_send_test_notification($tn_channel, $tn_email, $tn_lang);
+    bk_audit_log($pdo, 'test_notification', $tn_channel . ': ' . ($tn_result['ok'] ? 'ok' : 'failed'));
+    echo json_encode($tn_result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if ($action === 'save_settings') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
@@ -1390,6 +1437,21 @@ if ($action === 'events') {
         }
         krsort($rows_by_id);
         $rows = array_values($rows_by_id);
+
+        // A recovery is an OK check whose IMMEDIATELY PRECEDING check failed.
+        // Only the fresh tail ($recent_rows: one monitor, consecutive ids) has
+        // real neighbours - the older failures merged in above sit next to rows
+        // hours apart, so deciding this from the merged list (as the frontend
+        // did) invents recoveries at times when nothing happened.
+        $recovery_ids = [];
+        if ($monitor_id > 0) {
+            for ($i = 0, $n = count($recent_rows) - 1; $i < $n; $i++) {
+                if ($recent_rows[$i]['status'] === 'up'
+                    && in_array($recent_rows[$i + 1]['status'], ['down', 'warning'], true)) {
+                    $recovery_ids[(int)$recent_rows[$i]['id']] = true;
+                }
+            }
+        }
         $events = [];
 
         // Compute the outage duration: for down rows find the nearest up row after them
@@ -1426,6 +1488,9 @@ if ($action === 'events') {
                 'errorMsg' => $r['error_message'] ?: ($r['status'] === 'down' ? 'Cílový server neodpovídá.' : 'Kontrola proběhla v pořádku.'),
                 'responseTime' => $r['response_time'] !== null ? (int)$r['response_time'] : null,
                 'isDown' => $r['status'] === 'down',
+                // true = this OK check ended an outage. false on rows whose
+                // neighbour is unknown - never a guess.
+                'isRecovery' => isset($recovery_ids[(int)$r['id']]),
                 'outageDurationSec' => $outage_duration,
                 'outageEnd' => $outage_end,
             ];

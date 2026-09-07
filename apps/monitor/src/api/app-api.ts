@@ -21,7 +21,8 @@ export interface ApiMonitor {
   type: string;
   target: string;
   port?: number | null;
-  status: 'up' | 'down' | 'warning' | 'maintenance' | 'paused';
+  /** 'unknown' = an agent-side check whose agent stopped reporting (cron writes it). */
+  status: 'up' | 'down' | 'warning' | 'maintenance' | 'paused' | 'unknown';
   category: string | null;
   assetId: number | null;
   assetName: string | null;
@@ -31,8 +32,13 @@ export interface ApiMonitor {
   cpu: number | null;
   ram: number | null;
   hdd: number | null;
+  /** Seconds the monitor has been UP; null when it is not up or never checked. */
   uptimeSeconds: number | null;
+  /** Seconds since the last status change, whatever the status; null before the first check. */
+  sinceStatusChangeSeconds?: number | null;
   agentLastSeen: number | null;
+  /** true = the agent has reported before and is now silent past agent_offline_timeout; null = never reported. */
+  agentSilent?: boolean | null;
   hostname: string | null;
   os: string | null;
   details?: Record<string, any>;
@@ -167,6 +173,17 @@ function mutate<T>(action: string, body: unknown): Promise<T> {
 }
 
 export const appApi = {
+  /**
+   * Sends a real test message through one notification channel and returns
+   * the server's verdict. The settings page used to flash "Test OK" without
+   * calling anything.
+   */
+  async testNotification(
+    channel: 'email' | 'discord' | 'telegram' | 'slack'
+  ): Promise<{ ok: boolean; message: string }> {
+    return mutate<{ ok: boolean; message: string }>('test_notification', { channel });
+  },
+
   async getSession(): Promise<SessionInfo> {
     const session = await request<SessionInfo>('session');
     csrfToken = session.csrfToken;

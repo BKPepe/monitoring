@@ -51,7 +51,10 @@ export function DashboardPage() {
   const { t, lang } = useLanguage();
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<StatusFilter>('all');
-  const { data: live } = usePublicStatus();
+  // Refreshes every minute; the monitors list below reloads whenever `live`
+  // changes, so the whole page follows. It used to load once per visit and
+  // show the morning's state all day.
+  const { data: live } = usePublicStatus(60_000);
   // The user's dashboard layout (panel visibility + order). An empty array
   // = the default layout is kept, so nothing is lost until the user
   // configures something.
@@ -106,7 +109,11 @@ export function DashboardPage() {
 
   const totalMonitors = monitors.length > 0 ? monitors.length : (live?.totalMonitors ?? 0);
   const downMonitors = monitors.filter((m) => m.status === 'down').length;
-  const healthyCount = Math.max(0, totalMonitors - downMonitors);
+  // Healthy = actually UP. "Total minus down" counted warnings, paused
+  // checks and silent agents as healthy, so the tile said 100 % with a
+  // degraded service on the list.
+  const healthyCount = monitors.filter((m) => m.status === 'up').length;
+  const healthyPct = monitors.length > 0 ? (healthyCount / monitors.length) * 100 : null;
   // null/missing means nobody measured a 30-day uptime (new install, dead
   // cron, unreachable API) - that state renders as "no data". Falling back
   // to a number here would fabricate an SLA, which already happened once
@@ -134,7 +141,8 @@ export function DashboardPage() {
       title: string;
       source: string;
       severity: 'down' | 'warning' | 'up';
-      at: string;
+      /** When the state changed; null when the server never recorded a change - never "now". */
+      at: string | null;
     }[] = [];
     monitors.forEach((m) => {
       if (m.status === 'down') {
@@ -144,7 +152,7 @@ export function DashboardPage() {
           title: `🔴 ${t('dashboard.outage_title', 'Výpadek služby')}: ${m.name}`,
           source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'down',
-          at: m.lastStatusChange || new Date().toISOString(),
+          at: m.lastStatusChange ?? null,
         });
       } else if (m.status === 'warning') {
         alertsList.push({
@@ -153,7 +161,7 @@ export function DashboardPage() {
           title: `⚡ ${t('dashboard.high_latency', 'Zvýšená latence')}: ${m.name}`,
           source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'warning',
-          at: m.lastStatusChange || new Date().toISOString(),
+          at: m.lastStatusChange ?? null,
         });
       }
     });
@@ -164,10 +172,20 @@ export function DashboardPage() {
   // Mini latency trends for the table (mockup: a trend next to the value). One
   // light request per monitor after the list loads; without data there is simply no sparkline.
   const [latencySeries, setLatencySeries] = React.useState<Record<number, number[]>>({});
+  // Keyed on the id list, not on the array: with the minute refresh a fresh
+  // array would re-fire twelve requests every minute for a six-hour trend.
+  const sparklineKey = React.useMemo(
+    () =>
+      monitors
+        .slice(0, 12)
+        .map((m) => m.id)
+        .join(','),
+    [monitors]
+  );
   React.useEffect(() => {
-    if (monitors.length === 0) return;
+    if (sparklineKey === '') return;
     let active = true;
-    const targets = monitors.slice(0, 12);
+    const targets = sparklineKey.split(',').map((id) => ({ id: Number(id) }));
     Promise.all(
       targets.map((m) =>
         fetch(`/status/api.php?action=metric_series&monitor_id=${m.id}&metric=response_time&period=6h`, {
@@ -196,7 +214,7 @@ export function DashboardPage() {
     return () => {
       active = false;
     };
-  }, [monitors]);
+  }, [sparklineKey]);
 
   const [dailyUptimeRows, setDailyUptimeRows] = React.useState<
     Record<number, { date: string; status: 'up' | 'down' | 'warning' | 'paused'; uptimePct: number }[]>
@@ -300,7 +318,7 @@ export function DashboardPage() {
           <p className="text-muted-foreground px-3 py-3 text-sm">
             {t('dashboard.loading_monitors', 'Načítám monitory…')}
           </p>
-        ) : monitorsError ? (
+        ) : monitorsError && monitors.length === 0 ? (
           <p className="text-muted-foreground px-3 py-3 text-sm">
             {t('attention.unknown', 'Stav nelze zjistit — seznam monitorů se nenačetl.')}
           </p>
@@ -362,17 +380,32 @@ export function DashboardPage() {
             <TabsTrigger value="paused">
               {t('common.paused', 'Paused')} ({monitors.filter((m) => m.status === 'paused').length})
             </TabsTrigger>
+            {/* Silent agents had no tab - they were invisible in every filter but "all". */}
+            {(monitors.some((m) => m.status === 'unknown') || filter === 'unknown') && (
+              <TabsTrigger value="unknown">
+                {t('status.unknown', 'Neznámý (agent mlčí)')} ({monitors.filter((m) => m.status === 'unknown').length})
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value={filter} className="mt-0">
-            {monitorsError ? (
+            {monitorsError && monitors.length === 0 ? (
               <p className="text-down px-5 py-10 text-center text-sm">{monitorsError}</p>
             ) : monitorsLoading ? (
               <p className="text-muted-foreground px-5 py-10 text-center text-sm">
                 {t('dashboard.loading_monitors', 'Načítám monitory…')}
               </p>
             ) : (
-              <MonitorTable rows={visibleMonitors} latencySeries={latencySeries} />
+              <>
+                {/* A failed minute refresh keeps the last good list on screen and
+                    says it is stale - it used to replace the whole table. */}
+                {monitorsError && (
+                  <p className="px-5 pt-3 text-xs text-amber-700 dark:text-amber-400">
+                    ⚠ {t('dashboard.refresh_failed', 'Obnovení selhalo, data mohou být zastaralá')} — {monitorsError}
+                  </p>
+                )}
+                <MonitorTable rows={visibleMonitors} latencySeries={latencySeries} />
+              </>
             )}
           </TabsContent>
         </Tabs>
@@ -400,7 +433,7 @@ export function DashboardPage() {
           <p className="text-muted-foreground flex items-center gap-2 px-3 py-4 text-sm">
             {monitorsLoading ? (
               t('dashboard.loading_monitors', 'Načítám monitory…')
-            ) : monitorsError ? (
+            ) : monitorsError && monitors.length === 0 ? (
               t('dashboard.alerts_unknown', 'Stav výstrah nelze zjistit — seznam monitorů se nenačetl.')
             ) : (
               <>
@@ -421,7 +454,7 @@ export function DashboardPage() {
               <p className="truncate text-sm font-medium">{alert.title}</p>
               <p className="text-muted-foreground truncate text-xs">{alert.source}</p>
             </div>
-            <span className="text-muted-foreground shrink-0 text-xs">{formatRelative(alert.at)}</span>
+            <span className="text-muted-foreground shrink-0 text-xs">{alert.at ? formatRelative(alert.at) : '—'}</span>
           </Link>
         ))}
       </CardContent>
@@ -436,7 +469,8 @@ export function DashboardPage() {
       <CardContent>
         <HealthDonut
           centerLabel={{
-            value: formatPercent(totalMonitors ? (healthyCount / totalMonitors) * 100 : 0),
+            // No monitors = nothing measured. It used to print "0 %".
+            value: healthyPct == null ? '—' : formatPercent(healthyPct),
             caption: t('dashboard.healthy_pct', 'Zdravých'),
           }}
           // Each status leads to the device list narrowed to it - the ring
@@ -459,6 +493,16 @@ export function DashboardPage() {
               variant: 'down',
             },
             { label: 'Paused', value: monitors.filter((m) => m.status === 'paused').length, variant: 'paused' },
+            {
+              label: t('common.maintenance', 'Údržba'),
+              value: monitors.filter((m) => m.status === 'maintenance').length,
+              variant: 'maintenance',
+            },
+            {
+              label: t('status.unknown', 'Neznámý (agent mlčí)'),
+              value: monitors.filter((m) => m.status === 'unknown').length,
+              variant: 'unknown',
+            },
           ]}
         />
       </CardContent>
@@ -636,13 +680,13 @@ export function DashboardPage() {
         />
         <MetricTile
           label={t('dashboard.healthy_pct', 'Zdravých')}
-          value={formatPercent(totalMonitors ? (healthyCount / totalMonitors) * 100 : 0)}
+          value={healthyPct == null ? '—' : formatPercent(healthyPct)}
           icon={ShieldCheck}
           tone="up"
           hint={t('dashboard.healthy_hint', 'Měřící uzly v pořádku')}
         />
         <MetricTile
-          label={t('nav.incidents', 'Incidenty')}
+          label={t('dashboard.outages', 'Výpadky')}
           value={downMonitors}
           icon={AlertTriangle}
           tone={downMonitors > 0 ? 'down' : 'up'}
@@ -726,6 +770,7 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
+    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
 
   if (rows.length === 0) {
@@ -758,7 +803,15 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
                   {monitor.name}
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
-                  <StatusDot variant={monitor.status === 'maintenance' ? 'paused' : monitor.status} />
+                  <StatusDot
+                    variant={
+                      monitor.status === 'maintenance'
+                        ? 'paused'
+                        : monitor.status === 'unknown'
+                          ? 'neutral'
+                          : monitor.status
+                    }
+                  />
                   <span
                     className={
                       monitor.status === 'up'
@@ -838,7 +891,15 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
                 <TableCell>
                   {/* Mockup: status as coloured text with a dot, not a pill badge. */}
                   <span className="flex items-center gap-1.5 text-xs font-semibold">
-                    <StatusDot variant={monitor.status === 'maintenance' ? 'info' : monitor.status} />
+                    <StatusDot
+                      variant={
+                        monitor.status === 'maintenance'
+                          ? 'info'
+                          : monitor.status === 'unknown'
+                            ? 'neutral'
+                            : monitor.status
+                      }
+                    />
                     <span
                       className={
                         monitor.status === 'up'
@@ -889,8 +950,15 @@ function MonitorTable({ rows, latencySeries }: { rows: ApiMonitor[]; latencySeri
                 <TableCell className="tabular">
                   <ThresholdValue value={monitor.hdd} />
                 </TableCell>
-                <TableCell className="tabular text-muted-foreground">
-                  {monitor.uptimeSeconds == null ? '—' : formatUptime(monitor.uptimeSeconds)}
+                <TableCell
+                  className={monitor.status === 'down' ? 'tabular text-down' : 'tabular text-muted-foreground'}
+                >
+                  {/* A monitor that is down has no uptime - it has an outage duration. */}
+                  {monitor.status === 'down' && monitor.sinceStatusChangeSeconds != null
+                    ? `${t('dashboard.down_for', 'Výpadek')} ${formatUptime(monitor.sinceStatusChangeSeconds)}`
+                    : monitor.uptimeSeconds == null
+                      ? '—'
+                      : formatUptime(monitor.uptimeSeconds)}
                 </TableCell>
                 <TableCell className="text-muted-foreground pr-5 text-xs">
                   {monitor.lastCheck ? formatRelative(monitor.lastCheck) : '—'}

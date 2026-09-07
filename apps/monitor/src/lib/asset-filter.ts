@@ -1,7 +1,8 @@
 /** The statuses a device can be in, as `api.php` reports them. */
-export type AssetStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
+export type AssetStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance' | 'unknown';
 
-const KNOWN_STATUSES: AssetStatus[] = ['up', 'down', 'warning', 'paused', 'maintenance'];
+// 'unknown' = an agent-side check whose agent went silent (cron writes it).
+const KNOWN_STATUSES: AssetStatus[] = ['up', 'down', 'warning', 'paused', 'maintenance', 'unknown'];
 
 /**
  * Reads the `?status=` filter coming from the health ring on the dashboard.

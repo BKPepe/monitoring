@@ -107,7 +107,25 @@ foreach ($monitors as $monitor) {
     }
     
     echo "Kontroluji [$type] $name ($target)... ";
-    
+
+    // A window whose end has passed switches itself off. The flag used to
+    // stay on forever: the list said "maintenance", the public page reasoned
+    // about a window in the past, and the admin had to remember to untick it.
+    if (bk_maintenance_window_expired($monitor, time())) {
+        // The window goes with the flag (the same way admin.php clears it):
+        // a leftover start/end would make the NEXT maintenance expire the
+        // moment it is switched on, because the form prefills the old dates.
+        $m_end_text = date('d.m.Y H:i', strtotime((string)$monitor['maintenance_end']));
+        $stmt_mend = $pdo->prepare("UPDATE monitors SET maintenance = 0, maintenance_start = NULL, maintenance_end = NULL, maintenance_description = NULL WHERE id = ?");
+        $stmt_mend->execute([$id]);
+        $monitor['maintenance'] = 0;
+        $monitor['maintenance_start'] = null;
+        $monitor['maintenance_end'] = null;
+        $monitor['maintenance_description'] = null;
+        log_monitor_event($pdo, $id, $name, $type, 'maintenance_ended', 'Plánovaná údržba skončila (' . $m_end_text . ')');
+        echo "údržba skončila, příznak zrušen... ";
+    }
+
     if (is_in_maintenance($monitor)) {
         echo "Údržba (přeskakuji)\n";
         $new_status = 'maintenance';
@@ -189,8 +207,13 @@ foreach ($monitors as $monitor) {
             $stmt_up->execute([$new_status, $hb_details_json, $id]);
 
             // 'unknown' is not an event worth waking a human for - it only means
-            // the job has not reported yet. Notifications go out for up/down.
-            if ($new_status === 'up' || $new_status === 'down') {
+            // the job has not reported yet. Notifications go out for up/down,
+            // minus the end of a quiet maintenance window (same rule as the
+            // active checks below - heartbeats used to mail everyone).
+            $hb_maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
+            if (($new_status === 'up' || $new_status === 'down')
+                && bk_should_notify_status_change((string)$old_status, $new_status,
+                    $hb_maint_to_up ? bk_has_open_incident($pdo, (int)$id) : false)) {
                 trigger_notifications($pdo, $monitor, $new_status, $hb['error']);
             }
             echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (" . ($hb['error'] ?? 'signál dorazil včas') . ")\n";
@@ -259,16 +282,10 @@ foreach ($monitors as $monitor) {
         case 'web':
             $check_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
             detect_config_changes($pdo, $monitor, $check_result);
-            
-            // SSL certificate expiry check against the ssl_alert_days setting
-            if (isset($check_result['check_stages']['tls']['cert']['days_remaining'])) {
-                $days_rem = (int)$check_result['check_stages']['tls']['cert']['days_remaining'];
-                $ssl_threshold = (int)get_setting('ssl_alert_days', '14');
-                if ($days_rem <= $ssl_threshold && $days_rem >= 0) {
-                    $ssl_msg = "SSL certifikát pro {$target} vyprší za {$days_rem} dní! Obnovte certifikát včas.";
-                    trigger_notifications($pdo, $monitor, 'up', $ssl_msg);
-                }
-            }
+            // The SSL-expiry warning lives in the details block below (latched
+            // to once a day, honouring ssl_alert_days). A second copy used to
+            // sit here, unlatched and labelled "up": every run inside the
+            // window sent a "back online" notification to every channel.
             break;
             
         case 'cpanel':
@@ -559,21 +576,22 @@ foreach ($monitors as $monitor) {
                 $details_arr['ssl_days_remaining'] = $days;
                 $details_arr['ssl_issuer'] = $ssl_cert_info['issuer'] ?? null;
                 $details_arr['ssl_valid_to'] = $ssl_cert_info['valid_to'] ?? null;
-                if ($days <= 14) {
-                    // Read the previous warn timestamp from the monitor's last stored
-                    // details, not from $details_arr (which is rebuilt fresh every run
-                    // and would otherwise always read 0, spamming this alert hourly).
-                    // $details_decoded is only populated on the down-path above, so
-                    // decode last_details fresh here rather than relying on it.
-                    $prev_details = json_decode($monitor['last_details'] ?? '{}', true);
-                    $last_ssl_warn = (is_array($prev_details) ? $prev_details['last_ssl_warn'] ?? 0 : 0);
-                    if (time() - $last_ssl_warn > 86400) {
-                        $details_arr['last_ssl_warn'] = time();
-                        trigger_notifications($pdo, $monitor, 'ssl_expiring', "SSL certifikát pro '{$name}' vyprší za {$days} dní!");
-                        log_monitor_event($pdo, $id, $name, $type, 'ssl_warning', "SSL certifikát vyprší za {$days} dní");
-                    } else {
-                        $details_arr['last_ssl_warn'] = $last_ssl_warn;
-                    }
+                // Read the previous warn timestamp from the monitor's last stored
+                // details, not from $details_arr (which is rebuilt fresh every run
+                // and would otherwise always read 0, spamming this alert hourly).
+                // $details_decoded is only populated on the down-path above, so
+                // decode last_details fresh here rather than relying on it.
+                $prev_details = json_decode($monitor['last_details'] ?? '{}', true);
+                $last_ssl_warn = (int)(is_array($prev_details) ? ($prev_details['last_ssl_warn'] ?? 0) : 0);
+                // The threshold is the ssl_alert_days setting (it used to be a
+                // hardcoded 14 here, so a 30-day setting did nothing).
+                $ssl_threshold = (int)get_setting('ssl_alert_days', '14');
+                if (bk_ssl_alert_due($days, $ssl_threshold, $last_ssl_warn, time())) {
+                    $details_arr['last_ssl_warn'] = time();
+                    trigger_notifications($pdo, $monitor, 'ssl_expiring', "SSL certifikát pro '{$name}' vyprší za {$days} dní!");
+                    log_monitor_event($pdo, $id, $name, $type, 'ssl_warning', "SSL certifikát vyprší za {$days} dní");
+                } elseif ($last_ssl_warn > 0) {
+                    $details_arr['last_ssl_warn'] = $last_ssl_warn;
                 }
             }
             
@@ -702,9 +720,18 @@ foreach ($monitors as $monitor) {
         $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
         $stmt_up->execute([$new_status, $details, $id]);
         
-        // Send the status-change notifications
-        trigger_notifications($pdo, $monitor, $new_status, $error_msg);
-        echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
+        // Send the status-change notifications. Coming back UP after a planned
+        // window is not a recovery from an outage, so it gets no "back online"
+        // alert - unless an incident is still open, which means the outage
+        // started BEFORE the window and its record must close.
+        $maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
+        if (bk_should_notify_status_change((string)$old_status, $new_status,
+                $maint_to_up ? bk_has_open_incident($pdo, (int)$id) : false)) {
+            trigger_notifications($pdo, $monitor, $new_status, $error_msg);
+            echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
+        } else {
+            echo "ÚDRŽBA UKONČENA -> UP (bez notifikace, Odezva: {$response_time}ms)\n";
+        }
     } else {
         // Only update the last-check time
         $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");

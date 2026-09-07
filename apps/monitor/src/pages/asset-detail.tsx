@@ -71,6 +71,8 @@ interface AssetDetail {
   cpanelStats?: Record<string, { formatted?: string }> | null;
   cpanelStatsError?: { error?: string; hint?: string | null; since?: string } | null;
   collectionIssues: { type: string; message: string; hint?: string | null; since: string | null }[];
+  /** ISO time of the last check/report - every tab shows data from this moment. */
+  lastCheck: string | null;
   /** Raw details from the last report - the Network tab reads OpenWrt telemetry from them. */
   rawDetails: Record<string, any>;
   /** Remote Actions - admin session only (the API omits the fields otherwise). */
@@ -162,18 +164,28 @@ export function AssetDetailPage() {
     if (!loadedAssetId) return;
     let active = true;
 
-    fetch(`/status/api.php?action=events&monitor_id=${loadedAssetId}&limit=30`, { credentials: 'include' })
+    // 200 is what the API allows; 30 rows of a per-minute check covered half an
+    // hour and the page-size picker offered pages that could never fill.
+    fetch(`/status/api.php?action=events&monitor_id=${loadedAssetId}&limit=200`, { credentials: 'include' })
       .then((res) => res.json().catch(() => ({})))
       .then((data) => {
         if (!active || !data || !Array.isArray(data.events)) return;
+        // isRecovery comes from the server, which knows which rows are real
+        // neighbours - the list mixes older outages in, so deciding it here
+        // marked whichever OK row happened to sit above one of them.
+        const rows: any[] = data.events;
         setEvents(
-          data.events.map((e: any) => ({
+          rows.map((e: any) => ({
             id: e.id,
             title: e.isDown
               ? t('asset.event_outage', 'Výpadek služby')
               : e.rawStatus === 'warning'
                 ? t('asset.event_degraded', 'Zhoršená odezva')
-                : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
+                : e.rawStatus === 'unknown'
+                  ? t('asset.event_unknown', 'Stav neznámý (agent nehlásí)')
+                  : e.isRecovery
+                    ? t('asset.event_recovered', 'Služba obnovena')
+                    : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
             detail:
               e.errorMsg +
               (e.outageDurationSec
@@ -184,8 +196,8 @@ export function AssetDetailPage() {
                   )
                 : ''),
             at: e.time,
-            severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : 'info',
-            resolution: e.isDown ? 'Open' : 'Info',
+            severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : e.isRecovery ? 'up' : 'info',
+            resolution: e.isDown ? 'Open' : e.isRecovery ? 'Resolved' : 'Info',
             location: e.location,
             method: e.type,
             responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
@@ -288,6 +300,8 @@ export function AssetDetailPage() {
 
       <Hero asset={asset} />
 
+      <CollectionIssuesBanner issues={asset.collectionIssues} />
+
       <Tabs defaultValue="overview" className="space-y-6">
         {/* Sticky under the header (h-16): on a long detail the tabs and
             the range switcher stay at hand without scrolling back up. */}
@@ -306,6 +320,14 @@ export function AssetDetailPage() {
             </TabsTrigger>
           </TabsList>
           <RangePicker value={range} onChange={setRange} />
+          {/* Every tab shows data from this moment - the Network, Processes and
+              Services tabs used to present the last report as "now". */}
+          {asset.lastCheck && (
+            <p className="text-muted-foreground basis-full text-[11px]">
+              {t('asset.data_as_of', 'Data z posledního hlášení')}: {timeAgo(asset.lastCheck, t)} (
+              {new Date(asset.lastCheck).toLocaleString('cs-CZ')})
+            </p>
+          )}
         </div>
 
         <TabsContent value="overview">
@@ -700,6 +722,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Paused'),
     maintenance: t('common.maintenance', 'Údržba'),
+    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
 
   return (
@@ -711,7 +734,11 @@ function Hero({ asset }: { asset: AssetDetail }) {
         <div className="leading-tight">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold tracking-tight">{asset.name}</h1>
-            <Badge variant={asset.status === 'maintenance' ? 'info' : asset.status} dot pulse={asset.status === 'up'}>
+            <Badge
+              variant={asset.status === 'maintenance' ? 'info' : asset.status === 'unknown' ? 'warning' : asset.status}
+              dot
+              pulse={asset.status === 'up'}
+            >
               {statusText[asset.status]}
             </Badge>
           </div>
@@ -769,6 +796,38 @@ function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: 
   );
 }
 
+/**
+ * Data-collection outages. Rendered ABOVE the tab bar so the Network,
+ * Processes and Services tabs carry the warning too - it used to live inside
+ * the Overview tab only, and the other tabs showed stale data as current.
+ */
+function CollectionIssuesBanner({
+  issues,
+}: {
+  issues: { type: string; message: string; hint?: string | null; since: string | null }[];
+}) {
+  const { t } = useLanguage();
+  if (issues.length === 0) return null;
+  return (
+    <div role="alert" className="rounded-lg border-2 border-down/60 bg-down/10 p-4 space-y-1.5">
+      <p className="font-bold text-sm text-down">⛔ {t('collection.heading', 'Výpadek sběru dat')}</p>
+      {issues.map((issue, i) => (
+        <div key={`${issue.type}-${i}`} className="text-xs space-y-0.5">
+          <p>
+            <span className="text-down font-medium">{issue.message}</span>
+            {issue.since && (
+              <span className="text-muted-foreground font-mono ml-2">
+                ({t('collection.since', 'od')} {new Date(issue.since).toLocaleString('cs-CZ')})
+              </span>
+            )}
+          </p>
+          {issue.hint && <p className="text-muted-foreground">💡 {issue.hint}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function OverviewTab({
   asset,
   range,
@@ -814,28 +873,6 @@ function OverviewTab({
 
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-      {/* Data-collection outages must be the first thing on the page - the
-          charts below silently missing data without this context is exactly
-          the failure mode this project forbids. */}
-      {asset.collectionIssues.length > 0 && (
-        <div role="alert" className="xl:col-span-12 rounded-lg border-2 border-down/60 bg-down/10 p-4 space-y-1.5">
-          <p className="font-bold text-sm text-down">⛔ {t('collection.heading', 'Výpadek sběru dat')}</p>
-          {asset.collectionIssues.map((issue, i) => (
-            <div key={`${issue.type}-${i}`} className="text-xs space-y-0.5">
-              <p>
-                <span className="text-down font-medium">{issue.message}</span>
-                {issue.since && (
-                  <span className="text-muted-foreground font-mono ml-2">
-                    ({t('collection.since', 'od')} {new Date(issue.since).toLocaleString('cs-CZ')})
-                  </span>
-                )}
-              </p>
-              {issue.hint && <p className="text-muted-foreground">💡 {issue.hint}</p>}
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="grid gap-3 xl:col-span-12 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
         {serverInsights?.healthScore && <HealthScoreTile score={serverInsights.healthScore.score} />}
         {healthWithTrends.map((metric) => (
@@ -1095,6 +1132,7 @@ function OverviewTab({
                 warning: t('common.warning', 'Varování'),
                 paused: t('common.paused', 'Paused'),
                 maintenance: t('common.maintenance', 'Údržba'),
+                unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
               };
               return (
                 <div
@@ -1107,7 +1145,16 @@ function OverviewTab({
                       {service.kind} · {service.detail}
                     </p>
                   </div>
-                  <Badge variant={service.status === 'maintenance' ? 'info' : service.status} dot>
+                  <Badge
+                    variant={
+                      service.status === 'maintenance'
+                        ? 'info'
+                        : service.status === 'unknown'
+                          ? 'warning'
+                          : service.status
+                    }
+                    dot
+                  >
                     {relatedStatusLabel[service.status]}
                   </Badge>
                 </div>
@@ -1477,7 +1524,12 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
                 {it.up != null && <span className={it.up ? 'text-up' : 'text-down'}>{it.up ? '●' : '○'} </span>}
                 {fmtBytes(it.rx_bytes) != null ? `↓${fmtBytes(it.rx_bytes)}` : ''}{' '}
                 {fmtBytes(it.tx_bytes) != null ? `↑${fmtBytes(it.tx_bytes)}` : ''}
-                {Number(it.errors) > 0 ? ` · ⚠ ${it.errors} err` : ''}
+                {/* The agent reports rx_errors and tx_errors; the renderer used to
+                    read `errors`, which nobody sends, so interface errors were
+                    collected every minute and never shown. */}
+                {(Number(it.rx_errors) || 0) + (Number(it.tx_errors) || 0) + (Number(it.errors) || 0) > 0
+                  ? ` · ⚠ ${(Number(it.rx_errors) || 0) + (Number(it.tx_errors) || 0) + (Number(it.errors) || 0)} err`
+                  : ''}
               </span>
             </div>
           ))}
@@ -2110,8 +2162,20 @@ function buildDynamicAsset(
   m: ApiMonitor,
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
 ): AssetDetail {
+  // Every status the API can report. 'maintenance' and 'unknown' used to be
+  // folded into 'paused', so a silent agent read as "Paused" in the header.
   const status: MonitorStatus =
-    m.status === 'up' ? 'up' : m.status === 'down' ? 'down' : m.status === 'warning' ? 'warning' : 'paused';
+    m.status === 'up'
+      ? 'up'
+      : m.status === 'down'
+        ? 'down'
+        : m.status === 'warning'
+          ? 'warning'
+          : m.status === 'maintenance'
+            ? 'maintenance'
+            : m.status === 'unknown'
+              ? 'unknown'
+              : 'paused';
   const lastCheckDisplay = m.lastCheck
     ? `${timeAgo(m.lastCheck, t)} (${new Date(m.lastCheck).toLocaleString('cs-CZ')})`
     : t('asset.moment_ago', 'Před chvílí');
@@ -2186,7 +2250,18 @@ function buildDynamicAsset(
     // No status here - the hero badge already shows it; the Health Score tile
     // is added by OverviewTab from server insights.
     health: [
-      ...(m.uptimeSeconds != null ? [{ key: 'uptime', label: 'Uptime', value: formatUptime(m.uptimeSeconds) }] : []),
+      // Down has no uptime - it has an outage duration (the tile used to vanish).
+      ...(m.status === 'down' && m.sinceStatusChangeSeconds != null
+        ? [
+            {
+              key: 'uptime',
+              label: t('asset.down_for', 'Výpadek trvá'),
+              value: formatUptime(m.sinceStatusChangeSeconds),
+            },
+          ]
+        : m.uptimeSeconds != null
+          ? [{ key: 'uptime', label: 'Uptime', value: formatUptime(m.uptimeSeconds) }]
+          : []),
       {
         key: 'latency',
         label: t('common.response', 'Odezva'),
@@ -2345,6 +2420,7 @@ function buildDynamicAsset(
     cpanelStats: m.details?.cpanel_stats ?? null,
     cpanelStatsError: m.details?.cpanel_stats_error ?? null,
     collectionIssues: m.collectionIssues ?? [],
+    lastCheck: m.lastCheck ?? null,
     rawDetails: m.details && typeof m.details === 'object' ? m.details : {},
     remoteActionsEnabled: Boolean(m.remoteActionsEnabled),
     allowedActions: Array.isArray(m.allowedActions) ? m.allowedActions : [],

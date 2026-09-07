@@ -234,24 +234,34 @@ export function MetricDetailPage() {
     [rawPoints, isRate, activeUnit]
   );
 
-  const chartData: ChartData | null = detail
-    ? {
-        id: `${monId}-${metric}`,
-        title: detail.metric.label,
-        yMax: sourceUnit === '%' ? 100 : null,
-        series: [{ key: metric, label: detail.metric.label, unit, tone, points }],
-        events: detail.events.map((e) => ({ t: e.t, label: e.label })),
-        annotations: (anns ?? []).map((a) => ({
-          t: a.ts * 1000,
-          // The author belongs in the tooltip: a note is a claim and a claim has a claimant.
-          label: a.author ? `${a.note} (${a.author})` : a.note,
-        })),
-        bands: buildBands(detail, sourceUnit, isRate ? activeUnit : null, t),
-        // The label is attached here, not in the effect - `t` changes with the
-        // language and would refetch the periods and blank the shading.
-        periods: linkPeriods?.map((p) => ({ ...p, label: t('net.link_period_label', 'Primární linka mimo provoz') })),
-      }
-    : null;
+  // Memoised on its inputs: a fresh object on every render meant a fresh
+  // ECharts option and setOption(notMerge), which threw away the zoom the
+  // moment the user clicked the chart or typed a note.
+  const chartData: ChartData | null = React.useMemo(
+    () =>
+      detail
+        ? {
+            id: `${monId}-${metric}`,
+            title: detail.metric.label,
+            yMax: sourceUnit === '%' ? 100 : null,
+            series: [{ key: metric, label: detail.metric.label, unit, tone, points }],
+            events: detail.events.map((e) => ({ t: e.t, label: e.label })),
+            annotations: (anns ?? []).map((a) => ({
+              t: a.ts * 1000,
+              // The author belongs in the tooltip: a note is a claim and a claim has a claimant.
+              label: a.author ? `${a.note} (${a.author})` : a.note,
+            })),
+            bands: buildBands(detail, sourceUnit, isRate ? activeUnit : null, t),
+            // The label is attached here, not in the effect - `t` changes with the
+            // language and would refetch the periods and blank the shading.
+            periods: linkPeriods?.map((p) => ({
+              ...p,
+              label: t('net.link_period_label', 'Primární linka mimo provoz'),
+            })),
+          }
+        : null,
+    [detail, monId, metric, sourceUnit, unit, tone, points, anns, activeUnit, isRate, linkPeriods, t]
+  );
 
   const stats = computeStats(points);
   const delta = computeSeriesDelta(chartData?.series[0]);

@@ -213,8 +213,24 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
         state={verified ? 'good' : enc ? 'warn' : 'unknown'}
         stateText={enc || t('rsvc.unknown', 'Neznámý stav')}
         lines={[
-          Array.isArray(d.dns_servers) && d.dns_servers.length > 0
-            ? `${t('rsvc.servers', 'Servery')}: ${d.dns_servers.slice(0, 3).join(', ')}`
+          // The OpenWrt agent sends the resolver list as a comma-joined string;
+          // an array is accepted too.
+          (Array.isArray(d.dns_servers)
+            ? d.dns_servers
+            : String(d.dns_servers ?? '')
+                .split(',')
+                .map((s: string) => s.trim())
+                .filter(Boolean)
+          ).length > 0
+            ? `${t('rsvc.servers', 'Servery')}: ${(Array.isArray(d.dns_servers)
+                ? d.dns_servers
+                : String(d.dns_servers ?? '')
+                    .split(',')
+                    .map((s: string) => s.trim())
+                    .filter(Boolean)
+              )
+                .slice(0, 3)
+                .join(', ')}`
             : null,
           d.dns_latency_ms != null ? `${t('rsvc.dns_latency', 'Odezva dotazu')}: ${d.dns_latency_ms} ms` : null,
         ]}

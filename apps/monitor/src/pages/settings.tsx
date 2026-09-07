@@ -28,6 +28,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
+import { appApi } from '@/api/app-api';
 import { useLanguage } from '@/context/language-context';
 import { PresetManager } from '@/components/preset-manager';
 import { GithubIcon, GoogleIcon } from '@/components/ui/brand-icons';
@@ -99,7 +100,8 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testSent, setTestSent] = useState<string | null>(null);
+  const [testSent, setTestSent] = useState<{ channel: string; ok: boolean; message: string } | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<SettingsMap>({});
   const [envLocked, setEnvLocked] = useState<string[]>([]);
@@ -180,9 +182,20 @@ export function SettingsPage() {
     }
   };
 
-  const handleSendTest = (channelName: string) => {
-    setTestSent(channelName);
-    setTimeout(() => setTestSent(null), 3000);
+  // A real round trip: the server sends through the channel with the SAVED
+  // settings and reports whether it went. A green banner on a dead webhook
+  // was worse than no button.
+  const handleSendTest = async (channel: 'email' | 'discord' | 'telegram' | 'slack', channelName: string) => {
+    setTesting(channel);
+    setTestSent(null);
+    try {
+      const res = await appApi.testNotification(channel);
+      setTestSent({ channel: channelName, ok: !!res.ok, message: res.message ?? '' });
+    } catch (err) {
+      setTestSent({ channel: channelName, ok: false, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setTesting(null);
+    }
   };
 
   const handleSendDigest = async (period: 'weekly' | 'monthly') => {
@@ -309,11 +322,37 @@ export function SettingsPage() {
         </div>
       )}
       {testSent && (
-        <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center justify-between animate-in fade-in-50">
+        <div
+          role="status"
+          className={
+            testSent.ok
+              ? 'p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center justify-between gap-3 animate-in fade-in-50'
+              : 'p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold flex items-center justify-between gap-3 animate-in fade-in-50'
+          }
+        >
           <span>
-            ✅ {t('settings.test_sent', { channel: testSent }, `Testovací notifikace odeslána na kanál: ${testSent}`)}
+            {testSent.ok ? '✅ ' : '⛔ '}
+            {/* A failure must not open with "odeslána" - that is the claim under test. */}
+            {testSent.ok
+              ? t(
+                  'settings.test_sent',
+                  { channel: testSent.channel },
+                  `Testovací notifikace odeslána na kanál: ${testSent.channel}`
+                )
+              : t('settings.test_failed_on', { channel: testSent.channel }, `Test kanálu ${testSent.channel} selhal`)}
+            {testSent.message ? ` — ${testSent.message}` : ''}
+            {!testSent.ok && (
+              <span className="text-muted-foreground ml-2 font-normal">
+                {t(
+                  'settings.test_uses_saved',
+                  'Test používá uložené nastavení, neuložené změny se do něj nepromítnou.'
+                )}
+              </span>
+            )}
           </span>
-          <Badge variant="up">{t('settings.test_ok', 'Test OK')}</Badge>
+          <Badge variant={testSent.ok ? 'up' : 'down'}>
+            {testSent.ok ? t('settings.test_ok', 'Test OK') : t('settings.test_failed', 'Test selhal')}
+          </Badge>
         </div>
       )}
 
@@ -554,7 +593,8 @@ export function SettingsPage() {
                   <div className="flex justify-end">
                     <button
                       type="button"
-                      onClick={() => handleSendTest(t('settings.channel_email', 'E-mail (SMTP)'))}
+                      disabled={testing !== null}
+                      onClick={() => handleSendTest('email', t('settings.channel_email', 'E-mail (SMTP)'))}
                       className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-sky-600 text-white text-xs font-semibold shadow-sm hover:bg-sky-500 transition-colors"
                     >
                       <Send className="size-3.5" /> {t('settings.send_test_email', 'Odeslat testovací e-mail')}
@@ -710,7 +750,8 @@ export function SettingsPage() {
                 <div className="flex justify-end">
                   <button
                     type="button"
-                    onClick={() => handleSendTest('Discord Webhook')}
+                    disabled={testing !== null}
+                    onClick={() => handleSendTest('discord', 'Discord Webhook')}
                     className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold shadow-sm hover:bg-indigo-500 transition-colors"
                   >
                     <Send className="size-3.5" /> {t('settings.test_discord', 'Test Discord')}
@@ -755,7 +796,8 @@ export function SettingsPage() {
                 <div className="flex justify-end">
                   <button
                     type="button"
-                    onClick={() => handleSendTest('Telegram Bot')}
+                    disabled={testing !== null}
+                    onClick={() => handleSendTest('telegram', 'Telegram Bot')}
                     className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-sky-600 text-white text-xs font-semibold shadow-sm hover:bg-sky-500 transition-colors"
                   >
                     <Send className="size-3.5" /> {t('settings.test_telegram', 'Test Telegram')}

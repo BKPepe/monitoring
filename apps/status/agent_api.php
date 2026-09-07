@@ -1063,8 +1063,15 @@ try {
             $stmt_update = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
             $stmt_update->execute([$new_status, $details, $monitor_id]);
             
-            // Status change - trigger notifications (unless in maintenance)
-            if ($new_status !== 'maintenance') {
+            // Status change - trigger notifications (unless in maintenance).
+            // Coming back UP after a planned window is not an outage recovery,
+            // so it gets no "back online" alert - unless an incident is still
+            // open, which means the outage predates the window and the record
+            // has to close.
+            $bk_maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
+            if ($new_status !== 'maintenance'
+                && bk_should_notify_status_change((string)$old_status, $new_status,
+                    $bk_maint_to_up ? bk_has_open_incident($pdo, (int)$monitor_id) : false)) {
                 $bk_pending_notifications[] = [$new_status, $error_msg ?: 'Server opět komunikuje.'];
             }
         } else {

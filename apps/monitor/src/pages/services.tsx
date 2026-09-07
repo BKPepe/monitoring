@@ -109,7 +109,11 @@ export function ServicesPage() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="min-w-0 truncate text-sm font-semibold">{svc.name}</span>
-                        <StatusDot variant={svc.status === 'maintenance' ? 'paused' : svc.status} />
+                        <StatusDot
+                          variant={
+                            svc.status === 'maintenance' ? 'paused' : svc.status === 'unknown' ? 'neutral' : svc.status
+                          }
+                        />
                       </div>
                       <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
                         <span className="font-mono">{svc.target}</span>
@@ -138,7 +142,11 @@ export function ServicesPage() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate text-sm font-semibold">{svc.name}</span>
-                      <StatusDot variant={svc.status === 'maintenance' ? 'paused' : svc.status} />
+                      <StatusDot
+                        variant={
+                          svc.status === 'maintenance' ? 'paused' : svc.status === 'unknown' ? 'neutral' : svc.status
+                        }
+                      />
                     </div>
                     <p className="text-muted-foreground mt-1 font-mono text-[11px]">{svc.target}</p>
                   </Link>

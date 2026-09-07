@@ -258,6 +258,83 @@ foreach (($mnt_data2['monitors'] ?? []) as $m) {
 check('po vypnutí údržby je popis zase skrytý', $mnt_row2['maintenanceDescription'] ?? null, null);
 $pdo->exec("UPDATE monitors SET maintenance_description = NULL, maintenance_end = NULL WHERE id = 1");
 
+// A monitor that is down has no uptime - it has an outage duration.
+// uptimeSeconds used to be 0 for a down monitor ("uptime 0 s"), which the
+// dashboard printed as if the service had just come back.
+// PHP-side timestamps: api.php reads the column with strtotime() in PHP's
+// timezone, and the container's NOW() is not necessarily in the same zone.
+$dn_stmt = $pdo->prepare("UPDATE monitors SET status = 'down', last_status_change = ? WHERE id = 1");
+$dn_stmt->execute([date('Y-m-d H:i:s', time() - 7200)]);
+[, $dn_data] = api_get($base, 'action=monitors');
+$dn_row = null;
+foreach (($dn_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 1) $dn_row = $m;
+}
+check_true('výpadek: klíč uptimeSeconds je přítomen', is_array($dn_row) && array_key_exists('uptimeSeconds', $dn_row));
+// array_key_exists, not ?? - ?? would turn the null under test into the fallback.
+check_true('výpadek: uptimeSeconds je null, ne 0', is_array($dn_row) && array_key_exists('uptimeSeconds', $dn_row) && $dn_row['uptimeSeconds'] === null);
+// The magnitude is checked against the API's own lastStatusChange (ISO with
+// offset, so strtotime() is timezone-safe) - the test's DB session and the
+// app's PHP do not share a timezone, so "2 hours ago" is not comparable.
+$dn_since = $dn_row['sinceStatusChangeSeconds'] ?? null;
+$dn_expected = !empty($dn_row['lastStatusChange']) ? time() - strtotime((string)$dn_row['lastStatusChange']) : null;
+check_true('výpadek: sinceStatusChangeSeconds je celé číslo', is_int($dn_since) && $dn_since > 0);
+check_true('výpadek: sinceStatusChangeSeconds sedí na lastStatusChange', $dn_expected !== null && $dn_since !== null && abs($dn_since - $dn_expected) <= 5);
+check_true('bez agenta je agentSilent null (nikdy nehlásil)', array_key_exists('agentSilent', $dn_row) && $dn_row['agentSilent'] === null);
+
+// agent_offline_timeout = 0 means "detection off" (cron honours it), so there
+// is no verdict to hand out - an agent that reported a second ago must not be
+// reported as silent.
+$ag_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('agent_offline_timeout', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+$pdo->exec("UPDATE monitors SET last_details = '" . json_encode(['agent_last_seen' => time() - 60]) . "' WHERE id = 2");
+$ag_set->execute(['0']);
+[, $ag_data] = api_get($base, 'action=monitors');
+$ag_row = null;
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check_true('vypnutá detekce: agentSilent je null, ne true', array_key_exists('agentSilent', $ag_row ?? []) && $ag_row['agentSilent'] === null);
+$ag_set->execute(['50']);
+[, $ag_data] = api_get($base, 'action=monitors');
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check('čerstvý agent mlčící není', $ag_row['agentSilent'] ?? 'chybí', false);
+$pdo->exec("UPDATE monitors SET last_details = '" . json_encode(['agent_last_seen' => time() - 7200]) . "' WHERE id = 2");
+[, $ag_data] = api_get($base, 'action=monitors');
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check('agent po dvou hodinách mlčí', $ag_row['agentSilent'] ?? 'chybí', true);
+$pdo->exec("UPDATE monitors SET last_details = NULL WHERE id = 2");
+
+// A recovery is an OK check whose immediately preceding check failed. The
+// events list mixes older outages in, so the frontend cannot tell from row
+// order - the server marks the row it can actually prove.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (2, 'down', NULL, DATE_SUB(NOW(), INTERVAL 4 MINUTE))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (2, 'up', 5, DATE_SUB(NOW(), INTERVAL 3 MINUTE))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (2, 'up', 6, DATE_SUB(NOW(), INTERVAL 2 MINUTE))");
+[$ev_code, $ev_data] = api_get($base, 'action=events&monitor_id=2&limit=200');
+check('events vrací 200', $ev_code, 200);
+$ev_rows = $ev_data['events'] ?? [];
+check_true('events vrací tři řádky monitoru', count($ev_rows) === 3);
+// Newest first: [0] běžná OK kontrola, [1] obnovení, [2] výpadek.
+check('nejnovější OK kontrola není obnovení', $ev_rows[0]['isRecovery'] ?? 'chybí', false);
+check('OK kontrola hned po výpadku je obnovení', $ev_rows[1]['isRecovery'] ?? 'chybí', true);
+check('výpadek sám obnovením není', $ev_rows[2]['isRecovery'] ?? 'chybí', false);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
+$dn_stmt = $pdo->prepare("UPDATE monitors SET status = 'up', last_status_change = ? WHERE id = 1");
+$dn_stmt->execute([date('Y-m-d H:i:s', time() - 1800)]);
+[, $up_data] = api_get($base, 'action=monitors');
+foreach (($up_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 1) $dn_row = $m;
+}
+check_true('běží: uptimeSeconds je celé číslo', is_int($dn_row['uptimeSeconds'] ?? null) && $dn_row['uptimeSeconds'] > 0);
+check('běží: uptimeSeconds = doba od změny stavu', $dn_row['uptimeSeconds'] ?? null, $dn_row['sinceStatusChangeSeconds'] ?? 'chybí');
+
 // ui_config carries portalUrl for the public page footer - the key must exist
 // even when empty, so the frontend can tell "unset" from "old server without the field".
 [$code, $uicfg] = api_get($base, 'action=ui_config');
@@ -371,6 +448,7 @@ foreach ([
     'incident_action' => 'akce nad incidentem',
     'create_incident' => 'založení incidentu',
     'save_settings' => 'uložení nastavení',
+    'test_notification' => 'testovací notifikace',
 ] as $action => $label) {
     $ch = curl_init($base . '/api.php?action=' . $action);
     curl_setopt_array($ch, [
@@ -2202,6 +2280,18 @@ if ($logged_in) {
     [$code, $got] = api_get_auth($base, 'action=get_settings', $cookie_jar);
     check('get_settings vrací 200', $code, 200);
     $s = $got['settings'] ?? [];
+
+    // The test buttons send a REAL message and report the channel's verdict.
+    // Without a saved webhook the verdict is an honest failure, not "Test OK".
+    [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'fax'], $cookie_jar);
+    check('test_notification: neznámý kanál je 400', $tn_code, 400);
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id')");
+    [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'discord'], $cookie_jar);
+    check('test_notification: bez webhooku odpoví 200', $tn_code, 200);
+    check('test_notification: bez webhooku ok=false', $tn_res['ok'] ?? null, false);
+    check_true('test_notification: říká, co chybí', str_contains((string)($tn_res['message'] ?? ''), 'Discord'));
+    [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'telegram'], $cookie_jar);
+    check('test_notification: telegram bez tokenu ok=false', $tn_res['ok'] ?? null, false);
 
     check('eskalace se uložila a přečetla', $s['escalation_enabled'] ?? null, '1');
     check('lhůta na převzetí se uložila', $s['escalation_after_mins'] ?? null, '20');

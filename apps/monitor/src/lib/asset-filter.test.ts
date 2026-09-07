@@ -12,7 +12,9 @@ const inventory = [
 
 describe('parseStatusFilter', () => {
   it('accepts every status the API reports', () => {
-    for (const s of ['up', 'down', 'warning', 'paused', 'maintenance'] as const) {
+    // 'unknown' = an agent-side check whose agent went silent; cron writes it,
+    // so the URL filter and the inventory must both accept it.
+    for (const s of ['up', 'down', 'warning', 'paused', 'maintenance', 'unknown'] as const) {
       expect(parseStatusFilter(s)).toBe(s);
     }
   });
