@@ -5,6 +5,7 @@ import { escapeHtml, withAlpha } from './color';
 import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
 import type { ChartTheme } from './use-chart-theme';
+import { useLanguage } from '@/context/language-context';
 
 /**
  * Chart of one metric over time (one or more series sharing axes).
@@ -34,6 +35,7 @@ export function MetricChart({
   minimap?: boolean;
 }) {
   const theme = useChartTheme();
+  const { t } = useLanguage();
   const reducedMotion = usePrefersReducedMotion();
 
   // CSV export: exactly the points the chart draws (including null as an
@@ -104,12 +106,18 @@ export function MetricChart({
         iconStyle: { borderColor: theme.textMuted },
         emphasis: { iconStyle: { borderColor: theme.text } },
         feature: {
-          dataZoom: { yAxisIndex: 'none', title: { zoom: 'Zoom výběrem', back: 'Zpět' } },
-          restore: { title: 'Obnovit' },
-          saveAsImage: { title: 'Uložit PNG', name: data.id, backgroundColor: theme.tooltipBg },
+          // ECharts draws these tooltips itself, so they need the translated
+          // text handed in - they were the last hardcoded Czech in the app and
+          // showed up untranslated in the English UI.
+          dataZoom: {
+            yAxisIndex: 'none',
+            title: { zoom: t('chart.tool_zoom', 'Zoom výběrem'), back: t('chart.tool_zoom_back', 'Zpět') },
+          },
+          restore: { title: t('chart.tool_restore', 'Obnovit') },
+          saveAsImage: { title: t('chart.tool_png', 'Uložit PNG'), name: data.id, backgroundColor: theme.tooltipBg },
           myCsv: {
             show: true,
-            title: 'Export CSV',
+            title: t('chart.tool_csv', 'Export CSV'),
             // A document-with-arrow icon (a simple SVG path, so no icon
             // package needs dragging into the canvas).
             icon: 'path://M4 2h10l6 6v14H4V2z M14 2v6h6 M9 13h6 M12 10v6',
@@ -172,7 +180,7 @@ export function MetricChart({
         )
       ),
     };
-  }, [data, theme, reducedMotion, exportCsv, minimap]);
+  }, [data, theme, reducedMotion, exportCsv, minimap, t]);
 
   return (
     <Chart

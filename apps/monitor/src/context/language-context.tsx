@@ -1756,6 +1756,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.test_discord': { cs: 'Test Discord', en: 'Test Discord' },
   'settings.test_telegram': { cs: 'Test Telegram', en: 'Test Telegram' },
   'settings.test_slack': { cs: 'Test Slack', en: 'Test Slack' },
+  'chart.tool_zoom': { cs: 'Zoom výběrem', en: 'Zoom to selection' },
+  'chart.tool_zoom_back': { cs: 'Zpět', en: 'Back' },
+  'chart.tool_restore': { cs: 'Obnovit', en: 'Reset' },
+  'chart.tool_png': { cs: 'Uložit PNG', en: 'Save PNG' },
+  'chart.tool_csv': { cs: 'Export CSV', en: 'Export CSV' },
   'settings.digest_title': { cs: 'Týdenní & Měsíční Digest Report', en: 'Weekly & Monthly Digest Report' },
   'settings.digest_desc': {
     cs: 'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.',
