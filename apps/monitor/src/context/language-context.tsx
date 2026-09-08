@@ -1786,6 +1786,61 @@ const translations: Record<string, { cs: string; en: string }> = {
   'heatmap.detail_nodata': { cs: '⬚ Pro tento den nejsou žádná měření.', en: '⬚ No measurements for this day.' },
   'speed.history_title': { cs: 'Naměřená rychlost v čase', en: 'Measured speed over time' },
   'reports.not_measured': { cs: 'Bez měření', en: 'Not measured' },
+  'net.lte_quality': { cs: 'Kvalita LTE signálu', en: 'LTE signal quality' },
+  'net.wifi_noise': { cs: 'Šum na kanálu', en: 'Channel noise' },
+  'net.busy_label': { cs: 'Vytížení kanálu', en: 'Channel airtime' },
+  'signal.level_excellent': { cs: 'výborný', en: 'excellent' },
+  'signal.level_good': { cs: 'dobrý', en: 'good' },
+  'signal.level_fair': { cs: 'slabší', en: 'fair' },
+  'signal.level_poor': { cs: 'špatný', en: 'poor' },
+  'signal.scale': { cs: 'Stupnice:', en: 'Scale:' },
+  'signal.what_to_do': { cs: 'Co s tím:', en: 'What helps:' },
+  'signal.nothing_to_do': { cs: 'Není co zlepšovat.', en: 'Nothing to improve here.' },
+  'signal.aria_help': { cs: 'Co znamená {label}', en: 'What {label} means' },
+  'signal.what_rsrp': {
+    cs: 'Síla signálu z vysílače v místě routeru. Ovlivňuje ji vzdálenost, zdi a umístění antény.',
+    en: 'How strong the cell tower signal is at the router. Distance, walls and antenna placement move it.',
+  },
+  'signal.what_rsrq': {
+    cs: 'Kolik z toho, co dorazí, je užitečný signál a kolik rušení na stejné frekvenci.',
+    en: 'How much of what arrives is the wanted signal rather than interference on the same frequency.',
+  },
+  'signal.what_sinr': {
+    cs: 'Poměr signálu k šumu. Určuje, jakou rychlost linka reálně utáhne.',
+    en: 'Signal-to-noise ratio. It decides what throughput the link can actually carry.',
+  },
+  'signal.what_noise': {
+    cs: 'Šumové pozadí na kanálu. Čím nižší číslo, tím víc místa zbývá na užitečný signál.',
+    en: 'Noise floor on the channel. The lower the number, the more room the wanted signal has.',
+  },
+  'signal.what_busy': {
+    cs: 'Jak velkou část času je kanál obsazený vysíláním, ať už vaším, nebo cizím.',
+    en: "What share of the time the channel is busy transmitting, yours or anyone else's.",
+  },
+  'signal.advice_rsrp': {
+    cs: 'Signál je slabý. Pomůže posunout modem nebo anténu k oknu či výš, ven z kovové skříně, případně přidat směrovou anténu mířenou na nejbližší vysílač. Nižší pásmo (800 MHz) prochází zdmi lépe než 1800 nebo 2600 MHz.',
+    en: 'The signal is weak. Move the modem or antenna to a window or higher up and out of any metal enclosure, or add a directional antenna aimed at the nearest tower. A lower band (800 MHz) gets through walls better than 1800 or 2600 MHz.',
+  },
+  'signal.advice_rsrq': {
+    cs: 'Signál sice dorazí, ale je zarušený nebo je buňka přetížená. Zkuste směrovou anténu, jiné pásmo, nebo měřte v jinou denní dobu - přetížení bývá ve špičce.',
+    en: 'The signal arrives but is noisy, or the cell is congested. Try a directional antenna, another band, or measure at a different time of day - congestion peaks with usage.',
+  },
+  'signal.advice_sinr': {
+    cs: 'Poměr signálu k šumu je nízký, linka utáhne méně, než by síla signálu slibovala. Pomáhá směrová anténa, která odfiltruje okolní rušení.',
+    en: 'The signal-to-noise ratio is low, so the link carries less than its signal strength suggests. A directional antenna, which rejects surrounding interference, is what helps.',
+  },
+  'signal.advice_interference': {
+    cs: 'Síla signálu je v pořádku, ale kvalita ne - to je rušení nebo přetížená buňka, ne vzdálenost. Přesouvání antény k oknu tady nepomůže, zkuste ji nasměrovat, změnit pásmo, nebo ověřit rychlost v jinou denní dobu.',
+    en: 'The strength is fine but the quality is not - that is interference or a congested cell, not distance. Moving the antenna to a window will not help; aim it, change band, or check the speed at a different time of day.',
+  },
+  'signal.advice_noise': {
+    cs: 'Na kanálu je hluk z okolních sítí nebo jiných zdrojů. Pomůže změnit kanál, upřednostnit pásmo 5 GHz a zúžit šířku kanálu na 40 MHz.',
+    en: 'The channel carries noise from neighbouring networks or other sources. Change channel, prefer the 5 GHz band, and narrow the channel width to 40 MHz.',
+  },
+  'signal.advice_busy': {
+    cs: 'Kanál je obsazený velkou část času a klienti čekají na vysílání. Vyberte volnější kanál (na 2,4 GHz jen 1, 6 nebo 11) nebo přesuňte klienty na 5 GHz.',
+    en: 'The channel is busy much of the time and clients wait for their turn. Pick a quieter channel (on 2.4 GHz only 1, 6 or 11) or move clients to 5 GHz.',
+  },
   'settings.digest_title': { cs: 'Týdenní & Měsíční Digest Report', en: 'Weekly & Monthly Digest Report' },
   'settings.digest_desc': {
     cs: 'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.',
@@ -2465,7 +2520,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.oom_kills': { cs: 'OOM kills (od startu)', en: 'OOM kills (since boot)' },
   'net.boot_time': { cs: 'Systém běží od', en: 'System up since' },
   'net.usb_devices': { cs: 'USB zařízení', en: 'USB devices' },
-  'net.busy': { cs: 'vytížení', en: 'busy' },
   'net.just_now': { cs: 'před chvílí', en: 'just now' },
   'infra.unreachable_title': {
     cs: 'Tento cíl není z hostingu dosažitelný',

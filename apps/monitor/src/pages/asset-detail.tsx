@@ -16,6 +16,16 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
+import { SignalReading } from '@/components/signal-reading';
+import {
+  lteVerdict,
+  rateChannelBusy,
+  rateRsrp,
+  rateRsrq,
+  rateSinr,
+  rateWifiNoise,
+  signalTone,
+} from '@/lib/signal-quality';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -1071,7 +1081,10 @@ function OverviewTab({
                         {t('asset.agent_found_services', 'Agent objevil běžící služby')}
                       </p>
                       {found.map((s, i) => (
-                        <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                        <div
+                          key={i}
+                          className="border-border/40 flex items-center justify-between gap-2 border-b py-1.5 text-xs last:border-0"
+                        >
                           <span className="font-medium truncate">
                             {s.name}
                             {s.port ? <span className="text-muted-foreground font-mono">:{s.port}</span> : null}
@@ -1116,7 +1129,7 @@ function OverviewTab({
               return (
                 <div
                   key={service.name}
-                  className="hover:bg-muted/40 flex items-center gap-3 rounded-md px-3 py-2 transition-colors"
+                  className="hover:bg-muted/40 border-border/40 flex items-center gap-3 border-b px-3 py-2 transition-colors last:border-0"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{service.name}</p>
@@ -1267,23 +1280,29 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
 
   return (
     <Section title={title}>
-      <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-1 text-xs">
-        <span />
-        <span className="font-medium">
+      {/* Rows are separated the same way every other table on this page is -
+          three columns of a grid need the border on each cell, so it is applied
+          per cell rather than to a row element that does not exist here. */}
+      <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 text-xs">
+        <span className="border-border border-b pb-1" />
+        <span className="border-border border-b pb-1 font-medium">
           {t('net.link_primary', 'Primární (WAN)')}
           {data.primary ? <span className="text-muted-foreground font-mono"> · {data.primary.iface}</span> : null}
         </span>
-        <span className="font-medium">
+        <span className="border-border border-b pb-1 font-medium">
           {t('net.link_backup', 'Záloha (LTE)')}
           {data.backup ? <span className="text-muted-foreground font-mono"> · {data.backup.iface}</span> : null}
         </span>
-        {windows.map((w) => (
-          <React.Fragment key={w.key}>
-            <span className="text-muted-foreground">{w.label}</span>
-            <span className="font-mono">{cell(data.primary, w.key)}</span>
-            <span className="font-mono">{cell(data.backup, w.key)}</span>
-          </React.Fragment>
-        ))}
+        {windows.map((w, i) => {
+          const line = i === windows.length - 1 ? 'py-1.5' : 'border-border/40 border-b py-1.5';
+          return (
+            <React.Fragment key={w.key}>
+              <span className={`text-muted-foreground ${line}`}>{w.label}</span>
+              <span className={`font-mono ${line}`}>{cell(data.primary, w.key)}</span>
+              <span className={`font-mono ${line}`}>{cell(data.backup, w.key)}</span>
+            </React.Fragment>
+          );
+        })}
       </div>
       {!data.primary && (
         <p className="text-xs text-muted-foreground mt-2">
@@ -1361,6 +1380,7 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
   };
 
   const wifi: any[] = Array.isArray(d.wifi_radios) ? d.wifi_radios : [];
+  const lteOverall = lteVerdict(d.lte_rsrp, d.lte_rsrq, d.lte_sinr);
   const wg: any[] = Array.isArray(d.wireguard_peers) ? d.wireguard_peers : [];
   const ifaces: any[] = Array.isArray(d.interfaces) ? d.interfaces : [];
   const restarts =
@@ -1405,26 +1425,44 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
         <Section
           title={`📶 Wi-Fi (${d.wifi_clients_count ?? wifi.reduce((s, r) => s + (Number(r.clients) || 0), 0)} ${t('net.clients', 'klientů')})`}
         >
-          {wifi.map((r, i) => (
-            <div
-              key={i}
-              className="py-1.5 border-b border-border/40 last:border-0 text-xs flex items-center justify-between gap-2 flex-wrap"
-            >
-              <span className="font-medium">
-                {r.ssid}{' '}
-                <span className="text-muted-foreground">
-                  ({r.band}
-                  {r.channel ? `, ch ${r.channel}` : ''})
-                </span>
-              </span>
-              <span className="text-muted-foreground font-mono">
-                {Number(r.clients) || 0} {t('net.clients_short', 'kl.')}
-                {r.busy_pct != null ? ` · ${t('net.busy', 'vytížení')} ${r.busy_pct} %` : ''}
-                {r.noise ? ` · šum ${r.noise} dBm` : ''}
-                {r.tx_power ? ` · ${r.tx_power} dBm TX` : ''}
-              </span>
-            </div>
-          ))}
+          {wifi.map((r, i) => {
+            const noise = rateWifiNoise(r.noise == null ? null : Number(r.noise));
+            const busy = rateChannelBusy(r.busy_pct == null ? null : Number(r.busy_pct));
+            return (
+              <div key={i} className="border-border/40 border-b py-1.5 text-xs last:border-0">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {r.ssid}{' '}
+                    <span className="text-muted-foreground">
+                      ({r.band}
+                      {r.channel ? `, ch ${r.channel}` : ''})
+                    </span>
+                  </span>
+                  <span className="text-muted-foreground font-mono">
+                    {Number(r.clients) || 0} {t('net.clients_short', 'kl.')}
+                    {r.tx_power ? ` · ${r.tx_power} dBm TX` : ''}
+                  </span>
+                </div>
+                {/* The two numbers that decide how the Wi-Fi actually behaves,
+                    each with its scale and what helps - they used to be
+                    appended to the line as bare values. */}
+                <div className="mt-0.5 pl-1">
+                  <SignalReading
+                    label={t('net.wifi_noise', 'Šum na kanálu')}
+                    value={r.noise != null ? `${r.noise} dBm` : null}
+                    rating={noise}
+                    helpKey="noise"
+                  />
+                  <SignalReading
+                    label={t('net.busy_label', 'Vytížení kanálu')}
+                    value={r.busy_pct != null ? `${r.busy_pct} %` : null}
+                    rating={busy}
+                    helpKey="busy"
+                  />
+                </div>
+              </div>
+            );
+          })}
         </Section>
       )}
 
@@ -1568,9 +1606,47 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
             })()}
           />
           <Row label={t('net.lte_ip', 'LTE adresa')} value={d.lte_ipv4} />
-          <Row label="LTE RSRP" value={d.lte_rsrp != null ? `${d.lte_rsrp} dBm` : null} />
-          <Row label="LTE RSRQ" value={d.lte_rsrq != null ? `${d.lte_rsrq} dB` : null} />
-          <Row label="LTE SINR" value={d.lte_sinr != null ? `${d.lte_sinr} dB` : null} />
+          {/* Three raw numbers used to sit here with no scale and no verdict.
+              Read together they also say WHICH problem it is: a weak signal is
+              distance and antenna, good signal with bad quality is
+              interference, which moving the antenna does not fix. */}
+          {lteOverall && (
+            <Row
+              label={t('net.lte_quality', 'Kvalita LTE signálu')}
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <Badge variant={signalTone(lteOverall.level)} className="text-[10px]">
+                    {
+                      {
+                        excellent: t('signal.level_excellent', 'výborný'),
+                        good: t('signal.level_good', 'dobrý'),
+                        fair: t('signal.level_fair', 'slabší'),
+                        poor: t('signal.level_poor', 'špatný'),
+                      }[lteOverall.level]
+                    }
+                  </Badge>
+                </span>
+              }
+            />
+          )}
+          <SignalReading
+            label="LTE RSRP"
+            value={d.lte_rsrp != null ? `${d.lte_rsrp} dBm` : null}
+            rating={rateRsrp(d.lte_rsrp)}
+            helpKey="rsrp"
+          />
+          <SignalReading
+            label="LTE RSRQ"
+            value={d.lte_rsrq != null ? `${d.lte_rsrq} dB` : null}
+            rating={rateRsrq(d.lte_rsrq)}
+            helpKey="rsrq"
+          />
+          <SignalReading
+            label="LTE SINR"
+            value={d.lte_sinr != null ? `${d.lte_sinr} dB` : null}
+            rating={rateSinr(d.lte_sinr)}
+            helpKey="sinr"
+          />
           <Row
             label={t('net.lte_band', 'Pásmo / operátor')}
             value={[d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null}
