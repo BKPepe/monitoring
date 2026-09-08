@@ -305,7 +305,9 @@ export function DashboardPage() {
         const d = new Date(today);
         d.setDate(d.getDate() - i);
         const dateStr = d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
-        days.push({ date: dateStr, status: 'paused' as const, uptimePct: null });
+        // Never measured is not the same as switched off - the legend used to
+        // label these days "Pozastaveno".
+        days.push({ date: dateStr, status: 'nodata' as const, uptimePct: null });
       }
       return { monitorId: m.id, name: m.name, days };
     });

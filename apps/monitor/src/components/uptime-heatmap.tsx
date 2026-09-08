@@ -3,12 +3,15 @@ import { cn } from '@/lib/utils';
 import type { DayStatus, UptimeHistoryRow } from '@/data/model';
 import { useLanguage } from '@/context/language-context';
 
+// Tokens, not raw palette hues: these cells sit on both themes, and the ring
+// used to be picked from a different scale than the fill it surrounds.
 const cellClass: Record<DayStatus, string> = {
-  up: 'bg-up hover:ring-2 hover:ring-emerald-400/80',
-  warning: 'bg-warning hover:ring-2 hover:ring-amber-400/80',
-  down: 'bg-down hover:ring-2 hover:ring-rose-500/80',
+  up: 'bg-up hover:ring-2 hover:ring-up/80',
+  warning: 'bg-warning hover:ring-2 hover:ring-warning/80',
+  down: 'bg-down hover:ring-2 hover:ring-down/80',
   paused: 'bg-muted hover:ring-2 hover:ring-muted-foreground/80',
-  maintenance: 'bg-info/70 hover:ring-2 hover:ring-sky-400/80',
+  maintenance: 'bg-info/70 hover:ring-2 hover:ring-info/80',
+  nodata: 'bg-muted/40 border border-dashed border-border hover:ring-2 hover:ring-muted-foreground/60',
 };
 
 export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
@@ -21,6 +24,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
     down: t('heatmap.status_down', 'Výpadek služby (Offline)'),
     paused: t('heatmap.status_paused', 'Pozastaveno'),
     maintenance: t('heatmap.status_maintenance', 'Plánovaná údržba'),
+    nodata: t('heatmap.status_nodata', 'Bez měření'),
   };
 
   return (
@@ -66,50 +70,56 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                             {/* Large, clear tooltip with smart up/down direction */}
                             <div
                               className={cn(
-                                'absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-slate-950/98 border border-slate-700 text-slate-100 text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl ring-1 ring-white/10',
+                                // The same --popover token every ECharts tooltip uses: this one was
+                                // hardcoded dark, so the light theme got a black box.
+                                'absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-popover text-popover-foreground border border-border text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl',
                                 isTopRow ? 'top-full mt-2.5' : 'bottom-full mb-2.5',
                                 isNearRight ? 'right-0' : isNearLeft ? 'left-0' : 'left-1/2 -translate-x-1/2'
                               )}
                             >
-                              <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                                <span className="font-bold text-xs text-slate-200">{day.date}</span>
+                              <div className="flex items-center justify-between border-b border-border pb-1.5">
+                                <span className="text-foreground text-xs font-bold">{day.date}</span>
                                 {day.uptimePct != null ? (
                                   <span
                                     className={cn(
                                       'font-extrabold text-xs px-2 py-0.5 rounded-md',
                                       day.uptimePct >= 99.5
-                                        ? 'bg-emerald-500/20 text-emerald-300'
+                                        ? 'bg-up/15 text-up'
                                         : day.uptimePct >= 95
-                                          ? 'bg-amber-500/20 text-amber-300'
-                                          : 'bg-rose-500/20 text-rose-300'
+                                          ? 'bg-warning/15 text-warning'
+                                          : 'bg-down/15 text-down'
                                     )}
                                   >
                                     {day.uptimePct.toFixed(1)} % Uptime
                                   </span>
                                 ) : (
-                                  <span className="font-extrabold text-xs px-2 py-0.5 rounded-md bg-slate-700/50 text-slate-300">
+                                  <span className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-xs font-extrabold">
                                     {t('heatmap.no_data_badge', 'Bez dat')}
                                   </span>
                                 )}
                               </div>
 
                               <div className="flex items-center justify-between text-xs pt-0.5">
-                                <span className="text-slate-400">{t('heatmap.monitor_status', 'Stav monitoru:')}</span>
+                                <span className="text-muted-foreground">
+                                  {t('heatmap.monitor_status', 'Stav monitoru:')}
+                                </span>
                                 <span
                                   className={cn(
                                     'font-bold',
                                     day.status === 'down'
-                                      ? 'text-rose-400'
+                                      ? 'text-down'
                                       : day.status === 'warning'
-                                        ? 'text-amber-400'
-                                        : 'text-emerald-400'
+                                        ? 'text-warning'
+                                        : day.status === 'nodata' || day.status === 'paused'
+                                          ? 'text-muted-foreground'
+                                          : 'text-up'
                                   )}
                                 >
                                   {statusLabel[day.status]}
                                 </span>
                               </div>
 
-                              <div className="text-xs text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed font-sans">
+                              <div className="border-border text-muted-foreground border-t pt-1 font-sans text-xs leading-relaxed">
                                 {day.detail ??
                                   (day.status === 'down'
                                     ? t('heatmap.detail_down', '🔴 Detekován výpadek.')
@@ -118,8 +128,13 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                                       : day.status === 'maintenance'
                                         ? t('heatmap.detail_maintenance', '🔧 Plánovaná údržba.')
                                         : day.status === 'paused'
-                                          ? t('heatmap.detail_paused', '⏸️ Bez naměřených dat pro tento den.')
-                                          : t('heatmap.detail_up', '🟢 Všechny testy dostupnosti proběhly bez chyb.'))}
+                                          ? t('heatmap.detail_paused', '⏸️ Monitor byl pozastaven.')
+                                          : day.status === 'nodata'
+                                            ? t('heatmap.detail_nodata', '⬚ Pro tento den nejsou žádná měření.')
+                                            : t(
+                                                'heatmap.detail_up',
+                                                '🟢 Všechny testy dostupnosti proběhly bez chyb.'
+                                              ))}
                               </div>
                             </div>
                           </div>

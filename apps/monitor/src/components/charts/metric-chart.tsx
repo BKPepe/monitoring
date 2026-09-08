@@ -6,6 +6,9 @@ import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
 import type { ChartTheme } from './use-chart-theme';
 import { useLanguage } from '@/context/language-context';
+import { medianStep } from '@/lib/series-gaps';
+
+type TranslateFn = (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
 
 /**
  * Chart of one metric over time (one or more series sharing axes).
@@ -35,7 +38,15 @@ export function MetricChart({
   minimap?: boolean;
 }) {
   const theme = useChartTheme();
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
+  const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+  // Half a sample step: what the tooltip counts as "at this moment". Without
+  // it an event three hours away would be attached to the hovered point.
+  const tooltipWindow = React.useMemo(() => {
+    const step = medianStep(data.series[0]?.points ?? []);
+    return step == null ? 60_000 : Math.max(step / 2, 30_000);
+  }, [data]);
+  const totalPoints = React.useMemo(() => data.series.reduce((sum, s) => sum + s.points.length, 0), [data]);
   const reducedMotion = usePrefersReducedMotion();
 
   // CSV export: exactly the points the chart draws (including null as an
@@ -64,7 +75,10 @@ export function MetricChart({
     const seriesColor = theme.series[data.series[0]?.tone ?? 'latency'];
 
     return {
-      animation: !reducedMotion,
+      // A 30-day chart is tens of thousands of points and up to thirteen of
+      // them are drawn at once on the overview: the bezier and the entry
+      // animation are what makes that crawl, not the samples themselves.
+      animation: !reducedMotion && totalPoints < 2000,
       animationDuration: 300,
       grid: { top: 28, right: 12, bottom: minimap ? 58 : 24, left: 44 },
       // Zoom: dragging inside the chart (inside) and area selection (toolbox lens).
@@ -131,12 +145,70 @@ export function MetricChart({
         borderColor: theme.tooltipBorder,
         borderWidth: 1,
         textStyle: { color: theme.text, fontSize: 12 },
-        axisPointer: { type: 'line', lineStyle: { color: theme.grid } },
-        valueFormatter: (value: unknown) => (value == null ? '—' : `${value} ${unit}`),
+        axisPointer: {
+          type: 'line',
+          lineStyle: { color: theme.grid },
+          label: {
+            formatter: (p: { value: number | string }) => formatTime(Number(p.value), locale),
+            backgroundColor: theme.tooltipBg,
+            color: theme.text,
+            borderColor: theme.tooltipBorder,
+            borderWidth: 1,
+          },
+        },
+        // The tooltip is the only place a chart can say what happened at this
+        // moment: the value alone left the outage and note markers readable
+        // only by hitting a sub-pixel vertical line with the mouse.
+        appendToBody: true,
+        formatter: (params: unknown) => {
+          const all = Array.isArray(params) ? params : [params];
+          const rows = all.filter((r) => !BAND_SERIES.has(String((r as { seriesName?: string }).seriesName ?? '')));
+          const first = rows[0] as { axisValue?: number } | undefined;
+          const at = Number(first?.axisValue ?? NaN);
+          const header = Number.isFinite(at) ? formatTime(at, locale) : '';
+          const lines = rows.map((row) => {
+            const r = row as { seriesName?: string; value?: [number, number | null]; color?: string };
+            const raw = Array.isArray(r.value) ? r.value[1] : null;
+            const shown = raw == null ? '—' : `${formatValue(raw)} ${unit}`.trim();
+            const dot = `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${r.color ?? theme.textMuted};margin-right:6px"></span>`;
+            return `<div>${dot}${escapeHtml(String(r.seriesName ?? ''))}: <b>${escapeHtml(shown)}</b></div>`;
+          });
+          // Everything that HAPPENED within half a sample of this moment.
+          const near = [
+            ...(data.events ?? []).map((e) => ({ ...e, kind: 'event' as const })),
+            ...(data.annotations ?? []).map((a) => ({ ...a, kind: 'note' as const })),
+          ].filter((e) => Number.isFinite(at) && Math.abs(e.t - at) <= tooltipWindow);
+          const marks = near.map((e) => {
+            const color = e.kind === 'note' ? theme.annotation : theme.textMuted;
+            return `<div style="color:${color};margin-top:2px">• ${escapeHtml(e.label)}</div>`;
+          });
+          const spread = rangeAt(data.range, at, tooltipWindow);
+          const spreadLine =
+            spread && (spread.min != null || spread.max != null)
+              ? `<div style="color:${theme.textMuted};margin-top:2px">${escapeHtml(
+                  t('chart.tooltip_range', 'Rozsah dne')
+                )}: ${spread.min == null ? '—' : formatValue(spread.min)}–${
+                  spread.max == null ? '—' : formatValue(spread.max)
+                } ${escapeHtml(unit)}${
+                  spread.samples != null
+                    ? ` · ${escapeHtml(t('chart.tooltip_samples', { n: spread.samples }, `${spread.samples} měření`))}`
+                    : ''
+                }</div>`
+              : '';
+          return [
+            `<div style="color:${theme.textMuted};margin-bottom:2px">${escapeHtml(header)}</div>`,
+            ...lines,
+            spreadLine,
+            ...marks,
+          ]
+            .filter(Boolean)
+            .join('');
+        },
       },
       legend:
         data.series.length > 1
           ? {
+              data: data.series.map((s) => s.label),
               top: 0,
               right: 0,
               icon: 'roundRect',
@@ -161,29 +233,39 @@ export function MetricChart({
         scale: data.yMin === null,
         axisLine: { show: false },
         axisTick: { show: false },
+        // The unit belongs on the axis, and 12 000 belongs there as 12 k. A
+        // net chart used to read 0 / 2000 / 4000 with no unit anywhere.
+        name: unit && unit !== '%' ? unit : undefined,
+        nameLocation: 'end' as const,
+        nameGap: 8,
+        nameTextStyle: { color: theme.textMuted, fontSize: 10, align: 'left' as const },
         axisLabel: {
           color: theme.textMuted,
           fontSize: 11,
-          formatter: (value: number) => `${value}${unit === '%' ? ' %' : ''}`,
+          formatter: (value: number) => `${compact(value, locale)}${unit === '%' ? ' %' : ''}`,
         },
         splitLine: { lineStyle: { color: theme.grid } },
       },
-      series: data.series.map((s, i) =>
-        buildSeries(
-          s,
-          theme.series[s.tone],
-          data.series.length,
-          i === 0 ? data.events : undefined,
-          theme.textMuted,
-          // Bands belong to the first series only - drawn twice they darken.
-          i === 0 ? data.bands : undefined,
-          theme,
-          i === 0 ? data.annotations : undefined,
-          i === 0 ? data.periods : undefined
-        )
-      ),
+      series: [
+        ...buildRangeBand(data.range, theme.series[data.series[0]?.tone ?? 'latency']),
+        ...data.series.map((s, i) =>
+          buildSeries(
+            s,
+            theme.series[s.tone],
+            data.series.length,
+            i === 0 ? data.events : undefined,
+            theme.textMuted,
+            // Bands belong to the first series only - drawn twice they darken.
+            i === 0 ? data.bands : undefined,
+            theme,
+            i === 0 ? data.annotations : undefined,
+            i === 0 ? data.periods : undefined,
+            locale
+          )
+        ),
+      ],
     };
-  }, [data, theme, reducedMotion, exportCsv, minimap, t]);
+  }, [data, theme, reducedMotion, exportCsv, minimap, t, locale, tooltipWindow, totalPoints]);
 
   return (
     <Chart
@@ -192,13 +274,78 @@ export function MetricChart({
       key={theme.key}
       option={option}
       height={height}
-      animate={!reducedMotion}
       group={group}
-      ariaLabel={`${data.title} v čase`}
-      summary={describe(data)}
+      ariaLabel={t('chart.aria_over_time', { title: data.title }, `${data.title} v čase`)}
+      summary={describe(data, t)}
       onPickTime={onPickTime}
     />
   );
+}
+
+/**
+ * Names of the two helper series that draw the spread. They carry no readable
+ * information of their own - the tooltip prints the range as one line instead
+ * of listing "min" and "span" as if they were measurements.
+ */
+const BAND_SERIES = new Set(['__range_floor', '__range_span']);
+
+/**
+ * The day's min-max spread as a soft band under the average line.
+ *
+ * ECharts draws a band as two stacked series: an invisible floor at the
+ * minimum and a filled one the height of (max - min). Both are silent, out of
+ * the legend and out of the tooltip.
+ */
+function buildRangeBand(range: ChartData['range'], color: string) {
+  const usable = (range ?? []).filter((r) => r.min != null && r.max != null);
+  if (usable.length === 0) return [];
+  return [
+    {
+      name: '__range_floor',
+      type: 'line' as const,
+      stack: 'bk-range',
+      silent: true,
+      symbol: 'none' as const,
+      lineStyle: { opacity: 0 },
+      areaStyle: { opacity: 0 },
+      z: 1,
+      data: usable.map((r) => [r.t, r.min as number]),
+    },
+    {
+      name: '__range_span',
+      type: 'line' as const,
+      stack: 'bk-range',
+      silent: true,
+      symbol: 'none' as const,
+      lineStyle: { opacity: 0 },
+      areaStyle: { color: withAlpha(color, 0.16) },
+      z: 1,
+      data: usable.map((r) => [r.t, (r.max as number) - (r.min as number)]),
+    },
+  ];
+}
+
+/** Locale-formatted timestamp, the same shape every other time in the app uses. */
+function formatTime(ms: number, locale: string): string {
+  return new Date(ms).toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' });
+}
+
+/** Two decimals at most, and no trailing zeros - measurements, not accounting. */
+function formatValue(v: number): string {
+  return String(Math.round(v * 100) / 100);
+}
+
+/** 12 000 -> 12 k. Keeps a long axis label from eating the plot area. */
+function compact(value: number, locale: string): string {
+  if (!Number.isFinite(value)) return '—';
+  if (Math.abs(value) < 1000) return String(Math.round(value * 100) / 100);
+  return new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+/** The spread recorded for the day the hovered point belongs to. */
+function rangeAt(range: ChartData['range'], at: number, window: number) {
+  if (!range || !Number.isFinite(at)) return null;
+  return range.find((r) => Math.abs(r.t - at) <= window) ?? null;
 }
 
 function buildSeries(
@@ -210,8 +357,10 @@ function buildSeries(
   bands: ChartData['bands'],
   theme: ChartTheme,
   annotations?: ChartEvent[],
-  periods?: ChartData['periods']
+  periods?: ChartData['periods'],
+  locale = 'cs-CZ'
 ) {
+  const seriesPointCount = s.points.length;
   // Events (measured facts) and notes (human claims) share one markLine -
   // ECharts allows a single markLine per series, so the styling rides on each
   // item instead.
@@ -225,11 +374,11 @@ function buildSeries(
   const markLineData = [
     ...(events ?? []).map((e) => ({
       xAxis: e.t,
-      name: `${new Date(e.t).toLocaleString('cs-CZ')} — ${e.label}`,
+      name: `${formatTime(e.t, locale)} — ${e.label}`,
     })),
     ...(annotations ?? []).map((a) => ({
       xAxis: a.t,
-      name: `${new Date(a.t).toLocaleString('cs-CZ')} — ${a.label}`,
+      name: `${formatTime(a.t, locale)} — ${a.label}`,
       lineStyle: { color: theme.annotation, type: 'solid' as const, width: 1.4 },
       emphasis: { lineStyle: { color: theme.annotation, width: 2.2 } },
     })),
@@ -276,7 +425,7 @@ function buildSeries(
     // break, not a drop to zero.
     data: s.points.map((p) => [p.t, p.v]),
     showSymbol: false,
-    smooth: 0.25,
+    smooth: seriesPointCount > 2000 ? false : 0.25,
     // Predictions draw dashed — they must not be mistakable for measurements.
     lineStyle: { width: 1.6, color, type: s.predicted ? ('dashed' as const) : ('solid' as const) },
     itemStyle: { color },
@@ -291,6 +440,9 @@ function buildSeries(
           }
         : undefined,
     connectNulls: false,
+    // LTTB keeps the extremes; 'average' would smooth away exactly the spike
+    // the operator opened the chart for.
+    sampling: 'lttb' as const,
     // Events (outage, restart, config change) and notes as vertical lines.
     // silent: false - hovering the line shows WHAT happened at that moment.
     markLine: markLineData.length
@@ -322,16 +474,26 @@ function buildSeries(
  * chart would not exist for a blind user. Min/max/avg is the least worth saying.
 
  */
-function describe(data: ChartData): string {
+function describe(data: ChartData, t: TranslateFn): string {
   const parts = data.series.map((s) => {
     const values = s.points.map((p) => p.v).filter((v): v is number => v != null);
-    if (values.length === 0) return `${s.label}: žádná data`;
+    if (values.length === 0) {
+      return t('chart.summary_no_data', { label: s.label }, `${s.label}: žádná data`);
+    }
 
     const min = Math.min(...values);
     const max = Math.max(...values);
     const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+    // Breaks belong in the summary: for a screen reader the holes in the line
+    // are invisible, and a chart full of gaps otherwise reads as a full one.
+    const gaps = s.points.filter((p) => p.v == null).length;
 
-    return `${s.label}: minimum ${min} ${s.unit}, maximum ${max} ${s.unit}, průměr ${avg.toFixed(1)} ${s.unit}`;
+    const stats = t(
+      'chart.summary_stats',
+      { label: s.label, min: String(min), max: String(max), avg: avg.toFixed(1), unit: s.unit },
+      `${s.label}: minimum ${min} ${s.unit}, maximum ${max} ${s.unit}, průměr ${avg.toFixed(1)} ${s.unit}`
+    );
+    return gaps > 0 ? `${stats}. ${t('chart.summary_gaps', { n: gaps }, `${gaps} přerušení měření`)}` : stats;
   });
 
   return `${data.title}. ${parts.join('. ')}.`;

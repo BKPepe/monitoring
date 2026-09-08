@@ -7,7 +7,8 @@
  */
 
 export type MonitorStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
-export type DayStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
+/** 'nodata' = the day was never measured; 'paused' = the monitor was deliberately off. */
+export type DayStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance' | 'nodata';
 
 export interface HealthMetric {
   key: string;

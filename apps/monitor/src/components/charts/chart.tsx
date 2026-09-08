@@ -52,8 +52,6 @@ export interface ChartProps {
   summary?: string;
   height?: number;
   className?: string;
-  /** Disables animations (the caller handles prefers-reduced-motion). */
-  animate?: boolean;
   /**
    * Charts sharing a group share the tooltip cursor and zoom
    * (echarts.connect) - hovering CPU shows the same moment in the RAM chart.
@@ -68,16 +66,7 @@ export interface ChartProps {
   onPickTime?: (timestampMs: number) => void;
 }
 
-export function Chart({
-  option,
-  ariaLabel,
-  summary,
-  height = 200,
-  className,
-  animate = true,
-  group,
-  onPickTime,
-}: ChartProps) {
+export function Chart({ option, ariaLabel, summary, height = 200, className, group, onPickTime }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
 
@@ -130,13 +119,27 @@ export function Chart({
   }, [onPickTime]);
 
   React.useEffect(() => {
-    instanceRef.current?.setOption(option, {
+    const instance = instanceRef.current;
+    if (!instance) return;
+
+    // notMerge throws the whole option away, dataZoom included, so any zoom
+    // the user set was lost whenever the option changed identity: saving a
+    // note, switching the rate unit, or changing the UI language. Remember
+    // where they were and put them back.
+    const previous = (instance.getOption() as { dataZoom?: { start?: number; end?: number }[] } | undefined)
+      ?.dataZoom?.[0];
+    const wasZoomed = previous != null && ((previous.start ?? 0) > 0 || (previous.end ?? 100) < 100);
+
+    instance.setOption(option, {
       // notMerge: old series must be dropped, otherwise leftovers of the
       // previous configuration survive a data change.
       notMerge: true,
-      silent: !animate,
     });
-  }, [option, animate]);
+
+    if (wasZoomed) {
+      instance.dispatchAction({ type: 'dataZoom', start: previous.start, end: previous.end });
+    }
+  }, [option]);
 
   return (
     <figure className={cn('relative', className)}>

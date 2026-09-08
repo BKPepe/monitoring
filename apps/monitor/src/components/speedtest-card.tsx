@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Gauge, ArrowDown, ArrowUp } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
+import { MetricChart } from '@/components/charts/metric-chart';
+import { insertGaps } from '@/lib/series-gaps';
+import type { ChartData } from '@/api/types';
 
 interface Measurement {
   measuredAt: string;
@@ -61,6 +64,36 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
   }
 
   const latest = data.measurements[0];
+  // The card fetches thirty measurements and used to show one. This is the
+  // only place that history survives at all - the router keeps its results in
+  // a ramdisk - so it gets drawn. A failed test stays null and reads as a gap,
+  // never as zero throughput.
+  const ascending = [...data.measurements].reverse();
+  const speedChart: ChartData | null =
+    ascending.length >= 2
+      ? {
+          id: `speedtest-${monitorId}`,
+          title: t('speed.history_title', 'Naměřená rychlost v čase'),
+          yMax: null,
+          yMin: 0,
+          series: [
+            {
+              key: 'download',
+              label: t('speed.download', 'Stahování'),
+              unit: 'Mb/s',
+              tone: 'network',
+              points: insertGaps(ascending.map((m) => ({ t: Date.parse(m.measuredAt), v: m.downloadMbps }))),
+            },
+            {
+              key: 'upload',
+              label: t('speed.upload', 'Odesílání'),
+              unit: 'Mb/s',
+              tone: 'memory',
+              points: insertGaps(ascending.map((m) => ({ t: Date.parse(m.measuredAt), v: m.uploadMbps }))),
+            },
+          ],
+        }
+      : null;
   const periods: { key: string; label: string }[] = [
     { key: 'week', label: t('speed.week', 'Týden') },
     { key: 'month', label: t('speed.month', 'Měsíc') },
@@ -102,6 +135,8 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
           )}
         </div>
       </div>
+
+      {speedChart && <MetricChart data={speedChart} height={170} />}
 
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">

@@ -38,6 +38,8 @@ import type {
 } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { convertRate, formatRate, isRateMetric, suggestRateUnit, RATE_UNITS, type RateUnit } from '@/lib/rate-units';
+import { insertGaps } from '@/lib/series-gaps';
+import { percentile } from '@/lib/percentiles';
 import { cn } from '@/lib/utils';
 
 /**
@@ -210,7 +212,14 @@ export function MetricDetailPage() {
     loadAnnotations();
   }, [loadAnnotations]);
 
-  const rawPoints = React.useMemo(() => (series?.points ?? []).map(([ts, v]) => ({ t: ts * 1000, v })), [series]);
+  // insertGaps here for the same reason as in http-source: the endpoint only
+  // returns rows that were measured, so a silent agent looks like a straight
+  // line between the last sample before it and the first one after.
+  const rawPoints = React.useMemo(
+    () => insertGaps((series?.points ?? []).map(([ts, v]) => ({ t: ts * 1000, v }))),
+    [series]
+  );
+  const gapCount = React.useMemo(() => rawPoints.filter((p) => p.v == null).length, [rawPoints]);
 
   const tone = toneFor(metric);
   const sourceUnit = detail?.metric.unit ?? series?.unit ?? '';
@@ -261,9 +270,18 @@ export function MetricDetailPage() {
               ...p,
               label: t('net.link_period_label', 'Primární linka mimo provoz'),
             })),
+            // On a 90d/1y chart a point is a whole day's average. The server
+            // has always sent that day's real minimum and maximum; without the
+            // band a day that peaked at 100 % was drawn at its 40 % average.
+            range: series?.dailyRange?.map((r) => ({
+              t: r.ts * 1000,
+              min: isRate ? convertRate(r.min, activeUnit) : r.min,
+              max: isRate ? convertRate(r.max, activeUnit) : r.max,
+              samples: r.samples,
+            })),
           }
         : null,
-    [detail, monId, metric, sourceUnit, unit, tone, points, anns, activeUnit, isRate, linkPeriods, t]
+    [detail, monId, metric, sourceUnit, unit, tone, points, anns, activeUnit, isRate, linkPeriods, series, t]
   );
 
   const stats = computeStats(points);
@@ -331,9 +349,17 @@ export function MetricDetailPage() {
             </span>
           )}
         </StatTile>
-        <StatTile label={t('metric.average', 'Průměr')} value={stats.avg} unit={unit} />
+        <StatTile label={t('metric.median', 'Medián (p50)')} value={stats.p50} unit={unit} />
+        <StatTile label={t('metric.p95', 'p95 (horší konec)')} value={stats.p95} unit={unit} />
         <StatTile label={t('metric.peak', 'Špička')} value={stats.max} unit={unit} />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile label={t('metric.average', 'Průměr')} value={stats.avg} unit={unit} />
+        <StatTile label={t('metric.p99', 'p99 (nejhorší setina)')} value={stats.p99} unit={unit} />
         <StatTile label={t('metric.min', 'Minimum')} value={stats.min} unit={unit} />
+        {/* A window with holes must say so - the chart shows breaks, the number
+            says how many, and both come from the same points. */}
+        <StatTile label={t('metric.gaps', 'Přerušení měření')} value={gapCount} unit={t('metric.gaps_unit', 'x')} />
       </div>
 
       {/* Layer 2 - why. */}
@@ -751,17 +777,31 @@ function computeStats(points: { t: number; v: number | null }[]): {
   avg: number | null;
   min: number | null;
   max: number | null;
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
 } {
   const values = points.map((p) => p.v).filter((v): v is number => v != null);
   if (values.length === 0) {
-    return { current: null, avg: null, min: null, max: null };
+    return { current: null, avg: null, min: null, max: null, p50: null, p95: null, p99: null };
   }
   const round = (n: number) => Math.round(n * 100) / 100;
+  const pct = (p: number) => {
+    const v = percentile(values, p);
+    return v == null ? null : round(v);
+  };
   return {
     current: round(values[values.length - 1]),
     avg: round(values.reduce((s, v) => s + v, 0) / values.length),
     min: round(Math.min(...values)),
     max: round(Math.max(...values)),
+    // Percentiles from the SAME array as the tiles above, so a chart and its
+    // numbers can never disagree. Average plus peak was the least informative
+    // pair available for latency: one timeout owns the peak, the average hides
+    // the tail.
+    p50: pct(50),
+    p95: pct(95),
+    p99: pct(99),
   };
 }
 

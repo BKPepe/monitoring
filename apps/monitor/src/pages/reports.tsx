@@ -397,7 +397,15 @@ export function ReportsPage() {
             {monitors.map((item) => {
               const measured = item.uptimePercent != null;
               const isOk = measured && (item.uptimePercent as number) >= slaGoal;
-              const fillPct = measured ? Math.max(5, Math.min(100, ((item.uptimePercent as number) - 90.0) * 10)) : 0;
+              // The old scale was truncated AND floored: everything at or below
+              // 90.5 % drew the same 5 % stub, so 90 % and 42 % looked alike,
+              // while 99.0 and 99.9 were indistinguishable at the top. The bar
+              // now runs linearly over the last ten points of availability,
+              // anything below 90 % is a full-width bad bar, and a monitor with
+              // no measurement gets no fill at all.
+              const uptime = item.uptimePercent as number;
+              const fillPct = measured ? (uptime <= 90 ? 100 : Math.min(100, (uptime - 90) * 10)) : 0;
+              const goalPct = Math.max(0, Math.min(100, (slaGoal - 90) * 10));
               const isExpanded = expandedId === item.id;
 
               return (
@@ -449,13 +457,29 @@ export function ReportsPage() {
                     </div>
                   </div>
 
-                  {/* Progress bar */}
+                  {/* Availability on a stated scale (90-100 %), with the SLA goal
+                      marked on it. Without the scale and the tick the bar said
+                      nothing a reader could act on. */}
                   <div className="px-3.5 pb-2">
-                    <div className="h-1.5 w-full bg-secondary/80 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all rounded-full ${isOk ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                        style={{ width: `${fillPct}%` }}
+                    <div className="bg-secondary/80 relative h-1.5 w-full overflow-hidden rounded-full">
+                      {measured ? (
+                        <div
+                          className={`h-full rounded-full transition-all ${isOk ? 'bg-up' : uptime <= 90 ? 'bg-down' : 'bg-warning'}`}
+                          style={{ width: `${fillPct}%` }}
+                        />
+                      ) : (
+                        <div className="bg-muted-foreground/20 h-full w-full rounded-full" />
+                      )}
+                      <span
+                        aria-hidden
+                        title={t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
+                        className="bg-foreground/60 absolute top-0 h-full w-px"
+                        style={{ left: `${goalPct}%` }}
                       />
+                    </div>
+                    <div className="text-muted-foreground mt-0.5 flex justify-between text-[10px]">
+                      <span>{measured ? '90 %' : t('reports.not_measured', 'Bez měření')}</span>
+                      <span>100 %</span>
                     </div>
                   </div>
 

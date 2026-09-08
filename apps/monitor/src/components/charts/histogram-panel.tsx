@@ -5,6 +5,7 @@ import { withAlpha } from './color';
 import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { MetricPoint, MetricTone } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
+import { percentile } from '@/lib/percentiles';
 
 /**
  * Value histogram of the currently selected period.
@@ -26,6 +27,18 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
     const values = points.map((p) => p.v).filter((v): v is number => v != null);
     return values.length >= 2 ? buildHistogram(values) : null;
   }, [points]);
+
+  // p95/p99 marked on the bars themselves: the shape shows where the mass is,
+  // the markers show where the tail starts. Both come from the same values, so
+  // they cannot disagree with the tiles above the chart.
+  const marks = React.useMemo(() => {
+    if (!histogram) return [];
+    const values = points.map((p) => p.v).filter((v): v is number => v != null);
+    return ([95, 99] as const)
+      .map((p) => ({ p, value: percentile(values, p) }))
+      .filter((m): m is { p: 95 | 99; value: number } => m.value != null)
+      .map((m) => ({ p: m.p, value: m.value, bin: histogram.binOf(m.value) }));
+  }, [histogram, points]);
 
   const option = React.useMemo<EChartsCoreOption | null>(() => {
     if (!histogram) return null;
@@ -69,10 +82,25 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
           barCategoryGap: '15%',
           itemStyle: { color: withAlpha(color, 0.75), borderRadius: [3, 3, 0, 0] },
           emphasis: { itemStyle: { color } },
+          markLine: marks.length
+            ? {
+                symbol: 'none' as const,
+                silent: true,
+                lineStyle: { color: theme.textMuted, type: 'dashed' as const, width: 1 },
+                label: {
+                  show: true,
+                  formatter: '{b}',
+                  color: theme.textMuted,
+                  fontSize: 10,
+                  position: 'insideEndTop' as const,
+                },
+                data: marks.map((m) => ({ xAxis: m.bin, name: `p${m.p}` })),
+              }
+            : undefined,
         },
       ],
     };
-  }, [histogram, theme, reducedMotion, unit, t, tone]);
+  }, [histogram, marks, theme, reducedMotion, unit, t, tone]);
 
   if (!histogram || !option) {
     return (
@@ -87,9 +115,8 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
       key={theme.key}
       option={option}
       height={180}
-      animate={!reducedMotion}
       ariaLabel={t('metric.hist_aria', 'Histogram naměřených hodnot')}
-      summary={describeHistogram(histogram, unit)}
+      summary={describeHistogram(histogram, unit, marks, t)}
     />
   );
 }
@@ -97,6 +124,8 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
 interface Histogram {
   labels: string[];
   counts: number[];
+  /** Index of the bar a value falls into - used to place the percentile marks. */
+  binOf: (value: number) => number;
 }
 
 /**
@@ -110,7 +139,7 @@ function buildHistogram(values: number[]): Histogram {
 
   if (min === max) {
     // Every measurement identical - one bar says so honestly.
-    return { labels: [formatEdge(min)], counts: [values.length] };
+    return { labels: [formatEdge(min)], counts: [values.length], binOf: () => 0 };
   }
 
   const targetBins = Math.max(6, Math.min(24, Math.ceil(Math.sqrt(values.length))));
@@ -132,7 +161,11 @@ function buildHistogram(values: number[]): Histogram {
     return `${formatEdge(a)}–${formatEdge(a + step)}`;
   });
 
-  return { labels, counts };
+  return {
+    labels,
+    counts,
+    binOf: (value: number) => Math.min(binCount - 1, Math.max(0, Math.floor((value - start) / step))),
+  };
 }
 
 function formatEdge(v: number): string {
@@ -141,7 +174,18 @@ function formatEdge(v: number): string {
 }
 
 /** Text alternative - the canvas is invisible to a screen reader. */
-function describeHistogram(h: Histogram, unit: string): string {
+function describeHistogram(
+  h: Histogram,
+  unit: string,
+  marks: { p: number; value: number }[],
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
+): string {
   const top = h.counts.indexOf(Math.max(...h.counts));
-  return `Histogram: nejčastější pásmo ${h.labels[top]} ${unit} (${h.counts[top]}×).`;
+  const main = t(
+    'metric.hist_summary',
+    { band: h.labels[top], unit, count: h.counts[top] },
+    `Histogram: nejčastější pásmo ${h.labels[top]} ${unit} (${h.counts[top]}×).`
+  );
+  const tail = marks.map((m) => `p${m.p} ${m.value} ${unit}`).join(', ');
+  return tail ? `${main} ${tail}.` : main;
 }

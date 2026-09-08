@@ -1,3 +1,4 @@
+import { insertGaps } from '@/lib/series-gaps';
 import type {
   ChartData,
   MetricDetail,
@@ -91,10 +92,17 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   }
 }
 
-/** Seconds → milliseconds. `api.php` sends UNIX_TIMESTAMP(), i.e. seconds. */
+/**
+ * Seconds → milliseconds. `api.php` sends UNIX_TIMESTAMP(), i.e. seconds.
+ *
+ * Both metric endpoints select only rows that HAVE a value, so a stretch when
+ * nothing was measured arrives as two neighbouring samples. insertGaps marks
+ * those holes, which is what turns them into breaks in the line instead of a
+ * straight segment across an outage nobody measured.
+ */
 function toPoints(raw: [number, number, number?][]): MetricPoint[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map(([ts, value]) => ({ t: ts * 1000, v: value }));
+  return insertGaps(raw.map(([ts, value]) => ({ t: ts * 1000, v: value })));
 }
 
 export const httpMetricsSource: MetricsSource = {

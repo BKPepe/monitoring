@@ -1795,26 +1795,25 @@ function HealthScoreTile({ score }: { score: number }) {
   );
 }
 
+/** The same tokens the sparkline strokes with, so a tile reads as one thing. */
+const TONE_TEXT: Record<NonNullable<HealthMetric['tone']>, string> = {
+  latency: 'text-chart-latency',
+  cpu: 'text-chart-cpu',
+  memory: 'text-chart-memory',
+  disk: 'text-chart-disk',
+  temperature: 'text-chart-temperature',
+};
+
 function HealthCard({ metric }: { metric: HealthMetric }) {
   return (
     <Card className="p-3.5 flex flex-col gap-1">
       <p className="text-xs text-muted-foreground font-medium">{metric.label}</p>
       <div className="flex items-baseline gap-1.5">
+        {/* One metric, one colour. The number used to be picked from a
+            hand-written hue ladder (CPU amber) while the trace right below it
+            used the chart token (CPU green), so the tile contradicted itself. */}
         <p
-          className={cn(
-            'text-base font-bold',
-            metric.tone === 'latency'
-              ? 'text-sky-600 dark:text-sky-400 font-mono'
-              : metric.tone === 'cpu'
-                ? 'text-amber-600 dark:text-amber-400 font-mono'
-                : metric.tone === 'memory'
-                  ? 'text-emerald-600 dark:text-emerald-400 font-mono'
-                  : metric.tone === 'disk'
-                    ? 'text-purple-600 dark:text-purple-400 font-mono'
-                    : metric.tone === 'temperature'
-                      ? 'text-orange-600 dark:text-orange-400 font-mono'
-                      : 'text-foreground'
-          )}
+          className={cn('text-base font-bold', metric.tone ? `${TONE_TEXT[metric.tone]} font-mono` : 'text-foreground')}
         >
           {metric.value}
         </p>

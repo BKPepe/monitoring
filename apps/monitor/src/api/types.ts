@@ -109,6 +109,12 @@ export interface ChartData {
    */
   periods?: { from: number; to: number; label: string }[];
   /**
+   * Spread behind each point of the FIRST series, drawn as a band around the
+   * line. Used for daily rollups (90d/1y), where a point is a day's average
+   * and the day's real minimum and maximum are otherwise invisible.
+   */
+  range?: { t: number; min: number | null; max: number | null; samples?: number }[];
+  /**
    * Days remaining until full (100 %).
    *
    * Computed by `api.php` with linear regression over 7 days, for `hdd`, `ram`
@@ -145,6 +151,12 @@ export interface MetricSeriesResponse {
   points: [number, number][];
   /** `daily` = points are daily averages, not individual measurements. */
   resolution?: 'daily';
+  /**
+   * Per-day spread behind a daily average. The server has always sent it for
+   * 90d/1y; drawing only the average hid that a day averaging 40 % peaked at
+   * 100 %.
+   */
+  dailyRange?: { ts: number; min: number | null; max: number | null; samples: number }[];
   error?: string;
 }
 
