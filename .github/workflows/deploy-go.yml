@@ -72,6 +72,10 @@ jobs:
             echo "No BK_DATABASE_URL secret set in GitHub. Skipping .env generation."
           fi
 
+      # `timeout` je necinnost ridiciho socketu, ne celkovy limit. Pri 60 s
+      # padal deploy na "Timeout (control socket)" pokazde, kdyz hosting pod
+      # zatezi zaseknul prenos vetsiho souboru - server pritom odpovida
+      # normalne, jen pomalu. 300 s ceka, misto aby to shodilo cely deploy.
       - name: FTP Deploy Go Backend Subdirectory (bin/) for cPanel Application Manager
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
@@ -81,14 +85,19 @@ jobs:
           local-dir: ./bin/
           server-dir: bin/
           protocol: ftps
-          timeout: 60000
+          timeout: 300000
           security: loose
 
 
 
 
 
+      # Frontend se nasazuje i kdyz upload Go backendu selhal: jsou to dve
+      # nezavisle veci na jednom serveru a nekolikrat uz kvuli backendu
+      # zustaly zmeny v SPA nenasazene ("skipped"). Job je pritom porad
+      # cerveny, kdyz selze kterykoli krok - nic se neschovava.
       - name: FTP Deploy React Dashboard to public_html/app/
+        if: ${{ !cancelled() }}
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
           server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
@@ -97,7 +106,7 @@ jobs:
           local-dir: ./apps/monitor/dist/
           server-dir: public_html/app/
           protocol: ftps
-          timeout: 60000
+          timeout: 300000
           security: loose
           exclude: |
             **/.git*
@@ -107,12 +116,13 @@ jobs:
       # (stavový diff) - a bez .htaccess vrací F5 na /app/<route> 404.
       # Soubor se proto nahrává ještě explicitně přes curl, ať tam JE.
       - name: Upload SPA .htaccess explicitly
+        if: ${{ !cancelled() }}
         env:
           FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
           FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
           FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
         run: |
-          curl --silent --show-error --ssl-reqd --insecure \
+          curl --silent --show-error --ssl-reqd \
             --user "$FTP_USER:$FTP_PASS" \
             -T apps/monitor/dist/.htaccess \
             "ftp://$FTP_HOST/public_html/app/.htaccess"
@@ -125,6 +135,7 @@ jobs:
       # aplikace na URL /app v cPanelu (Passenger context ignoroval
       # .htaccess) - prvni misto, kam se pri selhani podivat.
       - name: Verify SPA deep-link refresh works
+        if: ${{ !cancelled() }}
         env:
           FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
           FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
@@ -140,7 +151,7 @@ jobs:
             echo "vezme a .htaccess se v nem neprocesuje. Prereguistruj ji na jine URL."
             echo ""
             echo "--- obsah .htaccess na serveru ---"
-            curl --silent --ssl-reqd --insecure --user "$FTP_USER:$FTP_PASS" \
+            curl --silent --ssl-reqd --user "$FTP_USER:$FTP_PASS" \
               "ftp://$FTP_HOST/public_html/app/.htaccess" || echo "(soubor nejde stahnout)"
             exit 1
           fi
