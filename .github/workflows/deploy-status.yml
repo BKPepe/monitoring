@@ -114,7 +114,10 @@ jobs:
           local-dir: ./apps/status/
           server-dir: public_html/status/
           protocol: ftps
-          timeout: 60000
+          # Stejny duvod jako v deploy-go.yml: `timeout` je necinnost ridiciho
+          # socketu. Po predchozim deployi jeste nejsou uvolnena FTP sezeni a
+          # server odpovi az za desitky sekund - v 60 s se to nestihlo.
+          timeout: 300000
           retry: 3
           exclude: |
             **/.git*
