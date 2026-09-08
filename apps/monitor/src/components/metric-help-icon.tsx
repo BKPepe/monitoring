@@ -12,11 +12,11 @@ import { metricHelp } from '@/lib/metric-help';
  *
  * When a metric has no explainer, nothing renders. An empty bubble saying
  * "no description" would only take space and teach people the question mark
- * ignorovat.
+ * to ignore the question mark.
  */
 export function MetricHelpIcon({ metric, className }: { metric: string; className?: string }) {
   const { t } = useLanguage();
-  const help = metricHelp(metric);
+  const help = metricHelp(metric, t);
   if (!help) return null;
 
   return (

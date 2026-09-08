@@ -1789,6 +1789,195 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.lte_quality': { cs: 'Kvalita LTE signálu', en: 'LTE signal quality' },
   'net.wifi_noise': { cs: 'Šum na kanálu', en: 'Channel noise' },
   'net.busy_label': { cs: 'Vytížení kanálu', en: 'Channel airtime' },
+  'help.source_agent': {
+    cs: 'Agent na zařízení, při každém hlášení (obvykle jednou za minutu).',
+    en: 'The agent on the device, with every report (usually once a minute).',
+  },
+  'help.source_server': {
+    cs: 'Kontrola ze serveru monitoringu, při každém běhu cronu.',
+    en: 'A check from the monitoring server, on every cron run.',
+  },
+  'help.response_time_what': {
+    cs: 'Doba, za kterou služba odpověděla na kontrolu.',
+    en: 'How long the service took to answer the check.',
+  },
+  'help.response_time_how': {
+    cs: 'Změří se celý požadavek - navázání spojení, TLS i odpověď.',
+    en: 'The whole request is timed: connection, TLS and the response.',
+  },
+  'help.response_time_caveat': {
+    cs: 'Měří se z jednoho místa, takže vysoká hodnota může znamenat i problém na cestě, ne u služby.',
+    en: 'Measured from one place, so a high value can also mean trouble on the way rather than at the service.',
+  },
+  'help.cpu_what': {
+    cs: 'Podíl času, kdy procesor nebyl nečinný.',
+    en: 'The share of time the processor was not idle.',
+  },
+  'help.cpu_how': {
+    cs: 'Rozdíl hodnot v /proc/stat mezi dvěma hlášeními.',
+    en: 'The difference in /proc/stat between two reports.',
+  },
+  'help.cpu_caveat': {
+    cs: 'Krátká špička mezi dvěma hlášeními se do průměru nemusí promítnout.',
+    en: 'A short spike between two reports may not show up in the average.',
+  },
+  'help.ram_what': { cs: 'Obsazená paměť v procentech.', en: 'Memory in use, as a percentage.' },
+  'help.ram_how': {
+    cs: 'Z /proc/meminfo: (MemTotal - MemAvailable) / MemTotal.',
+    en: 'From /proc/meminfo: (MemTotal - MemAvailable) / MemTotal.',
+  },
+  'help.ram_caveat': {
+    cs: 'Počítá se z MemAvailable, takže cache se nezapočítává jako obsazená.',
+    en: 'It is computed from MemAvailable, so cache does not count as used.',
+  },
+  'help.swap_what': { cs: 'Kolik odkládacího prostoru je použito.', en: 'How much swap space is in use.' },
+  'help.swap_how': {
+    cs: 'Z /proc/meminfo: (SwapTotal - SwapFree) / SwapTotal.',
+    en: 'From /proc/meminfo: (SwapTotal - SwapFree) / SwapTotal.',
+  },
+  'help.swap_caveat': {
+    cs: 'Router bez swapu hlásí prázdnou hodnotu, ne nulu - to jsou dvě různé věci.',
+    en: 'A router without swap reports an empty value, not a zero. Those are two different things.',
+  },
+  'help.hdd_what': { cs: 'Zaplnění hlavního úložiště.', en: 'How full the main storage is.' },
+  'help.hdd_how': {
+    cs: 'df na /overlay (běžný OpenWrt) nebo na / (Turris a systémy s zapisovatelným rootem).',
+    en: 'df on /overlay (ordinary OpenWrt) or on / (Turris and systems with a writable root).',
+  },
+  'help.hdd_caveat': {
+    cs: 'Je to jen jeden oddíl. Připojené disky najdete v přehledu úložiště níže.',
+    en: 'It is one partition only. Attached disks are in the storage panel below.',
+  },
+  'help.disk_io_read_what': { cs: 'Rychlost čtení z disků.', en: 'Read throughput of the disks.' },
+  'help.disk_io_read_how': {
+    cs: 'Přírůstek přečtených sektorů v /proc/diskstats mezi hlášeními, přepočtený na kB/s.',
+    en: 'The increase of sectors read in /proc/diskstats between reports, converted to kB/s.',
+  },
+  'help.disk_io_write_what': { cs: 'Rychlost zápisu na disky.', en: 'Write throughput of the disks.' },
+  'help.disk_io_write_how': {
+    cs: 'Přírůstek zapsaných sektorů v /proc/diskstats mezi hlášeními, přepočtený na kB/s.',
+    en: 'The increase of sectors written in /proc/diskstats between reports, converted to kB/s.',
+  },
+  'help.disk_io_write_caveat': {
+    cs: 'U routerů s flash pamětí je trvale vysoký zápis důvod ke kontrole - flash má omezený počet přepisů.',
+    en: 'On a router with flash storage, sustained writing is worth investigating: flash takes a limited number of rewrites.',
+  },
+  'help.wan_latency_ms_what': {
+    cs: 'Odezva směrem do internetu měřená z routeru.',
+    en: 'Latency towards the internet, measured from the router.',
+  },
+  'help.wan_latency_ms_how': { cs: 'Ping na bránu poskytovatele.', en: 'A ping to the provider gateway.' },
+  'help.wan_latency_ms_caveat': {
+    cs: 'Měří se z routeru, takže vylučuje vaši domácí síť - je to jiná hodnota než odezva služby z internetu.',
+    en: 'Measured from the router, so it excludes your home network. A different figure from the service latency measured over the internet.',
+  },
+  'help.dns_latency_ms_what': {
+    cs: 'Jak dlouho trvá přeložit doménové jméno.',
+    en: 'How long it takes to resolve a domain name.',
+  },
+  'help.dns_latency_ms_how': {
+    cs: 'Skutečný dotaz na lokální resolver a změření času.',
+    en: 'A real query to the local resolver, timed.',
+  },
+  'help.dns_latency_ms_caveat': {
+    cs: 'Vyžaduje nslookup i time; kde chybí, zůstává hodnota prázdná.',
+    en: 'It needs both nslookup and time; where either is missing, the value stays empty.',
+  },
+  'help.tcp_retrans_what': {
+    cs: 'Kolik TCP segmentů se muselo poslat znovu.',
+    en: 'How many TCP segments had to be sent again.',
+  },
+  'help.tcp_retrans_how': {
+    cs: 'Sloupec RetransSegs v /proc/net/snmp, rozdíl mezi hlášeními.',
+    en: 'The RetransSegs column in /proc/net/snmp, differenced between reports.',
+  },
+  'help.tcp_retrans_caveat': {
+    cs: 'Roste dřív, než si někdo stěžuje na pomalé připojení - je to dobrý včasný signál.',
+    en: 'It rises before anyone complains about a slow connection, which makes it a good early signal.',
+  },
+  'help.conntrack_what': {
+    cs: 'Jak zaplněná je tabulka sledovaných spojení.',
+    en: 'How full the connection tracking table is.',
+  },
+  'help.conntrack_how': {
+    cs: 'Podíl nf_conntrack_count a nf_conntrack_max.',
+    en: 'nf_conntrack_count over nf_conntrack_max.',
+  },
+  'help.conntrack_caveat': {
+    cs: 'Při 100 % router odmítá nová spojení, i když má volný procesor i pamět.',
+    en: 'At 100 % the router refuses new connections even with a free processor and free memory.',
+  },
+  'help.temperature_c_what': { cs: 'Teplota procesoru nebo desky.', en: 'Processor or board temperature.' },
+  'help.temperature_c_how': {
+    cs: 'Z thermal zón jádra (/sys/class/thermal).',
+    en: 'From the kernel thermal zones (/sys/class/thermal).',
+  },
+  'help.temperature_c_caveat': {
+    cs: 'Zařízení, které teplotní čidlo nevystavuje, hodnotu neposílá - proto je prázdná, ne nulová.',
+    en: 'A device that exposes no temperature sensor sends nothing, hence empty rather than zero.',
+  },
+  'help.entropy_what': {
+    cs: 'Kolik náhodnosti má jádro k dispozici.',
+    en: 'How much randomness the kernel has available.',
+  },
+  'help.entropy_how': {
+    cs: 'Z /proc/sys/kernel/random/entropy_avail.',
+    en: 'From /proc/sys/kernel/random/entropy_avail.',
+  },
+  'help.entropy_caveat': {
+    cs: 'Trvale nízká hodnota umí zdržovat navazování šifrovaných spojení.',
+    en: 'A persistently low value can slow down establishing encrypted connections.',
+  },
+  'help.ups_battery_pct_what': {
+    cs: 'Nabití baterie záložního zdroje.',
+    en: 'Charge of the backup power supply battery.',
+  },
+  'help.ups_battery_pct_how': { cs: 'Dotaz na démona UPS (NUT).', en: 'A query to the UPS daemon (NUT).' },
+  'help.fw_dropped_what': { cs: 'Kolik paketů firewall zahodil.', en: 'How many packets the firewall dropped.' },
+  'help.fw_dropped_how': {
+    cs: 'Součet počítadel u pravidel s verdiktem drop (nftables, jinak iptables).',
+    en: 'The sum of counters on rules with a drop verdict (nftables, otherwise iptables).',
+  },
+  'help.fw_dropped_caveat': {
+    cs: 'Pakety zahozené politikou řetězce nemají počítadlo, takže se do součtu nepromítnou.',
+    en: 'Packets dropped by the chain policy have no counter, so they never appear in the sum.',
+  },
+  'help.lte_rsrp_what': {
+    cs: 'Síla signálu z vysílače v místě routeru.',
+    en: 'Strength of the tower signal at the router.',
+  },
+  'help.lte_rsrp_how': {
+    cs: 'Z modemu přes ModemManager nebo uqmi, u HiLink modemů z /api/device/signal.',
+    en: 'From the modem via ModemManager or uqmi; on HiLink modems from /api/device/signal.',
+  },
+  'help.lte_rsrp_caveat': {
+    cs: 'Stupnice: nad -80 dBm výborný, do -90 dobrý, do -100 slabší, níž špatný. Sama o sobě neřekne všechno: se špatným RSRQ nebo SINR jde o rušení, ne o vzdálenost, a posun antény k oknu nepomůže.',
+    en: 'Scale: above -80 dBm excellent, to -90 good, to -100 fair, below that poor. On its own it does not say everything: with a poor RSRQ or SINR the problem is interference rather than distance, and moving the antenna to a window will not help.',
+  },
+  'help.lte_rsrq_what': {
+    cs: 'Kolik z přijatého signálu je užitečné a kolik rušení.',
+    en: 'How much of the received signal is wanted and how much is interference.',
+  },
+  'help.lte_rsrq_how': {
+    cs: 'Z modemu přes ModemManager nebo uqmi, u HiLink modemů z /api/device/signal.',
+    en: 'From the modem via ModemManager or uqmi; on HiLink modems from /api/device/signal.',
+  },
+  'help.lte_rsrq_caveat': {
+    cs: 'Stupnice: nad -10 dB výborný, do -15 dobrý, do -20 slabší, níž špatný. Nízká hodnota při dobrém RSRP znamená přetíženou nebo zarušenou buňku.',
+    en: 'Scale: above -10 dB excellent, to -15 good, to -20 fair, below that poor. A low value next to a good RSRP means a congested or interfered cell.',
+  },
+  'help.lte_sinr_what': {
+    cs: 'Poměr signálu k šumu, tedy kolik rychlosti linka utáhne.',
+    en: 'Signal-to-noise ratio: what throughput the link can carry.',
+  },
+  'help.lte_sinr_how': {
+    cs: 'Z modemu přes ModemManager nebo uqmi, u HiLink modemů z /api/device/signal.',
+    en: 'From the modem via ModemManager or uqmi; on HiLink modems from /api/device/signal.',
+  },
+  'help.lte_sinr_caveat': {
+    cs: 'Stupnice: nad 20 dB výborný, do 13 dobrý, do 0 slabší, záporný špatný. Pomáhá směrová anténa, která odfiltruje okolní rušení.',
+    en: 'Scale: above 20 dB excellent, to 13 good, down to 0 fair, negative poor. A directional antenna, which rejects surrounding interference, is what helps.',
+  },
   'signal.level_excellent': { cs: 'výborný', en: 'excellent' },
   'signal.level_good': { cs: 'dobrý', en: 'good' },
   'signal.level_fair': { cs: 'slabší', en: 'fair' },
