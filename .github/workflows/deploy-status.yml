@@ -15,6 +15,17 @@ on:
   # Actions zrovna nezareagovaly na push).
   workflow_dispatch:
 
+
+# Hosting pousti jen hrstku soucasnych FTP prihlaseni. Skupina je zamerne
+# SPOLECNA pro oba deploy workflow: push, ktery sahne na apps/status i na
+# apps/monitor, spousti oba najednou a ty se pak perou o stejne sloty na
+# stejnem uctu - odtud "Timeout (control socket)". Druhy deploy radeji
+# pocka. cancel-in-progress: false, protoze zabity FTP prenos nechava
+# server v polovicnim stavu.
+concurrency:
+  group: ftp-deploy-hosting
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Build and Deploy Status App
@@ -126,12 +137,16 @@ jobs:
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
         run: |
           set -eu
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
-            curl --silent --show-error --ssl-reqd --ftp-pasv --connect-timeout 20 --max-time 120 \
-              --user "$FTP_USERNAME:$FTP_PASSWORD" \
-              -T "apps/status/$f" "ftp://$FTP_SERVER/public_html/status/$f"
-            echo "nahrano: $f"
-          done
+          # Jedno prihlaseni na vsechny ctyri soubory: curl si spojeni podrzi
+          # a posle je za sebou. Ctyri samostatna volani = ctyri FTP sezeni,
+          # a tech ma ucet na hostingu jen par.
+          curl --silent --show-error --ssl-reqd --ftp-pasv --connect-timeout 20 --max-time 300 \
+            --user "$FTP_USERNAME:$FTP_PASSWORD" \
+            -T "apps/status/agent.sh" "ftp://$FTP_SERVER/public_html/status/agent.sh" \
+            -T "apps/status/agent.py" "ftp://$FTP_SERVER/public_html/status/agent.py" \
+            -T "apps/status/agent.ps1" "ftp://$FTP_SERVER/public_html/status/agent.ps1" \
+            -T "apps/status/agent_openwrt.sh" "ftp://$FTP_SERVER/public_html/status/agent_openwrt.sh"
+          echo "nahrany: agent.sh, agent.py, agent.ps1, agent_openwrt.sh"
 
       # Po nasazeni se kazda verejna stranka pozada, jestli neupadla.
       # widget.php a badge.php takhle mesice vracely 500 (volaly funkci,

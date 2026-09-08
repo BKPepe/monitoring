@@ -13,6 +13,17 @@ on:
   # Actions zrovna nezareagovaly na push).
   workflow_dispatch:
 
+
+# Hosting pousti jen hrstku soucasnych FTP prihlaseni. Skupina je zamerne
+# SPOLECNA pro oba deploy workflow: push, ktery sahne na apps/status i na
+# apps/monitor, spousti oba najednou a ty se pak perou o stejne sloty na
+# stejnem uctu - odtud "Timeout (control socket)". Druhy deploy radeji
+# pocka. cancel-in-progress: false, protoze zabity FTP prenos nechava
+# server v polovicnim stavu.
+concurrency:
+  group: ftp-deploy-hosting
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     name: Build Go Server & React SPA, Deploy via FTP
@@ -122,11 +133,25 @@ jobs:
           FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
           FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
         run: |
-          curl --silent --show-error --ssl-reqd \
-            --user "$FTP_USER:$FTP_PASS" \
-            -T apps/monitor/dist/.htaccess \
-            "ftp://$FTP_HOST/public_html/app/.htaccess"
-          echo ".htaccess nahran."
+          set -eu
+          # Ucet ma na hostingu jen par soucasnych FTP sezeni a hned po dvou
+          # velkych uploadech jeste nejsou uvolnena - prvni pokus proto konci
+          # na "server response timeout". Tri pokusy s odstupem, teprve pak je
+          # to chyba.
+          for attempt in 1 2 3; do
+            if curl --silent --show-error --ssl-reqd --ftp-pasv \
+              --connect-timeout 20 --max-time 180 \
+              --user "$FTP_USER:$FTP_PASS" \
+              -T apps/monitor/dist/.htaccess \
+              "ftp://$FTP_HOST/public_html/app/.htaccess"; then
+              echo ".htaccess nahran (pokus $attempt)."
+              exit 0
+            fi
+            echo "pokus $attempt selhal, cekam 20 s na uvolneni sezeni..."
+            sleep 20
+          done
+          echo "Ani na treti pokus se .htaccess nepodarilo nahrat."
+          exit 1
 
       # Deep link se MUSI dat obnovit (F5). Kontrola po kazdem deployi -
       # regrese rewrite pravidla shodi workflow, ne az uzivatele.
