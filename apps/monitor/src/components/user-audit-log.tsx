@@ -181,7 +181,29 @@ export function UserAuditLog() {
         </p>
       ) : (
         <>
-          <div className="overflow-x-auto">
+          {/* On a phone the six columns did not fit and this was the one table
+              in the app without a card fallback: the detail, the address and
+              the client were simply off-screen. Cards below md, the table
+              above it. */}
+          <ul className="flex flex-col gap-2 md:hidden">
+            {pageRows.map((e) => (
+              <li key={e.id} className="border-border rounded-md border p-3 text-xs">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <Badge variant={isDestructive(e.action) ? 'down' : isSecurity(e.action) ? 'neutral' : 'up'}>
+                    {actionLabels[e.action] ?? e.action}
+                  </Badge>
+                  <span className="text-muted-foreground font-mono tabular-nums">{e.time}</span>
+                </div>
+                <p className="mt-1 font-medium">{e.actor ?? '—'}</p>
+                {e.description && <p className="text-muted-foreground mt-0.5">{e.description}</p>}
+                <p className="text-muted-foreground mt-0.5 font-mono text-[11px] break-all">
+                  {e.ip ?? '—'}
+                  {e.userAgent ? ` · ${e.userAgent}` : ''}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full text-left text-xs">
               <thead className="text-muted-foreground border-b border-border">
                 <tr>

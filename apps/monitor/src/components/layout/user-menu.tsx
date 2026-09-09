@@ -39,13 +39,10 @@ export function UserMenu({
             <p className="truncate text-sm font-medium">{name}</p>
             <p className="text-muted-foreground truncate text-xs">{role}</p>
           </div>
-          <button
-            type="button"
-            className="text-muted-foreground hover:text-foreground ml-auto transition-colors"
-            aria-label={t('user_menu.menu_aria', 'Menu uživatele')}
-          >
-            <MoreVertical className="size-4" />
-          </button>
+          {/* Decoration, not a control: there is no user menu behind it. As a
+              button it took a tab stop and announced a menu that never opened,
+              which is worse than showing nothing. */}
+          <MoreVertical className="text-muted-foreground ml-auto size-4 shrink-0" aria-hidden="true" />
         </>
       )}
     </div>

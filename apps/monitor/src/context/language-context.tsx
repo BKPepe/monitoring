@@ -3270,7 +3270,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'footer.join_discord': { cs: 'Připojit se k Discordu', en: 'Join Discord' },
 
   // User Menu / App Shell
-  'user_menu.menu_aria': { cs: 'Menu uživatele', en: 'User Menu' },
   'user_menu.login_title': { cs: 'Přihlásit se / Nastavit', en: 'Log In / Setup' },
   'user_menu.profile_title': { cs: 'Můj účet', en: 'My account' },
   'user_menu.logged_out': { cs: 'Nepřihlášen', en: 'Not Logged In' },

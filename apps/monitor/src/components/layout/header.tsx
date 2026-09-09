@@ -103,9 +103,14 @@ export function Header({
             type="button"
             onClick={() => setLang('cs')}
             className={cn(
-              'px-2 py-1 rounded transition-colors text-[11px]',
+              // A 22px target is below what a thumb can hit reliably; 44px is
+              // the size a finger expects. The pressed state was carried by a
+              // background colour alone, which says nothing out loud.
+              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-[11px] transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
               lang === 'cs' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
+            aria-pressed={lang === 'cs'}
+            aria-label={t('settings.lang_cs', 'Čeština')}
             title={t('settings.lang_cs', 'Čeština')}
           >
             🇨🇿 CS
@@ -114,9 +119,11 @@ export function Header({
             type="button"
             onClick={() => setLang('en')}
             className={cn(
-              'px-2 py-1 rounded transition-colors text-[11px]',
+              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-[11px] transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
               lang === 'en' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
+            aria-pressed={lang === 'en'}
+            aria-label="English"
             title="English"
           >
             🇬🇧 EN

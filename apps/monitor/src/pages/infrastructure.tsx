@@ -641,7 +641,7 @@ export function InfrastructurePage() {
                       <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">
                         {t('infra.type_label', 'Typ monitoringu / Služby')}
                       </label>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid gap-2 sm:grid-cols-3">
                         {[
                           {
                             id: 'web',
@@ -697,7 +697,7 @@ export function InfrastructurePage() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
                       <div>
                         <label className="block text-xs font-medium text-muted-foreground mb-1">
                           {t('infra.display_name', 'Zobrazovaný název')} *
@@ -752,7 +752,7 @@ export function InfrastructurePage() {
                             'Po uložení dostanete adresu, na kterou se má úloha na konci ozvat. Když se neozve včas, monitor spadne do výpadku. Hodí se na zálohy a cronjoby, na které se zvenku nedá zeptat.'
                           )}
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
                           <div>
                             <label className="block text-xs font-medium text-muted-foreground mb-1">
                               {t('infra.heartbeat_interval', 'Jak často se úloha ozve (minuty)')} *
@@ -784,7 +784,7 @@ export function InfrastructurePage() {
                         </div>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid gap-3 sm:grid-cols-3">
                         <div className="col-span-2">
                           <label className="block text-xs font-medium text-muted-foreground mb-1">
                             {t('infra.target_label', 'Cíl (URL / Hostname / IP / Guild ID)')}{' '}
@@ -1008,7 +1008,7 @@ export function InfrastructurePage() {
                         <h4 className="font-bold text-foreground text-sm">
                           🎙️ {t('infra.ts3_settings', 'TeamSpeak 3 ServerQuery & Porty')}
                         </h4>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
                           <div>
                             <label className="block text-xs font-medium text-muted-foreground mb-1">
                               {t('infra.sq_user', 'ServerQuery Uživatel')}
@@ -1049,7 +1049,7 @@ export function InfrastructurePage() {
                         <h4 className="font-bold text-foreground text-sm">
                           🎮 {t('infra.rcon_settings', 'Minecraft RCON Příkazové Rozhraní')}
                         </h4>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
                           <div>
                             <label className="block text-xs font-medium text-muted-foreground mb-1">
                               {t('infra.rcon_port', 'RCON Port (výchozí 25575)')}
@@ -1200,7 +1200,7 @@ export function InfrastructurePage() {
                                     'Povolené vzdálené akce (OBĚ strany musí souhlasit):'
                                   )}
                                 </p>
-                                <div className="grid grid-cols-2 gap-2">
+                                <div className="grid gap-2 sm:grid-cols-2">
                                   {[
                                     {
                                       key: 'restart_wan',
@@ -1373,7 +1373,7 @@ export function InfrastructurePage() {
                         <label className="block text-[11px] font-medium text-muted-foreground mb-1">
                           {t('infra.latency_alert', 'Upozornit na zpomalení')}
                         </label>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
                           <Input
                             type="number"
                             min={1}
@@ -1496,7 +1496,7 @@ export function InfrastructurePage() {
                             />
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid gap-3 sm:grid-cols-2">
                             <div>
                               <label className="block text-[11px] font-medium text-muted-foreground mb-1">
                                 {t('infra.maintenance_from', 'Údržba od')}
