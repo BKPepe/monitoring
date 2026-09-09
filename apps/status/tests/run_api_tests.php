@@ -2364,6 +2364,31 @@ if ($logged_in) {
                 VALUES (1, 'down', 'email', 'admin@example.com', 1, NULL)");
     $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
                 VALUES (1, 'down', 'discord', NULL, 0, 'HTTP 404')");
+    // Údržba jedním voláním, klidně pro víc monitorů. Vypnutí musí smazat i
+    // okno, jinak by další údržba vypršela hned, jak ji někdo zapne.
+    [$tm_anon] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1], 'maintenance' => true], '');
+    check('anonym údržbu nepřepne', $tm_anon, 403);
+    [$tm_code, $tm_res] = api_post(
+        $base,
+        'action=toggle_maintenance',
+        ['monitor_ids' => [1, 2], 'maintenance' => true, 'description' => 'Výměna disku', 'maintenance_end' => '2030-01-02 03:00:00'],
+        $cookie_jar
+    );
+    check('toggle_maintenance vrací 200', $tm_code, 200);
+    check('a přepne oba monitory', $tm_res['changed'] ?? 0, 2);
+    [, $tm_list] = api_get($base, 'action=monitors');
+    $tm_by_id = [];
+    foreach (($tm_list['monitors'] ?? []) as $m) { $tm_by_id[(int)$m['id']] = $m; }
+    check_true('údržba je zapnutá u obou', ($tm_by_id[1]['maintenance'] ?? null) === true && ($tm_by_id[2]['maintenance'] ?? null) === true);
+    check('a popis je veřejný, dokud běží', $tm_by_id[1]['maintenanceDescription'] ?? null, 'Výměna disku');
+    api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1, 2], 'maintenance' => false], $cookie_jar);
+    [, $tm_off] = api_get($base, 'action=monitors');
+    $tm_off_by_id = [];
+    foreach (($tm_off['monitors'] ?? []) as $m) { $tm_off_by_id[(int)$m['id']] = $m; }
+    check_false('po vypnutí už údržba neběží', ($tm_off_by_id[1]['maintenance'] ?? null) === true);
+    $tm_win = $pdo->query("SELECT maintenance_end FROM monitors WHERE id = 1")->fetchColumn();
+    check_true('a okno je smazané, ne jen příznak', $tm_win === null);
+
     // Kdo bral výkon za období, ne kdo byl náhodou nahoře v posledním hlášení.
     // Seskupuje se podle jména: služba, která se restartuje, žere dál pod novým
     // pid a per-pid žebříček by ji rozdrobil na neškodně vypadající řádky.

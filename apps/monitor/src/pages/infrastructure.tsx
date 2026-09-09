@@ -71,6 +71,13 @@ export function InfrastructurePage() {
   const [activeTab, setActiveTab] = React.useState<'general' | 'metrics' | 'advanced' | 'alerts'>('general');
 
   // General settings
+  // Notification channels for THIS monitor. The notifier has honoured them
+  // for a long time ("the router shouts into the ops channel"), but nothing
+  // ever wrote them, so they were dead settings.
+  const [monDiscord, setMonDiscord] = React.useState('');
+  const [monSlack, setMonSlack] = React.useState('');
+  const [monTelegramToken, setMonTelegramToken] = React.useState('');
+  const [monTelegramChat, setMonTelegramChat] = React.useState('');
   const [monitorType, setMonitorType] = React.useState<
     'web' | 'minecraft' | 'teamspeak' | 'openwrt' | 'vps' | 'discord' | 'heartbeat'
   >('web');
@@ -248,6 +255,10 @@ export function InfrastructurePage() {
       setCpanelStatsUrl(mon.cpanelStatsUrl ?? '');
       setBodyKeyword(mon.bodyKeyword ?? '');
       setSqUsername(mon.sqUsername ?? 'serveradmin');
+      setMonDiscord(mon.discordWebhookUrl ?? '');
+      setMonSlack(mon.slackWebhookUrl ?? '');
+      setMonTelegramToken(mon.telegramBotToken ?? '');
+      setMonTelegramChat(mon.telegramChatId ?? '');
       setSqPassword('');
       setSqPasswordPlaceholder(
         mon.sqPasswordSet
@@ -425,6 +436,12 @@ export function InfrastructurePage() {
           remote_actions_enabled: remoteActionsEnabled ? 1 : 0,
           allowed_actions: allowedActions,
           enabled_metrics: enabledMetrics,
+          // Per-monitor channel overrides. Empty clears the override and the
+          // monitor falls back to the global channel.
+          discord_webhook_url: monDiscord,
+          slack_webhook_url: monSlack,
+          telegram_bot_token: monTelegramToken,
+          telegram_chat_id: monTelegramChat,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -515,6 +532,10 @@ export function InfrastructurePage() {
               setCpanelStatsUrl('');
               setBodyKeyword('');
               setSqUsername('serveradmin');
+              setMonDiscord('');
+              setMonSlack('');
+              setMonTelegramToken('');
+              setMonTelegramChat('');
               setSqPassword('');
               setSqPasswordPlaceholder('••••••••');
               setTs3FiletransferPort('30033');
@@ -1304,6 +1325,48 @@ export function InfrastructurePage() {
                           />
                           {t('infra.sms_on_outage', 'Zasílat SMS notifikace při výpadku')}
                         </label>
+                      </div>
+
+                      {/* Where THIS monitor's alerts go. The notifier has read these
+                          columns for a long time and nothing ever wrote them, so a
+                          router that should shout into the ops channel could not be
+                          told to. Empty = the global channel from Settings. */}
+                      <div className="border-border space-y-2 border-t pt-2">
+                        <label className="text-muted-foreground block text-[11px] font-medium">
+                          {t('infra.own_channels', 'Vlastní kanály pro tenhle monitor')}
+                        </label>
+                        <p className="text-muted-foreground text-[11px]">
+                          {t(
+                            'infra.own_channels_hint',
+                            'Prázdné pole znamená globální kanál z Nastavení. Vyplněné přebíjí jen pro tenhle monitor.'
+                          )}
+                        </p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <Input
+                            value={monDiscord}
+                            onChange={(e) => setMonDiscord(e.target.value)}
+                            placeholder={t('infra.own_discord', 'Discord webhook URL')}
+                            aria-label={t('infra.own_discord', 'Discord webhook URL')}
+                          />
+                          <Input
+                            value={monSlack}
+                            onChange={(e) => setMonSlack(e.target.value)}
+                            placeholder={t('infra.own_slack', 'Slack webhook URL')}
+                            aria-label={t('infra.own_slack', 'Slack webhook URL')}
+                          />
+                          <Input
+                            value={monTelegramToken}
+                            onChange={(e) => setMonTelegramToken(e.target.value)}
+                            placeholder={t('infra.own_tg_token', 'Telegram bot token')}
+                            aria-label={t('infra.own_tg_token', 'Telegram bot token')}
+                          />
+                          <Input
+                            value={monTelegramChat}
+                            onChange={(e) => setMonTelegramChat(e.target.value)}
+                            placeholder={t('infra.own_tg_chat', 'Telegram chat ID')}
+                            aria-label={t('infra.own_tg_chat', 'Telegram chat ID')}
+                          />
+                        </div>
                       </div>
 
                       <div className="pt-2 border-t border-border">

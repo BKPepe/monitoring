@@ -69,6 +69,11 @@ export interface ApiMonitor {
    * so they cannot answer whether anything was configured.
    */
   effectiveThresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
+  /** Per-monitor notification channels; null = use the global one. */
+  discordWebhookUrl?: string | null;
+  slackWebhookUrl?: string | null;
+  telegramBotToken?: string | null;
+  telegramChatId?: string | null;
   cpuThreshold?: number;
   ramThreshold?: number;
   hddThreshold?: number;
@@ -189,6 +194,18 @@ export const appApi = {
     channel: 'email' | 'discord' | 'telegram' | 'slack'
   ): Promise<{ ok: boolean; message: string }> {
     return mutate<{ ok: boolean; message: string }>('test_notification', { channel });
+  },
+
+  /**
+   * Switches maintenance for one or more monitors. Off also clears the window,
+   * so a leftover end date cannot expire the next maintenance immediately.
+   */
+  async toggleMaintenance(monitorIds: number[], maintenance: boolean, description = ''): Promise<void> {
+    await mutate<{ success: boolean }>('toggle_maintenance', {
+      monitor_ids: monitorIds,
+      maintenance,
+      description,
+    });
   },
 
   async getSession(): Promise<SessionInfo> {

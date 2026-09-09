@@ -80,7 +80,7 @@ if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SE
 $bk_post_only_actions = [
     // session-authenticated writes (these also require CSRF)
     'save_monitor', 'delete_monitor', 'import_discovered_service', 'upload_logo',
-    'trigger_remote_action', 'convert_to_agent_check', 'save_settings', 'test_notification',
+    'trigger_remote_action', 'convert_to_agent_check', 'save_settings', 'test_notification', 'toggle_maintenance',
     'generate_metrics_token', 'incident_action', 'create_incident',
     'save_preset', 'delete_preset', 'assign_preset',
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
@@ -383,6 +383,7 @@ if ($action === 'monitors') {
                        maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold, preset_id,
                        latency_threshold_ms, latency_threshold_mins,
                        body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
+                       discord_webhook_url, slack_webhook_url, telegram_bot_token, telegram_chat_id,
                        (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
                        (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
                        enabled_metrics, remote_actions_enabled, allowed_actions
@@ -421,6 +422,12 @@ if ($action === 'monitors') {
                 $monitors[$mid]['latencyThresholdMins'] = (int)($r['latency_threshold_mins'] ?? 5);
                 $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
                 $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
+                // The per-monitor channel overrides, so the form can show what is
+                // set and clear it. Admin extension only - they are secrets.
+                $monitors[$mid]['discordWebhookUrl'] = $r['discord_webhook_url'];
+                $monitors[$mid]['slackWebhookUrl'] = $r['slack_webhook_url'];
+                $monitors[$mid]['telegramBotToken'] = $r['telegram_bot_token'];
+                $monitors[$mid]['telegramChatId'] = $r['telegram_chat_id'];
                 $monitors[$mid]['sqUsername'] = $r['sq_username'];
                 $monitors[$mid]['sqPasswordSet'] = (bool)$r['sq_password_set'];
                 $monitors[$mid]['ts3FiletransferPort'] = $r['ts3_filetransfer_port'] ? (int)$r['ts3_filetransfer_port'] : null;
@@ -526,6 +533,23 @@ if ($action === 'save_monitor') {
     $hdd_threshold = !empty($input['hdd_threshold']) ? (int)$input['hdd_threshold'] : 90;
 
     $body_keyword = (!empty($input['body_keyword']) && $type === 'web') ? trim($input['body_keyword']) : null;
+
+    // Per-monitor notification channels. The notifier has honoured these
+    // columns for a long time - "this router shouts into the ops channel, the
+    // rest go to the general one" - but no form or endpoint ever wrote them,
+    // so they were dead settings. An empty string clears the override and the
+    // monitor falls back to the global channel.
+    $chan = function (string $key) use ($input): ?string {
+        if (!array_key_exists($key, $input)) {
+            return null;
+        }
+        $val = trim((string)$input[$key]);
+        return $val === '' ? null : $val;
+    };
+    $mon_discord = $chan('discord_webhook_url');
+    $mon_slack = $chan('slack_webhook_url');
+    $mon_tg_token = $chan('telegram_bot_token');
+    $mon_tg_chat = $chan('telegram_chat_id');
     $cpanel_stats_url = (!empty($input['cpanel_stats_url']) && $type === 'web') ? trim($input['cpanel_stats_url']) : null;
 
     $sq_username = (!empty($input['sq_username']) && $type === 'teamspeak') ? trim($input['sq_username']) : null;
@@ -573,12 +597,12 @@ if ($action === 'save_monitor') {
             // typed a new value - an empty edit-form field must not erase a stored password.
             $stmt = $pdo->prepare("
                 UPDATE monitors
-                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, latency_threshold_ms = ?, latency_threshold_mins = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?, heartbeat_interval = ?, heartbeat_grace = ?
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, latency_threshold_ms = ?, latency_threshold_mins = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?, heartbeat_interval = ?, heartbeat_grace = ?, discord_webhook_url = ?, slack_webhook_url = ?, telegram_bot_token = ?, telegram_chat_id = ?
                 WHERE id = ?
             ");
             // Token se pri editaci zamerne neprepisuje: uloha uz ho ma zadraty
             // v curl prikazu na svem stroji a zmena by ji tise odstrihla.
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $id]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat, $id]);
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
             $agent_key = bin2hex(random_bytes(16));
@@ -588,13 +612,13 @@ if ($action === 'save_monitor') {
                 $asset_id = (int)$pdo->lastInsertId();
             }
             $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, latency_threshold_ms, latency_threshold_mins, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id, heartbeat_interval, heartbeat_grace, heartbeat_token)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, latency_threshold_ms, latency_threshold_mins, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id, heartbeat_interval, heartbeat_grace, heartbeat_token, discord_webhook_url, slack_webhook_url, telegram_bot_token, telegram_chat_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             // Token vznika jen u heartbeat monitoru - u ostatnich typu by to byl
             // jen nepouzitelny tajny retezec navic v databazi.
             $heartbeat_token = $type === 'heartbeat' ? bk_heartbeat_generate_token() : null;
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $heartbeat_token]);
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $heartbeat_token, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat]);
             $new_id = (int)$pdo->lastInsertId();
             echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
@@ -1304,6 +1328,77 @@ if ($action === 'get_settings') {
 // One real test message through a notification channel, with the SAVED
 // settings. The settings page's test buttons used to flash "Test OK" without
 // calling anything - a dead webhook looked fine until the first outage.
+// Maintenance on or off in one click, for one monitor or several.
+//
+// Putting a machine into maintenance meant opening the edit form, ticking a
+// box and saving the whole monitor - so during an actual maintenance window,
+// when speed matters, the operator was editing forms. Several monitors at once
+// was not possible at all.
+if ($action === 'toggle_maintenance') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $tm_input = json_decode((string)file_get_contents('php://input'), true);
+    $tm_ids = [];
+    foreach ((array)($tm_input['monitor_ids'] ?? []) as $tm_id) {
+        $tm_id = (int)$tm_id;
+        if ($tm_id > 0) {
+            $tm_ids[] = $tm_id;
+        }
+    }
+    $tm_ids = array_values(array_unique($tm_ids));
+    $tm_on = !empty($tm_input['maintenance']);
+    $tm_desc = trim((string)($tm_input['description'] ?? ''));
+    $tm_end = trim((string)($tm_input['maintenance_end'] ?? ''));
+    if (count($tm_ids) === 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_ids.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $place = implode(',', array_fill(0, count($tm_ids), '?'));
+        if ($tm_on) {
+            // The window is written with the flag, so cron can end it by itself
+            // (bk_maintenance_window_expired). Without an end it is a manual
+            // window that waits to be switched off - both are legitimate.
+            $stmt = $pdo->prepare("
+                UPDATE monitors
+                SET maintenance = 1,
+                    maintenance_description = ?,
+                    maintenance_start = NOW(),
+                    maintenance_end = ?
+                WHERE id IN ({$place})
+            ");
+            $stmt->execute(array_merge(
+                [$tm_desc !== '' ? $tm_desc : null, $tm_end !== '' ? $tm_end : null],
+                $tm_ids
+            ));
+        } else {
+            // Off clears the window too - a leftover start/end would make the
+            // next maintenance expire the moment it is switched on.
+            $stmt = $pdo->prepare("
+                UPDATE monitors
+                SET maintenance = 0, maintenance_description = NULL, maintenance_start = NULL, maintenance_end = NULL
+                WHERE id IN ({$place})
+            ");
+            $stmt->execute($tm_ids);
+        }
+        bk_audit_log(
+            $pdo,
+            $tm_on ? 'maintenance_on' : 'maintenance_off',
+            implode(', ', array_map('strval', $tm_ids))
+        );
+        echo json_encode(['success' => true, 'changed' => count($tm_ids), 'maintenance' => $tm_on], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=toggle_maintenance] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Údržbu se nepodařilo přepnout.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // Which processes have been eating the machine over a whole window, not which
 // ones happened to be on top in the last report. process_samples has kept a
 // per-minute history for a long time and the only reader asked it about one

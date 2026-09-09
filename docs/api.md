@@ -486,6 +486,7 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=notification_log&monitor_id=&limit=` | admin | What was sent, to whom, on which channel and whether it went. A row is written for a failure too - that is the interesting half |
 | `action=interface_traffic_daily&monitor_id=&days=` | admin | Traffic per day and interface, busiest first. A missing day means nothing was reported that day, not zero traffic |
 | `action=process_top&monitor_id=&kind=&minutes=` | admin | Which processes used the machine over the whole window (average, peak, sample count), grouped by name so a restarting service is not split per pid. `enabled: false` = process history is switched off in the settings |
+| `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: switches maintenance on or off for one or more monitors. Off also clears the window, so the next maintenance does not expire the moment it starts |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | public read, admin write | Metric profiles |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | logged in | Public status pages |
 | `action=dashboard_layout` | public read, admin write | Tile order and visibility |

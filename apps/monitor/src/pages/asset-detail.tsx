@@ -19,6 +19,7 @@ import { Badge, StatusDot } from '@/components/ui/badge';
 import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
+import { MaintenanceToggle } from '@/components/maintenance-toggle';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
 import { ProcessTop } from '@/components/process-top';
 import {
@@ -123,6 +124,8 @@ export function AssetDetailPage() {
   const idNum = Number(assetId) || 1;
 
   const [asset, setAsset] = React.useState<AssetDetail | null>(null);
+  /** Bumped after an action that changes the monitor, to refetch it. */
+  const [reloadToken, setReloadToken] = React.useState(0);
 
   // The raw row too: the shared collection-issues banner takes ApiMonitor,
 
@@ -175,7 +178,7 @@ export function AssetDetailPage() {
     return () => {
       active = false;
     };
-  }, [idNum, t]);
+  }, [idNum, t, reloadToken]);
 
   // The effects below key on the asset ID, not the object - refreshing an object
   // with the same ID must not refetch events or insights.
@@ -359,7 +362,19 @@ export function AssetDetailPage() {
         <span className="text-foreground font-medium">{asset.name}</span>
       </div>
 
-      <Hero asset={asset} />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <Hero asset={asset} />
+        </div>
+        {/* One click, not "open the form, tick a box, save the whole monitor" -
+            which is what a maintenance window used to cost at the moment speed
+            matters most. */}
+        <MaintenanceToggle
+          monitorId={Number(asset.id)}
+          active={rawMonitor?.maintenance === true}
+          onChanged={() => setReloadToken((n) => n + 1)}
+        />
+      </div>
 
       <CollectionIssuesBanner monitors={rawMonitor ? [rawMonitor] : []} />
 
