@@ -94,9 +94,38 @@ export function HeatmapPanel({
   const hovered = hover ? days[hover.day] : null;
   const hoveredValue = hovered ? hovered.hours[hover!.hour] : null;
 
+  // What the grid says, in words. The cells are divs with colours; for a
+  // screen reader the whole panel was an unlabelled block, and this is the one
+  // view that answers "when in the day does this happen?".
+  type Peak = { day: string; hour: number; v: number };
+  const busiest = days.reduce<Peak | null>((worst, d) => {
+    let best = worst;
+    d.hours.forEach((v, hour) => {
+      if (v === null) return;
+      if (best === null || v > best.v) best = { day: d.day, hour, v };
+    });
+    return best;
+  }, null);
+  const summary = busiest
+    ? t(
+        'metric.heatmap_summary',
+        { hour: busiest.hour, day: busiest.day, value: fmt(busiest.v), unit },
+        `Nejvyšší hodnota ${fmt(busiest.v)} ${unit} připadá na ${busiest.day} v ${busiest.hour}:00.`
+      )
+    : '';
+
   return (
-    <div className="space-y-2">
-      <div className="overflow-x-auto">
+    <figure className="space-y-2">
+      <figcaption className="sr-only">
+        {t('metric.heatmap_aria', 'Hodinová mřížka naměřených hodnot po dnech')}
+        {summary ? ` ${summary}` : ''}
+      </figcaption>
+      <div
+        className="focus-visible:ring-ring overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
+        tabIndex={0}
+        role="region"
+        aria-label={t('metric.heatmap_aria', 'Hodinová mřížka naměřených hodnot po dnech')}
+      >
         <div className="relative min-w-[560px]" ref={gridRef}>
           {/* Hour header - every third hour, more would collide on mobile. */}
           <div className="mb-1 grid grid-cols-[3rem_repeat(24,minmax(0,1fr))] gap-px">
@@ -203,6 +232,6 @@ export function HeatmapPanel({
           `Heatmapa po hodinách za 30 dní, naměřeno od ${fmt(min)} do ${fmt(max)} ${unit}.`
         )}
       </p>
-    </div>
+    </figure>
   );
 }

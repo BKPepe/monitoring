@@ -1847,6 +1847,22 @@ const translations: Record<string, { cs: string; en: string }> = {
   'maint.start': { cs: 'Zapnout údržbu', en: 'Start maintenance' },
   'shell.skip_to_content': { cs: 'Přeskočit na obsah', en: 'Skip to content' },
   'app_shell.nav_label': { cs: 'Navigace', en: 'Navigation' },
+  'metric.heatmap_aria': {
+    cs: 'Hodinová mřížka naměřených hodnot po dnech',
+    en: 'Hour-by-day grid of measured values',
+  },
+  'metric.heatmap_summary': {
+    cs: 'Nejvyšší hodnota {value} {unit} připadá na {day} v {hour}:00.',
+    en: 'The highest value, {value} {unit}, falls on {day} at {hour}:00.',
+  },
+  'corr.summary': {
+    cs: 'Nejsilnější souběh má {label} ({value}), porovnáno {total} metrik.',
+    en: 'The strongest relationship is {label} ({value}), out of {total} metrics compared.',
+  },
+  'corr.summary_none': {
+    cs: 'Žádná z porovnávaných metrik nemá spočitatelný souběh.',
+    en: 'None of the compared metrics has a computable relationship.',
+  },
   'settings.show_secret': { cs: 'Zobrazit hodnotu', en: 'Show the value' },
   'settings.hide_secret': { cs: 'Skrýt hodnotu', en: 'Hide the value' },
   'settings.redetect_location': { cs: 'Zjistit lokalitu znovu', en: 'Detect the location again' },

@@ -46,8 +46,21 @@ export function CorrelationPanel({
     );
   }
 
+  // What the bars say, in words. The list is a set of coloured bars with
+  // numbers; a screen reader was given no summary of it at all.
+  const strongest = data.correlations.find((c) => c.r !== null);
+
   return (
     <div className="space-y-3">
+      <p className="sr-only">
+        {strongest
+          ? t(
+              'corr.summary',
+              { label: strongest.label, value: formatR(strongest.r as number), total: data.total },
+              `Nejsilnější souběh má ${strongest.label} (${formatR(strongest.r as number)}), porovnáno ${data.total} metrik.`
+            )
+          : t('corr.summary_none', 'Žádná z porovnávaných metrik nemá spočitatelný souběh.')}
+      </p>
       <ul className="space-y-1">
         {data.correlations.map((c) => {
           const row = (

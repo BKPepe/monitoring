@@ -143,6 +143,14 @@ export function Header({
             size="icon"
             className="relative cursor-pointer"
             aria-label={t('header.notifications_aria', 'Upozornění')}
+            // A button that opens a panel has to say so, and the panel has to
+            // close on Escape - otherwise a keyboard user opens it and has no
+            // way back except Tab through everything inside.
+            aria-haspopup="menu"
+            aria-expanded={showNotifications}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && showNotifications) setShowNotifications(false);
+            }}
             onClick={() => setShowNotifications(!showNotifications)}
           >
             <Bell />
@@ -160,7 +168,14 @@ export function Header({
 
           {/* Notification popover menu */}
           {showNotifications && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl bg-card border border-border shadow-2xl p-4 z-50 animate-in fade-in-50 zoom-in-95">
+            <div
+              role="menu"
+              aria-label={t('header.notifications_aria', 'Upozornění')}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setShowNotifications(false);
+              }}
+              className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl bg-card border border-border shadow-2xl p-4 z-50 animate-in fade-in-50 zoom-in-95"
+            >
               <div className="flex items-center justify-between border-b border-border pb-3 mb-3">
                 <div className="flex items-center gap-2">
                   <Bell className="size-4 text-primary" />

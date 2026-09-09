@@ -29,7 +29,15 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="overflow-visible py-2">
+      {/* The strip is thirty cells wide and does not fit a phone; scrolling it
+          inside its own box keeps the page from moving sideways, and the box
+          takes focus so a keyboard can move it too. */}
+      <div
+        className="focus-visible:ring-ring overflow-x-auto overflow-y-visible py-2 focus-visible:ring-2 focus-visible:outline-none"
+        tabIndex={0}
+        role="region"
+        aria-label={t('heatmap.caption', { days: dayCount }, `Denní dostupnost monitorů za posledních ${dayCount} dní`)}
+      >
         <table className="w-full border-separate border-spacing-y-2 text-sm overflow-visible">
           <caption className="sr-only">
             {t('heatmap.caption', { days: dayCount }, `Denní dostupnost monitorů za posledních ${dayCount} dní`)}
@@ -59,10 +67,21 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
 
                         return (
                           <div key={day.date} className="group relative flex-1">
+                            {/* Every cell was a link with no name: thirty of them
+                                per row, announced as "link, link, link" and
+                                readable only by hovering with a mouse. The name
+                                carries the day, the state and the number. */}
                             <Link
                               to={`/infrastructure/${row.monitorId}`}
+                              aria-label={`${row.name} · ${day.date} · ${statusLabel[day.status]}${
+                                day.uptimePct != null ? ` · ${day.uptimePct.toFixed(1)} %` : ''
+                              }`}
+                              title={`${day.date} · ${statusLabel[day.status]}${
+                                day.uptimePct != null ? ` · ${day.uptimePct.toFixed(1)} %` : ''
+                              }`}
                               className={cn(
                                 'block h-8 min-w-[14px] rounded-[4px] transition-all hover:scale-125 hover:z-30 cursor-pointer shadow-sm',
+                                'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
                                 cellClass[day.status]
                               )}
                             />
