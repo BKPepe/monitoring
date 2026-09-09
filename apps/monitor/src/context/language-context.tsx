@@ -1826,6 +1826,15 @@ const translations: Record<string, { cs: string; en: string }> = {
   'corr.show_all': { cs: 'Zobrazit všechny', en: 'Show all' },
   'asset.more_metrics': { cs: 'Další měřené metriky ({count})', en: 'Other measured metrics ({count})' },
   'collector.heading': { cs: 'Sběr dat neběží', en: 'Data collection is not running' },
+  'avail.title': { cs: 'Dostupnost', en: 'Availability' },
+  'avail.d1': { cs: '24 hodin', en: '24 hours' },
+  'avail.d7': { cs: '7 dní', en: '7 days' },
+  'avail.d30': { cs: '30 dní', en: '30 days' },
+  'avail.d90': { cs: '90 dní', en: '90 days' },
+  'avail.note': {
+    cs: 'Podíl kontrol, které dopadly dobře, v každém okně. Prázdné okno znamená, že se v něm neměřilo - ne stoprocentní dostupnost.',
+    en: 'The share of checks that passed in each window. An empty window means nothing was measured in it, not full availability.',
+  },
   'collector.never': {
     cs: 'Cron se nikdy nepřihlásil, takže žádná hodnota na téhle stránce není čerstvá.',
     en: 'Cron has never checked in, so nothing on this page is current.',

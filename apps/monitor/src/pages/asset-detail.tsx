@@ -17,6 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { SignalReading } from '@/components/signal-reading';
+import { AvailabilityWindows } from '@/components/availability-windows';
 import {
   lteVerdict,
   rateChannelBusy,
@@ -400,7 +401,7 @@ export function AssetDetailPage() {
 
         {hasNetworkData(asset.rawDetails) && (
           <TabsContent value="network">
-            <NetworkTab d={asset.rawDetails} monitorId={Number(asset.id)} />
+            <NetworkTab d={asset.rawDetails} monitorId={Number(asset.id)} assetId={assetId ?? asset.id} />
           </TabsContent>
         )}
 
@@ -995,6 +996,12 @@ function OverviewTab({
         </CardContent>
       </Card>
 
+      {/* How good this monitor has actually been - the server has computed it
+          in one request all along and only the public page ever asked. */}
+      <div className="xl:col-span-12">
+        <AvailabilityWindows monitorId={asset.id} />
+      </div>
+
       <div className="xl:col-span-12">
         <PerformanceCharts
           data={charts.data}
@@ -1221,12 +1228,28 @@ function hasNetworkData(d: Record<string, any>): boolean {
  * the whole subtree. Here it would merely re-render needlessly, but it is the
  * same root cause that made inputs lose focus in the settings.
  */
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+/**
+ * @param to When the value has a stored history, the row links to it. Most of
+ *   this tab is a snapshot of the last report, but a good half of these
+ *   numbers are recorded every minute and were readable only as "now".
+ */
+function Row({ label, value, to }: { label: string; value: React.ReactNode; to?: string }) {
   if (value == null || value === '') return null;
+  const shown = <span className="text-right font-mono font-medium">{value}</span>;
   return (
-    <div className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0 text-xs">
+    <div className="border-border/40 flex items-center justify-between gap-3 border-b py-1.5 text-xs last:border-0">
       <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium text-right font-mono">{value}</span>
+      {to ? (
+        <Link
+          to={to}
+          className="hover:text-primary focus-visible:ring-ring rounded transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          title={label}
+        >
+          {shown}
+        </Link>
+      ) : (
+        shown
+      )}
     </div>
   );
 }
@@ -1383,7 +1406,19 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
   );
 }
 
-function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: number }) {
+function NetworkTab({
+  d,
+  monitorId,
+  assetId,
+}: {
+  d: Record<string, any>;
+  monitorId: number;
+  /** For linking a row to the history of that metric. */
+  assetId: string | number;
+}) {
+  // Rows whose number is also a stored metric: measured every minute, kept for
+  // months, and until now readable only as its latest value.
+  const history = (key: string) => `/infrastructure/${assetId}/metric/${monitorId}/${key}`;
   const { t } = useLanguage();
 
   // "x minutes ago" labels need the clock, which is impure by definition.
@@ -1451,7 +1486,7 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
           <Row label="IPv6" value={d.wan_ipv6} />
           <Row label={t('net.gateway', 'Brána')} value={d.wan_gateway} />
           <Row label="DNS" value={d.wan_dns} />
-          <Row label={t('net.wan_uptime', 'WAN uptime')} value={fmtDur(d.wan_uptime)} />
+          <Row label={t('net.wan_uptime', 'WAN uptime')} value={fmtDur(d.wan_uptime)} to={history('wan_uptime')} />
           <Row label={t('net.reconnects', 'Reconnecty (od startu)')} value={d.wan_reconnect_count} />
           <Row label={t('net.last_reconnect', 'Poslední reconnect')} value={fmtAgo(d.wan_last_reconnect)} />
           {d.mwan3_active_gw != null && <Row label="mwan3" value={String(d.mwan3_active_gw)} />}
@@ -1506,8 +1541,16 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
       {(d.lan_subnet != null || d.dhcp_leases_count != null) && (
         <Section title={`🏠 ${t('net.lan_title', 'LAN & DHCP')}`}>
           <Row label={t('net.subnet', 'Subnet')} value={d.lan_subnet} />
-          <Row label={t('net.dhcp_leases', 'Aktivní DHCP lease')} value={d.dhcp_leases_count} />
-          <Row label={t('net.dhcp_reservations', 'Rezervace')} value={d.dhcp_reservations_count} />
+          <Row
+            label={t('net.dhcp_leases', 'Aktivní DHCP lease')}
+            value={d.dhcp_leases_count}
+            to={history('dhcp_leases_count')}
+          />
+          <Row
+            label={t('net.dhcp_reservations', 'Rezervace')}
+            value={d.dhcp_reservations_count}
+            to={history('dhcp_reservations_count')}
+          />
         </Section>
       )}
 
@@ -1515,7 +1558,7 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
         <Section title={`🧭 DNS (${d.dns_engine})`}>
           <Row label={t('net.dns_encryption', 'Šifrování')} value={d.dns_encryption} />
           <Row label={t('net.dns_servers', 'Servery')} value={d.dns_servers} />
-          <Row label={t('net.dns_queries', 'Dotazy')} value={d.dns_queries} />
+          <Row label={t('net.dns_queries', 'Dotazy')} value={d.dns_queries} to={history('dns_queries')} />
           <Row
             label={t('net.dns_cache', 'Cache hit rate')}
             value={dnsTotal > 0 ? `${Math.round((Number(d.dns_cache_hits) / dnsTotal) * 100)} %` : null}
@@ -1529,9 +1572,9 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
 
       {(d.fw_accepted != null || d.conntrack_pct != null) && (
         <Section title={`🛡 ${t('net.fw_title', 'Firewall & Conntrack')}`}>
-          <Row label={t('net.fw_accepted', 'Přijato paketů')} value={d.fw_accepted} />
-          <Row label={t('net.fw_dropped', 'Zahozeno')} value={d.fw_dropped} />
-          <Row label={t('net.fw_rejected', 'Odmítnuto')} value={d.fw_rejected} />
+          <Row label={t('net.fw_accepted', 'Přijato paketů')} value={d.fw_accepted} to={history('fw_accepted')} />
+          <Row label={t('net.fw_dropped', 'Zahozeno')} value={d.fw_dropped} to={history('fw_dropped')} />
+          <Row label={t('net.fw_rejected', 'Odmítnuto')} value={d.fw_rejected} to={history('fw_rejected')} />
           <Row
             label="Conntrack"
             value={
@@ -1729,9 +1772,17 @@ function NetworkTab({ d, monitorId }: { d: Record<string, any>; monitorId: numbe
                 : null
             }
           />
-          <Row label={t('net.log_errors', 'Chyby v logu (24 h)')} value={d.log_errors_24h} />
-          <Row label={t('net.log_warnings', 'Varování v logu (24 h)')} value={d.log_warnings_24h} />
-          <Row label={t('net.entropy', 'Entropie')} value={d.entropy} />
+          <Row
+            label={t('net.log_errors', 'Chyby v logu (24 h)')}
+            value={d.log_errors_24h}
+            to={history('log_errors_24h')}
+          />
+          <Row
+            label={t('net.log_warnings', 'Varování v logu (24 h)')}
+            value={d.log_warnings_24h}
+            to={history('log_warnings_24h')}
+          />
+          <Row label={t('net.entropy', 'Entropie')} value={d.entropy} to={history('entropy')} />
           <Row
             label={t('net.oom_kills', 'OOM kills (od startu)')}
             value={d.oom_kills != null && d.oom_kills > 0 ? d.oom_kills : d.oom_kills === 0 ? '0' : null}
