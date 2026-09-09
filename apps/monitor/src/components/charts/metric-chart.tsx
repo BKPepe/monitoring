@@ -6,7 +6,7 @@ import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { ChartData, ChartEvent, MetricSeries } from '@/api/types';
 import type { ChartTheme } from './use-chart-theme';
 import { useLanguage } from '@/context/language-context';
-import { medianStep } from '@/lib/series-gaps';
+import { insertGaps, medianStep } from '@/lib/series-gaps';
 
 type TranslateFn = (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
 
@@ -51,14 +51,20 @@ export function MetricChart({
 
   // CSV export: exactly the points the chart draws (including null as an
   // empty cell - a gap in measurement stays a gap in the export).
+  // Keyed by timestamp, never by array index: gaps are marked per series, so
+  // two series over the same period can differ in length and an index-paired
+  // export silently attributes one series' value to another's moment.
   const exportCsv = React.useCallback(() => {
     const rows: string[] = ['time,' + data.series.map((s) => `"${s.label} (${s.unit})"`).join(',')];
-    const times = data.series[0]?.points.map((p) => p.t) ?? [];
-    times.forEach((tms, i) => {
-      const cells = data.series.map((s) => {
-        const v = s.points[i]?.v;
+    const byTime = data.series.map((s) => new Map(s.points.map((p) => [p.t, p.v])));
+    const times = [...new Set(data.series.flatMap((s) => s.points.map((p) => p.t)))].sort((a, b) => a - b);
+    times.forEach((tms) => {
+      const cells = byTime.map((m) => {
+        const v = m.get(tms);
         return v == null ? '' : String(v);
       });
+      // A row where every series is empty is a gap marker, not a measurement.
+      if (cells.every((c) => c === '')) return;
       rows.push(new Date(tms).toISOString() + ',' + cells.join(','));
     });
     const blob = new Blob(['\ufeff' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -299,28 +305,41 @@ const BAND_SERIES = new Set(['__range_floor', '__range_span']);
 function buildRangeBand(range: ChartData['range'], color: string) {
   const usable = (range ?? []).filter((r) => r.min != null && r.max != null);
   if (usable.length === 0) return [];
+
+  // Days nobody measured have no row at all, so the band would be drawn
+  // straight across them - the exact fabrication the line was fixed for. The
+  // same cadence check marks the holes, and connectNulls:false splits the area.
+  const floor = insertGaps(usable.map((r) => ({ t: r.t, v: r.min as number })));
+  const spanByTime = new Map(usable.map((r) => [r.t, (r.max as number) - (r.min as number)]));
+
+  const common = {
+    type: 'line' as const,
+    stack: 'bk-range',
+    // ECharts' default 'samesign' adds the value beneath only when it has the
+    // same sign. A day's minimum is negative on every dBm and dB metric, so
+    // the floor was dropped and the band floated up from zero while the line
+    // sat at -100. 'all' always adds it.
+    stackStrategy: 'all' as const,
+    silent: true,
+    symbol: 'none' as const,
+    connectNulls: false,
+    z: 1,
+  };
+
   return [
     {
+      ...common,
       name: '__range_floor',
-      type: 'line' as const,
-      stack: 'bk-range',
-      silent: true,
-      symbol: 'none' as const,
       lineStyle: { opacity: 0 },
       areaStyle: { opacity: 0 },
-      z: 1,
-      data: usable.map((r) => [r.t, r.min as number]),
+      data: floor.map((p) => [p.t, p.v]),
     },
     {
+      ...common,
       name: '__range_span',
-      type: 'line' as const,
-      stack: 'bk-range',
-      silent: true,
-      symbol: 'none' as const,
       lineStyle: { opacity: 0 },
       areaStyle: { color: withAlpha(color, 0.16) },
-      z: 1,
-      data: usable.map((r) => [r.t, (r.max as number) - (r.min as number)]),
+      data: floor.map((p) => [p.t, p.v == null ? null : (spanByTime.get(p.t) ?? null)]),
     },
   ];
 }

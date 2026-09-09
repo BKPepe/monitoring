@@ -69,6 +69,22 @@ describe('insertGaps', () => {
     expect(countGaps(points)).toBe(0);
   });
 
+  // A cron retimed inside the window used to shred the chart: the global median
+  // was the fast era's step, so every ordinary slow step read as an outage.
+  it('follows a cadence change instead of calling it a run of outages', () => {
+    const fast = Array.from({ length: 30 }, (_, i) => ({ t: i * minute, v: 1 }));
+    const slowStart = 30 * minute;
+    const slow = Array.from({ length: 30 }, (_, i) => ({ t: slowStart + i * 10 * minute, v: 1 }));
+    const out = insertGaps([...fast, ...slow]);
+    // At most the one break where the cadence actually changed - not thirty.
+    expect(out.length - 60).toBeLessThanOrEqual(1);
+  });
+
+  it('still marks a real outage inside a slow cadence', () => {
+    const slow = [0, 10, 20, 30, 200, 210].map((m) => ({ t: m * minute, v: 1 }));
+    expect(countGaps(slow)).toBe(1);
+  });
+
   it('has nothing to do without a cadence', () => {
     expect(insertGaps([at(0)])).toHaveLength(1);
     expect(insertGaps([])).toHaveLength(0);

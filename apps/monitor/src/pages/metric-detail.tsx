@@ -38,7 +38,7 @@ import type {
 } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { convertRate, formatRate, isRateMetric, suggestRateUnit, RATE_UNITS, type RateUnit } from '@/lib/rate-units';
-import { insertGaps } from '@/lib/series-gaps';
+import { insertGaps, medianStep } from '@/lib/series-gaps';
 import { percentile } from '@/lib/percentiles';
 import { metricHelp } from '@/lib/metric-help';
 import { betterDirection } from '@/lib/metric-direction';
@@ -83,6 +83,8 @@ export function MetricDetailPage() {
   const corrAll = corrAllFor === corrQuestion;
   const [detail, setDetail] = React.useState<MetricDetail | null>(null);
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);
+  /** When the series was received, so "it stops early" is judged against a fixed moment. */
+  const [seriesAt, setSeriesAt] = React.useState<number | null>(null);
   const [heatmap, setHeatmap] = React.useState<MetricHeatmapResponse | null>(null);
   const [heatmapFailed, setHeatmapFailed] = React.useState(false);
   const [corr, setCorr] = React.useState<MetricCorrelationsResponse | null>(null);
@@ -126,7 +128,12 @@ export function MetricDetailPage() {
     resolveSource()
       .then(({ source }) => source.getMetricSeries(monId, metric, range))
       .then((s) => {
-        if (active) setSeries(s);
+        if (!active) return;
+        setSeries(s);
+        // When the data arrived. Used to tell "the series stops early" from
+        // "the window simply ends here" without reading the clock during a
+        // render, which is not allowed and would not be stable anyway.
+        setSeriesAt(Date.now());
       })
       .catch((e: unknown) => {
         // A failing series does not take the page down - the context is still useful.
@@ -233,7 +240,21 @@ export function MetricDetailPage() {
     () => insertGaps((series?.points ?? []).map(([ts, v]) => ({ t: ts * 1000, v }))),
     [series]
   );
-  const gapCount = React.useMemo(() => rawPoints.filter((p) => p.v == null).length, [rawPoints]);
+  /**
+   * Breaks in the window: the marked holes, plus one when the series simply
+   * stops before the end. `null` when there is not enough data to say - a
+   * window nobody measured used to print "0", an affirmative claim that
+   * measurement was never interrupted.
+   */
+  const gapCount = React.useMemo(() => {
+    const measured = rawPoints.filter((p) => p.v != null);
+    if (measured.length < 2) return null;
+    const marked = rawPoints.filter((p) => p.v == null).length;
+    const step = medianStep(measured);
+    const last = measured[measured.length - 1];
+    const stopsEarly = step != null && seriesAt != null && seriesAt - last.t > Math.max(step * 2.5, 90_000);
+    return marked + (stopsEarly ? 1 : 0);
+  }, [rawPoints, seriesAt]);
   /** When the window peaked - the moment worth asking "what was running" about. */
   const peakAt = React.useMemo(() => {
     let best: { t: number; v: number } | null = null;
@@ -444,7 +465,9 @@ export function MetricDetailPage() {
         {/* A window with holes must say so - the chart shows breaks, the number
             says how many, and both come from the same points. */}
         <StatTile label={t('metric.gaps', 'Přerušení měření')} value={gapCount} unit={t('metric.gaps_unit', 'x')} />
-        <StatTile label={t('metric.samples', 'Měření v období')} value={sampleCount} unit="" />
+        {/* Zero samples is "nothing was measured", which StatTile already
+            renders as a dash - it must not read as a measured zero. */}
+        <StatTile label={t('metric.samples', 'Měření v období')} value={sampleCount > 0 ? sampleCount : null} unit="" />
       </div>
 
       {/* Is that good? Answered against a threshold somebody set, against the

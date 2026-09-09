@@ -470,10 +470,15 @@ export function ReportsPage() {
                       ) : (
                         <div className="bg-muted-foreground/20 h-full w-full rounded-full" />
                       )}
+                      {/* print:hidden on purpose: the print stylesheet forces
+                          position:static on every div, so the absolute tick would
+                          lose its containing block and draw a rule down the whole
+                          page. The printed report states the goal in its header
+                          and the exact figure in the badge. */}
                       <span
                         aria-hidden
                         title={t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
-                        className="bg-foreground/60 absolute top-0 h-full w-px"
+                        className="bg-foreground/60 absolute top-0 h-full w-px print:hidden"
                         style={{ left: `${goalPct}%` }}
                       />
                     </div>
