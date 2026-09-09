@@ -121,6 +121,13 @@ export interface ChartData {
    * and `inode_usage`. Not computed here.
    */
   daysToFull?: number;
+  /**
+   * Whether this metric earns a full chart card on the overview. The curated
+   * set gets cards; everything else the device reports is listed compactly
+   * beneath them, because it is measured every minute and used to be
+   * unreachable - the batch response has always carried it.
+   */
+  featured?: boolean;
 }
 
 /** The periods `api.php` accepts in the `period` parameter. */

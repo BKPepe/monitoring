@@ -37,6 +37,7 @@ import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { DataSourceBanner } from '@/components/data-source-banner';
+import { CollectorHealthBanner } from '@/components/collector-health-banner';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
@@ -708,6 +709,10 @@ export function DashboardPage() {
       />
 
       <DataSourceBanner />
+
+      {/* Louder than any single monitor: when cron stops, every number below is
+          stale and the page would otherwise look calm. */}
+      <CollectorHealthBanner />
 
       <CollectionIssuesBanner monitors={monitors} />
 

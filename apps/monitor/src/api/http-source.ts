@@ -135,6 +135,7 @@ export const httpMetricsSource: MetricsSource = {
         validCharts.push({
           id: metric.key,
           title: data.label || metric.title,
+          featured: true,
           yMax: metric.yMax,
           yMin: metric.yMin,
           // The "full in X days" badge finally has a number. Undefined stays
@@ -151,6 +152,36 @@ export const httpMetricsSource: MetricsSource = {
           ],
         });
       }
+    }
+
+    // Everything else the device actually reports. The batch response has
+    // always carried some sixty series and the app kept thirteen, so more than
+    // forty measured metrics - router signal quality, load averages, steal
+    // time, firewall counters, interface errors - were collected every minute
+    // and reachable from nowhere. They are listed rather than drawn as cards:
+    // a wall of sixty charts is its own kind of hidden.
+    const featuredKeys = new Set(CHART_METRICS.map((m) => m.key as string));
+    for (const [key, data] of Object.entries(batch.series)) {
+      if (featuredKeys.has(key)) continue;
+      if (!data || !Array.isArray(data.points) || data.points.length === 0) continue;
+      validCharts.push({
+        id: key,
+        title: data.label || key,
+        featured: false,
+        yMax: null,
+        // An unknown scale derives its range from the data: pinning a zero
+        // floor would flatten every negative and every narrow series.
+        yMin: null,
+        series: [
+          {
+            key,
+            label: data.label || key,
+            unit: data.unit ?? '',
+            tone: 'latency',
+            points: toPoints(data.points),
+          },
+        ],
+      });
     }
 
     // No fabrication: when real data is missing, an empty array comes back and the component,

@@ -2025,20 +2025,80 @@ function PerformanceCharts({
     );
   }
 
+  // Cards for the curated set, a compact list for everything else the device
+  // reports. `featured` undefined means an older source that only ever
+  // returned the curated set - it keeps its cards.
+  const featured = data.filter((c) => c.featured !== false);
+  const others = data.filter((c) => c.featured === false);
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      {data.map((chart) => (
-        // Link through to Level 3. The legacy page had a metric detail too, but
-        // there was no way to reach it from here - and what cannot be reached
-        // does not exist.
-        <ChartCard
-          key={chart.id}
-          data={chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart}
-          group="asset-performance"
-          to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
-        />
-      ))}
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        {featured.map((chart) => (
+          // Link through to Level 3. The legacy page had a metric detail too, but
+          // there was no way to reach it from here - and what cannot be reached
+          // does not exist.
+          <ChartCard
+            key={chart.id}
+            data={chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart}
+            group="asset-performance"
+            to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
+          />
+        ))}
+      </div>
+
+      {others.length > 0 && (
+        <Card className="space-y-3 p-5">
+          <div>
+            <h3 className="text-sm font-semibold">
+              {t('asset.more_metrics', { count: others.length }, `Další měřené metriky (${others.length})`)}
+            </h3>
+            <p className="text-muted-foreground text-[11px] leading-relaxed">
+              {t(
+                'asset.more_metrics_hint',
+                'Tohle zařízení je hlásí každou minutu a historie se ukládá. Klikněte na kteroukoli pro graf, rozložení hodnot a souvislosti.'
+              )}
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {others.map((chart) => (
+              <MetricRow
+                key={chart.id}
+                chart={chart}
+                to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
+              />
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
+  );
+}
+
+/**
+ * One measured-but-not-featured metric: its name, the last measured value and
+ * the shape of the window, linking to the full detail. The value is the last
+ * NON-NULL sample - a gap marker must not read as the current reading.
+ */
+function MetricRow({ chart, to }: { chart: ChartData; to: string }) {
+  const series = chart.series[0];
+  const points = series?.points ?? [];
+  const latest = [...points].reverse().find((p) => p.v != null);
+  const values = points.map((p) => p.v);
+
+  return (
+    <Link
+      to={to}
+      className="hover:bg-muted/40 focus-visible:ring-ring border-border/40 flex items-center gap-3 rounded-md border px-3 py-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium">{chart.title}</span>
+        <span className="text-muted-foreground tabular block text-[11px]">
+          {latest?.v == null ? '—' : `${latest.v} ${series?.unit ?? ''}`.trim()}
+        </span>
+      </span>
+      {values.length >= 2 && <Sparkline data={values} tone="latency" className="h-6 w-16 shrink-0" />}
+    </Link>
   );
 }
 
@@ -2193,19 +2253,60 @@ function mapInsightsTimeline(
     wan_restored: t('asset.tl_wan_restored', 'Primární připojení (WAN) obnoveno'),
     monitor_added: t('asset.tl_monitor_added', 'Monitor přidán'),
     monitor_updated: t('asset.tl_monitor_updated', 'Monitor upraven'),
+    // The server logs twenty-three types; the map knew thirteen, so the rest
+    // arrived with a raw key as their title and a neutral severity - an agent
+    // that stopped reporting looked like a routine note.
+    agent_connected: t('asset.tl_agent_connected', 'Agent se ozval'),
+    agent_disconnected: t('asset.tl_agent_disconnected', 'Agent přestal hlásit'),
+    dns_lost: t('asset.tl_dns_lost', 'DNS nefunguje'),
+    dns_recovered: t('asset.tl_dns_recovered', 'DNS obnoveno'),
+    latency_degraded: t('asset.tl_latency_degraded', 'Trvale zhoršená odezva'),
+    latency_recovered: t('asset.tl_latency_recovered', 'Odezva zpět v normálu'),
+    maintenance_ended: t('asset.tl_maintenance_ended', 'Údržba skončila'),
+    service_discovered: t('asset.tl_service_discovered', 'Objevena běžící služba'),
+    service_lost: t('asset.tl_service_lost', 'Služba zmizela'),
+    process_restarted: t('asset.tl_process_restarted', 'Proces byl restartován'),
+    cert_renewed: t('asset.tl_cert_renewed', 'Certifikát obnoven'),
+    scheme_upgraded: t('asset.tl_scheme_upgraded', 'Přechod na HTTPS'),
+    wan_reconnected: t('asset.tl_wan_reconnected', 'WAN se znovu připojila'),
+    config_change: t('asset.tl_config_change', 'Změna konfigurace cíle'),
   };
   const severityFor = (type: string): TimelineEvent['severity'] => {
     // A dead primary link is an outage of the line itself, even while the
     // router still answers through the LTE backup.
-    if (type === 'status_changed_down' || type === 'wan_lost') return 'down';
+    if (['status_changed_down', 'wan_lost', 'agent_disconnected', 'dns_lost', 'service_lost'].includes(type)) {
+      return 'down';
+    }
     if (
-      type === 'status_changed_warning' ||
-      type === 'ssl_warning' ||
-      type === 'threshold_exceeded' ||
-      type === 'lte_backup_lost'
-    )
+      [
+        'status_changed_warning',
+        'ssl_warning',
+        'threshold_exceeded',
+        'lte_backup_lost',
+        'latency_degraded',
+        'config_change',
+        'process_restarted',
+      ].includes(type)
+    ) {
       return 'warning';
-    if (type === 'status_changed_up' || type === 'lte_backup_restored' || type === 'wan_restored') return 'up';
+    }
+    if (
+      [
+        'status_changed_up',
+        'lte_backup_restored',
+        'wan_restored',
+        'wan_reconnected',
+        'agent_connected',
+        'dns_recovered',
+        'latency_recovered',
+        'cert_renewed',
+        'maintenance_ended',
+      ].includes(type)
+    ) {
+      return 'up';
+    }
+    // Everything genuinely informational: a monitor added or edited, a service
+    // discovered, a scheme upgrade, a remote action.
     return 'info';
   };
 
