@@ -20,6 +20,7 @@ import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
+import { ProcessTop } from '@/components/process-top';
 import {
   lteVerdict,
   rateChannelBusy,
@@ -408,6 +409,11 @@ export function AssetDetailPage() {
         )}
 
         <TabsContent value="processes">
+          {/* The snapshot below answers "right now"; this answers "all day",
+              which is the question a spiky process only shows up in. */}
+          <div className="mb-4">
+            <ProcessTop monitorId={Number(asset.id)} />
+          </div>
           <Card className="p-6 space-y-4">
             <div className="flex items-center gap-3 border-b border-border pb-3">
               <Cpu className="size-5 text-primary" />

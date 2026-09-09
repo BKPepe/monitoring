@@ -2364,6 +2364,25 @@ if ($logged_in) {
                 VALUES (1, 'down', 'email', 'admin@example.com', 1, NULL)");
     $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
                 VALUES (1, 'down', 'discord', NULL, 0, 'HTTP 404')");
+    // Kdo bral výkon za období, ne kdo byl náhodou nahoře v posledním hlášení.
+    // Seskupuje se podle jména: služba, která se restartuje, žere dál pod novým
+    // pid a per-pid žebříček by ji rozdrobil na neškodně vypadající řádky.
+    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+    for ($i = 1; $i <= 5; $i++) {
+        $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                    VALUES (2, DATE_SUB(NOW(), INTERVAL {$i} MINUTE), 'cpu', 'hogger', " . (100 + $i) . ", " . (60 + $i) . ", NULL)");
+        $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                    VALUES (2, DATE_SUB(NOW(), INTERVAL {$i} MINUTE), 'cpu', 'quiet', 200, 2, NULL)");
+    }
+    [$pt_anon] = api_get($base, 'action=process_top&monitor_id=2');
+    check('anonym žebříček procesů nedostane', $pt_anon, 403);
+    [$pt_code, $pt] = api_get_auth($base, 'action=process_top&monitor_id=2&kind=cpu&minutes=1440', $cookie_jar);
+    check('process_top vrací 200', $pt_code, 200);
+    check('nejžravější je první', $pt['processes'][0]['name'] ?? null, 'hogger');
+    check_true('a nese průměr i špičku', ($pt['processes'][0]['max'] ?? 0) >= ($pt['processes'][0]['avg'] ?? 0));
+    check_true('pět vzorků pod jedním jménem, ne pět řádků', ($pt['processes'][0]['samples'] ?? 0) === 5);
+    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+
     // Denní provoz per rozhraní: tabulka ho drží dávno, četl ho jen součet.
     $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total)
                 VALUES (2, 'wan', DATE_SUB(CURDATE(), INTERVAL 2 DAY), 5000000000, 1000000000, 10, 10)

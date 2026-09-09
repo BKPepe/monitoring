@@ -1829,6 +1829,23 @@ const translations: Record<string, { cs: string; en: string }> = {
   'avail.title': { cs: 'Dostupnost', en: 'Availability' },
   'notif.title': { cs: 'Odeslané notifikace', en: 'Notifications sent' },
   'iftraffic.title': { cs: 'Provoz po dnech (30 dní)', en: 'Traffic by day (30 days)' },
+  'proctop.title': { cs: 'Kdo bral výkon za posledních 24 hodin', en: 'What used the machine in the last 24 hours' },
+  'proctop.hint': {
+    cs: 'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.',
+    en: 'The average and the peak over the window, not just the last report. A process that spikes every ten minutes never shows up in a snapshot.',
+  },
+  'proctop.cpu': { cs: 'Procesor', en: 'Processor' },
+  'proctop.ram': { cs: 'Paměť', en: 'Memory' },
+  'proctop.avg': { cs: 'prům.', en: 'avg' },
+  'proctop.max': { cs: 'špička', en: 'peak' },
+  'proctop.empty': {
+    cs: 'Za posledních 24 hodin nejsou uložené žádné vzorky procesů.',
+    en: 'No process samples are stored for the last 24 hours.',
+  },
+  'proctop.disabled': {
+    cs: 'Historie procesů je vypnutá (Nastavení → Obecné → Historie procesů), takže tuhle otázku zatím zodpovědět nejde.',
+    en: 'Process history is switched off (Settings → General → Process history), so this question cannot be answered yet.',
+  },
   'iftraffic.hint': {
     cs: 'Součet za každý den a rozhraní, jak ho hlásí agent. Chybějící den znamená, že se ten den nehlásilo, ne nulový provoz.',
     en: 'The total for each day and interface as the agent reports it. A missing day means nothing was reported that day, not zero traffic.',

@@ -1304,6 +1304,72 @@ if ($action === 'get_settings') {
 // One real test message through a notification channel, with the SAVED
 // settings. The settings page's test buttons used to flash "Test OK" without
 // calling anything - a dead webhook looked fine until the first outage.
+// Which processes have been eating the machine over a whole window, not which
+// ones happened to be on top in the last report. process_samples has kept a
+// per-minute history for a long time and the only reader asked it about one
+// moment (the culprits panel), so "what has been chewing the CPU today?" could
+// only be answered by watching the page.
+if ($action === 'process_top') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $pt_monitor = (int)($_GET['monitor_id'] ?? 0);
+    $pt_kind = ($_GET['kind'] ?? 'cpu') === 'ram' ? 'ram' : 'cpu';
+    $pt_minutes = min(43200, max(15, (int)($_GET['minutes'] ?? 1440)));
+    if ($pt_monitor <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        if ((int)get_setting('process_history_days', '30') <= 0) {
+            echo json_encode(['enabled' => false, 'processes' => []], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $col = $pt_kind === 'ram' ? 'ram_mb' : 'cpu_pct';
+        // Grouped by process NAME, not pid: a service that restarts keeps
+        // eating the same machine under a new pid, and a per-pid ranking would
+        // split it into a dozen harmless-looking rows.
+        $stmt = $pdo->prepare("
+            SELECT name,
+                   AVG({$col}) AS avg_val,
+                   MAX({$col}) AS max_val,
+                   COUNT(*) AS samples,
+                   MAX(sampled_at) AS last_seen
+            FROM process_samples
+            WHERE monitor_id = ? AND kind = ?
+              AND sampled_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+              AND {$col} IS NOT NULL
+            GROUP BY name
+            ORDER BY avg_val DESC
+            LIMIT 12
+        ");
+        $stmt->execute([$pt_monitor, $pt_kind, $pt_minutes]);
+        $rows = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $rows[] = [
+                'name' => (string)$r['name'],
+                'avg' => round((float)$r['avg_val'], 2),
+                'max' => round((float)$r['max_val'], 2),
+                'samples' => (int)$r['samples'],
+                'lastSeenIso' => date('c', strtotime((string)$r['last_seen'])),
+            ];
+        }
+        echo json_encode([
+            'enabled' => true,
+            'kind' => $pt_kind,
+            'minutes' => $pt_minutes,
+            'processes' => $rows,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=process_top] ' . $e->getMessage());
+        echo json_encode(['enabled' => true, 'processes' => [], 'error' => 'Historii procesů se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // Per-interface traffic by day. The table keeps a row per interface per day
 // and the only reader summed it into today / 7 / 30 days, so "which day did we
 // move forty gigabytes?" had no answer. Admin only, like every other endpoint
