@@ -1304,6 +1304,61 @@ if ($action === 'get_settings') {
 // One real test message through a notification channel, with the SAVED
 // settings. The settings page's test buttons used to flash "Test OK" without
 // calling anything - a dead webhook looked fine until the first outage.
+// Per-interface traffic by day. The table keeps a row per interface per day
+// and the only reader summed it into today / 7 / 30 days, so "which day did we
+// move forty gigabytes?" had no answer. Admin only, like every other endpoint
+// that names interfaces - that is network topology.
+if ($action === 'interface_traffic_daily') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $itd_monitor = (int)($_GET['monitor_id'] ?? 0);
+    $itd_days = min(180, max(1, (int)($_GET['days'] ?? 30)));
+    if ($itd_monitor <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT iface, date, rx_bytes_total, tx_bytes_total
+            FROM monitor_interface_traffic
+            WHERE monitor_id = ? AND date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            ORDER BY iface ASC, date ASC
+        ");
+        $stmt->execute([$itd_monitor, $itd_days]);
+        $by_iface = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $iface = (string)$r['iface'];
+            if (!isset($by_iface[$iface])) {
+                $by_iface[$iface] = ['iface' => $iface, 'total' => 0.0, 'days' => []];
+            }
+            $rx = $r['rx_bytes_total'] !== null ? (float)$r['rx_bytes_total'] : null;
+            $tx = $r['tx_bytes_total'] !== null ? (float)$r['tx_bytes_total'] : null;
+            $by_iface[$iface]['total'] += ($rx ?? 0) + ($tx ?? 0);
+            $by_iface[$iface]['days'][] = [
+                'date' => (string)$r['date'],
+                // A day the agent never reported is absent from the table; a
+                // day it reported with no traffic is a real zero. Null here
+                // would be a third thing that does not exist in the data.
+                'rxBytes' => $rx,
+                'txBytes' => $tx,
+            ];
+        }
+        // Busiest first: a router has a dozen interfaces and three of them
+        // carry everything.
+        $out = array_values($by_iface);
+        usort($out, fn($a, $b) => $b['total'] <=> $a['total']);
+        echo json_encode(['interfaces' => $out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=interface_traffic_daily] ' . $e->getMessage());
+        echo json_encode(['interfaces' => [], 'error' => 'Denní provoz se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // What was actually sent and whether it went. Admin only: it names
 // recipients and carries the delivery errors of the channels.
 if ($action === 'notification_log') {
@@ -2042,7 +2097,16 @@ if ($action === 'incidents') {
             // automatically on the transition to down).
             $open_by_monitor = [];
             try {
-                $stmt_open = $pdo->query("SELECT id, acknowledged_by, acknowledged_at FROM incidents WHERE status != 'resolved' AND monitor_id IS NOT NULL");
+                // monitor_id has to be SELECTed - the loop below indexes by it.
+                // Without it every open incident landed under key 0, so no
+                // monitor ever matched and "acknowledged by" and the incident
+                // id came out null for all of them: the Ack button was missing
+                // on exactly the incidents that had one.
+                $stmt_open = $pdo->query("
+                    SELECT id, monitor_id, acknowledged_by, acknowledged_at, escalated_at
+                    FROM incidents
+                    WHERE status != 'resolved' AND monitor_id IS NOT NULL
+                ");
                 foreach ($stmt_open->fetchAll() as $oi) {
                     $open_by_monitor[(int)$oi['monitor_id']] = $oi;
                 }
@@ -2055,6 +2119,15 @@ if ($action === 'incidents') {
                     'id' => (int)$r['id'],
                     'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
                     'acknowledgedBy' => $open_inc ? $open_inc['acknowledged_by'] : null,
+                    'acknowledgedAt' => ($open_inc && !empty($open_inc['acknowledged_at']))
+                        ? date('c', strtotime((string)$open_inc['acknowledged_at']))
+                        : null,
+                    // Escalation happened silently: cron stamps it and nobody
+                    // could see that an outage had already been escalated past
+                    // whoever was supposed to pick it up.
+                    'escalatedAt' => ($open_inc && !empty($open_inc['escalated_at']))
+                        ? date('c', strtotime((string)$open_inc['escalated_at']))
+                        : null,
                     'monitor_id' => (int)$r['monitor_id'],
                     'monitor_name' => $r['monitor_name'],
                     'target' => $r['target'],

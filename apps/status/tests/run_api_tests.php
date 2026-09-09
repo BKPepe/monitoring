@@ -2364,6 +2364,21 @@ if ($logged_in) {
                 VALUES (1, 'down', 'email', 'admin@example.com', 1, NULL)");
     $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
                 VALUES (1, 'down', 'discord', NULL, 0, 'HTTP 404')");
+    // Denní provoz per rozhraní: tabulka ho drží dávno, četl ho jen součet.
+    $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total)
+                VALUES (2, 'wan', DATE_SUB(CURDATE(), INTERVAL 2 DAY), 5000000000, 1000000000, 10, 10)
+                ON DUPLICATE KEY UPDATE rx_bytes_total = VALUES(rx_bytes_total)");
+    $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total)
+                VALUES (2, 'wan', DATE_SUB(CURDATE(), INTERVAL 1 DAY), 7000000000, 2000000000, 10, 10)
+                ON DUPLICATE KEY UPDATE rx_bytes_total = VALUES(rx_bytes_total)");
+    [$itd_anon] = api_get($base, 'action=interface_traffic_daily&monitor_id=2');
+    check('anonym denní provoz rozhraní nedostane', $itd_anon, 403);
+    [$itd_code, $itd] = api_get_auth($base, 'action=interface_traffic_daily&monitor_id=2&days=30', $cookie_jar);
+    check('interface_traffic_daily vrací 200', $itd_code, 200);
+    check_true('a vrací dny, ne jen součet', count($itd['interfaces'][0]['days'] ?? []) === 2);
+    check_true('nejvytíženější rozhraní je první', ($itd['interfaces'][0]['iface'] ?? '') === 'wan');
+    $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2");
+
     [$nl_anon_code] = api_get($base, 'action=notification_log&monitor_id=1');
     check('anonym historii notifikací nedostane', $nl_anon_code, 403);
     [$nl_code, $nl] = api_get_auth($base, 'action=notification_log&monitor_id=1&limit=50', $cookie_jar);

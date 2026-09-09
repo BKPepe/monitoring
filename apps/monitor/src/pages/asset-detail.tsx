@@ -19,6 +19,7 @@ import { Badge, StatusDot } from '@/components/ui/badge';
 import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
+import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
 import {
   lteVerdict,
   rateChannelBusy,
@@ -1640,6 +1641,10 @@ function NetworkTab({
       {(d.lte_device != null || d.wan_l3_device != null || d.lte_up != null) && (
         <LinkTrafficSection monitorId={monitorId} />
       )}
+
+      {/* The daily rows behind those totals - kept for a long time, summed by
+          the only reader, and never drawn. */}
+      <InterfaceTrafficDaily monitorId={monitorId} />
 
       {(d.sqm_enabled != null || d.lte_rsrp != null || d.lte_up != null) && (
         <Section title={`⚙️ ${t('net.link_title', 'SQM & LTE')}`}>

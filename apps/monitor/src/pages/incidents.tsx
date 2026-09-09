@@ -10,7 +10,7 @@ import { useLanguage } from '@/context/language-context';
 import { EventsHistoryTable } from '@/components/events-history-table';
 
 export function IncidentsPage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
   const [targetMonitors, setTargetMonitors] = useState<any[]>([]);
@@ -358,6 +358,18 @@ export function IncidentsPage() {
                       >
                         {t('incidents.view_outage', 'Detail výpadku')} <ArrowRight className="size-3" />
                       </Link>
+                      {/* Escalation used to happen silently: cron stamps it and
+                          nothing showed that the outage had already gone past
+                          whoever was meant to pick it up. */}
+                      {inc.escalatedAt && (
+                        <span className="text-down text-[11px] font-semibold">
+                          {t(
+                            'incidents.escalated_at',
+                            { when: new Date(inc.escalatedAt).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB') },
+                            `Eskalováno ${new Date(inc.escalatedAt).toLocaleString('cs-CZ')}`
+                          )}
+                        </span>
+                      )}
                       {inc.acknowledgedBy ? (
                         <span className="text-[11px] text-muted-foreground">
                           {t('incidents.ack_by', { user: inc.acknowledgedBy }, `Převzal: ${inc.acknowledgedBy}`)}

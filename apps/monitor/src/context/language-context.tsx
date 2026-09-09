@@ -1828,6 +1828,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'collector.heading': { cs: 'Sběr dat neběží', en: 'Data collection is not running' },
   'avail.title': { cs: 'Dostupnost', en: 'Availability' },
   'notif.title': { cs: 'Odeslané notifikace', en: 'Notifications sent' },
+  'iftraffic.title': { cs: 'Provoz po dnech (30 dní)', en: 'Traffic by day (30 days)' },
+  'iftraffic.hint': {
+    cs: 'Součet za každý den a rozhraní, jak ho hlásí agent. Chybějící den znamená, že se ten den nehlásilo, ne nulový provoz.',
+    en: 'The total for each day and interface as the agent reports it. A missing day means nothing was reported that day, not zero traffic.',
+  },
+  'iftraffic.rx': { cs: 'Staženo', en: 'Downloaded' },
+  'iftraffic.tx': { cs: 'Odesláno', en: 'Uploaded' },
+  'incidents.escalated_at': { cs: 'Eskalováno {when}', en: 'Escalated {when}' },
   'notif.desc': {
     cs: 'Co o tomhle monitoru odešlo, kterým kanálem a jestli to kanál přijal.',
     en: 'What went out about this monitor, on which channel, and whether the channel took it.',
