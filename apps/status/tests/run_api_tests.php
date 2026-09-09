@@ -1004,6 +1004,22 @@ check('bez PDO zůstává hodnota monitoru (žádný pád)', $thr_eff_nopdo['cpu
 // preset's limit - the very one agent_api actually alerts at.
 [, $thr_detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
 check('metric_detail kreslí pásmo podle presetu', $thr_detail['thresholds']['critical'] ?? null, 70);
+
+// "6 ms proti čemu a na čem?" - detail metriky musí umět pojmenovat cíl měření
+// i místo, odkud se měří. Neznámé zůstává null, nikdy vymyšlená lokalita.
+check('metric_detail vrací cíl měření', $thr_detail['monitor']['target'] ?? null, '10.0.0.1');
+check_true('klíč port je přítomen', array_key_exists('port', $thr_detail['monitor'] ?? []));
+check_true('klíč checkedFrom je přítomen', array_key_exists('checkedFrom', $thr_detail['monitor'] ?? []));
+// array_key_exists, ne ?? - ten by null pod testem zaměnil za fallback.
+check_true(
+    'bez zapsané lokality zůstává checkedFrom null',
+    array_key_exists('checkedFrom', $thr_detail['monitor'] ?? []) && $thr_detail['monitor']['checkedFrom'] === null
+);
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_from, checked_at)
+            VALUES (2, 'up', 5, 'Praha, CZ', NOW())");
+[, $cf_detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
+check('zapsaná lokalita se vrátí', $cf_detail['monitor']['checkedFrom'] ?? null, 'Praha, CZ');
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
 $pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
 $pdo->exec("DELETE FROM metric_presets WHERE id = 77");
 
@@ -1250,6 +1266,18 @@ foreach ($corr['correlations'] ?? [] as $c) {
 }
 check_true('metrika rostoucí s cílem má korelaci blízko +1', ($by_key['iowait']['r'] ?? 0) > 0.98);
 check_true('metrika klesající proti cíli má korelaci blízko -1', ($by_key['ram']['r'] ?? 0) < -0.98);
+
+// A metric below the top-N cut looked simply absent ("where is IPv4?"), so
+// all=1 has to return every comparison there is.
+[, $corr_all] = api_get($base, 'action=metric_correlations&monitor_id=90&metric=cpu&period=24h&all=1');
+check_true(
+    'all=1 vrací víc než zkrácený seznam',
+    count($corr_all['correlations'] ?? []) >= count($corr['correlations'] ?? [])
+);
+check_true(
+    'a nezamlčí ani jednu porovnávanou metriku',
+    count($corr_all['correlations'] ?? []) === (int)($corr_all['total'] ?? -1)
+);
 
 // The rule that matters most here: a metric that never moved has no
 // correlation to report. A zero would claim the two are unrelated.

@@ -179,6 +179,164 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
         'Stupnice: nad 20 dB výborný, do 13 dobrý, do 0 slabší, záporný špatný. Pomáhá směrová anténa, která odfiltruje okolní rušení.'
       ),
     },
+    ram_free_mb: {
+      what: t('help.ram_free_mb_what', 'Kolik paměti je skutečně volné.'),
+      how: t('help.ram_free_mb_how', 'Z /proc/meminfo, hodnota MemAvailable.'),
+      source: agent,
+      caveat: t(
+        'help.ram_free_mb_caveat',
+        'Je to druhá strana téže mince jako využití paměti: tady je lepší vyšší číslo.'
+      ),
+    },
+    load1: {
+      what: t('help.load1_what', 'Průměrný počet procesů čekajících na procesor za poslední minutu.'),
+      how: t('help.load1_how', 'První hodnota z /proc/loadavg.'),
+      source: agent,
+      caveat: t(
+        'help.load1_caveat',
+        'Porovnávejte s počtem jader: load 4 je na čtyřjádru plné vytížení, na jednojádru čtyřnásobné přetížení.'
+      ),
+    },
+    load5: {
+      what: t('help.load5_what', 'Zátěž procesoru průměrovaná přes pět minut.'),
+      how: t('help.load5_how', 'Druhá hodnota z /proc/loadavg.'),
+      source: agent,
+    },
+    load15: {
+      what: t('help.load15_what', 'Zátěž procesoru průměrovaná přes patnáct minut.'),
+      how: t('help.load15_how', 'Třetí hodnota z /proc/loadavg.'),
+      source: agent,
+      caveat: t('help.load15_caveat', 'Delší průměr ukazuje trend: když je vyšší než minutový, zátěž odeznívá.'),
+    },
+    iowait: {
+      what: t('help.iowait_what', 'Podíl času, kdy procesor čekal na disk.'),
+      how: t('help.iowait_how', 'Sloupec iowait v /proc/stat, rozdíl mezi hlášeními.'),
+      source: agent,
+      caveat: t(
+        'help.iowait_caveat',
+        'Vysoké čekání při nízkém využití CPU znamená, že úzké hrdlo je úložiště, ne procesor.'
+      ),
+    },
+    cpu_steal: {
+      what: t('help.cpu_steal_what', 'Čas, který hypervizor odebral tomuto virtuálnímu stroji.'),
+      how: t('help.cpu_steal_how', 'Sloupec steal v /proc/stat.'),
+      source: agent,
+      caveat: t(
+        'help.cpu_steal_caveat',
+        'Trvale nenulová hodnota znamená přetížený hostitel u poskytovatele - na vaší straně se s tím nedá nic dělat.'
+      ),
+    },
+    inode_usage: {
+      what: t('help.inode_usage_what', 'Zaplnění tabulky inodů, tedy počtu souborů.'),
+      how: t('help.inode_usage_how', 'df -i na stejném oddílu jako zaplnění disku.'),
+      source: agent,
+      caveat: t(
+        'help.inode_usage_caveat',
+        'Dojít mohou dřív než místo - typicky u milionů malých souborů, třeba cache nebo relací.'
+      ),
+    },
+    net: {
+      what: t('help.net_what', 'Provoz na WAN rozhraní.'),
+      how: t('help.net_how', 'Přírůstek bajtů rozhraní mezi hlášeními, přepočtený na KB/s.'),
+      source: agent,
+      caveat: t('help.net_caveat', 'Jen WAN. Provoz na LAN a mezi rozhraními se sem nepočítá.'),
+    },
+    net_lte: {
+      what: t('help.net_lte_what', 'Provoz na LTE záložním rozhraní.'),
+      how: t('help.net_lte_how', 'Stejný výpočet jako u WAN, jen na LTE zařízení.'),
+      source: agent,
+      caveat: t(
+        'help.net_lte_caveat',
+        'Nenulová hodnota mimo výpadek znamená, že něco teče přes zálohu - obvykle placená data.'
+      ),
+    },
+    net_ipv4: {
+      what: t('help.net_ipv4_what', 'Provoz protokolem IPv4 přes všechna rozhraní.'),
+      how: t('help.net_ipv4_how', 'Z /proc/net/netstat, rozdíl mezi hlášeními.'),
+      source: agent,
+      caveat: t('help.net_ipv4_caveat', 'Počítá i LAN, takže je to jiné číslo než provoz na WAN - nesčítejte je.'),
+    },
+    net_ipv6: {
+      what: t('help.net_ipv6_what', 'Provoz protokolem IPv6 přes všechna rozhraní.'),
+      how: t('help.net_ipv6_how', 'Z /proc/net/netstat, rozdíl mezi hlášeními.'),
+      source: agent,
+      caveat: t('help.net_ipv6_caveat', 'Nula znamená, že IPv6 neteče - buď není nasazené, nebo nefunguje.'),
+    },
+    net_errors: {
+      what: t('help.net_errors_what', 'Chyby na síťových rozhraních.'),
+      how: t('help.net_errors_how', 'Součet chybových počítadel rozhraní, rozdíl mezi hlášeními.'),
+      source: agent,
+      caveat: t('help.net_errors_caveat', 'Rostoucí počet ukazuje na vadný kabel, port nebo rušení, ne na zahlcení.'),
+    },
+    zombie_count: {
+      what: t('help.zombie_count_what', 'Počet zombie procesů.'),
+      how: t('help.zombie_count_how', 'Procesy ve stavu Z v /proc.'),
+      source: agent,
+      caveat: t(
+        'help.zombie_count_caveat',
+        'Zombie samy nic nespotřebují, ale jejich přibývání znamená, že rodičovský proces nesklízí potomky.'
+      ),
+    },
+    fork_rate: {
+      what: t('help.fork_rate_what', 'Kolik nových procesů systém spouští za sekundu.'),
+      how: t('help.fork_rate_how', 'Hodnota processes v /proc/stat, rozdíl mezi hlášeními.'),
+      source: agent,
+      caveat: t('help.fork_rate_caveat', 'Náhlý skok často znamená smyčku ve skriptu nebo restartující se službu.'),
+    },
+    wifi_clients: {
+      what: t('help.wifi_clients_what', 'Počet zařízení připojených k Wi-Fi.'),
+      how: t('help.wifi_clients_how', 'Součet klientů všech rádií podle iwinfo.'),
+      source: agent,
+    },
+    conntrack_count: {
+      what: t('help.conntrack_count_what', 'Počet sledovaných spojení.'),
+      how: t('help.conntrack_count_how', 'Z nf_conntrack_count.'),
+      source: agent,
+      caveat: t(
+        'help.conntrack_count_caveat',
+        'Absolutní číslo; jak blízko je stropu, říká metrika Conntrack tabulka.'
+      ),
+    },
+    dhcp_leases_count: {
+      what: t('help.dhcp_leases_count_what', 'Kolik zařízení má právě zapůjčenou adresu.'),
+      how: t('help.dhcp_leases_count_how', 'Počet záznamů v souboru zápůjček dnsmasq.'),
+      source: agent,
+    },
+    lte_rssi: {
+      what: t('help.lte_rssi_what', 'Celková síla přijímaného signálu včetně rušení.'),
+      how: t('help.lte_rssi_how', 'Z modemu přes ModemManager nebo uqmi.'),
+      source: agent,
+      caveat: t(
+        'help.lte_rssi_caveat',
+        'Na LTE je vypovídající spíš RSRP: RSSI sčítá i cizí signály na stejné frekvenci.'
+      ),
+    },
+    lte_uptime: {
+      what: t('help.lte_uptime_what', 'Jak dlouho stojí současné LTE spojení.'),
+      how: t('help.lte_uptime_how', 'Doba běhu rozhraní podle netifd.'),
+      source: agent,
+      caveat: t('help.lte_uptime_caveat', 'Krátká doba po nedávném výpadku znamená, že se spojení právě obnovilo.'),
+    },
+    ts_clients: {
+      what: t('help.ts_clients_what', 'Počet uživatelů na TeamSpeak serveru.'),
+      how: t('help.ts_clients_how', 'Dotaz ServerQuery na běžící server.'),
+      source: server,
+    },
+    mc_players: {
+      what: t('help.mc_players_what', 'Počet hráčů na Minecraft serveru.'),
+      how: t('help.mc_players_how', 'Ze status odpovědi serveru.'),
+      source: server,
+    },
+    discord_presence: {
+      what: t('help.discord_presence_what', 'Kolik lidí je online na Discord serveru.'),
+      how: t('help.discord_presence_how', 'Z widget API Discordu.'),
+      source: server,
+    },
+    tailscale_peers: {
+      what: t('help.tailscale_peers_what', 'Počet protějšků v síti Tailscale.'),
+      how: t('help.tailscale_peers_how', 'Z tailscale status.'),
+      source: agent,
+    },
   };
 
   return catalogue[key] ?? null;

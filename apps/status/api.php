@@ -3471,7 +3471,11 @@ if ($action === 'metric_correlations') {
     // Raw samples only - the daily rollup keeps no per-metric alignment.
     $minutes = min($minutes, 30 * 24 * 60);
     $corr_min_pairs = 10;
-    $corr_top = 8;
+    // Eight is what fits without turning the panel into a wall, but the rest
+    // must be reachable: a metric below the cut looked simply absent ("where
+    // is IPv4?"). `all=1` returns every comparison, including the ones whose
+    // coefficient is undefined and their reason.
+    $corr_top = !empty($_GET['all']) ? 100 : 8;
 
     if (!isset($BK_METRIC_COLUMN_MAP[$metric])) {
         echo json_encode([
@@ -3636,7 +3640,7 @@ if ($action === 'metric_detail') {
 
     try {
         $stmt = $pdo->prepare("
-            SELECT id, name, type, asset_id, preset_id, cpu_threshold, ram_threshold, hdd_threshold
+            SELECT id, name, type, target, port, asset_id, preset_id, cpu_threshold, ram_threshold, hdd_threshold
             FROM monitors WHERE id = ? LIMIT 1
         ");
         $stmt->execute([$monitor_id]);
@@ -3693,6 +3697,19 @@ if ($action === 'metric_detail') {
 
         // Events for the chart markers. Same source as the Timeline, so the chart
         // and the timeline never show a different history.
+        // The vantage point of the last check. Written by cron for server-side
+        // checks; agent-reported metrics have none, and then it stays null
+        // rather than borrowing the server's location.
+        $md_checked_from = null;
+        try {
+            $stmt_cf = $pdo->prepare("SELECT checked_from FROM monitor_logs WHERE monitor_id = ? AND checked_from IS NOT NULL AND checked_from <> '' ORDER BY id DESC LIMIT 1");
+            $stmt_cf->execute([(int)$mon['id']]);
+            $cf = $stmt_cf->fetchColumn();
+            $md_checked_from = ($cf === false || $cf === null || $cf === '') ? null : (string)$cf;
+        } catch (Throwable $e) {
+            error_log('[api.php action=metric_detail] checked_from lookup failed: ' . $e->getMessage());
+        }
+
         $events = [];
         foreach (bk_get_monitor_timeline($pdo, (int)$mon['id'], 30) as $ev) {
             $ts = strtotime((string)$ev['ts']);
@@ -3709,6 +3726,12 @@ if ($action === 'metric_detail') {
                 'id' => (int)$mon['id'],
                 'name' => $mon['name'],
                 'type' => $mon['type'],
+                // What is actually being measured, and from where. A latency of
+                // 6 ms says nothing until the page can name the target and the
+                // vantage point - unknown stays null, never a guessed location.
+                'target' => $mon['target'] !== null && $mon['target'] !== '' ? (string)$mon['target'] : null,
+                'port' => $mon['port'] !== null ? (int)$mon['port'] : null,
+                'checkedFrom' => $md_checked_from,
                 'assetId' => $mon['asset_id'] !== null ? (int)$mon['asset_id'] : null,
             ],
             'metric' => [

@@ -343,7 +343,7 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 | `action=metric_series&monitor_id=&metric=&period=` | veřejné | Jedna metrika v čase |
 | `action=metric_series_batch` | veřejné | Víc metrik jedním dotazem |
 | `action=metric_detail&monitor_id=&metric=` | veřejné | Kontext stránky detailu metriky |
-| `action=metric_correlations&monitor_id=&metric=&period=` | veřejné | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`) |
+| `action=metric_correlations&monitor_id=&metric=&period=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | veřejné | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | veřejné | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0` |
 | `action=link_traffic&monitor_id=&days=` | veřejné | Provoz routeru podle role linky: primární (`wan_l3_device`) vs. LTE záloha (`lte_device`) za dnes / 7 / 30 dní z denních součtů per rozhraní, plus období výpadku primární linky (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) spárovaná z událostí `wan_lost`/`wan_restored` - jestli v té době provoz opravdu šel po záloze, říkají bajty na záložním zařízení, ne tato období (otevřené období běží do teď; výpadek, který začal před oknem a dosud neskončil, se dohledá zvlášť a započítá od začátku okna, jinak by router běžící na záloze celé týdny hlásil „nikdy"). Role bere jen z toho, co agent hlásí - bez `wan_l3_device` (agent < 0.1.3) je primární strana `null`, ne odhad podle jména |
 | `action=process_history&monitor_id=&kind=&at=&radius=` | veřejné | Které procesy běžely kolem daného okamžiku |
@@ -390,7 +390,15 @@ prahy, které příbuzné metriky vůbec hlásí a co se v okolí dělo:
 
 ```json
 {
-  "monitor": { "id": 6, "name": "Turris", "type": "openwrt", "assetId": 6 },
+  "monitor": {
+    "id": 6,
+    "name": "Turris",
+    "type": "openwrt",
+    "target": "10.0.0.1",
+    "port": null,
+    "checkedFrom": "Praha, CZ",
+    "assetId": 6
+  },
   "metric": { "key": "cpu", "label": "Využití CPU", "unit": "%", "counter": false },
   "thresholds": { "warning": 75, "critical": 90 },
   "related": [{ "key": "ram", "label": "Využití paměti", "unit": "%", "latest": 41.2 }],

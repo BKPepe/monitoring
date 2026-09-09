@@ -45,9 +45,10 @@ export const mockMetricsSource: MetricsSource = {
   async getMetricCorrelations(
     monitorId: number,
     metric: string,
-    range: MetricRange
+    range: MetricRange,
+    all = false
   ): Promise<MetricCorrelationsResponse> {
-    return httpMetricsSource.getMetricCorrelations(monitorId, metric, range);
+    return httpMetricsSource.getMetricCorrelations(monitorId, metric, range, all);
   },
   async getLinkTraffic(monitorId: number, days = 30): Promise<LinkTrafficResponse> {
     return httpMetricsSource.getLinkTraffic(monitorId, days);

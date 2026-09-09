@@ -40,6 +40,12 @@ import { useLanguage } from '@/context/language-context';
 import { convertRate, formatRate, isRateMetric, suggestRateUnit, RATE_UNITS, type RateUnit } from '@/lib/rate-units';
 import { insertGaps } from '@/lib/series-gaps';
 import { percentile } from '@/lib/percentiles';
+import { metricHelp } from '@/lib/metric-help';
+import { betterDirection } from '@/lib/metric-direction';
+import { metricVerdict } from '@/lib/metric-verdict';
+import { rateSignalMetric, signalTone } from '@/lib/signal-quality';
+import { signalAdvice, signalLevelLabel } from '@/lib/signal-texts';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 /**
@@ -67,6 +73,14 @@ export function MetricDetailPage() {
   const [range, setRange] = React.useState<MetricRange>('24h');
   // The moment the user clicked in the chart - the answer to "what caused it".
   const [pickedAt, setPickedAt] = React.useState<number | null>(null);
+  /**
+   * Which metric+period the user expanded the correlation list for. Storing the
+   * question rather than a boolean means switching metric or period is back to
+   * the short list on its own, with no effect resetting state after a render.
+   */
+  const [corrAllFor, setCorrAllFor] = React.useState<string | null>(null);
+  const corrQuestion = `${monId}|${metric}|${range}`;
+  const corrAll = corrAllFor === corrQuestion;
   const [detail, setDetail] = React.useState<MetricDetail | null>(null);
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);
   const [heatmap, setHeatmap] = React.useState<MetricHeatmapResponse | null>(null);
@@ -151,7 +165,7 @@ export function MetricDetailPage() {
     setCorr(null);
     setCorrAvailable(null);
     resolveSource()
-      .then(({ source }) => source.getMetricCorrelations(monId, metric, range))
+      .then(({ source }) => source.getMetricCorrelations(monId, metric, range, corrAll))
       .then((c) => {
         if (!active) return;
         setCorr(c);
@@ -165,7 +179,7 @@ export function MetricDetailPage() {
     return () => {
       active = false;
     };
-  }, [monId, metric, range]);
+  }, [monId, metric, range, corrAll]);
 
   // Periods the primary link was down, shaded on the two link charts. Bytes
   // drawn inside them could not have gone over the primary line; whether the
@@ -220,6 +234,15 @@ export function MetricDetailPage() {
     [series]
   );
   const gapCount = React.useMemo(() => rawPoints.filter((p) => p.v == null).length, [rawPoints]);
+  /** When the window peaked - the moment worth asking "what was running" about. */
+  const peakAt = React.useMemo(() => {
+    let best: { t: number; v: number } | null = null;
+    for (const p of rawPoints) {
+      if (p.v == null) continue;
+      if (!best || p.v > best.v) best = { t: p.t, v: p.v };
+    }
+    return best ? Math.round(best.t / 1000) : null;
+  }, [rawPoints]);
 
   const tone = toneFor(metric);
   const sourceUnit = detail?.metric.unit ?? series?.unit ?? '';
@@ -284,7 +307,22 @@ export function MetricDetailPage() {
     [detail, monId, metric, sourceUnit, unit, tone, points, anns, activeUnit, isRate, linkPeriods, series, t]
   );
 
+  const help = metricHelp(metric, t);
   const stats = computeStats(points);
+  const direction = betterDirection(metric);
+  // Which tail is the bad one depends on the metric: for latency the high end,
+  // for signal strength the low one. Labelling both "the worse end" was wrong
+  // on every dBm chart in the app.
+  const worseTail = direction === 'higher' ? stats.p5 : stats.p95;
+  const worstValue = direction === 'higher' ? stats.min : stats.max;
+  const signalRating = rateSignalMetric(metric, stats.current);
+  const sampleCount = React.useMemo(() => points.filter((p) => p.v != null).length, [points]);
+  const verdict = metricVerdict({
+    metricKey: metric,
+    current: stats.current,
+    values: points.map((p) => p.v).filter((v): v is number => v != null),
+    thresholds: detail?.thresholds ?? { warning: null, critical: null },
+  });
   const delta = computeSeriesDelta(chartData?.series[0]);
   const goodDir = goodDirectionFor(tone);
   const deltaGood = delta && goodDir ? delta.direction === goodDir : null;
@@ -327,6 +365,32 @@ export function MetricDetailPage() {
             <MetricHelpIcon metric={metric} className="size-4" />
           </h1>
           <p className="text-muted-foreground text-xs">{detail?.monitor.name}</p>
+          {/* What is measured, on what, and from where - visible, not hidden in
+              a tooltip. "6 ms" says nothing until the page names the target and
+              the vantage point, and "disk usage" until it names the partition. */}
+          {help && (
+            <p className="text-muted-foreground mt-1 max-w-2xl text-[11px] leading-relaxed">
+              {help.what} <span className="text-foreground/80">{help.how}</span>{' '}
+              {detail?.monitor.target && (
+                <>
+                  {t('metric.on_target', 'Cíl')}:{' '}
+                  <span className="font-mono">
+                    {detail.monitor.target}
+                    {detail.monitor.port ? `:${detail.monitor.port}` : ''}
+                  </span>
+                  .{' '}
+                </>
+              )}
+              {detail?.monitor.checkedFrom
+                ? t(
+                    'metric.measured_from',
+                    { place: detail.monitor.checkedFrom },
+                    `Měřeno z: ${detail.monitor.checkedFrom}.`
+                  )
+                : help.source}
+              {help.caveat && <span className="text-foreground/80"> {help.caveat}</span>}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {isRate && <UnitPicker value={activeUnit} onChange={setRateUnit} />}
@@ -349,18 +413,88 @@ export function MetricDetailPage() {
             </span>
           )}
         </StatTile>
-        <StatTile label={t('metric.median', 'Medián (p50)')} value={stats.p50} unit={unit} />
-        <StatTile label={t('metric.p95', 'p95 (horší konec)')} value={stats.p95} unit={unit} />
-        <StatTile label={t('metric.peak', 'Špička')} value={stats.max} unit={unit} />
+        <StatTile label={t('metric.typical', 'Obvykle (medián)')} value={stats.p50} unit={unit} />
+        {/* Which tail is the bad one follows the metric. On a dBm scale p95 is
+            the BEST five percent, so calling it "the worse end" - as this page
+            did - was backwards. */}
+        <StatTile
+          label={
+            direction === 'higher'
+              ? t('metric.worse_end_low', 'Horší konec (p5)')
+              : t('metric.worse_end_high', 'Horší konec (p95)')
+          }
+          value={worseTail}
+          unit={unit}
+        />
+        <StatTile
+          label={
+            direction === 'higher' ? t('metric.worst_low', 'Nejhorší') : t('metric.worst_high', 'Nejhorší (špička)')
+          }
+          value={worstValue}
+          unit={unit}
+        />
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label={t('metric.average', 'Průměr')} value={stats.avg} unit={unit} />
-        <StatTile label={t('metric.p99', 'p99 (nejhorší setina)')} value={stats.p99} unit={unit} />
-        <StatTile label={t('metric.min', 'Minimum')} value={stats.min} unit={unit} />
+        <StatTile
+          label={direction === 'higher' ? t('metric.best_high', 'Nejlepší') : t('metric.best_low', 'Nejlepší')}
+          value={direction === 'higher' ? stats.max : stats.min}
+          unit={unit}
+        />
         {/* A window with holes must say so - the chart shows breaks, the number
             says how many, and both come from the same points. */}
         <StatTile label={t('metric.gaps', 'Přerušení měření')} value={gapCount} unit={t('metric.gaps_unit', 'x')} />
+        <StatTile label={t('metric.samples', 'Měření v období')} value={sampleCount} unit="" />
       </div>
+
+      {/* Is that good? Answered against a threshold somebody set, against the
+          metric's own physical scale, or against this window - and it says
+          which of the three, because they are not the same claim. */}
+      {(signalRating || (verdict && verdict.kind !== 'none')) && (
+        <Card className="flex flex-wrap items-center gap-x-3 gap-y-1.5 p-4 text-xs">
+          <span className="font-semibold">{t('metric.is_it_good', 'Je to v pořádku?')}</span>
+          {signalRating ? (
+            <>
+              <Badge variant={signalTone(signalRating.level)}>{signalLevelLabel(t, signalRating.level)}</Badge>
+              <span className="text-muted-foreground">
+                {signalAdvice(t, signalRating.advice) || t('signal.nothing_to_do', 'Není co zlepšovat.')}
+              </span>
+            </>
+          ) : (
+            verdict && (
+              <>
+                <Badge variant={verdict.tone === 'neutral' ? 'info' : verdict.tone}>
+                  {
+                    {
+                      threshold_ok: t('metric.verdict_threshold_ok', 'pod nastaveným prahem'),
+                      threshold_warning: t('metric.verdict_threshold_warning', 'nad varovným prahem'),
+                      threshold_critical: t('metric.verdict_threshold_critical', 'nad kritickým prahem'),
+                      usual: t('metric.verdict_usual', 'v obvyklém rozmezí'),
+                      unusual: t('metric.verdict_unusual', 'na horším konci období'),
+                      none: t('metric.verdict_none', 'bez měřítka'),
+                    }[verdict.kind]
+                  }
+                </Badge>
+                <span className="text-muted-foreground">
+                  {verdict.against != null
+                    ? verdict.kind.startsWith('threshold')
+                      ? t(
+                          'metric.verdict_against_threshold',
+                          { value: `${verdict.against} ${unit}`.trim() },
+                          `Porovnáno s prahem nastaveným u monitoru (${verdict.against} ${unit}).`
+                        )
+                      : t(
+                          'metric.verdict_against_window',
+                          { value: `${verdict.against} ${unit}`.trim() },
+                          `Porovnáno se zvoleným obdobím, kde obvyklá hodnota je ${verdict.against} ${unit}.`
+                        )
+                    : t('metric.verdict_no_yardstick', 'Pro tuhle metriku není nastavený práh ani pevná stupnice.')}
+                </span>
+              </>
+            )
+          )}
+        </Card>
+      )}
 
       {/* Layer 2 - why. */}
       <Card className="space-y-3 p-5">
@@ -588,7 +722,13 @@ export function MetricDetailPage() {
             {t('corr.title', 'Co se hýbalo spolu s touto metrikou')}
           </h2>
           {corr ? (
-            <CorrelationPanel data={corr} assetId={assetId ?? detail?.monitor.assetId ?? undefined} monitorId={monId} />
+            <CorrelationPanel
+              data={corr}
+              assetId={assetId ?? detail?.monitor.assetId ?? undefined}
+              monitorId={monId}
+              showingAll={corrAll}
+              onShowAll={() => setCorrAllFor(corrQuestion)}
+            />
           ) : (
             <p className="text-muted-foreground text-xs">{t('metric.loading', 'Načítám měření…')}</p>
           )}
@@ -619,7 +759,18 @@ export function MetricDetailPage() {
             <Crosshair className="size-4 text-primary" />
             {t('culprits.title', 'Co v tu chvíli běželo')}
           </h2>
-          <ProcessCulprits monitorId={monId} kind={metric === 'ram' ? 'ram' : 'cpu'} at={pickedAt} />
+          <p className="text-muted-foreground text-[11px]">
+            {pickedAt
+              ? t('culprits.at_picked', 'Okamžik vybraný kliknutím do grafu. Klikněte jinam pro jiný.')
+              : t(
+                  'culprits.at_peak',
+                  'Ukazuje se špička zvoleného období. Kliknutím do grafu se podíváte na jiný okamžik.'
+                )}
+          </p>
+          {/* The question is "what caused that peak", so the peak is where this
+              starts. It used to render nothing until the user discovered that
+              the chart is clickable. */}
+          <ProcessCulprits monitorId={monId} kind={metric === 'ram' ? 'ram' : 'cpu'} at={pickedAt ?? peakAt} />
         </Card>
       )}
 
@@ -780,10 +931,11 @@ function computeStats(points: { t: number; v: number | null }[]): {
   p50: number | null;
   p95: number | null;
   p99: number | null;
+  p5: number | null;
 } {
   const values = points.map((p) => p.v).filter((v): v is number => v != null);
   if (values.length === 0) {
-    return { current: null, avg: null, min: null, max: null, p50: null, p95: null, p99: null };
+    return { current: null, avg: null, min: null, max: null, p50: null, p95: null, p99: null, p5: null };
   }
   const round = (n: number) => Math.round(n * 100) / 100;
   const pct = (p: number) => {
@@ -802,6 +954,9 @@ function computeStats(points: { t: number; v: number | null }[]): {
     p50: pct(50),
     p95: pct(95),
     p99: pct(99),
+    // The bad tail of a metric where MORE is better (signal strength, free
+    // memory): there p95 is the good end and p5 is the one that hurts.
+    p5: pct(5),
   };
 }
 

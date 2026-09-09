@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import type { MetricCorrelationsResponse } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
+import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { cn } from '@/lib/utils';
 
 /**
@@ -23,10 +24,15 @@ export function CorrelationPanel({
   data,
   assetId,
   monitorId,
+  onShowAll,
+  showingAll,
 }: {
   data: MetricCorrelationsResponse;
   assetId: string | number | undefined;
   monitorId: number;
+  /** Loads every comparison, not only the strongest few. */
+  onShowAll?: () => void;
+  showingAll?: boolean;
 }) {
   const { t } = useLanguage();
 
@@ -46,7 +52,13 @@ export function CorrelationPanel({
         {data.correlations.map((c) => {
           const row = (
             <>
-              <span className="min-w-0 flex-1 truncate">{c.label}</span>
+              <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+                <span className="truncate">{c.label}</span>
+                {/* Each metric explains itself here too - the list is where
+                    people meet names like "free memory" or "RSRQ" for the
+                    first time. Renders nothing when there is no explainer. */}
+                <MetricHelpIcon metric={c.key} className="size-3 shrink-0" />
+              </span>
               <CorrelationBar r={c.r} />
               <span
                 className={cn('w-12 shrink-0 text-right text-xs tabular-nums', c.r === null && 'text-muted-foreground')}
@@ -57,7 +69,7 @@ export function CorrelationPanel({
           );
 
           return (
-            <li key={c.key}>
+            <li key={c.key} className="border-border/40 border-b last:border-0">
               {assetId !== undefined ? (
                 <Link
                   to={`/infrastructure/${assetId}/metric/${monitorId}/${c.key}`}
@@ -97,6 +109,17 @@ export function CorrelationPanel({
             'corr.truncated',
             { shown: data.correlations.length, total: data.total },
             `Zobrazeno ${data.correlations.length} nejsilnějších z ${data.total} porovnávaných metrik.`
+          )}{' '}
+          {/* A metric below the cut read as simply absent ("where is IPv4?"),
+              so the rest has to be reachable rather than merely counted. */}
+          {onShowAll && !showingAll && (
+            <button
+              type="button"
+              onClick={onShowAll}
+              className="text-primary underline-offset-2 hover:underline focus-visible:ring-ring rounded focus-visible:ring-2 focus-visible:outline-none"
+            >
+              {t('corr.show_all', 'Zobrazit všechny')}
+            </button>
           )}
         </p>
       )}

@@ -161,8 +161,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'metric.current': { cs: 'Aktuální', en: 'Current' },
   'metric.average': { cs: 'Průměr', en: 'Average' },
-  'metric.peak': { cs: 'Špička', en: 'Peak' },
-  'metric.min': { cs: 'Minimum', en: 'Minimum' },
   'metric.unit': { cs: 'Jednotka', en: 'Unit' },
   // "What was running at that moment" - the answer the chart alone cannot give.
   'culprits.title': { cs: 'Co v tu chvíli běželo', en: 'What was running then' },
@@ -1773,10 +1771,45 @@ const translations: Record<string, { cs: string; en: string }> = {
   'chart.summary_gaps': { cs: '{n} přerušení měření', en: '{n} breaks in measurement' },
   'chart.tooltip_range': { cs: 'Rozsah dne', en: 'Range that day' },
   'chart.tooltip_samples': { cs: '{n} měření', en: '{n} measurements' },
-  'metric.median': { cs: 'Medián (p50)', en: 'Median (p50)' },
-  'metric.p95': { cs: 'p95 (horší konec)', en: 'p95 (worse end)' },
-  'metric.p99': { cs: 'p99 (nejhorší setina)', en: 'p99 (worst hundredth)' },
   'metric.gaps': { cs: 'Přerušení měření', en: 'Breaks in measurement' },
+  'metric.typical': { cs: 'Obvykle (medián)', en: 'Typically (median)' },
+  'metric.worse_end_high': { cs: 'Horší konec (p95)', en: 'Worse end (p95)' },
+  'metric.worse_end_low': { cs: 'Horší konec (p5)', en: 'Worse end (p5)' },
+  'metric.worst_high': { cs: 'Nejhorší (špička)', en: 'Worst (peak)' },
+  'metric.worst_low': { cs: 'Nejhorší', en: 'Worst' },
+  'metric.best_high': { cs: 'Nejlepší', en: 'Best' },
+  'metric.best_low': { cs: 'Nejlepší', en: 'Best' },
+  'metric.samples': { cs: 'Měření v období', en: 'Measurements in the window' },
+  'metric.on_target': { cs: 'Cíl', en: 'Target' },
+  'metric.measured_from': { cs: 'Měřeno z: {place}.', en: 'Measured from: {place}.' },
+  'metric.is_it_good': { cs: 'Je to v pořádku?', en: 'Is this all right?' },
+  'metric.verdict_threshold_ok': { cs: 'pod nastaveným prahem', en: 'below the configured threshold' },
+  'metric.verdict_threshold_warning': { cs: 'nad varovným prahem', en: 'above the warning threshold' },
+  'metric.verdict_threshold_critical': { cs: 'nad kritickým prahem', en: 'above the critical threshold' },
+  'metric.verdict_usual': { cs: 'v obvyklém rozmezí', en: 'in the usual range' },
+  'metric.verdict_unusual': { cs: 'na horším konci období', en: 'at the worse end of the window' },
+  'metric.verdict_none': { cs: 'bez měřítka', en: 'no yardstick' },
+  'metric.verdict_against_threshold': {
+    cs: 'Porovnáno s prahem nastaveným u monitoru ({value}).',
+    en: 'Compared against the threshold configured on the monitor ({value}).',
+  },
+  'metric.verdict_against_window': {
+    cs: 'Porovnáno se zvoleným obdobím, kde obvyklá hodnota je {value}.',
+    en: 'Compared against the chosen window, where the usual value is {value}.',
+  },
+  'metric.verdict_no_yardstick': {
+    cs: 'Pro tuhle metriku není nastavený práh ani pevná stupnice.',
+    en: 'This metric has neither a configured threshold nor a fixed scale.',
+  },
+  'culprits.at_peak': {
+    cs: 'Ukazuje se špička zvoleného období. Kliknutím do grafu se podíváte na jiný okamžik.',
+    en: 'Showing the peak of the chosen window. Click the chart to look at another moment.',
+  },
+  'culprits.at_picked': {
+    cs: 'Okamžik vybraný kliknutím do grafu. Klikněte jinam pro jiný.',
+    en: 'The moment you picked in the chart. Click elsewhere for another.',
+  },
+  'corr.show_all': { cs: 'Zobrazit všechny', en: 'Show all' },
   'metric.gaps_unit': { cs: 'x', en: 'x' },
   'metric.hist_summary': {
     cs: 'Histogram: nejčastější pásmo {band} {unit} ({count}×).',
@@ -1789,6 +1822,197 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.lte_quality': { cs: 'Kvalita LTE signálu', en: 'LTE signal quality' },
   'net.wifi_noise': { cs: 'Šum na kanálu', en: 'Channel noise' },
   'net.busy_label': { cs: 'Vytížení kanálu', en: 'Channel airtime' },
+  'help.ram_free_mb_what': { cs: 'Kolik paměti je skutečně volné.', en: 'How much memory is actually free.' },
+  'help.ram_free_mb_how': {
+    cs: 'Z /proc/meminfo, hodnota MemAvailable.',
+    en: 'From /proc/meminfo, the MemAvailable value.',
+  },
+  'help.ram_free_mb_caveat': {
+    cs: 'Je to druhá strana téže mince jako využití paměti: tady je lepší vyšší číslo.',
+    en: 'The other side of the same coin as memory usage: here a higher number is the good one.',
+  },
+  'help.load1_what': {
+    cs: 'Průměrný počet procesů čekajících na procesor za poslední minutu.',
+    en: 'Average number of processes waiting for the processor over the last minute.',
+  },
+  'help.load1_how': { cs: 'První hodnota z /proc/loadavg.', en: 'The first value in /proc/loadavg.' },
+  'help.load1_caveat': {
+    cs: 'Porovnávejte s počtem jader: load 4 je na čtyřjádru plné vytížení, na jednojádru čtyřnásobné přetížení.',
+    en: 'Read it against the core count: a load of 4 is full utilisation on four cores and fourfold overload on one.',
+  },
+  'help.load5_what': {
+    cs: 'Zátěž procesoru průměrovaná přes pět minut.',
+    en: 'Processor load averaged over five minutes.',
+  },
+  'help.load5_how': { cs: 'Druhá hodnota z /proc/loadavg.', en: 'The second value in /proc/loadavg.' },
+  'help.load15_what': {
+    cs: 'Zátěž procesoru průměrovaná přes patnáct minut.',
+    en: 'Processor load averaged over fifteen minutes.',
+  },
+  'help.load15_how': { cs: 'Třetí hodnota z /proc/loadavg.', en: 'The third value in /proc/loadavg.' },
+  'help.load15_caveat': {
+    cs: 'Delší průměr ukazuje trend: když je vyšší než minutový, zátěž odeznívá.',
+    en: 'The longer average shows the trend: higher than the one-minute figure means the load is receding.',
+  },
+  'help.iowait_what': {
+    cs: 'Podíl času, kdy procesor čekal na disk.',
+    en: 'The share of time the processor spent waiting for disk.',
+  },
+  'help.iowait_how': {
+    cs: 'Sloupec iowait v /proc/stat, rozdíl mezi hlášeními.',
+    en: 'The iowait column in /proc/stat, differenced between reports.',
+  },
+  'help.iowait_caveat': {
+    cs: 'Vysoké čekání při nízkém využití CPU znamená, že úzké hrdlo je úložiště, ne procesor.',
+    en: 'High waiting with low CPU usage means the bottleneck is storage, not the processor.',
+  },
+  'help.cpu_steal_what': {
+    cs: 'Čas, který hypervizor odebral tomuto virtuálnímu stroji.',
+    en: 'Time the hypervisor took away from this virtual machine.',
+  },
+  'help.cpu_steal_how': { cs: 'Sloupec steal v /proc/stat.', en: 'The steal column in /proc/stat.' },
+  'help.cpu_steal_caveat': {
+    cs: 'Trvale nenulová hodnota znamená přetížený hostitel u poskytovatele - na vaší straně se s tím nedá nic dělat.',
+    en: 'A persistently non-zero value means an overloaded host at the provider; nothing on your side fixes it.',
+  },
+  'help.inode_usage_what': {
+    cs: 'Zaplnění tabulky inodů, tedy počtu souborů.',
+    en: 'How full the inode table is, that is the file count.',
+  },
+  'help.inode_usage_how': {
+    cs: 'df -i na stejném oddílu jako zaplnění disku.',
+    en: 'df -i on the same partition as the disk usage.',
+  },
+  'help.inode_usage_caveat': {
+    cs: 'Dojít mohou dřív než místo - typicky u milionů malých souborů, třeba cache nebo relací.',
+    en: 'They can run out before space does, typically with millions of small files such as caches or sessions.',
+  },
+  'help.net_what': { cs: 'Provoz na WAN rozhraní.', en: 'Traffic on the WAN interface.' },
+  'help.net_how': {
+    cs: 'Přírůstek bajtů rozhraní mezi hlášeními, přepočtený na KB/s.',
+    en: 'The interface byte counters differenced between reports, converted to KB/s.',
+  },
+  'help.net_caveat': {
+    cs: 'Jen WAN. Provoz na LAN a mezi rozhraními se sem nepočítá.',
+    en: 'WAN only. Traffic on the LAN and between interfaces is not included.',
+  },
+  'help.net_lte_what': { cs: 'Provoz na LTE záložním rozhraní.', en: 'Traffic on the LTE backup interface.' },
+  'help.net_lte_how': {
+    cs: 'Stejný výpočet jako u WAN, jen na LTE zařízení.',
+    en: 'The same calculation as WAN, on the LTE device.',
+  },
+  'help.net_lte_caveat': {
+    cs: 'Nenulová hodnota mimo výpadek znamená, že něco teče přes zálohu - obvykle placená data.',
+    en: 'A non-zero value outside an outage means something is flowing over the backup, usually metered data.',
+  },
+  'help.net_ipv4_what': {
+    cs: 'Provoz protokolem IPv4 přes všechna rozhraní.',
+    en: 'IPv4 traffic across all interfaces.',
+  },
+  'help.net_ipv4_how': {
+    cs: 'Z /proc/net/netstat, rozdíl mezi hlášeními.',
+    en: 'From /proc/net/netstat, differenced between reports.',
+  },
+  'help.net_ipv4_caveat': {
+    cs: 'Počítá i LAN, takže je to jiné číslo než provoz na WAN - nesčítejte je.',
+    en: 'It counts the LAN too, so it is a different number from WAN traffic. Do not add them together.',
+  },
+  'help.net_ipv6_what': {
+    cs: 'Provoz protokolem IPv6 přes všechna rozhraní.',
+    en: 'IPv6 traffic across all interfaces.',
+  },
+  'help.net_ipv6_how': {
+    cs: 'Z /proc/net/netstat, rozdíl mezi hlášeními.',
+    en: 'From /proc/net/netstat, differenced between reports.',
+  },
+  'help.net_ipv6_caveat': {
+    cs: 'Nula znamená, že IPv6 neteče - buď není nasazené, nebo nefunguje.',
+    en: 'Zero means no IPv6 is flowing: either it is not deployed, or it is broken.',
+  },
+  'help.net_errors_what': { cs: 'Chyby na síťových rozhraních.', en: 'Errors on the network interfaces.' },
+  'help.net_errors_how': {
+    cs: 'Součet chybových počítadel rozhraní, rozdíl mezi hlášeními.',
+    en: 'The sum of the error counters of the interfaces, differenced between reports.',
+  },
+  'help.net_errors_caveat': {
+    cs: 'Rostoucí počet ukazuje na vadný kabel, port nebo rušení, ne na zahlcení.',
+    en: 'A rising count points at a faulty cable, port or interference rather than congestion.',
+  },
+  'help.zombie_count_what': { cs: 'Počet zombie procesů.', en: 'Number of zombie processes.' },
+  'help.zombie_count_how': { cs: 'Procesy ve stavu Z v /proc.', en: 'Processes in state Z under /proc.' },
+  'help.zombie_count_caveat': {
+    cs: 'Zombie samy nic nespotřebují, ale jejich přibývání znamená, že rodičovský proces nesklízí potomky.',
+    en: 'Zombies consume nothing themselves, but a growing count means a parent process is not reaping its children.',
+  },
+  'help.fork_rate_what': {
+    cs: 'Kolik nových procesů systém spouští za sekundu.',
+    en: 'How many new processes the system starts per second.',
+  },
+  'help.fork_rate_how': {
+    cs: 'Hodnota processes v /proc/stat, rozdíl mezi hlášeními.',
+    en: 'The processes value in /proc/stat, differenced between reports.',
+  },
+  'help.fork_rate_caveat': {
+    cs: 'Náhlý skok často znamená smyčku ve skriptu nebo restartující se službu.',
+    en: 'A sudden jump often means a loop in a script or a service restarting over and over.',
+  },
+  'help.wifi_clients_what': { cs: 'Počet zařízení připojených k Wi-Fi.', en: 'Number of devices connected to Wi-Fi.' },
+  'help.wifi_clients_how': {
+    cs: 'Součet klientů všech rádií podle iwinfo.',
+    en: 'The sum of clients across all radios, from iwinfo.',
+  },
+  'help.conntrack_count_what': { cs: 'Počet sledovaných spojení.', en: 'Number of tracked connections.' },
+  'help.conntrack_count_how': { cs: 'Z nf_conntrack_count.', en: 'From nf_conntrack_count.' },
+  'help.conntrack_count_caveat': {
+    cs: 'Absolutní číslo; jak blízko je stropu, říká metrika Conntrack tabulka.',
+    en: 'An absolute number; how close it is to the ceiling is what the conntrack table metric says.',
+  },
+  'help.dhcp_leases_count_what': {
+    cs: 'Kolik zařízení má právě zapůjčenou adresu.',
+    en: 'How many devices currently hold a lease.',
+  },
+  'help.dhcp_leases_count_how': {
+    cs: 'Počet záznamů v souboru zápůjček dnsmasq.',
+    en: 'The number of records in the dnsmasq lease file.',
+  },
+  'help.lte_rssi_what': {
+    cs: 'Celková síla přijímaného signálu včetně rušení.',
+    en: 'Total received signal strength, interference included.',
+  },
+  'help.lte_rssi_how': { cs: 'Z modemu přes ModemManager nebo uqmi.', en: 'From the modem via ModemManager or uqmi.' },
+  'help.lte_rssi_caveat': {
+    cs: 'Na LTE je vypovídající spíš RSRP: RSSI sčítá i cizí signály na stejné frekvenci.',
+    en: 'On LTE, RSRP says more: RSSI also sums up foreign signals on the same frequency.',
+  },
+  'help.lte_uptime_what': {
+    cs: 'Jak dlouho stojí současné LTE spojení.',
+    en: 'How long the current LTE connection has stood.',
+  },
+  'help.lte_uptime_how': { cs: 'Doba běhu rozhraní podle netifd.', en: 'Interface uptime as reported by netifd.' },
+  'help.lte_uptime_caveat': {
+    cs: 'Krátká doba po nedávném výpadku znamená, že se spojení právě obnovilo.',
+    en: 'A short time after a recent outage means the connection has just been re-established.',
+  },
+  'help.ts_clients_what': {
+    cs: 'Počet uživatelů na TeamSpeak serveru.',
+    en: 'Number of users on the TeamSpeak server.',
+  },
+  'help.ts_clients_how': {
+    cs: 'Dotaz ServerQuery na běžící server.',
+    en: 'A ServerQuery request to the running server.',
+  },
+  'help.mc_players_what': { cs: 'Počet hráčů na Minecraft serveru.', en: 'Number of players on the Minecraft server.' },
+  'help.mc_players_how': { cs: 'Ze status odpovědi serveru.', en: 'From the server status response.' },
+  'help.discord_presence_what': {
+    cs: 'Kolik lidí je online na Discord serveru.',
+    en: 'How many people are online on the Discord server.',
+  },
+  'help.discord_presence_how': { cs: 'Z widget API Discordu.', en: 'From the Discord widget API.' },
+  'help.tailscale_peers_what': {
+    cs: 'Počet protějšků v síti Tailscale.',
+    en: 'Number of peers in the Tailscale network.',
+  },
+  'help.tailscale_peers_how': { cs: 'Z tailscale status.', en: 'From tailscale status.' },
   'help.source_agent': {
     cs: 'Agent na zařízení, při každém hlášení (obvykle jednou za minutu).',
     en: 'The agent on the device, with every report (usually once a minute).',

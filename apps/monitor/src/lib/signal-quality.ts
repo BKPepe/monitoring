@@ -117,6 +117,14 @@ export function rateChannelBusy(pct: number | null | undefined): SignalRating | 
   );
 }
 
+/** The rating for a metric key, when that metric has a physical scale at all. */
+export function rateSignalMetric(metricKey: string, value: number | null | undefined): SignalRating | null {
+  if (metricKey === 'lte_rsrp') return rateRsrp(value);
+  if (metricKey === 'lte_rsrq') return rateRsrq(value);
+  if (metricKey === 'lte_sinr') return rateSinr(value);
+  return null;
+}
+
 /**
  * The one thing worth doing about an LTE link, given all three numbers.
  *

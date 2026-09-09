@@ -162,7 +162,17 @@ export interface MetricSeriesResponse {
 
 /** Context for the metric detail page (`api.php?action=metric_detail`). */
 export interface MetricDetail {
-  monitor: { id: number; name: string; type: string; assetId: number | null };
+  monitor: {
+    id: number;
+    name: string;
+    type: string;
+    /** What is being measured (host, URL, address). null = the monitor has none. */
+    target: string | null;
+    port: number | null;
+    /** Where the last check was run from; null for values an agent reports about itself. */
+    checkedFrom: string | null;
+    assetId: number | null;
+  };
   metric: { key: string; label: string; unit: string; counter: boolean };
   /** `null` = no threshold is set; no band is drawn in the chart. */
   thresholds: { warning: number | null; critical: number | null };
@@ -273,6 +283,12 @@ export interface MetricsSource {
   getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail>;
   getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse>;
   getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse>;
-  getMetricCorrelations(monitorId: number, metric: string, range: MetricRange): Promise<MetricCorrelationsResponse>;
+  /** @param all Every comparison, not only the strongest few. */
+  getMetricCorrelations(
+    monitorId: number,
+    metric: string,
+    range: MetricRange,
+    all?: boolean
+  ): Promise<MetricCorrelationsResponse>;
   getLinkTraffic(monitorId: number, days?: number): Promise<LinkTrafficResponse>;
 }

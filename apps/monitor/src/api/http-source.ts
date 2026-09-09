@@ -179,10 +179,11 @@ export const httpMetricsSource: MetricsSource = {
   async getMetricCorrelations(
     monitorId: number,
     metric: string,
-    range: MetricRange
+    range: MetricRange,
+    all = false
   ): Promise<MetricCorrelationsResponse> {
     const res = await getJson<MetricCorrelationsResponse>(
-      `api.php?action=metric_correlations&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}`
+      `api.php?action=metric_correlations&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${all ? '&all=1' : ''}`
     );
     if (!Array.isArray(res?.correlations)) {
       throw new Error(res?.error ?? 'Neplatná odpověď metric_correlations.');

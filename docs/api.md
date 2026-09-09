@@ -348,7 +348,7 @@ command.
 | `action=metric_series&monitor_id=&metric=&period=` | public | One metric over time |
 | `action=metric_series_batch` | public | Several metrics in one query |
 | `action=metric_detail&monitor_id=&metric=` | public | Context for the metric detail page |
-| `action=metric_correlations&monitor_id=&metric=&period=` | public | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
+| `action=metric_correlations&monitor_id=&metric=&period=` (optionally `&all=1` for every compared metric, not just the strongest 8) | public | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | public | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
 | `action=link_traffic&monitor_id=&days=` | public | A router's traffic by link role: primary (`wan_l3_device`) vs. LTE backup (`lte_device`) for today / 7 / 30 days from the daily per-interface totals, plus the primary-link outages (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) paired from `wan_lost`/`wan_restored` events - whether traffic really went over the backup during them is what the backup device's byte counts say, not these periods (an open period runs until now; an outage that began before the window and has not ended is looked up separately and counted from the start of the window, or a router that has been on the backup for weeks would report "never"). Roles come only from what the agent reports - without `wan_l3_device` (agent < 0.1.3) the primary side is `null`, never a guess from the name |
 | `action=process_history&monitor_id=&kind=&at=&radius=` | public | Which processes were running around a point in time |
@@ -396,7 +396,15 @@ monitor has, which related metrics it reports at all and what happened around it
 
 ```json
 {
-  "monitor": { "id": 6, "name": "Turris", "type": "openwrt", "assetId": 6 },
+  "monitor": {
+    "id": 6,
+    "name": "Turris",
+    "type": "openwrt",
+    "target": "10.0.0.1",
+    "port": null,
+    "checkedFrom": "Praha, CZ",
+    "assetId": 6
+  },
   "metric": { "key": "cpu", "label": "CPU usage", "unit": "%", "counter": false },
   "thresholds": { "warning": 75, "critical": 90 },
   "related": [{ "key": "ram", "label": "Memory usage", "unit": "%", "latest": 41.2 }],
