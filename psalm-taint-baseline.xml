@@ -16,6 +16,12 @@
                 'id' => (int)$mon['id'],
                 'name' => $mon['name'],
                 'type' => $mon['type'],
+                // What is actually being measured, and from where. A latency of
+                // 6 ms says nothing until the page can name the target and the
+                // vantage point - unknown stays null, never a guessed location.
+                'target' => $mon['target'] !== null && $mon['target'] !== '' ? (string)$mon['target'] : null,
+                'port' => $mon['port'] !== null ? (int)$mon['port'] : null,
+                'checkedFrom' => $md_checked_from,
                 'assetId' => $mon['asset_id'] !== null ? (int)$mon['asset_id'] : null,
             ],
             'metric' => [
@@ -24,6 +30,10 @@
                 'unit' => $def['unit'],
                 'counter' => !empty($def['counter']),
             ],
+            // `warning` is DERIVED (the band below the configured limit), not
+            // something an admin ever typed. The frontend words the two
+            // differently, so it has to be able to tell them apart.
+            'thresholdsDerived' => ['warning' => true, 'critical' => false],
             'thresholds' => [
                 // The warning band sits 15 points below the critical limit - same
                 // as the legacy page, so both show the same thing.
@@ -71,6 +81,12 @@
                 'id' => (int)$mon['id'],
                 'name' => $mon['name'],
                 'type' => $mon['type'],
+                // What is actually being measured, and from where. A latency of
+                // 6 ms says nothing until the page can name the target and the
+                // vantage point - unknown stays null, never a guessed location.
+                'target' => $mon['target'] !== null && $mon['target'] !== '' ? (string)$mon['target'] : null,
+                'port' => $mon['port'] !== null ? (int)$mon['port'] : null,
+                'checkedFrom' => $md_checked_from,
                 'assetId' => $mon['asset_id'] !== null ? (int)$mon['asset_id'] : null,
             ],
             'metric' => [
@@ -79,6 +95,10 @@
                 'unit' => $def['unit'],
                 'counter' => !empty($def['counter']),
             ],
+            // `warning` is DERIVED (the band below the configured limit), not
+            // something an admin ever typed. The frontend words the two
+            // differently, so it has to be able to tell them apart.
+            'thresholdsDerived' => ['warning' => true, 'critical' => false],
             'thresholds' => [
                 // The warning band sits 15 points below the critical limit - same
                 // as the legacy page, so both show the same thing.
