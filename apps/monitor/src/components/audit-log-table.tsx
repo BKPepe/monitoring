@@ -137,7 +137,7 @@ export function AuditLogTable() {
           type="button"
           onClick={() => setOnlyProblems((v) => !v)}
           className={`ml-auto rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-            onlyProblems ? 'bg-down text-white' : 'bg-secondary text-muted-foreground hover:text-foreground'
+            onlyProblems ? 'bg-down text-down-foreground' : 'bg-secondary text-muted-foreground hover:text-foreground'
           }`}
           title={t('audit_log.only_problems_hint', 'Zobrazit jen chyby a varování')}
         >

@@ -403,6 +403,18 @@ if ($action === 'monitors') {
                 $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? 90);
                 $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
                 $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
+                // The limits that actually decide, preset first and null where
+                // nobody set one. The three fields above are the raw columns
+                // the edit form writes back, with a default filled in by ??,
+                // so they cannot answer "is this configured?" and they ignore
+                // a preset entirely - the frontend coloured a monitor whose
+                // preset says 70 against 90.
+                $eff = bk_monitor_thresholds($pdo, $r);
+                $monitors[$mid]['effectiveThresholds'] = [
+                    'cpu' => $eff['cpu'],
+                    'ram' => $eff['ram'],
+                    'hdd' => $eff['hdd'],
+                ];
                 $monitors[$mid]['presetId'] = $r['preset_id'] !== null ? (int)$r['preset_id'] : null;
                 // null = upozornovani na zpomaleni je vypnute
                 $monitors[$mid]['latencyThresholdMs'] = $r['latency_threshold_ms'] !== null ? (int)$r['latency_threshold_ms'] : null;
@@ -1495,9 +1507,75 @@ if ($action === 'events') {
                 'outageEnd' => $outage_end,
             ];
         }
-        echo json_encode(['events' => $events], JSON_UNESCAPED_UNICODE);
+        // Which check recorded the LAST status change.
+        //
+        // It cannot be found in the list above: that list is the newest rows
+        // plus the newest failures, so for a monitor that has been down for
+        // hours the transition itself has already fallen out of both windows,
+        // and every routine passing check looks alike anyway. The row is
+        // therefore looked up by monitors.last_status_change - the only record
+        // of WHEN the state changed - and its status has to agree with the
+        // monitor's, otherwise it is a neighbouring check rather than the
+        // change. Nothing found stays null; no row is promoted on a guess.
+        $status_change = null;
+        if ($monitor_id > 0) {
+            try {
+                $stmt_mon = $pdo->prepare("SELECT status, last_status_change FROM monitors WHERE id = ? LIMIT 1");
+                $stmt_mon->execute([$monitor_id]);
+                $mon_row = $stmt_mon->fetch();
+                $changed_at = is_array($mon_row) ? ($mon_row['last_status_change'] ?? null) : null;
+                $changed_ts = ($changed_at !== null && $changed_at !== '') ? strtotime((string)$changed_at) : false;
+
+                if ($changed_ts !== false) {
+                    // +-120 s: the log INSERT and the monitors UPDATE are two
+                    // statements of the same run, so they differ by about a
+                    // second - never by a check interval.
+                    $stmt_change = $pdo->prepare("
+                        SELECT id, checked_at, status, error_message, checked_from, response_time
+                        FROM monitor_logs
+                        WHERE monitor_id = ? AND status = ? AND checked_at BETWEEN ? AND ?
+                        ORDER BY ABS(TIMESTAMPDIFF(SECOND, checked_at, ?)) ASC, id ASC
+                        LIMIT 1
+                    ");
+                    $stmt_change->execute([
+                        $monitor_id,
+                        (string)$mon_row['status'],
+                        date('Y-m-d H:i:s', $changed_ts - 120),
+                        date('Y-m-d H:i:s', $changed_ts + 120),
+                        date('Y-m-d H:i:s', $changed_ts),
+                    ]);
+                    $change_row = $stmt_change->fetch();
+
+                    if (is_array($change_row)) {
+                        // The state it came FROM. Absent (the first check ever,
+                        // or older rows already pruned) stays null - "it was up
+                        // before" is not a safe default.
+                        $stmt_prev = $pdo->prepare("
+                            SELECT status FROM monitor_logs
+                            WHERE monitor_id = ? AND id < ? ORDER BY id DESC LIMIT 1
+                        ");
+                        $stmt_prev->execute([$monitor_id, (int)$change_row['id']]);
+                        $prev = $stmt_prev->fetchColumn();
+                        $status_change = [
+                            'changedAtIso' => date('c', strtotime((string)$change_row['checked_at'])),
+                            'status' => (string)$change_row['status'],
+                            'fromStatus' => ($prev === false || $prev === null) ? null : (string)$prev,
+                            'errorMsg' => $change_row['error_message'] !== null && $change_row['error_message'] !== ''
+                                ? (string)$change_row['error_message']
+                                : null,
+                            'location' => $change_row['checked_from'] ?: null,
+                            'responseTime' => $change_row['response_time'] !== null ? (int)$change_row['response_time'] : null,
+                        ];
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log('[api.php action=events] status change lookup failed: ' . $e->getMessage());
+            }
+        }
+
+        echo json_encode(['events' => $events, 'statusChange' => $status_change], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
-        echo json_encode(['events' => []], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['events' => [], 'statusChange' => null], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

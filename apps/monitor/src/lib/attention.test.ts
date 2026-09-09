@@ -93,25 +93,38 @@ describe('buildNeedsAttention', () => {
 describe('thresholdFor', () => {
   const base = { id: 1, name: 'x', status: 'up' } as never;
 
-  it('uses the limit configured on the monitor', () => {
-    expect(thresholdFor({ ...(base as object), hddThreshold: 70 } as never, 'hdd')).toBe(70);
-    expect(thresholdFor({ ...(base as object), cpuThreshold: 60 } as never, 'cpu')).toBe(60);
+  it('uses the effective limit the server resolved', () => {
+    const eff = (t: Record<string, number | null>) => ({ ...(base as object), effectiveThresholds: t }) as never;
+    expect(thresholdFor(eff({ cpu: null, ram: null, hdd: 70 }), 'hdd')).toBe(70);
+    expect(thresholdFor(eff({ cpu: 60, ram: null, hdd: null }), 'cpu')).toBe(60);
+  });
+
+  // The raw column carries a server-side default and ignores the preset, so
+  // reading it would colour a monitor whose preset says 70 against 90.
+  it('ignores the raw column when no effective limit was resolved', () => {
+    expect(thresholdFor({ ...(base as object), cpuThreshold: 60 } as never, 'cpu')).toBe(METRIC_ATTENTION_THRESHOLD);
   });
 
   // An anonymous session receives no thresholds; the fallback is stated, not silent.
-  it('falls back to the stated default when the monitor carries none', () => {
+  it('falls back to the stated default when nothing was configured', () => {
     expect(thresholdFor(base, 'ram')).toBe(METRIC_ATTENTION_THRESHOLD);
-    expect(thresholdFor({ ...(base as object), ramThreshold: 0 } as never, 'ram')).toBe(METRIC_ATTENTION_THRESHOLD);
+    expect(
+      thresholdFor({ ...(base as object), effectiveThresholds: { cpu: null, ram: null, hdd: null } } as never, 'ram')
+    ).toBe(METRIC_ATTENTION_THRESHOLD);
   });
 
   it('alerts against the configured limit, not the default', () => {
-    const monitors = [{ id: 7, name: 'Router', status: 'up', hdd: 75, hddThreshold: 70 }] as never;
+    const monitors = [
+      { id: 7, name: 'Router', status: 'up', hdd: 75, effectiveThresholds: { cpu: null, ram: null, hdd: 70 } },
+    ] as never;
     const items = buildNeedsAttention(monitors, labels);
     expect(items.some((i) => i.text.includes('Disk'))).toBe(true);
   });
 
   it('stays quiet below a deliberately high limit', () => {
-    const monitors = [{ id: 8, name: 'Build', status: 'up', ram: 93, ramThreshold: 98 }] as never;
+    const monitors = [
+      { id: 8, name: 'Build', status: 'up', ram: 93, effectiveThresholds: { cpu: null, ram: 98, hdd: null } },
+    ] as never;
     expect(buildNeedsAttention(monitors, labels)).toEqual([]);
   });
 });

@@ -456,7 +456,7 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=incidents` | veřejné | Seznam incidentů |
 | `action=create_incident` | přihlášený | Ruční založení |
 | `action=incident_action` | přihlášený | `op`: acknowledge / resolve / postmortem |
-| `action=events&monitor_id=&limit=` | veřejné | Události monitoru |
+| `action=events&monitor_id=&limit=` | veřejné | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky |
 | `action=sla_report&days=` | veřejné | SLA přehled |
 | `action=audit_logs&limit=` | veřejné | Poslední kontroly napříč monitory |
 

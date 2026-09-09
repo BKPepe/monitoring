@@ -50,17 +50,23 @@
   --sidebar-border: rgb(0 0 0 / 0.08);
 
   /* --- Stavy monitoru. Sdílená sémantika s apps/site i s dashboardem.
-     Kontrast je změřený proti VŠEM podkladům, na kterých ty barvy leží
-     (--background, --card, --secondary), ne jen proti tomu nejsvětlejšímu:
-     jako text je potřeba 4,5:1, jako výplň 3:1. Na sekundárním podkladu
-     padaly „běží“, „varování“ a „pozastaveno“ pod 4,4:1, a to je text na
-     97 místech v aplikaci. Hodnoty jsou proto o stupeň tmavší, odstín
-     zůstal. */
-  --status-up: #13723a;
-  --status-down: #b91c1c;
-  --status-warning: #8f5706;
+     Kontrast změřený proti VŠEM podkladům, na kterých ty barvy leží, včetně
+     toho, co se snadno přehlédne: odznak a proužek kontroly si podklad
+     obarví nádechem téže barvy (bg-down/12, bg-up/15), což povrch přitáhne
+     k textu a stojí zhruba 1,4:1. Dvojice, která na kartě projde na 4,7:1,
+     tak uvnitř odznaku sedí na 4,0:1 - přesně tudy propadly „běží“,
+     „varování“ i „pozastaveno“. Podlahy: 4,5:1 jako text, 3:1 jako tečka
+     nebo pruh. Nejhorší podklad je --secondary s 15% nádechem, hodnoty ho
+     překonávají a odstín drží. */
+  --status-up: #166534;
+  --status-down: #991b1b;
+  --status-warning: #854d0e;
   --status-info: #1d4ed8;
-  --status-paused: #5b6472;
+  --status-paused: #4b5563;
+  /* Text na plné výplni --status-down (odznaky se sytým podkladem). Bílá na
+     ní má 8,3:1; na světlé červené v tmavém tématu by měla 2,5:1, proto je
+     to token a ne natvrdo napsaná bílá. */
+  --status-down-foreground: #ffffff;
 
   /* --- Barvy sérií v grafech ------------------------------------------
      Pořadí je závazné: CPU vždy zelená, RAM modrá, síť tyrkysová, teplota
@@ -125,13 +131,16 @@
   --sidebar-accent: #1a1e24;
   --sidebar-border: rgb(255 255 255 / 0.06);
 
-  /* Na tmavém podkladu padaly „výpadek“ (3,73:1) a „pozastaveno“ (3,27:1)
-     pod čitelnost jako text; ostatní tři jsou nad 6:1 a zůstávají. */
+  /* Na tmavém podkladu platí totéž pravidlo o nádechu: „výpadek“ měl uvnitř
+     vlastního odznaku 3,3:1 a „pozastaveno“ 2,8:1. Zbylé tři procházejí a
+     zůstávají. */
   --status-up: #22c55e;
-  --status-down: #f0736f;
+  --status-down: #ff7f7c;
   --status-warning: #facc15;
   --status-info: #60a5fa;
-  --status-paused: #8b93a1;
+  --status-paused: #9ca3af;
+  /* Světlá červeň potřebuje tmavý text: bílá na ní má 2,5:1, tmavá 8,0:1. */
+  --status-down-foreground: #0a0c0f;
 
   /* Na tmavém podkladu potřebují barvy víc světla, aby držely kontrast. */
   --chart-cpu: #22c55e;
@@ -175,6 +184,7 @@
 
   --color-up: var(--status-up);
   --color-down: var(--status-down);
+  --color-down-foreground: var(--status-down-foreground);
   --color-warning: var(--status-warning);
   --color-info: var(--status-info);
   --color-paused: var(--status-paused);

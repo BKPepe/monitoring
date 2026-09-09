@@ -128,6 +128,13 @@ export function AssetDetailPage() {
   const [range, setRange] = React.useState<TimeRange>('24h');
   const [loading, setLoading] = React.useState(true);
   const [events, setEvents] = React.useState<TimelineEvent[]>([]);
+  /** The check that recorded the last status change, straight from the server. */
+  const [statusChange, setStatusChange] = React.useState<{
+    changedAtIso: string;
+    status: string;
+    fromStatus: string | null;
+    errorMsg: string | null;
+  } | null>(null);
   const [serverInsights, setServerInsights] = React.useState<ServerInsights | null>(null);
 
   React.useEffect(() => {
@@ -179,26 +186,34 @@ export function AssetDetailPage() {
    * lives in the event log we already load, so there is no need to go hunting
    * for it in the timeline below.
    */
+  /**
+   * What the last status change actually was.
+   *
+   * Not guessed from the event list: that list is the newest rows plus the
+   * newest failures, so the transition itself is often not in it at all, and
+   * every routine passing check looks alike - the old filter picked the newest
+   * one, the single row that by definition changed nothing. The server answers
+   * the question directly, pinned to monitors.last_status_change, and returns
+   * null when it cannot find the row. Null renders nothing rather than
+   * borrowing another event's text.
+   */
   const statusChangeHint = React.useMemo(() => {
-    // Transitions only. 'info' is an ordinary passing check, and since the
-    // list is newest-first the old filter always picked the most recent
-    // routine check - the one row that by definition changed nothing.
-    const transitions = events.filter((e) => e.severity !== 'info');
-    if (transitions.length === 0) return undefined;
-    // The transition that belongs to the recorded change, not merely the
-    // newest one: an outage from last week must not be captioned with a
-    // recovery that happened after it.
-    const changeAt = rawMonitor?.lastStatusChange ? Date.parse(rawMonitor.lastStatusChange) : NaN;
-    const match = Number.isFinite(changeAt)
-      ? (transitions.find((e) => {
-          const at = e.atIso ? Date.parse(e.atIso) : NaN;
-          return Number.isFinite(at) && Math.abs(at - changeAt) <= 5 * 60_000;
-        }) ?? null)
-      : null;
-    const change = match ?? transitions[0];
-    const detail = (change.detail ?? '').trim();
-    return detail ? `${change.title} — ${detail}` : change.title;
-  }, [events, rawMonitor]);
+    if (!statusChange) return undefined;
+    const label =
+      statusChange.status === 'down'
+        ? t('asset.event_outage', 'Výpadek služby')
+        : statusChange.status === 'warning'
+          ? t('asset.event_degraded', 'Zhoršená odezva')
+          : statusChange.status === 'unknown'
+            ? t('asset.event_unknown', 'Stav neznámý (agent nehlásí)')
+            : statusChange.status === 'maintenance'
+              ? t('common.maintenance', 'Údržba')
+              : statusChange.fromStatus && statusChange.fromStatus !== 'up'
+                ? t('asset.event_recovered', 'Služba obnovena')
+                : t('asset.event_ok', 'Kontrola proběhla v pořádku');
+    const detail = (statusChange.errorMsg ?? '').trim();
+    return detail ? `${label} — ${detail}` : label;
+  }, [statusChange, t]);
 
   React.useEffect(() => {
     if (!loadedAssetId) return;
@@ -213,6 +228,7 @@ export function AssetDetailPage() {
         // isRecovery comes from the server, which knows which rows are real
         // neighbours - the list mixes older outages in, so deciding it here
         // marked whichever OK row happened to sit above one of them.
+        setStatusChange(data.statusChange && typeof data.statusChange.status === 'string' ? data.statusChange : null);
         const rows: any[] = data.events;
         setEvents(
           rows.map((e: any) => ({

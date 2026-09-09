@@ -2007,7 +2007,9 @@ function bk_days_to_full(PDO $pdo, int $monitor_id): array {
                 continue;
             }
             $days = (100 - $rate_info['latest']) / $rate_info['rate_per_day'];
-            if ($days <= 0 || $days > 90) {
+            // Under a day is not a forecast anyone can act on, and rounding it
+            // would print "full in 0 days" - a date that has already passed.
+            if ($days < 1 || $days > 90) {
                 continue;
             }
             $out[$metric_key] = (int)round($days);
@@ -2055,14 +2057,18 @@ function bk_get_forecast_insights($pdo, $monitor) {
         $metrics_rows = $stmt_raw->fetchAll();
     }
 
+    // The same rule as bk_days_to_full(), which the chart badge reads: a
+    // forecast under a day or beyond 90 is not one. Two copies of this
+    // arithmetic would eventually disagree, and the sentence and the badge
+    // would contradict each other on the same page.
     foreach (['hdd_usage' => 'insight_forecast_disk', 'ram_usage' => 'insight_forecast_ram'] as $metric_key => $tip_key) {
         $rate_info = bk_half_window_rate($metrics_rows, $metric_key);
         if ($rate_info === null || $rate_info['rate_per_day'] <= 0.01) {
             continue; // Ploché nebo klesající - není co predikovat
         }
         $days_until_full = (100 - $rate_info['latest']) / $rate_info['rate_per_day'];
-        if ($days_until_full <= 0 || $days_until_full > 90) {
-            continue; // Už plné (nesmysl), nebo za hranicí toho, co stojí za varování
+        if ($days_until_full < 1 || $days_until_full > 90) {
+            continue; // Do dne se nedá nic naplánovat, přes 90 dní nestojí za varování
         }
         $insights[] = [
             'type' => 'forecast',

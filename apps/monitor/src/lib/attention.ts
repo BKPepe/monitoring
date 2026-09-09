@@ -41,10 +41,18 @@ export function metricSeverity(value: number | null | undefined, limit: number):
   return value >= limit - 15 ? 'warning' : 'up';
 }
 
-/** The configured limit for a metric, or the stated fallback. */
+/**
+ * The limit a metric is judged against: the effective one the server resolved
+ * (preset first, then the monitor's own), and the stated fallback only where
+ * nothing was configured or the caller is anonymous.
+ *
+ * Deliberately NOT the raw cpuThreshold/ramThreshold/hddThreshold fields: the
+ * server fills those with a default and they ignore a preset, so a monitor
+ * whose preset says "warn at 70" was coloured against 90.
+ */
 export function thresholdFor(m: ApiMonitor, metric: 'cpu' | 'ram' | 'hdd'): number {
-  const configured = metric === 'cpu' ? m.cpuThreshold : metric === 'ram' ? m.ramThreshold : m.hddThreshold;
-  return typeof configured === 'number' && configured > 0 ? configured : METRIC_ATTENTION_THRESHOLD;
+  const effective = m.effectiveThresholds?.[metric];
+  return typeof effective === 'number' && effective > 0 ? effective : METRIC_ATTENTION_THRESHOLD;
 }
 /** How many days before certificate expiry alerts start. */
 export const SSL_ATTENTION_DAYS = 14;

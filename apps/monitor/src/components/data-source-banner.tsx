@@ -80,7 +80,7 @@ export function DataSourceBanner() {
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-0.5 inline-flex items-center gap-1.5 rounded-md bg-down px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90 transition-opacity"
+          className="mt-0.5 inline-flex items-center gap-1.5 rounded-md bg-down px-2.5 py-1 text-[11px] font-semibold text-down-foreground hover:opacity-90 transition-opacity"
         >
           {t('banner.api_down_retry', 'Zkusit znovu')}
         </button>

@@ -321,6 +321,25 @@ $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked
 check('events vrací 200', $ev_code, 200);
 $ev_rows = $ev_data['events'] ?? [];
 check_true('events vrací tři řádky monitoru', count($ev_rows) === 3);
+
+// Řádek "co se změnilo" se nedá uhodnout ze seznamu: ten drží nejnovější
+// kontroly plus nejnovější výpadky, takže samotný přechod v něm často není.
+// Server proto vrací ten řádek přímo, přišpendlený na last_status_change.
+$pdo->exec("UPDATE monitors SET status = 'up', last_status_change = DATE_SUB(NOW(), INTERVAL 3 MINUTE) WHERE id = 2");
+[, $sc_data] = api_get($base, 'action=events&monitor_id=2&limit=200');
+check_true('events vrací statusChange', array_key_exists('statusChange', $sc_data));
+check('a je to ta kontrola, která stav změnila', $sc_data['statusChange']['status'] ?? null, 'up');
+check_true(
+    'zná i stav, ze kterého se přešlo',
+    ($sc_data['statusChange']['fromStatus'] ?? null) === 'down'
+);
+// Bez zaznamenané změny se nic nevymýšlí.
+$pdo->exec("UPDATE monitors SET last_status_change = DATE_SUB(NOW(), INTERVAL 40 DAY) WHERE id = 2");
+[, $sc_none] = api_get($base, 'action=events&monitor_id=2&limit=200');
+check_true(
+    'bez odpovídajícího řádku zůstává statusChange null',
+    array_key_exists('statusChange', $sc_none) && $sc_none['statusChange'] === null
+);
 // Newest first: [0] běžná OK kontrola, [1] obnovení, [2] výpadek.
 check('nejnovější OK kontrola není obnovení', $ev_rows[0]['isRecovery'] ?? 'chybí', false);
 check('OK kontrola hned po výpadku je obnovení', $ev_rows[1]['isRecovery'] ?? 'chybí', true);

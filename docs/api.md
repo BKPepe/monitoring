@@ -462,7 +462,7 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=incidents` | public | List of incidents |
 | `action=create_incident` | logged in | Manual creation |
 | `action=incident_action` | logged in | `op`: acknowledge / resolve / postmortem |
-| `action=events&monitor_id=&limit=` | public | Monitor events |
+| `action=events&monitor_id=&limit=` | public | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures |
 | `action=sla_report&days=` | public | SLA overview |
 | `action=audit_logs&limit=` | public | Latest checks across monitors |
 

@@ -62,6 +62,13 @@ export interface ApiMonitor {
   presetId?: number | null;
   latencyThresholdMs?: number | null;
   latencyThresholdMins?: number;
+  /**
+   * The limits that actually decide: the preset when one is assigned, then the
+   * monitor's own value, then null for "nobody set one". The three raw fields
+   * below are what the edit form writes back and carry a server-side default,
+   * so they cannot answer whether anything was configured.
+   */
+  effectiveThresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
   cpuThreshold?: number;
   ramThreshold?: number;
   hddThreshold?: number;
