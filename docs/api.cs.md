@@ -401,6 +401,7 @@ prahy, které příbuzné metriky vůbec hlásí a co se v okolí dělo:
   },
   "metric": { "key": "cpu", "label": "Využití CPU", "unit": "%", "counter": false },
   "thresholds": { "warning": 75, "critical": 90 },
+  "thresholdsDerived": { "warning": true, "critical": false },
   "related": [{ "key": "ram", "label": "Využití paměti", "unit": "%", "latest": 41.2 }],
   "events": [{ "t": 1755000000000, "type": "status_change", "label": "Obnoveno" }]
 }

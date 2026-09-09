@@ -1778,7 +1778,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'metric.worst_high': { cs: 'Nejhorší (špička)', en: 'Worst (peak)' },
   'metric.worst_low': { cs: 'Nejhorší', en: 'Worst' },
   'metric.best_high': { cs: 'Nejlepší', en: 'Best' },
-  'metric.best_low': { cs: 'Nejlepší', en: 'Best' },
   'metric.samples': { cs: 'Měření v období', en: 'Measurements in the window' },
   'metric.on_target': { cs: 'Cíl', en: 'Target' },
   'metric.measured_from': { cs: 'Měřeno z: {place}.', en: 'Measured from: {place}.' },
@@ -1789,9 +1788,32 @@ const translations: Record<string, { cs: string; en: string }> = {
   'metric.verdict_usual': { cs: 'v obvyklém rozmezí', en: 'in the usual range' },
   'metric.verdict_unusual': { cs: 'na horším konci období', en: 'at the worse end of the window' },
   'metric.verdict_none': { cs: 'bez měřítka', en: 'no yardstick' },
-  'metric.verdict_against_threshold': {
-    cs: 'Porovnáno s prahem nastaveným u monitoru ({value}).',
-    en: 'Compared against the threshold configured on the monitor ({value}).',
+  'metric.p95_neutral': { cs: 'Horní pásmo (p95)', en: 'Upper band (p95)' },
+  'metric.peak_neutral': { cs: 'Špička', en: 'Peak' },
+  'metric.min_neutral': { cs: 'Minimum', en: 'Minimum' },
+  'metric.verdict_against_limit': {
+    cs: 'Porovnáno s limitem nastaveným u monitoru ({value}).',
+    en: 'Compared against the limit configured on the monitor ({value}).',
+  },
+  'metric.verdict_against_band': {
+    cs: 'Porovnáno s varovným pásmem ({band}), které leží pod nastaveným limitem ({limit}).',
+    en: 'Compared against the warning band ({band}), which sits below the configured limit ({limit}).',
+  },
+  'metric.verdict_against_tail': {
+    cs: 'Horší konec období je {value} a aktuální hodnota je za ním.',
+    en: 'The worse end of the window is {value}, and the current value is past it.',
+  },
+  'culprits.at_picked_when': {
+    cs: 'Okamžik vybraný v grafu: {when}. Klikněte jinam pro jiný.',
+    en: 'The moment picked in the chart: {when}. Click elsewhere for another.',
+  },
+  'culprits.at_peak_when': {
+    cs: 'Špička zvoleného období: {when}. Kliknutím do grafu se podíváte jinam.',
+    en: 'The peak of the chosen window: {when}. Click the chart to look elsewhere.',
+  },
+  'culprits.pick_moment': {
+    cs: 'Klikněte do grafu na okamžik, který vás zajímá.',
+    en: 'Click the chart at the moment you are interested in.',
   },
   'metric.verdict_against_window': {
     cs: 'Porovnáno se zvoleným obdobím, kde obvyklá hodnota je {value}.',
@@ -1800,14 +1822,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'metric.verdict_no_yardstick': {
     cs: 'Pro tuhle metriku není nastavený práh ani pevná stupnice.',
     en: 'This metric has neither a configured threshold nor a fixed scale.',
-  },
-  'culprits.at_peak': {
-    cs: 'Ukazuje se špička zvoleného období. Kliknutím do grafu se podíváte na jiný okamžik.',
-    en: 'Showing the peak of the chosen window. Click the chart to look at another moment.',
-  },
-  'culprits.at_picked': {
-    cs: 'Okamžik vybraný kliknutím do grafu. Klikněte jinam pro jiný.',
-    en: 'The moment you picked in the chart. Click elsewhere for another.',
   },
   'corr.show_all': { cs: 'Zobrazit všechny', en: 'Show all' },
   'metric.gaps_unit': { cs: 'x', en: 'x' },

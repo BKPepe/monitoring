@@ -1008,6 +1008,8 @@ check('metric_detail kreslí pásmo podle presetu', $thr_detail['thresholds']['c
 // "6 ms proti čemu a na čem?" - detail metriky musí umět pojmenovat cíl měření
 // i místo, odkud se měří. Neznámé zůstává null, nikdy vymyšlená lokalita.
 check('metric_detail vrací cíl měření', $thr_detail['monitor']['target'] ?? null, '10.0.0.1');
+check_true('práh warning je označený jako odvozený', ($thr_detail['thresholdsDerived']['warning'] ?? null) === true);
+check_true('a critical jako nastavený', ($thr_detail['thresholdsDerived']['critical'] ?? null) === false);
 check_true('klíč port je přítomen', array_key_exists('port', $thr_detail['monitor'] ?? []));
 check_true('klíč checkedFrom je přítomen', array_key_exists('checkedFrom', $thr_detail['monitor'] ?? []));
 // array_key_exists, ne ?? - ten by null pod testem zaměnil za fallback.
@@ -1017,8 +1019,16 @@ check_true(
 );
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_from, checked_at)
             VALUES (2, 'up', 5, 'Praha, CZ', NOW())");
-[, $cf_detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
-check('zapsaná lokalita se vrátí', $cf_detail['monitor']['checkedFrom'] ?? null, 'Praha, CZ');
+// Only the metrics the SERVER measures may claim a vantage point. CPU is
+// measured by the agent about its own machine; handing back cron's own label
+// would claim the router's processor was measured from the hosting.
+[, $cf_cpu] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
+check_true(
+    'u metriky od agenta zůstává checkedFrom null',
+    array_key_exists('checkedFrom', $cf_cpu['monitor'] ?? []) && $cf_cpu['monitor']['checkedFrom'] === null
+);
+[, $cf_detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=response_time');
+check('u odezvy se lokalita vrátí', $cf_detail['monitor']['checkedFrom'] ?? null, 'Praha, CZ');
 $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
 $pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
 $pdo->exec("DELETE FROM metric_presets WHERE id = 77");
@@ -1445,22 +1455,19 @@ if (!empty($cookie_jar)) {
 // First the rollup itself: without it the test below would only verify reads
 // from a table nobody fills.
 $pdo->exec("DELETE FROM metrics_daily");
+// Both samples on ONE day, chosen from the DB's own clock. Offsets from NOW()
+// straddle midnight in the database's timezone for an hour every night: at
+// 01:20 UTC the "2 hours ago" row lands on the previous day, the aggregate has
+// one sample instead of two and the test fails with no code change. Seen in
+// this suite twice now, so the day is pinned instead of hoped for.
+$sample_day = $pdo->query("SELECT DATE(DATE_SUB(NOW(), INTERVAL 3 HOUR))")->fetchColumn();
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
-            VALUES (2, 10, 50, 70, DATE_SUB(NOW(), INTERVAL 2 HOUR))");
+            VALUES (2, 10, 50, 70, TIMESTAMP('{$sample_day}', '00:10:00'))");
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
-            VALUES (2, 90, 55, 71, DATE_SUB(NOW(), INTERVAL 1 HOUR))");
+            VALUES (2, 90, 55, 71, TIMESTAMP('{$sample_day}', '00:20:00'))");
 
 $rolled_metrics = bk_rollup_daily_metrics($pdo, 2);
 check_true('agregace zapsala řádky', $rolled_metrics > 0);
-
-// The day those samples belong to - NOT today.
-//
-// This used to check `day = CURDATE()`, but the samples are an hour or two
-// old: between midnight and 2 am they fall into yesterday and the test failed
-// with no code change at all. It was caught in CI, which once happened to run
-// at 00:11 UTC. The test now asks for the day the data belongs to by its own
-// timestamps, so the start hour does not matter.
-$sample_day = $pdo->query("SELECT DATE(DATE_SUB(NOW(), INTERVAL 1 HOUR))")->fetchColumn();
 
 $stmt_cpu_row = $pdo->prepare("SELECT min_val, avg_val, max_val, samples FROM metrics_daily
                                WHERE monitor_id = 2 AND metric_key = 'cpu' AND day = ?");

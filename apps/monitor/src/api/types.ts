@@ -176,6 +176,8 @@ export interface MetricDetail {
   metric: { key: string; label: string; unit: string; counter: boolean };
   /** `null` = no threshold is set; no band is drawn in the chart. */
   thresholds: { warning: number | null; critical: number | null };
+  /** Which of the thresholds is derived rather than configured by an admin. */
+  thresholdsDerived?: { warning: boolean; critical: boolean };
   /** Only metrics this monitor actually reported in its latest measurement. */
   related: { key: string; label: string; unit: string; latest: number }[];
   events: { t: number; type: string; label: string }[];

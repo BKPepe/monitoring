@@ -407,6 +407,7 @@ monitor has, which related metrics it reports at all and what happened around it
   },
   "metric": { "key": "cpu", "label": "CPU usage", "unit": "%", "counter": false },
   "thresholds": { "warning": 75, "critical": 90 },
+  "thresholdsDerived": { "warning": true, "critical": false },
   "related": [{ "key": "ram", "label": "Memory usage", "unit": "%", "latest": 41.2 }],
   "events": [{ "t": 1755000000000, "type": "status_change", "label": "Recovered" }]
 }

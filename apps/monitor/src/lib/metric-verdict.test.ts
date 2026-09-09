@@ -52,6 +52,29 @@ describe('metricVerdict', () => {
     expect(metricVerdict({ metricKey: 'mc_players', current: 40, values, thresholds: none })?.kind).toBe('none');
   });
 
+  // The healthiest possible reading: swap at 0 all day, no zombies, no steal.
+  // A nearest-rank percentile of a constant series is that constant, so the
+  // comparison used to make "perfect" a permanent amber warning.
+  it('has no verdict on a window that never moved', () => {
+    const flat = Array.from({ length: 50 }, () => 0);
+    expect(metricVerdict({ metricKey: 'swap', current: 0, values: flat, thresholds: none })?.kind).toBe('none');
+    const pinned = Array.from({ length: 50 }, () => 256);
+    expect(metricVerdict({ metricKey: 'entropy', current: 256, values: pinned, thresholds: none })?.kind).toBe('none');
+  });
+
+  it('being exactly at the tail is not being past it', () => {
+    expect(metricVerdict({ metricKey: 'response_time', current: 95, values, thresholds: none })?.kind).toBe('usual');
+    expect(metricVerdict({ metricKey: 'response_time', current: 96, values, thresholds: none })?.kind).toBe('unusual');
+  });
+
+  // The sentence on the page names the configured limit, so the verdict has to
+  // carry it - the warning band is derived from it, not typed by anyone.
+  it('carries the configured limit alongside the band it compared with', () => {
+    const v = metricVerdict({ metricKey: 'cpu', current: 75, values, thresholds: { warning: 70, critical: 90 } });
+    expect(v?.against).toBe(70);
+    expect(v?.configured).toBe(90);
+  });
+
   it('refuses to judge on too few samples', () => {
     expect(metricVerdict({ metricKey: 'cpu', current: 50, values: [1, 2, 3], thresholds: none })?.kind).toBe('none');
   });

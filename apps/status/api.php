@@ -3697,17 +3697,21 @@ if ($action === 'metric_detail') {
 
         // Events for the chart markers. Same source as the Timeline, so the chart
         // and the timeline never show a different history.
-        // The vantage point of the last check. Written by cron for server-side
-        // checks; agent-reported metrics have none, and then it stays null
-        // rather than borrowing the server's location.
+        // The vantage point of the last check - ONLY for the metrics the
+        // monitoring server measures itself (response time). Everything else
+        // is measured by the agent about its own machine, and monitor_logs
+        // would hand back cron's own label ('Main Server'), which would claim
+        // the router's CPU was measured from the hosting.
         $md_checked_from = null;
-        try {
-            $stmt_cf = $pdo->prepare("SELECT checked_from FROM monitor_logs WHERE monitor_id = ? AND checked_from IS NOT NULL AND checked_from <> '' ORDER BY id DESC LIMIT 1");
-            $stmt_cf->execute([(int)$mon['id']]);
-            $cf = $stmt_cf->fetchColumn();
-            $md_checked_from = ($cf === false || $cf === null || $cf === '') ? null : (string)$cf;
-        } catch (Throwable $e) {
-            error_log('[api.php action=metric_detail] checked_from lookup failed: ' . $e->getMessage());
+        if ($metric === 'response_time' || $metric === 'latency') {
+            try {
+                $stmt_cf = $pdo->prepare("SELECT checked_from FROM monitor_logs WHERE monitor_id = ? AND checked_from IS NOT NULL AND checked_from <> '' ORDER BY id DESC LIMIT 1");
+                $stmt_cf->execute([(int)$mon['id']]);
+                $cf = $stmt_cf->fetchColumn();
+                $md_checked_from = ($cf === false || $cf === null || $cf === '') ? null : (string)$cf;
+            } catch (Throwable $e) {
+                error_log('[api.php action=metric_detail] checked_from lookup failed: ' . $e->getMessage());
+            }
         }
 
         $events = [];
@@ -3740,6 +3744,10 @@ if ($action === 'metric_detail') {
                 'unit' => $def['unit'],
                 'counter' => !empty($def['counter']),
             ],
+            // `warning` is DERIVED (the band below the configured limit), not
+            // something an admin ever typed. The frontend words the two
+            // differently, so it has to be able to tell them apart.
+            'thresholdsDerived' => ['warning' => true, 'critical' => false],
             'thresholds' => [
                 // The warning band sits 15 points below the critical limit - same
                 // as the legacy page, so both show the same thing.

@@ -255,15 +255,21 @@ export function MetricDetailPage() {
     const stopsEarly = step != null && seriesAt != null && seriesAt - last.t > Math.max(step * 2.5, 90_000);
     return marked + (stopsEarly ? 1 : 0);
   }, [rawPoints, seriesAt]);
-  /** When the window peaked - the moment worth asking "what was running" about. */
+  /**
+   * When the window peaked - the moment worth asking "what was running" about.
+   * Only on raw samples: on the 90d/1y rollup a point is a whole day stamped
+   * at midnight, and opening the process list there would attribute whatever
+   * ran at 00:00 to a peak that happened at some unknown hour.
+   */
   const peakAt = React.useMemo(() => {
+    if (series?.dailyRange && series.dailyRange.length > 0) return null;
     let best: { t: number; v: number } | null = null;
     for (const p of rawPoints) {
       if (p.v == null) continue;
       if (!best || p.v > best.v) best = { t: p.t, v: p.v };
     }
     return best ? Math.round(best.t / 1000) : null;
-  }, [rawPoints]);
+  }, [rawPoints, series]);
 
   const tone = toneFor(metric);
   const sourceUnit = detail?.metric.unit ?? series?.unit ?? '';
@@ -337,7 +343,18 @@ export function MetricDetailPage() {
   const worseTail = direction === 'higher' ? stats.p5 : stats.p95;
   const worstValue = direction === 'higher' ? stats.min : stats.max;
   const signalRating = rateSignalMetric(metric, stats.current);
-  const sampleCount = React.useMemo(() => points.filter((p) => p.v != null).length, [points]);
+  /**
+   * How many measurements the window stands on. On the 90d/1y rollup a chart
+   * point is a whole day, so counting points would report a year of per-minute
+   * reporting as "365 measurements"; the daily rows carry the real count.
+   */
+  const sampleCount = React.useMemo(() => {
+    const daily = series?.dailyRange;
+    if (daily && daily.length > 0) {
+      return daily.reduce((sum, d) => sum + (Number.isFinite(d.samples) ? d.samples : 0), 0);
+    }
+    return points.filter((p) => p.v != null).length;
+  }, [points, series]);
   const verdict = metricVerdict({
     metricKey: metric,
     current: stats.current,
@@ -438,18 +455,26 @@ export function MetricDetailPage() {
         {/* Which tail is the bad one follows the metric. On a dBm scale p95 is
             the BEST five percent, so calling it "the worse end" - as this page
             did - was backwards. */}
+        {/* Traffic and headcounts have no bad end - the direction module exists
+            to refuse that judgement, so the labels must not sneak it back in. */}
         <StatTile
           label={
-            direction === 'higher'
-              ? t('metric.worse_end_low', 'Horší konec (p5)')
-              : t('metric.worse_end_high', 'Horší konec (p95)')
+            direction === 'neutral'
+              ? t('metric.p95_neutral', 'Horní pásmo (p95)')
+              : direction === 'higher'
+                ? t('metric.worse_end_low', 'Horší konec (p5)')
+                : t('metric.worse_end_high', 'Horší konec (p95)')
           }
-          value={worseTail}
+          value={direction === 'higher' ? worseTail : stats.p95}
           unit={unit}
         />
         <StatTile
           label={
-            direction === 'higher' ? t('metric.worst_low', 'Nejhorší') : t('metric.worst_high', 'Nejhorší (špička)')
+            direction === 'neutral'
+              ? t('metric.peak_neutral', 'Špička')
+              : direction === 'higher'
+                ? t('metric.worst_low', 'Nejhorší')
+                : t('metric.worst_high', 'Nejhorší (špička)')
           }
           value={worstValue}
           unit={unit}
@@ -458,7 +483,7 @@ export function MetricDetailPage() {
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label={t('metric.average', 'Průměr')} value={stats.avg} unit={unit} />
         <StatTile
-          label={direction === 'higher' ? t('metric.best_high', 'Nejlepší') : t('metric.best_low', 'Nejlepší')}
+          label={direction === 'neutral' ? t('metric.min_neutral', 'Minimum') : t('metric.best_high', 'Nejlepší')}
           value={direction === 'higher' ? stats.max : stats.min}
           unit={unit}
         />
@@ -499,19 +524,39 @@ export function MetricDetailPage() {
                   }
                 </Badge>
                 <span className="text-muted-foreground">
-                  {verdict.against != null
-                    ? verdict.kind.startsWith('threshold')
+                  {/* Each wording names the number it actually compared with. The
+                      warning band is derived from the configured limit, and the
+                      "unusual" verdict compares with the tail, not the median -
+                      calling either "the usual value" stated a figure that was
+                      by construction not that. */}
+                  {verdict.against == null
+                    ? t('metric.verdict_no_yardstick', 'Pro tuhle metriku není nastavený práh ani pevná stupnice.')
+                    : verdict.kind === 'threshold_critical'
                       ? t(
-                          'metric.verdict_against_threshold',
+                          'metric.verdict_against_limit',
                           { value: `${verdict.against} ${unit}`.trim() },
-                          `Porovnáno s prahem nastaveným u monitoru (${verdict.against} ${unit}).`
+                          `Porovnáno s limitem nastaveným u monitoru (${verdict.against} ${unit}).`
                         )
-                      : t(
-                          'metric.verdict_against_window',
-                          { value: `${verdict.against} ${unit}`.trim() },
-                          `Porovnáno se zvoleným obdobím, kde obvyklá hodnota je ${verdict.against} ${unit}.`
-                        )
-                    : t('metric.verdict_no_yardstick', 'Pro tuhle metriku není nastavený práh ani pevná stupnice.')}
+                      : verdict.kind.startsWith('threshold')
+                        ? t(
+                            'metric.verdict_against_band',
+                            {
+                              band: `${verdict.against} ${unit}`.trim(),
+                              limit: `${verdict.configured ?? verdict.against} ${unit}`.trim(),
+                            },
+                            'Porovnáno s varovným pásmem, které leží pod nastaveným limitem.'
+                          )
+                        : verdict.kind === 'unusual'
+                          ? t(
+                              'metric.verdict_against_tail',
+                              { value: `${verdict.against} ${unit}`.trim() },
+                              `Horší konec období je ${verdict.against} ${unit} a aktuální hodnota je za ním.`
+                            )
+                          : t(
+                              'metric.verdict_against_window',
+                              { value: `${verdict.against} ${unit}`.trim() },
+                              `Porovnáno se zvoleným obdobím, kde obvyklá hodnota je ${verdict.against} ${unit}.`
+                            )}
                 </span>
               </>
             )
@@ -784,11 +829,18 @@ export function MetricDetailPage() {
           </h2>
           <p className="text-muted-foreground text-[11px]">
             {pickedAt
-              ? t('culprits.at_picked', 'Okamžik vybraný kliknutím do grafu. Klikněte jinam pro jiný.')
-              : t(
-                  'culprits.at_peak',
-                  'Ukazuje se špička zvoleného období. Kliknutím do grafu se podíváte na jiný okamžik.'
-                )}
+              ? t(
+                  'culprits.at_picked_when',
+                  { when: new Date(pickedAt * 1000).toLocaleString(locale) },
+                  `Okamžik vybraný v grafu: ${new Date(pickedAt * 1000).toLocaleString(locale)}. Klikněte jinam pro jiný.`
+                )
+              : peakAt
+                ? t(
+                    'culprits.at_peak_when',
+                    { when: new Date(peakAt * 1000).toLocaleString(locale) },
+                    `Špička zvoleného období: ${new Date(peakAt * 1000).toLocaleString(locale)}. Kliknutím do grafu se podíváte jinam.`
+                  )
+                : t('culprits.pick_moment', 'Klikněte do grafu na okamžik, který vás zajímá.')}
           </p>
           {/* The question is "what caused that peak", so the peak is where this
               starts. It used to render nothing until the user discovered that
