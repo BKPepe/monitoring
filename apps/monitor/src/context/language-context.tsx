@@ -1845,6 +1845,13 @@ const translations: Record<string, { cs: string; en: string }> = {
   'proctop.cpu': { cs: 'Procesor', en: 'Processor' },
   'infra.own_channels': { cs: 'Vlastní kanály pro tenhle monitor', en: 'Channels for this monitor' },
   'maint.start': { cs: 'Zapnout údržbu', en: 'Start maintenance' },
+  'settings.redetect_location': { cs: 'Zjistit lokalitu znovu', en: 'Detect the location again' },
+  'infra.clear_history': { cs: 'Smazat historii měření', en: 'Erase the measured history' },
+  'infra.clear_history_hint': {
+    cs: 'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.',
+    en: 'Erases every measurement, log row and daily aggregate of this monitor. Irreversible. Type the exact monitor name to confirm.',
+  },
+  'infra.clear_history_done': { cs: 'Historie smazána.', en: 'History erased.' },
   'maint.end': { cs: 'Ukončit údržbu', en: 'End maintenance' },
   'maint.prompt': {
     cs: 'Popis údržby (nepovinné, uvidí ho i veřejná stránka):',

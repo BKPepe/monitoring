@@ -208,6 +208,24 @@ export const appApi = {
     });
   },
 
+  /**
+   * Wipes a monitor's measured history. Irreversible, so the server asks for
+   * the monitor's own name back - a stray click must not delete months of
+   * measurements.
+   */
+  async clearMonitorHistory(monitorId: number, confirmName: string): Promise<void> {
+    await mutate<{ success: boolean }>('clear_monitor_history', {
+      monitor_id: monitorId,
+      confirm_name: confirmName,
+    });
+  },
+
+  /** Asks the geolocation API again where this server is. */
+  async redetectLocation(): Promise<string> {
+    const res = await mutate<{ location: string }>('redetect_location', {});
+    return res.location;
+  },
+
   async getSession(): Promise<SessionInfo> {
     const session = await request<SessionInfo>('session');
     csrfToken = session.csrfToken;

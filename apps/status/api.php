@@ -81,6 +81,7 @@ $bk_post_only_actions = [
     // session-authenticated writes (these also require CSRF)
     'save_monitor', 'delete_monitor', 'import_discovered_service', 'upload_logo',
     'trigger_remote_action', 'convert_to_agent_check', 'save_settings', 'test_notification', 'toggle_maintenance',
+    'clear_monitor_history', 'redetect_location',
     'generate_metrics_token', 'incident_action', 'create_incident',
     'save_preset', 'delete_preset', 'assign_preset',
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
@@ -1328,6 +1329,84 @@ if ($action === 'get_settings') {
 // One real test message through a notification channel, with the SAVED
 // settings. The settings page's test buttons used to flash "Test OK" without
 // calling anything - a dead webhook looked fine until the first outage.
+// Wipes a monitor's measured history. Irreversible, so it asks for the
+// monitor's own name back: a stray click on a button labelled "clear" must not
+// be able to delete months of measurements.
+if ($action === 'clear_monitor_history') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $ch_input = json_decode((string)file_get_contents('php://input'), true);
+    $ch_id = (int)($ch_input['monitor_id'] ?? 0);
+    $ch_confirm = trim((string)($ch_input['confirm_name'] ?? ''));
+    if ($ch_id <= 0) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $stmt_name = $pdo->prepare("SELECT name FROM monitors WHERE id = ? LIMIT 1");
+        $stmt_name->execute([$ch_id]);
+        $ch_name = $stmt_name->fetchColumn();
+        if ($ch_name === false) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($ch_confirm !== (string)$ch_name) {
+            http_response_code(400);
+            echo json_encode([
+                'error' => 'Pro potvrzení opište přesný název monitoru.',
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        bk_audit_log($pdo, 'monitor_history_cleared', (string)$ch_name, 'monitor', $ch_id);
+        $pdo->prepare("DELETE FROM monitor_logs WHERE monitor_id = ?")->execute([$ch_id]);
+        $pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = ?")->execute([$ch_id]);
+        $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ?")->execute([$ch_id]);
+        // The state goes with it: keeping "up" next to an empty history would
+        // claim a measurement that no longer exists.
+        $pdo->prepare("
+            UPDATE monitors
+            SET status = 'unknown', last_checked = NULL, last_status_change = NULL, last_details = NULL
+            WHERE id = ?
+        ")->execute([$ch_id]);
+
+        echo json_encode(['success' => true, 'message' => 'Historie monitoru byla smazána.'], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=clear_monitor_history] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Historii se nepodařilo smazat.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// Asks the geolocation API again where this server is. The answer is cached in
+// a setting and every check writes it into its log row, so a wrong one follows
+// the data around until somebody forces a new lookup.
+if ($action === 'redetect_location') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    try {
+        $rl_loc = detect_server_location();
+        $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
+        $stmt_set->execute(['ip_loc_local', $rl_loc, $rl_loc]);
+        bk_audit_log($pdo, 'location_redetected', $rl_loc);
+        echo json_encode(['success' => true, 'location' => $rl_loc], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=redetect_location] ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Lokalitu se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // Maintenance on or off in one click, for one monitor or several.
 //
 // Putting a machine into maintenance meant opening the edit form, ticking a

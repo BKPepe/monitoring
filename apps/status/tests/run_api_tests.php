@@ -2364,6 +2364,22 @@ if ($logged_in) {
                 VALUES (1, 'down', 'email', 'admin@example.com', 1, NULL)");
     $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
                 VALUES (1, 'down', 'discord', NULL, 0, 'HTTP 404')");
+    // Vymazání historie je nevratné, takže server chce zpátky přesný název.
+    // Překlep nebo prázdné pole nesmí smazat měsíce měření.
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (1, 'up', 111, NOW())");
+    [$clr_anon] = api_post($base, 'action=clear_monitor_history', ['monitor_id' => 1, 'confirm_name' => 'Testovací web'], '');
+    check('anonym historii nesmaže', $clr_anon, 403);
+    [$clr_bad] = api_post($base, 'action=clear_monitor_history', ['monitor_id' => 1, 'confirm_name' => 'špatný název'], $cookie_jar);
+    check('špatné potvrzení je 400', $clr_bad, 400);
+    $clr_before = (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = 1")->fetchColumn();
+    check_true('a nic nesmazalo', $clr_before > 0);
+    [$clr_ok] = api_post($base, 'action=clear_monitor_history', ['monitor_id' => 1, 'confirm_name' => 'Testovací web'], $cookie_jar);
+    check('se správným názvem projde', $clr_ok, 200);
+    check('a historie je pryč', (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = 1")->fetchColumn(), 0);
+    // Stav jde s ní: „up“ vedle prázdné historie by tvrdilo měření, které
+    // už neexistuje.
+    check('stav se vrátil na neznámý', $pdo->query("SELECT status FROM monitors WHERE id = 1")->fetchColumn(), 'unknown');
+
     // Údržba jedním voláním, klidně pro víc monitorů. Vypnutí musí smazat i
     // okno, jinak by další údržba vypršela hned, jak ji někdo zapne.
     [$tm_anon] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1], 'maintenance' => true], '');

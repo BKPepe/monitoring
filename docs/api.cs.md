@@ -481,6 +481,8 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=interface_traffic_daily&monitor_id=&days=` | admin | Provoz po dnech a rozhraních, seřazený od nejvytíženějšího. Chybějící den = ten den se nehlásilo, ne nulový provoz |
 | `action=process_top&monitor_id=&kind=&minutes=` | admin | Které procesy braly výkon za celé období (průměr, špička, počet vzorků), seskupené podle jména - restartovaná služba se nerozdrobí na řádek na pid. `enabled: false` = historie procesů je v nastavení vypnutá |
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: zapne nebo vypne údržbu pro jeden i více monitorů. Vypnutí maže i okno, aby další údržba nevypršela hned po zapnutí |
+| `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: smaže měření, logy i denní agregace monitoru a vrátí ho do stavu „neznámý“. Nevratné, proto chce zpátky přesný název monitoru |
+| `action=redetect_location` | admin | Vynutí nový dotaz na geolokaci serveru a uloží ji do `ip_loc_local` |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | veřejné čtení, admin zápis | Profily metrik |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | přihlášený | Veřejné status stránky |
 | `action=dashboard_layout` | veřejné čtení, admin zápis | Pořadí a viditelnost dlaždic |

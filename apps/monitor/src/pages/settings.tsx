@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Settings,
   Bell,
@@ -101,6 +102,8 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testSent, setTestSent] = useState<{ channel: string; ok: boolean; message: string } | null>(null);
+  const [locBusy, setLocBusy] = useState(false);
+  const [locResult, setLocResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<SettingsMap>({});
@@ -179,6 +182,19 @@ export function SettingsPage() {
       setError(err instanceof Error ? err.message : t('settings.save_error', 'Chyba při ukládání.'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const redetectLocation = async () => {
+    setLocBusy(true);
+    setLocResult(null);
+    try {
+      const where = await appApi.redetectLocation();
+      setLocResult({ ok: true, msg: where });
+    } catch (err) {
+      setLocResult({ ok: false, msg: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setLocBusy(false);
     }
   };
 
@@ -421,6 +437,19 @@ export function SettingsPage() {
                   )}
                   hint={t('settings.cron_location_hint', 'Prázdné nebo AUTO = automaticky zjištěno dle IP hostingu.')}
                 />
+                {/* The detected location is cached in a setting and every check
+                    writes it into its log row, so a wrong one follows the data
+                    around until somebody forces a new lookup. Until now that
+                    button existed only in the legacy administration. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" disabled={locBusy} onClick={redetectLocation} className="gap-1.5">
+                    <RefreshCw className="size-3.5" />
+                    {t('settings.redetect_location', 'Zjistit lokalitu znovu')}
+                  </Button>
+                  {locResult && (
+                    <span className={locResult.ok ? 'text-up text-xs' : 'text-down text-xs'}>{locResult.msg}</span>
+                  )}
+                </div>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">

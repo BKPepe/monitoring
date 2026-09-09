@@ -1586,6 +1586,41 @@ export function InfrastructurePage() {
                       {t('infra.delete_monitor_btn', 'Smazat monitor')}
                     </Button>
                   )}
+                  {/* Keeps the monitor and its settings, throws away what it
+                      measured - the "start again from today" case, which until
+                      now existed only in the legacy administration. The server
+                      asks for the monitor's name back, so a stray click cannot
+                      delete months of measurements. */}
+                  {editingId && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-1.5 text-xs font-semibold"
+                      title={t(
+                        'infra.clear_history_hint',
+                        'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.'
+                      )}
+                      onClick={async () => {
+                        const typed = window.prompt(
+                          t(
+                            'infra.clear_history_hint',
+                            'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.'
+                          ),
+                          ''
+                        );
+                        if (typed == null) return;
+                        try {
+                          await appApi.clearMonitorHistory(editingId, typed);
+                          window.alert(t('infra.clear_history_done', 'Historie smazána.'));
+                          loadMonitors();
+                        } catch (err) {
+                          window.alert(err instanceof Error ? err.message : String(err));
+                        }
+                      }}
+                    >
+                      {t('infra.clear_history', 'Smazat historii měření')}
+                    </Button>
+                  )}
                   <Button type="button" variant="outline" className="ml-auto" onClick={() => setShowAddModal(false)}>
                     {t('common.cancel', 'Zrušit')}
                   </Button>
