@@ -1304,6 +1304,51 @@ if ($action === 'get_settings') {
 // One real test message through a notification channel, with the SAVED
 // settings. The settings page's test buttons used to flash "Test OK" without
 // calling anything - a dead webhook looked fine until the first outage.
+// What was actually sent and whether it went. Admin only: it names
+// recipients and carries the delivery errors of the channels.
+if ($action === 'notification_log') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $nl_monitor = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
+    $nl_limit = min(200, max(1, (int)($_GET['limit'] ?? 50)));
+    try {
+        $where = $nl_monitor > 0 ? 'WHERE n.monitor_id = ?' : '';
+        $stmt = $pdo->prepare("
+            SELECT n.id, n.monitor_id, n.status, n.channel, n.recipient, n.ok, n.error_message, n.created_at,
+                   m.name AS monitor_name
+            FROM notification_log n
+            LEFT JOIN monitors m ON m.id = n.monitor_id
+            {$where}
+            ORDER BY n.id DESC
+            LIMIT {$nl_limit}
+        ");
+        $stmt->execute($nl_monitor > 0 ? [$nl_monitor] : []);
+        $rows = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $rows[] = [
+                'id' => (int)$r['id'],
+                'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
+                'monitorName' => $r['monitor_name'],
+                'status' => $r['status'],
+                'channel' => $r['channel'],
+                // The address is the point of the record: "did it reach ME?"
+                'recipient' => $r['recipient'],
+                'ok' => (bool)$r['ok'],
+                'error' => $r['error_message'],
+                'atIso' => date('c', strtotime((string)$r['created_at'])),
+            ];
+        }
+        echo json_encode(['entries' => $rows], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=notification_log] ' . $e->getMessage());
+        echo json_encode(['entries' => [], 'error' => 'Historii notifikací se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'test_notification') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);

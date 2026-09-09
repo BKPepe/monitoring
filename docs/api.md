@@ -483,6 +483,7 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 |---|---|---|
 | `action=get_settings` / `save_settings` | admin | Global settings |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): sends one real test message with the saved settings, returns `{ok, message}` |
+| `action=notification_log&monitor_id=&limit=` | admin | What was sent, to whom, on which channel and whether it went. A row is written for a failure too - that is the interesting half |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | public read, admin write | Metric profiles |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | logged in | Public status pages |
 | `action=dashboard_layout` | public read, admin write | Tile order and visibility |

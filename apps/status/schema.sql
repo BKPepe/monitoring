@@ -371,6 +371,22 @@ CREATE TABLE IF NOT EXISTS `uptime_daily` (
 -- Syrové vps_metrics se po 30 dnech mažou, takže bez tohohle by nešlo
 -- odpovědět na "jak rostlo zaplnění disku za půl roku" - a odhad "disk bude
 -- plný za X dní" by se navždy počítal nejvýš z třiceti dnů.
+-- Odeslane notifikace: co, komu, kterym kanalem a jestli to proslo.
+-- Bez tehle tabulky nesla po vypadku zodpovedet otazka "dorazil ten alert?"
+-- a kanal, ktery tydny selhava, vypadal presne jako kanal, na kterem je klid.
+CREATE TABLE IF NOT EXISTS `notification_log` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `monitor_id` INT DEFAULT NULL,
+  `status` VARCHAR(32) NOT NULL,
+  `channel` VARCHAR(24) NOT NULL,
+  `recipient` VARCHAR(190) DEFAULT NULL,
+  `ok` TINYINT(1) NOT NULL DEFAULT 0,
+  `error_message` VARCHAR(255) DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_notif_monitor` (`monitor_id`, `id`),
+  KEY `idx_notif_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `metrics_daily` (
   `monitor_id` INT NOT NULL,
   `day` DATE NOT NULL,

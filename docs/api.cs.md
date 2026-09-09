@@ -477,6 +477,7 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 |---|---|---|
 | `action=get_settings` / `save_settings` | admin | Globální nastavení |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): pošle jednu skutečnou testovací zprávu s uloženým nastavením, vrací `{ok, message}` |
+| `action=notification_log&monitor_id=&limit=` | admin | Co se odeslalo, komu, kterým kanálem a jestli to prošlo. Řádek vzniká i u neúspěchu - to je ta zajímavější půlka |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | veřejné čtení, admin zápis | Profily metrik |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | přihlášený | Veřejné status stránky |
 | `action=dashboard_layout` | veřejné čtení, admin zápis | Pořadí a viditelnost dlaždic |

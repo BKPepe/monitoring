@@ -2358,6 +2358,25 @@ if ($logged_in) {
 
     // The test buttons send a REAL message and report the channel's verdict.
     // Without a saved webhook the verdict is an honest failure, not "Test OK".
+    // Historie doručení: řádek vzniká i u neúspěchu, protože to je ta
+    // zajímavější půlka. Bez přihlášení se nevydá vůbec - jsou tam adresáti.
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
+                VALUES (1, 'down', 'email', 'admin@example.com', 1, NULL)");
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
+                VALUES (1, 'down', 'discord', NULL, 0, 'HTTP 404')");
+    [$nl_anon_code] = api_get($base, 'action=notification_log&monitor_id=1');
+    check('anonym historii notifikací nedostane', $nl_anon_code, 403);
+    [$nl_code, $nl] = api_get_auth($base, 'action=notification_log&monitor_id=1&limit=50', $cookie_jar);
+    check('notification_log vrací 200', $nl_code, 200);
+    check_true('a obě odeslání', count($nl['entries'] ?? []) === 2);
+    $nl_fail = null;
+    foreach ($nl['entries'] ?? [] as $e) {
+        if (($e['channel'] ?? '') === 'discord') $nl_fail = $e;
+    }
+    check('neúspěch je zaznamenaný jako neúspěch', $nl_fail['ok'] ?? null, false);
+    check('i s důvodem', $nl_fail['error'] ?? null, 'HTTP 404');
+    $pdo->exec("DELETE FROM notification_log");
+
     [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'fax'], $cookie_jar);
     check('test_notification: neznámý kanál je 400', $tn_code, 400);
     $pdo->exec("DELETE FROM settings WHERE key_name IN ('discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id')");

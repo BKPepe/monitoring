@@ -5692,6 +5692,46 @@ function bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg = '') {
     }
 }
 
+/**
+ * Records one delivery attempt.
+ *
+ * Nothing used to write down what was sent, so after an outage "did the alert
+ * reach me?" had no answer, and a channel that had been failing for weeks
+ * looked exactly like a channel with nothing to report. The row is written
+ * whether the attempt succeeded or not - a failure is the interesting half.
+ *
+ * Never throws: an alert must go out even when its bookkeeping cannot.
+ */
+function bk_log_notification(
+    ?PDO $pdo,
+    ?int $monitor_id,
+    string $status,
+    string $channel,
+    ?string $recipient,
+    bool $ok,
+    ?string $error = null
+): void {
+    if ($pdo === null) {
+        return;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $monitor_id !== null && $monitor_id > 0 ? $monitor_id : null,
+            substr($status, 0, 32),
+            substr($channel, 0, 24),
+            $recipient !== null && $recipient !== '' ? substr($recipient, 0, 190) : null,
+            $ok ? 1 : 0,
+            $error !== null && $error !== '' ? substr($error, 0, 255) : null,
+        ]);
+    } catch (Throwable $e) {
+        error_log('[bk_log_notification] ' . $e->getMessage());
+    }
+}
+
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg);
     $name = $monitor['name'];
@@ -5892,21 +5932,32 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
                 $alert_email_by_lang[$rec_lang] = $render_alert_email($rec_lang);
             }
             [$email_subject, $html_body] = $alert_email_by_lang[$rec_lang];
-            send_email($rec['email'], $email_subject, $html_body);
+            $mail_ok = send_email($rec['email'], $email_subject, $html_body);
+            bk_log_notification(
+                $pdo,
+                (int)($monitor['id'] ?? 0),
+                $new_status,
+                'email',
+                $rec['email'],
+                (bool)$mail_ok,
+                $mail_ok ? null : ($GLOBALS['last_mail_error'] ?? null)
+            );
         }
         
         // SMS notifications (Twilio / SMSbrana) - independent of WhatsApp
         $gateway_type = get_setting('sms_gateway_type', '');
         if ($rec['sms_notifications'] && !empty($rec['phone'])) {
             if ($gateway_type === 'twilio' || $gateway_type === 'smsbrana') {
-                send_sms($rec['phone'], $sms_body);
+                $sms_ok = send_sms($rec['phone'], $sms_body);
+                bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'sms', $rec['phone'], (bool)$sms_ok);
             }
         }
 
         // WhatsApp notifications (CallMeBot) - independent of the SMS gateway, its own channel.
         // The key is bound to a specific phone number, so it exists per-user only.
         if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
-            send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
+            $wa_ok = send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
+            bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'whatsapp', $rec['phone'], (bool)$wa_ok);
         }
     }
 
@@ -5935,12 +5986,30 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
                 "color" => $color
             ]]
         ];
-        send_webhook_post($discord_webhook, json_encode($payload));
+        $discord_ok = send_webhook_post($discord_webhook, json_encode($payload));
+        bk_log_notification(
+            $pdo,
+            (int)($monitor['id'] ?? 0),
+            $new_status,
+            'discord',
+            null,
+            $discord_ok,
+            $discord_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+        );
     }
 
     if (!empty($slack_webhook)) {
         $slack_msg = "$emoji *Blood Kings Alert*:\n*Monitor:* $name\n*Status:* " . strtoupper($status_text) . "\n*Čas:* $time" . (!empty($error_msg) ? "\n*Detaily:* $error_msg" : "");
-        send_webhook_post($slack_webhook, json_encode(["text" => $slack_msg]));
+        $slack_ok = send_webhook_post($slack_webhook, json_encode(["text" => $slack_msg]));
+        bk_log_notification(
+            $pdo,
+            (int)($monitor['id'] ?? 0),
+            $new_status,
+            'slack',
+            null,
+            $slack_ok,
+            $slack_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+        );
     }
 
     if (!empty($telegram_token) && !empty($telegram_chat)) {
@@ -5951,7 +6020,16 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             "text" => $tg_msg,
             "parse_mode" => "Markdown"
         ];
-        send_webhook_post($tg_url, json_encode($payload));
+        $tg_ok = send_webhook_post($tg_url, json_encode($payload));
+        bk_log_notification(
+            $pdo,
+            (int)($monitor['id'] ?? 0),
+            $new_status,
+            'telegram',
+            $telegram_chat,
+            $tg_ok,
+            $tg_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+        );
     }
 
     // Pushover notifikace
@@ -5959,7 +6037,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     $po_token = get_setting('pushover_api_token');
     if (!empty($po_user) && !empty($po_token)) {
         $po_prio = ($new_status === 'down') ? 1 : 0;
-        send_pushover_alert($po_user, $po_token, "Blood Kings Alert: $name", "$emoji Monitor $name je $status_text. $error_msg", $po_prio);
+        $po_ok = send_pushover_alert($po_user, $po_token, "Blood Kings Alert: $name", "$emoji Monitor $name je $status_text. $error_msg", $po_prio);
+        bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'pushover', null, (bool)$po_ok);
     }
 
     // PagerDuty notifikace
@@ -5974,8 +6053,17 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         if ($pd_action !== null) {
             // One key per monitor: the agent-silence page and the outage page
             // are the same incident, and the recovery closes it.
-            send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg",
+            $pd_ok = send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg",
                 'Blood Kings Monitoring', 'bk-monitor-' . (int)($monitor['id'] ?? 0));
+            bk_log_notification(
+                $pdo,
+                (int)($monitor['id'] ?? 0),
+                $new_status,
+                'pagerduty',
+                $pd_action,
+                (bool)$pd_ok,
+                $pd_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+            );
         }
     }
 }

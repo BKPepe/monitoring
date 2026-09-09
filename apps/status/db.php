@@ -47,7 +47,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260902');
+    define('BK_SCHEMA_VERSION', '20260909');
 
     $bk_current_schema = false;
     try {
@@ -708,6 +708,22 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN sqm_dropped BIGINT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN wan_reconnect_count BIGINT DEFAULT NULL",
 
+        // What was actually sent, to whom, on which channel, and whether it
+        // went. Nothing recorded any of that: after an outage nobody could
+        // answer "did the alert reach me?", and a channel that had been
+        // failing for weeks looked exactly like a quiet one.
+        "CREATE TABLE IF NOT EXISTS `notification_log` (
+          `id` INT AUTO_INCREMENT PRIMARY KEY,
+          `monitor_id` INT DEFAULT NULL,
+          `status` VARCHAR(32) NOT NULL,
+          `channel` VARCHAR(24) NOT NULL,
+          `recipient` VARCHAR(190) DEFAULT NULL,
+          `ok` TINYINT(1) NOT NULL DEFAULT 0,
+          `error_message` VARCHAR(255) DEFAULT NULL,
+          `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          KEY `idx_notif_monitor` (`monitor_id`, `id`),
+          KEY `idx_notif_created` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         // Daily metric aggregation - the only way to have a series longer than
         // the raw-data retention (30 days).
         "CREATE TABLE IF NOT EXISTS `metrics_daily` (

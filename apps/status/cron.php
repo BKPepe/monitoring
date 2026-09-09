@@ -837,6 +837,10 @@ try {
     $pdo->exec("DELETE FROM vps_metrics WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
     // Audit log: longer retention (90 days) - security records
     $pdo->exec("DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)");
+    // Delivery history: the same 90 days as the audit trail. It answers "did
+    // the alert reach me?" for an outage anyone still remembers, and a row per
+    // channel per alert adds up otherwise.
+    $pdo->exec("DELETE FROM notification_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)");
     // Event timeline: a year. It was never pruned at all - every threshold,
     // agent reconnect and remote action since the install, forever.
     $pdo->exec("DELETE FROM monitor_events WHERE occurred_at < DATE_SUB(NOW(), INTERVAL 365 DAY)");

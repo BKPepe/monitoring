@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
+import { NotificationLog } from '@/components/notification-log';
 import {
   lteVerdict,
   rateChannelBusy,
@@ -715,6 +716,9 @@ export function AssetDetailPage() {
 
         <TabsContent value="events">
           <div className="space-y-4">
+            {/* What went out about this monitor - the question after every
+                outage, which nothing could answer until the delivery log. */}
+            <NotificationLog monitorId={Number(asset.id)} />
             {serverInsights && serverInsights.timeline.length > 0 && (
               <Card className="p-6 space-y-4">
                 <div className="flex items-center gap-3 border-b border-border pb-3">

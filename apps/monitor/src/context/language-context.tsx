@@ -1827,6 +1827,17 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.more_metrics': { cs: 'Další měřené metriky ({count})', en: 'Other measured metrics ({count})' },
   'collector.heading': { cs: 'Sběr dat neběží', en: 'Data collection is not running' },
   'avail.title': { cs: 'Dostupnost', en: 'Availability' },
+  'notif.title': { cs: 'Odeslané notifikace', en: 'Notifications sent' },
+  'notif.desc': {
+    cs: 'Co o tomhle monitoru odešlo, kterým kanálem a jestli to kanál přijal.',
+    en: 'What went out about this monitor, on which channel, and whether the channel took it.',
+  },
+  'notif.failed': { cs: '{n} neodesláno', en: '{n} not delivered' },
+  'notif.empty': {
+    cs: 'Za posledních 90 dní o tomhle monitoru nic neodešlo.',
+    en: 'Nothing has gone out about this monitor in the last 90 days.',
+  },
+  'notif.not_delivered': { cs: 'kanál zprávu nepřijal', en: 'the channel did not take the message' },
   'avail.d1': { cs: '24 hodin', en: '24 hours' },
   'avail.d7': { cs: '7 dní', en: '7 days' },
   'avail.d30': { cs: '30 dní', en: '30 days' },
