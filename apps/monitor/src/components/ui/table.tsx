@@ -8,8 +8,17 @@ import { cn } from '@/lib/utils';
  */
 export function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
-    // Wide tables scroll inside their own box - the page must never scroll sideways.
-    <div className="w-full overflow-x-auto">
+    // Wide tables scroll inside their own box - the page must never scroll
+    // sideways. tabIndex makes that box reachable from the keyboard: a scroll
+    // container that only a mouse wheel or a finger can move hides its right
+    // half from anyone using a keyboard. role/aria-label tell a screen reader
+    // what the focusable box is.
+    <div
+      className="focus-visible:ring-ring w-full overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
+      tabIndex={0}
+      role="region"
+      aria-label={props['aria-label'] ?? undefined}
+    >
       <table className={cn('w-full caption-bottom text-sm', className)} {...props} />
     </div>
   );

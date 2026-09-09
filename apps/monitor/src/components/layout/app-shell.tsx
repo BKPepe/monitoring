@@ -14,12 +14,15 @@ import { cn } from '@/lib/utils';
  */
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
+import { useFocusTrap } from '@/lib/use-focus-trap';
 
 export function AppShell() {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const closeMobileNav = React.useCallback(() => setMobileNavOpen(false), []);
+  const mobileNavRef = useFocusTrap<HTMLDivElement>(mobileNavOpen, closeMobileNav);
   const { session } = useSession();
 
   // Global search index (⌘K): pages + real monitors.
@@ -168,9 +171,18 @@ export function AppShell() {
         </div>
       </div>
 
-      {/* Mobile overlay */}
+      {/* Mobile overlay. A dialog, not a decorated div: it takes the keyboard
+          when it opens, keeps it inside while it is open, closes on Escape and
+          hands focus back to the button that opened it. Without that a
+          keyboard user could open the drawer and never reach it. */}
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden print:hidden">
+        <div
+          ref={mobileNavRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('app_shell.nav_label', 'Navigace')}
+          className="fixed inset-0 z-50 lg:hidden print:hidden"
+        >
           <button
             type="button"
             className="absolute inset-0 bg-black/60"

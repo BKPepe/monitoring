@@ -1323,6 +1323,7 @@ function SettingsField({
   onToggleVisibility,
   envLockedTitle,
 }: FieldInputProps) {
+  const { t } = useLanguage();
   const isSecret = type === 'password';
   return (
     <div className={className}>
@@ -1345,11 +1346,18 @@ function SettingsField({
           autoComplete={isSecret ? 'new-password' : undefined}
         />
         {isSecret && (
+          // tabIndex={-1} put this out of the keyboard's reach entirely, and an
+          // icon with no name says nothing to a screen reader - so checking a
+          // password you just typed was a mouse-only operation.
           <button
             type="button"
             onClick={onToggleVisibility}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            tabIndex={-1}
+            aria-label={
+              visible ? t('settings.hide_secret', 'Skrýt hodnotu') : t('settings.show_secret', 'Zobrazit hodnotu')
+            }
+            aria-pressed={visible}
+            title={visible ? t('settings.hide_secret', 'Skrýt hodnotu') : t('settings.show_secret', 'Zobrazit hodnotu')}
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring absolute right-2 top-1/2 -translate-y-1/2 rounded transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
           </button>
