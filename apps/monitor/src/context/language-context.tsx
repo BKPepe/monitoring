@@ -1830,6 +1830,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'notif.title': { cs: 'Odeslané notifikace', en: 'Notifications sent' },
   'iftraffic.title': { cs: 'Provoz po dnech (30 dní)', en: 'Traffic by day (30 days)' },
   'proctop.title': { cs: 'Kdo bral výkon za posledních 24 hodin', en: 'What used the machine in the last 24 hours' },
+  'settings.confirm_failures_label': {
+    cs: 'Potvrdit výpadek až po N neúspěšných kontrolách',
+    en: 'Confirm an outage only after N failed checks',
+  },
+  'settings.confirm_failures_hint': {
+    cs: 'Jedna neúspěšná kontrola je jedna neúspěšná kontrola: zopakované spojení, pomalá odpověď DNS, zahozený paket. 1 = hlásit hned při první (dosavadní chování). Každá neúspěšná kontrola se zapíše do historie i tak, čeká jen verdikt.',
+    en: 'One failed check is one failed check: a retried connection, a slow DNS answer, a dropped packet. 1 = alert on the first one (the behaviour so far). Every failed check is recorded either way; only the verdict waits.',
+  },
   'proctop.hint': {
     cs: 'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.',
     en: 'The average and the peak over the window, not just the last report. A process that spikes every ten minutes never shows up in a snapshot.',

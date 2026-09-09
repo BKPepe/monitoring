@@ -663,6 +663,17 @@ export function SettingsPage() {
 
               <FieldInput
                 ctx={fieldCtx}
+                k="alert_confirm_failures"
+                label={t('settings.confirm_failures_label', 'Potvrdit výpadek až po N neúspěšných kontrolách')}
+                placeholder="1"
+                hint={t(
+                  'settings.confirm_failures_hint',
+                  'Jedna neúspěšná kontrola je jedna neúspěšná kontrola: zopakované spojení, pomalá odpověď DNS, zahozený paket. 1 = hlásit hned při první (dosavadní chování). Každá neúspěšná kontrola se zapíše do historie i tak, čeká jen verdikt.'
+                )}
+                className="max-w-xs"
+              />
+              <FieldInput
+                ctx={fieldCtx}
                 k="agent_offline_timeout"
                 label={t(
                   'settings.agent_offline_timeout_label',

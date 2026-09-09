@@ -33,6 +33,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_wan_link_state',
     'bk_pair_link_periods',
     'bk_pagerduty_action',
+    'bk_down_is_confirmed',
     'bk_alert_color_class',
     'bk_should_notify_status_change',
     'bk_ssl_alert_due',
@@ -504,6 +505,21 @@ if (function_exists('bk_pagerduty_action')) {
     foreach (['vps_warning', 'latency_degraded', 'latency_recovered', 'ssl_expiring', 'maintenance', 'config_change'] as $s) {
         check("{$s} do PagerDuty nejde", bk_pagerduty_action($s), null);
     }
+}
+
+// --- Outage confirmation (bk_down_is_confirmed) --------------------------------
+//
+// One failed check is one failed check. With the confirmation at N the verdict
+// waits for N in a row - the log records every failure either way.
+if (function_exists('bk_down_is_confirmed')) {
+    check_true('při jedné požadované se hlásí hned', bk_down_is_confirmed(1, 1));
+    check_false('při třech nestačí jedna', bk_down_is_confirmed(1, 3));
+    check_false('ani dvě', bk_down_is_confirmed(2, 3));
+    check_true('třetí v řadě potvrzuje', bk_down_is_confirmed(3, 3));
+    check_true('a víc než dost taky', bk_down_is_confirmed(9, 3));
+    // Nesmyslné nastavení nesmí výpadky umlčet úplně.
+    check_true('nula požadovaných se chová jako jedna', bk_down_is_confirmed(1, 0));
+    check_true('záporná taky', bk_down_is_confirmed(1, -5));
 }
 
 // --- Alert colour class (bk_alert_color_class) ---------------------------------

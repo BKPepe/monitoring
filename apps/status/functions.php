@@ -2315,6 +2315,22 @@ function bk_has_open_incident(PDO $pdo, int $monitor_id): bool {
     }
 }
 
+/**
+ * Whether a failing check may declare the monitor down yet.
+ *
+ * One failed check is one failed check: a retried connection, a slow DNS
+ * answer, a router that dropped a packet. Alerting on the first one is how a
+ * monitoring system teaches people to ignore it. With the confirmation set to
+ * N, the state flips only after N consecutive failures - the log still records
+ * every one of them, so nothing is hidden, only the verdict waits.
+ *
+ * @param int $consecutive Failures in a row INCLUDING the one just measured.
+ * @param int $required How many are needed; 1 keeps the old behaviour.
+ */
+function bk_down_is_confirmed(int $consecutive, int $required): bool {
+    return $consecutive >= max(1, $required);
+}
+
 function bk_pagerduty_action(string $status): ?string {
     if (in_array($status, ['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'], true)) {
         return 'trigger';

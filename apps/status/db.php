@@ -864,6 +864,8 @@ function bk_settings_keys(): array {
         'sms_gateway_type', 'twilio_sid', 'twilio_token', 'twilio_from',
         'smsbrana_user', 'smsbrana_password',
         'agent_offline_timeout', 'agent_notifications_enabled', 'agent_notify_admin_only',
+        // How many consecutive failures declare an outage. 1 = alert on the first.
+        'alert_confirm_failures',
         'discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id', 'slack_webhook_url',
         'oauth_github_client_id', 'oauth_github_client_secret',
         'oauth_google_client_id', 'oauth_google_client_secret',

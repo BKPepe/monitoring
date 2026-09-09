@@ -712,7 +712,36 @@ foreach ($monitors as $monitor) {
         ? json_encode($check_result['check_stages'], JSON_UNESCAPED_UNICODE)
         : null;
     $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages) VALUES (?, ?, ?, ?, ?, ?)");
+    // The log always records what was MEASURED. Confirmation below decides
+    // only when the monitor's state follows - a suppressed failure that never
+    // appeared in the history would be a lie by omission.
     $stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);
+
+    // Outage confirmation: with alert_confirm_failures = N, a monitor goes down
+    // only after N consecutive failures. One failed check is one failed check -
+    // a retried connection, a slow DNS answer, a dropped packet - and alerting
+    // on the first one is how a monitoring system teaches people to ignore it.
+    $confirm_required = max(1, (int)get_setting('alert_confirm_failures', '1'));
+    if ($new_status === 'down' && $old_status !== 'down' && $confirm_required > 1) {
+        $stmt_recent = $pdo->prepare("
+            SELECT status FROM monitor_logs
+            WHERE monitor_id = ? ORDER BY id DESC LIMIT " . ($confirm_required + 1)
+        );
+        $stmt_recent->execute([$id]);
+        $consecutive = 0;
+        foreach ($stmt_recent->fetchAll(PDO::FETCH_COLUMN) as $recent_status) {
+            if ($recent_status !== 'down') {
+                break;
+            }
+            $consecutive++;
+        }
+        if (!bk_down_is_confirmed($consecutive, $confirm_required)) {
+            echo "výpadek nepotvrzen ({$consecutive}/{$confirm_required})... ";
+            // The state stays where it was, so no notification goes out and the
+            // status page does not flap. The failing check is already logged.
+            $new_status = $old_status;
+        }
+    }
     
     // Detect a status change
     if ($old_status !== $new_status) {
