@@ -381,8 +381,14 @@ export function AssetDetailPage() {
       <Tabs defaultValue="overview" className="space-y-6">
         {/* Sticky under the header (h-16): on a long detail the tabs and
             the range switcher stay at hand without scrolling back up. */}
-        <div className="bg-background/95 sticky top-16 z-20 -mx-1 flex flex-wrap items-center justify-between gap-4 border-b border-border px-1 pb-3 pt-1 backdrop-blur-sm">
-          <TabsList className="bg-secondary/40 p-1">
+        {/* Two things about this bar. On a phone five triggers do not fit: the
+            strip used to overflow and drag the whole page sideways, so the last
+            tabs were unreachable - it scrolls on its own now. And the offset is
+            top-0, not top-16: the header lives OUTSIDE the scrolling main, so
+            sticking 4rem below the top of that container left a 64px band the
+            content slid through in the open. */}
+        <div className="bg-background/95 sticky top-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-4 border-b border-border px-1 pb-3 pt-1 backdrop-blur-sm">
+          <TabsList className="bg-secondary/40 max-w-full flex-nowrap overflow-x-auto p-1">
             <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled & Výkon')}</TabsTrigger>
             <TabsTrigger value="processes">
               {t('asset.tab_processes_short', 'Procesy')} ({asset.processes.length})

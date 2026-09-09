@@ -50,12 +50,22 @@ export function Badge({ className, variant, dot, pulse, children, ...props }: Ba
 }
 
 /** A standalone status dot for places where a badge does not fit (table rows). */
+/**
+ * @param label What the colour means. A dot carries the state in hue alone, so
+ *   without a label it says nothing to a screen reader and nothing to anyone
+ *   who cannot separate the greens from the ambers - which is roughly one man
+ *   in twelve. Given a label the dot stops being decoration and announces
+ *   itself; without one it stays aria-hidden, for the callers that already
+ *   print the state in text beside it.
+ */
 export function StatusDot({
   variant = 'neutral',
   className,
+  label,
 }: {
   variant?: NonNullable<BadgeProps['variant']>;
   className?: string;
+  label?: string;
 }) {
   const color: Record<string, string> = {
     up: 'bg-up',
@@ -66,6 +76,16 @@ export function StatusDot({
     primary: 'bg-primary',
     neutral: 'bg-muted-foreground',
   };
+  if (label) {
+    return (
+      <span
+        role="img"
+        aria-label={label}
+        title={label}
+        className={cn('size-2 shrink-0 rounded-full', color[variant], className)}
+      />
+    );
+  }
   return <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', color[variant], className)} />;
 }
 

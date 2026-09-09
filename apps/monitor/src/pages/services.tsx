@@ -17,6 +17,15 @@ import { formatPercent, formatRelative } from '@/lib/utils';
  */
 export function ServicesPage() {
   const { t } = useLanguage();
+  // One word per state, so the colour is never the only carrier.
+  const statusLabel: Record<string, string> = {
+    up: t('common.online', 'Online'),
+    down: t('common.offline', 'Offline'),
+    warning: t('common.warning', 'Varování'),
+    paused: t('common.paused', 'Paused'),
+    maintenance: t('common.maintenance', 'Údržba'),
+    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+  };
   const { session } = useSession();
   const [monitors, setMonitors] = React.useState<ApiMonitor[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -109,11 +118,23 @@ export function ServicesPage() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="min-w-0 truncate text-sm font-semibold">{svc.name}</span>
-                        <StatusDot
-                          variant={
-                            svc.status === 'maintenance' ? 'paused' : svc.status === 'unknown' ? 'neutral' : svc.status
-                          }
-                        />
+                        {/* The dot was the only carrier of the state on this
+                            page: no text, no label, and on a narrow screen the
+                            warning amber reads as grey. It says what it means
+                            now, and the word is printed beside it. */}
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          <StatusDot
+                            variant={
+                              svc.status === 'maintenance'
+                                ? 'paused'
+                                : svc.status === 'unknown'
+                                  ? 'neutral'
+                                  : svc.status
+                            }
+                            label={statusLabel[svc.status]}
+                          />
+                          <span className="text-muted-foreground text-[11px]">{statusLabel[svc.status]}</span>
+                        </span>
                       </div>
                       <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
                         <span className="font-mono">{svc.target}</span>

@@ -187,6 +187,16 @@ export function AppShell() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col print:block print:w-full">
+        {/* Keyboard users start every page in the sidebar and the header:
+            without this, reaching the actual content means tabbing past two
+            dozen links on every single navigation. Visible only when focused,
+            which is the point - it is a control for the people who need it. */}
+        <a
+          href="#main"
+          className="bg-popover text-popover-foreground border-border focus-visible:ring-ring sr-only rounded-md border px-3 py-2 text-sm font-medium focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus-visible:ring-2 focus-visible:outline-none"
+        >
+          {t('shell.skip_to_content', 'Přeskočit na obsah')}
+        </a>
         <Header
           searchResults={searchIndex}
           onSearchSelect={onSearchSelect}
@@ -194,7 +204,7 @@ export function AppShell() {
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
 
-        <main className="flex-1 overflow-y-auto print:overflow-visible print:h-auto">
+        <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto print:overflow-visible print:h-auto">
           {/* The 12-column grid is available to pages inside; the shell just
               holds the max width and padding. */}
           <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:px-0 print:py-0 print:max-w-none">

@@ -1845,6 +1845,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'proctop.cpu': { cs: 'Procesor', en: 'Processor' },
   'infra.own_channels': { cs: 'Vlastní kanály pro tenhle monitor', en: 'Channels for this monitor' },
   'maint.start': { cs: 'Zapnout údržbu', en: 'Start maintenance' },
+  'shell.skip_to_content': { cs: 'Přeskočit na obsah', en: 'Skip to content' },
   'settings.redetect_location': { cs: 'Zjistit lokalitu znovu', en: 'Detect the location again' },
   'infra.clear_history': { cs: 'Smazat historii měření', en: 'Erase the measured history' },
   'infra.clear_history_hint': {
