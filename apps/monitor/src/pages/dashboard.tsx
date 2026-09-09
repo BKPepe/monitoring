@@ -41,7 +41,7 @@ import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
 import { nestUnderAgents, processUsage } from '@/lib/monitor-grouping';
-import { buildNeedsAttention } from '@/lib/attention';
+import { buildNeedsAttention, metricSeverity, thresholdFor } from '@/lib/attention';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -642,7 +642,10 @@ export function DashboardPage() {
         }
         value={formatPercent(value)}
         icon={Activity}
-        tone={value >= 90 ? 'down' : value >= 75 ? 'warning' : 'up'}
+        tone={
+          metricSeverity(value, thresholdFor(worst, field === 'cpu' ? 'cpu' : field === 'ram' ? 'ram' : 'hdd')) ??
+          undefined
+        }
         hint={monitorId != null ? undefined : worst.name}
       />
     );
@@ -977,7 +980,7 @@ function MonitorTable({
                   return (
                     <>
                       <TableCell className="tabular">
-                        <ThresholdValue value={usage.cpu} />
+                        <ThresholdValue value={usage.cpu} limit={thresholdFor(monitor, 'cpu')} />
                       </TableCell>
                       <TableCell className="tabular">
                         {isProc ? (
@@ -987,14 +990,14 @@ function MonitorTable({
                             <span className="text-muted-foreground">—</span>
                           )
                         ) : (
-                          <ThresholdValue value={usage.ram} />
+                          <ThresholdValue value={usage.ram} limit={thresholdFor(monitor, 'ram')} />
                         )}
                       </TableCell>
                     </>
                   );
                 })()}
                 <TableCell className="tabular">
-                  <ThresholdValue value={monitor.hdd} />
+                  <ThresholdValue value={monitor.hdd} limit={thresholdFor(monitor, 'hdd')} />
                 </TableCell>
                 <TableCell
                   className={monitor.status === 'down' ? 'tabular text-down' : 'tabular text-muted-foreground'}
@@ -1018,10 +1021,13 @@ function MonitorTable({
   );
 }
 
-function ThresholdValue({ value }: { value: number | null }) {
+function ThresholdValue({ value, limit }: { value: number | null; limit: number }) {
   if (value == null) return <span className="text-muted-foreground">—</span>;
+  // Coloured against the limit configured on this monitor, not a number
+  // invented in this file.
+  const severity = metricSeverity(value, limit);
   return (
-    <span className={value >= 80 ? 'text-down font-medium' : value >= 60 ? 'text-warning' : ''}>
+    <span className={severity === 'down' ? 'text-down font-medium' : severity === 'warning' ? 'text-warning' : ''}>
       {formatPercent(value)}
     </span>
   );

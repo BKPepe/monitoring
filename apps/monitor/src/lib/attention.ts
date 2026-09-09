@@ -19,8 +19,33 @@ export interface AttentionLabels {
   metricHigh: (metric: string, value: number) => string;
 }
 
-/** Above this value the metric counts as critical. */
+/**
+ * Fallback used only where a monitor carries no configured limit - an
+ * anonymous session does not receive them, and a monitor may never have had
+ * one set. It is a STATED default, not a rule: where the admin configured a
+ * limit, that limit decides.
+ */
 export const METRIC_ATTENTION_THRESHOLD = 90;
+
+/**
+ * Where a value sits against its limit: at or above it is critical, within the
+ * warning band below it is a warning. The band is fifteen points, the same one
+ * the server derives for its own thresholds, so the app and the alert agree.
+ *
+ * Three different ladders lived in the UI (90/75 on one tile, 80/60 in the
+ * table, a flat 90 in this file) and none of them read the limit the admin set.
+ */
+export function metricSeverity(value: number | null | undefined, limit: number): 'up' | 'warning' | 'down' | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (value >= limit) return 'down';
+  return value >= limit - 15 ? 'warning' : 'up';
+}
+
+/** The configured limit for a metric, or the stated fallback. */
+export function thresholdFor(m: ApiMonitor, metric: 'cpu' | 'ram' | 'hdd'): number {
+  const configured = metric === 'cpu' ? m.cpuThreshold : metric === 'ram' ? m.ramThreshold : m.hddThreshold;
+  return typeof configured === 'number' && configured > 0 ? configured : METRIC_ATTENTION_THRESHOLD;
+}
 /** How many days before certificate expiry alerts start. */
 export const SSL_ATTENTION_DAYS = 14;
 
@@ -75,13 +100,16 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
       });
     }
 
-    for (const [metric, value] of [
-      ['CPU', m.cpu],
-      ['RAM', m.ram],
-      ['Disk', m.hdd],
+    // The limit the admin set on THIS monitor decides. A single hardcoded 90
+    // meant a disk configured to warn at 70 stayed silent until 90, and a
+    // monitor deliberately allowed to sit at 95 nagged every minute.
+    for (const [metric, value, key] of [
+      ['CPU', m.cpu, 'cpu'],
+      ['RAM', m.ram, 'ram'],
+      ['Disk', m.hdd, 'hdd'],
     ] as const) {
       // An unmeasured metric (null) never creates an alert.
-      if (typeof value === 'number' && value >= METRIC_ATTENTION_THRESHOLD) {
+      if (typeof value === 'number' && value >= thresholdFor(m, key)) {
         items.push({
           key: `${metric}-${m.id}`,
           assetId: m.id,

@@ -353,12 +353,6 @@ export function InfrastructurePage() {
     return groupOrder.map((name) => ({ name, assets: groups.get(name)! }));
   }, [rawMonitors]);
 
-  React.useEffect(() => {
-    if (selectedId === null && tree && tree.length > 0 && tree[0].assets.length > 0) {
-      setSelectedId(tree[0].assets[0].id);
-    }
-  }, [tree, selectedId]);
-
   const toggleMetric = (key: string) => {
     setEnabledMetrics((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
@@ -465,7 +459,16 @@ export function InfrastructurePage() {
   const activeStatus = parseStatusFilter(searchParams.get('status'));
   const filteredAssets = filterAssets(allAssets, { query, status: activeStatus });
 
-  const selectedAsset = allAssets.find((a) => a.id === selectedId) ?? allAssets[0];
+  // The detail pane follows the filter that brought the user here. Arriving
+  // from the dashboard's "Offline" ring and landing on a healthy device made
+  // the ring worse than useless: it answered "which ones are down" with one
+  // that is not. Nothing selected and nothing matching stays nothing - an
+  // empty filter result must not fall back to an arbitrary device.
+  // filterAssets returns null when nothing is filtering at all, and a list
+  // (possibly empty) when something is.
+  const visibleAssets = filteredAssets ?? allAssets;
+  const selectedAsset =
+    (selectedId !== null ? allAssets.find((a) => a.id === selectedId) : undefined) ?? visibleAssets[0];
   // The ref is filled in an effect, not during render - render must not touch refs.
   React.useEffect(() => {
     selectedAssetRef.current = selectedAsset ?? null;

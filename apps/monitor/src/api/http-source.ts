@@ -63,7 +63,16 @@ const CHART_METRICS: {
 
 /** Response of `action=metric_series_batch` - all device charts in one request. */
 interface MetricSeriesBatchResponse {
-  series: Record<string, { points: [number, number, number?][]; unit: string; label: string }>;
+  series: Record<
+    string,
+    {
+      points: [number, number, number?][];
+      unit: string;
+      label: string;
+      /** Days until the metric reaches 100 %; absent when there is no projection. */
+      daysToFull?: number;
+    }
+  >;
   error?: string;
 }
 
@@ -128,6 +137,9 @@ export const httpMetricsSource: MetricsSource = {
           title: data.label || metric.title,
           yMax: metric.yMax,
           yMin: metric.yMin,
+          // The "full in X days" badge finally has a number. Undefined stays
+          // undefined - the badge renders only for a real projection.
+          daysToFull: typeof data.daysToFull === 'number' ? data.daysToFull : undefined,
           series: [
             {
               key: metric.key,

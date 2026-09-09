@@ -164,6 +164,7 @@ export function Sidebar({
 }
 
 function NavGroup({ items, collapsed }: { items: NavItem[]; collapsed: boolean }) {
+  const { t } = useLanguage();
   return (
     <ul className="flex flex-col gap-0.5">
       {items.map(({ to, label, icon: Icon, count }) => (
@@ -188,7 +189,18 @@ function NavGroup({ items, collapsed }: { items: NavItem[]; collapsed: boolean }
               <>
                 <span className="truncate">{label}</span>
                 {count != null && count > 0 && (
-                  <Badge variant="down" className="ml-auto px-1.5 py-0 text-[10px]">
+                  <Badge
+                    variant="down"
+                    className="ml-auto px-1.5 py-0 text-[10px]"
+                    // This counts OPEN INCIDENT RECORDS, while the dashboard
+                    // tile counts services that are down right now. They are
+                    // two different facts and routinely differ - an incident
+                    // stays open until somebody closes it. Saying which is
+                    // which stops them from being read as one number that
+                    // disagrees with itself.
+                    title={t('nav.incidents_badge', { count }, `Otevřené incidenty: ${count}`)}
+                    aria-label={t('nav.incidents_badge', { count }, `Otevřené incidenty: ${count}`)}
+                  >
                     {count}
                   </Badge>
                 )}

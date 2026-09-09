@@ -1824,6 +1824,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'This metric has neither a configured threshold nor a fixed scale.',
   },
   'corr.show_all': { cs: 'Zobrazit všechny', en: 'Show all' },
+  'nav.incidents_badge': { cs: 'Otevřené incidenty: {count}', en: 'Open incidents: {count}' },
   'metric.gaps_unit': { cs: 'x', en: 'x' },
   'metric.hist_summary': {
     cs: 'Histogram: nejčastější pásmo {band} {unit} ({count}×).',

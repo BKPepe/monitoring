@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildNeedsAttention, type AttentionLabels } from './attention';
+import { buildNeedsAttention, thresholdFor, METRIC_ATTENTION_THRESHOLD, type AttentionLabels } from './attention';
 import type { ApiMonitor } from '@/api/app-api';
 
 /**
@@ -87,5 +87,31 @@ describe('buildNeedsAttention', () => {
   it('každá položka odkazuje na svůj monitor', () => {
     const out = buildNeedsAttention([mon({ id: 42, status: 'down' })], labels);
     expect(out[0].assetId).toBe(42);
+  });
+});
+
+describe('thresholdFor', () => {
+  const base = { id: 1, name: 'x', status: 'up' } as never;
+
+  it('uses the limit configured on the monitor', () => {
+    expect(thresholdFor({ ...(base as object), hddThreshold: 70 } as never, 'hdd')).toBe(70);
+    expect(thresholdFor({ ...(base as object), cpuThreshold: 60 } as never, 'cpu')).toBe(60);
+  });
+
+  // An anonymous session receives no thresholds; the fallback is stated, not silent.
+  it('falls back to the stated default when the monitor carries none', () => {
+    expect(thresholdFor(base, 'ram')).toBe(METRIC_ATTENTION_THRESHOLD);
+    expect(thresholdFor({ ...(base as object), ramThreshold: 0 } as never, 'ram')).toBe(METRIC_ATTENTION_THRESHOLD);
+  });
+
+  it('alerts against the configured limit, not the default', () => {
+    const monitors = [{ id: 7, name: 'Router', status: 'up', hdd: 75, hddThreshold: 70 }] as never;
+    const items = buildNeedsAttention(monitors, labels);
+    expect(items.some((i) => i.text.includes('Disk'))).toBe(true);
+  });
+
+  it('stays quiet below a deliberately high limit', () => {
+    const monitors = [{ id: 8, name: 'Build', status: 'up', ram: 93, ramThreshold: 98 }] as never;
+    expect(buildNeedsAttention(monitors, labels)).toEqual([]);
   });
 });

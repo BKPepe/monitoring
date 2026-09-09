@@ -1009,6 +1009,27 @@ check('metric_detail kreslí pásmo podle presetu', $thr_detail['thresholds']['c
 // i místo, odkud se měří. Neznámé zůstává null, nikdy vymyšlená lokalita.
 check('metric_detail vrací cíl měření', $thr_detail['monitor']['target'] ?? null, '10.0.0.1');
 check_true('práh warning je označený jako odvozený', ($thr_detail['thresholdsDerived']['warning'] ?? null) === true);
+
+// Predpoved zaplneni: cislo, ktere doted mel jen text insightu, takze odznak
+// "Plno za X dni" nemel co zobrazit. Chybejici predpoved = klic chybi, ne nula.
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key = 'hdd'");
+for ($i = 13; $i >= 0; $i--) {
+    $day = date('Y-m-d', time() - $i * 86400);
+    $val = 60 + (13 - $i) * 2; // roste o dve procenta denne
+    $pdo->exec("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples)
+                VALUES (2, '{$day}', 'hdd', {$val}, {$val}, {$val}, 10)
+                ON DUPLICATE KEY UPDATE avg_val = VALUES(avg_val), min_val = VALUES(min_val), max_val = VALUES(max_val)");
+}
+[, $batch] = api_get($base, 'action=metric_series_batch&monitor_id=2&period=24h');
+$hdd_series = $batch['series']['hdd'] ?? null;
+check_true('rostoucí disk dostane predikci zaplnění', is_array($hdd_series) && isset($hdd_series['daysToFull']));
+check_true('a je to kladný počet dní', ($hdd_series['daysToFull'] ?? 0) > 0 && ($hdd_series['daysToFull'] ?? 0) <= 90);
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key = 'hdd'");
+[, $batch2] = api_get($base, 'action=metric_series_batch&monitor_id=2&period=24h');
+check_true(
+    'bez růstu se predikce nevrací vůbec',
+    !array_key_exists('daysToFull', $batch2['series']['hdd'] ?? [])
+);
 check_true('a critical jako nastavený', ($thr_detail['thresholdsDerived']['critical'] ?? null) === false);
 check_true('klíč port je přítomen', array_key_exists('port', $thr_detail['monitor'] ?? []));
 check_true('klíč checkedFrom je přítomen', array_key_exists('checkedFrom', $thr_detail['monitor'] ?? []));

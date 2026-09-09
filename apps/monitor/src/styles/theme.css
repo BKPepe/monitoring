@@ -49,12 +49,18 @@
   --sidebar-accent: #eef0f3;
   --sidebar-border: rgb(0 0 0 / 0.08);
 
-  /* --- Stavy monitoru. Sdílená sémantika s apps/site i s dashboardem. --- */
-  --status-up: #15803d;
+  /* --- Stavy monitoru. Sdílená sémantika s apps/site i s dashboardem.
+     Kontrast je změřený proti VŠEM podkladům, na kterých ty barvy leží
+     (--background, --card, --secondary), ne jen proti tomu nejsvětlejšímu:
+     jako text je potřeba 4,5:1, jako výplň 3:1. Na sekundárním podkladu
+     padaly „běží“, „varování“ a „pozastaveno“ pod 4,4:1, a to je text na
+     97 místech v aplikaci. Hodnoty jsou proto o stupeň tmavší, odstín
+     zůstal. */
+  --status-up: #13723a;
   --status-down: #b91c1c;
-  --status-warning: #a16207;
+  --status-warning: #8f5706;
   --status-info: #1d4ed8;
-  --status-paused: #6b7280;
+  --status-paused: #5b6472;
 
   /* --- Barvy sérií v grafech ------------------------------------------
      Pořadí je závazné: CPU vždy zelená, RAM modrá, síť tyrkysová, teplota
@@ -119,11 +125,13 @@
   --sidebar-accent: #1a1e24;
   --sidebar-border: rgb(255 255 255 / 0.06);
 
+  /* Na tmavém podkladu padaly „výpadek“ (3,73:1) a „pozastaveno“ (3,27:1)
+     pod čitelnost jako text; ostatní tři jsou nad 6:1 a zůstávají. */
   --status-up: #22c55e;
-  --status-down: #e5383b;
+  --status-down: #f0736f;
   --status-warning: #facc15;
   --status-info: #60a5fa;
-  --status-paused: #71717a;
+  --status-paused: #8b93a1;
 
   /* Na tmavém podkladu potřebují barvy víc světla, aby držely kontrast. */
   --chart-cpu: #22c55e;

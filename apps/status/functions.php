@@ -1962,6 +1962,62 @@ function bk_half_window_rate(array $rows, string $value_key, string $time_key = 
  * and the Knowledge panel merge (see the plan - a separate decision once
  * more insight types exist).
  */
+/**
+ * Days until a growing metric reaches 100 %, per metric key.
+ *
+ * The same computation the forecast insight prints as a sentence, returned as
+ * a number so a chart can carry the "full in X days" badge. Keys are the SPA's
+ * metric keys ('hdd', 'ram'); a metric that is flat, shrinking, already full or
+ * more than 90 days out is absent rather than present with a made-up value.
+ *
+ * @return array<string, int>
+ */
+function bk_days_to_full(PDO $pdo, int $monitor_id): array {
+    $out = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT day AS checked_at,
+                   MAX(CASE WHEN metric_key = 'hdd' THEN avg_val END) AS hdd_usage,
+                   MAX(CASE WHEN metric_key = 'ram' THEN avg_val END) AS ram_usage
+            FROM metrics_daily
+            WHERE monitor_id = ? AND metric_key IN ('hdd', 'ram')
+              AND day >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+            GROUP BY day
+            ORDER BY day ASC
+        ");
+        $stmt->execute([$monitor_id]);
+        $rows = $stmt->fetchAll();
+
+        // Same fallback as the insight: without it a fresh install would show
+        // no forecast at all and the disk would look like it never grows.
+        if (count($rows) < 5) {
+            $stmt_raw = $pdo->prepare("
+                SELECT checked_at, hdd_usage, ram_usage
+                FROM vps_metrics
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+                ORDER BY checked_at ASC
+            ");
+            $stmt_raw->execute([$monitor_id]);
+            $rows = $stmt_raw->fetchAll();
+        }
+
+        foreach (['hdd_usage' => 'hdd', 'ram_usage' => 'ram'] as $column => $metric_key) {
+            $rate_info = bk_half_window_rate($rows, $column);
+            if ($rate_info === null || $rate_info['rate_per_day'] <= 0.01) {
+                continue;
+            }
+            $days = (100 - $rate_info['latest']) / $rate_info['rate_per_day'];
+            if ($days <= 0 || $days > 90) {
+                continue;
+            }
+            $out[$metric_key] = (int)round($days);
+        }
+    } catch (Throwable $e) {
+        error_log('[bk_days_to_full] ' . $e->getMessage());
+    }
+    return $out;
+}
+
 function bk_get_forecast_insights($pdo, $monitor) {
     $insights = [];
     $monitor_id = $monitor['id'];

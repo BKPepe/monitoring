@@ -3874,6 +3874,7 @@ if ($action === 'metric_series_batch') {
         }
 
         $series = [];
+        $days_to_full = bk_days_to_full($pdo, (int)$real_id);
 
         // Latency - from monitor_logs (one row per check)
         $stmt_lat = $pdo->prepare("
@@ -3913,6 +3914,12 @@ if ($action === 'metric_series_batch') {
                 }
             }
             $series[$metric_key] = ['unit' => $def['unit'], 'label' => $def['label'], 'points' => $pts];
+            // Days until this metric reaches 100 %, where that is a real
+            // projection. The chart card has always had a badge for it and
+            // never a number to put in it. Absent = no forecast, never a zero.
+            if (isset($days_to_full[$metric_key])) {
+                $series[$metric_key]['daysToFull'] = $days_to_full[$metric_key];
+            }
         }
 
         echo json_encode(['series' => $series], JSON_UNESCAPED_UNICODE);

@@ -40,7 +40,10 @@ export interface TimelineEvent {
   id: number;
   title: string;
   detail: string;
+  /** Human-readable time, as the API formatted it. */
   at: string;
+  /** The same moment machine-readable; null when the source did not send one. */
+  atIso?: string | null;
   severity: 'up' | 'down' | 'warning' | 'info';
   resolution?: 'Resolved' | 'Info' | 'Open';
   location?: string;

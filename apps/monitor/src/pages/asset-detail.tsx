@@ -142,7 +142,13 @@ export function AssetDetailPage() {
         const match =
           list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
           list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
-        setAsset(match ? buildDynamicAsset(match, t) : null);
+        // Monitors sharing the asset - the agent's own checks. The card that
+        // lists them had a dead main branch: `related` was hardcoded to an
+        // empty array, so it always fell through to the ports fallback.
+        const siblings = match
+          ? list.filter((m: ApiMonitor) => m.id !== match.id && m.assetId != null && m.assetId === match.assetId)
+          : [];
+        setAsset(match ? buildDynamicAsset(match, t, siblings) : null);
         setRawMonitor(match ?? null);
       })
       .catch(() => {
@@ -174,11 +180,25 @@ export function AssetDetailPage() {
    * for it in the timeline below.
    */
   const statusChangeHint = React.useMemo(() => {
-    const change = events.find((e) => e.severity === 'down' || e.severity === 'warning' || e.severity === 'info');
-    if (!change) return undefined;
+    // Transitions only. 'info' is an ordinary passing check, and since the
+    // list is newest-first the old filter always picked the most recent
+    // routine check - the one row that by definition changed nothing.
+    const transitions = events.filter((e) => e.severity !== 'info');
+    if (transitions.length === 0) return undefined;
+    // The transition that belongs to the recorded change, not merely the
+    // newest one: an outage from last week must not be captioned with a
+    // recovery that happened after it.
+    const changeAt = rawMonitor?.lastStatusChange ? Date.parse(rawMonitor.lastStatusChange) : NaN;
+    const match = Number.isFinite(changeAt)
+      ? (transitions.find((e) => {
+          const at = e.atIso ? Date.parse(e.atIso) : NaN;
+          return Number.isFinite(at) && Math.abs(at - changeAt) <= 5 * 60_000;
+        }) ?? null)
+      : null;
+    const change = match ?? transitions[0];
     const detail = (change.detail ?? '').trim();
     return detail ? `${change.title} — ${detail}` : change.title;
-  }, [events]);
+  }, [events, rawMonitor]);
 
   React.useEffect(() => {
     if (!loadedAssetId) return;
@@ -216,6 +236,7 @@ export function AssetDetailPage() {
                   )
                 : ''),
             at: e.time,
+            atIso: typeof e.timeIso === 'string' ? e.timeIso : null,
             severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : e.isRecovery ? 'up' : 'info',
             resolution: e.isDown ? 'Open' : e.isRecovery ? 'Resolved' : 'Info',
             location: e.location,
@@ -2209,7 +2230,8 @@ function timeAgo(
 
 function buildDynamicAsset(
   m: ApiMonitor,
-  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string,
+  siblings: ApiMonitor[] = []
 ): AssetDetail {
   // Every status the API can report. 'maintenance' and 'unknown' used to be
   // folded into 'paused', so a silent agent read as "Paused" in the header.
@@ -2488,6 +2510,25 @@ function buildDynamicAsset(
     // in AssetDetailPage) from action=events, instead of a synthetic entry.
     events: [],
     processes: parsedProcesses,
-    related: [],
+    // Monitors on the same asset: the TeamSpeak server running on the VPS the
+    // agent reports about, the web check on the same machine. Their own status
+    // is shown, not the parent's.
+    related: siblings.map((s) => ({
+      name: s.name,
+      kind: (s.type ?? '').toUpperCase(),
+      status:
+        s.status === 'up'
+          ? 'up'
+          : s.status === 'down'
+            ? 'down'
+            : s.status === 'warning'
+              ? 'warning'
+              : s.status === 'maintenance'
+                ? 'maintenance'
+                : s.status === 'unknown'
+                  ? 'unknown'
+                  : 'paused',
+      detail: [s.target, s.port ? `:${s.port}` : null].filter(Boolean).join('') || (s.hostname ?? ''),
+    })),
   };
 }

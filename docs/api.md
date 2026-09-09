@@ -346,7 +346,7 @@ command.
 | Endpoint | Access | Description |
 |---|---|---|
 | `action=metric_series&monitor_id=&metric=&period=` | public | One metric over time |
-| `action=metric_series_batch` | public | Several metrics in one query |
+| `action=metric_series_batch&monitor_id=&period=` | public | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero |
 | `action=metric_detail&monitor_id=&metric=` | public | Context for the metric detail page |
 | `action=metric_correlations&monitor_id=&metric=&period=` (optionally `&all=1` for every compared metric, not just the strongest 8) | public | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | public | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
