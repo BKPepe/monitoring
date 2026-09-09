@@ -34,8 +34,13 @@ export const mockMetricsSource: MetricsSource = {
     return httpMetricsSource.getMetricDetail(monitorId, metric);
   },
 
-  async getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse> {
-    return httpMetricsSource.getMetricSeries(monitorId, metric, range);
+  async getMetricSeries(
+    monitorId: number,
+    metric: string,
+    range: MetricRange,
+    previous = false
+  ): Promise<MetricSeriesResponse> {
+    return httpMetricsSource.getMetricSeries(monitorId, metric, range, previous);
   },
 
   async getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse> {

@@ -1919,6 +1919,21 @@ check('24h nechá venku měření starší než den', count($m24h['points'] ?? [
 [, $m7d] = api_get($base, 'action=metric_series&monitor_id=2&metric=cpu&period=7d');
 check('7d vrátí i to nejstarší', count($m7d['points'] ?? []), 4);
 
+// The comparison curve in the chart is the same window shifted one period
+// back, so `previous=1` must return exactly the points the current window
+// leaves out. If the two shared even one point, the overlaid curves would
+// claim two different measurements happened at the same moment.
+[, $prev24] = api_get($base, 'action=metric_series&monitor_id=2&metric=cpu&period=24h&previous=1');
+check('previous=1 vrátí předchozí okno (jen měření staré 2000 minut)', count($prev24['points'] ?? []), 1);
+check_true(
+    'a nesdílí s aktuálním oknem ani jeden bod',
+    empty(array_intersect(array_column($m24h['points'] ?? [], 0), array_column($prev24['points'] ?? [], 0)))
+);
+// All four measurements fall inside the week, so the week before it is empty.
+// That is what proves the offset really is one whole period.
+[, $prev7d] = api_get($base, 'action=metric_series&monitor_id=2&metric=cpu&period=7d&previous=1');
+check('previous=1 pro týden sahá do předminulého týdne', count($prev7d['points'] ?? []), 0);
+
 // Context for the metric detail page.
 [$code, $detail] = api_get($base, 'action=metric_detail&monitor_id=2&metric=cpu');
 check('metric_detail vrací 200', $code, 200);

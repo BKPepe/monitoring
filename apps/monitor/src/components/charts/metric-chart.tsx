@@ -22,6 +22,7 @@ export function MetricChart({
   height = 200,
   group,
   onPickTime,
+  onZoom,
   minimap = false,
 }: {
   data: ChartData;
@@ -29,6 +30,8 @@ export function MetricChart({
   group?: string;
   /** A click into the chart returns the time in ms - see Chart.onPickTime. */
   onPickTime?: (timestampMs: number) => void;
+  /** The window the user zoomed to - see Chart.onZoom. */
+  onZoom?: (window: { from: number; to: number } | null) => void;
   /**
    * A slider strip under the chart with the whole series drawn small - drag
    * to narrow the view. The inside zoom (drag / ctrl+wheel) works either way;
@@ -266,7 +269,8 @@ export function MetricChart({
             theme,
             i === 0 ? data.annotations : undefined,
             i === 0 ? data.periods : undefined,
-            locale
+            locale,
+            data.stacked === true
           )
         ),
       ],
@@ -284,6 +288,7 @@ export function MetricChart({
       ariaLabel={t('chart.aria_over_time', { title: data.title }, `${data.title} v čase`)}
       summary={describe(data, t)}
       onPickTime={onPickTime}
+      onZoom={onZoom}
     />
   );
 }
@@ -377,7 +382,8 @@ function buildSeries(
   theme: ChartTheme,
   annotations?: ChartEvent[],
   periods?: ChartData['periods'],
-  locale = 'cs-CZ'
+  locale = 'cs-CZ',
+  stacked = false
 ) {
   const seriesPointCount = s.points.length;
   // Events (measured facts) and notes (human claims) share one markLine -
@@ -390,10 +396,19 @@ function buildSeries(
   // data itself the separator is form - a vertical rule versus a curve; no hue
   // could do that job alone, because the six series colours cover nearly the
   // whole wheel.
+  // An outage or a crossed limit is not the same kind of thing as "config
+  // changed", and all of them used to be the same grey dotted line - so the
+  // one worth looking at could not be found among the rest.
   const markLineData = [
     ...(events ?? []).map((e) => ({
       xAxis: e.t,
       name: `${formatTime(e.t, locale)} — ${e.label}`,
+      ...(e.severity === 'alert'
+        ? {
+            lineStyle: { color: theme.series.latency, type: 'solid' as const, width: 1.6 },
+            emphasis: { lineStyle: { width: 2.4 } },
+          }
+        : {}),
     })),
     ...(annotations ?? []).map((a) => ({
       xAxis: a.t,
@@ -445,12 +460,21 @@ function buildSeries(
     data: s.points.map((p) => [p.t, p.v]),
     showSymbol: false,
     smooth: seriesPointCount > 2000 ? false : 0.25,
-    // Predictions draw dashed — they must not be mistakable for measurements.
-    lineStyle: { width: 1.6, color, type: s.predicted ? ('dashed' as const) : ('solid' as const) },
+    // Predictions draw dashed - they must not be mistakable for measurements.
+    // A past window draws dotted and dimmed: measured, but not of this window.
+    lineStyle: {
+      width: 1.6,
+      color,
+      opacity: s.past ? 0.55 : 1,
+      type: s.past ? ('dotted' as const) : s.predicted ? ('dashed' as const) : ('solid' as const),
+    },
     itemStyle: { color },
     // Area fill only for a single series; two would overlap and become unreadable.
+    ...(stacked ? { stack: 'bk-total', stackStrategy: 'all' as const } : {}),
+    // A fill per series is mud when two lines overlap - except when they are
+    // stacked, where each band is its own share of the total.
     areaStyle:
-      seriesCount === 1 && !s.predicted
+      (seriesCount === 1 || stacked) && !s.predicted && !s.past
         ? {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
               { offset: 0, color: withAlpha(color, 0.28) },

@@ -3670,6 +3670,15 @@ if ($action === 'metric_series') {
     $period = $_GET['period'] ?? '24h';
     $minutes = bk_period_minutes($period) ?? 1440;
 
+    // ?previous=1 vrátí stejně dlouhé okno posunuté o jednu periodu zpět -
+    // podklad pro srovnávací křivku v grafu ("je tohle na úterý normální?").
+    // Posun je přesně jedna perioda, aby na sebe obě křivky seděly bod po bodu.
+    $previous_window = !empty($_GET['previous']);
+    $window_sql = $previous_window
+        ? 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND checked_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)'
+        : 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)';
+    $window_params = $previous_window ? [$minutes * 2, $minutes] : [$minutes];
+
     // Periods longer than the raw-data retention (30 days) read from the daily rollup
     // `metrics_daily`. 0 = the regular window over vps_metrics.
     $long_term_days = $period === '1y' ? 365 : ($period === '180d' ? 180 : ($period === '90d' ? 90 : 0));
@@ -3695,10 +3704,10 @@ if ($action === 'metric_series') {
             $stmt = $pdo->prepare("
                 SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
                 FROM monitor_logs
-                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND response_time IS NOT NULL
+                WHERE monitor_id = ? AND {$window_sql} AND response_time IS NOT NULL
                 ORDER BY checked_at ASC
             ");
-            $stmt->execute([$real_id, $minutes]);
+            $stmt->execute(array_merge([$real_id], $window_params));
             foreach ($stmt->fetchAll() as $r) {
                 $points[] = [(int)$r['ts'], (float)$r['val']];
             }
@@ -3752,10 +3761,10 @@ if ($action === 'metric_series') {
                 $stmt = $pdo->prepare("
                     SELECT UNIX_TIMESTAMP(checked_at) as ts, {$col} as val
                     FROM vps_metrics
-                    WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND {$col} IS NOT NULL
+                    WHERE monitor_id = ? AND {$window_sql} AND {$col} IS NOT NULL
                     ORDER BY checked_at ASC
                 ");
-                $stmt->execute([$real_id, $minutes]);
+                $stmt->execute(array_merge([$real_id], $window_params));
 
                 if ($is_counter) {
                     // The delta against the previous measurement. When the value drops,
@@ -3784,6 +3793,12 @@ if ($action === 'metric_series') {
         // No fabrication: an empty series means the agent has not sent this
         // metric yet or the period has no records - not that we make one up.
         $series_payload = ['unit' => $unit, 'label' => $label, 'points' => $points];
+        // The same projection the batch endpoint sends, so the detail page can
+        // draw where this is heading instead of only printing the number.
+        $md_forecast = bk_days_to_full($pdo, (int)$real_id);
+        if (isset($md_forecast[$metric])) {
+            $series_payload['daysToFull'] = $md_forecast[$metric];
+        }
         if ($long_term_days > 0) {
             // The client must be able to tell it is looking at daily averages,
             // not individual measurements - otherwise it would read precision into the chart the data does not have.

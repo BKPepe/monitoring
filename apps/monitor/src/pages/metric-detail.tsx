@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft,
   Activity,
@@ -70,7 +70,26 @@ export function MetricDetailPage() {
   const metric = String(metricKey ?? '');
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
 
-  const [range, setRange] = React.useState<MetricRange>('24h');
+  /**
+   * The period lives in the address, not in component state.
+   *
+   * A reload, the browser's back button or a link sent to a colleague used to
+   * land on the default 24 hours - so "look at this, the spike on the 30-day
+   * chart" could not be shared at all, and drilling from one metric to another
+   * silently reset the window the operator had chosen.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rangeParam = searchParams.get('range');
+  const range: MetricRange = isKnownRange(rangeParam) ? rangeParam : '24h';
+  const setRange = React.useCallback(
+    (next: MetricRange) => {
+      const params = new URLSearchParams(searchParams);
+      params.set('range', next);
+      // replace: switching a period is not a place in history to go back to.
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
   // The moment the user clicked in the chart - the answer to "what caused it".
   const [pickedAt, setPickedAt] = React.useState<number | null>(null);
   /**
@@ -293,6 +312,88 @@ export function MetricDetailPage() {
     [rawPoints, isRate, activeUnit]
   );
 
+  /**
+   * The same metric one period earlier, laid over the current window.
+   *
+   * "Is this normal for a Tuesday?" had no answer in the app: there was no way
+   * to put a second series on a chart at all. The comparison is its own
+   * request and its timestamps are shifted forward by exactly one window, so
+   * the two curves line up hour for hour. Drawn dotted and dimmed, because it
+   * is another day's measurement and must never be read as this window's.
+   */
+  const [compare, setCompare] = React.useState(false);
+  /**
+   * The comparison is keyed by the question it answers. A plain state slot
+   * would keep last week's curve on screen for a moment after the period or
+   * the metric changes, shifted by the wrong offset - a wrong picture, not a
+   * late one.
+   */
+  const compareKey = `${monId}|${metric}|${range}`;
+  const [compareState, setCompareState] = React.useState<{
+    key: string;
+    series: MetricSeriesResponse;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!compare) return;
+    let active = true;
+    const key = compareKey;
+    resolveSource()
+      .then(({ source }) => source.getMetricSeries(monId, metric, range, true))
+      .then((s) => {
+        if (active) setCompareState({ key, series: s });
+      })
+      .catch(() => {
+        // No comparable window is a legitimate answer - a monitor added
+        // yesterday has no last week - and the overlay simply stays away.
+      });
+    return () => {
+      active = false;
+    };
+  }, [compare, compareKey, monId, metric, range]);
+
+  const comparisonSeries = React.useMemo(() => {
+    const points = compareState?.key === compareKey ? compareState.series.points : null;
+    if (!compare || !points?.length) return null;
+    const shift = periodLengthMs(range);
+    if (shift == null) return null;
+    return {
+      key: `${metric}-previous`,
+      label: t('metric.compare_label', 'Předchozí období'),
+      unit,
+      tone,
+      past: true,
+      points: insertGaps(
+        points.map(([ts, v]) => ({
+          t: ts * 1000 + shift,
+          v: isRate ? convertRate(v, activeUnit) : v,
+        }))
+      ),
+    };
+  }, [compare, compareState, compareKey, range, metric, unit, tone, isRate, activeUnit, t]);
+
+  /**
+   * The capacity forecast as a line: from the last measurement to the day the
+   * metric would reach 100 %. The number has been on the card badge since the
+   * server started returning it, but the chart - the place where a trend is
+   * read - showed nothing.
+   */
+  const forecastSeries = React.useMemo(() => {
+    const days = series?.daysToFull;
+    const last = [...points].reverse().find((p) => p.v != null);
+    if (typeof days !== 'number' || days <= 0 || !last || last.v == null) return null;
+    return {
+      key: `${metric}-forecast`,
+      label: t('metric.forecast_label', { days }, `Odhad zaplnění (za ${days} dní)`),
+      unit,
+      tone,
+      predicted: true,
+      points: [
+        { t: last.t, v: last.v },
+        { t: last.t + days * 86_400_000, v: 100 },
+      ],
+    };
+  }, [series, points, metric, unit, tone, t]);
+
   // Memoised on its inputs: a fresh object on every render meant a fresh
   // ECharts option and setOption(notMerge), which threw away the zoom the
   // moment the user clicked the chart or typed a note.
@@ -306,8 +407,33 @@ export function MetricDetailPage() {
             // Percentages are read against their full scale; everything else
             // (latency, temperature, load, negative dBm) gets a derived range.
             yMin: sourceUnit === '%' ? 0 : null,
-            series: [{ key: metric, label: detail.metric.label, unit, tone, points }],
-            events: detail.events.map((e) => ({ t: e.t, label: e.label })),
+            series: [
+              { key: metric, label: detail.metric.label, unit, tone, points },
+              // Where this is heading, drawn as a dashed line so it can never
+              // be mistaken for a measurement. Only for a metric the server
+              // actually projects, and only while the projection is inside the
+              // chart's own horizon.
+              ...(comparisonSeries ? [comparisonSeries] : []),
+              ...(forecastSeries ? [forecastSeries] : []),
+            ],
+            events: detail.events.map((e) => ({
+              t: e.t,
+              label: e.label,
+              // From the recorded type, not from the words: the same event
+              // reads differently in another language.
+              severity: [
+                'status_changed_down',
+                'threshold_exceeded',
+                'ssl_warning',
+                'wan_lost',
+                'lte_backup_lost',
+                'agent_disconnected',
+                'latency_degraded',
+                'dns_lost',
+              ].includes(e.type)
+                ? ('alert' as const)
+                : ('info' as const),
+            })),
             annotations: (anns ?? []).map((a) => ({
               t: a.ts * 1000,
               // The author belongs in the tooltip: a note is a claim and a claim has a claimant.
@@ -331,11 +457,40 @@ export function MetricDetailPage() {
             })),
           }
         : null,
-    [detail, monId, metric, sourceUnit, unit, tone, points, anns, activeUnit, isRate, linkPeriods, series, t]
+    [
+      detail,
+      monId,
+      metric,
+      sourceUnit,
+      unit,
+      tone,
+      points,
+      anns,
+      activeUnit,
+      isRate,
+      linkPeriods,
+      series,
+      forecastSeries,
+      comparisonSeries,
+      t,
+    ]
   );
 
   const help = metricHelp(metric, t);
-  const stats = computeStats(points);
+  /**
+   * The window the chart is zoomed to, or null for the whole period.
+   *
+   * The tiles and the histogram described the whole selected period no matter
+   * what the chart showed, so zooming into one hour left them talking about
+   * the other twenty-three - the chart said one thing and the numbers beside
+   * it another.
+   */
+  const [zoomWindow, setZoomWindow] = React.useState<{ from: number; to: number } | null>(null);
+  const shownPoints = React.useMemo(
+    () => (zoomWindow ? points.filter((p) => p.t >= zoomWindow.from && p.t <= zoomWindow.to) : points),
+    [points, zoomWindow]
+  );
+  const stats = computeStats(shownPoints);
   const direction = betterDirection(metric);
   // Which tail is the bad one depends on the metric: for latency the high end,
   // for signal strength the low one. Labelling both "the worse end" was wrong
@@ -432,9 +587,37 @@ export function MetricDetailPage() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {isRate && <UnitPicker value={activeUnit} onChange={setRateUnit} />}
+          {/* Two curves on one chart: this window and the one before it, laid
+              on top of each other so "is this normal for a Tuesday?" can be
+              answered by looking. Only for the periods whose length is fixed -
+              a rollup window is not a fixed number of days. */}
+          {periodLengthMs(range) != null && (
+            <Button
+              size="sm"
+              variant={compare ? 'primary' : 'outline'}
+              aria-pressed={compare}
+              onClick={() => setCompare((v) => !v)}
+              className="text-xs"
+            >
+              {t('metric.compare_toggle', 'Porovnat s předchozím obdobím')}
+            </Button>
+          )}
           <RangePicker value={range} onChange={setRange} />
         </div>
       </div>
+
+      {zoomWindow && (
+        <p className="text-muted-foreground text-[11px]">
+          {t(
+            'metric.zoom_window',
+            {
+              from: new Date(zoomWindow.from).toLocaleString(locale),
+              to: new Date(zoomWindow.to).toLocaleString(locale),
+            },
+            `Čísla níž popisují přiblížený výsek: ${new Date(zoomWindow.from).toLocaleString(locale)} až ${new Date(zoomWindow.to).toLocaleString(locale)}.`
+          )}
+        </p>
+      )}
 
       {/* Layer 1 - what is happening. Numbers before the chart, not after it. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -596,6 +779,7 @@ export function MetricDetailPage() {
               data={chartData}
               height={340}
               minimap={!['15m', '1h', '6h'].includes(range)}
+              onZoom={setZoomWindow}
               onPickTime={(ms) => {
                 if (annMode) {
                   setAnnDraftTs(Math.round(ms / 1000));
@@ -809,7 +993,7 @@ export function MetricDetailPage() {
           <BarChart3 className="size-4 text-primary" />
           {t('metric.hist_title', 'Rozložení hodnot')}
         </h2>
-        <HistogramPanel points={points} unit={unit} tone={tone} />
+        <HistogramPanel points={shownPoints} unit={unit} tone={tone} />
         <p className="text-muted-foreground text-[11px] leading-relaxed">
           {t(
             'metric.hist_note',
@@ -957,6 +1141,23 @@ function UnitPicker({ value, onChange }: { value: RateUnit; onChange: (u: RateUn
 }
 
 const RANGES: MetricRange[] = ['15m', '1h', '6h', '24h', '7d', '30d', '90d', '1y'];
+
+/**
+ * How long a period lasts, in milliseconds - the offset that lays the previous
+ * window over the current one. The long ranges are daily rollups whose windows
+ * are not a fixed number of days, so they get no comparison rather than a
+ * misaligned one.
+ */
+function periodLengthMs(range: MetricRange): number | null {
+  const minutes: Record<string, number> = { '15m': 15, '1h': 60, '6h': 360, '24h': 1440, '7d': 10080, '30d': 43200 };
+  const m = minutes[range];
+  return m == null ? null : m * 60_000;
+}
+
+/** A period from the address is user input: anything unknown falls back. */
+function isKnownRange(value: string | null): value is MetricRange {
+  return value !== null && (RANGES as string[]).includes(value);
+}
 
 /**
  * How far back to ask for chart notes so every note visible in the chart's

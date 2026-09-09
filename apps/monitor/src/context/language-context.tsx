@@ -1847,6 +1847,15 @@ const translations: Record<string, { cs: string; en: string }> = {
   'maint.start': { cs: 'Zapnout údržbu', en: 'Start maintenance' },
   'shell.skip_to_content': { cs: 'Přeskočit na obsah', en: 'Skip to content' },
   'app_shell.nav_label': { cs: 'Navigace', en: 'Navigation' },
+  'metric.forecast_label': { cs: 'Odhad zaplnění (za {days} dní)', en: 'Projected full (in {days} days)' },
+  'metric.compare_toggle': { cs: 'Porovnat s předchozím obdobím', en: 'Compare with the previous period' },
+  'metric.compare_label': { cs: 'Předchozí období', en: 'The previous period' },
+  'asset.traffic_combined': { cs: 'Provoz po linkách (WAN + LTE)', en: 'Traffic by link (WAN + LTE)' },
+  'metric.zoom_window': {
+    cs: 'Čísla níž popisují přiblížený výsek: {from} až {to}.',
+    en: 'The numbers below describe the zoomed window: {from} to {to}.',
+  },
+  'metric.heatmap_no_sample': { cs: 'bez měření', en: 'not measured' },
   'metric.heatmap_aria': {
     cs: 'Hodinová mřížka naměřených hodnot po dnech',
     en: 'Hour-by-day grid of measured values',

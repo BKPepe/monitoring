@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useParams, Link } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft,
   Clock,
@@ -88,6 +88,8 @@ interface AssetDetail {
   cpanelStatsError?: { error?: string; hint?: string | null; since?: string } | null;
   /** ISO time of the last check/report - every tab shows data from this moment. */
   lastCheck: string | null;
+  /** The monitor's effective limits, so its charts show the line its alerts use. */
+  thresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
   /** Raw details from the last report - the Network tab reads OpenWrt telemetry from them. */
   rawDetails: Record<string, any>;
   /** Remote Actions - admin session only (the API omits the fields otherwise). */
@@ -132,7 +134,19 @@ export function AssetDetailPage() {
   // so the detail page reuses it instead of keeping its own copy.
 
   const [rawMonitor, setRawMonitor] = React.useState<ApiMonitor | null>(null);
-  const [range, setRange] = React.useState<TimeRange>('24h');
+  /** Same as the metric detail: the period belongs in the address, so a
+   *  reload or a shared link keeps the window the operator chose. */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rangeParam = searchParams.get('range');
+  const range: TimeRange = isKnownTimeRange(rangeParam) ? rangeParam : '24h';
+  const setRange = React.useCallback(
+    (next: TimeRange) => {
+      const params = new URLSearchParams(searchParams);
+      params.set('range', next);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
   const [loading, setLoading] = React.useState(true);
   const [events, setEvents] = React.useState<TimelineEvent[]>([]);
   /** The check that recorded the last status change, straight from the server. */
@@ -1043,6 +1057,7 @@ function OverviewTab({
           events={events}
           assetId={assetId ?? asset.id}
           monitorId={asset.id}
+          thresholds={asset.thresholds}
         />
       </div>
 
@@ -2037,6 +2052,39 @@ function HealthCard({ metric }: { metric: HealthMetric }) {
   );
 }
 
+/**
+ * Paints the monitor's own limits onto a chart that has one.
+ *
+ * The chart component has drawn threshold bands since the metric detail was
+ * built, and the overview never passed any: the same CPU chart showed the
+ * limit on one page and not on the other, so "is 78 % close to the line?"
+ * could only be answered by clicking through.
+ */
+function withBands(
+  chart: ChartData,
+  thresholds: { cpu: number | null; ram: number | null; hdd: number | null } | undefined,
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
+): ChartData {
+  const limit =
+    chart.id === 'cpu'
+      ? thresholds?.cpu
+      : chart.id === 'ram'
+        ? thresholds?.ram
+        : chart.id === 'hdd'
+          ? thresholds?.hdd
+          : null;
+  if (limit == null || limit <= 0 || chart.bands) return chart;
+  // The warning band is the same fifteen points below the limit the server
+  // derives for its own alerts, so the chart and the alert agree.
+  return {
+    ...chart,
+    bands: [
+      { from: Math.max(0, limit - 15), to: limit, tone: 'warning', label: t('metric.band_warning', 'Varování') },
+      { from: limit, to: 100, tone: 'critical', label: t('metric.band_critical', 'Kritické') },
+    ],
+  };
+}
+
 function PerformanceCharts({
   data: rawData,
   error,
@@ -2045,6 +2093,7 @@ function PerformanceCharts({
   events = [],
   assetId,
   monitorId,
+  thresholds,
 }: {
   data: ChartData[] | null;
   error: Error | null;
@@ -2054,6 +2103,8 @@ function PerformanceCharts({
   /** For linking through to the metric detail (Level 3). */
   assetId: string | number;
   monitorId: number;
+  /** The monitor's effective limits, so the charts show the same line the alerts use. */
+  thresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
 }) {
   const { t } = useLanguage();
 
@@ -2064,9 +2115,17 @@ function PerformanceCharts({
     return events
       .map((e) => {
         const ms = Date.parse(String(e.at).replace(' ', 'T'));
-        return Number.isNaN(ms) ? null : { t: ms, label: e.title };
+        return Number.isNaN(ms)
+          ? null
+          : {
+              t: ms,
+              label: e.title,
+              // The severity the event list already carries, so an outage
+              // marker stands out from a routine note.
+              severity: e.severity === 'down' || e.severity === 'warning' ? ('alert' as const) : ('info' as const),
+            };
       })
-      .filter((e): e is { t: number; label: string } => e != null);
+      .filter((e): e is { t: number; label: string; severity: 'alert' | 'info' } => e != null);
   }, [events]);
 
   const data = React.useMemo(() => {
@@ -2118,8 +2177,30 @@ function PerformanceCharts({
   const featured = data.filter((c) => c.featured !== false);
   const others = data.filter((c) => c.featured === false);
 
+  // Both links on one chart, stacked. "Did the backup carry the traffic while
+  // the primary was down?" needed two cards and a mental overlay; stacked, the
+  // height is the total and each band is one link's share.
+  const wan = featured.find((c) => c.id === 'net');
+  const lte = featured.find((c) => c.id === 'net_lte');
+  const combined: ChartData | null =
+    wan && lte && lte.series[0]?.points.some((p) => p.v != null && p.v > 0)
+      ? {
+          id: 'net-combined',
+          title: t('asset.traffic_combined', 'Provoz po linkách (WAN + LTE)'),
+          yMax: null,
+          yMin: 0,
+          stacked: true,
+          series: [
+            { ...wan.series[0], label: t('net.link_primary', 'Primární (WAN)') },
+            { ...lte.series[0], label: t('net.link_backup', 'Záloha (LTE)') },
+          ],
+        }
+      : null;
+
   return (
     <div className="flex flex-col gap-4">
+      {combined && <ChartCard data={combined} group="asset-performance" />}
+
       <div className="grid gap-4 lg:grid-cols-2">
         {featured.map((chart) => (
           // Link through to Level 3. The legacy page had a metric detail too, but
@@ -2127,7 +2208,11 @@ function PerformanceCharts({
           // does not exist.
           <ChartCard
             key={chart.id}
-            data={chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart}
+            data={withBands(
+              chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart,
+              thresholds,
+              t
+            )}
             group="asset-performance"
             to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
           />
@@ -2406,6 +2491,11 @@ function mapInsightsTimeline(
     at: e.relative ? `${e.relative} · ${e.at}` : e.at,
     severity: severityFor(e.type),
   }));
+}
+
+/** A period from the address is user input: anything unknown falls back. */
+function isKnownTimeRange(value: string | null): value is TimeRange {
+  return value !== null && ['15m', '1h', '6h', '24h', '7d', '30d'].includes(value);
 }
 
 function timeAgo(
@@ -2695,6 +2785,7 @@ function buildDynamicAsset(
     cpanelStats: m.details?.cpanel_stats ?? null,
     cpanelStatsError: m.details?.cpanel_stats_error ?? null,
     lastCheck: m.lastCheck ?? null,
+    thresholds: m.effectiveThresholds,
     rawDetails: m.details && typeof m.details === 'object' ? m.details : {},
     remoteActionsEnabled: Boolean(m.remoteActionsEnabled),
     allowedActions: Array.isArray(m.allowedActions) ? m.allowedActions : [],

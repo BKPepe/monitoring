@@ -37,6 +37,13 @@ export function HeatmapPanel({
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
 
   const [hover, setHover] = React.useState<{ day: number; hour: number; x: number; y: number } | null>(null);
+  /** Opens the readout for one cell, from a pointer, a tap or the keyboard. */
+  const showFor = React.useCallback((cellEl: HTMLElement, day: number, hour: number) => {
+    const grid = gridRef.current?.getBoundingClientRect();
+    if (!grid) return;
+    const cell = cellEl.getBoundingClientRect();
+    setHover({ day, hour, x: cell.left - grid.left + cell.width / 2, y: cell.top - grid.top });
+  }, []);
   const gridRef = React.useRef<HTMLDivElement>(null);
 
   // The converted grid is what everything below reads - values, max, tooltip.
@@ -166,12 +173,20 @@ export function HeatmapPanel({
                       v === null && 'border border-dashed border-muted-foreground/45'
                     )}
                     style={v === null ? undefined : { backgroundColor: fillFor(v) }}
-                    onMouseEnter={(e) => {
-                      const grid = gridRef.current?.getBoundingClientRect();
-                      const cell = e.currentTarget.getBoundingClientRect();
-                      if (!grid) return;
-                      setHover({ day: di, hour: h, x: cell.left - grid.left + cell.width / 2, y: cell.top - grid.top });
-                    }}
+                    // The value lived in a hover tooltip only, so on a phone and
+                    // from a keyboard the grid was colours and nothing else. The
+                    // cell takes focus, opens the same readout on focus or tap,
+                    // and carries the whole reading in its own label for a
+                    // screen reader.
+                    tabIndex={0}
+                    role="img"
+                    aria-label={`${dayLabel(d.day).text} ${String(h).padStart(2, '0')}:00 — ${
+                      v === null ? t('metric.heatmap_no_sample', 'bez měření') : `${fmt(v)} ${unit}`
+                    }`}
+                    onFocus={(e) => showFor(e.currentTarget, di, h)}
+                    onBlur={() => setHover(null)}
+                    onClick={(e) => showFor(e.currentTarget, di, h)}
+                    onMouseEnter={(e) => showFor(e.currentTarget, di, h)}
                     onMouseLeave={() => setHover(null)}
                   />
                 ))}

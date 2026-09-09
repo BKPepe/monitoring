@@ -64,9 +64,16 @@ export interface ChartProps {
    * a spike, clicking it fills in the reason.
    */
   onPickTime?: (timestampMs: number) => void;
+  /**
+   * The window the user zoomed to, in milliseconds. The numbers beside a chart
+   * describe the whole period, so zooming into one hour left the tiles and the
+   * histogram talking about the other twenty-three - the chart said one thing
+   * and the statistics another.
+   */
+  onZoom?: (window: { from: number; to: number } | null) => void;
 }
 
-export function Chart({ option, ariaLabel, summary, height = 200, className, group, onPickTime }: ChartProps) {
+export function Chart({ option, ariaLabel, summary, height = 200, className, group, onPickTime, onZoom }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
 
@@ -117,6 +124,31 @@ export function Chart({ option, ariaLabel, summary, height = 200, className, gro
       zr.off('click', handler);
     };
   }, [onPickTime]);
+
+  React.useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance || !onZoom) return;
+    const handler = () => {
+      const zoom = (
+        instance.getOption() as
+          { dataZoom?: { startValue?: number; endValue?: number; start?: number; end?: number }[] } | undefined
+      )?.dataZoom?.[0];
+      const zoomed = zoom != null && ((zoom.start ?? 0) > 0 || (zoom.end ?? 100) < 100);
+      // startValue/endValue are the axis values ECharts resolved for the
+      // current window - the percentages alone would need the data to convert.
+      // Not zoomed = no window, and the callers go back to describing the whole
+      // period rather than a slice that happens to equal it.
+      onZoom(
+        zoomed && typeof zoom.startValue === 'number' && typeof zoom.endValue === 'number'
+          ? { from: zoom.startValue, to: zoom.endValue }
+          : null
+      );
+    };
+    instance.on('dataZoom', handler);
+    return () => {
+      instance.off('dataZoom', handler);
+    };
+  }, [onZoom]);
 
   React.useEffect(() => {
     const instance = instanceRef.current;

@@ -46,6 +46,9 @@ const CHART_METRICS: {
   { key: 'ram', title: 'Využití paměti', tone: 'memory', yMax: 100, yMin: 0 },
   { key: 'hdd', title: 'Zaplnění disku', tone: 'disk', yMax: 100, yMin: 0 },
   { key: 'net', title: 'Síťový provoz (KB/s)', tone: 'network', yMax: null, yMin: 0 },
+  // The backup link carries traffic too - and traffic over it is usually
+  // metered. It was measured every minute and had no card of its own.
+  { key: 'net_lte', title: 'Provoz na LTE záloze (KB/s)', tone: 'temperature', yMax: null, yMin: 0 },
   { key: 'iowait', title: 'Čekání na I/O', tone: 'latency', yMax: 100, yMin: 0 },
   { key: 'swap', title: 'Využití swapu', tone: 'temperature', yMax: 100, yMin: 0 },
   { key: 'load1', title: 'Load Average (1 min)', tone: 'cpu', yMax: null, yMin: null },
@@ -196,9 +199,14 @@ export const httpMetricsSource: MetricsSource = {
     );
   },
 
-  async getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse> {
+  async getMetricSeries(
+    monitorId: number,
+    metric: string,
+    range: MetricRange,
+    previous = false
+  ): Promise<MetricSeriesResponse> {
     const res = await getJson<MetricSeriesResponse>(
-      `api.php?action=metric_series&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}`
+      `api.php?action=metric_series&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${previous ? '&previous=1' : ''}`
     );
     // An empty series is a legitimate answer (the agent does not report this
     // metric), a broken shape is not - it would surface in the chart as "no

@@ -65,10 +65,22 @@ export interface MetricSeries {
   points: MetricPoint[];
   /** The series is a prediction, not a measurement — drawn dashed. */
   predicted?: boolean;
+  /**
+   * The same metric one period earlier, laid over this window. Drawn dotted
+   * and dimmed: it is measured data, but not of the window on the axis, and
+   * it must be told apart from the dashed forecast at a glance.
+   */
+  past?: boolean;
 }
 
 /** An event on the chart's timeline (outage, restart, config change). */
 export interface ChartEvent {
+  /**
+   * How serious the event was. An outage or a crossed limit is drawn boldly;
+   * everything else stays a quiet dotted line. Matching on the label text
+   * would break the moment the interface is read in another language.
+   */
+  severity?: 'alert' | 'info';
   t: number;
   label: string;
 }
@@ -128,6 +140,13 @@ export interface ChartData {
    * unreachable - the batch response has always carried it.
    */
   featured?: boolean;
+  /**
+   * Draw the series stacked on top of each other. For two links carrying the
+   * same kind of traffic that is the honest picture: the height is the total
+   * and each band is one link's share. Stacked areas are also the one case
+   * where two fills do not overlap into mud.
+   */
+  stacked?: boolean;
 }
 
 /** The periods `api.php` accepts in the `period` parameter. */
@@ -164,6 +183,8 @@ export interface MetricSeriesResponse {
    * 100 %.
    */
   dailyRange?: { ts: number; min: number | null; max: number | null; samples: number }[];
+  /** Days until the metric reaches 100 %; absent when there is no projection. */
+  daysToFull?: number;
   error?: string;
 }
 
@@ -290,7 +311,13 @@ export interface MetricsSource {
   getAssetCharts(monitorId: number, range: TimeRange): Promise<ChartData[]>;
   getPublicStatus(): Promise<PublicStatus>;
   getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail>;
-  getMetricSeries(monitorId: number, metric: string, range: MetricRange): Promise<MetricSeriesResponse>;
+  /** @param previous The window immediately before this one, for comparison. */
+  getMetricSeries(
+    monitorId: number,
+    metric: string,
+    range: MetricRange,
+    previous?: boolean
+  ): Promise<MetricSeriesResponse>;
   getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse>;
   /** @param all Every comparison, not only the strongest few. */
   getMetricCorrelations(
