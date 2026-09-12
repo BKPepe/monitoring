@@ -1,9 +1,11 @@
 import * as React from 'react';
 import { Card } from '@/components/ui/card';
+import { StatBlock } from '@/components/stat-block';
 import { Badge } from '@/components/ui/badge';
 import { Mic, Plug, IdCard, Users, Check, X } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
+import { LoadingState } from '@/components/ui/states';
 
 interface Ts3Stages {
   query?: { ok?: boolean; time_ms?: number | null; authenticated?: boolean; steps?: Record<string, boolean> };
@@ -55,7 +57,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
   if (stages === undefined) {
     return (
       <Card className="p-6">
-        <p className="text-muted-foreground text-sm">{t('ts3.loading', 'Načítám detail serveru…')}</p>
+        <LoadingState label={t('ts3.loading', 'Načítám detail serveru…')} />
       </Card>
     );
   }
@@ -117,16 +119,12 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
 
       <div className="grid gap-3 sm:grid-cols-2">
         {/* Slots and channels ------------------------------------------- */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Users className="size-3.5" /> {t('ts3.slots', 'Obsazenost')}
-          </div>
-          <p className="mt-1 text-2xl font-bold tracking-tight">
-            {svc.clients_online ?? '—'}
-            {svc.clients_max != null && (
-              <span className="text-muted-foreground text-sm font-medium"> / {svc.clients_max}</span>
-            )}
-          </p>
+        <StatBlock
+          icon={Users}
+          label={t('ts3.slots', 'Obsazenost')}
+          value={svc.clients_online}
+          secondary={svc.clients_max != null ? `/ ${svc.clients_max}` : undefined}
+        >
           {svc.slot_usage_pct != null && (
             <div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
               <div
@@ -135,7 +133,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
               />
             </div>
           )}
-          <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+          <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs">
             {svc.channel_count != null && (
               <span>{t('ts3.channels', { count: svc.channel_count }, `${svc.channel_count} kanálů`)}</span>
             )}
@@ -151,13 +149,10 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
               </span>
             )}
           </div>
-        </div>
+        </StatBlock>
 
         {/* Porty --------------------------------------------------------- */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Plug className="size-3.5" /> {t('ts3.ports', 'Dostupnost portů')}
-          </div>
+        <StatBlock icon={Plug} label={t('ts3.ports', 'Dostupnost portů')}>
           {Object.keys(ports).length === 0 ? (
             <p className="text-muted-foreground mt-1 text-sm">—</p>
           ) : (
@@ -178,7 +173,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
               ))}
             </ul>
           )}
-        </div>
+        </StatBlock>
       </div>
 
       {/* Aktivita v hlasu ------------------------------------------------- */}
@@ -198,7 +193,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
       )}
 
       {!authenticated && (
-        <p className="text-muted-foreground text-[11px] leading-relaxed">
+        <p className="text-muted-foreground text-2xs leading-relaxed">
           {t(
             'ts3.no_auth',
             'Bez přihlášení k ServerQuery vrací server jen základní údaje. Doplňte jméno a heslo v nastavení monitoru pro detail kanálů a aktivity.'

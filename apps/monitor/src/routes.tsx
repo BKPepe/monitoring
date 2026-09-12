@@ -42,16 +42,16 @@ import { useLanguage } from '@/context/language-context';
 function AppUpdateNotice() {
   const { t } = useLanguage();
   return (
-    <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-100 p-6 text-center">
-      <div className="max-w-md w-full p-8 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl space-y-4">
-        <div className="size-12 rounded-full bg-rose-500/10 text-rose-400 grid place-items-center mx-auto">
+    <div className="min-h-screen grid place-items-center bg-background text-foreground p-6 text-center">
+      <div className="max-w-md w-full p-8 rounded-2xl bg-card border border-border shadow-2xl space-y-4">
+        <div className="size-12 rounded-full bg-down/10 text-down grid place-items-center mx-auto">
           <AlertTriangle className="size-6" />
         </div>
         <div className="space-y-1">
           <h2 className="text-lg font-bold">
             {t('routes.update_detected_title', 'Byla zjištěna aktualizace aplikace')}
           </h2>
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <p className="text-xs text-muted-foreground leading-relaxed">
             {t(
               'routes.update_detected_desc',
               'Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.'
@@ -101,15 +101,15 @@ class GlobalErrorBoundary extends React.Component<{ children: React.ReactNode },
 export function RouteErrorFallback() {
   const { t } = useLanguage();
   return (
-    <div className="p-8 rounded-xl bg-slate-900 border border-slate-800 text-center space-y-4 my-8">
-      <div className="size-10 rounded-full bg-amber-500/10 text-amber-400 grid place-items-center mx-auto">
+    <div className="p-8 rounded-xl bg-card border border-border text-center space-y-4 my-8">
+      <div className="size-10 rounded-full bg-warning/10 text-warning grid place-items-center mx-auto">
         <AlertTriangle className="size-5" />
       </div>
       <div>
-        <h3 className="font-bold text-sm text-slate-100">
+        <h3 className="font-bold text-sm text-foreground">
           {t('routes.load_failed_title', 'Stránku se nepodařilo načíst')}
         </h3>
-        <p className="text-xs text-slate-400 mt-1">
+        <p className="text-xs text-muted-foreground mt-1">
           {t('routes.load_failed_desc', 'Počkat na dokončení aktualizace nebo obnovit relaci.')}
         </p>
       </div>

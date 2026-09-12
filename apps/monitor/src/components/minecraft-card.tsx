@@ -1,4 +1,5 @@
 import { Card } from '@/components/ui/card';
+import { StatBlock } from '@/components/stat-block';
 import { Gamepad2, Users, Gauge, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 
@@ -36,7 +37,7 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
   return (
     <Card className="space-y-4 p-6">
       <div className="flex items-center gap-3 border-b border-border pb-3">
-        <Gamepad2 className="size-5 text-emerald-500" />
+        <Gamepad2 className="size-5 text-primary" />
         <div className="min-w-0">
           <h3 className="text-base font-bold">{t('mc.title', 'Minecraft server')}</h3>
           <p className="text-muted-foreground text-xs">
@@ -48,24 +49,19 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
       </div>
 
       {d.motd && (
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <MessageSquare className="size-3.5" /> MOTD
-          </div>
+        <StatBlock icon={MessageSquare} label="MOTD">
           <p className="mt-1 font-mono text-sm">{d.motd}</p>
-        </div>
+        </StatBlock>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         {/* Players -------------------------------------------------------- */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Users className="size-3.5" /> {t('mc.players', 'Hráči')}
-          </div>
-          <p className="mt-1 text-2xl font-bold tracking-tight">
-            {online == null ? '—' : online}
-            {max != null && <span className="text-muted-foreground text-sm font-medium"> / {max}</span>}
-          </p>
+        <StatBlock
+          icon={Users}
+          label={t('mc.players', 'Hráči')}
+          value={online}
+          secondary={max != null ? `/ ${max}` : undefined}
+        >
           {fill != null && (
             <div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
               <div className="bg-primary h-full rounded-full" style={{ width: `${Math.min(100, fill)}%` }} />
@@ -80,28 +76,25 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
               ))}
             </div>
           ) : online === 0 ? (
-            <p className="text-muted-foreground mt-2 text-[11px]">{t('mc.nobody', 'Nikdo není připojen')}</p>
+            <p className="text-muted-foreground mt-2 text-2xs">{t('mc.nobody', 'Nikdo není připojen')}</p>
           ) : (
             online != null && (
               // The server reports a count but no name list - common on servers
               // with a hidden player list.
-              <p className="text-muted-foreground mt-2 text-[11px]">
+              <p className="text-muted-foreground mt-2 text-2xs">
                 {t('mc.list_hidden', 'Server jmenný seznam hráčů neposkytuje')}
               </p>
             )
           )}
-        </div>
+        </StatBlock>
 
         {/* TPS ---------------------------------------------------------- */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Gauge className="size-3.5" /> {t('mc.tps', 'TPS (tiků za sekundu)')}
-          </div>
+        <StatBlock icon={Gauge} label={t('mc.tps', 'TPS (tiků za sekundu)')}>
           {hasTps ? (
             <div className="mt-1.5 flex gap-4">
               {tps.map((x) => (
                 <div key={x.key}>
-                  <p className="text-muted-foreground text-[11px]">{x.label}</p>
+                  <p className="text-muted-foreground text-2xs">{x.label}</p>
                   <p className={`font-mono text-lg font-bold ${typeof x.value === 'number' ? tpsTone(x.value) : ''}`}>
                     {typeof x.value === 'number' ? x.value.toFixed(1) : '—'}
                   </p>
@@ -111,7 +104,7 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
           ) : (
             <>
               <p className="text-muted-foreground mt-1 text-sm">—</p>
-              <p className="text-muted-foreground mt-1 text-[11px] leading-relaxed">
+              <p className="text-muted-foreground mt-1 text-2xs leading-relaxed">
                 {t(
                   'mc.tps_needs_rcon',
                   'TPS umí vrátit jen RCON. Doplňte RCON port a heslo v nastavení monitoru a hodnoty se začnou sbírat.'
@@ -119,7 +112,7 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
               </p>
             </>
           )}
-        </div>
+        </StatBlock>
       </div>
     </Card>
   );

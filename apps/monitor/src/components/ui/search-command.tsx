@@ -89,7 +89,7 @@ export function SearchCommand({
       >
         <Search className="size-4 shrink-0" />
         <span className="truncate">{resolvedPlaceholder}</span>
-        <kbd className="text-muted-foreground bg-muted ml-auto hidden rounded border border-border px-1.5 py-0.5 font-mono text-[10px] sm:inline-block">
+        <kbd className="text-muted-foreground bg-muted ml-auto hidden rounded border border-border px-1.5 py-0.5 font-mono text-3xs sm:inline-block">
           ⌘K
         </kbd>
       </button>

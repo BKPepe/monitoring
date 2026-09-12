@@ -48,14 +48,14 @@ export function ChartCard({ data, group, to }: { data: ChartData; group?: string
           </CardTitle>
           {latest && (
             <div className="mt-0.5 flex items-baseline gap-2">
-              <span className="tabular text-2xl font-bold tracking-tight">
+              <span className="tabular-nums text-2xl font-bold tracking-tight">
                 {latest.v}
                 <span className="text-muted-foreground ml-1 text-sm font-medium">{primary.unit}</span>
               </span>
               {delta && (
                 <span
                   className={cn(
-                    'tabular text-xs font-semibold',
+                    'tabular-nums text-xs font-semibold',
                     deltaGood === null ? 'text-muted-foreground' : deltaGood ? 'text-up' : 'text-down'
                   )}
                   title={t('chart_card.delta_title', 'Změna průměru za zobrazené období (konec vs. začátek)')}

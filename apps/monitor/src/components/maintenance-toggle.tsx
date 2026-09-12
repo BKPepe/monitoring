@@ -52,7 +52,7 @@ export function MaintenanceToggle({
         <Wrench className="size-3.5" />
         {active ? t('maint.end', 'Ukončit údržbu') : t('maint.start', 'Zapnout údržbu')}
       </Button>
-      {error && <span className="text-down text-[11px]">{error}</span>}
+      {error && <span className="text-down text-2xs">{error}</span>}
     </span>
   );
 }

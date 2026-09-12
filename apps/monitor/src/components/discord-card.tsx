@@ -1,4 +1,5 @@
 import { Card } from '@/components/ui/card';
+import { StatBlock } from '@/components/stat-block';
 import { MessageSquare, Volume2, Users, ExternalLink } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 
@@ -75,18 +76,14 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
 
       <div className="grid gap-3 sm:grid-cols-2">
         {/* Online -------------------------------------------------------- */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Users className="size-3.5" /> {t('discord.presence', 'Právě online')}
-          </div>
-          <p className="mt-1 text-2xl font-bold tracking-tight">{presence == null ? '—' : presence}</p>
+        <StatBlock icon={Users} label={t('discord.presence', 'Právě online')} value={presence}>
           {presence == null && (
-            <p className="text-muted-foreground text-[11px]">
+            <p className="text-muted-foreground text-2xs">
               {t('discord.presence_unknown', 'Widget zatím neodpověděl')}
             </p>
           )}
           {Object.keys(byStatus).length > 0 && (
-            <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+            <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs">
               {Object.entries(byStatus).map(([key, count]) => (
                 <span key={key} className="inline-flex items-center gap-1">
                   <span className={`size-1.5 rounded-full ${statusDot[key] ?? statusDot.unknown}`} />
@@ -95,13 +92,10 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
               ))}
             </div>
           )}
-        </div>
+        </StatBlock>
 
         {/* Voice channels ------------------------------------------------ */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-            <Volume2 className="size-3.5" /> {t('discord.voice', 'Hlasové kanály')}
-          </div>
+        <StatBlock icon={Volume2} label={t('discord.voice', 'Hlasové kanály')}>
           {voice.length === 0 ? (
             <p className="text-muted-foreground mt-1 text-sm">{t('discord.voice_empty', 'Nikdo v hlasovém kanálu')}</p>
           ) : (
@@ -116,7 +110,7 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
               ))}
             </ul>
           )}
-        </div>
+        </StatBlock>
       </div>
 
       {/* Members online ---------------------------------------------------- */}
@@ -138,7 +132,7 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
               </span>
             ))}
           </div>
-          <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
+          <p className="text-muted-foreground mt-2 text-2xs leading-relaxed">
             {t(
               'discord.members_note',
               'Widget vrací jen právě připojené členy (nejvýš 100), ne celý seznam serveru — počet členů celkem odsud zjistit nelze.'

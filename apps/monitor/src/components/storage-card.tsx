@@ -3,6 +3,7 @@ import { HardDrive, ArrowDownToLine, ArrowUpFromLine, Pencil, Info } from 'lucid
 import { useLanguage } from '@/context/language-context';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { cn } from '@/lib/utils';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface Filesystem {
   mount: string;
@@ -98,7 +99,7 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
                   style={{ width: `${Math.min(100, Math.max(0, fs.used_pct))}%` }}
                 />
               </div>
-              <p className="text-muted-foreground font-mono text-[10px]">
+              <p className="text-muted-foreground font-mono text-3xs">
                 {fs.device}
                 {fs.fstype ? ` · ${fs.fstype}` : ''}
               </p>
@@ -113,34 +114,32 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
             {t('storage.devices', 'Provoz po discích')}
             <MetricHelpIcon metric="disk_io_write" />
           </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="text-muted-foreground border-b border-border">
-                <tr>
-                  <th className="py-1.5 pr-3 font-medium">{t('storage.device', 'Zařízení')}</th>
-                  <th className="py-1.5 pr-3 font-medium">
-                    <ArrowDownToLine className="mr-1 inline size-3" />
-                    {t('storage.read', 'Čtení')}
-                  </th>
-                  <th className="py-1.5 font-medium">
-                    <ArrowUpFromLine className="mr-1 inline size-3" />
-                    {t('storage.write', 'Zápis')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map((dev) => (
-                  <tr key={dev.device} className="border-b border-border/50 last:border-0">
-                    <td className="py-1.5 pr-3 font-mono">{dev.device}</td>
-                    {/* A dash means "first measurement after boot or after a device
-                        restart" - a rate cannot be computed from a single reading. */}
-                    <td className="py-1.5 pr-3 tabular-nums">{rate(dev.read_kbps)}</td>
-                    <td className="py-1.5 tabular-nums">{rate(dev.write_kbps)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table dense>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('storage.device', 'Zařízení')}</TableHead>
+                <TableHead>
+                  <ArrowDownToLine className="mr-1 inline size-3" />
+                  {t('storage.read', 'Čtení')}
+                </TableHead>
+                <TableHead>
+                  <ArrowUpFromLine className="mr-1 inline size-3" />
+                  {t('storage.write', 'Zápis')}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {devices.map((dev) => (
+                <TableRow key={dev.device}>
+                  <TableCell className="font-mono">{dev.device}</TableCell>
+                  {/* A dash means "first measurement after boot or after a device
+                      restart" - a rate cannot be computed from a single reading. */}
+                  <TableCell className="tabular-nums">{rate(dev.read_kbps)}</TableCell>
+                  <TableCell className="tabular-nums">{rate(dev.write_kbps)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
 
@@ -153,7 +152,7 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
               from the labels around it, so it was overlooked and the section looked
               empty. As an info notice it is clear nothing is missing here -
               this device simply cannot do it. */}
-          <p className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 p-2.5 text-[11px] leading-relaxed text-info">
+          <p className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 p-2.5 text-2xs leading-relaxed text-info">
             <Info className="mt-px size-3.5 shrink-0" />
             <span>
               {t(
@@ -176,13 +175,13 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
                 <span className="truncate">
                   <Pencil className="text-muted-foreground mr-1.5 inline size-3" />
                   <span className="font-medium">{p.name}</span>
-                  <span className="text-muted-foreground ml-1.5 font-mono text-[10px]">#{p.pid}</span>
+                  <span className="text-muted-foreground ml-1.5 font-mono text-3xs">#{p.pid}</span>
                 </span>
                 <span className="tabular-nums">{human(p.write_bytes)}</span>
               </li>
             ))}
           </ul>
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-2xs">
             {t('storage.writers_note', 'Součet od spuštění procesu, ne aktuální rychlost.')}
           </p>
         </div>

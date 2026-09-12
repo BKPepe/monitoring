@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
@@ -16,7 +17,6 @@ import {
   Server,
   ChevronDown,
   ChevronUp,
-  AlertTriangle,
   RefreshCw,
   HelpCircle,
   ExternalLink,
@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 const API_BASE = '/status/api.php';
 
@@ -157,12 +158,7 @@ export function ReportsPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20 gap-3">
-        <RefreshCw className="size-5 animate-spin text-primary" />
-        <span className="text-sm text-muted-foreground">{t('reports.loading', 'Načítám SLA metriky z databáze…')}</span>
-      </div>
-    );
+    return <LoadingState size="page" label={t('reports.loading', 'Načítám SLA metriky z databáze…')} />;
   }
 
   const handleExportCSV = () => {
@@ -234,7 +230,7 @@ export function ReportsPage() {
 
         <div className="text-right text-xs text-muted-foreground space-y-0.5 shrink-0 ml-4">
           <p className="font-semibold text-foreground text-sm">{t('reports.pdf_audit_report', 'SLA Audit Report')}</p>
-          <p className="font-mono text-[11px] whitespace-nowrap">
+          <p className="font-mono text-2xs whitespace-nowrap">
             {t(
               'reports.pdf_generated_at',
               {
@@ -244,72 +240,62 @@ export function ReportsPage() {
               `Vygenerováno: ${new Date().toLocaleDateString('cs-CZ')} ${new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}`
             )}
           </p>
-          <p className="text-[10px] text-muted-foreground whitespace-nowrap">
+          <p className="text-3xs text-muted-foreground whitespace-nowrap">
             {t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}
           </p>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            {t('reports.title', 'SLA Výkaz & Statistika Dle Serverů')}
-          </h1>
-          <p className="text-muted-foreground text-sm">
-            {t(
-              'reports.subtitle',
-              'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.'
-            )}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2 print:hidden">
-          <div className="flex items-center rounded-md border border-border bg-secondary/50 p-0.5 text-xs font-semibold mr-1">
-            {([30, 90, 365] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDays(d)}
-                className={`px-2.5 py-1 rounded transition-colors ${days === d ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-              >
-                {d === 30
-                  ? t('reports.period_30', '30 dní')
-                  : d === 90
-                    ? t('reports.period_90', 'Kvartál')
-                    : t('reports.period_365', 'Rok')}
-              </button>
-            ))}
+      <PageHeader
+        title={t('reports.title', 'SLA Výkaz & Statistika Dle Serverů')}
+        subtitle={t(
+          'reports.subtitle',
+          'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.'
+        )}
+        actions={
+          <div className="flex items-center gap-2 print:hidden">
+            <div className="flex items-center rounded-md border border-border bg-secondary/50 p-0.5 text-xs font-semibold mr-1">
+              {([30, 90, 365] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDays(d)}
+                  className={`px-2.5 py-1 rounded transition-colors ${days === d ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  {d === 30
+                    ? t('reports.period_30', '30 dní')
+                    : d === 90
+                      ? t('reports.period_90', 'Kvartál')
+                      : t('reports.period_365', 'Rok')}
+                </button>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2 font-semibold">
+              <Download className="size-4 text-muted-foreground" /> {t('reports.export_csv', 'Exportovat CSV')}
+            </Button>
+            <Button variant="outline" size="sm" onClick={handlePrintPDF} className="gap-2 font-semibold">
+              <FileText className="size-4 text-muted-foreground" /> {t('reports.export_pdf', 'Tisknout / PDF')}
+            </Button>
           </div>
-          <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2 font-semibold">
-            <Download className="size-4 text-emerald-400" /> {t('reports.export_csv', 'Exportovat CSV')}
-          </Button>
-          <Button variant="outline" size="sm" onClick={handlePrintPDF} className="gap-2 font-semibold">
-            <FileText className="size-4 text-sky-400" /> {t('reports.export_pdf', 'Tisknout / PDF')}
-          </Button>
-        </div>
-      </div>
+        }
+      />
 
-      {error && (
-        <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
-          <AlertTriangle className="size-4 shrink-0" />
-          {error}
-        </div>
-      )}
+      {error && <ErrorState tone="warning" message={error} />}
 
       {/* KPI cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-emerald-500/10 text-emerald-400">
+          <div className="p-3 rounded-lg bg-up/10 text-up">
             <ShieldCheck className="size-6" />
           </div>
           <div>
             <p className="text-xs text-muted-foreground">{t('reports.overall_sla', 'Celkové plnění SLA')}</p>
             <p
-              className={`font-bold text-xl ${overallUptime == null ? 'text-muted-foreground' : overallUptime >= slaGoal ? 'text-emerald-400' : 'text-rose-400'}`}
+              className={`text-xl font-bold tabular-nums ${overallUptime == null ? 'text-muted-foreground' : overallUptime >= slaGoal ? 'text-up' : 'text-down'}`}
             >
               {overallUptime != null ? `${overallUptime.toFixed(2)} %` : '—'}
             </p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-3xs text-muted-foreground">
               {t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
             </p>
           </div>
@@ -321,11 +307,11 @@ export function ReportsPage() {
           </div>
           <div>
             <p className="text-xs text-muted-foreground">{t('reports.monitored_count', 'Sledované servery/weby')}</p>
-            <p className="font-bold text-xl">
+            <p className="text-xl font-bold tabular-nums">
               {t('reports.total_count', { count: monitors.length }, `${monitors.length} celkem`)}
             </p>
             <p
-              className={`text-[10px] font-medium ${monitors.every((m) => m.uptimePercent != null && m.uptimePercent >= slaGoal) ? 'text-emerald-400' : 'text-amber-400'}`}
+              className={`text-3xs font-medium ${monitors.every((m) => m.uptimePercent != null && m.uptimePercent >= slaGoal) ? 'text-up' : 'text-warning'}`}
             >
               {t(
                 'reports.sla_compliant_count',
@@ -340,30 +326,26 @@ export function ReportsPage() {
         </Card>
 
         <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-amber-500/10 text-amber-400">
+          <div className="p-3 rounded-lg bg-warning/10 text-warning">
             <Clock className="size-6" />
           </div>
           <div>
             <p className="text-xs text-muted-foreground">
               {t('reports.total_outage_30d', { days }, `Celkový výpadek (${days} d)`)}
             </p>
-            <p className="font-bold text-xl">{totalOutage} min</p>
-            <p className="text-[10px] text-muted-foreground">
-              {t('reports.outage_sum_hint', 'Suma výpadků všech cílů')}
-            </p>
+            <p className="text-xl font-bold tabular-nums">{totalOutage} min</p>
+            <p className="text-3xs text-muted-foreground">{t('reports.outage_sum_hint', 'Suma výpadků všech cílů')}</p>
           </div>
         </Card>
 
         <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-emerald-500/10 text-emerald-400">
+          <div className="p-3 rounded-lg bg-up/10 text-up">
             <CheckCircle2 className="size-6" />
           </div>
           <div>
             <p className="text-xs text-muted-foreground">{t('reports.mttr', 'Průměrná doba obnovení (MTTR)')}</p>
-            <p className="font-bold text-xl">{overallMttr !== null ? formatDuration(overallMttr) : '—'}</p>
-            <p className="text-[10px] text-muted-foreground">
-              {t('reports.mttr_hint', 'Automatické obnovení (down→up)')}
-            </p>
+            <p className="text-xl font-bold tabular-nums">{overallMttr !== null ? formatDuration(overallMttr) : '—'}</p>
+            <p className="text-3xs text-muted-foreground">{t('reports.mttr_hint', 'Automatické obnovení (down→up)')}</p>
           </div>
         </Card>
       </div>
@@ -411,7 +393,7 @@ export function ReportsPage() {
               return (
                 <div
                   key={item.id}
-                  className="rounded-lg bg-secondary/30 border border-border overflow-hidden print:border-slate-300 print:bg-white print:break-inside-avoid"
+                  className="rounded-lg bg-secondary/30 border border-border overflow-hidden print:border-border print:bg-white print:break-inside-avoid"
                 >
                   {/* Main row */}
                   <div
@@ -427,18 +409,18 @@ export function ReportsPage() {
                     className="w-full p-3.5 text-left flex items-center justify-between gap-2 hover:bg-secondary/50 transition-colors cursor-pointer print:hover:bg-transparent"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <Server className="size-4 text-primary shrink-0 print:text-slate-700" />
+                      <Server className="size-4 text-primary shrink-0 print:text-foreground" />
                       <span className="font-bold text-sm text-foreground truncate print:text-base print:text-black">
                         {item.name}
                       </span>
-                      <span className="text-xs text-muted-foreground font-mono truncate print:text-xs print:text-slate-600">
+                      <span className="text-xs text-muted-foreground font-mono truncate print:text-xs print:text-muted-foreground">
                         ({item.target})
                       </span>
                     </div>
 
                     <div className="flex items-center gap-3 shrink-0">
                       {item.outageMinutes > 0 && (
-                        <span className="text-[10px] text-muted-foreground font-mono">
+                        <span className="text-3xs text-muted-foreground font-mono">
                           {t(
                             'reports.outage_minutes_inline',
                             { min: item.outageMinutes },
@@ -446,7 +428,7 @@ export function ReportsPage() {
                           )}
                         </span>
                       )}
-                      <Badge variant={!measured ? 'paused' : isOk ? 'up' : 'down'} className="text-[10px]">
+                      <Badge variant={!measured ? 'paused' : isOk ? 'up' : 'down'} className="text-3xs">
                         {measured ? `${(item.uptimePercent as number).toFixed(2)} %` : '—'}
                       </Badge>
                       {isExpanded ? (
@@ -482,7 +464,7 @@ export function ReportsPage() {
                         style={{ left: `${goalPct}%` }}
                       />
                     </div>
-                    <div className="text-muted-foreground mt-0.5 flex justify-between text-[10px]">
+                    <div className="text-muted-foreground mt-0.5 flex justify-between text-3xs">
                       <span>{measured ? '90 %' : t('reports.not_measured', 'Bez měření')}</span>
                       <span>100 %</span>
                     </div>
@@ -494,17 +476,17 @@ export function ReportsPage() {
                   >
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
                       <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-[10px]">{t('common.type', 'Typ')}</p>
+                        <p className="text-muted-foreground text-3xs">{t('common.type', 'Typ')}</p>
                         <p className="font-semibold">{item.type}</p>
                       </div>
                       <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-[10px]">
+                        <p className="text-muted-foreground text-3xs">
                           {t('reports.total_checks_30d', { days }, `Celkem kontrol (${days} d)`)}
                         </p>
                         <p className="font-semibold">{item.totalChecks.toLocaleString('cs-CZ')}</p>
                       </div>
                       <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-[10px]">
+                        <p className="text-muted-foreground text-3xs">
                           {t('reports.mttr_label', 'MTTR (doba obnovení)')}
                         </p>
                         <p className="font-semibold">
@@ -512,11 +494,9 @@ export function ReportsPage() {
                         </p>
                       </div>
                       <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-[10px]">
-                          {t('reports.current_status', 'Aktuální stav')}
-                        </p>
+                        <p className="text-muted-foreground text-3xs">{t('reports.current_status', 'Aktuální stav')}</p>
                         <p
-                          className={`font-semibold ${item.currentStatus === 'up' ? 'text-emerald-400' : item.currentStatus === 'down' ? 'text-rose-400' : 'text-amber-400'}`}
+                          className={`font-semibold ${item.currentStatus === 'up' ? 'text-up' : item.currentStatus === 'down' ? 'text-down' : 'text-warning'}`}
                         >
                           {item.currentStatus === 'up'
                             ? `🟢 ${t('common.online', 'Online')}`
@@ -530,7 +510,7 @@ export function ReportsPage() {
                     {/* Response latency percentiles (p50 / p95 / p99) */}
                     <div className="p-3 rounded-md bg-background/60 border border-border/60 space-y-1">
                       <div className="flex items-center gap-1.5">
-                        <p className="text-muted-foreground text-[11px] font-semibold">
+                        <p className="text-muted-foreground text-2xs font-semibold">
                           {t('reports.percentile_title', 'Percentilové Rozložení Latence (p50 / p95 / p99)')}
                         </p>
                         <Tooltip>
@@ -548,21 +528,21 @@ export function ReportsPage() {
                               {t('reports.percentile_tooltip_title', 'Co percentily znamenají')}
                             </p>
                             <p>
-                              <strong className="text-emerald-400">{t('reports.p50_label', 'p50 (medián):')}</strong>{' '}
+                              <strong className="text-foreground">{t('reports.p50_label', 'p50 (medián):')}</strong>{' '}
                               {t(
                                 'reports.p50_desc',
                                 'polovina kontrol byla rychlejší, polovina pomalejší — nejlépe vystihuje typickou odezvu.'
                               )}
                             </p>
                             <p className="mt-1">
-                              <strong className="text-amber-400">{t('reports.p95_label', 'p95:')}</strong>{' '}
+                              <strong className="text-foreground">{t('reports.p95_label', 'p95:')}</strong>{' '}
                               {t(
                                 'reports.p95_desc',
                                 '95 % kontrol bylo rychlejších; zbylých 5 % jsou špičky (dočasné zpomalení, zátěž).'
                               )}
                             </p>
                             <p className="mt-1">
-                              <strong className="text-rose-400">{t('reports.p99_label', 'p99:')}</strong>{' '}
+                              <strong className="text-foreground">{t('reports.p99_label', 'p99:')}</strong>{' '}
                               {t(
                                 'reports.p99_desc',
                                 'jen 1 % kontrol bylo pomalejších — ojedinělé extrémní špičky, často síťový problém nebo přetížený server.'
@@ -578,25 +558,25 @@ export function ReportsPage() {
                         </Tooltip>
                       </div>
                       <div className="flex flex-wrap items-center gap-4 font-mono text-xs pt-0.5">
-                        <span className="bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
+                        <span className="bg-secondary border border-border px-2 py-0.5 rounded">
                           {t('reports.p50_value_label', 'p50 (Medián):')}{' '}
-                          <strong className="text-emerald-400">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong>
+                          <strong className="text-foreground">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong>
                         </span>
-                        <span className="bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded">
+                        <span className="bg-secondary border border-border px-2 py-0.5 rounded">
                           {t('reports.p95_value_label', 'p95 (Špičky):')}{' '}
-                          <strong className="text-amber-400">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong>
+                          <strong className="text-foreground">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong>
                         </span>
-                        <span className="bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded">
+                        <span className="bg-secondary border border-border px-2 py-0.5 rounded">
                           {t('reports.p99_value_label', 'p99 (Kritické špičky):')}{' '}
-                          <strong className="text-rose-400">{item.p99Ms != null ? `${item.p99Ms} ms` : '—'}</strong>
+                          <strong className="text-foreground">{item.p99Ms != null ? `${item.p99Ms} ms` : '—'}</strong>
                         </span>
                       </div>
                     </div>
 
                     {/* Last outage detail */}
                     {item.lastOutage ? (
-                      <div className="p-3 rounded-lg bg-rose-500/5 border border-rose-500/20 space-y-1.5 text-xs">
-                        <p className="font-bold text-destructive text-[11px]">
+                      <div className="p-3 rounded-lg bg-down/5 border border-down/20 space-y-1.5 text-xs">
+                        <p className="font-bold text-destructive text-2xs">
                           📋 {t('reports.last_outage_title', 'Poslední výpadek')}
                         </p>
                         <div className="grid gap-1 sm:grid-cols-2">
@@ -618,20 +598,20 @@ export function ReportsPage() {
                           </p>
                           <p>
                             <span className="text-muted-foreground">{t('reports.outage_field_status', 'Stav:')}</span>{' '}
-                            <Badge variant={item.lastOutage.resolved ? 'up' : 'down'} className="text-[9px] ml-1">
+                            <Badge variant={item.lastOutage.resolved ? 'up' : 'down'} className="text-3xs ml-1">
                               {item.lastOutage.resolved
                                 ? t('reports.resolved_badge', 'Vyřešeno')
                                 : t('reports.ongoing_badge', 'Probíhá')}
                             </Badge>
                           </p>
                         </div>
-                        <p className="pt-1 border-t border-rose-500/10">
+                        <p className="pt-1 border-t border-down/10">
                           <span className="text-muted-foreground">{t('reports.reason_label', 'Důvod:')}</span>{' '}
                           <span className="font-mono text-destructive">{item.lastOutage.reason}</span>
                         </p>
                       </div>
                     ) : (
-                      <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-xs font-medium text-emerald-800 dark:text-emerald-300">
+                      <div className="p-3 rounded-lg bg-up/10 border border-up/25 text-xs font-medium text-up">
                         ✅ {t('reports.no_outage_30d', { days }, `Žádný výpadek za posledních ${days} dní.`)}
                       </div>
                     )}
@@ -665,7 +645,7 @@ export function ReportsPage() {
             <Card className="p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400">
+                  <div className="p-2.5 rounded-xl bg-up/10 text-up">
                     <BarChart3 className="size-6" />
                   </div>
                   <div>
@@ -673,7 +653,7 @@ export function ReportsPage() {
                       <h3 className="font-semibold text-base">
                         {t('reports.prometheus_title', 'Prometheus Exportér Metrik')}
                       </h3>
-                      <Badge variant="up" className="text-[10px]">
+                      <Badge variant="up" className="text-3xs">
                         🟢 {t('reports.prometheus_active', 'Aktivní')}
                       </Badge>
                     </div>
@@ -694,21 +674,21 @@ export function ReportsPage() {
                   href={`/status/metrics.php?token=${encodeURIComponent(metricsToken)}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors shadow-sm"
+                  className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 text-sm font-semibold transition-colors shadow-sm"
                 >
                   <ExternalLink className="size-4" /> {t('reports.prometheus_btn', 'Otevřít Prometheus výstup')}
                 </a>
                 <Button variant="outline" size="sm" onClick={handleCopyMetricsUrl} className="gap-2 text-xs">
-                  {copiedUrl ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
+                  {copiedUrl ? <Check className="size-3.5 text-up" /> : <Copy className="size-3.5" />}
                   {copiedUrl ? t('common.copied', 'Zkopírováno!') : t('reports.copy_url', 'Kopírovat URL metrik')}
                 </Button>
               </div>
             </Card>
           ) : (
-            <Card className="p-6 space-y-4 border-amber-500/30 bg-amber-500/10 dark:bg-amber-500/5">
+            <Card className="p-6 space-y-4 border-warning/30 bg-warning/10">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-400">
+                  <div className="p-2.5 rounded-xl bg-warning/15 text-warning">
                     <BarChart3 className="size-6" />
                   </div>
                   <div>
@@ -716,10 +696,7 @@ export function ReportsPage() {
                       <h3 className="font-semibold text-base">
                         {t('reports.prometheus_title', 'Prometheus Exportér Metrik')}
                       </h3>
-                      <Badge
-                        variant="down"
-                        className="text-[10px] bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30"
-                      >
+                      <Badge variant="down" className="text-3xs bg-warning/15 text-warning border-warning/30">
                         ⚠️ {t('reports.prometheus_inactive', 'Vyžaduje token')}
                       </Badge>
                     </div>
@@ -727,18 +704,18 @@ export function ReportsPage() {
                   </div>
                 </div>
               </div>
-              <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+              <p className="text-sm font-medium text-warning">
                 {t(
                   'reports.prometheus_inactive_desc',
                   'Metriky jsou chráněny proti neautorizovanému přístupu. Vygenerujte přístupový token pro aktivaci endpointu.'
                 )}
               </p>
-              {tokenError && <p className="text-xs font-semibold text-destructive">{tokenError}</p>}
+              {tokenError && <ErrorState size="inline" message={tokenError} />}
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <Button
                   onClick={handleGenerateMetricsToken}
                   disabled={generatingToken}
-                  className="gap-2 font-semibold bg-amber-600 hover:bg-amber-500 text-white shadow-sm"
+                  className="gap-2 font-semibold bg-warning text-warning-foreground hover:bg-warning/90 shadow-sm"
                 >
                   {generatingToken ? <RefreshCw className="size-4 animate-spin" /> : <Key className="size-4" />}
                   {t('reports.generate_token_btn', 'Aktivovat Prometheus token (1-klik)')}

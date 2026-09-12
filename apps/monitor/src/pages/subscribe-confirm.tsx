@@ -4,6 +4,7 @@ import { BellRing, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';
+import { ErrorState } from '@/components/ui/states';
 
 /**
  * Confirming a public e-mail subscription (the link from the opt-in mail).
@@ -64,7 +65,7 @@ export function SubscribeConfirmPage() {
             <p className="text-muted-foreground text-sm">
               {t('pubsub.confirm_hint', 'Kliknutím potvrdíte odběr upozornění na výpadky pro tuto e-mailovou adresu.')}
             </p>
-            {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+            {error && <ErrorState size="inline" message={error} />}
             <Button onClick={confirm} disabled={state === 'busy'} className="w-full">
               {state === 'busy' ? t('pubsub.working', 'Potvrzuji…') : t('pubsub.confirm_btn', 'Potvrdit odběr')}
             </Button>

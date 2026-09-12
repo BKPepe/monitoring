@@ -3,6 +3,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ShieldCheck, RefreshCw, UserCheck } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
+import { EmptyState, LoadingState } from '@/components/ui/states';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 export interface AuditLogRow {
   id: number;
@@ -85,7 +87,7 @@ export function AuditLogTable() {
     <Card className="p-6 space-y-4 border-primary/25">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
         <div className="flex items-center gap-3">
-          <ShieldCheck className="size-5 text-emerald-400" />
+          <ShieldCheck className="size-5 text-primary" />
           <div>
             <h3 className="font-bold text-base">{t('audit_log.title', 'Průběh kontrol')}</h3>
             <p className="text-xs text-muted-foreground">
@@ -98,7 +100,7 @@ export function AuditLogTable() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Badge variant="up" dot pulse className="text-[10px]">
+          <Badge variant="up" dot pulse className="text-3xs">
             {t('events.live_refresh', 'Živá obnova 10s')}
           </Badge>
           <button
@@ -111,7 +113,7 @@ export function AuditLogTable() {
             <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
           {lastUpdated && (
-            <span className="text-[10px] text-muted-foreground font-mono">
+            <span className="text-3xs text-muted-foreground font-mono">
               {t('events.updated_at', 'Aktualizováno')}: {lastUpdated}
             </span>
           )}
@@ -124,7 +126,7 @@ export function AuditLogTable() {
             key={c}
             type="button"
             onClick={() => setCategory(c)}
-            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+            className={`rounded-md px-2.5 py-1 text-2xs font-semibold transition-colors ${
               category === c
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-muted-foreground hover:text-foreground'
@@ -136,7 +138,7 @@ export function AuditLogTable() {
         <button
           type="button"
           onClick={() => setOnlyProblems((v) => !v)}
-          className={`ml-auto rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+          className={`ml-auto rounded-md px-2.5 py-1 text-2xs font-semibold transition-colors ${
             onlyProblems ? 'bg-down text-down-foreground' : 'bg-secondary text-muted-foreground hover:text-foreground'
           }`}
           title={t('audit_log.only_problems_hint', 'Zobrazit jen chyby a varování')}
@@ -148,9 +150,7 @@ export function AuditLogTable() {
       {/* Mobil: pet sloupcu auditu se na telefonu necte, tak karty. */}
       <div className="flex flex-col gap-2 md:hidden">
         {loading ? (
-          <p className="text-muted-foreground py-6 text-center text-xs">
-            {t('audit_log.loading', 'Načítám auditní logy...')}
-          </p>
+          <LoadingState size="inline" label={t('audit_log.loading', 'Načítám auditní logy...')} />
         ) : visibleLogs.length === 0 ? (
           <p className="text-muted-foreground py-6 text-center text-xs">
             {logs.length === 0
@@ -161,7 +161,7 @@ export function AuditLogTable() {
           visibleLogs.map((row) => (
             <div key={row.id} className="rounded-lg border border-border p-3 text-xs">
               <div className="flex items-start justify-between gap-2">
-                <span className="font-mono font-bold text-[11px]">{row.action}</span>
+                <span className="font-mono font-bold text-2xs">{row.action}</span>
                 <Badge
                   variant={row.status === 'down' ? 'down' : row.status === 'warning' ? 'warning' : 'up'}
                   className="shrink-0 font-bold"
@@ -174,7 +174,7 @@ export function AuditLogTable() {
                 </Badge>
               </div>
               <p className="text-muted-foreground mt-1 leading-snug">{row.details}</p>
-              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs">
                 <span className="inline-flex items-center gap-1">
                   <UserCheck className="size-3 text-primary" />
                   {row.user}
@@ -186,44 +186,48 @@ export function AuditLogTable() {
         )}
       </div>
 
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[11px]">
-              <th className="py-2.5 px-3">{t('events.col_time', 'ČAS')}</th>
-              <th className="py-2.5 px-3">{t('audit_log.col_initiator', 'INICIÁTOR')}</th>
-              <th className="py-2.5 px-3">{t('audit_log.col_action', 'AKCE / UDÁLOST')}</th>
-              <th className="py-2.5 px-3">{t('events.col_status', 'STAV')}</th>
-              <th className="py-2.5 px-3">{t('audit_log.col_detail', 'DETAIL ZPRÁVY')}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
+      <div className="hidden md:block">
+        <Table dense>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('events.col_time', 'ČAS')}</TableHead>
+              <TableHead>{t('audit_log.col_initiator', 'INICIÁTOR')}</TableHead>
+              <TableHead>{t('audit_log.col_action', 'AKCE / UDÁLOST')}</TableHead>
+              <TableHead>{t('events.col_status', 'STAV')}</TableHead>
+              <TableHead>{t('audit_log.col_detail', 'DETAIL ZPRÁVY')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {loading ? (
-              <tr>
-                <td colSpan={5} className="py-8 text-center text-muted-foreground text-xs">
-                  {t('audit_log.loading', 'Načítám auditní logy...')}
-                </td>
-              </tr>
+              <TableRow>
+                <TableCell colSpan={5}>
+                  <LoadingState label={t('audit_log.loading', 'Načítám auditní logy...')} />
+                </TableCell>
+              </TableRow>
             ) : visibleLogs.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="py-8 text-center text-muted-foreground text-xs">
-                  {logs.length === 0
-                    ? t('audit_log.no_logs', 'Žádné auditní záznamy nebyly nalezeny.')
-                    : t('audit_log.no_logs_filtered', 'Tomuto filtru neodpovídá žádný záznam.')}
-                </td>
-              </tr>
+              <TableRow>
+                <TableCell colSpan={5}>
+                  <EmptyState
+                    title={
+                      logs.length === 0
+                        ? t('audit_log.no_logs', 'Žádné auditní záznamy nebyly nalezeny.')
+                        : t('audit_log.no_logs_filtered', 'Tomuto filtru neodpovídá žádný záznam.')
+                    }
+                  />
+                </TableCell>
+              </TableRow>
             ) : (
               visibleLogs.map((row) => (
-                <tr key={row.id} className="hover:bg-secondary/30 transition-colors">
-                  <td className="py-3 px-3 font-mono text-muted-foreground whitespace-nowrap">{row.time}</td>
-                  <td className="py-3 px-3">
+                <TableRow key={row.id}>
+                  <TableCell className="font-mono text-muted-foreground whitespace-nowrap">{row.time}</TableCell>
+                  <TableCell>
                     <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
                       <UserCheck className="size-3.5 text-primary shrink-0" />
                       {row.user}
                     </span>
-                  </td>
-                  <td className="py-3 px-3 font-bold font-mono text-[11px] text-foreground">{row.action}</td>
-                  <td className="py-3 px-3 whitespace-nowrap">
+                  </TableCell>
+                  <TableCell className="font-bold font-mono text-2xs text-foreground">{row.action}</TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <Badge
                       variant={row.status === 'down' ? 'down' : row.status === 'warning' ? 'warning' : 'up'}
                       className="font-bold"
@@ -234,13 +238,13 @@ export function AuditLogTable() {
                           ? t('audit_log.status_warning', 'VAROVÁNÍ')
                           : 'OK'}
                     </Badge>
-                  </td>
-                  <td className="py-3 px-3 text-muted-foreground leading-snug">{row.details}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground leading-snug">{row.details}</TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </Card>
   );

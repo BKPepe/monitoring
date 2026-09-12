@@ -6,7 +6,14 @@ import { cn } from '@/lib/utils';
  * it for sorting and filtering - so it stays dumb and purely stylistic, to
  * allow that without rewriting the markup.
  */
-export function Table({ className, ...props }: React.ComponentProps<'table'>) {
+/**
+ * `dense` is the compact 12 px density for logs and process lists. It is a
+ * prop, not a second table implementation: before it existed, seven tables
+ * were written by hand to get that density and three different header
+ * treatments, row heights and hover colours ended up stacked on one page.
+ * A choice made here is a choice a reviewer can see.
+ */
+export function Table({ className, dense, ...props }: React.ComponentProps<'table'> & { dense?: boolean }) {
   return (
     // Wide tables scroll inside their own box - the page must never scroll
     // sideways. tabIndex makes that box reachable from the keyboard: a scroll
@@ -19,7 +26,14 @@ export function Table({ className, ...props }: React.ComponentProps<'table'>) {
       role="region"
       aria-label={props['aria-label'] ?? undefined}
     >
-      <table className={cn('w-full caption-bottom text-sm', className)} {...props} />
+      <table
+        className={cn(
+          'w-full caption-bottom text-sm',
+          dense && 'text-xs [&_td]:px-2 [&_td]:py-1.5 [&_th]:h-8 [&_th]:px-2',
+          className
+        )}
+        {...props}
+      />
     </div>
   );
 }

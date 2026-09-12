@@ -1,7 +1,15 @@
 import { useState } from 'react';
 import { StatusDot } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import { FileText, HelpCircle, X, ExternalLink, Mail, MessageSquare } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { FileText, HelpCircle, ExternalLink, Mail, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { versionCommitUrl } from '@/lib/version';
@@ -66,141 +74,114 @@ export function Footer({ version }: { version: string }) {
         </div>
       </footer>
 
-      {/* Documentation modal */}
-      {showDocsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <Card className="w-full max-w-2xl p-6 relative space-y-4 max-h-[85vh] overflow-y-auto bg-slate-900 border-slate-700 text-slate-100 shadow-2xl">
-            <button
-              type="button"
-              onClick={() => setShowDocsModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white"
-            >
-              <X className="size-5" />
-            </button>
+      {/* Both modals were hand-rolled cards painted slate in both themes: a
+          near-black box over a white page, no focus trap and no Escape. The
+          Dialog primitive gives them the page's own surface and the keyboard. */}
+      <Dialog open={showDocsModal} onOpenChange={setShowDocsModal}>
+        <DialogContent className="max-h-[85dvh] max-w-2xl overflow-y-auto">
+          <DialogHeader className="flex-row items-center gap-3 border-b border-border">
+            <FileText aria-hidden="true" className="size-6 shrink-0 text-primary" />
+            <div>
+              <DialogTitle>{t('footer.docs_title', 'Dokumentace & Nápověda')}</DialogTitle>
+              <DialogDescription className="text-xs">
+                {t('footer.docs_subtitle', 'Příručka k monitorování, API a instalačním agentům.')}
+              </DialogDescription>
+            </div>
+          </DialogHeader>
 
-            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
-              <FileText className="size-6 text-sky-400" />
+          <div className="text-muted-foreground space-y-4 px-5 py-4 text-xs">
+            <section className="space-y-1.5">
+              <h4 className="text-foreground text-sm font-semibold">
+                {t('footer.docs_section1_title', '1. Monitoring HTTP & SSL Webů')}
+              </h4>
+              <p className="leading-relaxed">
+                {t(
+                  'footer.docs_section1_desc',
+                  'Systém pravidelně v 60s intervalu testuje dostupnost vašich webů, vyhodnocuje latenci odpovědi, HTTP stavové kódy a platnost SSL/TLS certifikátů.'
+                )}
+              </p>
+            </section>
+
+            <section className="space-y-1.5">
+              <h4 className="text-foreground text-sm font-semibold">
+                {t('footer.docs_section2_title', '2. Instalace Systémového Agenta')}
+              </h4>
+              <p className="leading-relaxed">
+                {t(
+                  'footer.docs_section2_desc_prefix',
+                  'Pro měření CPU, RAM a zaplnění diskových oddílů na Linux/OpenWrt serverech použijte jednorázový instalační skript v sekci'
+                )}{' '}
+                <a href="/app/api-agents" className="text-primary underline">
+                  {t('nav.api-agents', 'API & Agenti')}
+                </a>
+                .
+              </p>
+            </section>
+
+            <section className="space-y-1.5">
+              <h4 className="text-foreground text-sm font-semibold">
+                {t('footer.docs_section3_title', '3. Veřejné API & Prometheus Exportér')}
+              </h4>
+              <p className="bg-muted rounded border border-border p-2 font-mono text-2xs leading-relaxed">
+                GET https://bloodkings.eu/api/v1/public_status
+                <br />
+                GET https://bloodkings.eu/status/metrics.php (Prometheus format)
+              </p>
+            </section>
+          </div>
+
+          <DialogFooter>
+            <Button size="sm" onClick={() => setShowDocsModal(false)}>
+              {t('footer.close_docs', 'Zavřít dokumentaci')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSupportModal} onOpenChange={setShowSupportModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader className="flex-row items-center gap-3 border-b border-border">
+            <HelpCircle aria-hidden="true" className="size-6 shrink-0 text-primary" />
+            <div>
+              <DialogTitle>{t('footer.support', 'Podpora & Kontakt')}</DialogTitle>
+              <DialogDescription className="text-xs">
+                {t('footer.support_subtitle', 'Podpora pro monitorovací systém Blood Kings.')}
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 px-5 py-4 text-xs">
+            <div className="bg-muted flex items-center gap-3 rounded-lg border border-border p-3">
+              <Mail aria-hidden="true" className="size-5 shrink-0 text-primary" />
               <div>
-                <h3 className="font-bold text-lg">{t('footer.docs_title', 'Dokumentace & Nápověda')}</h3>
-                <p className="text-xs text-slate-400">
-                  {t('footer.docs_subtitle', 'Příručka k monitorování, API a instalačním agentům.')}
-                </p>
+                <p className="font-semibold">{t('footer.email_support', 'E-mailová podpora')}</p>
+                <p className="text-muted-foreground font-mono text-2xs">support@bloodkings.eu</p>
               </div>
             </div>
 
-            <div className="space-y-4 text-xs text-slate-300">
-              <section className="space-y-1.5">
-                <h4 className="font-semibold text-white text-sm">
-                  {t('footer.docs_section1_title', '1. Monitoring HTTP & SSL Webů')}
-                </h4>
-                <p className="leading-relaxed">
-                  {t(
-                    'footer.docs_section1_desc',
-                    'Systém pravidelně v 60s intervalu testuje dostupnost vašich webů, vyhodnocuje latenci odpovědi, HTTP stavové kódy a platnost SSL/TLS certifikátů.'
-                  )}
-                </p>
-              </section>
-
-              <section className="space-y-1.5">
-                <h4 className="font-semibold text-white text-sm">
-                  {t('footer.docs_section2_title', '2. Instalace Systémového Agenta')}
-                </h4>
-                <p className="leading-relaxed">
-                  {t(
-                    'footer.docs_section2_desc_prefix',
-                    'Pro měření CPU, RAM a zaplnění diskových oddílů na Linux/OpenWrt serverech použijte jednorázový instalační skript v sekci'
-                  )}{' '}
-                  <a href="/app/api-agents" className="text-sky-400 underline">
-                    {t('nav.api-agents', 'API & Agenti')}
-                  </a>
-                  .
-                </p>
-              </section>
-
-              <section className="space-y-1.5">
-                <h4 className="font-semibold text-white text-sm">
-                  {t('footer.docs_section3_title', '3. Veřejné API & Prometheus Exportér')}
-                </h4>
-                <p className="leading-relaxed font-mono text-[11px] bg-slate-950 p-2 rounded border border-slate-800">
-                  GET https://bloodkings.eu/api/v1/public_status
-                  <br />
-                  GET https://bloodkings.eu/status/metrics.php (Prometheus format)
-                </p>
-              </section>
-            </div>
-
-            <div className="pt-3 border-t border-slate-800 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowDocsModal(false)}
-                className="px-4 py-2 rounded-md bg-sky-600 text-white text-xs font-semibold hover:bg-sky-500"
-              >
-                {t('footer.close_docs', 'Zavřít dokumentaci')}
-              </button>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* Support & Contact modal */}
-      {showSupportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <Card className="w-full max-w-md p-6 relative space-y-4 bg-slate-900 border-slate-700 text-slate-100 shadow-2xl">
-            <button
-              type="button"
-              onClick={() => setShowSupportModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white"
-            >
-              <X className="size-5" />
-            </button>
-
-            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
-              <HelpCircle className="size-6 text-sky-400" />
+            <div className="bg-muted flex items-center gap-3 rounded-lg border border-border p-3">
+              <MessageSquare aria-hidden="true" className="size-5 shrink-0 text-primary" />
               <div>
-                <h3 className="font-bold text-lg">{t('footer.support', 'Podpora & Kontakt')}</h3>
-                <p className="text-xs text-slate-400">
-                  {t('footer.support_subtitle', 'Podpora pro monitorovací systém Blood Kings.')}
-                </p>
+                <p className="font-semibold">{t('footer.discord_community', 'Discord Komunita & Bot')}</p>
+                <a
+                  href="https://discord.gg/2bcsnte"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary inline-flex items-center gap-1 font-mono text-2xs hover:underline"
+                >
+                  {t('footer.join_discord', 'Připojit se k Discordu')} <ExternalLink className="size-3" />
+                </a>
               </div>
             </div>
+          </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 flex items-center gap-3">
-                <Mail className="size-5 text-sky-400 shrink-0" />
-                <div>
-                  <p className="font-semibold text-white">{t('footer.email_support', 'E-mailová podpora')}</p>
-                  <p className="text-slate-400 font-mono text-[11px]">support@bloodkings.eu</p>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 flex items-center gap-3">
-                <MessageSquare className="size-5 text-indigo-400 shrink-0" />
-                <div>
-                  <p className="font-semibold text-white">{t('footer.discord_community', 'Discord Komunita & Bot')}</p>
-                  <a
-                    href="https://discord.gg/2bcsnte"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-indigo-400 hover:underline font-mono text-[11px] inline-flex items-center gap-1"
-                  >
-                    {t('footer.join_discord', 'Připojit se k Discordu')} <ExternalLink className="size-3" />
-                  </a>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-slate-800 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowSupportModal(false)}
-                className="px-4 py-2 rounded-md bg-sky-600 text-white text-xs font-semibold hover:bg-sky-500"
-              >
-                {t('common.close', 'Zavřít')}
-              </button>
-            </div>
-          </Card>
-        </div>
-      )}
+          <DialogFooter>
+            <Button size="sm" onClick={() => setShowSupportModal(false)}>
+              {t('common.close', 'Zavřít')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

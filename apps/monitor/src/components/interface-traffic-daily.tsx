@@ -61,7 +61,7 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
     <Card className="space-y-4 p-5">
       <div>
         <h3 className="text-sm font-semibold">{t('iftraffic.title', 'Provoz po dnech (30 dní)')}</h3>
-        <p className="text-muted-foreground text-[11px] leading-relaxed">
+        <p className="text-muted-foreground text-2xs leading-relaxed">
           {t(
             'iftraffic.hint',
             'Součet za každý den a rozhraní, jak ho hlásí agent. Chybějící den znamená, že se ten den nehlásilo, ne nulový provoz.'
@@ -99,7 +99,7 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
         };
         return (
           <div key={iface.iface} className="space-y-1">
-            <p className="text-muted-foreground font-mono text-[11px]">{iface.iface}</p>
+            <p className="text-muted-foreground font-mono text-2xs">{iface.iface}</p>
             <MetricChart data={chart} height={150} />
           </div>
         );

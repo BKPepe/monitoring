@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { filterAssets, parseStatusFilter } from '@/lib/asset-filter';
+import { filterAssets, orderByStatusChange, parseStatusFilter } from '@/lib/asset-filter';
 import {
   Boxes,
   ChevronDown,
@@ -24,7 +24,8 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/layout/page-header';
+import { Badge, statusVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { appApi, type ApiAsset, type ApiMonitor } from '@/api/app-api';
@@ -32,6 +33,7 @@ import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { cn, formatRelative, formatUptime } from '@/lib/utils';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 type AssetNode = ApiAsset;
 type MonitorStatus = ApiAsset['status'];
@@ -46,16 +48,6 @@ const kindIcon: Record<string, LucideIcon> = {
   Discord: MessageSquare,
   Web: Globe,
   'Container host': Container,
-};
-
-const badgeVariant: Record<MonitorStatus, 'up' | 'down' | 'warning' | 'paused' | 'info'> = {
-  up: 'up',
-  down: 'down',
-  warning: 'warning',
-  paused: 'paused',
-  maintenance: 'info',
-  // The agent went silent - the server does not know the state. Not healthy.
-  unknown: 'warning',
 };
 
 export function InfrastructurePage() {
@@ -475,6 +467,14 @@ export function InfrastructurePage() {
   // find them yourself.
   const activeStatus = parseStatusFilter(searchParams.get('status'));
   const filteredAssets = filterAssets(allAssets, { query, status: activeStatus });
+  // How long each device has been in its current state - the row shows it,
+  // and a list filtered by state is ordered by it (what just broke first).
+  const sinceById = React.useMemo(
+    () => new Map(rawMonitors.map((m) => [m.id, m.sinceStatusChangeSeconds ?? null])),
+    [rawMonitors]
+  );
+  const sinceFor = (asset: AssetNode) => sinceById.get(asset.monitorId ?? asset.id) ?? null;
+  const orderedAssets = filteredAssets && activeStatus ? orderByStatusChange(filteredAssets, sinceFor) : filteredAssets;
 
   // The detail pane follows the filter that brought the user here. Arriving
   // from the dashboard's "Offline" ring and landing on a healthy device made
@@ -498,84 +498,81 @@ export function InfrastructurePage() {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Paused'),
+    paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
     unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('infra.title', 'Správa Infrastruktury & Zařízení')}</h1>
-          <p className="text-muted-foreground text-sm">
-            {t(
-              'infra.subtitle',
-              'Kompletní přehled sledovaných serverů, routerů (OpenWrt), herních portů (Minecraft), hlasových služeb (TeamSpeak) a webů.'
-            )}
-          </p>
-        </div>
-
-        {isAdmin && (
-          <Button
-            onClick={() => {
-              setEditingId(null);
-              setMonitorName('');
-              setMonitorTarget('');
-              setMonitorPort('');
-              setTimeoutVal('5');
-              setEmailNotifications(true);
-              setSmsNotifications(false);
-              setNotes('');
-              setMaintenance(false);
-              setMaintenanceDescription('');
-              setCpanelStatsUrl('');
-              setBodyKeyword('');
-              setSqUsername('serveradmin');
-              setMonDiscord('');
-              setMonSlack('');
-              setMonTelegramToken('');
-              setMonTelegramChat('');
-              setSqPassword('');
-              setSqPasswordPlaceholder('••••••••');
-              setTs3FiletransferPort('30033');
-              setRconPort('25575');
-              setRconPassword('');
-              setRconPasswordPlaceholder('••••••••');
-              setMonitoredProcesses('');
-              setCpuThreshold('90');
-              setRamThreshold('95');
-              setHddThreshold('90');
-              setRemoteActionsEnabled(false);
-              setAllowedActions([
-                'restart_wan',
-                'restart_wireguard',
-                'reboot_router',
-                'renew_dhcp',
-                'restart_service',
-                'reconnect_pppoe',
-              ]);
-              setEnabledMetrics([
-                'check_pipeline',
-                'response_breakdown',
-                'ssl_card',
-                'headers',
-                'health_score',
-                'process',
-                'service',
-                'clients_chart',
-                'quality',
-                'ports',
-                'license_version',
-              ]);
-              setShowAddModal(true);
-            }}
-            className="gap-2 font-bold text-xs shadow-md"
-          >
-            <Plus className="size-4" /> {t('infra.add_agent', 'Přidat nový monitor')}
-          </Button>
+      <PageHeader
+        title={t('infra.title', 'Správa Infrastruktury & Zařízení')}
+        subtitle={t(
+          'infra.subtitle',
+          'Kompletní přehled sledovaných serverů, routerů (OpenWrt), herních portů (Minecraft), hlasových služeb (TeamSpeak) a webů.'
         )}
-      </div>
+        actions={
+          isAdmin && (
+            <Button
+              onClick={() => {
+                setEditingId(null);
+                setMonitorName('');
+                setMonitorTarget('');
+                setMonitorPort('');
+                setTimeoutVal('5');
+                setEmailNotifications(true);
+                setSmsNotifications(false);
+                setNotes('');
+                setMaintenance(false);
+                setMaintenanceDescription('');
+                setCpanelStatsUrl('');
+                setBodyKeyword('');
+                setSqUsername('serveradmin');
+                setMonDiscord('');
+                setMonSlack('');
+                setMonTelegramToken('');
+                setMonTelegramChat('');
+                setSqPassword('');
+                setSqPasswordPlaceholder('••••••••');
+                setTs3FiletransferPort('30033');
+                setRconPort('25575');
+                setRconPassword('');
+                setRconPasswordPlaceholder('••••••••');
+                setMonitoredProcesses('');
+                setCpuThreshold('90');
+                setRamThreshold('95');
+                setHddThreshold('90');
+                setRemoteActionsEnabled(false);
+                setAllowedActions([
+                  'restart_wan',
+                  'restart_wireguard',
+                  'reboot_router',
+                  'renew_dhcp',
+                  'restart_service',
+                  'reconnect_pppoe',
+                ]);
+                setEnabledMetrics([
+                  'check_pipeline',
+                  'response_breakdown',
+                  'ssl_card',
+                  'headers',
+                  'health_score',
+                  'process',
+                  'service',
+                  'clients_chart',
+                  'quality',
+                  'ports',
+                  'license_version',
+                ]);
+                setShowAddModal(true);
+              }}
+              className="gap-2 font-bold text-xs shadow-md"
+            >
+              <Plus className="size-4" /> {t('infra.add_agent', 'Přidat nový monitor')}
+            </Button>
+          )
+        }
+      />
 
       {/* Compact, complete tabbed modal for configuring a new/existing monitor */}
       {showAddModal && (
@@ -628,7 +625,7 @@ export function InfrastructurePage() {
             </div>
 
             {addedSuccess ? (
-              <div className="p-8 text-center space-y-3 text-emerald-400 my-auto">
+              <div className="p-8 text-center space-y-3 text-up my-auto">
                 <CheckCircle2 className="size-12 mx-auto" />
                 <p className="font-bold text-lg">{t('infra.save_success', 'Monitor byl úspěšně uložen!')}</p>
               </div>
@@ -691,7 +688,7 @@ export function InfrastructurePage() {
                             )}
                           >
                             <p className="font-bold text-xs">{opt.label}</p>
-                            <p className="text-[10px] text-muted-foreground">{opt.desc}</p>
+                            <p className="text-3xs text-muted-foreground">{opt.desc}</p>
                           </button>
                         ))}
                       </div>
@@ -746,7 +743,7 @@ export function InfrastructurePage() {
                         configures how often it must report. */}
                     {monitorType === 'heartbeat' ? (
                       <div className="space-y-3">
-                        <div className="rounded-lg border border-border bg-secondary/40 p-3 text-[11px] text-muted-foreground">
+                        <div className="rounded-lg border border-border bg-secondary/40 p-3 text-2xs text-muted-foreground">
                           {t(
                             'infra.heartbeat_help',
                             'Po uložení dostanete adresu, na kterou se má úloha na konci ozvat. Když se neozve včas, monitor spadne do výpadku. Hodí se na zálohy a cronjoby, na které se zvenku nedá zeptat.'
@@ -777,7 +774,7 @@ export function InfrastructurePage() {
                               onChange={(e) => setHeartbeatGraceMins(e.target.value)}
                               placeholder="5"
                             />
-                            <p className="mt-1 text-[10px] text-muted-foreground">
+                            <p className="mt-1 text-3xs text-muted-foreground">
                               {t('infra.heartbeat_grace_hint', 'Záloha nedoběhne vždy na sekundu stejně.')}
                             </p>
                           </div>
@@ -829,7 +826,7 @@ export function InfrastructurePage() {
                       <p className="font-semibold text-foreground">
                         {t('infra.service_profiles_title', 'Zobrazované sekce dashboardu (Service Profiles):')}
                       </p>
-                      <p className="text-[11px] mt-0.5">
+                      <p className="text-2xs mt-0.5">
                         {t(
                           'infra.service_profiles_desc',
                           'Zvolte, které sekce se pro tento monitor zobrazí veřejně i v administraci. Doporučené položky jsou zapnuty.'
@@ -872,11 +869,11 @@ export function InfrastructurePage() {
                               type="checkbox"
                               checked={enabledMetrics.includes(m.key)}
                               onChange={() => toggleMetric(m.key)}
-                              className="rounded border-slate-700 text-primary"
+                              className="rounded border-border text-primary"
                             />
                             <span className="font-medium text-foreground">{m.label}</span>
                             {m.recommended && (
-                              <span className="ml-auto text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded font-semibold">
+                              <span className="ml-auto text-3xs bg-primary/10 text-primary px-2 py-0.5 rounded font-semibold">
                                 {t('infra.recommended', 'Doporučeno')}
                               </span>
                             )}
@@ -932,11 +929,11 @@ export function InfrastructurePage() {
                               type="checkbox"
                               checked={enabledMetrics.includes(m.key)}
                               onChange={() => toggleMetric(m.key)}
-                              className="rounded border-slate-700 text-primary"
+                              className="rounded border-border text-primary"
                             />
                             <span className="font-medium text-foreground">{m.label}</span>
                             {m.recommended && (
-                              <span className="ml-auto text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded font-semibold">
+                              <span className="ml-auto text-3xs bg-primary/10 text-primary px-2 py-0.5 rounded font-semibold">
                                 {t('infra.recommended', 'Doporučeno')}
                               </span>
                             )}
@@ -975,7 +972,7 @@ export function InfrastructurePage() {
                             placeholder="https://bloodkings.eu/cpanel_stats.php?key=Klic123"
                             className="font-mono text-xs"
                           />
-                          <p className="text-[11px] text-muted-foreground mt-1">
+                          <p className="text-2xs text-muted-foreground mt-1">
                             {t(
                               'infra.cpanel_url_hint',
                               'Sledování reálného zátížení hostingu (Disk, RAM, CPU, MySQL) přes nahraný soubor cpanel_stats.php s vaším klíčem.'
@@ -992,7 +989,7 @@ export function InfrastructurePage() {
                             placeholder={t('infra.body_keyword_placeholder', 'Např. Blood Kings')}
                             className="text-xs"
                           />
-                          <p className="text-[11px] text-muted-foreground mt-1">
+                          <p className="text-2xs text-muted-foreground mt-1">
                             {t(
                               'infra.body_keyword_hint',
                               'Kontrola ověří, že tělo HTTP odpovědi obsahuje tento řetězec. Pokud chybí, vyhodnotí výpadek.'
@@ -1068,7 +1065,7 @@ export function InfrastructurePage() {
                             />
                           </div>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t(
                             'infra.rcon_hint',
                             'RCON umožňuje dotazovat příkaz "tps" na serveru Spigot/Paper/BungeeCord pro přesný výpočet lagů (TPS).'
@@ -1098,16 +1095,16 @@ export function InfrastructurePage() {
                           <div className="space-y-4 p-4 rounded-xl bg-secondary/40 border border-border text-xs text-foreground">
                             {/* Agent detection status indicator */}
                             {hasActiveAgent ? (
-                              <div className="p-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
+                              <div className="p-3 rounded-lg bg-up/15 border border-up/30 text-up flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
                                 <span className="flex items-center gap-2">
-                                  <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                                  <CheckCircle2 className="size-4 text-up shrink-0" />
                                   <span>
                                     {t('infra.agent_detected_short', 'Agent rozpoznán a aktivní')}
                                     {agentVer && (
                                       <>
                                         {' '}
                                         (
-                                        <strong className="font-mono font-bold text-emerald-900 dark:text-emerald-200 bg-emerald-500/25 px-1.5 py-0.5 rounded">
+                                        <strong className="font-mono font-bold text-up bg-up/25 px-1.5 py-0.5 rounded">
                                           v{agentVer}
                                         </strong>
                                         )
@@ -1122,7 +1119,7 @@ export function InfrastructurePage() {
                                   {mon?.agentUpdateAvailable && (
                                     <Badge
                                       variant="warning"
-                                      className="text-[10px]"
+                                      className="text-3xs"
                                       title={t(
                                         'infra.agent_update_hint',
                                         'Agent se aktualizuje sám, pokud má v agent.cfg AUTO_UPDATE="1" (nebo jednorázově příkazem --update). Jinak stáhněte novou verzi ručně.'
@@ -1136,15 +1133,15 @@ export function InfrastructurePage() {
                                       )}
                                     </Badge>
                                   )}
-                                  <Badge variant="up" className="text-[10px]">
+                                  <Badge variant="up" className="text-3xs">
                                     {t('infra.agent_connected_badge', 'Agent Připojen ✅')}
                                   </Badge>
                                 </span>
                               </div>
                             ) : (
-                              <div className="p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
+                              <div className="p-3 rounded-lg bg-warning/15 border border-warning/30 text-warning flex items-center justify-between flex-wrap gap-2 text-xs font-semibold">
                                 <span className="flex items-center gap-2">
-                                  <AlertTriangle className="size-4 text-amber-500 shrink-0" />
+                                  <AlertTriangle className="size-4 text-warning shrink-0" />
                                   <span>
                                     {agentKnownButSilent
                                       ? `${t('infra.agent_silent', 'Agent mlčí, naposledy')} ${lastSeenText ?? '—'}`
@@ -1154,7 +1151,7 @@ export function InfrastructurePage() {
                                         )}
                                   </span>
                                 </span>
-                                <Badge variant="warning" className="text-[10px]">
+                                <Badge variant="warning" className="text-3xs">
                                   {agentKnownButSilent
                                     ? t('infra.agent_silent_badge', 'Agent nehlásí ⚠️')
                                     : t('infra.needs_install', 'Vyžaduje instalaci ⚠️')}
@@ -1167,25 +1164,25 @@ export function InfrastructurePage() {
                                 <h4 className="font-bold text-foreground text-sm">
                                   📶 {t('infra.remote_actions_title', 'OpenWrt Remote Actions')}
                                 </h4>
-                                <p className="text-[11px] text-muted-foreground">
+                                <p className="text-2xs text-muted-foreground">
                                   {t(
                                     'infra.remote_actions_desc',
                                     'Potvrzovací příkazy (reboot routeru, restart WAN, WireGuard) chráněné HMAC-SHA256'
                                   )}
                                 </p>
                               </div>
-                              <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-amber-500 dark:text-amber-400">
+                              <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-warning">
                                 <input
                                   type="checkbox"
                                   checked={remoteActionsEnabled}
                                   onChange={(e) => setRemoteActionsEnabled(e.target.checked)}
-                                  className="rounded border-amber-400 text-amber-500"
+                                  className="rounded border-warning text-warning"
                                 />
                                 {t('infra.enable_remote_actions', 'Povolit Remote Actions pro tento router')}
                               </label>
                             </div>
 
-                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            <p className="text-2xs text-muted-foreground leading-relaxed">
                               {t(
                                 'infra.remote_actions_off_hint',
                                 'Ve výchozím stavu VYPNUTO. Bez zaškrtnutí server nikdy nezařadí žádnou vzdálenou akci do fronty pro tento konkrétní monitor, bez ohledu na požadavky.'
@@ -1235,7 +1232,7 @@ export function InfrastructurePage() {
                                         type="checkbox"
                                         checked={allowedActions.includes(act.key)}
                                         onChange={() => toggleAction(act.key)}
-                                        className="rounded border-emerald-500 text-emerald-500"
+                                        className="rounded border-up text-up"
                                       />
                                       <span className="font-medium">{act.label}</span>
                                     </label>
@@ -1248,7 +1245,7 @@ export function InfrastructurePage() {
                               <div className="pt-3 border-t border-border space-y-2">
                                 <div className="flex items-center justify-between">
                                   <p className="font-bold text-foreground flex items-center gap-1.5">
-                                    <Terminal className="size-3.5 text-emerald-500" />{' '}
+                                    <Terminal className="size-3.5 text-muted-foreground" />{' '}
                                     {t('infra.one_time_install', 'Jednorázová instalace OpenWrt agenta')} (
                                     <code>agent_openwrt.sh</code>):
                                   </p>
@@ -1260,12 +1257,12 @@ export function InfrastructurePage() {
                                       navigator.clipboard.writeText(cmd);
                                       alert(t('infra.copied_to_clipboard', 'Příkaz zkopírován do schránky!'));
                                     }}
-                                    className="text-[11px] font-semibold text-primary hover:underline bg-primary/10 px-2 py-0.5 rounded border border-primary/30 cursor-pointer"
+                                    className="text-2xs font-semibold text-primary hover:underline bg-primary/10 px-2 py-0.5 rounded border border-primary/30 cursor-pointer"
                                   >
                                     {t('infra.copy_command', 'Kopírovat příkaz')}
                                   </button>
                                 </div>
-                                <code className="block bg-slate-950 p-2.5 rounded-lg text-[11px] font-mono text-emerald-400 border border-slate-800 break-all whitespace-pre-wrap select-all">
+                                <code className="block bg-muted p-2.5 rounded-lg text-2xs font-mono text-foreground border border-border break-all whitespace-pre-wrap select-all">
                                   wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh &&
                                   chmod +x /usr/bin/agent_openwrt.sh
                                 </code>
@@ -1286,7 +1283,7 @@ export function InfrastructurePage() {
                           onChange={(e) => setMonitoredProcesses(e.target.value)}
                           placeholder={t('infra.monitored_processes_placeholder', 'Např. ts3server, nginx, mysql')}
                         />
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t(
                             'infra.monitored_processes_hint',
                             'Zadejte názvy procesů, které má agent hlídat. Pokud některý nepoběží, monitor bude označen jako DOWN.'
@@ -1311,7 +1308,7 @@ export function InfrastructurePage() {
                             type="checkbox"
                             checked={emailNotifications}
                             onChange={(e) => setEmailNotifications(e.target.checked)}
-                            className="rounded border-slate-700 text-primary"
+                            className="rounded border-border text-primary"
                           />
                           {t('infra.email_on_outage', 'Zasílat e-mailové notifikace při výpadku')}
                         </label>
@@ -1321,7 +1318,7 @@ export function InfrastructurePage() {
                             type="checkbox"
                             checked={smsNotifications}
                             onChange={(e) => setSmsNotifications(e.target.checked)}
-                            className="rounded border-slate-700 text-primary"
+                            className="rounded border-border text-primary"
                           />
                           {t('infra.sms_on_outage', 'Zasílat SMS notifikace při výpadku')}
                         </label>
@@ -1332,10 +1329,10 @@ export function InfrastructurePage() {
                           router that should shout into the ops channel could not be
                           told to. Empty = the global channel from Settings. */}
                       <div className="border-border space-y-2 border-t pt-2">
-                        <label className="text-muted-foreground block text-[11px] font-medium">
+                        <label className="text-muted-foreground block text-2xs font-medium">
                           {t('infra.own_channels', 'Vlastní kanály pro tenhle monitor')}
                         </label>
-                        <p className="text-muted-foreground text-[11px]">
+                        <p className="text-muted-foreground text-2xs">
                           {t(
                             'infra.own_channels_hint',
                             'Prázdné pole znamená globální kanál z Nastavení. Vyplněné přebíjí jen pro tenhle monitor.'
@@ -1370,7 +1367,7 @@ export function InfrastructurePage() {
                       </div>
 
                       <div className="pt-2 border-t border-border">
-                        <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                        <label className="block text-2xs font-medium text-muted-foreground mb-1">
                           {t('infra.latency_alert', 'Upozornit na zpomalení')}
                         </label>
                         <div className="grid gap-3 sm:grid-cols-2">
@@ -1391,7 +1388,7 @@ export function InfrastructurePage() {
                             placeholder="5"
                           />
                         </div>
-                        <p className="text-[11px] text-muted-foreground mt-1">
+                        <p className="text-2xs text-muted-foreground mt-1">
                           {t(
                             'infra.latency_alert_hint',
                             'Odezva v ms a doba v minutách. Upozornění přijde, až budou VŠECHNY kontroly v tom okně nad limitem — jedna pomalá odpověď je šum, ne incident. Prázdné pole = vypnuto.'
@@ -1400,7 +1397,7 @@ export function InfrastructurePage() {
                       </div>
 
                       <div className="pt-2 border-t border-border">
-                        <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                        <label className="block text-2xs font-medium text-muted-foreground mb-1">
                           {t('infra.preset', 'Preset metrik')}
                         </label>
                         <select
@@ -1415,7 +1412,7 @@ export function InfrastructurePage() {
                             </option>
                           ))}
                         </select>
-                        <p className="text-[11px] text-muted-foreground mt-1">
+                        <p className="text-2xs text-muted-foreground mt-1">
                           {t(
                             'infra.preset_hint',
                             'Preset přebíjí sadu metrik a vyplněné prahy níže. Spravuje se v Nastavení → Presety.'
@@ -1425,13 +1422,13 @@ export function InfrastructurePage() {
 
                       <div className="grid grid-cols-4 gap-3 pt-2 border-t border-border">
                         <div>
-                          <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                          <label className="block text-2xs font-medium text-muted-foreground mb-1">
                             {t('infra.timeout_s', 'Timeout (s)')}
                           </label>
                           <Input value={timeoutVal} onChange={(e) => setTimeoutVal(e.target.value)} placeholder="5" />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                          <label className="block text-2xs font-medium text-muted-foreground mb-1">
                             {t('infra.cpu_limit', 'CPU Limit (%)')}
                           </label>
                           <Input
@@ -1441,7 +1438,7 @@ export function InfrastructurePage() {
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                          <label className="block text-2xs font-medium text-muted-foreground mb-1">
                             {t('infra.ram_limit', 'RAM Limit (%)')}
                           </label>
                           <Input
@@ -1451,7 +1448,7 @@ export function InfrastructurePage() {
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                          <label className="block text-2xs font-medium text-muted-foreground mb-1">
                             {t('infra.hdd_limit', 'HDD Limit (%)')}
                           </label>
                           <Input
@@ -1461,7 +1458,7 @@ export function InfrastructurePage() {
                           />
                         </div>
                       </div>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t(
                           'infra.threshold_hint',
                           'Zadejte hodnoty zátěže (v %), při jejichž překročení vám agent zašle varovnou notifikaci.'
@@ -1473,12 +1470,12 @@ export function InfrastructurePage() {
                       <h4 className="font-bold text-foreground text-sm">
                         🔧 {t('infra.maintenance_title', 'Režim Údržby & Poznámky')}
                       </h4>
-                      <label className="flex items-center gap-2.5 cursor-pointer font-semibold text-sm text-amber-800 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2.5">
+                      <label className="flex items-center gap-2.5 cursor-pointer font-semibold text-sm text-warning bg-warning/10 border border-warning/25 rounded-lg px-3 py-2.5">
                         <input
                           type="checkbox"
                           checked={maintenance}
                           onChange={(e) => setMaintenance(e.target.checked)}
-                          className="size-4 rounded border-amber-500 text-amber-600 accent-amber-500"
+                          className="size-4 rounded border-warning text-warning accent-warning"
                         />
                         {t('infra.enable_maintenance', 'Aktivovat režim plánované údržby')}
                       </label>
@@ -1486,7 +1483,7 @@ export function InfrastructurePage() {
                       {maintenance && (
                         <div className="space-y-3">
                           <div>
-                            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                            <label className="block text-2xs font-medium text-muted-foreground mb-1">
                               {t('infra.maintenance_desc_label', 'Popis údržby (zobrazí se uživatelům)')}
                             </label>
                             <Input
@@ -1498,7 +1495,7 @@ export function InfrastructurePage() {
 
                           <div className="grid gap-3 sm:grid-cols-2">
                             <div>
-                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                              <label className="block text-2xs font-medium text-muted-foreground mb-1">
                                 {t('infra.maintenance_from', 'Údržba od')}
                               </label>
                               <Input
@@ -1508,7 +1505,7 @@ export function InfrastructurePage() {
                               />
                             </div>
                             <div>
-                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                              <label className="block text-2xs font-medium text-muted-foreground mb-1">
                                 {t('infra.maintenance_to', 'Údržba do')}
                               </label>
                               <Input
@@ -1518,14 +1515,14 @@ export function InfrastructurePage() {
                               />
                             </div>
                           </div>
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t(
                               'infra.maintenance_window_hint',
                               'Bez vyplněného okna platí údržba trvale, dokud ji nevypnete. S oknem se monitor přepne do údržby jen v zadaném intervalu a mimo něj se kontroluje normálně.'
                             )}
                           </p>
                           {maintenanceStart && maintenanceEnd && maintenanceEnd <= maintenanceStart && (
-                            <p className="text-[11px] font-semibold text-down">
+                            <p className="text-2xs font-semibold text-down">
                               {t('infra.maintenance_window_invalid', 'Konec údržby musí být později než začátek.')}
                             </p>
                           )}
@@ -1533,7 +1530,7 @@ export function InfrastructurePage() {
                       )}
 
                       <div>
-                        <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                        <label className="block text-2xs font-medium text-muted-foreground mb-1">
                           {t('infra.internal_notes', 'Interní poznámky k monitoru')}
                         </label>
                         <Input
@@ -1656,7 +1653,7 @@ export function InfrastructurePage() {
               missing. */}
           {activeStatus && (
             <div className="flex items-center gap-2 text-xs">
-              <Badge variant={badgeVariant[activeStatus]} dot>
+              <Badge variant={statusVariant[activeStatus]} dot>
                 {statusLabel[activeStatus]}
               </Badge>
               <span className="text-muted-foreground">
@@ -1685,15 +1682,14 @@ export function InfrastructurePage() {
             {monitorsError ? (
               <p className="text-muted-foreground text-xs text-center py-6">{monitorsError}</p>
             ) : !tree ? (
-              <p className="text-muted-foreground text-xs text-center py-6">
-                {t('infra.loading_devices', 'Načítám zařízení…')}
-              </p>
-            ) : filteredAssets ? (
+              <LoadingState size="inline" label={t('infra.loading_devices', 'Načítám zařízení…')} />
+            ) : orderedAssets ? (
               <div className="space-y-1">
-                {filteredAssets.map((asset) => (
+                {orderedAssets.map((asset) => (
                   <AssetRow
                     key={asset.id}
                     asset={asset}
+                    since={sinceFor(asset)}
                     isSelected={selectedId === asset.id}
                     onSelect={() => setSelectedId(asset.id)}
                   />
@@ -1710,6 +1706,7 @@ export function InfrastructurePage() {
                       <AssetRow
                         key={asset.id}
                         asset={asset}
+                        since={sinceFor(asset)}
                         isSelected={selectedId === asset.id}
                         onSelect={() => setSelectedId(asset.id)}
                       />
@@ -1729,7 +1726,7 @@ export function InfrastructurePage() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-lg font-bold">{selectedAsset.name}</h2>
-                    <Badge variant={badgeVariant[selectedAsset.status]} dot>
+                    <Badge variant={statusVariant[selectedAsset.status]} dot>
                       {statusLabel[selectedAsset.status]}
                     </Badge>
                   </div>
@@ -1763,11 +1760,11 @@ export function InfrastructurePage() {
                   <p className="font-bold text-sm text-foreground mt-0.5">{selectedAsset.kind}</p>
                 </div>
                 {selectedMonitor?.unreachableTarget && (
-                  <div className="sm:col-span-2 p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 space-y-2">
-                    <p className="text-xs font-bold text-amber-800 dark:text-amber-300">
+                  <div className="sm:col-span-2 p-3.5 rounded-lg bg-warning/10 border border-warning/30 space-y-2">
+                    <p className="text-xs font-bold text-warning">
                       ⚠ {t('infra.unreachable_title', 'Tento cíl není z hostingu dosažitelný')}
                     </p>
-                    <p className="text-[11px] text-amber-900/80 dark:text-amber-200/80">
+                    <p className="text-2xs text-warning/80">
                       {t(
                         'infra.unreachable_desc',
                         'Cíl leží v privátní síti, takže aktivní kontrola z hostingu bude vždy selhávat a hlásit falešné výpadky. Převeďte monitor na kontrolu agentem — ověří běžící proces přímo na stroji.'
@@ -1825,19 +1822,19 @@ export function InfrastructurePage() {
                   {/* Green only while the agent is inside its reporting timeout - a
                       report from 3 days ago used to read "Aktivní před 3 dny". */}
                   {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && !selectedMonitor.agentSilent && (
-                    <p className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
+                    <p className="text-3xs font-semibold text-up mt-0.5">
                       🟢 {t('infra.active_since', 'Aktivní')}{' '}
                       {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
                     </p>
                   )}
                   {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && selectedMonitor.agentSilent && (
-                    <p className="text-[10px] font-semibold text-down mt-0.5">
+                    <p className="text-3xs font-semibold text-down mt-0.5">
                       🔴 {t('infra.agent_silent', 'Agent mlčí, naposledy')}{' '}
                       {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
                     </p>
                   )}
                   {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen == null && (
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                    <p className="text-3xs text-muted-foreground mt-0.5">
                       {t('infra.agent_never_reported', 'Agent se ještě neozval')}
                     </p>
                   )}
@@ -1874,13 +1871,24 @@ export function InfrastructurePage() {
   );
 }
 
-function AssetRow({ asset, isSelected, onSelect }: { asset: AssetNode; isSelected: boolean; onSelect: () => void }) {
+function AssetRow({
+  asset,
+  since,
+  isSelected,
+  onSelect,
+}: {
+  asset: AssetNode;
+  /** Seconds in the current state; null when the server does not know. */
+  since: number | null;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
   const { t } = useLanguage();
   const statusLabel: Record<MonitorStatus, string> = {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Paused'),
+    paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
     unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
@@ -1902,12 +1910,18 @@ function AssetRow({ asset, isSelected, onSelect }: { asset: AssetNode; isSelecte
         </span>
         <div className="min-w-0">
           <p className="text-xs truncate font-medium text-foreground">{asset.name}</p>
-          <p className="text-[10px] text-muted-foreground truncate">{asset.hostname}</p>
+          <p className="text-3xs text-muted-foreground truncate">{asset.hostname}</p>
         </div>
       </div>
-      <Badge variant={badgeVariant[asset.status]} dot className="shrink-0 text-[10px]">
-        {statusLabel[asset.status]}
-      </Badge>
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        <Badge variant={statusVariant[asset.status]} dot className="shrink-0 text-3xs">
+          {statusLabel[asset.status]}
+        </Badge>
+        {/* How long it has been like this. Without it a list of offline
+            devices had no order a reader could see, and no way to tell the
+            outage of a minute from the one of a week. */}
+        {since != null && <span className="text-muted-foreground text-3xs tabular-nums">{formatUptime(since)}</span>}
+      </div>
     </button>
   );
 }
@@ -2005,7 +2019,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
           <div>
             <h3 className="font-bold text-sm flex items-center gap-2">
               {t('discovery.title', 'Objevené služby')}
-              <Badge variant="info" className="text-[10px]">
+              <Badge variant="info" className="text-3xs">
                 {services.length}
               </Badge>
             </h3>
@@ -2027,11 +2041,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
         </button>
       </div>
 
-      {error && (
-        <div className="p-2.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold">
-          {error}
-        </div>
-      )}
+      {error && <ErrorState message={error} />}
 
       <div className="flex flex-col gap-3">
         {/* Grouped by the discovering agent - a flat list with a per-row
@@ -2084,7 +2094,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                       </span>
                     )}
                   </span>
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-2xs text-muted-foreground">
                     {t('discovery.group_count', { count: group.length }, `${group.length} zatím nesledovaných služeb`)}
                   </span>
                 </span>
@@ -2100,9 +2110,9 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                     const key = `${svc.sourceMonitorId}:${svc.name}:${svc.port ?? ''}`;
                     const confColor =
                       svc.confidence >= 80
-                        ? 'text-emerald-400'
+                        ? 'text-up'
                         : svc.confidence >= 60
-                          ? 'text-amber-400'
+                          ? 'text-warning'
                           : 'text-muted-foreground';
                     return (
                       <div key={key} className="flex flex-wrap items-center gap-3 bg-secondary/20 px-3 py-2.5">
@@ -2112,13 +2122,13 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                             {svc.port != null && (
                               <span className="text-xs text-muted-foreground font-mono">:{svc.port}</span>
                             )}
-                            <span className="text-[10px] uppercase tracking-wide text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
+                            <span className="text-3xs uppercase tracking-wide text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
                               {svc.type}
                             </span>
                             <span className={cn('text-xs font-bold', confColor)}>{svc.confidence}%</span>
                             {svc.target && (
                               <span
-                                className="text-[11px] text-muted-foreground font-mono truncate"
+                                className="text-2xs text-muted-foreground font-mono truncate"
                                 title={t('discovery.target_hint', 'Adresa, kterou bude kontrola testovat')}
                               >
                                 → {svc.target}
@@ -2126,7 +2136,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                             )}
                           </div>
                           {(svc.evidence.length > 0 || svc.missing.length > 0) && (
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                            <p className="text-2xs text-muted-foreground mt-0.5">
                               {svc.evidence.length > 0 &&
                                 `${t('discovery.evidence', 'Důkazy')}: ${svc.evidence.join(', ')}`}
                               {svc.evidence.length > 0 && svc.missing.length > 0 && ' · '}
@@ -2136,7 +2146,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                           )}
                         </div>
                         {svc.importBlocked ? (
-                          <span className="shrink-0 max-w-[260px] text-[11px] font-medium text-amber-800 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-md px-2 py-1">
+                          <span className="shrink-0 max-w-[260px] text-2xs font-medium text-warning bg-warning/10 border border-warning/25 rounded-md px-2 py-1">
                             ⚠️ {svc.importBlocked}
                           </span>
                         ) : (

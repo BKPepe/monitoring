@@ -81,4 +81,17 @@ describe('status colours meet WCAG AA as text', () => {
       expect(contrast(token('status-down-foreground', theme), token('status-down', theme))).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  // The same rule for the solid green and yellow fills the action buttons
+  // paint ("resolve the incident", "take it over"): dark fills take white,
+  // the bright dark-theme ones take near-black.
+  it('text on the solid up and warning fills is readable in both themes', () => {
+    for (const theme of ['light', 'dark'] as const) {
+      for (const s of ['up', 'warning'] as const) {
+        expect(contrast(token(`status-${s}-foreground`, theme), token(`status-${s}`, theme))).toBeGreaterThanOrEqual(
+          4.5
+        );
+      }
+    }
+  });
 });

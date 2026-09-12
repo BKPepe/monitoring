@@ -69,14 +69,14 @@ export function CollectorHealthBanner() {
             )}
       </p>
       {health.lastRunAt && (
-        <p className="text-muted-foreground font-mono text-[11px]">
+        <p className="text-muted-foreground font-mono text-2xs">
           {t('collector.last_run', 'Poslední běh')}: {new Date(health.lastRunAt).toLocaleString(locale)}
           {health.monitorsChecked != null
             ? ` · ${t('collector.checked', { n: health.monitorsChecked }, `zkontrolováno ${health.monitorsChecked} monitorů`)}`
             : ''}
         </p>
       )}
-      <p className="text-muted-foreground text-[11px] leading-relaxed">
+      <p className="text-muted-foreground text-2xs leading-relaxed">
         {t(
           'collector.hint',
           'Nejčastější příčina: cron úloha na hostingu se přestala spouštět, nebo běh spadl na chybě. Zkontrolujte plánovač a log cronu.'

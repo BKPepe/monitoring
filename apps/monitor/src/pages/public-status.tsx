@@ -12,6 +12,7 @@ import { useLanguage } from '@/context/language-context';
 import { useTheme } from '@/lib/use-theme';
 import { versionCommitUrl } from '@/lib/version';
 import { cn } from '@/lib/utils';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface Region {
   location: string;
@@ -477,7 +478,7 @@ export function PublicStatusPage() {
       })()}
 
       {monitors === null ? (
-        <p className="text-muted-foreground text-sm">{t('public.loading_services', 'Načítám služby…')}</p>
+        <LoadingState label={t('public.loading_services', 'Načítám služby…')} />
       ) : (
         categories.map(([category, items]) => (
           <Card key={category} className="space-y-1 p-5">
@@ -557,7 +558,7 @@ export function PublicStatusPage() {
                 {(inc.updates ?? []).length > 0 && (
                   <ul className="w-full space-y-1 border-l border-border/60 pl-3">
                     {(inc.updates ?? []).map((u, i) => (
-                      <li key={i} className="text-muted-foreground text-[11px]">
+                      <li key={i} className="text-muted-foreground text-2xs">
                         <span className="text-foreground font-medium">{updateStatusLabel(u.status, t)}</span>
                         {u.message ? ` — ${u.message}` : ''}
                         <span className="ml-1 tabular-nums">({noSeconds(u.at)})</span>
@@ -569,10 +570,10 @@ export function PublicStatusPage() {
                     the public never saw it - though it is written precisely for them. */}
                 {inc.status === 'resolved' && inc.postmortem && (
                   <div className="bg-secondary/30 w-full rounded-md border border-border/60 p-2.5">
-                    <p className="text-foreground mb-1 text-[11px] font-semibold">
+                    <p className="text-foreground mb-1 text-2xs font-semibold">
                       {t('public.postmortem', 'Co se stalo (postmortem)')}
                     </p>
-                    <p className="text-muted-foreground text-[11px] whitespace-pre-wrap">{inc.postmortem}</p>
+                    <p className="text-muted-foreground text-2xs whitespace-pre-wrap">{inc.postmortem}</p>
                   </div>
                 )}
               </li>
@@ -641,8 +642,8 @@ export function PublicStatusPage() {
             </button>
           </form>
         )}
-        {subError && <p className="text-down text-xs font-semibold">{subError}</p>}
-        <p className="text-muted-foreground/70 text-[11px]">
+        {subError && <ErrorState size="inline" message={subError} />}
+        <p className="text-muted-foreground/70 text-2xs">
           {t('pubsub.box_hint', 'Pošleme jen výpadky a jejich obnovení. Odhlášení jedním klikem v každém e-mailu.')}
         </p>
       </Card>
@@ -762,7 +763,7 @@ function Stat({
 }) {
   return (
     <Card className="p-4">
-      <p className="text-muted-foreground text-[11px] font-medium">{label}</p>
+      <p className="text-muted-foreground text-2xs font-medium">{label}</p>
       {/* Unknown renders as a dash. A zero here would claim a measurement. */}
       <p
         className={cn(

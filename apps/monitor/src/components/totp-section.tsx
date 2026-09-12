@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useLanguage } from '@/context/language-context';
+import { ErrorState } from '@/components/ui/states';
 
 /**
  * Two-factor enrollment for the logged-in user.
@@ -123,7 +124,7 @@ export function TotpSection({
         )}
       </div>
 
-      {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+      {error && <ErrorState size="inline" message={error} />}
 
       {phase === 'idle' && enabled === false && (
         <div className="space-y-2">

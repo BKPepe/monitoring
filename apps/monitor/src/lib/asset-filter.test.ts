@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterAssets, parseStatusFilter, type AssetStatus } from './asset-filter';
+import { orderByStatusChange, filterAssets, parseStatusFilter, type AssetStatus } from './asset-filter';
 
 const asset = (name: string, status: AssetStatus, hostname?: string) => ({ name, status, hostname });
 
@@ -58,5 +58,25 @@ describe('filterAssets', () => {
     const noHost = [{ name: 'Bez hostname', status: 'up' as AssetStatus, hostname: null }];
     expect(filterAssets(noHost, { query: 'bez' })?.length).toBe(1);
     expect(filterAssets(noHost, { query: 'jine' })?.length).toBe(0);
+  });
+});
+
+describe('orderByStatusChange', () => {
+  const since = (a: { since: number | null }) => a.since;
+
+  it('puts the most recent change first', () => {
+    const rows = [{ since: 3600 }, { since: 60 }, { since: 86400 }];
+    expect(orderByStatusChange(rows, since).map((r) => r.since)).toEqual([60, 3600, 86400]);
+  });
+
+  it('sends a device with no known time to the end, not to a random place', () => {
+    const rows = [{ since: null }, { since: 120 }, { since: null }, { since: 30 }];
+    expect(orderByStatusChange(rows, since).map((r) => r.since)).toEqual([30, 120, null, null]);
+  });
+
+  it('does not mutate the list it was given', () => {
+    const rows = [{ since: 10 }, { since: 5 }];
+    orderByStatusChange(rows, since);
+    expect(rows.map((r) => r.since)).toEqual([10, 5]);
   });
 });

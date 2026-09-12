@@ -13,8 +13,8 @@ export function NotFoundPage() {
         <div className="relative mx-auto w-20 h-20 rounded-2xl bg-primary/10 border border-primary/30 flex items-center justify-center">
           <FileQuestion className="size-10 text-primary" />
           <span className="absolute -top-1 -right-1 flex h-4 w-4">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-4 w-4 bg-amber-500"></span>
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-4 w-4 bg-warning"></span>
           </span>
         </div>
 
@@ -54,7 +54,7 @@ export function NotFoundPage() {
 
 function BadgeText({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-block text-[10px] font-bold tracking-widest uppercase text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full border border-amber-400/20">
+    <span className="inline-block text-3xs font-bold tracking-widest uppercase text-warning bg-warning/10 px-3 py-1 rounded-full border border-warning/20">
       {children}
     </span>
   );

@@ -181,7 +181,7 @@ export function PublicMonitorCard({
                 ] as const
               ).map(([key, label]) => (
                 <div key={key} className="rounded-md border border-border/60 px-2 py-1.5 text-center">
-                  <p className="text-muted-foreground text-[10px] font-medium">{label}</p>
+                  <p className="text-muted-foreground text-3xs font-medium">{label}</p>
                   <p
                     className={cn(
                       'text-xs font-semibold tabular-nums',
@@ -219,7 +219,7 @@ export function PublicMonitorCard({
             if (bars.length === 0) return null;
             return (
               <div className="space-y-1.5">
-                <p className="text-muted-foreground text-[11px] font-medium">
+                <p className="text-muted-foreground text-2xs font-medium">
                   {t('public.hosting_limits', 'Čerpání limitů hostingu')}
                 </p>
                 {bars.map(([k, label]) => (
@@ -394,7 +394,7 @@ function LatencySparkline({
       {/* A visible caption, not a title= tooltip - tooltips do not exist on touch
           (the same lesson as the availability strip). Without an explanation
           it is an anonymous squiggle: what is the axis, what does a gap mean? */}
-      <p className="text-muted-foreground/70 pl-[5.5rem] text-[10px]">
+      <p className="text-muted-foreground/70 pl-[5.5rem] text-3xs">
         {t(
           'public.latency_hint',
           'Každý bod je denní průměr odezvy; rozsah vpravo je nejlepší–nejhorší den. Mezera = den bez měření.'

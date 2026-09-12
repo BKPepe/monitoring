@@ -103,7 +103,7 @@ export function Sidebar({
         {!collapsed && (
           <div className="min-w-0 leading-tight">
             <p className="truncate text-sm font-semibold">Blood Kings</p>
-            <p className="text-muted-foreground truncate text-[10px] tracking-[0.14em] uppercase">Monitoring</p>
+            <p className="text-muted-foreground truncate text-3xs tracking-[0.14em] uppercase">Monitoring</p>
           </div>
         )}
       </div>
@@ -116,7 +116,7 @@ export function Sidebar({
           <>
             <div className="my-3 border-t border-sidebar-border" />
             {!collapsed && (
-              <p className="text-muted-foreground px-3 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase">
+              <p className="text-muted-foreground px-3 pb-1 text-3xs font-semibold tracking-[0.14em] uppercase">
                 {t('sidebar.custom_links', 'Vlastní odkazy')}
               </p>
             )}
@@ -191,7 +191,7 @@ function NavGroup({ items, collapsed }: { items: NavItem[]; collapsed: boolean }
                 {count != null && count > 0 && (
                   <Badge
                     variant="down"
-                    className="ml-auto px-1.5 py-0 text-[10px]"
+                    className="ml-auto px-1.5 py-0 text-3xs"
                     // This counts OPEN INCIDENT RECORDS, while the dashboard
                     // tile counts services that are down right now. They are
                     // two different facts and routinely differ - an incident

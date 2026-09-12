@@ -74,10 +74,10 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
               key={e.id}
               className="border-border/40 flex flex-wrap items-center gap-x-3 gap-y-1 border-b py-1.5 text-xs last:border-0"
             >
-              <span className="text-muted-foreground w-36 shrink-0 font-mono text-[11px]">
+              <span className="text-muted-foreground w-36 shrink-0 font-mono text-2xs">
                 {new Date(e.atIso).toLocaleString(locale)}
               </span>
-              <Badge variant={e.ok ? 'up' : 'down'} className="text-[10px]">
+              <Badge variant={e.ok ? 'up' : 'down'} className="text-3xs">
                 {e.channel}
               </Badge>
               <span className="min-w-0 flex-1 truncate">
@@ -85,7 +85,7 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
                 {e.recipient ? <span className="text-muted-foreground font-mono"> · {e.recipient}</span> : null}
               </span>
               {!e.ok && (
-                <span className="text-down text-[11px]">
+                <span className="text-down text-2xs">
                   {e.error ?? t('notif.not_delivered', 'kanál zprávu nepřijal')}
                 </span>
               )}

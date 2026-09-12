@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { StatusDot } from '@/components/ui/badge';
+import { PageHeader } from '@/components/layout/page-header';
+import { StatusDot, statusVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -43,6 +44,7 @@ import { usePublicStatus } from '@/api/use-asset-charts';
 import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
 import { nestUnderAgents, processUsage } from '@/lib/monitor-grouping';
 import { buildNeedsAttention, metricSeverity, thresholdFor } from '@/lib/attention';
+import { LoadingState, EmptyState, ErrorState } from '@/components/ui/states';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -72,6 +74,10 @@ export function DashboardPage() {
   // changes, so the whole page follows. It used to load once per visit and
   // show the morning's state all day.
   const { data: live } = usePublicStatus(60_000);
+  // When the monitor list was last loaded. The page refreshes every minute
+  // and said nothing about it, so a reader could not tell whether the
+  // numbers were from now or from before the last outage.
+  const [loadedAt, setLoadedAt] = React.useState<Date | null>(null);
   // The user's dashboard layout (panel visibility + order). An empty array
   // = the default layout is kept, so nothing is lost until the user
   // configures something.
@@ -111,6 +117,7 @@ export function DashboardPage() {
 
         setMonitors(userTargets.length > 0 ? userTargets : list);
         setMonitorsError(null);
+        setLoadedAt(new Date());
       })
       .catch(() => {
         if (active) setMonitorsError(t('dashboard.monitors_load_error', 'Seznam monitorů se nepodařilo načíst.'));
@@ -350,9 +357,7 @@ export function DashboardPage() {
       </CardHeader>
       <CardContent className="flex flex-col gap-1 px-2 pb-3">
         {monitorsLoading ? (
-          <p className="text-muted-foreground px-3 py-3 text-sm">
-            {t('dashboard.loading_monitors', 'Načítám monitory…')}
-          </p>
+          <LoadingState size="inline" label={t('dashboard.loading_monitors', 'Načítám monitory…')} />
         ) : monitorsError && monitors.length === 0 ? (
           <p className="text-muted-foreground px-3 py-3 text-sm">
             {t('attention.unknown', 'Stav nelze zjistit — seznam monitorů se nenačetl.')}
@@ -413,7 +418,7 @@ export function DashboardPage() {
               {t('common.offline', 'Offline')} ({monitors.filter((m) => m.status === 'down').length})
             </TabsTrigger>
             <TabsTrigger value="paused">
-              {t('common.paused', 'Paused')} ({monitors.filter((m) => m.status === 'paused').length})
+              {t('common.paused', 'Pozastaveno')} ({monitors.filter((m) => m.status === 'paused').length})
             </TabsTrigger>
             {/* Silent agents had no tab - they were invisible in every filter but "all". */}
             {(monitors.some((m) => m.status === 'unknown') || filter === 'unknown') && (
@@ -425,17 +430,15 @@ export function DashboardPage() {
 
           <TabsContent value={filter} className="mt-0">
             {monitorsError && monitors.length === 0 ? (
-              <p className="text-down px-5 py-10 text-center text-sm">{monitorsError}</p>
+              <ErrorState message={monitorsError} className="m-4" />
             ) : monitorsLoading ? (
-              <p className="text-muted-foreground px-5 py-10 text-center text-sm">
-                {t('dashboard.loading_monitors', 'Načítám monitory…')}
-              </p>
+              <LoadingState label={t('dashboard.loading_monitors', 'Načítám monitory…')} />
             ) : (
               <>
                 {/* A failed minute refresh keeps the last good list on screen and
                     says it is stale - it used to replace the whole table. */}
                 {monitorsError && (
-                  <p className="px-5 pt-3 text-xs text-amber-700 dark:text-amber-400">
+                  <p className="px-5 pt-3 text-xs text-warning">
                     ⚠ {t('dashboard.refresh_failed', 'Obnovení selhalo, data mohou být zastaralá')} — {monitorsError}
                   </p>
                 )}
@@ -530,7 +533,11 @@ export function DashboardPage() {
               value: monitors.filter((m) => m.status === 'down').length,
               variant: 'down',
             },
-            { label: 'Paused', value: monitors.filter((m) => m.status === 'paused').length, variant: 'paused' },
+            {
+              label: t('common.paused', 'Pozastaveno'),
+              value: monitors.filter((m) => m.status === 'paused').length,
+              variant: 'paused',
+            },
             {
               label: t('common.maintenance', 'Údržba'),
               value: monitors.filter((m) => m.status === 'maintenance').length,
@@ -578,7 +585,7 @@ export function DashboardPage() {
                   <p className="text-xs font-semibold truncate">{ins.monitorName}</p>
                 </div>
                 <p className="text-xs leading-relaxed">{ins.text}</p>
-                {ins.detail && <p className="text-muted-foreground text-[11px]">{ins.detail}</p>}
+                {ins.detail && <p className="text-muted-foreground text-2xs">{ins.detail}</p>}
                 <Link
                   to={`/infrastructure/${ins.monitorId}`}
                   className="text-primary mt-auto text-xs font-semibold hover:underline"
@@ -607,11 +614,9 @@ export function DashboardPage() {
       </CardHeader>
       <CardContent className="overflow-visible">
         {dailyUptimeError ? (
-          <p className="text-muted-foreground py-8 text-center text-sm">{dailyUptimeError}</p>
+          <ErrorState message={dailyUptimeError} />
         ) : liveUptimeHistory.length === 0 ? (
-          <p className="text-muted-foreground py-8 text-center text-sm">
-            {t('dashboard.loading_uptime', 'Načítám historii dostupnosti…')}
-          </p>
+          <LoadingState label={t('dashboard.loading_uptime', 'Načítám historii dostupnosti…')} />
         ) : (
           <UptimeHeatmap rows={liveUptimeHistory} />
         )}
@@ -690,17 +695,28 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{t('dashboard.title', 'Status Overview')}</h1>
-          <p className="text-muted-foreground text-sm">
-            {t('dashboard.subtitle', 'Přehled všech vašich monitorovaných služeb, domén a serverů v reálném čase.')}
+      <PageHeader
+        title={t('dashboard.title', 'Status Overview')}
+        subtitle={t(
+          'dashboard.subtitle',
+          'Přehled všech vašich monitorovaných služeb, domén a serverů v reálném čase.'
+        )}
+        actions={
+          <Button variant="outline" size="sm" onClick={() => setLayoutOpen(true)} className="gap-2 font-semibold">
+            <LayoutGrid className="size-4" /> {t('dashboard.customize', 'Upravit rozložení')}
+          </Button>
+        }
+      >
+        {loadedAt && (
+          <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
+            {t(
+              'dashboard.data_as_of',
+              { time: loadedAt.toLocaleTimeString(lang === 'en' ? 'en-GB' : 'cs-CZ') },
+              `Data z ${loadedAt.toLocaleTimeString('cs-CZ')}, obnovují se každou minutu`
+            )}
           </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setLayoutOpen(true)} className="gap-2 font-semibold">
-          <LayoutGrid className="size-4" /> {t('dashboard.customize', 'Upravit rozložení')}
-        </Button>
-      </div>
+        )}
+      </PageHeader>
 
       <DashboardLayoutEditor
         open={layoutOpen}
@@ -797,16 +813,18 @@ const typeIcon: Record<string, LucideIcon> = {
 
 // Icon colour tuning by type (mockup: each service kind has its own shade).
 const typeTint: Record<string, string> = {
-  web: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
-  http: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
-  https: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
-  teamspeak: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400',
-  minecraft: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-  discord: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
-  openwrt: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400',
-  vps: 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
-  cpanel: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
-  agent_service: 'bg-teal-500/15 text-teal-600 dark:text-teal-400',
+  // The kind of a monitor is a category, not a verdict: one neutral chip,
+  // the word does the telling. Ten hues used to carry nothing but decoration.
+  web: 'bg-secondary text-secondary-foreground',
+  http: 'bg-secondary text-secondary-foreground',
+  https: 'bg-secondary text-secondary-foreground',
+  teamspeak: 'bg-secondary text-secondary-foreground',
+  minecraft: 'bg-secondary text-secondary-foreground',
+  discord: 'bg-secondary text-secondary-foreground',
+  openwrt: 'bg-secondary text-secondary-foreground',
+  vps: 'bg-secondary text-secondary-foreground',
+  cpanel: 'bg-secondary text-secondary-foreground',
+  agent_service: 'bg-secondary text-secondary-foreground',
 };
 
 function MonitorTable({
@@ -822,17 +840,13 @@ function MonitorTable({
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Paused'),
+    paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
     unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
 
   if (rows.length === 0) {
-    return (
-      <p className="text-muted-foreground px-5 py-10 text-center text-sm">
-        {t('dashboard.no_monitors', 'Žádný monitor neodpovídá filtru.')}
-      </p>
-    );
+    return <EmptyState title={t('dashboard.no_monitors', 'Žádný monitor neodpovídá filtru.')} />;
   }
 
   return (
@@ -857,15 +871,7 @@ function MonitorTable({
                   {monitor.name}
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
-                  <StatusDot
-                    variant={
-                      monitor.status === 'maintenance'
-                        ? 'paused'
-                        : monitor.status === 'unknown'
-                          ? 'neutral'
-                          : monitor.status
-                    }
-                  />
+                  <StatusDot variant={statusVariant[monitor.status]} />
                   <span
                     className={
                       monitor.status === 'up'
@@ -945,15 +951,7 @@ function MonitorTable({
                 <TableCell>
                   {/* Mockup: status as coloured text with a dot, not a pill badge. */}
                   <span className="flex items-center gap-1.5 text-xs font-semibold">
-                    <StatusDot
-                      variant={
-                        monitor.status === 'maintenance'
-                          ? 'info'
-                          : monitor.status === 'unknown'
-                            ? 'neutral'
-                            : monitor.status
-                      }
-                    />
+                    <StatusDot variant={statusVariant[monitor.status]} />
                     <span
                       className={
                         monitor.status === 'up'
@@ -969,7 +967,7 @@ function MonitorTable({
                     </span>
                   </span>
                 </TableCell>
-                <TableCell className="tabular">
+                <TableCell className="tabular-nums">
                   <div className="flex items-center gap-2">
                     <span>{formatMs(monitor.responseMs)}</span>
                     {(latencySeries[monitor.id]?.length ?? 0) >= 2 && (
@@ -984,10 +982,10 @@ function MonitorTable({
                   const isProc = (monitor.type || '').toLowerCase() === 'agent_service';
                   return (
                     <>
-                      <TableCell className="tabular">
+                      <TableCell className="tabular-nums">
                         <ThresholdValue value={usage.cpu} limit={thresholdFor(monitor, 'cpu')} />
                       </TableCell>
-                      <TableCell className="tabular">
+                      <TableCell className="tabular-nums">
                         {isProc ? (
                           usage.ram != null ? (
                             <span className="text-muted-foreground">{usage.ram} MB</span>
@@ -1001,11 +999,13 @@ function MonitorTable({
                     </>
                   );
                 })()}
-                <TableCell className="tabular">
+                <TableCell className="tabular-nums">
                   <ThresholdValue value={monitor.hdd} limit={thresholdFor(monitor, 'hdd')} />
                 </TableCell>
                 <TableCell
-                  className={monitor.status === 'down' ? 'tabular text-down' : 'tabular text-muted-foreground'}
+                  className={
+                    monitor.status === 'down' ? 'tabular-nums text-down' : 'tabular-nums text-muted-foreground'
+                  }
                 >
                   {/* A monitor that is down has no uptime - it has an outage duration. */}
                   {monitor.status === 'down' && monitor.sinceStatusChangeSeconds != null

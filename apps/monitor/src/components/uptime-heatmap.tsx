@@ -22,7 +22,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
     up: t('heatmap.status_up', 'Dostupné (100 %)'),
     warning: t('heatmap.status_warning', 'Zhoršená latence'),
     down: t('heatmap.status_down', 'Výpadek služby (Offline)'),
-    paused: t('heatmap.status_paused', 'Pozastaveno'),
+    paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('heatmap.status_maintenance', 'Plánovaná údržba'),
     nodata: t('heatmap.status_nodata', 'Bez měření'),
   };

@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { useFocusTrap } from '@/lib/use-focus-trap';
+import { LoadingState } from '@/components/ui/states';
 
 export function AppShell() {
   const { t } = useLanguage();
@@ -223,13 +224,7 @@ export function AppShell() {
             {/* Pages load on visit (React.lazy in routes.tsx), so between the
                 click and the render there is a short pause for downloading
                 jejich kódu. Bez tohohle boundary by React vyhodil chybu. */}
-            <React.Suspense
-              fallback={
-                <p className="text-muted-foreground py-16 text-center text-sm" role="status">
-                  {t('shell.loading_page', 'Načítám stránku…')}
-                </p>
-              }
-            >
+            <React.Suspense fallback={<LoadingState size="page" label={t('shell.loading_page', 'Načítám stránku…')} />}>
               <Outlet />
             </React.Suspense>
           </div>

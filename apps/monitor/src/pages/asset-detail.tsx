@@ -15,7 +15,7 @@ import {
   Gamepad2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge, StatusDot } from '@/components/ui/badge';
+import { Badge, StatusDot, statusVariant } from '@/components/ui/badge';
 import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
@@ -56,6 +56,7 @@ import { TeamspeakCard } from '@/components/teamspeak-card';
 import { HeartbeatCard } from '@/components/heartbeat-card';
 import { StorageCard } from '@/components/storage-card';
 import { SpeedtestCard } from '@/components/speedtest-card';
+import { LoadingState } from '@/components/ui/states';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -316,11 +317,7 @@ export function AssetDetailPage() {
   }, [loadedAssetId, lang]);
 
   if (loading) {
-    return (
-      <div className="text-muted-foreground py-20 text-center text-sm" role="status">
-        {t('asset.loading', 'Načítám detail zařízení a diagnostické metriky…')}
-      </div>
-    );
+    return <LoadingState size="page" label={t('asset.loading', 'Načítám detail zařízení a diagnostické metriky…')} />;
   }
 
   if (!asset) {
@@ -419,7 +416,7 @@ export function AssetDetailPage() {
           {/* Every tab shows data from this moment - the Network, Processes and
               Services tabs used to present the last report as "now". */}
           {asset.lastCheck && (
-            <p className="text-muted-foreground basis-full text-[11px]">
+            <p className="text-muted-foreground basis-full text-2xs">
               {t('asset.data_as_of', 'Data z posledního hlášení')}: {timeAgo(asset.lastCheck, t)} (
               {new Date(asset.lastCheck).toLocaleString('cs-CZ')})
             </p>
@@ -462,10 +459,8 @@ export function AssetDetailPage() {
               </div>
             </div>
             {asset.rawDetails?.ts3_process && (
-              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-xs space-y-1">
-                <p className="font-bold text-emerald-800 dark:text-emerald-300">
-                  🎙 {t('asset.ts3_process_title', 'Proces ts3server')}
-                </p>
+              <div className="p-3 rounded-lg bg-up/10 border border-up/25 text-xs space-y-1">
+                <p className="font-bold text-up">🎙 {t('asset.ts3_process_title', 'Proces ts3server')}</p>
                 <p className="font-mono text-muted-foreground">
                   PID {asset.rawDetails.ts3_process.pid ?? '—'}
                   {asset.rawDetails.ts3_process.cpu != null && ` · CPU ${asset.rawDetails.ts3_process.cpu} %`}
@@ -531,7 +526,7 @@ export function AssetDetailPage() {
                   {asset.processes.map((proc) => (
                     <div key={proc.name} className="rounded-lg border border-border px-3 py-2">
                       <p className="truncate font-mono text-xs font-semibold">{proc.name}</p>
-                      <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono text-[11px]">
+                      <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono text-2xs">
                         <span>CPU {formatPercent(proc.cpu, 1)}</span>
                         {/* Unmeasured memory = a dash, not a bare "MB". */}
                         <span>RAM {proc.memory == null ? '—' : `${proc.memory} MB`}</span>
@@ -570,7 +565,7 @@ export function AssetDetailPage() {
         <TabsContent value="services">
           <Card className="p-6 space-y-4">
             <div className="flex items-center gap-3 border-b border-border pb-3">
-              <ShieldCheck className="size-5 text-emerald-400" />
+              <ShieldCheck className="size-5 text-up" />
               <div>
                 <h3 className="font-bold text-base">
                   {isRouter
@@ -636,7 +631,7 @@ export function AssetDetailPage() {
                       {isNoSsl ? (
                         <>
                           <p className="text-xs text-muted-foreground font-medium">N/A</p>
-                          <p className="text-[11px] text-muted-foreground font-mono">
+                          <p className="text-2xs text-muted-foreground font-mono">
                             {upperKind === 'ROUTER'
                               ? t('asset.proto_router', 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)')
                               : upperKind === 'MINECRAFT'
@@ -652,10 +647,10 @@ export function AssetDetailPage() {
                             className={cn(
                               'text-xs font-semibold flex items-center gap-1.5',
                               (asset.sslCert.days_remaining ?? 99) <= 14
-                                ? 'text-amber-400'
+                                ? 'text-warning'
                                 : (asset.sslCert.days_remaining ?? 99) <= 0
-                                  ? 'text-rose-400'
-                                  : 'text-emerald-400'
+                                  ? 'text-down'
+                                  : 'text-up'
                             )}
                           >
                             <ShieldCheck className="size-4 shrink-0" />
@@ -669,7 +664,7 @@ export function AssetDetailPage() {
                                   )
                               : t('asset.ssl_valid', '🟢 Platný SSL/TLS Certifikát')}
                           </p>
-                          <div className="text-[11px] text-muted-foreground font-mono space-y-0.5 pt-1 border-t border-border/40">
+                          <div className="text-2xs text-muted-foreground font-mono space-y-0.5 pt-1 border-t border-border/40">
                             {asset.sslCert.issuer && (
                               <p>
                                 {t('asset.ssl_issuer', 'Vydavatel:')} {asset.sslCert.issuer}
@@ -691,7 +686,7 @@ export function AssetDetailPage() {
                           <p className="text-xs font-medium text-muted-foreground">
                             {t('asset.ssl_unknown', 'Certifikát zatím nebyl načten')}
                           </p>
-                          <p className="text-[11px] text-muted-foreground font-mono">
+                          <p className="text-2xs text-muted-foreground font-mono">
                             {t(
                               'asset.ssl_unknown_desc',
                               'Kontrola certifikátu proběhne při příštím HTTPS testu tohoto cíle.'
@@ -702,15 +697,10 @@ export function AssetDetailPage() {
                     </div>
                     <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
                       <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
-                      <p
-                        className={cn(
-                          'text-xs font-medium',
-                          asset.status === 'down' ? 'text-rose-400' : 'text-emerald-400'
-                        )}
-                      >
+                      <p className={cn('text-xs font-medium', asset.status === 'down' ? 'text-down' : 'text-up')}>
                         {asset.status === 'down' ? t('common.offline', 'Offline') : t('infra.active_since', 'Aktivní')}
                       </p>
-                      <p className="text-[11px] text-muted-foreground font-mono">
+                      <p className="text-2xs text-muted-foreground font-mono">
                         {t('common.protocol', 'Protokol')}: {asset.kind}
                       </p>
                     </div>
@@ -726,16 +716,11 @@ export function AssetDetailPage() {
                         return (
                           <>
                             <p
-                              className={cn(
-                                'text-xs font-medium font-mono',
-                                missingTool
-                                  ? 'text-amber-700 dark:text-amber-400'
-                                  : 'text-emerald-600 dark:text-emerald-400'
-                              )}
+                              className={cn('text-xs font-medium font-mono', missingTool ? 'text-warning' : 'text-up')}
                             >
                               {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
                             </p>
-                            <p className="text-[11px] text-muted-foreground font-mono">
+                            <p className="text-2xs text-muted-foreground font-mono">
                               {missingTool
                                 ? t(
                                     'asset.smart_install_hint',
@@ -824,7 +809,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Paused'),
+    paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
     unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
@@ -838,11 +823,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
         <div className="leading-tight">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold tracking-tight">{asset.name}</h1>
-            <Badge
-              variant={asset.status === 'maintenance' ? 'info' : asset.status === 'unknown' ? 'warning' : asset.status}
-              dot
-              pulse={asset.status === 'up'}
-            >
+            <Badge variant={statusVariant[asset.status]} dot pulse={asset.status === 'up'}>
               {statusText[asset.status]}
             </Badge>
           </div>
@@ -1031,9 +1012,7 @@ function OverviewTab({
                     </span>
                     {/* Without this the row only said WHEN the status changed. What
                       changed and why had to be dug out of the timeline below. */}
-                    {row.hint && (
-                      <span className="text-muted-foreground block text-[11px] font-normal">{row.hint}</span>
-                    )}
+                    {row.hint && <span className="text-muted-foreground block text-2xs font-normal">{row.hint}</span>}
                   </dd>
                 </div>
               );
@@ -1079,7 +1058,7 @@ function OverviewTab({
                 <StatusDot variant={e.severity === 'info' ? 'paused' : e.severity} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium">{e.title}</p>
-                  <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-[11px]">
+                  <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-2xs">
                     <span className="font-mono">{e.at}</span>
                     {/* The vantage point may be unrecorded - then nothing is printed. */}
                     {e.location && <span className="truncate">· {e.location}</span>}
@@ -1100,7 +1079,7 @@ function OverviewTab({
         </CardHeader>
         <CardContent className="px-0">
           {asset.processes.length > 0 && (
-            <p className="text-[11px] text-muted-foreground px-5 pb-2">
+            <p className="text-2xs text-muted-foreground px-5 pb-2">
               {t(
                 'asset.processes_top_hint',
                 'Agent hlásí 5 nejnáročnějších procesů podle CPU a 5 podle RAM z posledního reportu — není to kompletní výpis všeho, co na stroji běží.'
@@ -1129,10 +1108,10 @@ function OverviewTab({
                 {asset.processes.map((proc) => (
                   <TableRow key={proc.name}>
                     <TableCell className="pl-5 font-mono text-xs">{proc.name}</TableCell>
-                    <TableCell className="tabular text-right">
+                    <TableCell className="tabular-nums text-right">
                       {proc.cpu != null ? formatPercent(proc.cpu, 1) : '—'}
                     </TableCell>
-                    <TableCell className="tabular pr-5 text-right">
+                    <TableCell className="tabular-nums pr-5 text-right">
                       {proc.memory != null ? `${proc.memory} MB` : '—'}
                     </TableCell>
                   </TableRow>
@@ -1168,7 +1147,7 @@ function OverviewTab({
                 <div className="space-y-3 px-3 py-2">
                   {found.length > 0 && (
                     <div className="space-y-1.5">
-                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                      <p className="text-2xs font-semibold text-muted-foreground uppercase tracking-wide">
                         {t('asset.agent_found_services', 'Agent objevil běžící služby')}
                       </p>
                       {found.map((s, i) => (
@@ -1185,19 +1164,19 @@ function OverviewTab({
                           </span>
                         </div>
                       ))}
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-3xs text-muted-foreground">
                         {t('asset.agent_found_hint', 'Sledovat je můžete jedním kliknutím v přehledu Infrastruktura.')}
                       </p>
                     </div>
                   )}
                   {ports.length > 0 && (
                     <div className="space-y-1.5">
-                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                      <p className="text-2xs font-semibold text-muted-foreground uppercase tracking-wide">
                         {t('asset.listening_ports', 'Naslouchající porty')}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {ports.map((p) => (
-                          <span key={p} className="rounded-md bg-secondary px-2 py-0.5 font-mono text-[11px]">
+                          <span key={p} className="rounded-md bg-secondary px-2 py-0.5 font-mono text-2xs">
                             {p}
                           </span>
                         ))}
@@ -1213,7 +1192,7 @@ function OverviewTab({
                 up: t('common.online', 'Online'),
                 down: t('common.offline', 'Offline'),
                 warning: t('common.warning', 'Varování'),
-                paused: t('common.paused', 'Paused'),
+                paused: t('common.paused', 'Pozastaveno'),
                 maintenance: t('common.maintenance', 'Údržba'),
                 unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
               };
@@ -1228,16 +1207,7 @@ function OverviewTab({
                       {service.kind} · {service.detail}
                     </p>
                   </div>
-                  <Badge
-                    variant={
-                      service.status === 'maintenance'
-                        ? 'info'
-                        : service.status === 'unknown'
-                          ? 'warning'
-                          : service.status
-                    }
-                    dot
-                  >
+                  <Badge variant={statusVariant[service.status]} dot>
                     {relatedStatusLabel[service.status]}
                   </Badge>
                 </div>
@@ -1348,7 +1318,7 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
   if (data === undefined) {
     return (
       <Section title={title}>
-        <p className="text-xs text-muted-foreground">{t('net.link_loading', 'Načítám…')}</p>
+        <LoadingState label={t('net.link_loading', 'Načítám…')} size="inline" />
       </Section>
     );
   }
@@ -1746,7 +1716,7 @@ function NetworkTab({
               label={t('net.lte_quality', 'Kvalita LTE signálu')}
               value={
                 <span className="inline-flex items-center gap-2">
-                  <Badge variant={signalTone(lteOverall.level)} className="text-[10px]">
+                  <Badge variant={signalTone(lteOverall.level)} className="text-3xs">
                     {
                       {
                         excellent: t('signal.level_excellent', 'výborný'),
@@ -1783,7 +1753,7 @@ function NetworkTab({
             value={[d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null}
           />
           {d.lte_up === true && d.lte_rsrp == null && (
-            <p className="text-muted-foreground col-span-full text-[11px] leading-relaxed">
+            <p className="text-muted-foreground col-span-full text-2xs leading-relaxed">
               {t(
                 'net.lte_no_signal_data',
                 'Spojení běží, ale sílu signálu router nehlásí — modem není dostupný přes ModemManager. Doinstalováním balíčku umodem-manager (nebo uqmi) začne agent hlásit i RSRP, RSRQ a pásmo.'
@@ -1974,10 +1944,8 @@ function ActionsMenu({ asset }: { asset: AssetDetail }) {
       {result && (
         <p
           className={cn(
-            'absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border p-2 text-[11px] font-medium shadow-lg',
-            result.ok
-              ? 'border-emerald-500/30 bg-card text-emerald-700 dark:text-emerald-300'
-              : 'border-destructive/40 bg-card text-destructive'
+            'absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border p-2 text-2xs font-medium shadow-lg',
+            result.ok ? 'border-up/30 bg-card text-up' : 'border-destructive/40 bg-card text-destructive'
           )}
         >
           {result.text}
@@ -2002,10 +1970,10 @@ function HealthScoreTile({ score }: { score: number }) {
         <ShieldCheck className={cn('size-3.5', toneCls)} /> {t('asset.health_score_label', 'Health Score')}
       </p>
       <div className="flex items-baseline gap-1">
-        <span className={cn('tabular text-xl font-bold tracking-tight', toneCls)}>{score}</span>
+        <span className={cn('tabular-nums text-xl font-bold tracking-tight', toneCls)}>{score}</span>
         <span className="text-muted-foreground text-xs font-medium">/ 100</span>
       </div>
-      <p className={cn('text-[11px] font-semibold', toneCls)}>{label}</p>
+      <p className={cn('text-2xs font-semibold', toneCls)}>{label}</p>
     </Card>
   );
 }
@@ -2035,7 +2003,7 @@ function HealthCard({ metric }: { metric: HealthMetric }) {
         {metric.delta && (
           <span
             className={cn(
-              'tabular text-[11px] font-semibold',
+              'tabular-nums text-2xs font-semibold',
               metric.delta.good === null ? 'text-muted-foreground' : metric.delta.good ? 'text-up' : 'text-down'
             )}
           >
@@ -2225,7 +2193,7 @@ function PerformanceCharts({
             <h3 className="text-sm font-semibold">
               {t('asset.more_metrics', { count: others.length }, `Další měřené metriky (${others.length})`)}
             </h3>
-            <p className="text-muted-foreground text-[11px] leading-relaxed">
+            <p className="text-muted-foreground text-2xs leading-relaxed">
               {t(
                 'asset.more_metrics_hint',
                 'Tohle zařízení je hlásí každou minutu a historie se ukládá. Klikněte na kteroukoli pro graf, rozložení hodnot a souvislosti.'
@@ -2265,7 +2233,7 @@ function MetricRow({ chart, to }: { chart: ChartData; to: string }) {
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium">{chart.title}</span>
-        <span className="text-muted-foreground tabular block text-[11px]">
+        <span className="text-muted-foreground tabular-nums block text-2xs">
           {latest?.v == null ? '—' : `${latest.v} ${series?.unit ?? ''}`.trim()}
         </span>
       </span>
@@ -2335,7 +2303,7 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
                 setSeverity(s);
                 setPage(0);
               }}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+              className={`rounded-md px-2.5 py-1 text-2xs font-semibold transition-colors ${
                 severity === s
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-secondary text-muted-foreground hover:text-foreground'
@@ -2353,7 +2321,7 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
               setNewestFirst((v) => !v);
               setPage(0);
             }}
-            className="bg-secondary text-muted-foreground hover:text-foreground rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors"
+            className="bg-secondary text-muted-foreground hover:text-foreground rounded-md px-2.5 py-1 text-2xs font-semibold transition-colors"
           >
             {newestFirst
               ? t('timeline.newest_first', 'Nejnovější první')
@@ -2366,7 +2334,7 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
               setPage(0);
             }}
             aria-label={t('timeline.page_size', 'Počet na stránku')}
-            className="border-border bg-background rounded-md border px-1.5 py-1 text-[11px]"
+            className="border-border bg-background rounded-md border px-1.5 py-1 text-2xs"
           >
             {[10, 25, 50, 100].map((n) => (
               <option key={n} value={n}>
@@ -2381,7 +2349,7 @@ function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
 
       {pageCount > 1 && (
         <div className="flex items-center justify-between gap-2 pt-1">
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             {t(
               'timeline.page_info',
               { from: current * pageSize + 1, to: current * pageSize + visible.length, total: filtered.length },

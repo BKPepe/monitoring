@@ -1,4 +1,5 @@
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import {
   Terminal,
@@ -20,6 +21,7 @@ import { useLanguage } from '@/context/language-context';
 import { appApi } from '@/api/app-api';
 import { Link } from 'react-router';
 import { cn } from '@/lib/utils';
+import { LoadingState } from '@/components/ui/states';
 
 type PlatformId = 'linux' | 'openwrt' | 'windows' | 'cpanel' | 'docker';
 
@@ -193,16 +195,13 @@ export function ApiAgentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            {t('api_agents.title', 'API Klíče, Bezpečnost & Správa Agentů')}
-          </h1>
-          <p className="text-muted-foreground text-sm">
-            {t('api_agents.subtitle', 'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.')}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t('api_agents.title', 'API Klíče, Bezpečnost & Správa Agentů')}
+        subtitle={t(
+          'api_agents.subtitle',
+          'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.'
+        )}
+      />
 
       {/* Quick agent installation by platform */}
       <Card className="p-6 space-y-5">
@@ -241,7 +240,7 @@ export function ApiAgentsPage() {
               >
                 <div className="flex items-center justify-between w-full">
                   <Icon className={cn('size-4', isSelected ? 'text-primary' : 'text-muted-foreground')} />
-                  <Badge variant="info" className="text-[9px] px-1.5 py-0">
+                  <Badge variant="info" className="text-3xs px-1.5 py-0">
                     {p.badge}
                   </Badge>
                 </div>
@@ -258,7 +257,7 @@ export function ApiAgentsPage() {
             <div className="flex items-center gap-2">
               <currentPlatform.icon className="size-5 text-primary" />
               <h4 className="font-bold text-sm text-foreground">{currentPlatform.name}</h4>
-              <Badge variant="up" className="text-[10px]">
+              <Badge variant="up" className="text-3xs">
                 {currentPlatform.badge}
               </Badge>
             </div>
@@ -268,7 +267,7 @@ export function ApiAgentsPage() {
               className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 bg-primary/20 text-primary text-xs font-semibold hover:bg-primary/30 transition-colors cursor-pointer border border-primary/40"
             >
               {copiedKey === currentPlatform.id ? (
-                <Check className="size-3.5 text-emerald-400" />
+                <Check className="size-3.5 text-up" />
               ) : (
                 <Copy className="size-3.5" />
               )}
@@ -280,12 +279,12 @@ export function ApiAgentsPage() {
 
           <p className="text-xs text-muted-foreground leading-relaxed">{currentPlatform.desc}</p>
 
-          <div className="p-3 rounded-lg bg-slate-950 font-mono text-xs text-emerald-400 flex items-center justify-between overflow-x-auto border border-slate-800 break-all select-all">
+          <div className="p-3 rounded-lg bg-muted font-mono text-xs text-foreground flex items-center justify-between overflow-x-auto border border-border break-all select-all">
             <code>{currentPlatform.command}</code>
           </div>
 
           {currentPlatform.extraNote && (
-            <p className="text-[11px] text-amber-800 dark:text-amber-300 bg-amber-500/10 p-2.5 rounded-md border border-amber-500/30 font-mono">
+            <p className="text-2xs text-warning bg-warning/10 p-2.5 rounded-md border border-warning/30 font-mono">
               💡 <strong>{t('api_agents.setup_note_label', 'Poznámka k nastavení:')}</strong>{' '}
               {currentPlatform.extraNote}
             </p>
@@ -339,9 +338,7 @@ export function ApiAgentsPage() {
 
         <div className="space-y-3">
           {loading ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">
-              {t('api_agents.loading', 'Načítám agenty…')}
-            </p>
+            <LoadingState size="inline" label={t('api_agents.loading', 'Načítám agenty…')} />
           ) : agents.length === 0 ? (
             <p className="text-xs text-muted-foreground py-4 text-center">
               {t('api_agents.no_agents', 'Žádní registrovaní agenti v databázi.')}
@@ -362,16 +359,16 @@ export function ApiAgentsPage() {
                   className={cn(
                     'p-4 rounded-xl border transition-colors space-y-2 text-xs',
                     isOutdated
-                      ? 'bg-rose-500/10 border-rose-500/40'
+                      ? 'bg-down/10 border-down/40'
                       : autoUpdateKnown && !autoUpdateEnabled
-                        ? 'bg-amber-500/10 border-amber-500/30'
+                        ? 'bg-warning/10 border-warning/30'
                         : 'bg-secondary/30 border-border'
                   )}
                 >
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-foreground text-sm">{a.name}</p>
-                      <Badge variant="info" className="font-mono text-[10px]">
+                      <Badge variant="info" className="font-mono text-3xs">
                         {a.type.toUpperCase()}
                       </Badge>
                       <Badge variant={a.status === 'up' ? 'up' : 'down'}>
@@ -383,7 +380,7 @@ export function ApiAgentsPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       {version ? (
                         isOutdated ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-sm animate-pulse">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-down/25 text-down border border-down/50 shadow-sm animate-pulse">
                             {t(
                               'api_agents.version_outdated',
                               { version, latest: latestVersion ?? '' },
@@ -391,7 +388,7 @@ export function ApiAgentsPage() {
                             )}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-sm">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-up/20 text-up border border-up/40 shadow-sm">
                             {t('api_agents.version_current', { version }, `🟢 v${version} (Aktuální verze)`)}
                           </span>
                         )
@@ -403,11 +400,11 @@ export function ApiAgentsPage() {
 
                       {/* Auto-update status indicator */}
                       {autoUpdateEnabled ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-up/15 text-up border border-up/30">
                           <RefreshCw className="size-3" /> {t('api_agents.auto_update_on', 'Auto-updates: Zapnuto')}
                         </span>
                       ) : autoUpdateKnown ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-warning/20 text-warning border border-warning/40">
                           <AlertTriangle className="size-3" />{' '}
                           {t('api_agents.auto_update_off', 'Auto-updates: VYPNUTO')}
                         </span>
@@ -415,15 +412,15 @@ export function ApiAgentsPage() {
                     </div>
                   </div>
 
-                  <p className="text-muted-foreground font-mono text-[11px]">
+                  <p className="text-muted-foreground font-mono text-2xs">
                     OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> ·{' '}
                     {t('common.target', 'Cíl')}: <span className="text-foreground">{a.target}</span>
                   </p>
 
                   {/* Warning message for outdated version or disabled auto-updates */}
                   {isOutdated && (
-                    <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/40 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
-                      <AlertTriangle className="size-4 text-rose-400 shrink-0" />
+                    <div className="p-2.5 rounded-lg bg-down/10 border border-down/40 text-down text-xs flex items-center gap-2">
+                      <AlertTriangle className="size-4 text-down shrink-0" />
                       <span>
                         <strong>{t('api_agents.outdated_warning_title', 'Agent je neaktuální!')}</strong>{' '}
                         {t(
@@ -436,8 +433,8 @@ export function ApiAgentsPage() {
                   )}
 
                   {autoUpdateKnown && !autoUpdateEnabled && (
-                    <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
-                      <AlertTriangle className="size-3.5 text-amber-400 shrink-0" />
+                    <div className="p-2.5 rounded-lg bg-warning/10 border border-warning/30 text-warning text-2xs flex items-center gap-2">
+                      <AlertTriangle className="size-3.5 text-warning shrink-0" />
                       <span>
                         <strong>
                           {t('api_agents.auto_update_disabled_title', 'Automatické aktualizace jsou vypnuty:')}

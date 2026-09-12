@@ -381,13 +381,13 @@ function Tile({
         </Badge>
       </div>
       {visible.length > 0 && (
-        <ul className="text-muted-foreground mt-2 space-y-0.5 font-mono text-[11px]">
+        <ul className="text-muted-foreground mt-2 space-y-0.5 font-mono text-2xs">
           {visible.map((line, i) => (
             <li key={i}>{line}</li>
           ))}
         </ul>
       )}
-      {note && <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">{note}</p>}
+      {note && <p className="text-muted-foreground mt-2 text-2xs leading-relaxed">{note}</p>}
     </Card>
   );
 }

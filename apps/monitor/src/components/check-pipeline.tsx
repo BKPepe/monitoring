@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Activity, Check, X, ChevronDown } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
+import { LoadingState } from '@/components/ui/states';
 
 interface Stage {
   ok?: boolean | null;
@@ -57,7 +58,7 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
   if (data === null) {
     return (
       <Card className="p-6">
-        <p className="text-muted-foreground text-sm">{t('pipeline.loading', 'Načítám rozpad kontroly…')}</p>
+        <LoadingState label={t('pipeline.loading', 'Načítám rozpad kontroly…')} />
       </Card>
     );
   }
@@ -102,9 +103,7 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
             {t('pipeline.subtitle', 'Kolik času zabrala která fáze poslední kontroly.')}
           </p>
         </div>
-        {data.checkedAt && (
-          <span className="text-muted-foreground ml-auto font-mono text-[11px]">{data.checkedAt}</span>
-        )}
+        {data.checkedAt && <span className="text-muted-foreground ml-auto font-mono text-2xs">{data.checkedAt}</span>}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -159,7 +158,7 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
               {expanded && (
                 <>
                   {extras.length > 0 && (
-                    <dl className="text-muted-foreground mt-2 grid gap-x-4 gap-y-0.5 text-[11px] sm:grid-cols-2">
+                    <dl className="text-muted-foreground mt-2 grid gap-x-4 gap-y-0.5 text-2xs sm:grid-cols-2">
                       {extras.map(([k, v]) => (
                         <div key={k} className="flex justify-between gap-2">
                           <dt>{k}</dt>
@@ -174,10 +173,10 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
                       printed at all - "—" on five rows says nothing. */}
                   {headerEntries.length > 0 && (
                     <div className="mt-2">
-                      <p className="text-muted-foreground mb-1 text-[11px] font-medium">
+                      <p className="text-muted-foreground mb-1 text-2xs font-medium">
                         {t('pipeline.headers', 'HTTP hlavičky')}
                       </p>
-                      <dl className="text-muted-foreground grid gap-x-4 gap-y-0.5 text-[11px]">
+                      <dl className="text-muted-foreground grid gap-x-4 gap-y-0.5 text-2xs">
                         {headerEntries.map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-3">
                             <dt className="shrink-0">{k.replace(/_/g, '-')}</dt>
@@ -195,7 +194,7 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
       </div>
 
       {total > 0 && (
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-muted-foreground text-2xs">
           {t('pipeline.total', { ms: total }, `Součet fází: ${total} ms`)}
           {data.responseMs != null &&
             ` · ${t('pipeline.measured', { ms: data.responseMs }, `naměřená odezva ${data.responseMs} ms`)}`}

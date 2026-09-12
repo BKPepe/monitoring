@@ -94,7 +94,7 @@ export function CorrelationPanel({
                 <div className="-mx-2 flex items-center gap-3 px-2 py-1.5 text-xs">{row}</div>
               )}
               {c.reason && (
-                <p className="text-muted-foreground -mt-0.5 px-2 pb-1 text-[10px]">
+                <p className="text-muted-foreground -mt-0.5 px-2 pb-1 text-3xs">
                   {c.reason === 'constant'
                     ? t('corr.reason_constant', 'hodnota se za celé období nezměnila, vztah nelze spočítat')
                     : t(
@@ -109,7 +109,7 @@ export function CorrelationPanel({
         })}
       </ul>
 
-      <p className="text-muted-foreground text-[11px] leading-relaxed">
+      <p className="text-muted-foreground text-2xs leading-relaxed">
         {t(
           'corr.note',
           { samples: data.samples },
@@ -117,7 +117,7 @@ export function CorrelationPanel({
         )}
       </p>
       {data.total > data.correlations.length && (
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-muted-foreground text-2xs">
           {t(
             'corr.truncated',
             { shown: data.correlations.length, total: data.total },

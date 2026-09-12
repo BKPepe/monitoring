@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { MapPin } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { formatMs } from '@/lib/utils';
+import { LoadingState } from '@/components/ui/states';
 
 interface Region {
   /** null = the node does not report its location. No guessing. */
@@ -62,7 +63,7 @@ export function RegionsPanel() {
         {error ? (
           <p className="text-muted-foreground py-4 text-center text-sm">{error}</p>
         ) : regions === null ? (
-          <p className="text-muted-foreground py-4 text-center text-sm">{t('regions.loading', 'Načítám…')}</p>
+          <LoadingState label={t('regions.loading', 'Načítám…')} />
         ) : regions.length === 0 ? (
           <p className="text-muted-foreground py-4 text-center text-sm">
             {t('regions.empty', 'Za posledních 7 dní neproběhla žádná kontrola.')}
@@ -125,7 +126,7 @@ export function RegionsPanel() {
         )}
 
         {regions !== null && regions.length === 1 && (
-          <p className="text-muted-foreground text-[11px] leading-relaxed">
+          <p className="text-muted-foreground text-2xs leading-relaxed">
             {t(
               'regions.single_hint',
               'Kontroly běží z jednoho místa. Další měřicí uzel se přidá instalací node agenta — teprve pak má srovnání regionů smysl.'

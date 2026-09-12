@@ -39,7 +39,7 @@ export function CollectionIssuesBanner({ monitors }: { monitors: ApiMonitor[] })
               <span className="font-bold text-foreground">{monitor.name}</span>
               <span className="text-down font-medium">{issue.message}</span>
               {issue.since && (
-                <span className="text-muted-foreground font-mono text-[11px]">
+                <span className="text-muted-foreground font-mono text-2xs">
                   ({t('collection.since', 'od')} {new Date(issue.since).toLocaleString('cs-CZ')})
                 </span>
               )}

@@ -89,4 +89,30 @@ export function StatusDot({
   return <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', color[variant], className)} />;
 }
 
+/** The states a monitor can be in, as the API reports them. */
+export type MonitorState = 'up' | 'down' | 'warning' | 'paused' | 'maintenance' | 'unknown';
+
+/**
+ * Which colour a monitor state gets - settled once, for the whole app.
+ *
+ * Four pages used to carry their own copy of this decision and they
+ * disagreed: a monitor in maintenance was blue in the desktop table and grey
+ * in the phone card of the same file, and a silent agent was amber on the
+ * infrastructure page and grey on the dashboard. Status colour is the one
+ * thing an operator scans for, so the answer must not depend on the page or
+ * on the width of the window.
+ *
+ * - maintenance is info: deliberate and planned, not a fault and not "off".
+ * - unknown is warning: the agent went silent and the server does not know
+ *   the state. Not healthy, and grey would say "nothing to see here".
+ */
+export const statusVariant: Record<MonitorState, NonNullable<BadgeProps['variant']>> = {
+  up: 'up',
+  down: 'down',
+  warning: 'warning',
+  paused: 'paused',
+  maintenance: 'info',
+  unknown: 'warning',
+};
+
 export { badgeVariants };

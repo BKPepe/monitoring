@@ -29,7 +29,7 @@ export function UptimeStrip({ days }: { days: UptimeDay[] }) {
 
   if (days.length === 0) {
     return (
-      <p className="text-muted-foreground text-[11px]">{t('public.no_history', 'Historie zatím není k dispozici')}</p>
+      <p className="text-muted-foreground text-2xs">{t('public.no_history', 'Historie zatím není k dispozici')}</p>
     );
   }
 
@@ -63,7 +63,7 @@ export function UptimeStrip({ days }: { days: UptimeDay[] }) {
       </div>
       {/* The caption keeps its height even when empty so the row does not
           jump the first time a day is hovered. */}
-      <p className="text-muted-foreground mt-0.5 h-4 truncate text-right text-[10px] tabular-nums">
+      <p className="text-muted-foreground mt-0.5 h-4 truncate text-right text-3xs tabular-nums">
         {picked ? `${picked.date} ${picked.detail}` : '\u00A0'}
       </p>
     </div>

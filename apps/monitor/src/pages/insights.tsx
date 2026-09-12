@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Lightbulb, HardDrive, Cpu, ArrowRight, Server, Globe } from 'lucide-react';
 import { appApi } from '@/api/app-api';
@@ -68,16 +69,10 @@ export function InsightsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            {t('insights.title', 'AI & Inteligentní Analýza (Insights)')}
-          </h1>
-          <p className="text-muted-foreground text-sm">
-            {t('insights.subtitle', 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.')}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t('insights.title', 'AI & Inteligentní Analýza (Insights)')}
+        subtitle={t('insights.subtitle', 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.')}
+      />
 
       {loading ? (
         <p className="text-muted-foreground text-sm">
@@ -87,11 +82,11 @@ export function InsightsPage() {
         <>
           <div className="grid gap-4 md:grid-cols-3">
             {/* Card 1: Server Disk Growth */}
-            <Card className="p-5 flex flex-col justify-between space-y-4 border-amber-500/30">
+            <Card className="p-5 flex flex-col justify-between space-y-4 border-warning/30">
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400">
+                    <div className="p-2.5 rounded-xl bg-warning/10 text-warning">
                       <HardDrive className="size-6" />
                     </div>
                     <div>
@@ -114,7 +109,7 @@ export function InsightsPage() {
                       <p className="font-semibold text-foreground text-sm mb-0.5">{highDiskMonitor.name}</p>
                       <p className="text-muted-foreground font-mono">
                         {t('common.target', 'Cíl')}: {highDiskMonitor.target} · {t('common.hdd', 'Využití disku')}:{' '}
-                        <strong className="text-amber-400">{highDiskMonitor.hdd} %</strong>
+                        <strong className="text-warning">{highDiskMonitor.hdd} %</strong>
                       </p>
                     </div>
                     <p className="text-muted-foreground leading-relaxed">
@@ -214,7 +209,7 @@ export function InsightsPage() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400">
+                    <div className="p-2.5 rounded-xl bg-up/10 text-up">
                       <Globe className="size-6" />
                     </div>
                     <div>
@@ -229,7 +224,7 @@ export function InsightsPage() {
 
                 <div className="space-y-2 text-xs">
                   <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
-                    <p className="font-semibold text-emerald-400 text-sm mb-0.5">TLS 1.3 & Web Uptime</p>
+                    <p className="font-semibold text-up text-sm mb-0.5">TLS 1.3 & Web Uptime</p>
                     <p className="text-muted-foreground font-mono">
                       {t(
                         'insights.monitored_prefix',
@@ -257,7 +252,7 @@ export function InsightsPage() {
           {/* Actionable recommendations for servers with an agent */}
           <Card className="p-6 space-y-4">
             <div className="flex items-center gap-2.5 border-b border-border pb-3">
-              <Lightbulb className="size-5 text-amber-400" />
+              <Lightbulb className="size-5 text-primary" />
               <h3 className="font-bold text-base">
                 {t('insights.recommendations', 'Automatické analýzy a doporučení pro servery a infrastrukturu')}
               </h3>

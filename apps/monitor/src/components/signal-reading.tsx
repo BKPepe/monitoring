@@ -71,7 +71,7 @@ export function SignalReading({
       <span className="flex items-center gap-2 text-right">
         <span className="font-mono font-medium">{value}</span>
         {levelLabel && rating && (
-          <Badge variant={signalTone(rating.level)} className="text-[10px]">
+          <Badge variant={signalTone(rating.level)} className="text-3xs">
             {levelLabel}
           </Badge>
         )}

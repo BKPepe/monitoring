@@ -85,6 +85,12 @@ export function HealthDonut({
   // a link - a row promising "0 offline devices" would lead to a blank list.
   const linkFor = (arc: HealthSegment) => (hrefFor && arc.value > 0 ? hrefFor(arc) : null);
 
+  // A small installation used to read "Warning 0, Paused 0, Maintenance 0,
+  // Unknown 0" under the ring - four lines saying nothing. Online and offline
+  // stay even at zero, because "0 offline" is the reassurance the ring is
+  // for; the other states appear once there is one to count.
+  const legend = arcs.filter((arc) => arc.value > 0 || arc.variant === 'up' || arc.variant === 'down');
+
   return (
     <div className={cn('flex flex-wrap items-center justify-center gap-6', className)}>
       <div className="relative shrink-0">
@@ -121,7 +127,7 @@ export function HealthDonut({
 
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
           <div>
-            <p className="tabular text-2xl font-semibold">{centerLabel.value}</p>
+            <p className="tabular-nums text-2xl font-semibold">{centerLabel.value}</p>
             <p className="text-muted-foreground text-xs">{centerLabel.caption}</p>
           </div>
         </div>
@@ -130,15 +136,15 @@ export function HealthDonut({
       {/* The legend carries the same numbers as the chart — it doubles as the
           text alternative for screen readers, hence the chart itself has role="presentation". */}
       <ul className="flex min-w-40 flex-col gap-2 text-sm">
-        {arcs.map((arc) => {
+        {legend.map((arc) => {
           const href = linkFor(arc);
           const row = (
             <>
               <span className={cn('size-2.5 shrink-0 rounded-sm', dotClass[arc.variant])} />
               <span className={cn(href ? 'text-foreground' : 'text-muted-foreground')}>{arc.label}</span>
-              <span className="tabular ml-auto font-medium">{arc.value}</span>
+              <span className="tabular-nums ml-auto font-medium">{arc.value}</span>
               {/* w-14: "100.0 %" wrapped onto two lines in the w-12 column. */}
-              <span className="tabular text-muted-foreground w-14 shrink-0 text-right text-xs whitespace-nowrap">
+              <span className="tabular-nums text-muted-foreground w-14 shrink-0 text-right text-xs whitespace-nowrap">
                 {(arc.fraction * 100).toFixed(1)} %
               </span>
             </>

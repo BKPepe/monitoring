@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useLanguage } from '@/context/language-context';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface Sample {
   at: string;
@@ -69,18 +70,18 @@ export function ProcessCulprits({
 
   if (at === null) {
     return (
-      <p className="text-muted-foreground text-[11px]">
+      <p className="text-muted-foreground text-2xs">
         {t('culprits.pick', 'Klepnutím do grafu zjistíte, co v tu chvíli běželo.')}
       </p>
     );
   }
 
   if (loading) {
-    return <p className="text-muted-foreground text-[11px]">{t('culprits.loading', 'Hledám, co běželo…')}</p>;
+    return <p className="text-muted-foreground text-2xs">{t('culprits.loading', 'Hledám, co běželo…')}</p>;
   }
 
   if (!data) {
-    return <p className="text-muted-foreground text-[11px]">{t('culprits.failed', 'Nepodařilo se načíst.')}</p>;
+    return <p className="text-muted-foreground text-2xs">{t('culprits.failed', 'Nepodařilo se načíst.')}</p>;
   }
 
   // Three different reasons for an empty table, and they mean different things.
@@ -88,7 +89,7 @@ export function ProcessCulprits({
   // an idle machine.
   if (!data.enabled) {
     return (
-      <p className="text-muted-foreground text-[11px] leading-relaxed">
+      <p className="text-muted-foreground text-2xs leading-relaxed">
         {t(
           'culprits.disabled',
           'Historie procesů je vypnutá (Nastavení → Obecné → Historie procesů), takže tuhle otázku zatím zodpovědět nejde.'
@@ -99,7 +100,7 @@ export function ProcessCulprits({
 
   if (data.samples.length === 0) {
     return (
-      <p className="text-muted-foreground text-[11px] leading-relaxed">
+      <p className="text-muted-foreground text-2xs leading-relaxed">
         {data.pruned
           ? t('culprits.empty_pruned', 'V tomhle okně už zbyly jen záznamy ze špiček a žádná tu nebyla.')
           : t(
@@ -128,34 +129,30 @@ export function ProcessCulprits({
 
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="text-muted-foreground border-b border-border">
-            <tr>
-              <th className="py-1.5 pr-3 font-medium">{t('culprits.process', 'Proces')}</th>
-              <th className="py-1.5 pr-3 font-medium">CPU</th>
-              <th className="py-1.5 font-medium">{t('culprits.memory', 'Paměť')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.name} className="border-b border-border/50 last:border-0">
-                <td className="py-1.5 pr-3">
-                  <span className="font-medium">{r.name}</span>
-                  {r.pid !== null && (
-                    <span className="text-muted-foreground ml-1.5 font-mono text-[10px]">#{r.pid}</span>
-                  )}
-                </td>
-                {/* A dash means the agent did not report that dimension for
-                    this process - not that it used nothing. */}
-                <td className="py-1.5 pr-3 tabular-nums">{r.cpu === null ? '—' : `${r.cpu} %`}</td>
-                <td className="py-1.5 tabular-nums">{r.ram === null ? '—' : `${r.ram} MB`}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-muted-foreground text-[11px]">
+      <Table dense>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t('culprits.process', 'Proces')}</TableHead>
+            <TableHead>CPU</TableHead>
+            <TableHead>{t('culprits.memory', 'Paměť')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.name}>
+              <TableCell>
+                <span className="font-medium">{r.name}</span>
+                {r.pid !== null && <span className="text-muted-foreground ml-1.5 font-mono text-3xs">#{r.pid}</span>}
+              </TableCell>
+              {/* A dash means the agent did not report that dimension for
+                  this process - not that it used nothing. */}
+              <TableCell className="tabular-nums">{r.cpu === null ? '—' : `${r.cpu} %`}</TableCell>
+              <TableCell className="tabular-nums">{r.ram === null ? '—' : `${r.ram} MB`}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <p className="text-muted-foreground text-2xs">
         {t(
           'culprits.window',
           { from: data.from, to: data.to },

@@ -106,7 +106,7 @@ export function Header({
               // A 22px target is below what a thumb can hit reliably; 44px is
               // the size a finger expects. The pressed state was carried by a
               // background colour alone, which says nothing out loud.
-              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-[11px] transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
+              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-2xs transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
               lang === 'cs' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
             aria-pressed={lang === 'cs'}
@@ -119,7 +119,7 @@ export function Header({
             type="button"
             onClick={() => setLang('en')}
             className={cn(
-              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-[11px] transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
+              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-2xs transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
               lang === 'en' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
             aria-pressed={lang === 'en'}
@@ -163,7 +163,7 @@ export function Header({
             <Bell />
             {alertCount > 0 && (
               <>
-                <span className="bg-destructive text-destructive-foreground absolute top-1 right-1 grid size-4 place-items-center rounded-full text-[10px] font-semibold">
+                <span className="bg-destructive text-destructive-foreground absolute top-1 right-1 grid size-4 place-items-center rounded-full text-3xs font-semibold">
                   {alertCount > 9 ? '9+' : alertCount}
                 </span>
                 <span className="sr-only">
@@ -188,7 +188,7 @@ export function Header({
                   <Bell className="size-4 text-primary" />
                   <h4 className="font-bold text-sm">{t('settings.notifications', 'Notifikace & Upozornění')}</h4>
                 </div>
-                <span className="text-[11px] text-muted-foreground font-mono">
+                <span className="text-2xs text-muted-foreground font-mono">
                   {currentlyDown > 0
                     ? `${currentlyDown} ${t('header.active_alerts', 'aktivní')}`
                     : unreadAlerts.length > 0
@@ -204,36 +204,29 @@ export function Header({
                       key={evt.id}
                       className={cn(
                         'p-3 rounded-lg border flex items-start gap-3 text-xs',
-                        evt.id > readUpToId
-                          ? 'bg-rose-500/10 border-rose-500/20'
-                          : 'bg-secondary/40 border-border opacity-70'
+                        evt.id > readUpToId ? 'bg-down/10 border-down/20' : 'bg-secondary/40 border-border opacity-70'
                       )}
                     >
                       <AlertTriangle
                         className={cn(
                           'size-4 shrink-0 mt-0.5',
-                          evt.id > readUpToId ? 'text-rose-500 dark:text-rose-400' : 'text-muted-foreground'
+                          evt.id > readUpToId ? 'text-down' : 'text-muted-foreground'
                         )}
                       />
                       <div>
-                        <p
-                          className={cn(
-                            'font-semibold',
-                            evt.id > readUpToId ? 'text-rose-700 dark:text-rose-400' : 'text-foreground'
-                          )}
-                        >
+                        <p className={cn('font-semibold', evt.id > readUpToId ? 'text-down' : 'text-foreground')}>
                           🔴 {t('header.outage_label', 'Výpadek')}: {evt.monitorName}
                         </p>
                         <p className="text-muted-foreground mt-0.5">
                           {evt.errorMsg ||
                             t('header.target_unresponsive', { target: evt.target }, `${evt.target} neodpovídá.`)}
                         </p>
-                        <span className="text-[10px] text-muted-foreground block mt-1">{evt.time}</span>
+                        <span className="text-3xs text-muted-foreground block mt-1">{evt.time}</span>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 text-xs font-medium text-emerald-800 dark:text-emerald-300">
+                  <div className="p-3 rounded-lg bg-up/10 border border-up/20 flex items-center gap-3 text-xs font-medium text-up">
                     <CheckCircle2 className="size-4 shrink-0" />
                     <span>{t('header.all_nodes_ok', 'Všechny monitorované uzly fungují bez závad.')}</span>
                   </div>

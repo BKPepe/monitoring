@@ -65,6 +65,12 @@ jobs:
       - name: Mrtvé překladové klíče
         run: npm run check:i18n-dead
 
+      # Surova paleta Tailwindu (text-emerald-400, bg-slate-900) nema svetlou
+      # variantu ani zmereny kontrast - v SPA jde kazda barva pres tokeny.
+      # Jednou se jich nastradalo 389; grep je drzi na nule.
+      - name: Surová paleta v SPA
+        run: npm run check:palette
+
       - name: Rozpočet velikosti buildu
         run: npm run check:bundle
 

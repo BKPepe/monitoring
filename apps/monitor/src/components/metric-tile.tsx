@@ -49,13 +49,13 @@ export function MetricTile({
       </div>
 
       <div className="mt-2 flex items-baseline gap-1.5">
-        <span className="tabular text-2xl font-semibold tracking-tight">{value}</span>
+        <span className="tabular-nums text-2xl font-semibold tracking-tight">{value}</span>
         {unit && <span className="text-muted-foreground text-sm">{unit}</span>}
       </div>
 
       <div className="mt-1 flex items-center gap-2">
         {delta && (
-          <span className={cn('tabular text-xs font-medium', isGood ? 'text-up' : 'text-down')}>
+          <span className={cn('tabular-nums text-xs font-medium', isGood ? 'text-up' : 'text-down')}>
             {delta.direction === 'up' ? '▲' : '▼'} {delta.value}
           </span>
         )}

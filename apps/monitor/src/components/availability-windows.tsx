@@ -55,16 +55,16 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {cells.map((cell) => (
           <div key={cell.label}>
-            <p className="text-muted-foreground text-[11px] font-medium">{cell.label}</p>
+            <p className="text-muted-foreground text-2xs font-medium">{cell.label}</p>
             <p
               className={
                 cell.value == null
-                  ? 'text-muted-foreground tabular text-lg font-bold'
+                  ? 'text-muted-foreground tabular-nums text-lg font-bold'
                   : cell.value >= 99.9
-                    ? 'text-up tabular text-lg font-bold'
+                    ? 'text-up tabular-nums text-lg font-bold'
                     : cell.value >= 99
-                      ? 'text-warning tabular text-lg font-bold'
-                      : 'text-down tabular text-lg font-bold'
+                      ? 'text-warning tabular-nums text-lg font-bold'
+                      : 'text-down tabular-nums text-lg font-bold'
               }
             >
               {cell.value == null ? '—' : `${cell.value.toFixed(2)} %`}
@@ -72,7 +72,7 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
           </div>
         ))}
       </div>
-      <p className="text-muted-foreground text-[11px] leading-relaxed">
+      <p className="text-muted-foreground text-2xs leading-relaxed">
         {t(
           'avail.note',
           'Podíl kontrol, které dopadly dobře, v každém okně. Prázdné okno znamená, že se v něm neměřilo - ne stoprocentní dostupnost.'

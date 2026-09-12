@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';
+import { ErrorState } from '@/components/ui/states';
 
 /**
  * Setting a password from an invite or reset link.
@@ -80,7 +81,7 @@ export function SetPasswordPage() {
           </p>
         ) : (
           <form onSubmit={submit} className="space-y-3">
-            {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+            {error && <ErrorState size="inline" message={error} />}
             <label className="block">
               <span className="text-muted-foreground mb-1 block text-xs font-medium">
                 {t('setpw.password', 'Nové heslo')}

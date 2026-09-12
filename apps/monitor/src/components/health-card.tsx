@@ -19,9 +19,9 @@ export function HealthCard({ metric }: { metric: HealthMetric }) {
       <p className="text-muted-foreground text-xs font-medium">{label}</p>
 
       <div className="flex items-baseline gap-2">
-        <span className="tabular text-xl font-semibold tracking-tight">{value}</span>
+        <span className="tabular-nums text-xl font-semibold tracking-tight">{value}</span>
         {delta && (
-          <span className={cn('tabular text-xs font-medium', isGood ? 'text-up' : 'text-down')}>
+          <span className={cn('tabular-nums text-xs font-medium', isGood ? 'text-up' : 'text-down')}>
             {delta.direction === 'up' ? '▲' : '▼'} {delta.value}
           </span>
         )}

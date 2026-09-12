@@ -1,13 +1,15 @@
 import * as React from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/ui/card';
-import { StatusDot } from '@/components/ui/badge';
+import { PageHeader } from '@/components/layout/page-header';
+import { StatusDot, statusVariant } from '@/components/ui/badge';
 import { Radar, Server, ArrowRight } from 'lucide-react';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { processUsage } from '@/lib/monitor-grouping';
 import { formatPercent, formatRelative } from '@/lib/utils';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 /**
  * Services: all agent-side checks (agent_service) across machines, grouped
@@ -22,7 +24,7 @@ export function ServicesPage() {
     up: t('common.online', 'Online'),
     down: t('common.offline', 'Offline'),
     warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Paused'),
+    paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
     unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
   };
@@ -67,23 +69,16 @@ export function ServicesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-          <Radar className="size-5 text-primary" /> {t('services.title', 'Služby')}
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {t('services.subtitle', 'Procesy a služby hlídané agenty napříč všemi stroji.')}
-        </p>
-      </div>
+      <PageHeader
+        icon={<Radar className="size-5 text-primary" />}
+        title={t('services.title', 'Služby')}
+        subtitle={t('services.subtitle', 'Procesy a služby hlídané agenty napříč všemi stroji.')}
+      />
 
-      {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs font-semibold text-destructive">
-          {error}
-        </div>
-      )}
+      {error && <ErrorState message={error} />}
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">{t('services.loading', 'Načítám služby…')}</p>
+        <LoadingState label={t('services.loading', 'Načítám služby…')} />
       ) : services.length === 0 ? (
         <Card className="p-8 text-center text-sm text-muted-foreground space-y-2">
           <p className="text-foreground font-semibold">{t('services.empty_title', 'Žádné služby hlídané agentem')}</p>
@@ -123,20 +118,11 @@ export function ServicesPage() {
                             warning amber reads as grey. It says what it means
                             now, and the word is printed beside it. */}
                         <span className="flex shrink-0 items-center gap-1.5">
-                          <StatusDot
-                            variant={
-                              svc.status === 'maintenance'
-                                ? 'paused'
-                                : svc.status === 'unknown'
-                                  ? 'neutral'
-                                  : svc.status
-                            }
-                            label={statusLabel[svc.status]}
-                          />
-                          <span className="text-muted-foreground text-[11px]">{statusLabel[svc.status]}</span>
+                          <StatusDot variant={statusVariant[svc.status]} label={statusLabel[svc.status]} />
+                          <span className="text-muted-foreground text-2xs">{statusLabel[svc.status]}</span>
                         </span>
                       </div>
-                      <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+                      <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs">
                         <span className="font-mono">{svc.target}</span>
                         {usage.cpu != null && <span>CPU {formatPercent(usage.cpu)}</span>}
                         {usage.ram != null && <span>RAM {usage.ram} MB</span>}
@@ -163,13 +149,9 @@ export function ServicesPage() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate text-sm font-semibold">{svc.name}</span>
-                      <StatusDot
-                        variant={
-                          svc.status === 'maintenance' ? 'paused' : svc.status === 'unknown' ? 'neutral' : svc.status
-                        }
-                      />
+                      <StatusDot variant={statusVariant[svc.status]} />
                     </div>
-                    <p className="text-muted-foreground mt-1 font-mono text-[11px]">{svc.target}</p>
+                    <p className="text-muted-foreground mt-1 font-mono text-2xs">{svc.target}</p>
                   </Link>
                 ))}
               </div>

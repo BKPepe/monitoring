@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { KeyRound, Link2, Save, UserRound } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,6 +11,7 @@ import { SubscriptionsCard } from '@/components/subscriptions-card';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface MyProfile {
   username: string;
@@ -54,7 +56,7 @@ export function ProfilePage() {
   }, [session?.authenticated, load]);
 
   if (sessionLoading) {
-    return <p className="text-muted-foreground py-16 text-center text-sm">{t('profile.loading', 'Načítám…')}</p>;
+    return <LoadingState label={t('profile.loading', 'Načítám…')} size="page" />;
   }
 
   if (!session?.authenticated) {
@@ -75,21 +77,17 @@ export function ProfilePage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-          <UserRound className="size-5 text-primary" />
-          {t('profile.title', 'Můj účet')}
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {t('profile.subtitle', 'Kontaktní údaje, heslo, dvoufázové ověření a odběry notifikací.')}
-        </p>
-      </div>
+      <PageHeader
+        icon={<UserRound className="size-5 text-primary" />}
+        title={t('profile.title', 'Můj účet')}
+        subtitle={t('profile.subtitle', 'Kontaktní údaje, heslo, dvoufázové ověření a odběry notifikací.')}
+      />
 
       {notice && <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">{notice}</div>}
-      {error && <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">{error}</div>}
+      {error && <ErrorState message={error} />}
 
       {profile === null && !error ? (
-        <p className="text-muted-foreground text-sm">{t('profile.loading', 'Načítám…')}</p>
+        <LoadingState label={t('profile.loading', 'Načítám…')} />
       ) : profile !== null ? (
         <>
           <ProfileForm
@@ -327,7 +325,7 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
         {t('profile.oauth_title', 'Přihlašování přes externí účet')}
       </h3>
 
-      {error && <p className="text-down text-xs font-semibold">{error}</p>}
+      {error && <ErrorState size="inline" message={error} />}
 
       {profile.oauthProvider ? (
         <div className="space-y-3">

@@ -11,6 +11,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState } from '@/components/ui/states';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface AuditEntry {
   id: number;
@@ -169,10 +171,10 @@ export function UserAuditLog() {
         )}
       </div>
 
-      {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+      {error && <ErrorState size="inline" message={error} />}
 
       {entries === null ? (
-        <p className="text-muted-foreground text-sm">{t('uaudit.loading', 'Načítám…')}</p>
+        <LoadingState label={t('uaudit.loading', 'Načítám…')} />
       ) : visible.length === 0 && !error ? (
         <p className="text-muted-foreground text-sm">
           {entries.length === 0
@@ -196,54 +198,54 @@ export function UserAuditLog() {
                 </div>
                 <p className="mt-1 font-medium">{e.actor ?? '—'}</p>
                 {e.description && <p className="text-muted-foreground mt-0.5">{e.description}</p>}
-                <p className="text-muted-foreground mt-0.5 font-mono text-[11px] break-all">
+                <p className="text-muted-foreground mt-0.5 font-mono text-2xs break-all">
                   {e.ip ?? '—'}
                   {e.userAgent ? ` · ${e.userAgent}` : ''}
                 </p>
               </li>
             ))}
           </ul>
-          <div className="hidden overflow-x-auto md:block">
-            <table className="w-full text-left text-xs">
-              <thead className="text-muted-foreground border-b border-border">
-                <tr>
-                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_time', 'Čas')}</th>
-                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_action', 'Akce')}</th>
-                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_actor', 'Kdo')}</th>
-                  <th className="py-2 pr-3 font-medium">{t('uaudit.col_detail', 'Detail')}</th>
-                  <th className="py-2 font-medium">{t('uaudit.col_ip', 'IP')}</th>
-                  <th className="py-2 pl-3 font-medium">{t('uaudit.col_agent', 'Klient')}</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div className="hidden md:block">
+            <Table dense>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('uaudit.col_time', 'Čas')}</TableHead>
+                  <TableHead>{t('uaudit.col_action', 'Akce')}</TableHead>
+                  <TableHead>{t('uaudit.col_actor', 'Kdo')}</TableHead>
+                  <TableHead>{t('uaudit.col_detail', 'Detail')}</TableHead>
+                  <TableHead>{t('uaudit.col_ip', 'IP')}</TableHead>
+                  <TableHead>{t('uaudit.col_agent', 'Klient')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {pageRows.map((e) => (
-                  <tr key={e.id} className="border-b border-border/50 last:border-0">
-                    <td className="text-muted-foreground py-2 pr-3 font-mono whitespace-nowrap tabular-nums">
+                  <TableRow key={e.id}>
+                    <TableCell className="text-muted-foreground font-mono whitespace-nowrap tabular-nums">
                       {e.time}
-                    </td>
-                    <td className="py-2 pr-3">
+                    </TableCell>
+                    <TableCell>
                       <Badge variant={isDestructive(e.action) ? 'down' : isSecurity(e.action) ? 'neutral' : 'up'}>
                         {actionLabels[e.action] ?? e.action}
                       </Badge>
-                    </td>
-                    <td className="py-2 pr-3 font-medium">
+                    </TableCell>
+                    <TableCell>
                       {/* An empty name means unauthenticated - typically an attempt
                           to sign in with a nonexistent account. A dash, not "system". */}
                       {e.actor ?? '—'}
-                    </td>
-                    <td className="text-muted-foreground max-w-[28rem] truncate py-2 pr-3" title={e.description ?? ''}>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground max-w-[28rem] truncate" title={e.description ?? ''}>
                       {e.description ?? '—'}
-                    </td>
-                    <td className="text-muted-foreground py-2 font-mono whitespace-nowrap">{e.ip ?? '—'}</td>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground font-mono whitespace-nowrap">{e.ip ?? '—'}</TableCell>
                     {/* The full user agent is long; the table shows it truncated and
                         text shows on hover. */}
-                    <td className="text-muted-foreground max-w-[14rem] truncate py-2 pl-3" title={e.userAgent ?? ''}>
+                    <TableCell className="text-muted-foreground max-w-[14rem] truncate" title={e.userAgent ?? ''}>
                       {e.userAgent ?? '—'}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
 
           {pageCount > 1 && (

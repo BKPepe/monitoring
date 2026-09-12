@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { HeartPulse, Copy, Check, RefreshCw, AlertTriangle } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
+import { LoadingState } from '@/components/ui/states';
 
 interface HeartbeatInfo {
   monitorId: number;
@@ -62,7 +63,7 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
   if (info === undefined) {
     return (
       <Card className="p-6">
-        <p className="text-muted-foreground text-sm">{t('hb.loading', 'Načítám nastavení heartbeatu…')}</p>
+        <LoadingState label={t('hb.loading', 'Načítám nastavení heartbeatu…')} />
       </Card>
     );
   }
@@ -135,7 +136,7 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
         </p>
         {info.url ? (
           <div className="flex items-center gap-2">
-            <code className="bg-muted min-w-0 flex-1 overflow-x-auto rounded-md px-2 py-1.5 font-mono text-[11px] whitespace-nowrap">
+            <code className="bg-muted min-w-0 flex-1 overflow-x-auto rounded-md px-2 py-1.5 font-mono text-2xs whitespace-nowrap">
               {info.url}
             </code>
             <Button variant="outline" size="sm" onClick={() => copy(info.url as string, 'url')} className="shrink-0">
@@ -153,14 +154,14 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
             {t('hb.cron_label', 'Na konec úlohy (cron, skript zálohy)')}
           </p>
           <div className="flex items-center gap-2">
-            <code className="bg-muted min-w-0 flex-1 overflow-x-auto rounded-md px-2 py-1.5 font-mono text-[11px] whitespace-nowrap">
+            <code className="bg-muted min-w-0 flex-1 overflow-x-auto rounded-md px-2 py-1.5 font-mono text-2xs whitespace-nowrap">
               {curl}
             </code>
             <Button variant="outline" size="sm" onClick={() => copy(curl, 'curl')} className="shrink-0">
               {copied === 'curl' ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
             </Button>
           </div>
-          <p className="text-muted-foreground mt-1.5 text-[11px]">
+          <p className="text-muted-foreground mt-1.5 text-2xs">
             {t(
               'hb.fail_hint',
               'Když úloha selže, přidejte &status=fail&msg=popis - monitor pak spadne hned, ne až po vypršení intervalu.'
@@ -170,7 +171,7 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
       )}
 
       <div className="flex items-center justify-between border-t border-border pt-3">
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-muted-foreground text-2xs">
           {info.lastSignalAt
             ? t('hb.last_signal', { at: info.lastSignalAt }, `Poslední signál: ${info.lastSignalAt}`)
             : t('hb.never', 'Zatím nepřišel žádný signál.')}

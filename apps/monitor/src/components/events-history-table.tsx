@@ -3,6 +3,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { History, ChevronLeft, ChevronRight, MapPin, RefreshCw } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EmptyState } from '@/components/ui/states';
 
 export interface EventLogRow {
   id: number;
@@ -71,7 +73,7 @@ export function EventsHistoryTable() {
     <Card className="p-6 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
         <div className="flex items-center gap-3">
-          <History className="size-5 text-rose-500" />
+          <History className="size-5 text-primary" />
           <div>
             <h3 className="font-bold text-base">
               {t('events.table_title', 'Historie posledních událostí & Auditní Protokol')}
@@ -104,7 +106,7 @@ export function EventsHistoryTable() {
                 setFilter('up');
                 setPage(1);
               }}
-              className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'up' ? 'bg-background text-emerald-400 shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'up' ? 'bg-background text-up shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
               {t('events.filter_passed', 'Passed')} ({events.filter((e) => !e.isDown).length})
             </button>
@@ -114,7 +116,7 @@ export function EventsHistoryTable() {
                 setFilter('down');
                 setPage(1);
               }}
-              className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'down' ? 'bg-background text-rose-400 shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              className={`rounded px-2.5 py-1 transition-colors cursor-pointer ${filter === 'down' ? 'bg-background text-down shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
               {t('events.filter_failed', 'Failed')} ({events.filter((e) => e.isDown).length})
             </button>
@@ -137,7 +139,7 @@ export function EventsHistoryTable() {
             </select>
           </div>
 
-          <Badge variant="up" dot pulse className="text-[10px]">
+          <Badge variant="up" dot pulse className="text-3xs">
             {t('events.live_refresh', 'Živá obnova 10s')}
           </Badge>
           <button
@@ -150,7 +152,7 @@ export function EventsHistoryTable() {
             <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
           {lastUpdated && (
-            <span className="text-[10px] text-muted-foreground font-mono">
+            <span className="text-3xs text-muted-foreground font-mono">
               {t('events.updated_at', 'Aktualizováno')}: {lastUpdated}
             </span>
           )}
@@ -171,7 +173,7 @@ export function EventsHistoryTable() {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate font-bold">{row.monitorName}</p>
-                  <p className="text-muted-foreground truncate font-mono text-[10px]">{row.target}</p>
+                  <p className="text-muted-foreground truncate font-mono text-3xs">{row.target}</p>
                 </div>
                 <Badge
                   variant={row.isDown ? 'down' : row.rawStatus === 'warning' ? 'warning' : 'up'}
@@ -181,13 +183,13 @@ export function EventsHistoryTable() {
                 </Badge>
               </div>
               {row.errorMsg && <p className="text-muted-foreground mt-1 leading-snug">{row.errorMsg}</p>}
-              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs">
                 <span className="font-mono">{row.time}</span>
                 <span className="font-mono">{row.type}</span>
                 {/* Lokalita muze chybet - misto se nedomysli. */}
                 {row.location && (
                   <span className="inline-flex items-center gap-1">
-                    <MapPin className="size-3 shrink-0 text-rose-400" />
+                    <MapPin className="size-3 shrink-0 text-muted-foreground" />
                     {row.location}
                   </span>
                 )}
@@ -197,67 +199,71 @@ export function EventsHistoryTable() {
         )}
       </div>
 
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[11px]">
-              <th className="py-2.5 px-3">{t('events.col_time', 'ČAS')}</th>
-              <th className="py-2.5 px-3">{t('events.col_monitor', 'MONITOR')}</th>
-              <th className="py-2.5 px-3">{t('events.col_type', 'TYP')}</th>
-              <th className="py-2.5 px-3">{t('events.col_location', 'LOKACE')}</th>
-              <th className="py-2.5 px-3">{t('events.col_status', 'STAV')}</th>
-              <th className="py-2.5 px-3">{t('events.col_error', 'CHYBA / DETAIL')}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
+      <div className="hidden md:block">
+        <Table dense>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('events.col_time', 'ČAS')}</TableHead>
+              <TableHead>{t('events.col_monitor', 'MONITOR')}</TableHead>
+              <TableHead>{t('events.col_type', 'TYP')}</TableHead>
+              <TableHead>{t('events.col_location', 'LOKACE')}</TableHead>
+              <TableHead>{t('events.col_status', 'STAV')}</TableHead>
+              <TableHead>{t('events.col_error', 'CHYBA / DETAIL')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {paginatedEvents.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="py-8 text-center text-muted-foreground text-xs">
-                  {events.length === 0
-                    ? t('events.no_events_db', 'V databázi monitor_logs nebyly nalezeny žádné události.')
-                    : t('events.no_events_filter', 'Žádné události neodpovídají zvolenému filtru.')}
-                </td>
-              </tr>
+              <TableRow>
+                <TableCell colSpan={6}>
+                  <EmptyState
+                    title={
+                      events.length === 0
+                        ? t('events.no_events_db', 'V databázi monitor_logs nebyly nalezeny žádné události.')
+                        : t('events.no_events_filter', 'Žádné události neodpovídají zvolenému filtru.')
+                    }
+                  />
+                </TableCell>
+              </TableRow>
             ) : (
               paginatedEvents.map((row) => (
-                <tr key={row.id} className="hover:bg-secondary/30 transition-colors">
-                  <td className="py-3 px-3 font-mono text-muted-foreground whitespace-nowrap">{row.time}</td>
-                  <td className="py-3 px-3">
+                <TableRow key={row.id}>
+                  <TableCell className="font-mono text-muted-foreground whitespace-nowrap">{row.time}</TableCell>
+                  <TableCell>
                     <p className="font-bold text-foreground">{row.monitorName}</p>
-                    <p className="text-[10px] text-muted-foreground font-mono truncate max-w-[180px]">{row.target}</p>
-                  </td>
-                  <td className="py-3 px-3 font-mono text-[11px] text-muted-foreground">{row.type}</td>
-                  <td className="py-3 px-3 whitespace-nowrap">
-                    <span className="inline-flex items-center gap-1 text-[11px]">
+                    <p className="text-3xs text-muted-foreground font-mono truncate max-w-[180px]">{row.target}</p>
+                  </TableCell>
+                  <TableCell className="font-mono text-2xs text-muted-foreground">{row.type}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1 text-2xs">
                       {row.location ? (
                         <>
-                          <MapPin className="size-3 text-rose-400 shrink-0" />
+                          <MapPin className="size-3 text-muted-foreground shrink-0" />
                           <span>{row.location}</span>
                         </>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
                     </span>
-                  </td>
-                  <td className="py-3 px-3 whitespace-nowrap">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <Badge
                       variant={row.isDown ? 'down' : row.rawStatus === 'warning' ? 'warning' : 'up'}
                       className="font-bold"
                     >
                       {row.status}
                     </Badge>
-                  </td>
-                  <td className="py-3 px-3 text-muted-foreground leading-snug">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground leading-snug">
                     {row.errorMsg}
                     {row.responseTime != null && row.responseTime > 0 && (
-                      <span className="ml-2 font-mono text-[10px] text-sky-400">({row.responseTime} ms)</span>
+                      <span className="ml-2 font-mono text-3xs text-muted-foreground">({row.responseTime} ms)</span>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <div className="flex items-center justify-between border-t border-border pt-4 text-xs">

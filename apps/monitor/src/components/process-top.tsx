@@ -83,7 +83,7 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold">{t('proctop.title', 'Kdo bral výkon za posledních 24 hodin')}</h3>
-          <p className="text-muted-foreground text-[11px] leading-relaxed">
+          <p className="text-muted-foreground text-2xs leading-relaxed">
             {t(
               'proctop.hint',
               'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.'
@@ -126,13 +126,13 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
                   style={{ width: `${worst > 0 ? Math.max(2, Math.round((p.avg / worst) * 100)) : 0}%` }}
                 />
               </span>
-              <span className="tabular w-28 shrink-0 text-right">
+              <span className="tabular-nums w-28 shrink-0 text-right">
                 {t('proctop.avg', 'prům.')} {p.avg} {unit}
               </span>
-              <span className="text-muted-foreground tabular w-28 shrink-0 text-right">
+              <span className="text-muted-foreground tabular-nums w-28 shrink-0 text-right">
                 {t('proctop.max', 'špička')} {p.max} {unit}
               </span>
-              <span className="text-muted-foreground hidden w-32 shrink-0 text-right font-mono text-[11px] lg:block">
+              <span className="text-muted-foreground hidden w-32 shrink-0 text-right font-mono text-2xs lg:block">
                 {new Date(p.lastSeenIso).toLocaleString(locale)}
               </span>
             </li>

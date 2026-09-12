@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronUp, Eye, EyeOff, LayoutGrid, X } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 /** Sekce, ktere davaji smysl jen pres celou sirku. */
 const WIDE_BY_DEFAULT = new Set(['monitors', 'insights', 'uptime_history', 'attention']);
@@ -151,12 +152,10 @@ export function DashboardLayoutEditor({
           </button>
         </div>
 
-        {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+        {error && <ErrorState size="inline" message={error} />}
 
         {loading ? (
-          <p className="text-muted-foreground py-6 text-center text-xs">
-            {t('layout.loading', 'Načítám katalog dlaždic…')}
-          </p>
+          <LoadingState size="inline" label={t('layout.loading', 'Načítám katalog dlaždic…')} />
         ) : (
           <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
             {tiles.map((tile, i) => {
@@ -173,11 +172,11 @@ export function DashboardLayoutEditor({
                   <span className="flex flex-col leading-tight">
                     <span className="font-semibold">{info?.label ?? tile.key}</span>
                     {unavailable ? (
-                      <span className="text-muted-foreground text-[10px]">
+                      <span className="text-muted-foreground text-3xs">
                         {t('layout.no_data', 'Zatím se pro tuhle položku nesbírají žádná data')}
                       </span>
                     ) : info?.samples != null ? (
-                      <span className="text-muted-foreground text-[10px]">
+                      <span className="text-muted-foreground text-3xs">
                         {t('layout.samples', { count: info.samples }, `${info.samples} naměřených vzorků`)}
                       </span>
                     ) : null}
@@ -188,7 +187,7 @@ export function DashboardLayoutEditor({
                       type="button"
                       onClick={() => resize(i)}
                       disabled={!tile.visible}
-                      className="rounded px-1.5 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground disabled:opacity-40"
+                      className="rounded px-1.5 py-1 text-3xs font-semibold text-muted-foreground hover:text-foreground disabled:opacity-40"
                       title={t('layout.size_hint', 'Přepnout šířku dlaždice')}
                     >
                       {tile.size === 'wide' ? t('layout.size_wide', 'široká') : t('layout.size_normal', 'běžná')}

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Layers, Plus, Pencil, Trash2, X } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 export interface MetricPreset {
   id: number;
@@ -97,11 +98,11 @@ export function PresetManager() {
         </Button>
       </div>
 
-      {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+      {error && <ErrorState size="inline" message={error} />}
       {notice && <p className="text-up text-xs font-semibold">{notice}</p>}
 
       {presets === null ? (
-        <p className="text-muted-foreground text-sm">{t('presets.loading', 'Načítám presety…')}</p>
+        <LoadingState label={t('presets.loading', 'Načítám presety…')} />
       ) : presets.length === 0 ? (
         <p className="text-muted-foreground py-4 text-center text-sm">
           {t('presets.empty', 'Zatím žádný preset. Monitory používají doporučené výchozí nastavení svého typu.')}
@@ -122,7 +123,7 @@ export function PresetManager() {
                   </span>
                 </div>
                 {p.description && <p className="text-muted-foreground mt-0.5 text-xs">{p.description}</p>}
-                <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+                <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs">
                   <span>{t('presets.metrics_count', { count: p.metrics.length }, `${p.metrics.length} metrik`)}</span>
                   {/* An unset threshold is not printed - the preset simply does not govern it. */}
                   {p.cpuThreshold != null && <span>CPU ≥ {p.cpuThreshold} %</span>}
@@ -234,7 +235,7 @@ function PresetDialog({
           </button>
         </div>
 
-        {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+        {error && <ErrorState size="inline" message={error} />}
 
         <div className="space-y-3">
           <Field label={t('presets.field_name', 'Název')}>
@@ -286,9 +287,7 @@ function PresetDialog({
                     />
                     <span>{m.label}</span>
                     {m.recommended && (
-                      <span className="text-muted-foreground text-[10px]">
-                        {t('presets.recommended', 'doporučeno')}
-                      </span>
+                      <span className="text-muted-foreground text-3xs">{t('presets.recommended', 'doporučeno')}</span>
                     )}
                   </label>
                 ))}
@@ -317,7 +316,7 @@ function PresetDialog({
               </Field>
             ))}
           </div>
-          <p className="text-muted-foreground text-[11px] leading-relaxed">
+          <p className="text-muted-foreground text-2xs leading-relaxed">
             {t(
               'presets.threshold_hint',
               'Prázdné pole znamená, že preset práh neřeší a ponechá hodnotu nastavenou u monitoru.'

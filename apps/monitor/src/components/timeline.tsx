@@ -38,8 +38,8 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-sm font-semibold text-foreground">{event.title}</p>
                 {event.at && (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border shadow-xs">
-                    <Clock className="size-3 text-amber-400 shrink-0" />
+                  <span className="inline-flex items-center gap-1 text-2xs font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border shadow-xs">
+                    <Clock className="size-3 text-muted-foreground shrink-0" />
                     <span>{event.at}</span>
                   </span>
                 )}
@@ -50,10 +50,10 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
             <p className="text-muted-foreground text-xs leading-relaxed">{event.detail}</p>
 
             {(event.location || event.method) && (
-              <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px]">
+              <div className="flex flex-wrap items-center gap-2 pt-0.5 text-2xs">
                 {event.method && (
                   <span className="inline-flex items-center gap-1.5 font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border">
-                    <Globe className="size-3 text-sky-400 shrink-0" />
+                    <Globe className="size-3 text-muted-foreground shrink-0" />
                     <span>
                       {t('timeline.method_label', 'Metoda / Test:')}{' '}
                       <strong className="text-foreground">{event.method}</strong>
@@ -62,7 +62,7 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
                 )}
                 {event.location && (
                   <span className="inline-flex items-center gap-1.5 font-mono text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded border border-border">
-                    <MapPin className="size-3 text-rose-400 shrink-0" />
+                    <MapPin className="size-3 text-muted-foreground shrink-0" />
                     <span>
                       {t('timeline.node_label', 'Uzel:')} <strong className="text-foreground">{event.location}</strong>
                     </span>

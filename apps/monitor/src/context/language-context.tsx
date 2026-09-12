@@ -603,7 +603,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.ongoing_outage': { cs: 'Probíhající výpadek', en: 'Ongoing outage' },
   'dashboard.no_outages': { cs: 'Všechny systémy bez výpadku', en: 'All systems without outage' },
   'dashboard.infra_health': { cs: 'Zdraví infrastruktury', en: 'Infrastructure Health' },
-  'common.paused': { cs: 'Paused', en: 'Paused' },
+  'common.paused': { cs: 'Pozastaveno', en: 'Paused' },
+  'common.retry': { cs: 'Zkusit znovu', en: 'Try again' },
   'common.maintenance': { cs: 'Údržba', en: 'Maintenance' },
   'dashboard.full_report': { cs: 'Celý report', en: 'Full Report' },
   'dashboard.no_monitors': { cs: 'Žádný monitor neodpovídá filtru.', en: 'No monitors match the filter.' },
@@ -3010,6 +3011,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'attention.metric_high': { cs: '{metric} na {value} %', en: '{metric} at {value} %' },
   'dashboard.metric_worst': { cs: 'Nejvyšší {label}', en: 'Highest {label}' },
   'dashboard.customize': { cs: 'Upravit rozložení', en: 'Customize layout' },
+  'dashboard.data_as_of': {
+    cs: 'Data z {time}, obnovují se každou minutu',
+    en: 'Data as of {time}, refreshed every minute',
+  },
   'layout.title': { cs: 'Rozložení dashboardu', en: 'Dashboard layout' },
   'layout.subtitle': {
     cs: 'Vyberte, co se má zobrazovat a v jakém pořadí. Nabízí se jen to, pro co se opravdu sbírají data.',
@@ -3167,7 +3172,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'footer.api_unreachable': { cs: 'Nedostupné', en: 'Unreachable' },
   'heatmap.status_warning': { cs: 'Zhoršená latence', en: 'Degraded Latency' },
   'heatmap.status_down': { cs: 'Výpadek služby (Offline)', en: 'Service Outage (Offline)' },
-  'heatmap.status_paused': { cs: 'Pozastaveno', en: 'Paused' },
   'heatmap.status_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled Maintenance' },
   'heatmap.caption': {
     cs: 'Denní dostupnost monitorů za posledních {days} dní',

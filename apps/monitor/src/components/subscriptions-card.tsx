@@ -2,6 +2,7 @@ import * as React from 'react';
 import { BellRing, Check, Save } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface SubEntry {
   id: number;
@@ -65,10 +66,10 @@ export function SubscriptionsCard() {
   return (
     <Card className="space-y-5 p-6">
       <div className="flex items-center gap-3 border-b border-border pb-3">
-        <BellRing className="size-5 text-violet-400" />
+        <BellRing className="size-5 text-primary" />
         <div>
           <h3 className="text-sm font-semibold">{t('settings.subs_title', 'Odběr notifikací pro můj účet')}</h3>
-          <p className="text-muted-foreground text-[10px]">
+          <p className="text-muted-foreground text-3xs">
             {t(
               'settings.subs_desc',
               'Zvolte, pro které monitory chcete dostávat e-mailové, SMS nebo WhatsApp notifikace při výpadku.'
@@ -77,15 +78,15 @@ export function SubscriptionsCard() {
         </div>
       </div>
 
-      {error && <p className="text-down text-xs font-semibold">{error}</p>}
+      {error && <ErrorState size="inline" message={error} />}
 
       {subs === null ? (
-        <p className="text-muted-foreground text-xs">{t('settings.subs_loading', 'Načítám odběry…')}</p>
+        <LoadingState label={t('settings.subs_loading', 'Načítám odběry…')} size="inline" />
       ) : subs.length === 0 ? (
         <p className="text-muted-foreground text-xs">{t('settings.subs_none', 'Žádné monitory k odběru.')}</p>
       ) : (
         <div className="space-y-2">
-          <div className="text-muted-foreground grid grid-cols-[1fr_60px_60px_70px] gap-2 px-1 text-[10px] font-bold tracking-wider uppercase">
+          <div className="text-muted-foreground grid grid-cols-[1fr_60px_60px_70px] gap-2 px-1 text-3xs font-bold tracking-wider uppercase">
             <span>{t('settings.subs_col_monitor', 'Monitor')}</span>
             <span className="text-center">E-mail</span>
             <span className="text-center">SMS</span>
@@ -115,7 +116,7 @@ export function SubscriptionsCard() {
             <button
               type="button"
               onClick={save}
-              className="inline-flex items-center gap-1.5 rounded bg-violet-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-violet-500"
+              className="inline-flex items-center gap-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 px-3 py-1.5 text-xs font-bold shadow-sm transition-colors"
             >
               {saved ? <Check className="size-3.5" /> : <Save className="size-3.5" />}
               {saved ? t('settings.subs_saved', 'Uloženo!') : t('settings.subs_save', 'Uložit odběry')}

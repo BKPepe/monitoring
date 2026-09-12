@@ -34,3 +34,23 @@ export function filterAssets<T extends { name: string; hostname?: string | null;
       (!q || a.name.toLowerCase().includes(q) || (a.hostname ?? '').toLowerCase().includes(q))
   );
 }
+
+/**
+ * Orders a filtered device list by when each device last changed state,
+ * the most recent change first.
+ *
+ * The "offline" list arrived in whatever order the API sent it, and without
+ * a time on the rows it had no order a reader could see. Newest first puts
+ * what just broke at the top, which is what the operator opened the list
+ * for; a device with no known time goes last, not to an arbitrary place.
+ */
+export function orderByStatusChange<T>(assets: T[], sinceSeconds: (asset: T) => number | null | undefined): T[] {
+  return [...assets].sort((a, b) => {
+    const sa = sinceSeconds(a);
+    const sb = sinceSeconds(b);
+    if (sa == null && sb == null) return 0;
+    if (sa == null) return 1;
+    if (sb == null) return -1;
+    return sa - sb;
+  });
+}

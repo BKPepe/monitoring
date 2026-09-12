@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -7,6 +8,7 @@ import { Activity, Plus, Pencil, Trash2, ExternalLink, X, Eye, EyeOff } from 'lu
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 export interface DisplayOptions {
   showRegions: boolean;
@@ -110,23 +112,20 @@ export function StatusPagesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-            <Activity className="size-5 text-primary" /> {t('sp.title', 'Veřejné status stránky')}
-          </h1>
-          <p className="text-muted-foreground text-sm">
-            {t('sp.subtitle', 'Vyberte, které služby uvidí veřejnost, a pod jakou adresou.')}
-          </p>
-        </div>
-        {isAdmin && (
-          <Button size="sm" onClick={() => setEditing('new')} className="gap-1.5 font-semibold">
-            <Plus className="size-4" /> {t('sp.new', 'Nová stránka')}
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        icon={<Activity className="size-5 text-primary" />}
+        title={t('sp.title', 'Veřejné status stránky')}
+        subtitle={t('sp.subtitle', 'Vyberte, které služby uvidí veřejnost, a pod jakou adresou.')}
+        actions={
+          isAdmin && (
+            <Button size="sm" onClick={() => setEditing('new')} className="gap-1.5 font-semibold">
+              <Plus className="size-4" /> {t('sp.new', 'Nová stránka')}
+            </Button>
+          )
+        }
+      />
 
-      {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+      {error && <ErrorState size="inline" message={error} />}
       {notice && <p className="text-up text-xs font-semibold">{notice}</p>}
 
       {/* The main public page always exists - without this link there was no
@@ -165,10 +164,10 @@ export function StatusPagesPage() {
           </div>
           <img src="/status/api.php?action=badge" alt={t('sp.badge_alt', 'Odznak stavu')} className="h-5" />
         </div>
-        <code className="text-muted-foreground block overflow-x-auto rounded bg-secondary/40 px-2 py-1.5 text-[11px] whitespace-nowrap select-all">
+        <code className="text-muted-foreground block overflow-x-auto rounded bg-secondary/40 px-2 py-1.5 text-2xs whitespace-nowrap select-all">
           {`<img src="${window.location.origin}/status/api.php?action=badge" alt="status">`}
         </code>
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-muted-foreground text-2xs">
           {t('sp.badge_monitor_hint', 'Odznak jedné služby: přidejte &monitor_id=ID, anglická verze: &lang=en.')}
         </p>
       </Card>
@@ -221,7 +220,7 @@ export function StatusPagesPage() {
       )}
 
       {pages === null ? (
-        <p className="text-muted-foreground text-sm">{t('sp.loading', 'Načítám…')}</p>
+        <LoadingState label={t('sp.loading', 'Načítám…')} />
       ) : pages.length === 0 ? (
         <Card className="space-y-2 p-8 text-center">
           <p className="text-foreground text-sm font-semibold">{t('sp.empty_title', 'Zatím žádná status stránka')}</p>
@@ -276,7 +275,7 @@ export function StatusPagesPage() {
                 )}
               </div>
 
-              <p className="text-muted-foreground text-[11px]">
+              <p className="text-muted-foreground text-2xs">
                 {p.monitorIds.length === 0
                   ? t('sp.all_monitors', 'Zobrazuje všechny monitory')
                   : t(
@@ -380,7 +379,7 @@ function PageDialog({
           </button>
         </div>
 
-        {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+        {error && <ErrorState size="inline" message={error} />}
 
         <label className="block">
           <span className="text-muted-foreground mb-1 block text-xs font-medium">{t('sp.field_title', 'Název')}</span>
@@ -400,7 +399,7 @@ function PageDialog({
             onChange={(e) => setSlug(e.target.value)}
             placeholder={t('sp.slug_placeholder', 'odvodí se z názvu')}
           />
-          <span className="text-muted-foreground mt-1 block text-[11px]">
+          <span className="text-muted-foreground mt-1 block text-2xs">
             {t('sp.slug_hint', 'Použije se v adrese stránky (?page=…). Bez vyplnění se vytvoří z názvu.')}
           </span>
         </label>
@@ -467,7 +466,7 @@ function PageDialog({
           <span className="text-muted-foreground mb-1 block text-xs font-medium">
             {t('sp.field_monitors', 'Zobrazené monitory')}
           </span>
-          <p className="text-muted-foreground mb-1.5 text-[11px]">
+          <p className="text-muted-foreground mb-1.5 text-2xs">
             {t('sp.monitors_hint', 'Nevyberete-li nic, stránka ukáže všechny monitory.')}
           </p>
           <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
@@ -481,7 +480,7 @@ function PageDialog({
                   }
                 />
                 <span className="truncate">{m.name}</span>
-                <span className="text-muted-foreground ml-auto shrink-0 text-[11px]">{m.type}</span>
+                <span className="text-muted-foreground ml-auto shrink-0 text-2xs">{m.type}</span>
               </label>
             ))}
           </div>

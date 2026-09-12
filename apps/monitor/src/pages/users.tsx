@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { KeyRound, Pencil, Plus, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,7 @@ import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
 import { AuditLogTable } from '@/components/audit-log-table';
 import { UserAuditLog } from '@/components/user-audit-log';
+import { LoadingState, EmptyState, ErrorState } from '@/components/ui/states';
 
 export function UsersPage() {
   const { t } = useLanguage();
@@ -43,7 +45,7 @@ export function UsersPage() {
   }, [isAdmin, reload]);
 
   if (sessionLoading) {
-    return <p className="text-muted-foreground py-16 text-center text-sm">{t('users.loading', 'Načítám…')}</p>;
+    return <LoadingState label={t('users.loading', 'Načítám…')} size="page" />;
   }
 
   if (!session?.authenticated) return <LoginRequired loginUrl={session?.loginUrl ?? 'admin.php'} />;
@@ -51,21 +53,19 @@ export function UsersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{t('users.title', 'Uživatelé')}</h1>
-          <p className="text-muted-foreground text-sm">
-            {t('users.subtitle', 'Účty, role a přístup do administrace.')}
-          </p>
-        </div>
-        <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
-          <UserPlus />
-          {t('users.add_user', 'Nový uživatel')}
-        </Button>
-      </div>
+      <PageHeader
+        title={t('users.title', 'Uživatelé')}
+        subtitle={t('users.subtitle', 'Účty, role a přístup do administrace.')}
+        actions={
+          <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
+            <UserPlus />
+            {t('users.add_user', 'Nový uživatel')}
+          </Button>
+        }
+      />
 
       {notice && <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">{notice}</div>}
-      {error && <div className="border-down/30 bg-down/12 text-down rounded-lg border px-3 py-2 text-sm">{error}</div>}
+      {error && <ErrorState message={error} />}
 
       <Card>
         <CardHeader>
@@ -73,9 +73,9 @@ export function UsersPage() {
         </CardHeader>
         <CardContent className="px-0 pb-0">
           {users === null ? (
-            <p className="text-muted-foreground py-10 text-center text-sm">{t('users.loading', 'Načítám…')}</p>
+            <LoadingState label={t('users.loading', 'Načítám…')} />
           ) : users.length === 0 ? (
-            <p className="text-muted-foreground py-10 text-center text-sm">{t('users.none', 'Žádní uživatelé.')}</p>
+            <EmptyState title={t('users.none', 'Žádní uživatelé.')} />
           ) : (
             <>
               {/* Mobil: karty misto tabulky - ctyri sloupce s akcemi se na

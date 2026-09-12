@@ -4,6 +4,7 @@ import { BellOff, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';
+import { ErrorState } from '@/components/ui/states';
 
 /**
  * Unsubscribing from public outage notifications (the link in every mail).
@@ -64,7 +65,7 @@ export function UnsubscribePage() {
             <p className="text-muted-foreground text-sm">
               {t('pubsub.unsub_hint', 'Kliknutím zrušíte odběr upozornění na výpadky pro tuto e-mailovou adresu.')}
             </p>
-            {error && <p className="text-destructive text-xs font-semibold">{error}</p>}
+            {error && <ErrorState size="inline" message={error} />}
             <Button onClick={unsubscribe} disabled={state === 'busy'} variant="destructive" className="w-full">
               {state === 'busy' ? t('pubsub.working_unsub', 'Odhlašuji…') : t('pubsub.unsub_btn', 'Odhlásit odběr')}
             </Button>

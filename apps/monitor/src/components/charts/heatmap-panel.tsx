@@ -138,7 +138,7 @@ export function HeatmapPanel({
           <div className="mb-1 grid grid-cols-[3rem_repeat(24,minmax(0,1fr))] gap-px">
             <span />
             {Array.from({ length: 24 }, (_, h) => (
-              <span key={h} className="text-muted-foreground text-center text-[9px] tabular-nums">
+              <span key={h} className="text-muted-foreground text-center text-3xs tabular-nums">
                 {h % 3 === 0 ? h : ''}
               </span>
             ))}
@@ -156,7 +156,7 @@ export function HeatmapPanel({
               >
                 <span
                   className={cn(
-                    'text-muted-foreground pr-1.5 text-right text-[9px] leading-[13px] tabular-nums',
+                    'text-muted-foreground pr-1.5 text-right text-3xs leading-[13px] tabular-nums',
                     label.weekend && 'font-semibold'
                   )}
                 >
@@ -196,7 +196,7 @@ export function HeatmapPanel({
 
           {hover && hovered && (
             <div
-              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-[11px] whitespace-nowrap shadow-md"
+              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-2xs whitespace-nowrap shadow-md"
               style={{ left: hover.x, top: hover.y - 4 }}
             >
               <span className="text-muted-foreground">
@@ -223,7 +223,7 @@ export function HeatmapPanel({
       </div>
 
       {/* Scale legend + the honesty note about empty cells. */}
-      <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px]">
+      <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-3xs">
         {/* Both ends are labelled: the ramp starts at the lowest measured
             value, so an unlabelled light end would read as zero. */}
         <span className="flex items-center gap-1.5 tabular-nums">

@@ -47,6 +47,7 @@ import { rateSignalMetric, signalTone } from '@/lib/signal-quality';
 import { signalAdvice, signalLevelLabel } from '@/lib/signal-texts';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 /**
  * Level 3 - detail of a single metric.
@@ -553,7 +554,7 @@ export function MetricDetailPage() {
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
             {detail?.metric.label ?? metric}
             <MetricHelpIcon metric={metric} className="size-4" />
           </h1>
@@ -562,7 +563,7 @@ export function MetricDetailPage() {
               a tooltip. "6 ms" says nothing until the page names the target and
               the vantage point, and "disk usage" until it names the partition. */}
           {help && (
-            <p className="text-muted-foreground mt-1 max-w-2xl text-[11px] leading-relaxed">
+            <p className="text-muted-foreground mt-1 max-w-2xl text-2xs leading-relaxed">
               {help.what} <span className="text-foreground/80">{help.how}</span>{' '}
               {detail?.monitor.target && (
                 <>
@@ -607,7 +608,7 @@ export function MetricDetailPage() {
       </div>
 
       {zoomWindow && (
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-muted-foreground text-2xs">
           {t(
             'metric.zoom_window',
             {
@@ -752,7 +753,7 @@ export function MetricDetailPage() {
         {isAdmin && points.length > 0 && (
           <div className="flex items-center justify-end gap-2">
             {annMode && !annDraftTs && (
-              <span className="text-muted-foreground text-[11px]">
+              <span className="text-muted-foreground text-2xs">
                 {t('ann.mode_hint', 'Klikněte do grafu na okamžik, ke kterému poznámka patří')}
               </span>
             )}
@@ -840,7 +841,7 @@ export function MetricDetailPage() {
               placeholder={t('ann.placeholder', 'Co se v tu chvíli stalo (deploy, výměna disku, změna konfigurace…)')}
               className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
             />
-            {annError && <p className="text-destructive text-xs font-semibold">{annError}</p>}
+            {annError && <ErrorState size="inline" message={annError} />}
             <div className="flex gap-2">
               <Button type="submit" size="sm" disabled={!annText.trim() || annBusy} className="text-xs">
                 {annBusy ? t('ann.saving', 'Ukládám…') : t('ann.save', 'Uložit poznámku')}
@@ -861,7 +862,7 @@ export function MetricDetailPage() {
           </form>
         )}
 
-        <div className="text-muted-foreground space-y-1 text-[11px]">
+        <div className="text-muted-foreground space-y-1 text-2xs">
           {detail?.metric.counter && (
             <p>
               {t(
@@ -926,7 +927,7 @@ export function MetricDetailPage() {
               </li>
             ))}
           </ul>
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-2xs">
             {t(
               'ann.legend_note',
               'Poznámky se v grafu kreslí jako plné svislé čáry vlastní barvou; tečkované čáry jsou naměřené události (výpadky, restarty).'
@@ -955,7 +956,7 @@ export function MetricDetailPage() {
               : t('metric.loading', 'Načítám měření…')}
           </div>
         )}
-        <p className="text-muted-foreground text-[11px] leading-relaxed">
+        <p className="text-muted-foreground text-2xs leading-relaxed">
           {t(
             'metric.heatmap_note',
             'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
@@ -982,7 +983,7 @@ export function MetricDetailPage() {
               onShowAll={() => setCorrAllFor(corrQuestion)}
             />
           ) : (
-            <p className="text-muted-foreground text-xs">{t('metric.loading', 'Načítám měření…')}</p>
+            <LoadingState label={t('metric.loading', 'Načítám měření…')} size="inline" />
           )}
         </Card>
       )}
@@ -994,7 +995,7 @@ export function MetricDetailPage() {
           {t('metric.hist_title', 'Rozložení hodnot')}
         </h2>
         <HistogramPanel points={shownPoints} unit={unit} tone={tone} />
-        <p className="text-muted-foreground text-[11px] leading-relaxed">
+        <p className="text-muted-foreground text-2xs leading-relaxed">
           {t(
             'metric.hist_note',
             'Kolik měření zvoleného období padlo do jednotlivých pásem hodnot. Dva vrcholy znamenají střídání dvou režimů - to průměr v grafu nahoře neukáže.'
@@ -1011,7 +1012,7 @@ export function MetricDetailPage() {
             <Crosshair className="size-4 text-primary" />
             {t('culprits.title', 'Co v tu chvíli běželo')}
           </h2>
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-2xs">
             {pickedAt
               ? t(
                   'culprits.at_picked_when',
@@ -1056,7 +1057,7 @@ export function MetricDetailPage() {
               </Link>
             ))}
           </div>
-          <p className="text-muted-foreground text-[11px] leading-relaxed">
+          <p className="text-muted-foreground text-2xs leading-relaxed">
             {t(
               'metric.protocol_split_note',
               'Tenhle graf měří provoz na WAN rozhraní, zatímco počty podle protokolu jdou přes všechna rozhraní včetně LAN. Součet IPv4 a IPv6 proto bývá vyšší a není to chyba měření.'
@@ -1105,7 +1106,7 @@ function StatTile({
 }) {
   return (
     <Card className="p-4">
-      <p className="text-muted-foreground text-[11px] font-medium">{label}</p>
+      <p className="text-muted-foreground text-2xs font-medium">{label}</p>
       <div className="mt-1 flex items-baseline gap-2">
         {/* Unmeasured is a dash, never a zero. */}
         <span className="text-2xl font-bold tracking-tight tabular-nums">

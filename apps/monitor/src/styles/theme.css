@@ -67,6 +67,11 @@
      ní má 8,3:1; na světlé červené v tmavém tématu by měla 2,5:1, proto je
      to token a ne natvrdo napsaná bílá. */
   --status-down-foreground: #ffffff;
+  /* Totéž pro plnou zelenou a žlutou výplň (tlačítka „uzavřít incident“,
+     „převzít“). Ve světlém tématu jsou obě tmavé a nesou bílý text (7,6:1 a
+     7,5:1); v tmavém jsou světlé a bílá by na nich měla 2,3:1 - proto token. */
+  --status-up-foreground: #ffffff;
+  --status-warning-foreground: #ffffff;
 
   /* --- Barvy sérií v grafech ------------------------------------------
      Pořadí je závazné: CPU vždy zelená, RAM modrá, síť tyrkysová, teplota
@@ -141,6 +146,8 @@
   --status-paused: #9ca3af;
   /* Světlá červeň potřebuje tmavý text: bílá na ní má 2,5:1, tmavá 8,0:1. */
   --status-down-foreground: #0a0c0f;
+  --status-up-foreground: #0a0c0f;
+  --status-warning-foreground: #0a0c0f;
 
   /* Na tmavém podkladu potřebují barvy víc světla, aby držely kontrast. */
   --chart-cpu: #22c55e;
@@ -185,6 +192,8 @@
   --color-up: var(--status-up);
   --color-down: var(--status-down);
   --color-down-foreground: var(--status-down-foreground);
+  --color-up-foreground: var(--status-up-foreground);
+  --color-warning-foreground: var(--status-warning-foreground);
   --color-warning: var(--status-warning);
   --color-info: var(--status-info);
   --color-paused: var(--status-paused);
@@ -203,6 +212,14 @@
 
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  /* Dva kroky pod text-xs. Aplikace je hustá a 11 a 10 px používá na stovkách
+     míst - dokud to byly text-2xs a text-3xs, nedaly se ladit z jednoho
+     místa a 9 px se vloudilo bez povšimnutí. Bez vlastní výšky řádku: chová se
+     jako dřívější arbitrary hodnota, tedy jen velikost písma. Nic menšího
+     tady záměrně není. */
+  --text-2xs: 0.6875rem;
+  --text-3xs: 0.625rem;
 }
 
 @layer base {
@@ -226,11 +243,6 @@
      naviguje klávesnicí — tab přes tabulky monitorů musí být vidět. */
   :focus-visible {
     @apply outline-ring outline-2 outline-offset-2;
-  }
-
-  /* Čísla metrik nesmí při live updatu přeskakovat do stran. */
-  .tabular {
-    font-variant-numeric: tabular-nums;
   }
 
   /* Mobilní Safari zvětší celou stránku, jakmile má zaostřený prvek písmo

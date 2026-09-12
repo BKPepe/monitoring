@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Globe, Plus, ExternalLink, ShieldCheck, Activity, Clock, Lock, Server } from 'lucide-react';
 import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface WebMonitor {
   id: number;
@@ -149,43 +151,38 @@ export function WebsitesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            {t('websites.title', 'Sledované weby, cPanel & HTTP API')}
-          </h1>
-          <p className="text-muted-foreground text-sm">
-            {t(
-              'websites.subtitle',
-              'Výhradně přehled dostupnosti webových stránek, cPanel statistik, SSL certifikátů a HTTP/HTTPS API.'
-            )}
-          </p>
-        </div>
-
-        {isAuthenticated ? (
-          <button
-            type="button"
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors cursor-pointer"
-          >
-            <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')}
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled
-            title={t('websites.login_required_hint', 'Pro přidávání a úpravu monitorů se prosím přihlaste')}
-            className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
-          >
-            <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')} (
-            {t('common.login_required', 'Vyžaduje přihlášení')})
-          </button>
+      <PageHeader
+        title={t('websites.title', 'Sledované weby, cPanel & HTTP API')}
+        subtitle={t(
+          'websites.subtitle',
+          'Výhradně přehled dostupnosti webových stránek, cPanel statistik, SSL certifikátů a HTTP/HTTPS API.'
         )}
-      </div>
+        actions={
+          isAuthenticated ? (
+            <button
+              type="button"
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors cursor-pointer"
+            >
+              <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title={t('websites.login_required_hint', 'Pro přidávání a úpravu monitorů se prosím přihlaste')}
+              className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
+            >
+              <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')} (
+              {t('common.login_required', 'Vyžaduje přihlášení')})
+            </button>
+          )
+        }
+      />
 
       {!isAuthenticated && (
-        <Card className="p-4 bg-amber-500/10 border-amber-500/30 flex items-center justify-between">
-          <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+        <Card className="p-4 bg-warning/10 border-warning/30 flex items-center justify-between">
+          <p className="text-xs text-warning font-medium">
             {t(
               'websites.public_notice',
               'Přehled stavu webů a cPanelu je veřejně přístupný. Pro přidávání nových domén se prosím přihlaste.'
@@ -201,12 +198,12 @@ export function WebsitesPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Activity className="size-4 text-emerald-400" /> {t('websites.avg_latency', 'Průměrná latence HTTP')}
+            <Activity className="size-4 text-muted-foreground" /> {t('websites.avg_latency', 'Průměrná latence HTTP')}
           </div>
-          <p className="text-2xl font-bold tracking-tight text-emerald-400">
+          <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
             {avgLatency != null ? `${avgLatency} ms` : '—'}
           </p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t(
               'websites.responding_count',
               { count: respondingLatencies.length },
@@ -219,10 +216,10 @@ export function WebsitesPage() {
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
             <Globe className="size-4 text-primary" /> {t('websites.current_uptime', 'Aktuální dostupnost webů')}
           </div>
-          <p className="text-2xl font-bold tracking-tight text-foreground">
+          <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
             {overallUptimePct != null ? `${overallUptimePct.toFixed(1)} %` : '—'}
           </p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t(
               'websites.uptime_hint',
               { up: upCount, total: websites.length },
@@ -233,7 +230,7 @@ export function WebsitesPage() {
 
         <Card className="p-4 space-y-1">
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Lock className="size-4 text-emerald-400" /> {t('websites.ssl_valid', 'SSL Certifikáty')}
+            <Lock className="size-4 text-muted-foreground" /> {t('websites.ssl_valid', 'SSL Certifikáty')}
           </div>
           {(() => {
             // A summary from real data - it used to be a hardcoded "100 % OK".
@@ -241,8 +238,8 @@ export function WebsitesPage() {
             if (withSsl.length === 0) {
               return (
                 <>
-                  <p className="text-2xl font-bold tracking-tight text-muted-foreground">—</p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-2xl font-bold tracking-tight tabular-nums text-muted-foreground">—</p>
+                  <p className="text-2xs text-muted-foreground">
                     {t('websites.ssl_none_read', 'Platnost certifikátů zatím nebyla přečtena')}
                   </p>
                 </>
@@ -254,20 +251,20 @@ export function WebsitesPage() {
             if (expired.length > 0) {
               return (
                 <>
-                  <p className="text-2xl font-bold tracking-tight text-rose-400">
+                  <p className="text-2xl font-bold tracking-tight tabular-nums text-down">
                     {expired.length}/{withSsl.length}
                   </p>
-                  <p className="text-[11px] text-rose-400">{t('websites.ssl_expired', 'Vypršelé certifikáty!')}</p>
+                  <p className="text-2xs text-down">{t('websites.ssl_expired', 'Vypršelé certifikáty!')}</p>
                 </>
               );
             }
             if (expiring.length > 0) {
               return (
                 <>
-                  <p className="text-2xl font-bold tracking-tight text-amber-400">
+                  <p className="text-2xl font-bold tracking-tight tabular-nums text-warning">
                     {t('websites.ssl_days_short', { days: soonest }, `${soonest} dní`)}
                   </p>
-                  <p className="text-[11px] text-amber-400">
+                  <p className="text-2xs text-warning">
                     {t(
                       'websites.ssl_expiring_hint',
                       { count: expiring.length },
@@ -279,10 +276,10 @@ export function WebsitesPage() {
             }
             return (
               <>
-                <p className="text-2xl font-bold tracking-tight text-emerald-400">
+                <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
                   {withSsl.length}/{withSsl.length} OK
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {t('websites.ssl_soonest', { days: soonest }, `Nejbližší expirace za ${soonest} dní`)}
                 </p>
               </>
@@ -294,18 +291,14 @@ export function WebsitesPage() {
           <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
             <Clock className="size-4 text-primary" /> {t('websites.monitored_count', 'Sledovaných webů')}
           </div>
-          <p className="text-2xl font-bold tracking-tight text-foreground">{websites.length}</p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">{websites.length}</p>
+          <p className="text-2xs text-muted-foreground">
             {t('websites.check_interval', 'Interval kontrol podle nastavení monitoru')}
           </p>
         </Card>
       </div>
 
-      {loadError && (
-        <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold">
-          {loadError}
-        </div>
-      )}
+      {loadError && <ErrorState message={loadError} />}
 
       {/* New website modal */}
       {showAddModal && isAuthenticated && (
@@ -363,7 +356,7 @@ export function WebsitesPage() {
       )}
 
       {loading ? (
-        <p className="text-muted-foreground text-sm">{t('websites.loading', 'Načítám seznam webů...')}</p>
+        <LoadingState label={t('websites.loading', 'Načítám seznam webů...')} />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {websites.map((web) => (
@@ -398,7 +391,7 @@ export function WebsitesPage() {
                   </div>
                   <div>
                     <span className="text-muted-foreground">{t('websites.http_status', 'Stav HTTP:')}</span>
-                    <p className={`font-semibold ${web.status === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    <p className={`font-semibold ${web.status === 'up' ? 'text-up' : 'text-down'}`}>
                       {web.status === 'up' ? '200 OK' : 'OFFLINE'}
                     </p>
                   </div>
@@ -417,7 +410,7 @@ export function WebsitesPage() {
                         </div>
                       );
                     }
-                    const cls = days <= 0 ? 'text-rose-400' : days <= 30 ? 'text-amber-400' : 'text-emerald-400';
+                    const cls = days <= 0 ? 'text-down' : days <= 30 ? 'text-warning' : 'text-up';
                     return (
                       <div className="col-span-2 pt-1 border-t border-border/60">
                         <span className="text-muted-foreground flex items-center gap-1">
@@ -449,9 +442,9 @@ export function WebsitesPage() {
                           ? 'text-muted-foreground'
                           : slaGoal != null && value < slaGoal
                             ? value < 99
-                              ? 'text-rose-400'
-                              : 'text-amber-400'
-                            : 'text-emerald-400';
+                              ? 'text-down'
+                              : 'text-warning'
+                            : 'text-up';
                       return (
                         <div>
                           <span className="text-muted-foreground">{label}</span>
@@ -466,7 +459,7 @@ export function WebsitesPage() {
                         <span className="text-muted-foreground flex items-center gap-1">
                           <Activity className="size-3" /> {t('websites.sla_label', 'SLA dostupnost:')}
                           {slaGoal != null && (
-                            <span className="text-[10px]">
+                            <span className="text-3xs">
                               ({t('websites.sla_goal', { goal: slaGoal }, `cíl ${slaGoal} %`)})
                             </span>
                           )}
@@ -492,7 +485,7 @@ export function WebsitesPage() {
                   // Collection configured but failing - scream, don't hide the card.
                   <div
                     role="alert"
-                    className="p-2.5 rounded-lg bg-down/10 border border-down/40 my-2 text-[11px] space-y-0.5"
+                    className="p-2.5 rounded-lg bg-down/10 border border-down/40 my-2 text-2xs space-y-0.5"
                   >
                     <p className="font-bold text-down">
                       ⛔ {t('websites.cpanel_error', 'Sběr cPanel statistik selhává')}
@@ -501,7 +494,7 @@ export function WebsitesPage() {
                   </div>
                 )}
                 {web.details?.cpanel_stats && (
-                  <div className="p-2.5 rounded-lg bg-secondary/40 border border-border/70 my-2 space-y-1.5 text-[11px]">
+                  <div className="p-2.5 rounded-lg bg-secondary/40 border border-border/70 my-2 space-y-1.5 text-2xs">
                     <div className="flex items-center justify-between text-muted-foreground font-semibold border-b border-border/50 pb-1">
                       <span
                         className="flex items-center gap-1"
@@ -513,7 +506,7 @@ export function WebsitesPage() {
                         <Server className="size-3 text-primary" />{' '}
                         {t('websites.cpanel_resources', 'Zdroje hostingu (sdílené účtem):')}
                       </span>
-                      <span className="text-emerald-400">UAPI OK</span>
+                      <span className="text-up">UAPI OK</span>
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       <div>
