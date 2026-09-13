@@ -4,7 +4,8 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Activity, Plus, Pencil, Trash2, ExternalLink, X, Eye, EyeOff } from 'lucide-react';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Activity, Plus, Pencil, Trash2, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
@@ -368,133 +369,138 @@ function PageDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="max-h-[85vh] w-full max-w-lg space-y-4 overflow-y-auto p-6">
-        <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
-          <h3 className="text-base font-bold">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      {/* The form holds unsaved input - a stray click on the backdrop must not
+          throw it away. Escape and the close button still close it deliberately. */}
+      <DialogContent
+        className="flex max-h-[85dvh] flex-col"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogHeader className="border-b border-border">
+          <DialogTitle>
             {page ? t('sp.edit_title', 'Upravit stránku') : t('sp.new_title', 'Nová status stránka')}
-          </h3>
-          <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
-        </div>
+          </DialogTitle>
+        </DialogHeader>
 
-        {error && <ErrorState size="inline" message={error} />}
+        <div className="space-y-4 overflow-y-auto px-5 py-4">
+          {error && <ErrorState size="inline" message={error} />}
 
-        <label className="block">
-          <span className="text-muted-foreground mb-1 block text-xs font-medium">{t('sp.field_title', 'Název')}</span>
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={t('sp.title_placeholder', 'např. Herní servery')}
-          />
-        </label>
-
-        <label className="block">
-          <span className="text-muted-foreground mb-1 block text-xs font-medium">
-            {t('sp.field_slug', 'Adresa (slug)')}
-          </span>
-          <Input
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            placeholder={t('sp.slug_placeholder', 'odvodí se z názvu')}
-          />
-          <span className="text-muted-foreground mt-1 block text-2xs">
-            {t('sp.slug_hint', 'Použije se v adrese stránky (?page=…). Bez vyplnění se vytvoří z názvu.')}
-          </span>
-        </label>
-
-        <label className="block">
-          <span className="text-muted-foreground mb-1 block text-xs font-medium">
-            {t('sp.field_description', 'Popis')}
-          </span>
-          <Input value={description ?? ''} onChange={(e) => setDescription(e.target.value)} />
-        </label>
-
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={isPublic}
-            onChange={(e) => setIsPublic(e.target.checked)}
-            className="size-4"
-          />
-          {t('sp.field_public', 'Veřejně přístupná')}
-        </label>
-
-        {/* What the page shows. The default is everything - options switch things
-            off, not on, so pages created before this option look unchanged. */}
-        <div>
-          <span className="text-muted-foreground mb-1 block text-xs font-medium">
-            {t('sp.field_display', 'Zobrazené sekce')}
-          </span>
-          <div className="space-y-1.5">
-            {(
-              [
-                ['showRegions', t('sp.opt_regions', 'Místa měření')],
-                ['showEvents', t('sp.opt_events', 'Poslední události')],
-                ['showIncidents', t('sp.opt_incidents', 'Incidenty')],
-                ['showUptime', t('sp.opt_uptime', 'Pásy dostupnosti (30 dní)')],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={display[key]}
-                  onChange={(e) => setDisplay((d) => ({ ...d, [key]: e.target.checked }))}
-                  className="size-4"
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-          <label className="mt-2 block">
-            <span className="text-muted-foreground mb-1 block text-xs font-medium">
-              {t('sp.opt_detail_level', 'Detail služeb')}
-            </span>
-            <select
-              value={display.detailLevel}
-              onChange={(e) => setDisplay((d) => ({ ...d, detailLevel: e.target.value as 'full' | 'status' }))}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-            >
-              <option value="full">{t('sp.detail_full', 'Stav + rozbalovací detail a vytížení')}</option>
-              <option value="status">{t('sp.detail_status', 'Jen stav a dostupnost')}</option>
-            </select>
+          <label className="block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">{t('sp.field_title', 'Název')}</span>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={t('sp.title_placeholder', 'např. Herní servery')}
+            />
           </label>
-        </div>
 
-        <div>
-          <span className="text-muted-foreground mb-1 block text-xs font-medium">
-            {t('sp.field_monitors', 'Zobrazené monitory')}
-          </span>
-          <p className="text-muted-foreground mb-1.5 text-2xs">
-            {t('sp.monitors_hint', 'Nevyberete-li nic, stránka ukáže všechny monitory.')}
-          </p>
-          <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
-            {monitors.map((m) => (
-              <label key={m.id} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(m.id)}
-                  onChange={(e) =>
-                    setSelected((prev) => (e.target.checked ? [...prev, m.id] : prev.filter((id) => id !== m.id)))
-                  }
-                />
-                <span className="truncate">{m.name}</span>
-                <span className="text-muted-foreground ml-auto shrink-0 text-2xs">{m.type}</span>
-              </label>
-            ))}
+          <label className="block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_slug', 'Adresa (slug)')}
+            </span>
+            <Input
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              placeholder={t('sp.slug_placeholder', 'odvodí se z názvu')}
+            />
+            <span className="text-muted-foreground mt-1 block text-2xs">
+              {t('sp.slug_hint', 'Použije se v adrese stránky (?page=…). Bez vyplnění se vytvoří z názvu.')}
+            </span>
+          </label>
+
+          <label className="block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_description', 'Popis')}
+            </span>
+            <Input value={description ?? ''} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isPublic}
+              onChange={(e) => setIsPublic(e.target.checked)}
+              className="size-4"
+            />
+            {t('sp.field_public', 'Veřejně přístupná')}
+          </label>
+
+          {/* What the page shows. The default is everything - options switch things
+            off, not on, so pages created before this option look unchanged. */}
+          <div>
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_display', 'Zobrazené sekce')}
+            </span>
+            <div className="space-y-1.5">
+              {(
+                [
+                  ['showRegions', t('sp.opt_regions', 'Místa měření')],
+                  ['showEvents', t('sp.opt_events', 'Poslední události')],
+                  ['showIncidents', t('sp.opt_incidents', 'Incidenty')],
+                  ['showUptime', t('sp.opt_uptime', 'Pásy dostupnosti (30 dní)')],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={display[key]}
+                    onChange={(e) => setDisplay((d) => ({ ...d, [key]: e.target.checked }))}
+                    className="size-4"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <label className="mt-2 block">
+              <span className="text-muted-foreground mb-1 block text-xs font-medium">
+                {t('sp.opt_detail_level', 'Detail služeb')}
+              </span>
+              <select
+                value={display.detailLevel}
+                onChange={(e) => setDisplay((d) => ({ ...d, detailLevel: e.target.value as 'full' | 'status' }))}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="full">{t('sp.detail_full', 'Stav + rozbalovací detail a vytížení')}</option>
+                <option value="status">{t('sp.detail_status', 'Jen stav a dostupnost')}</option>
+              </select>
+            </label>
+          </div>
+
+          <div>
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_monitors', 'Zobrazené monitory')}
+            </span>
+            <p className="text-muted-foreground mb-1.5 text-2xs">
+              {t('sp.monitors_hint', 'Nevyberete-li nic, stránka ukáže všechny monitory.')}
+            </p>
+            <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+              {monitors.map((m) => (
+                <label key={m.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(m.id)}
+                    onChange={(e) =>
+                      setSelected((prev) => (e.target.checked ? [...prev, m.id] : prev.filter((id) => id !== m.id)))
+                    }
+                  />
+                  <span className="truncate">{m.name}</span>
+                  <span className="text-muted-foreground ml-auto shrink-0 text-2xs">{m.type}</span>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-border pt-3">
+        <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
             {t('common.cancel', 'Zrušit')}
           </Button>
           <Button size="sm" onClick={save} disabled={saving} className="font-semibold">
             {saving ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit')}
           </Button>
-        </div>
-      </Card>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

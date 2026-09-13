@@ -2,7 +2,8 @@ import * as React from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Layers, Plus, Pencil, Trash2, X } from 'lucide-react';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Layers, Plus, Pencil, Trash2 } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
@@ -224,20 +225,27 @@ function PresetDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="max-h-[85vh] w-full max-w-lg space-y-4 overflow-y-auto p-6">
-        <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
-          <h3 className="text-base font-bold">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      {/* The form holds unsaved input: a stray click on the overlay must not
+          throw it away. Escape and the close button still close it - that is
+          a deliberate act. There is no subtitle, so Radix is told explicitly
+          that nothing describes the dialog instead of warning about it. */}
+      <DialogContent
+        className="flex max-h-[85dvh] flex-col"
+        aria-describedby={undefined}
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogHeader className="border-b border-border">
+          <DialogTitle>
             {preset ? t('presets.edit_title', 'Upravit preset') : t('presets.new_title', 'Nový preset')}
-          </h3>
-          <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
-        </div>
+          </DialogTitle>
+        </DialogHeader>
 
-        {error && <ErrorState size="inline" message={error} />}
+        {/* Only the fields scroll; the title and the save row stay in reach on a phone. */}
+        <div className="space-y-3 overflow-y-auto px-5 py-4">
+          {error && <ErrorState size="inline" message={error} />}
 
-        <div className="space-y-3">
           <Field label={t('presets.field_name', 'Název')}>
             <input
               value={name}
@@ -324,16 +332,16 @@ function PresetDialog({
           </p>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-border pt-3">
+        <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
             {t('common.cancel', 'Zrušit')}
           </Button>
           <Button size="sm" onClick={save} disabled={saving} className="font-semibold">
             {saving ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit')}
           </Button>
-        </div>
-      </Card>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

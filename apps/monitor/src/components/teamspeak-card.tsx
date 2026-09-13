@@ -122,7 +122,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
         <StatBlock
           icon={Users}
           label={t('ts3.slots', 'Obsazenost')}
-          value={svc.clients_online}
+          value={svc.clients_online ?? null}
           secondary={svc.clients_max != null ? `/ ${svc.clients_max}` : undefined}
         >
           {svc.slot_usage_pct != null && (

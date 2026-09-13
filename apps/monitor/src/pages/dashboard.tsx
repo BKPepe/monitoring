@@ -70,10 +70,16 @@ export function DashboardPage() {
   const { t, lang } = useLanguage();
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<StatusFilter>('all');
-  // Refreshes every minute; the monitors list below reloads whenever `live`
-  // changes, so the whole page follows. It used to load once per visit and
-  // show the morning's state all day.
+  // The public status refreshes every minute. The monitor list keeps its own
+  // minute clock instead of following `live`: a failed refresh deliberately
+  // keeps the old `live` object, so a list tied to it silently stopped
+  // reloading while the caption kept promising a refresh every minute.
   const { data: live } = usePublicStatus(60_000);
+  const [refreshTick, setRefreshTick] = React.useState(0);
+  React.useEffect(() => {
+    const id = window.setInterval(() => setRefreshTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
   // When the monitor list was last loaded. The page refreshes every minute
   // and said nothing about it, so a reader could not tell whether the
   // numbers were from now or from before the last outage.
@@ -129,7 +135,7 @@ export function DashboardPage() {
     return () => {
       active = false;
     };
-  }, [session, live, t]);
+  }, [session, refreshTick, t]);
 
   const totalMonitors = monitors.length > 0 ? monitors.length : (live?.totalMonitors ?? 0);
   const downMonitors = monitors.filter((m) => m.status === 'down').length;

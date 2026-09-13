@@ -23,7 +23,10 @@ export function StatBlock({
 }: {
   icon?: LucideIcon;
   label: React.ReactNode;
-  /** The headline number. `null` or `undefined` is "not measured" and draws as a dash. */
+  /**
+   * The headline number. `null` is "not measured" and draws as a dash. Leave
+   * the prop out for a block that has no headline, only children.
+   */
   value?: React.ReactNode;
   /** A quieter suffix after the value - a maximum, a unit. */
   secondary?: React.ReactNode;

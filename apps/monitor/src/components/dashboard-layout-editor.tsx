@@ -1,7 +1,14 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronUp, Eye, EyeOff, LayoutGrid, X } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { ChevronDown, ChevronUp, Eye, EyeOff, LayoutGrid } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
@@ -87,8 +94,6 @@ export function DashboardLayoutEditor({
     };
   }, [open, t]);
 
-  if (!open) return null;
-
   const entry = (key: string) => catalog.find((c) => c.key === key);
 
   const move = (index: number, delta: number) => {
@@ -133,106 +138,113 @@ export function DashboardLayoutEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="w-full max-w-lg space-y-4 p-6">
-        <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      {/* The tile order and visibility are unsaved edits - a stray click on the
+          backdrop must not throw them away. Escape and the close button still
+          close the dialog, those are deliberate. */}
+      <DialogContent
+        className="flex max-h-[85dvh] flex-col"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogHeader className="flex-row items-center gap-3 border-b border-border">
+          <LayoutGrid aria-hidden="true" className="size-6 shrink-0 text-primary" />
           <div>
-            <h3 className="flex items-center gap-2 text-base font-bold">
-              <LayoutGrid className="size-4 text-primary" /> {t('layout.title', 'Rozložení dashboardu')}
-            </h3>
-            <p className="text-muted-foreground text-xs">
+            <DialogTitle>{t('layout.title', 'Rozložení dashboardu')}</DialogTitle>
+            <DialogDescription className="text-xs">
               {t(
                 'layout.subtitle',
                 'Vyberte, co se má zobrazovat a v jakém pořadí. Nabízí se jen to, pro co se opravdu sbírají data.'
               )}
-            </p>
+            </DialogDescription>
           </div>
-          <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
+        </DialogHeader>
+
+        {/* Only the list scrolls; the header and the save row stay reachable on a
+            phone even with two dozen tiles. */}
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {error && <ErrorState size="inline" message={error} />}
+
+          {loading ? (
+            <LoadingState size="inline" label={t('layout.loading', 'Načítám katalog dlaždic…')} />
+          ) : (
+            <div className="space-y-1.5">
+              {tiles.map((tile, i) => {
+                const info = entry(tile.key);
+                const unavailable = info && !info.available;
+                return (
+                  <div
+                    key={tile.key}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs',
+                      tile.visible && !unavailable ? 'bg-secondary/40' : 'bg-transparent opacity-70'
+                    )}
+                  >
+                    <span className="flex flex-col leading-tight">
+                      <span className="font-semibold">{info?.label ?? tile.key}</span>
+                      {unavailable ? (
+                        <span className="text-muted-foreground text-3xs">
+                          {t('layout.no_data', 'Zatím se pro tuhle položku nesbírají žádná data')}
+                        </span>
+                      ) : info?.samples != null ? (
+                        <span className="text-muted-foreground text-3xs">
+                          {t('layout.samples', { count: info.samples }, `${info.samples} naměřených vzorků`)}
+                        </span>
+                      ) : null}
+                    </span>
+
+                    <div className="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => resize(i)}
+                        disabled={!tile.visible}
+                        className="rounded px-1.5 py-1 text-3xs font-semibold text-muted-foreground hover:text-foreground disabled:opacity-40"
+                        title={t('layout.size_hint', 'Přepnout šířku dlaždice')}
+                      >
+                        {tile.size === 'wide' ? t('layout.size_wide', 'široká') : t('layout.size_normal', 'běžná')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggle(i)}
+                        disabled={unavailable}
+                        className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                        title={tile.visible ? t('layout.hide', 'Skrýt') : t('layout.show', 'Zobrazit')}
+                      >
+                        {tile.visible ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => move(i, -1)}
+                        disabled={i === 0}
+                        className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      >
+                        <ChevronUp className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => move(i, 1)}
+                        disabled={i === tiles.length - 1}
+                        className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      >
+                        <ChevronDown className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {error && <ErrorState size="inline" message={error} />}
-
-        {loading ? (
-          <LoadingState size="inline" label={t('layout.loading', 'Načítám katalog dlaždic…')} />
-        ) : (
-          <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
-            {tiles.map((tile, i) => {
-              const info = entry(tile.key);
-              const unavailable = info && !info.available;
-              return (
-                <div
-                  key={tile.key}
-                  className={cn(
-                    'flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs',
-                    tile.visible && !unavailable ? 'bg-secondary/40' : 'bg-transparent opacity-70'
-                  )}
-                >
-                  <span className="flex flex-col leading-tight">
-                    <span className="font-semibold">{info?.label ?? tile.key}</span>
-                    {unavailable ? (
-                      <span className="text-muted-foreground text-3xs">
-                        {t('layout.no_data', 'Zatím se pro tuhle položku nesbírají žádná data')}
-                      </span>
-                    ) : info?.samples != null ? (
-                      <span className="text-muted-foreground text-3xs">
-                        {t('layout.samples', { count: info.samples }, `${info.samples} naměřených vzorků`)}
-                      </span>
-                    ) : null}
-                  </span>
-
-                  <div className="ml-auto flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => resize(i)}
-                      disabled={!tile.visible}
-                      className="rounded px-1.5 py-1 text-3xs font-semibold text-muted-foreground hover:text-foreground disabled:opacity-40"
-                      title={t('layout.size_hint', 'Přepnout šířku dlaždice')}
-                    >
-                      {tile.size === 'wide' ? t('layout.size_wide', 'široká') : t('layout.size_normal', 'běžná')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggle(i)}
-                      disabled={unavailable}
-                      className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
-                      title={tile.visible ? t('layout.hide', 'Skrýt') : t('layout.show', 'Zobrazit')}
-                    >
-                      {tile.visible ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(i, -1)}
-                      disabled={i === 0}
-                      className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                    >
-                      <ChevronUp className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(i, 1)}
-                      disabled={i === tiles.length - 1}
-                      className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                    >
-                      <ChevronDown className="size-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 border-t border-border pt-3">
+        <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
             {t('common.cancel', 'Zrušit')}
           </Button>
           <Button size="sm" onClick={save} disabled={saving || loading} className="font-semibold">
             {saving ? t('layout.saving', 'Ukládám…') : t('layout.save', 'Uložit rozložení')}
           </Button>
-        </div>
-      </Card>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

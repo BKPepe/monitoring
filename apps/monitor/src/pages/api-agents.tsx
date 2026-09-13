@@ -376,11 +376,12 @@ export function ApiAgentsPage() {
                       </Badge>
                     </div>
 
-                    {/* High-contrast version badge */}
+                    {/* The chips sit on the plain page ground, not on a tint of their own
+                        colour: stacked on the card's tint they fell to about 4.1:1. */}
                     <div className="flex items-center gap-2 flex-wrap">
                       {version ? (
                         isOutdated ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-down/25 text-down border border-down/50 shadow-sm animate-pulse">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-background text-down border border-down/50 shadow-sm animate-pulse">
                             {t(
                               'api_agents.version_outdated',
                               { version, latest: latestVersion ?? '' },
@@ -388,7 +389,7 @@ export function ApiAgentsPage() {
                             )}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-up/20 text-up border border-up/40 shadow-sm">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-background text-up border border-up/40 shadow-sm">
                             {t('api_agents.version_current', { version }, `🟢 v${version} (Aktuální verze)`)}
                           </span>
                         )
@@ -400,11 +401,11 @@ export function ApiAgentsPage() {
 
                       {/* Auto-update status indicator */}
                       {autoUpdateEnabled ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-up/15 text-up border border-up/30">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-background text-up border border-up/30">
                           <RefreshCw className="size-3" /> {t('api_agents.auto_update_on', 'Auto-updates: Zapnuto')}
                         </span>
                       ) : autoUpdateKnown ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-warning/20 text-warning border border-warning/40">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-background text-warning border border-warning/40">
                           <AlertTriangle className="size-3" />{' '}
                           {t('api_agents.auto_update_off', 'Auto-updates: VYPNUTO')}
                         </span>

@@ -272,6 +272,55 @@
    TISK a PDF REPORTY (@media print)
    ========================================================================== */
 @media print {
+  /* Paper is white whatever the screen theme is, but the tokens follow the
+     screen: without this a dark-theme user's PDF printed the host line of
+     every report row near-white on white (1.2:1). Every token the dark block
+     redefines returns to its light value here; theme-contrast.test.ts keeps
+     this list in step with the dark block. */
+  .dark {
+    --background: #ffffff;
+    --foreground: #0b0d10;
+    --card: #f7f8fa;
+    --card-foreground: #0b0d10;
+    --popover: #ffffff;
+    --popover-foreground: #0b0d10;
+    --primary: #a30d18;
+    --primary-foreground: #ffffff;
+    --secondary: #eef0f3;
+    --secondary-foreground: #0b0d10;
+    --muted: #eef0f3;
+    --muted-foreground: #6b7280;
+    --accent: #eef0f3;
+    --accent-foreground: #0b0d10;
+    --destructive: #b91c1c;
+    --destructive-foreground: #ffffff;
+    --border: rgb(0 0 0 / 0.1);
+    --border-strong: rgb(0 0 0 / 0.18);
+    --input: rgb(0 0 0 / 0.12);
+    --ring: #c1121f;
+    --sidebar: #f7f8fa;
+    --sidebar-foreground: #0b0d10;
+    --sidebar-accent: #eef0f3;
+    --sidebar-border: rgb(0 0 0 / 0.08);
+    --status-up: #166534;
+    --status-down: #991b1b;
+    --status-warning: #854d0e;
+    --status-info: #1d4ed8;
+    --status-paused: #4b5563;
+    --status-down-foreground: #ffffff;
+    --status-up-foreground: #ffffff;
+    --status-warning-foreground: #ffffff;
+    --chart-cpu: #15803d;
+    --chart-memory: #2563eb;
+    --chart-network: #0d9488;
+    --chart-temperature: #c2410c;
+    --chart-disk: #7c3aed;
+    --chart-latency: #a16207;
+    --chart-annotation: #c026d3;
+    --chart-corr-positive: #2563eb;
+    --chart-corr-negative: #ea580c;
+  }
+
   /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka bez obsahu */
   aside,
   header,

@@ -95,3 +95,25 @@ describe('status colours meet WCAG AA as text', () => {
     }
   });
 });
+
+describe('printing', () => {
+  const declarations = (block: string) =>
+    Object.fromEntries([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const blockAt = (opener: string, from = 0) => {
+    const start = css.indexOf(opener, from);
+    if (start < 0) throw new Error(`${opener} not found`);
+    return css.slice(start, css.indexOf('}', start));
+  };
+
+  // Paper is white in both themes. A token the dark block redefines but the
+  // print block does not reset keeps its screen value on paper - which is how
+  // the report's host line came out near-white on white.
+  it('resets every dark token to its light value inside @media print', () => {
+    const light = declarations(blockAt(':root {'));
+    const dark = declarations(blockAt('.dark {'));
+    const printed = declarations(blockAt('.dark {', css.indexOf('@media print')));
+    for (const name of Object.keys(dark)) {
+      expect(printed[name], `${name} in the print block`).toBe(light[name]);
+    }
+  });
+});

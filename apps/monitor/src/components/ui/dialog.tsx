@@ -18,7 +18,10 @@ export function DialogContent({
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=open]:animate-in data-[state=open]:fade-in" />
       <DialogPrimitive.Content
         className={cn(
-          'bg-popover text-popover-foreground fixed top-1/2 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2',
+          // 2rem narrower than the screen. The hand-rolled overlays this
+          // replaced kept 16 px on each side; w-full ran the rounded panel
+          // into both edges of a phone.
+          'bg-popover text-popover-foreground fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2',
           'rounded-xl border border-border shadow-2xl',
           className
         )}
@@ -51,5 +54,9 @@ export function DialogDescription({ className, ...props }: React.ComponentProps<
 }
 
 export function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
-  return <div className={cn('flex justify-end gap-2 border-t border-border px-5 py-3', className)} {...props} />;
+  // flex-wrap: the monitor editor's four actions are wider than a phone, and
+  // a row that could not wrap pushed "Delete monitor" off the screen.
+  return (
+    <div className={cn('flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3', className)} {...props} />
+  );
 }

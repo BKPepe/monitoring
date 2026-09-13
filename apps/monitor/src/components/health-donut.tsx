@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Link, useNavigate } from 'react-router';
 import { cn } from '@/lib/utils';
+import { statusVariant, type BadgeProps } from '@/components/ui/badge';
 
 /**
  * Ring chart of the status distribution.
@@ -21,23 +22,34 @@ export interface HealthSegment {
   variant: 'up' | 'warning' | 'down' | 'paused' | 'maintenance' | 'unknown';
 }
 
-const strokeClass: Record<HealthSegment['variant'], string> = {
+// The ring takes its colours from the shared status decision in badge.tsx.
+// It kept a private copy that painted a silent agent grey, a few centimetres
+// from a monitor table that - by that decision - paints it amber.
+type Tone = NonNullable<BadgeProps['variant']>;
+const strokeByTone: Record<Tone, string> = {
   up: 'stroke-up',
-  warning: 'stroke-warning',
   down: 'stroke-down',
+  warning: 'stroke-warning',
+  info: 'stroke-info',
   paused: 'stroke-paused',
-  maintenance: 'stroke-info',
-  unknown: 'stroke-muted-foreground',
+  neutral: 'stroke-muted-foreground',
+  primary: 'stroke-primary',
 };
-
-const dotClass: Record<HealthSegment['variant'], string> = {
+const dotByTone: Record<Tone, string> = {
   up: 'bg-up',
-  warning: 'bg-warning',
   down: 'bg-down',
+  warning: 'bg-warning',
+  info: 'bg-info',
   paused: 'bg-paused',
-  maintenance: 'bg-info',
-  unknown: 'bg-muted-foreground',
+  neutral: 'bg-muted-foreground',
+  primary: 'bg-primary',
 };
+const strokeClass = Object.fromEntries(
+  Object.entries(statusVariant).map(([state, tone]) => [state, strokeByTone[tone]])
+) as Record<HealthSegment['variant'], string>;
+const dotClass = Object.fromEntries(
+  Object.entries(statusVariant).map(([state, tone]) => [state, dotByTone[tone]])
+) as Record<HealthSegment['variant'], string>;
 
 const RADIUS = 54;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;

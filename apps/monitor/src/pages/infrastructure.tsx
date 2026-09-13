@@ -24,6 +24,14 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge, statusVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -179,6 +187,22 @@ export function InfrastructurePage() {
     return cancel;
   }, [session, loadMonitors]);
 
+  // The list reloads every minute. The rows show how long each device has
+  // been in its state, and a value fetched once at page load kept saying
+  // "2 min" an hour later - an old outage read as a fresh one, and a device
+  // that recovered in the meantime never showed it.
+  React.useEffect(() => {
+    let cancel: (() => void) | undefined;
+    const id = window.setInterval(() => {
+      cancel?.();
+      cancel = loadMonitors();
+    }, 60_000);
+    return () => {
+      window.clearInterval(id);
+      cancel?.();
+    };
+  }, [loadMonitors]);
+
   // Deep-link ?edit=<id>: the handler is read via a ref, because the effect
   // must run only when the monitors arrive - depending on the handler identity
   // would run it on every render (the handler is not memoised).
@@ -187,7 +211,13 @@ export function InfrastructurePage() {
   // is created lower (it needs the asset tree) and reading a value before its
   // declaration is a trap even when the handler only runs from an event.
   const selectedAssetRef = React.useRef<(typeof allAssets)[number] | null>(null);
+  // Once, when the monitors first arrive. The list now reloads every minute,
+  // and a deep link re-run on each reload reopened the editor over whatever
+  // the user was doing.
+  const editDeepLinkDone = React.useRef(false);
   React.useEffect(() => {
+    if (editDeepLinkDone.current || rawMonitors.length === 0) return;
+    editDeepLinkDone.current = true;
     const params = new URLSearchParams(window.location.search);
     const editIdStr = params.get('edit');
     if (editIdStr) {
@@ -574,34 +604,34 @@ export function InfrastructurePage() {
         }
       />
 
-      {/* Compact, complete tabbed modal for configuring a new/existing monitor */}
+      {/* Compact, complete tabbed modal for configuring a new/existing monitor.
+          It was a hand-rolled overlay until now: no focus trap, no Escape, and
+          focus was lost on close. The Dialog primitive supplies all of that. */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in-50">
-          <div className="w-full max-w-3xl rounded-2xl bg-card border border-border shadow-2xl p-6 space-y-5 max-h-[92vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-border pb-3 shrink-0">
-              <div>
-                <h3 className="text-lg font-bold">
-                  {editingId
-                    ? t('infra.edit_monitor_num', { id: editingId }, `Úprava monitoru #${editingId}`)
-                    : t('infra.add_monitor_title', 'Přidat nový monitor / zařízení')}
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {t(
-                    'infra.add_monitor_subtitle',
-                    'Plné nastavení parametrů, profilů služeb, 2FA/Remote Actions a limitů'
-                  )}
-                </p>
-              </div>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="text-muted-foreground hover:text-foreground text-base px-2 py-1"
-              >
-                ✕
-              </button>
-            </div>
+        <Dialog open onOpenChange={(open) => !open && setShowAddModal(false)}>
+          <DialogContent
+            className="flex max-h-[92dvh] max-w-3xl flex-col"
+            // The form holds unsaved input - a stray click outside must not
+            // throw it away. Escape and the close button are deliberate acts.
+            onPointerDownOutside={(e) => e.preventDefault()}
+            onInteractOutside={(e) => e.preventDefault()}
+          >
+            <DialogHeader className="shrink-0 border-b border-border">
+              <DialogTitle className="text-lg font-bold">
+                {editingId
+                  ? t('infra.edit_monitor_num', { id: editingId }, `Úprava monitoru #${editingId}`)
+                  : t('infra.add_monitor_title', 'Přidat nový monitor / zařízení')}
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                {t(
+                  'infra.add_monitor_subtitle',
+                  'Plné nastavení parametrů, profilů služeb, 2FA/Remote Actions a limitů'
+                )}
+              </DialogDescription>
+            </DialogHeader>
 
             {/* Modal tabs */}
-            <div className="flex border-b border-border gap-2 shrink-0">
+            <div className="flex border-b border-border gap-2 shrink-0 px-5 pt-4">
               {[
                 { id: 'general', label: t('infra.tab_general', '1. Základní & Typ') },
                 { id: 'metrics', label: t('infra.tab_metrics', '2. Sekce Dashboardu') },
@@ -630,7 +660,11 @@ export function InfrastructurePage() {
                 <p className="font-bold text-lg">{t('infra.save_success', 'Monitor byl úspěšně uložen!')}</p>
               </div>
             ) : (
-              <form onSubmit={handleSaveMonitor} className="space-y-4 overflow-y-auto pr-1 flex-1">
+              <form
+                id="monitor-settings-form"
+                onSubmit={handleSaveMonitor}
+                className="space-y-4 overflow-y-auto px-5 py-4 flex-1"
+              >
                 {/* TAB 1: Basic settings and type selection */}
                 {activeTab === 'general' && (
                   <div className="space-y-4">
@@ -1104,7 +1138,9 @@ export function InfrastructurePage() {
                                       <>
                                         {' '}
                                         (
-                                        <strong className="font-mono font-bold text-up bg-up/25 px-1.5 py-0.5 rounded">
+                                        {/* The plain page ground, not a second tint of green: stacked on
+                                            the strip's own tint the version fell to 3.7:1. */}
+                                        <strong className="font-mono font-bold text-foreground bg-background px-1.5 py-0.5 rounded">
                                           v{agentVer}
                                         </strong>
                                         )
@@ -1542,93 +1578,98 @@ export function InfrastructurePage() {
                     </div>
                   </div>
                 )}
-
-                <div className="flex items-center gap-2 pt-3 border-t border-border shrink-0">
-                  {editingId != null && (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="mr-auto gap-1.5 text-xs font-semibold"
-                      onClick={async () => {
-                        // Answers "how do I remove an imported monitor again?" -
-                        // deletion previously existed only in admin.php.
-                        if (
-                          !window.confirm(
-                            t(
-                              'infra.delete_confirm',
-                              'Opravdu smazat tento monitor včetně celé jeho historie měření? Akce je nevratná.'
-                            )
-                          )
-                        )
-                          return;
-                        try {
-                          const res = await fetch('/status/api.php?action=delete_monitor', {
-                            method: 'POST',
-                            credentials: 'include',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ id: editingId }),
-                          });
-                          const data = await res.json().catch(() => ({}));
-                          if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-                          setShowAddModal(false);
-                          setSelectedId(null);
-                          loadMonitors();
-                        } catch (err) {
-                          window.alert(
-                            err instanceof Error ? err.message : t('infra.delete_failed', 'Smazání monitoru selhalo.')
-                          );
-                        }
-                      }}
-                    >
-                      {t('infra.delete_monitor_btn', 'Smazat monitor')}
-                    </Button>
-                  )}
-                  {/* Keeps the monitor and its settings, throws away what it
-                      measured - the "start again from today" case, which until
-                      now existed only in the legacy administration. The server
-                      asks for the monitor's name back, so a stray click cannot
-                      delete months of measurements. */}
-                  {editingId && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="gap-1.5 text-xs font-semibold"
-                      title={t(
-                        'infra.clear_history_hint',
-                        'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.'
-                      )}
-                      onClick={async () => {
-                        const typed = window.prompt(
-                          t(
-                            'infra.clear_history_hint',
-                            'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.'
-                          ),
-                          ''
-                        );
-                        if (typed == null) return;
-                        try {
-                          await appApi.clearMonitorHistory(editingId, typed);
-                          window.alert(t('infra.clear_history_done', 'Historie smazána.'));
-                          loadMonitors();
-                        } catch (err) {
-                          window.alert(err instanceof Error ? err.message : String(err));
-                        }
-                      }}
-                    >
-                      {t('infra.clear_history', 'Smazat historii měření')}
-                    </Button>
-                  )}
-                  <Button type="button" variant="outline" className="ml-auto" onClick={() => setShowAddModal(false)}>
-                    {t('common.cancel', 'Zrušit')}
-                  </Button>
-                  <Button type="submit" className="font-bold">
-                    {t('infra.save_monitor_btn', 'Uložit monitor a nastavení')}
-                  </Button>
-                </div>
               </form>
             )}
-          </div>
-        </div>
+
+            {/* The action row sits outside the scrolling form so it stays in
+                view however long a tab is; `form` ties the submit button back
+                to it (Enter in a field still submits). */}
+            {!addedSuccess && (
+              <DialogFooter className="shrink-0 items-center">
+                {editingId != null && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="mr-auto gap-1.5 text-xs font-semibold"
+                    onClick={async () => {
+                      // Answers "how do I remove an imported monitor again?" -
+                      // deletion previously existed only in admin.php.
+                      if (
+                        !window.confirm(
+                          t(
+                            'infra.delete_confirm',
+                            'Opravdu smazat tento monitor včetně celé jeho historie měření? Akce je nevratná.'
+                          )
+                        )
+                      )
+                        return;
+                      try {
+                        const res = await fetch('/status/api.php?action=delete_monitor', {
+                          method: 'POST',
+                          credentials: 'include',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ id: editingId }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+                        setShowAddModal(false);
+                        setSelectedId(null);
+                        loadMonitors();
+                      } catch (err) {
+                        window.alert(
+                          err instanceof Error ? err.message : t('infra.delete_failed', 'Smazání monitoru selhalo.')
+                        );
+                      }
+                    }}
+                  >
+                    {t('infra.delete_monitor_btn', 'Smazat monitor')}
+                  </Button>
+                )}
+                {/* Keeps the monitor and its settings, throws away what it
+                    measured - the "start again from today" case, which until
+                    now existed only in the legacy administration. The server
+                    asks for the monitor's name back, so a stray click cannot
+                    delete months of measurements. */}
+                {editingId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-1.5 text-xs font-semibold"
+                    title={t(
+                      'infra.clear_history_hint',
+                      'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.'
+                    )}
+                    onClick={async () => {
+                      const typed = window.prompt(
+                        t(
+                          'infra.clear_history_hint',
+                          'Smaže všechna měření, logy i denní agregace tohohle monitoru. Nevratné. Pro potvrzení opište přesný název monitoru.'
+                        ),
+                        ''
+                      );
+                      if (typed == null) return;
+                      try {
+                        await appApi.clearMonitorHistory(editingId, typed);
+                        window.alert(t('infra.clear_history_done', 'Historie smazána.'));
+                        loadMonitors();
+                      } catch (err) {
+                        window.alert(err instanceof Error ? err.message : String(err));
+                      }
+                    }}
+                  >
+                    {t('infra.clear_history', 'Smazat historii měření')}
+                  </Button>
+                )}
+                <Button type="button" variant="outline" className="ml-auto" onClick={() => setShowAddModal(false)}>
+                  {t('common.cancel', 'Zrušit')}
+                </Button>
+                <Button type="submit" form="monitor-settings-form" className="font-bold">
+                  {t('infra.save_monitor_btn', 'Uložit monitor a nastavení')}
+                </Button>
+              </DialogFooter>
+            )}
+          </DialogContent>
+        </Dialog>
       )}
 
       <CollectionIssuesBanner monitors={rawMonitors} />
@@ -1764,7 +1805,7 @@ export function InfrastructurePage() {
                     <p className="text-xs font-bold text-warning">
                       ⚠ {t('infra.unreachable_title', 'Tento cíl není z hostingu dosažitelný')}
                     </p>
-                    <p className="text-2xs text-warning/80">
+                    <p className="text-2xs text-warning">
                       {t(
                         'infra.unreachable_desc',
                         'Cíl leží v privátní síti, takže aktivní kontrola z hostingu bude vždy selhávat a hlásit falešné výpadky. Převeďte monitor na kontrolu agentem — ověří běžící proces přímo na stroji.'
