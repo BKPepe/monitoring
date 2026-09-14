@@ -3986,8 +3986,9 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
     $dns_time_ms = round((microtime(true) - $dns_start) * 1000);
 
     // Breakdown of the check into stages (DNS/TCP/TLS/HTTP/body) for the
-    // diagnostic "check pipeline" on the monitor detail. None of this affects
-    // $status below - that is still decided solely by the HTTP code/cURL error.
+    // diagnostic "check pipeline" on the monitor detail. The verdict itself
+    // comes from bk_http_verdict(): the HTTP code and, when the monitor has
+    // one, the expected text in the body.
     $check_stages = [
         'dns' => [
             'ok' => $host ? ($has_ipv4 || $has_ipv6) : false,
@@ -4086,7 +4087,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             ],
         ];
 
-        if ($body_keyword !== null && $body_keyword !== '') {
+        if (is_string($body_keyword) && trim($body_keyword) !== '') {
             $keyword_found = $response !== false && strpos($response, $body_keyword) !== false;
             $check_stages['body'] = [
                 'ok' => $keyword_found,
@@ -4106,21 +4107,13 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             ], $conn_details);
         }
 
-        if ($http_code >= 200 && $http_code < 400) {
-            return array_merge([
-                'status' => 'up',
-                'response_time' => $duration,
-                'error' => null,
-                'check_stages' => $check_stages
-            ], $conn_details);
-        } else {
-            return array_merge([
-                'status' => 'down',
-                'response_time' => $duration,
-                'error' => "HTTP status kód: " . $http_code,
-                'check_stages' => $check_stages
-            ], $conn_details);
-        }
+        $verdict = bk_http_verdict((int)$http_code, $response, $body_keyword);
+        return array_merge([
+            'status' => $verdict['status'],
+            'response_time' => $duration,
+            'error' => $verdict['error'],
+            'check_stages' => $check_stages
+        ], $conn_details);
     } else {
         // Fallback na file_get_contents
         $context = stream_context_create([
@@ -4164,20 +4157,95 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             }
         }
         
-        if ($http_code >= 200 && $http_code < 400) {
-            return array_merge([
-                'status' => 'up',
-                'response_time' => $duration,
-                'error' => null
-            ], $conn_details);
-        } else {
-            return array_merge([
-                'status' => 'down',
-                'response_time' => $duration,
-                'error' => "HTTP status kód: " . $http_code
-            ], $conn_details);
-        }
+        $verdict = bk_http_verdict($http_code, $response, $body_keyword);
+        return array_merge([
+            'status' => $verdict['status'],
+            'response_time' => $duration,
+            'error' => $verdict['error']
+        ], $conn_details);
     }
+}
+
+/**
+ * The verdict of a web check: does the site work for its visitors?
+ *
+ * A 2xx/3xx answer used to be the whole verdict. The body keyword was measured
+ * for the diagnostic pipeline and then ignored, so a hosting "account
+ * suspended" page, a parked domain or a blank page after a PHP fatal - all
+ * served with 200 - stayed green, while the monitor form promised that a
+ * missing keyword counts as an outage. The keyword is compared as the exact
+ * string the admin typed.
+ *
+ * @param int $http_code Final status code after redirects (0 = no answer).
+ * @param string|false|null $body Response body; false or null when none was read.
+ * @param mixed $body_keyword Expected text; null or blank means not checked.
+ * @return array{status: string, error: ?string}
+ */
+function bk_http_verdict(int $http_code, $body, $body_keyword): array {
+    if ($http_code < 200 || $http_code >= 400) {
+        return ['status' => 'down', 'error' => 'HTTP status kód: ' . $http_code];
+    }
+    if (is_string($body_keyword) && trim($body_keyword) !== ''
+        && (!is_string($body) || strpos($body, $body_keyword) === false)) {
+        return [
+            'status' => 'down',
+            'error' => 'Stránka odpověděla HTTP ' . $http_code . ', ale neobsahuje očekávaný text „' . $body_keyword . '“',
+        ];
+    }
+    return ['status' => 'up', 'error' => null];
+}
+
+/**
+ * Does fresh evidence from the agent on the same machine show the service
+ * running, although the check from the hosting failed?
+ *
+ * The fallback exists for game servers the hosting cannot reach directly
+ * (an outbound firewall on shared hosting): the agent sees the port listening
+ * or the process running. Three rules used to turn real outages green:
+ * - a web monitor counted as up whenever the agent listed port 80 or 443, so
+ *   nginx in front of a dead PHP-FPM or database answered every visitor with
+ *   a 502 while the monitor stayed up - a site that serves no pages is down;
+ * - agent data as old as the silence timeout (50 minutes by default) was
+ *   trusted, so a machine that went down with its agent stayed up that long.
+ *   Eleven minutes still covers the slowest agent - the Docker loop reports
+ *   every 300 s - with one report missed;
+ * - any monitored process counted, so a running nginx vouched for TeamSpeak.
+ *
+ * @param string $type Monitor type.
+ * @param array $agent The monitor's last_details as the agent wrote them.
+ * @param array $monitor The monitor row (target, port, monitored_processes).
+ * @param int $now Unix time.
+ * @param int $max_age_secs How old the agent's report may be to count.
+ */
+function bk_agent_backup_says_up(string $type, array $agent, array $monitor, int $now, int $max_age_secs = 660): bool {
+    $seen = (int)($agent['agent_last_seen'] ?? 0);
+    if ($seen <= 0 || $now - $seen > $max_age_secs) {
+        return false;
+    }
+
+    if ($type === 'teamspeak') {
+        $parts = explode(':', (string)($monitor['target'] ?? ''));
+        $service_ports = [count($parts) === 2 ? (int)$parts[1] : 9987, (int)($monitor['port'] ?? 0) ?: 10011];
+        $process_pattern = '/ts3|teamspeak/i';
+    } elseif ($type === 'minecraft') {
+        $service_ports = [(int)($monitor['port'] ?? 0) ?: 25565];
+        $process_pattern = '/minecraft|java/i';
+    } else {
+        return false;
+    }
+
+    $listening = array_map('intval', is_array($agent['ports'] ?? null) ? $agent['ports'] : []);
+    if (array_intersect($service_ports, $listening)) {
+        return true;
+    }
+
+    $monitored = array_filter(array_map('trim', explode(',', (string)($monitor['monitored_processes'] ?? ''))));
+    $service_processes = array_filter($monitored, fn($p) => preg_match($process_pattern, $p) === 1);
+    if (!$service_processes) {
+        return false;
+    }
+    $missing = is_array($agent['missing_processes'] ?? null) ? $agent['missing_processes'] : [];
+    return !array_intersect($service_processes, $missing);
 }
 
 /**
@@ -5934,10 +6002,12 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     if ($new_status === 'maintenance') {
         $sms_body = "$emoji Monitor $name byl přepnut do režimu plánované údržby. Důvod: $error_msg";
     } elseif ($new_status === 'down' && !empty($error_msg)) {
-        $sms_body .= " Chyba: " . substr($error_msg, 0, 100);
+        // Cut by characters. A byte cut split a letter like "ů" in half, and the
+        // keyword error arrived naming a shorter keyword than the configured one.
+        $sms_body .= " Chyba: " . mb_strimwidth($error_msg, 0, 100, '…', 'UTF-8');
     } elseif ($is_agent_event && !empty($error_msg)) {
     // For agent events (inactive agent, exceeded limits) always state the reason
-        $sms_body .= " Důvod: " . substr($error_msg, 0, 220);
+        $sms_body .= " Důvod: " . mb_strimwidth($error_msg, 0, 220, '…', 'UTF-8');
     }
     
     foreach ($recipients as $rec) {

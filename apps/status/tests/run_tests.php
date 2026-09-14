@@ -41,6 +41,8 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_agent_str',
     'bk_smart_is_missing',
     'bk_agent_bool',
+    'bk_http_verdict',
+    'bk_agent_backup_says_up',
 ]);
 
 
@@ -633,6 +635,59 @@ if (function_exists('bk_agent_bool')) {
     check_true('1/0 a "1"/"0"', bk_agent_bool(['a' => 1], 'a') === true && bk_agent_bool(['a' => '0'], 'a') === false);
     check_true('"false" je false, ne true jako u (bool)', bk_agent_bool(['a' => 'false'], 'a') === false);
     check_true('pole, null a "maybe" = null', bk_agent_bool(['a' => []], 'a') === null && bk_agent_bool(['a' => null], 'a') === null && bk_agent_bool(['a' => 'maybe'], 'a') === null);
+}
+
+// --- Web check verdict (bk_http_verdict) -----------------------------------
+// The body keyword used to be measured and ignored: a suspended-hosting page
+// served with 200 stayed green, although the form promises an outage.
+if (function_exists('bk_http_verdict')) {
+    check('200 bez klíčového slova je up', bk_http_verdict(200, 'cokoli', null)['status'], 'up');
+    check('200 s nalezeným textem je up', bk_http_verdict(200, '<h1>Blood Kings</h1>', 'Blood Kings')['status'], 'up');
+    $v = bk_http_verdict(200, '<h1>Account suspended</h1>', 'Blood Kings');
+    check('200 bez očekávaného textu je výpadek', $v['status'], 'down');
+    check_true('chyba jmenuje hledaný text', str_contains((string)$v['error'], 'Blood Kings'));
+    check('prázdné tělo s klíčovým slovem je výpadek', bk_http_verdict(200, '', 'Blood Kings')['status'], 'down');
+    check('nepřečtené tělo s klíčovým slovem je výpadek', bk_http_verdict(200, false, 'Blood Kings')['status'], 'down');
+    check('text se porovnává přesně, jak ho admin zadal', bk_http_verdict(200, 'blood kings', 'Blood Kings')['status'], 'down');
+    check('prázdné nebo mezerové slovo se nekontroluje', bk_http_verdict(200, 'x', '  ')['status'], 'up');
+    check('3xx s nalezeným textem je up', bk_http_verdict(301, 'Blood Kings', 'Blood Kings')['status'], 'up');
+    $v = bk_http_verdict(503, 'Blood Kings', 'Blood Kings');
+    check('503 je výpadek i s nalezeným textem', $v['status'], 'down');
+    check('503 hlásí HTTP kód, ne chybějící text', $v['error'], 'HTTP status kód: 503');
+    check('žádná odpověď je výpadek', bk_http_verdict(0, '', null)['status'], 'down');
+}
+
+// --- Agent backup verdict (bk_agent_backup_says_up) ------------------------
+// The fallback turned real outages green: a web with the agent listing 443,
+// agent data 50 minutes old, and any monitored process vouching for TeamSpeak.
+if (function_exists('bk_agent_backup_says_up')) {
+    $now = 1800000000;
+    $all_ports = ['agent_last_seen' => $now - 60, 'ports' => [80, 443, 9987, 10011, 25565], 'missing_processes' => []];
+    check_false('web agent nikdy nezachrání (nginx na 443 s mrtvým PHP je výpadek)',
+        bk_agent_backup_says_up('web', $all_ports, ['target' => 'https://x.cz'], $now));
+    check_false('port monitor agent nezachrání', bk_agent_backup_says_up('port', $all_ports, ['port' => 80], $now));
+    check_true('TeamSpeak s voice portem v čerstvém hlášení je up',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [9987]], ['target' => 'ts.x.cz', 'port' => 10011], $now));
+    check_true('voice port se bere z cíle host:port',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [9988]], ['target' => 'ts.x.cz:9988'], $now));
+    check_true('Docker agent hlásí po 300 s, hlášení staré 6 minut ještě platí',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 360, 'ports' => [9987]], ['target' => 'ts.x.cz'], $now));
+    check_false('hlášení staré 20 minut nic nedokazuje',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 1200, 'ports' => [9987]], ['target' => 'ts.x.cz'], $now));
+    check_false('agent, který nikdy nehlásil, nic nedokazuje',
+        bk_agent_backup_says_up('minecraft', ['ports' => [25565]], ['port' => 25565], $now));
+    check_true('Minecraft s portem v čerstvém hlášení je up',
+        bk_agent_backup_says_up('minecraft', ['agent_last_seen' => $now - 30, 'ports' => ['25565']], ['port' => 25565], $now));
+    check_false('cizí port Minecraft nezachrání',
+        bk_agent_backup_says_up('minecraft', ['agent_last_seen' => $now - 30, 'ports' => [80]], ['port' => 25565], $now));
+    check_true('běžící ts3server v čerstvém hlášení je up',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => []], ['target' => 'ts.x.cz', 'monitored_processes' => 'ts3server, nginx'], $now));
+    check_false('chybějící ts3server není up',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => ['ts3server']], ['target' => 'ts.x.cz', 'monitored_processes' => 'ts3server'], $now));
+    check_false('běžící nginx neručí za TeamSpeak',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => []], ['target' => 'ts.x.cz', 'monitored_processes' => 'nginx'], $now));
+    check_false('rozbitá data agenta nic nedokazují',
+        bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => 'x'], ['target' => 'ts.x.cz'], $now));
 }
 
 $failed = bk_test_report('čisté funkce');

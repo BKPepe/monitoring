@@ -66,6 +66,12 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
 $stmt = $pdo->query("SELECT * FROM monitors");
 $monitors = $stmt->fetchAll();
 
+// last_details is shared with agent_api.php, which rewrites it on every agent
+// report. The list above is read once and the checks run one after another,
+// so without a fresh read a slow run merges and writes back a copy that is
+// minutes old - undoing what the agent wrote in between.
+$stmt_fresh_details = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
+
 foreach ($monitors as $monitor) {
     $id = $monitor['id'];
     $name = $monitor['name'];
@@ -74,6 +80,14 @@ foreach ($monitors as $monitor) {
     $port = $monitor['port'];
     $timeout = $monitor['timeout'] ?: 5;
     $old_status = $monitor['status'];
+
+    $stmt_fresh_details->execute([$id]);
+    $fresh_details = $stmt_fresh_details->fetchColumn();
+    if ($fresh_details === false) {
+        // Deleted since the run started.
+        continue;
+    }
+    $monitor['last_details'] = $fresh_details;
     
     // Kontrola neaktivity VPS agenta (pokud je propojen)
     // Timeout 0 = agent inactivity detection is fully disabled
@@ -94,6 +108,10 @@ foreach ($monitors as $monitor) {
 
                 $stmt_up_agent = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
                 $stmt_up_agent->execute([$new_details, $id]);
+                // Everything below builds on $monitor['last_details'] and writes
+                // it back. Left stale, it wrote the latch away again and every
+                // following run re-sent this alert to every channel, SMS included.
+                $monitor['last_details'] = $new_details;
 
                 $mins_since = round($seconds_since_report / 60);
                 $last_seen_str = date('d.m.Y H:i', intval($agent_last_seen));
@@ -373,6 +391,7 @@ foreach ($monitors as $monitor) {
     // not the whole machine. A down is written with the extra context, but the
     // agent-fallback logic below deliberately does NOT apply - a web that
     // serves no pages IS down for visitors, we just want a more precise notification.
+    // (bk_agent_backup_says_up() enforces that: it never vouches for a web.)
     if (($check_result['status'] ?? '') === 'down' && $type === 'web' && !empty($monitor['cpanel_stats_url'])) {
         $cp_probe = check_cpanel($monitor['cpanel_stats_url'], min($timeout, 5));
         if (($cp_probe['status'] ?? '') === 'up') {
@@ -386,76 +405,32 @@ foreach ($monitors as $monitor) {
     $error_msg = $check_result['error'];
     $details = null;
     
-    // BACKUP FALLBACK: if the active check fails, ask the locally running VPS agent for data
+    // BACKUP FALLBACK: a game server the hosting cannot reach directly (an
+    // outbound firewall) still counts as up when fresh data from the agent on
+    // the same machine shows it listening or running. The rules live in
+    // bk_agent_backup_says_up(): never for web, only a report a few minutes
+    // old, and only the service's own port or process.
     if ($new_status === 'down') {
         $details_decoded = json_decode($monitor['last_details'] ?? '{}', true);
-        $agent_last_seen = $details_decoded['agent_last_seen'] ?? 0;
-        $offline_timeout_mins = intval(get_setting('agent_offline_timeout', '50'));
-        $offline_timeout_secs = $offline_timeout_mins * 60;
-        
-        if ($agent_last_seen > 0 && (time() - $agent_last_seen) < $offline_timeout_secs) {
-            $fallback_success = false;
-            
-            if ($type === 'teamspeak') {
-                $ports = $details_decoded['ports'] ?? [];
-                $voice_port = 9987;
-                $parts = explode(':', $target);
-                if (count($parts) === 2) {
-                    $voice_port = intval($parts[1]);
-                }
-                $query_port = $port ?: 10011;
-                
-                $ts_process_ok = true;
-                if (!empty($monitor['monitored_processes'])) {
-                    $missing = $details_decoded['missing_processes'] ?? [];
-                    foreach ($missing as $m_proc) {
-                        if (stripos($m_proc, 'ts3server') !== false || stripos($m_proc, 'ts3') !== false) {
-                            $ts_process_ok = false;
-                        }
-                    }
-                }
-                
-                if (in_array($voice_port, $ports) || in_array($query_port, $ports) || ($ts_process_ok && !empty($monitor['monitored_processes']))) {
-                    $fallback_success = true;
-                }
-            } elseif ($type === 'minecraft') {
-                $ports = $details_decoded['ports'] ?? [];
-                $mc_port = $port ?: 25565;
-                
-                $mc_process_ok = true;
-                if (!empty($monitor['monitored_processes'])) {
-                    $missing = $details_decoded['missing_processes'] ?? [];
-                    foreach ($missing as $m_proc) {
-                        if (stripos($m_proc, 'minecraft') !== false || stripos($m_proc, 'java') !== false) {
-                            $mc_process_ok = false;
-                        }
-                    }
-                }
-                
-                if (in_array($mc_port, $ports) || ($mc_process_ok && !empty($monitor['monitored_processes']))) {
-                    $fallback_success = true;
-                }
-            } elseif ($type === 'web') {
-                $ports = $details_decoded['ports'] ?? [];
-                if (in_array(80, $ports) || in_array(443, $ports)) {
-                    $fallback_success = true;
-                }
+        if (!is_array($details_decoded)) {
+            $details_decoded = [];
+        }
+
+        if (bk_agent_backup_says_up((string)$type, $details_decoded, $monitor, time())) {
+            $new_status = 'up';
+            $error_msg = 'Používá se záložní API (přímé TCP spojení selhalo)';
+            // Only what the fallback adds - the rest of last_details is merged
+            // in below from a fresh read, not from this copy.
+            $fallback_details = [
+                'api_fallback' => true,
+                'last_error' => $check_result['error'],
+            ];
+            if ($type === 'teamspeak' && isset($details_decoded['ts3_clients_online'])) {
+                $fallback_details['clients_online'] = $details_decoded['ts3_clients_online'];
+                $fallback_details['clients_max'] = $details_decoded['ts3_clients_max'] ?? null;
+                $fallback_details['name'] = !empty($details_decoded['ts3_name']) ? $details_decoded['ts3_name'] : ($monitor['name'] ?: 'TeamSpeak Server');
             }
-            
-            if ($fallback_success) {
-                $new_status = 'up';
-                $error_msg = 'Používá se záložní API (přímé TCP spojení selhalo)';
-                $details_decoded['api_fallback'] = true;
-                $details_decoded['last_error'] = $check_result['error'];
-                
-                if ($type === 'teamspeak' && isset($details_decoded['ts3_clients_online'])) {
-                    $details_decoded['clients_online'] = $details_decoded['ts3_clients_online'];
-                    $details_decoded['clients_max'] = $details_decoded['ts3_clients_max'];
-                    $details_decoded['name'] = !empty($details_decoded['ts3_name']) ? $details_decoded['ts3_name'] : ($monitor['name'] ?: 'TeamSpeak Server');
-                }
-                
-                $details = json_encode($details_decoded, JSON_UNESCAPED_UNICODE);
-            }
+            $details = json_encode($fallback_details, JSON_UNESCAPED_UNICODE);
         }
     }
     
@@ -670,6 +645,14 @@ foreach ($monitors as $monitor) {
         }
     }
     
+    // The check above can take seconds (timeouts, the retry, the cPanel probe)
+    // and an agent report may have landed meanwhile: merge into what is stored now.
+    $stmt_fresh_details->execute([$id]);
+    $fresh_details = $stmt_fresh_details->fetchColumn();
+    if ($fresh_details !== false) {
+        $monitor['last_details'] = $fresh_details;
+    }
+
     // Merge old details (e.g. from the VPS agent) with the fresh active-check ones
     if ($details !== null) {
         $old_details = json_decode($monitor['last_details'] ?? '{}', true);
@@ -804,8 +787,18 @@ foreach ($monitors as $monitor) {
 
             trigger_notifications($pdo, $monitor, 'latency_' . $lat['state'], $lat_msg);
 
+            // Sending the alert takes seconds (SMS and WhatsApp gateways), and an
+            // agent report landing meanwhile stores its own latches in the same
+            // column. Only the latency latch is this block's to change, so it goes
+            // onto a fresh read instead of writing back the copy from before.
+            $stmt_fresh_details->execute([$id]);
+            $lat_fresh = json_decode((string)($stmt_fresh_details->fetchColumn() ?: '{}'), true);
+            if (!is_array($lat_fresh)) {
+                $lat_fresh = [];
+            }
+            $lat_fresh['latency_alert_sent'] = $lat_details['latency_alert_sent'];
             $stmt_lat = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
-            $stmt_lat->execute([json_encode($lat_details, JSON_UNESCAPED_UNICODE), $id]);
+            $stmt_lat->execute([json_encode($lat_fresh, JSON_UNESCAPED_UNICODE), $id]);
             echo "  ODEZVA -> " . strtoupper($lat['state']) . " ({$lat['avg_ms']} ms)\n";
         }
     }

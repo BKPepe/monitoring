@@ -343,6 +343,51 @@ check('bez odeslaneho alertu se navrat nehlasi', $decide([90, 85], 500, false), 
 // Prah presne na hranici: rovnost neni prekroceni.
 check('hodnota rovna prahu neni zpomaleni', $decide([500, 500], 500, false), 'ok');
 
+// --- cron: an alert fires once, and a failed check stays failed ------------
+// The agent-silence latch was written to the database while the loop kept a
+// stale copy of last_details and wrote that back later, so every run re-sent
+// the alert. These guard the order of operations, which no pure test can see.
+$cron_src = file_get_contents(__DIR__ . '/../cron.php');
+check_true('cron po zápisu pojistky aktualizuje svou kopii last_details',
+    (bool)preg_match('/\$stmt_up_agent->execute\(\[\$new_details, \$id\]\);\s*(?:\/\/[^\n]*\n\s*)*\$monitor\[\'last_details\'\] = \$new_details;/', $cron_src));
+// The fresh reads only help where they sit: at the start of the monitor, after
+// the check and the agent fallback but before the merge, and after the latency
+// alert is sent but before its write. Order is checked, not just the count.
+$fresh_positions = [];
+$offset = 0;
+while (($pos = strpos($cron_src, '$stmt_fresh_details->execute([$id]);', $offset)) !== false) {
+    $fresh_positions[] = $pos;
+    $offset = $pos + 1;
+}
+check('cron čte last_details čerstvě na třech místech', count($fresh_positions), 3);
+$cron_before = fn(string $needle, int $pos) => ($p = strpos($cron_src, $needle)) !== false && $pos < $p;
+$cron_after = fn(string $needle, int $pos) => ($p = strpos($cron_src, $needle)) !== false && $pos > $p;
+check_true('první čtení je před pojistkou mlčícího agenta',
+    isset($fresh_positions[0]) && $cron_before('$details_arr[\'agent_alert_sent\'] = true;', $fresh_positions[0]));
+check_true('druhé čtení je po záloze přes agenta a před sloučením detailů',
+    isset($fresh_positions[1]) && $cron_after('if (bk_agent_backup_says_up(', $fresh_positions[1])
+    && $cron_before('// Merge old details', $fresh_positions[1]));
+check_true('třetí čtení je po alertu latence a před jeho zápisem',
+    isset($fresh_positions[2]) && $cron_after('trigger_notifications($pdo, $monitor, \'latency_\'', $fresh_positions[2])
+    && $cron_before('$stmt_lat->execute(', $fresh_positions[2]));
+
+// The call itself is matched - the helper's name also appears in comments.
+check_true('záloha přes agenta rozhoduje voláním bk_agent_backup_says_up',
+    (bool)preg_match('/if \(bk_agent_backup_says_up\(\(string\)\$type, \$details_decoded, \$monitor, time\(\)\)\) \{/', $cron_src));
+check_false('záloha přes agenta nemá vlastní pravidla portů webu',
+    (bool)preg_match('/in_array\((80|443),/', $cron_src));
+check_true('záloha zapisuje jen svůj rozdíl, ne starou kopii detailů',
+    str_contains($cron_src, '$details = json_encode($fallback_details') && !str_contains($cron_src, 'json_encode($details_decoded'));
+
+// Both branches of check_http must RETURN the verdict, and cron must hand it the keyword.
+$fn_src = file_get_contents(__DIR__ . '/../functions.php');
+check('check_http vrací verdikt bk_http_verdict v cURL i náhradní větvi',
+    preg_match_all('/\$verdict = bk_http_verdict\([^;]*\$body_keyword\);\s*return array_merge\(\[\s*\'status\' => \$verdict\[\'status\'\],\s*\'response_time\' => \$duration,\s*\'error\' => \$verdict\[\'error\'\]/', $fn_src), 2);
+check('cron předává klíčové slovo první kontrole i opakování',
+    substr_count($cron_src, 'check_http($target, $timeout, $monitor[\'body_keyword\'] ?? null)'), 2);
+check_false('SMS neřeže chybovou zprávu po bajtech',
+    (bool)preg_match('/substr\(\$error_msg, 0,/', $fn_src));
+
 $failed = bk_test_report('sběr, e-maily, notifikace');
 // Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {
