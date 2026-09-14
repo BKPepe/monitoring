@@ -10,6 +10,7 @@ import type {
   MetricsSource,
   PublicStatus,
   TimeRange,
+  PublicStatusScope,
 } from './types';
 
 /**
@@ -26,8 +27,8 @@ export const mockMetricsSource: MetricsSource = {
     return httpMetricsSource.getAssetCharts(assetId, range);
   },
 
-  async getPublicStatus(): Promise<PublicStatus> {
-    return httpMetricsSource.getPublicStatus();
+  async getPublicStatus(scope?: PublicStatusScope): Promise<PublicStatus> {
+    return httpMetricsSource.getPublicStatus(scope);
   },
 
   async getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail> {

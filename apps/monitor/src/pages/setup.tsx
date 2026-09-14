@@ -55,7 +55,7 @@ export function SetupPage() {
           : t('setup.install_success', 'Instalace úspěšná! Přesměrovávám...')
       );
       setTimeout(() => {
-        window.location.href = '/app/';
+        window.location.href = bk_after_login_target();
       }, 800);
     } catch (err: any) {
       if (err.message && err.message.includes('2FA')) {
@@ -517,4 +517,18 @@ export function SetupPage() {
       </div>
     </div>
   );
+}
+
+/**
+ * Where a successful login goes: the app page the visitor was sent here from
+ * (the shell's login guard adds ?next=), otherwise the dashboard. Only a path
+ * inside the app is followed - an absolute or protocol-relative URL in the
+ * query would turn the login page into an open redirect.
+ */
+function bk_after_login_target(): string {
+  const next = new URLSearchParams(window.location.search).get('next') ?? '';
+  if (/^\/(?!\/)[^\\]*$/.test(next) && !next.includes('://')) {
+    return '/app' + next;
+  }
+  return '/app/';
 }

@@ -482,7 +482,8 @@ foreach ($monitors as $monitor) {
 
             $ts3_agent_details = json_decode($monitor['last_details'] ?? '', true);
             if (!is_array($ts3_agent_details)) $ts3_agent_details = [];
-            bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details);
+            // Cron has no session and reads every monitor.
+            bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details, true);
             $ts3_process_cpu = null;
             $ts3_process_ram = null;
             // Without agent metrics it stays NULL - fictional zeros would make

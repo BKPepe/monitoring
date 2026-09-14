@@ -15,6 +15,9 @@ export function IncidentsPage() {
   const { t, lang } = useLanguage();
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
+  // Creating, acknowledging and resolving incidents is an admin task. A signed-in
+  // user sees the incidents of their own monitors and changes nothing.
+  const isAdmin = session?.user?.role === 'admin';
   const [targetMonitors, setTargetMonitors] = useState<any[]>([]);
   const [probingNodes, setProbingNodes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -132,7 +135,7 @@ export function IncidentsPage() {
 
   const handleCreateIncident = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAuthenticated || !incidentTitle) return;
+    if (!isAdmin || !incidentTitle) return;
 
     const affectedName =
       affectedScope === 'all'
@@ -174,7 +177,7 @@ export function IncidentsPage() {
         title={t('incidents.title', 'Správa Incidentů a Výpadků')}
         subtitle={t('incidents.subtitle', 'Oddělený přehled výpadků cílových služeb a stavu měřících agentů/lokací.')}
         actions={
-          isAuthenticated ? (
+          isAdmin ? (
             <button
               type="button"
               onClick={() => setShowNewIncidentModal(true)}
@@ -182,20 +185,7 @@ export function IncidentsPage() {
             >
               <Plus className="size-4" /> {t('incidents.create', 'Nahlásit nový incident')}
             </button>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={t(
-                'incidents.login_required_hint',
-                'Pro zakládání incidentů se musíte přihlásit jako administrátor'
-              )}
-              className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
-            >
-              <Plus className="size-4" /> {t('incidents.create', 'Nahlásit nový incident')} (
-              {t('common.login_required', 'Vyžaduje přihlášení')})
-            </button>
-          )
+          ) : null
         }
       />
 
@@ -213,7 +203,7 @@ export function IncidentsPage() {
         </Card>
       )}
 
-      {showNewIncidentModal && isAuthenticated && (
+      {showNewIncidentModal && isAdmin && (
         <Card className="p-6 border-primary/50 bg-secondary/40">
           <h3 className="font-bold text-base mb-3">
             {t('incidents.create_modal_title', 'Nahlásit nový incident / Plánovanou údržbu')}
@@ -377,7 +367,7 @@ export function IncidentsPage() {
                           {t('incidents.ack_by', { user: inc.acknowledgedBy }, `Převzal: ${inc.acknowledgedBy}`)}
                         </span>
                       ) : (
-                        isAuthenticated &&
+                        isAdmin &&
                         inc.incidentId != null && (
                           <button
                             type="button"
@@ -476,7 +466,7 @@ export function IncidentsPage() {
 
                           {actionError && <ErrorState size="inline" message={actionError} />}
 
-                          {isAuthenticated && (
+                          {isAdmin && (
                             <div className="space-y-2">
                               {open && (
                                 <div className="flex flex-wrap items-center gap-2">

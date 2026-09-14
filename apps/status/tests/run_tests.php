@@ -43,6 +43,12 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_agent_bool',
     'bk_http_verdict',
     'bk_agent_backup_says_up',
+    'bk_viewer',
+    'bk_monitor_scope_sql',
+    'bk_public_monitor_details',
+    'bk_public_reason',
+    'bk_public_incident_update',
+    'bk_sync_session_account',
 ]);
 
 
@@ -139,28 +145,32 @@ foreach ($callers as $caller_file) {
 }
 check('vsichni volajici predavaji $pdo', $missing_pdo, []);
 
-// --- Anonymni odpoved nesmi nest sitovou identitu ------------------------
+// --- The public view carries no host internals ------------------------------
 //
-// agent_api dnes propousti i klice, o kterych server predem nevi (jinak nova
-// metrika tise zmizi). Vycet citlivych klicu by je nepokryl, takze filtr jede
-// i podle nazvu - tenhle test hlida, ze vzor zabira a zaroven nesmaze
-// agregaty, kvuli kterym verejny status existuje.
-$api_src = file_get_contents(__DIR__ . '/../api.php');
-if (preg_match("/preg_match\('(\/\(ipv4\|.*?)',/", $api_src, $re_m)) {
-    $anon_re = $re_m[1];
-
-    foreach (['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint',
-              'device_mac', 'board_serial', 'hostname', 'agent_key', 'api_token'] as $secret_key) {
-        check_true("anonym neuvidi {$secret_key}", (bool)preg_match($anon_re, $secret_key));
+// agent_api passes through keys the server has never heard of, so the public
+// monitor list uses an allowlist (bk_public_monitor_details) instead of the
+// name-based denylist it replaced: a denylist let every new key through, from
+// process lists to interface names. This guards both halves - the network
+// identity and new agent keys stay out, what the public card renders stays in.
+if (function_exists('bk_public_monitor_details')) {
+    $sample = array_fill_keys(['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint',
+        'device_mac', 'board_serial', 'hostname', 'agent_key', 'api_token', 'top_ram_processes', 'wan_l3_device',
+        'mwan3_active_gw', 'net', 'filesystems', 'some_future_agent_key',
+        'version', 'motd', 'players_online', 'players_max', 'clients_online', 'clients_max',
+        'presence_count', 'members', 'voice_channels', 'model', 'os', 'cpanel_stats'], 1);
+    $public_keys = array_keys(bk_public_monitor_details($sample));
+    foreach (['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint', 'device_mac',
+              'board_serial', 'hostname', 'agent_key', 'api_token', 'top_ram_processes', 'wan_l3_device',
+              'mwan3_active_gw', 'net', 'filesystems', 'some_future_agent_key'] as $private_key) {
+        check_false("anonym neuvidí {$private_key}", in_array($private_key, $public_keys, true));
     }
-
-    foreach (['cpu', 'ram', 'hdd', 'dns_latency_ms', 'conntrack_pct', 'lte_up', 'lte_uptime',
-              'presence_count', 'uptime_seconds', 'wifi_clients_total'] as $public_key) {
-        check_false("agregat {$public_key} zustava", (bool)preg_match($anon_re, $public_key));
+    foreach (['version', 'motd', 'players_online', 'players_max', 'clients_online', 'clients_max',
+              'presence_count', 'members', 'voice_channels', 'model', 'os', 'cpanel_stats'] as $card_key) {
+        check_true("veřejná karta dostane {$card_key}", in_array($card_key, $public_keys, true));
     }
-} else {
-    check_true('filtr citlivych klicu je v api.php k nalezeni', false);
 }
+check_true('veřejný pohled seznamu monitorů jde přes allowlist',
+    str_contains(file_get_contents(__DIR__ . '/../api.php'), '$details_out = bk_public_monitor_details($details);'));
 
 // --- Heartbeat monitory --------------------------------------------------
 //
@@ -688,6 +698,71 @@ if (function_exists('bk_agent_backup_says_up')) {
         bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => []], ['target' => 'ts.x.cz', 'monitored_processes' => 'nginx'], $now));
     check_false('rozbitá data agenta nic nedokazují',
         bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => 'x'], ['target' => 'ts.x.cz'], $now));
+}
+
+// --- Per-monitor access (bk_viewer, bk_monitor_scope_sql) --------------------
+// Monitors belong to users; an admin sees all, a user the assigned ones, an
+// anonymous visitor none through the app. The scope helper must never widen.
+if (function_exists('bk_viewer')) {
+    $saved_session = $_SESSION ?? null;
+    $_SESSION = [];
+    check('anonym není přihlášený ani admin', bk_viewer(), ['logged_in' => false, 'is_admin' => false, 'user_id' => 0]);
+    $_SESSION = ['admin_logged_in' => true, 'admin_role' => 'user', 'admin_id' => 7];
+    check('uživatel je přihlášený, ne admin', bk_viewer(), ['logged_in' => true, 'is_admin' => false, 'user_id' => 7]);
+    $_SESSION = ['admin_logged_in' => true, 'admin_role' => 'admin', 'admin_id' => 1];
+    check_true('admin je admin', bk_viewer()['is_admin']);
+    $_SESSION = ['admin_role' => 'admin', 'admin_id' => 1];
+    check_false('role bez přihlášení nic neznamená', bk_viewer()['is_admin']);
+    $_SESSION = $saved_session ?? [];
+}
+if (function_exists('bk_monitor_scope_sql')) {
+    check('admin nemá omezení', bk_monitor_scope_sql(null, 'm.id'), ['1=1', []]);
+    check('nic přiřazeného = nic, ne všechno', bk_monitor_scope_sql([], 'm.id'), ['1=0', []]);
+    check('přiřazené monitory jako vázané parametry', bk_monitor_scope_sql([3, '5', 3], 'm.id'), ['m.id IN (?,?)', [3, 5]]);
+    $threw = false;
+    try {
+        bk_monitor_scope_sql([1], 'm.id) OR (1=1');
+    } catch (InvalidArgumentException $e) {
+        $threw = true;
+    }
+    check_true('podvržený název sloupce se odmítne', $threw);
+}
+
+if (function_exists('bk_public_monitor_details')) {
+    $pub = bk_public_monitor_details([
+        'version' => '3.13.7', 'players_online' => 4, 'cpanel_stats' => ['disk' => ['percent' => 40]],
+        'top_cpu_processes' => [['name' => 'mysqld', 'cpu' => 80]], 'processes' => ['sshd', 'nginx'],
+        'ts3_process' => ['pid' => 42], 'missing_processes' => ['kresd'], 'discovered_services' => [['name' => 'x']],
+        'wan_l3_device' => 'pppoe-wan', 'lte_device' => 'wwan0', 'interfaces' => [['iface' => 'eth0']],
+        'net_lte' => 120, 'wan_ipv4' => '203.0.113.9', 'ports' => [22, 443], 'agent_key' => 'x',
+        'containers_future_key' => ['db'],
+    ]);
+    check('veřejné detaily nesou jen hodnoty karty', array_keys($pub), ['version', 'players_online', 'cpanel_stats']);
+    check('prázdné detaily zůstanou prázdné', bk_public_monitor_details([]), []);
+}
+
+if (function_exists('bk_public_reason')) {
+    check('HTTP chyba webu zůstane veřejná', bk_public_reason('HTTP status kód: 503', 'web'), 'HTTP status kód: 503');
+    check('chybějící proces agenta se veřejně nejmenuje', bk_public_reason('Chybí běžící proces: nginx', 'vps'), null);
+    check('agent-side kontrola nejmenuje proces', bk_public_reason("Agent nehlásí proces 'kresd' ani otevřený port 53.", 'agent_service'), null);
+    check('zmínka o procesu u jiného typu se také skryje', bk_public_reason('ts3server restartován (PID 1 -> 2)', 'teamspeak'), null);
+    check('prázdný důvod zůstane prázdný', bk_public_reason(null, 'vps'), null);
+    check('DNS chyba neprozradí jméno hostitele', bk_public_reason('cURL chyba: Could not resolve host: interni.example', 'web'), 'Adresu se nepodařilo přeložit (DNS)');
+    check('neúspěšné spojení neprozradí hostitele ani port', bk_public_reason("cURL chyba: Failed to connect to 10.0.0.5 port 8443 after 3 ms: Couldn't connect to server", 'web'), 'Spojení selhalo');
+    check('vypršený čas se pozná', bk_public_reason('cURL chyba: Operation timed out after 10001 milliseconds with 0 bytes received', 'web'), 'Vypršel časový limit spojení');
+    check('hledaný text stránky se neprozradí', bk_public_reason('Stránka odpověděla HTTP 200, ale neobsahuje očekávaný text „tajne-slovo“', 'web'), 'Stránka odpověděla HTTP 200, ale neobsahuje očekávaný obsah');
+    check('zavřený port nenese číslo portu', bk_public_reason('Port 2222 je zavřený nebo nedostupný: Connection refused (111)', 'port'), 'Port je zavřený nebo nedostupný');
+    check('chyba TS3 neprozradí IP hostingu', bk_public_reason('TS3 Query port (10011) nedostupný: Connection timed out (110). Tip: Ujistěte se, že váš VPS neblokuje IP adresu webhostingu (203.0.113.7) ve svém firewallu.', 'teamspeak'), 'TeamSpeak ServerQuery neodpovídá');
+    check('pevná hláška Minecraftu zůstane', bk_public_reason('Minecraft server je podle API vypnutý.', 'minecraft'), 'Minecraft server je podle API vypnutý.');
+    check('neznámý text se veřejně neřekne', bk_public_reason('Cíl 10.0.0.1 vrátil něco nečekaného', 'web'), null);
+}
+
+if (function_exists('bk_public_incident_update')) {
+    check('automatický důvod výpadku zůstane interní', bk_public_incident_update('Automaticky detekován výpadek. Důvod: Chybí běžící proces: nginx'), 'Automaticky detekován výpadek.');
+    check('převzetí nejmenuje operátora', bk_public_incident_update('Incident převzal: pepe'), 'Incident převzat.');
+    check('poznámka ztratí jméno autora', bk_public_incident_update('[pepe] Vyměňujeme disk'), 'Vyměňujeme disk');
+    check('ruční zpráva bez jména zůstane celá', bk_public_incident_update('Pracujeme na opravě'), 'Pracujeme na opravě');
+    check('zpráva jen se jménem je prázdná', bk_public_incident_update('[pepe] '), null);
 }
 
 $failed = bk_test_report('čisté funkce');

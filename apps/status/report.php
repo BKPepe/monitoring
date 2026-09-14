@@ -4,7 +4,18 @@
  * Generates a printable SLA report or a downloadable CSV statement for a month.
  */
 
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @session_start();
+}
 require_once __DIR__ . '/functions.php';
+
+// The SLA table names every monitor with its target and outages. It used to
+// answer anyone; now a signed-in account gets the monitors it may see.
+if (empty($_SESSION['admin_logged_in'])) {
+    header('Location: admin.php');
+    exit;
+}
+$report_visible_ids = bk_visible_monitor_ids($pdo);
 
 $month = isset($_GET['month']) ? (int)$_GET['month'] : (int)date('m');
 $year = isset($_GET['year']) ? (int)$_GET['year'] : (int)date('Y');
@@ -19,9 +30,11 @@ $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
 if ($monitor_id > 0) {
     $stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
     $stmt->execute([$monitor_id]);
-    $monitors = $stmt->fetchAll();
+    $monitors = bk_can_view_monitor($pdo, $monitor_id) ? $stmt->fetchAll() : [];
 } else {
-    $stmt = $pdo->query("SELECT * FROM monitors ORDER BY name ASC");
+    [$report_scope, $report_scope_params] = bk_monitor_scope_sql($report_visible_ids, 'id');
+    $stmt = $pdo->prepare("SELECT * FROM monitors WHERE {$report_scope} ORDER BY name ASC");
+    $stmt->execute($report_scope_params);
     $monitors = $stmt->fetchAll();
 }
 

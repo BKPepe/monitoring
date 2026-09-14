@@ -13,6 +13,7 @@ import type {
   MetricTone,
   PublicStatus,
   TimeRange,
+  PublicStatusScope,
 } from './types';
 
 /**
@@ -250,8 +251,8 @@ export const httpMetricsSource: MetricsSource = {
     return res;
   },
 
-  async getPublicStatus(): Promise<PublicStatus> {
-    const raw = await getJson<any>('api.php?action=public_status');
+  async getPublicStatus(scope: PublicStatusScope = 'app'): Promise<PublicStatus> {
+    const raw = await getJson<any>(`api.php?action=public_status${scope === 'public' ? '&scope=public' : ''}`);
     // totalMonitors is always a real COUNT(*) - if that's missing, the
     // response itself is broken. uptimePercent/avgLatencyMs are legitimately
     // null when there's no data yet (new install, dead cron), so they're not

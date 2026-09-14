@@ -56,13 +56,30 @@ The response sets a session cookie. Every further call has to send it
 
 Session state: `GET /status/api.php?action=session`.
 
+### Who sees which monitor
+
+A monitor belongs to the accounts assigned to it, and one monitor can have
+several. An administrator sees and changes every monitor. A `user` account sees
+only its assigned monitors, read-only, together with its own profile and alert
+subscriptions for those monitors. A monitor the caller may not see answers 404,
+the same as one that does not exist, so ids cannot be probed. Rows marked
+**assigned monitor** follow this rule, and list actions return only the visible
+monitors.
+
+`scope=public` asks `public_status`, `monitors`, `daily_uptime`, `uptime_windows`, `regions`,
+`events` and `incidents` for the public status view. It covers every monitor, is
+the same for everyone and carries no targets, hostnames, processes or interface
+names. An anonymous caller always gets this view.
+
 ### What an anonymous visitor sees
 
-Public responses pass through a filter that strips everything carrying network
-identity out of the `details` structure - IP addresses, MACs, SSIDs, hostnames,
-endpoints, serial numbers, tokens and passwords. The filter works from the shape
-of the key name rather than an enumeration, so it also catches a metric that
-does not exist yet. Aggregates (`cpu`, `ram`, client counts) stay.
+Public responses keep only an allowlist of `details` keys: aggregates such as
+`cpu`, `ram` and `hdd`, the agent version, and player or client counts. Anything
+else - IP addresses, interface names, processes, ports, discovered services -
+stays on the server, including keys added in the future. Failure reasons shrink to a fixed set
+of sentences - HTTP code, timeout, DNS, TLS, closed port - with no host, port,
+process or searched text, and incident updates lose the automatic check reason
+and the operator's name.
 
 ---
 
@@ -280,9 +297,9 @@ and a lint guards it (`run_api_action_lint.php`).
 
 | Endpoint | Access | Description |
 |---|---|---|
-| `action=export_csv&monitor_id=&days=` | public | Check history of a monitor as CSV. The error-message column is only included for a logged-in user - the monitor page is public and the messages carry internal names |
+| `action=export_csv&monitor_id=&days=` | assigned monitor | Check history of a monitor as CSV, including the error message of each check |
 | `action=save_annotation` | admin | A note on a chart (`monitor_id`, `metric_key`, `timestamp`, `note`) |
-| `action=annotations&monitor_id=&metric=&hours=` | logged in | Notes for rendering. An anonymous caller gets an empty list, not a 403 - a chart without notes is not an error |
+| `action=annotations&monitor_id=&metric=&hours=` | assigned monitor | Notes for rendering. An anonymous caller and a monitor the account is not assigned to get an empty list, not a 403 - a chart without notes is not an error |
 | `action=delete_annotation` | admin, POST | Deletes a note by `id`. A note is a claim, and a wrong claim next to a chart has to be retractable |
 | `action=forgot_password` | public, POST | Sends a password reset link. The response is identical for existing and nonexistent addresses |
 | `action=setup` | public, POST | Creates the first administrator. **Only into an empty users table**, otherwise 409 |
@@ -303,8 +320,11 @@ real email of the logged-in user - it used to return a hardcoded
 
 ### `GET api.php?action=monitors`
 
-**Logged in.** List of monitors with their last state, response time and agent
-metrics.
+**Assigned monitors, or the public view.** List of monitors with their last
+state, response time and agent metrics. A `user` account gets its assigned
+monitors and an administrator all of them. An anonymous caller, or any caller
+with `scope=public`, gets every monitor with `target`, `port`, `hostname` and
+`agentLastSeen` set to `null` and only the allowlisted `details` keys.
 
 Response time comes from `monitor_logs`, the CPU/RAM/HDD values from
 `vps_metrics` - they are not columns of the `monitors` table. A missing value is
@@ -345,23 +365,23 @@ command.
 
 | Endpoint | Access | Description |
 |---|---|---|
-| `action=metric_series&monitor_id=&metric=&period=` | public | One metric over time |
-| `action=metric_series_batch&monitor_id=&period=` | public | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero |
-| `action=metric_detail&monitor_id=&metric=` | public | Context for the metric detail page |
-| `action=metric_correlations&monitor_id=&metric=&period=` (optionally `&all=1` for every compared metric, not just the strongest 8) | public | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
-| `action=metric_heatmap&monitor_id=&metric=&days=` | public | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
-| `action=link_traffic&monitor_id=&days=` | public | A router's traffic by link role: primary (`wan_l3_device`) vs. LTE backup (`lte_device`) for today / 7 / 30 days from the daily per-interface totals, plus the primary-link outages (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) paired from `wan_lost`/`wan_restored` events - whether traffic really went over the backup during them is what the backup device's byte counts say, not these periods (an open period runs until now; an outage that began before the window and has not ended is looked up separately and counted from the start of the window, or a router that has been on the backup for weeks would report "never"). Roles come only from what the agent reports - without `wan_l3_device` (agent < 0.1.3) the primary side is `null`, never a guess from the name |
-| `action=process_history&monitor_id=&kind=&at=&radius=` | public | Which processes were running around a point in time |
-| `action=metrics_history&monitor_id=&period=` | public | Agent metric history |
-| `action=daily_uptime&days=` | public | Daily availability from `uptime_daily` |
-| `action=uptime_windows` | public | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one pass; an unmeasured window is `null`, never 100 |
-| `action=check_stages&monitor_id=` | public | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
-| `action=regions&days=` | public | Availability by measurement location (`checked_from`) |
-| `action=public_status` | public | Summary for the public page (counts, average availability) |
+| `action=metric_series&monitor_id=&metric=&period=` | assigned monitor | One metric over time |
+| `action=metric_series_batch&monitor_id=&period=` | assigned monitor | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero |
+| `action=metric_detail&monitor_id=&metric=` | assigned monitor | Context for the metric detail page |
+| `action=metric_correlations&monitor_id=&metric=&period=` (optionally `&all=1` for every compared metric, not just the strongest 8) | assigned monitor | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
+| `action=metric_heatmap&monitor_id=&metric=&days=` | assigned monitor | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
+| `action=link_traffic&monitor_id=&days=` | assigned monitor | A router's traffic by link role: primary (`wan_l3_device`) vs. LTE backup (`lte_device`) for today / 7 / 30 days from the daily per-interface totals, plus the primary-link outages (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) paired from `wan_lost`/`wan_restored` events - whether traffic really went over the backup during them is what the backup device's byte counts say, not these periods (an open period runs until now; an outage that began before the window and has not ended is looked up separately and counted from the start of the window, or a router that has been on the backup for weeks would report "never"). Roles come only from what the agent reports - without `wan_l3_device` (agent < 0.1.3) the primary side is `null`, never a guess from the name |
+| `action=process_history&monitor_id=&kind=&at=&radius=` | assigned monitor | Which processes were running around a point in time |
+| `action=metrics_history&monitor_id=&period=` | assigned monitor | Agent metric history |
+| `action=daily_uptime&days=` | public status / assigned | Daily availability from `uptime_daily` |
+| `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one pass; an unmeasured window is `null`, never 100 |
+| `action=check_stages&monitor_id=` | assigned monitor | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
+| `action=regions&days=` | public status / assigned | Availability by measurement location (`checked_from`) |
+| `action=public_status` | public status / assigned | Summary for the public page (counts, average availability). Inside the app a `user` account gets totals over its assigned monitors |
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it summarises the fleet, an unknown monitor is 404 |
-| `action=websites_overview` | public | Sites with certificates and availability in the window |
-| `action=monitor_insights&monitor_id=` | public | Derived observations for one monitor |
-| `action=dashboard_insights&limit=` | public | The same across monitors, for the overview |
+| `action=websites_overview` | assigned monitor | Sites with certificates and availability in the window |
+| `action=monitor_insights&monitor_id=` | assigned monitor | Derived observations for one monitor |
+| `action=dashboard_insights&limit=` | assigned monitor | The same across monitors, for the overview |
 | `action=ui_config` | public | Appearance settings for the frontend (logo, names) |
 | `action=alerts_read_state` | logged in | Read-alert watermark (`readUpToId`) |
 | `action=convert_to_agent_check` | admin | Turns an agent-watched process into a monitor of its own |
@@ -459,12 +479,12 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 
 | Endpoint | Access | Description |
 |---|---|---|
-| `action=incidents` | public | List of incidents |
+| `action=incidents` | public status / assigned | List of incidents. The public view drops targets, operator names and check reasons, also from `updates` |
 | `action=create_incident` | logged in | Manual creation |
 | `action=incident_action` | logged in | `op`: acknowledge / resolve / postmortem |
-| `action=events&monitor_id=&limit=` | public | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures |
-| `action=sla_report&days=` | public | SLA overview |
-| `action=audit_logs&limit=` | public | Latest checks across monitors |
+| `action=events&monitor_id=&limit=` | public status / assigned | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures |
+| `action=sla_report&days=` | assigned monitor | SLA overview |
+| `action=audit_logs&limit=` | admin | Latest checks across monitors |
 
 > **Careful:** `audit_logs` and `sla_report` are currently unauthenticated and
 > return monitor names and error message texts. Those can contain internal
@@ -484,25 +504,25 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=get_settings` / `save_settings` | admin | Global settings |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): sends one real test message with the saved settings, returns `{ok, message}` |
 | `action=notification_log&monitor_id=&limit=` | admin | What was sent, to whom, on which channel and whether it went. A row is written for a failure too - that is the interesting half |
-| `action=interface_traffic_daily&monitor_id=&days=` | admin | Traffic per day and interface, busiest first. A missing day means nothing was reported that day, not zero traffic |
-| `action=process_top&monitor_id=&kind=&minutes=` | admin | Which processes used the machine over the whole window (average, peak, sample count), grouped by name so a restarting service is not split per pid. `enabled: false` = process history is switched off in the settings |
+| `action=interface_traffic_daily&monitor_id=&days=` | assigned monitor | Traffic per day and interface, busiest first. A missing day means nothing was reported that day, not zero traffic |
+| `action=process_top&monitor_id=&kind=&minutes=` | assigned monitor | Which processes used the machine over the whole window (average, peak, sample count), grouped by name so a restarting service is not split per pid. `enabled: false` = process history is switched off in the settings |
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: switches maintenance on or off for one or more monitors. Off also clears the window, so the next maintenance does not expire the moment it starts |
 | `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: erases the monitor's measurements, logs and daily aggregates and returns it to "unknown". Irreversible, so it asks for the exact monitor name back |
 | `action=redetect_location` | admin | Forces a fresh geolocation lookup for the server and stores it in `ip_loc_local` |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | public read, admin write | Metric profiles |
-| `action=status_pages` / `save_status_page` / `delete_status_page` | logged in | Public status pages |
-| `action=dashboard_layout` | public read, admin write | Tile order and visibility |
-| `action=users` | admin | User list |
+| `action=status_pages` / `save_status_page` / `delete_status_page` | list public, hidden pages and writes admin | Public status pages |
+| `action=dashboard_layout` | logged in | Tile order and visibility |
+| `action=users` | admin | User list, each account with its `monitorIds` |
 | `action=export_config` | admin | Configuration export without secrets |
 | `action=generate_metrics_token` | admin | Token for the Prometheus exporter |
 | `action=upload_logo` | admin | Status page logo |
 | `action=send_digest&period=` | admin | Manual digest send |
 | `action=trigger_remote_action` | admin | Action on a router (allowed ones only) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
-| `action=get_subscriptions` / `save_subscriptions` | logged in | Alert subscriptions |
+| `action=get_subscriptions` / `save_subscriptions` | logged in | Alert subscriptions, limited to the monitors the account can see |
 | `action=public_subscribe` / `public_subscribe_confirm` / `public_unsubscribe` | public | E-mail subscription for visitors without accounts: double opt-in (nothing is sent until the owner confirms), IP rate limit on sign-up, neutral responses (no enumeration), one-click unsubscribe link in every mail |
 | `action=public_subscribers` / `delete_public_subscriber` | admin | Subscriber overview and manual removal (GDPR requests) |
-| `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
+| `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account; `monitorIds` sets which monitors a `user` account sees - omitted keeps the assignment, `[]` clears it, unknown ids are dropped); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; regenerating a set and disabling both require the password |

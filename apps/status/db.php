@@ -47,7 +47,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260909');
+    define('BK_SCHEMA_VERSION', '20260914');
 
     $bk_current_schema = false;
     try {
@@ -740,6 +740,17 @@ try {
           `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (`monitor_id`, `day`, `metric_key`),
           KEY `idx_metrics_daily_day` (`day`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        // Per-monitor access: which users may see which monitors (several per
+        // monitor). Without a row a user sees nothing - the app fails closed.
+        "CREATE TABLE IF NOT EXISTS `monitor_users` (
+    `monitor_id` INT NOT NULL,
+    `user_id` INT NOT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`monitor_id`, `user_id`),
+    KEY `idx_monitor_users_user` (`user_id`),
+    FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
+    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "CREATE INDEX idx_logs_monitor_id_desc ON monitor_logs (monitor_id, id)",
         // The windowed SLA aggregation (websites_overview) filters a year of logs by time.

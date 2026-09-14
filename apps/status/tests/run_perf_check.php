@@ -21,10 +21,13 @@ $budgets = [
     // regression (an endpoint blowing up to seconds), not network jitter.
     'monitors' => 1.20,           // volá KAŽDÁ stránka aplikace jako první
     'public_status' => 1.00,
-    'dashboard_insights' => 1.20, // těžké analýzy, ale cachované
+    // Measured without a login, so only what anonymous visitors really get:
+    // dashboard_insights and audit_logs need an account since monitors belong
+    // to users, and timing a 401 would guard nothing.
     'daily_uptime' => 1.20,
     'events' => 1.20,
-    'audit_logs' => 1.00,
+    'incidents' => 1.20,
+    'uptime_windows' => 1.20,
     'ui_config' => 0.80,
 ];
 

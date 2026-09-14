@@ -280,7 +280,12 @@ function render_vps_agent_details($details, $monitor = null) {
     $ram_color = ($ram > 85) ? 'red' : (($ram > 60) ? 'yellow' : 'green');
     $hdd_color = ($hdd > 90) ? 'red' : (($hdd > 70) ? 'yellow' : 'green');
     
-    $is_admin = (session_status() === PHP_SESSION_ACTIVE) && isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+    // Admin-only bits (agent update offers, setup hints) need the admin role.
+    // What runs on the machine - processes, ports, discovered services - needs
+    // access to this monitor. The legacy page used to show both to any visitor.
+    $is_admin = function_exists('bk_viewer') && bk_viewer()['is_admin'];
+    $can_view = $monitor !== null && isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO
+        && bk_can_view_monitor($GLOBALS['pdo'], (int)($monitor['id'] ?? 0));
     
     ob_start();
     ?>
@@ -452,7 +457,7 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php endif; ?>
             
             <?php 
-            if ($monitor):
+            if ($monitor && $can_view):
                 $monitored_str = $monitor['monitored_processes'] ?? '';
                 if (!empty($monitored_str)):
                     $monitored_arr = array_filter(array_map('trim', explode(',', $monitored_str)));
@@ -477,7 +482,7 @@ function render_vps_agent_details($details, $monitor = null) {
             <?php endif; ?>
             <?php endif; ?>
             
-            <?php if ($monitor && $monitor['type'] === 'vps' && !empty($details['ports'])): 
+            <?php if ($can_view && $monitor && $monitor['type'] === 'vps' && !empty($details['ports'])): 
                 // Ports may arrive as an array or a comma-separated string
                 $ports_arr = is_array($details['ports']) ? $details['ports'] : array_filter(array_map('trim', explode(',', $details['ports'])));
             ?>
@@ -491,7 +496,7 @@ function render_vps_agent_details($details, $monitor = null) {
                 </div>
             <?php endif; ?>
 
-            <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
+            <?php if ($can_view && !empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
                 <div style="margin-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.45rem;">
                     <span style="color: var(--text-muted); display: block; margin-bottom: 0.35rem;"><?php echo htmlspecialchars(t('agent_discovered_services')); ?></span>
                     <div style="display: flex; flex-direction: column; gap: 0.3rem;">
@@ -517,7 +522,7 @@ function render_vps_agent_details($details, $monitor = null) {
                 </div>
             <?php endif; ?>
 
-            <?php if (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes'])): ?>
+            <?php if ($can_view && (!empty($details['top_cpu_processes']) || !empty($details['top_ram_processes']))): ?>
                 <div style="margin-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.45rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
                     <?php if (!empty($details['top_cpu_processes'])): ?>
                         <div>
@@ -2965,6 +2970,7 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
                 'event_type' => $row['event_type'],
                 'description' => $row['description'],
                 'ts' => $row['occurred_at'],
+                'monitor_id' => (int)$row['monitor_id'],
                 'monitor_name' => $monitor_names[$row['monitor_id']] ?? '?',
             ];
         }
@@ -2984,6 +2990,7 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
                 'event_type' => 'remote_action',
                 'description' => $desc,
                 'ts' => $row['created_at'],
+                'monitor_id' => (int)$row['monitor_id'],
                 'monitor_name' => $monitor_names[$row['monitor_id']] ?? '?',
             ];
         }
@@ -3008,6 +3015,7 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
                     'event_type' => $event_type,
                     'description' => null,
                     'ts' => $row['checked_at'],
+                    'monitor_id' => (int)$mid,
                     'monitor_name' => $monitor_names[$mid] ?? '?',
                 ];
             }
@@ -5877,8 +5885,11 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $status_text = 'SSL CERTIFIKÁT BRZY VYPRŠÍ';
         $emoji = '🔒';
     }
-    // Load all notification recipients (subscribers + administrators without an explicit subscription)
-    $stmt = $pdo->prepare("
+    // Load all notification recipients (subscribers + administrators without an explicit subscription).
+    // A subscribed user gets the alert only while the monitor is assigned to
+    // them: an alert carries the monitor's name and outage reason, and a stale
+    // subscription must not keep mailing them to an account that lost access.
+    $recipients_sql = "
         SELECT u.id, u.email, u.phone, u.role, u.whatsapp_apikey, u.email_lang,
                COALESCE(s.email_notifications, m.email_notifications) as email_notifications,
                COALESCE(s.sms_notifications, m.sms_notifications, u.sms_notifications) as sms_notifications,
@@ -5886,9 +5897,18 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         FROM users u
         CROSS JOIN (SELECT * FROM monitors WHERE id = ?) m
         LEFT JOIN user_subscriptions s ON u.id = s.user_id AND s.monitor_id = m.id
-        WHERE u.role = 'admin' OR s.user_id IS NOT NULL
-    ");
-    $stmt->execute([$monitor['id']]);
+        WHERE u.role = 'admin' OR (s.user_id IS NOT NULL AND %s)
+    ";
+    try {
+        $stmt = $pdo->prepare(sprintf($recipients_sql, "EXISTS (SELECT 1 FROM monitor_users mu WHERE mu.user_id = u.id AND mu.monitor_id = m.id)"));
+        $stmt->execute([$monitor['id']]);
+    } catch (PDOException $e) {
+        // No access table yet (a migration that has not run): the alert still
+        // reaches every admin - it must never fail as a whole - but no user.
+        error_log('[notify] monitor_users unavailable, alerting admins only: ' . $e->getMessage());
+        $stmt = $pdo->prepare(sprintf($recipients_sql, '1=0'));
+        $stmt->execute([$monitor['id']]);
+    }
     $recipients = $stmt->fetchAll();
 
     // VPS agent events are internal by default - they go to administrators only, not regular subscribers
@@ -8812,7 +8832,7 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
     return $issues;
 }
 
-function bk_enrich_monitor_details($pdo, $monitor, &$details) {
+function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = false) {
     if (!is_array($details)) $details = [];
     if (!$pdo || empty($monitor) || !is_array($monitor)) return;
 
@@ -8821,11 +8841,21 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
     $target = trim($monitor['target'] ?? '');
     $sib_details_raw = null;
 
+    // Every lookup below reads ANOTHER monitor. A viewer may borrow only from
+    // monitors they can see, or a user assigned one TeamSpeak monitor would get
+    // the processes and interfaces of any agent in the fleet. Cron ($system)
+    // runs without a session and sees everything.
+    $visible = $system ? null : bk_visible_monitor_ids($pdo);
+    if ($visible === []) {
+        return;
+    }
+    [$vis_sql, $vis_params] = bk_monitor_scope_sql($visible, 'id');
+
     // 1. Try matching via asset_id (when set)
     if (!empty($asset_id)) {
         try {
-            $stmt = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL AND agent_key IS NOT NULL AND agent_key != '' LIMIT 1");
-            $stmt->execute([$asset_id, $mid]);
+            $stmt = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL AND agent_key IS NOT NULL AND agent_key != '' AND {$vis_sql} LIMIT 1");
+            $stmt->execute(array_merge([$asset_id, $mid], $vis_params));
             $sib_details_raw = $stmt->fetchColumn();
         } catch (Exception $e) {}
     }
@@ -8854,9 +8884,10 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
                 SELECT last_details FROM monitors 
                 WHERE id != ? AND agent_key IS NOT NULL AND agent_key != '' AND last_details IS NOT NULL
                   AND (target = ? OR target = ? OR last_details LIKE ?)
+                  AND {$vis_sql}
                 ORDER BY updated_at DESC LIMIT 1
             ");
-            $stmt->execute([$mid, $target, $resolved_ip, '%' . $resolved_ip . '%']);
+            $stmt->execute(array_merge([$mid, $target, $resolved_ip, '%' . $resolved_ip . '%'], $vis_params));
             $sib_details_raw = $stmt->fetchColumn();
         } catch (Exception $e) {}
     }
@@ -8868,10 +8899,11 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
                 SELECT last_details FROM monitors 
                 WHERE agent_key IS NOT NULL AND agent_key != '' 
                   AND last_details LIKE '%\"ts3_process\"%' 
-                  AND last_details NOT LIKE '%\"ts3_process\":null%' 
+                  AND last_details NOT LIKE '%\"ts3_process\":null%'
+                  AND {$vis_sql}
                 ORDER BY updated_at DESC LIMIT 1
             ");
-            $stmt->execute();
+            $stmt->execute($vis_params);
             $sib_details_raw = $stmt->fetchColumn();
         } catch (Exception $e) {}
     }
@@ -8900,4 +8932,279 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details) {
     }
 }
 
+/**
+ * Who is looking: an anonymous visitor, an admin, or a user who sees only the
+ * monitors assigned to them. The session key admin_logged_in means "any
+ * signed-in account", despite its name.
+ *
+ * @return array{logged_in: bool, is_admin: bool, user_id: int}
+ */
+function bk_viewer(): array {
+    bk_sync_session_account($GLOBALS['pdo'] ?? null);
+    $logged_in = !empty($_SESSION['admin_logged_in']);
+    return [
+        'logged_in' => $logged_in,
+        'is_admin' => $logged_in && ($_SESSION['admin_role'] ?? '') === 'admin',
+        'user_id' => $logged_in ? (int)($_SESSION['admin_id'] ?? 0) : 0,
+    ];
+}
 
+/**
+ * The monitor ids the current viewer may see.
+ *
+ * Monitors belong to users through monitor_users, and several users may share
+ * one. An admin sees everything (null means no restriction). A signed-in user
+ * sees only the assigned monitors. An anonymous visitor gets none through the
+ * app - the public status page has its own status-only endpoints.
+ *
+ * @return int[]|null null = every monitor.
+ */
+/**
+ * Brings the signed-in account in line with the users table, once per request.
+ *
+ * The role was written into the session at login and never read again, so an
+ * administrator demoted to a user, or deleted, kept every right until they
+ * logged out. The role is re-read here and a deleted account is logged out.
+ * When the session lock is already released the correction stays in memory,
+ * which is enough: the next request corrects it again.
+ */
+function bk_sync_session_account($pdo): void {
+    static $synced = false;
+    if ($synced || empty($_SESSION['admin_logged_in']) || !($pdo instanceof PDO)) {
+        return;
+    }
+    $synced = true;
+    $user_id = (int)($_SESSION['admin_id'] ?? 0);
+    $role = false;
+    if ($user_id > 0) {
+        try {
+            $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
+            $stmt->execute([$user_id]);
+            $role = $stmt->fetchColumn();
+        } catch (PDOException $e) {
+            // Fail closed: the login stays, admin rights do not for this request.
+            error_log('[access] session account check failed: ' . $e->getMessage());
+            $_SESSION['admin_role'] = 'user';
+            return;
+        }
+    }
+    if ($role === false) {
+        unset($_SESSION['admin_logged_in'], $_SESSION['admin_role'], $_SESSION['admin_id'], $_SESSION['admin_username']);
+        return;
+    }
+    $_SESSION['admin_role'] = (string)$role;
+}
+
+function bk_visible_monitor_ids(PDO $pdo): ?array {
+    $viewer = bk_viewer();
+    if ($viewer['is_admin']) {
+        return null;
+    }
+    if (!$viewer['logged_in'] || $viewer['user_id'] <= 0) {
+        return [];
+    }
+    static $cache = [];
+    if (!array_key_exists($viewer['user_id'], $cache)) {
+        try {
+            $stmt = $pdo->prepare("SELECT monitor_id FROM monitor_users WHERE user_id = ?");
+            $stmt->execute([$viewer['user_id']]);
+            $cache[$viewer['user_id']] = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        } catch (PDOException $e) {
+            // The table is missing (migration pending): fail closed. A user who
+            // sees nothing for a minute is a nuisance; one who sees everything is a leak.
+            error_log('[access] monitor_users unavailable: ' . $e->getMessage());
+            $cache[$viewer['user_id']] = [];
+        }
+    }
+    return $cache[$viewer['user_id']];
+}
+
+/** Whether the current viewer may see this monitor. */
+function bk_can_view_monitor(PDO $pdo, int $monitor_id): bool {
+    $ids = bk_visible_monitor_ids($pdo);
+    return $ids === null || in_array($monitor_id, $ids, true);
+}
+
+/**
+ * An SQL condition restricting a monitor id column to the viewer's monitors.
+ * Pure, so the three cases are testable without a database.
+ *
+ * @param int[]|null $ids From bk_visible_monitor_ids(): null = all monitors.
+ * @param string $column A column reference written in code, e.g. 'm.id'.
+ * @return array{0: string, 1: int[]} The condition and its bound parameters.
+ */
+function bk_monitor_scope_sql(?array $ids, string $column): array {
+    if (!preg_match('/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/i', $column)) {
+        throw new InvalidArgumentException('Invalid column reference: ' . $column);
+    }
+    if ($ids === null) {
+        return ['1=1', []];
+    }
+    $ids = array_values(array_unique(array_map('intval', $ids)));
+    if (!$ids) {
+        return ['1=0', []];
+    }
+    return [$column . ' IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids];
+}
+
+/**
+ * A monitor's details as the public status page may show them.
+ *
+ * An allowlist, not a denylist: agents pass through keys the server has never
+ * seen, so a denylist leaked every new one - process lists, interface names,
+ * per-link traffic - to anonymous visitors by default. These are the keys the
+ * public monitor card renders. Everything else, from process names to the
+ * network identity, is for the signed-in users the monitor belongs to.
+ */
+function bk_public_monitor_details(array $details): array {
+    $allowed = [
+        // Load percentages the public cards draw as bars - they name nothing.
+        'cpu', 'ram', 'hdd', 'disk', 'memory',
+        'version', 'motd', 'players_online', 'players_max',
+        'clients_online', 'clients_max',
+        'presence_count', 'members', 'voice_channels',
+        'model', 'os', 'cpanel_stats',
+    ];
+    return array_intersect_key($details, array_flip($allowed));
+}
+
+/**
+ * Whether the request gets the public status view: asked for with
+ * scope=public, and always for an anonymous caller. The public view shows the
+ * status of every public monitor, the same for everyone, with no host internals.
+ */
+function bk_public_view(): bool {
+    return ($_GET['scope'] ?? '') === 'public' || empty($_SESSION['admin_logged_in']);
+}
+
+/** Stops the request with 401 unless someone is signed in. */
+function bk_require_login(): void {
+    if (empty($_SESSION['admin_logged_in'])) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+/**
+ * Stops the request unless the viewer may see the monitor: 401 for an
+ * anonymous caller, 404 for a signed-in user it is not assigned to. The 404 is
+ * the same answer as for a monitor that does not exist, so a user cannot probe
+ * which ids belong to someone else.
+ */
+function bk_require_monitor_view(PDO $pdo, int $monitor_id): void {
+    bk_require_login();
+    if ($monitor_id <= 0 || !bk_can_view_monitor($pdo, $monitor_id)) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+/**
+ * What the public view may say about why a check failed.
+ *
+ * A status page says that a service is down, not what runs on the machine
+ * behind it or where it lives: no process names, hosts, ports, addresses or
+ * the text a page is searched for. Null lets the public page fall back to its
+ * generic wording.
+ */
+function bk_public_reason(?string $message, string $monitor_type): ?string {
+    if ($message === null || trim($message) === '') {
+        return null;
+    }
+    // Agent-side checks describe the machine from inside: processes, ports, units.
+    if (in_array(strtolower($monitor_type), ['vps', 'openwrt', 'agent_service'], true)) {
+        return null;
+    }
+    $message = trim($message);
+    // What the checks store names hosts ("Could not resolve host: ..."), ports,
+    // the text a page is searched for and the hosting's own IP. A list of
+    // forbidden words let all of that through, so each known shape maps to a
+    // sentence without them and anything else says nothing - the caller then
+    // shows its generic label.
+    if (preg_match('/^HTTP status kód: (\d{1,3})$/u', $message, $m)) {
+        return 'HTTP status kód: ' . $m[1];
+    }
+    if (preg_match('/^Stránka odpověděla HTTP (\d{1,3}), ale neobsahuje očekávaný text/u', $message, $m)) {
+        return 'Stránka odpověděla HTTP ' . $m[1] . ', ale neobsahuje očekávaný obsah';
+    }
+    if (str_starts_with($message, 'cURL chyba:') || $message === 'Spojení selhalo') {
+        if (preg_match('/timed?\s*out|timeout/i', $message)) {
+            return 'Vypršel časový limit spojení';
+        }
+        if (preg_match('/resolve|name lookup/i', $message)) {
+            return 'Adresu se nepodařilo přeložit (DNS)';
+        }
+        if (preg_match('/ssl|tls|certificate/i', $message)) {
+            return 'Zabezpečené spojení (TLS) selhalo';
+        }
+        return 'Spojení selhalo';
+    }
+    if (preg_match('/^Port \S+ je zavřený nebo nedostupný/u', $message)) {
+        return 'Port je zavřený nebo nedostupný';
+    }
+    if (str_starts_with($message, 'TS3 Query port') || str_starts_with($message, 'Chyba komunikace s TS3 ServerQuery')) {
+        return 'TeamSpeak ServerQuery neodpovídá';
+    }
+    if (str_starts_with($message, 'Discord API neodpovídá')) {
+        return 'Discord API neodpovídá nebo server neexistuje';
+    }
+    static $fixed = [
+        'Minecraft server je podle API vypnutý.',
+        'Prázdná odpověď od MC serveru (timeout nebo nepodporovaný protokol), i po opakovaném pokusu.',
+        'Neočekávané ID paketu od MC serveru',
+        'Nelze dekódovat JSON stav Minecraft serveru',
+        'Heartbeat monitor nemá nastavený interval, takže není podle čeho poznat zpoždění.',
+        'Zatím nepřišel žádný signál - úloha se ještě ani jednou neohlásila.',
+    ];
+    return in_array($message, $fixed, true) ? $message : null;
+}
+
+/**
+ * An incident update as the public status page may show it.
+ *
+ * Updates are written by people and by the outage lifecycle. The lifecycle
+ * appends the raw check failure ("Důvod: Chybí běžící proces: nginx") and the
+ * incident actions prefix the operator's username; neither is public.
+ */
+function bk_public_incident_update(?string $message): ?string {
+    if ($message === null) {
+        return null;
+    }
+    $message = trim($message);
+    if (str_starts_with($message, 'Automaticky detekován výpadek.')) {
+        return 'Automaticky detekován výpadek.';
+    }
+    if (str_starts_with($message, 'Incident převzal:')) {
+        return 'Incident převzat.';
+    }
+    $message = trim((string)preg_replace('/^\[[^\]\r\n]{1,100}\]\s*/u', '', $message));
+    return $message === '' ? null : $message;
+}
+
+/**
+ * Looks up the monitor a chart request means - the exact monitor id first,
+ * otherwise a monitor of that asset - among the monitors the viewer may see,
+ * and returns the executed statement so the caller keeps its own fetch and
+ * its own "not found" answer. An anonymous caller gets 401; a monitor the
+ * viewer may not see is simply not found.
+ *
+ * @param string $columns Column list written in code, e.g. 'id, type'.
+ */
+function bk_visible_monitor_stmt(PDO $pdo, int $id, string $columns): PDOStatement {
+    bk_require_login();
+    if (!preg_match('/^[a-z_][a-z0-9_]*(\s*,\s*[a-z_][a-z0-9_]*)*$/i', $columns)) {
+        throw new InvalidArgumentException('Invalid column list: ' . $columns);
+    }
+    [$scope, $scope_params] = bk_monitor_scope_sql(bk_visible_monitor_ids($pdo), 'id');
+    $stmt = $pdo->prepare("SELECT {$columns} FROM monitors WHERE (id = ? OR asset_id = ?) AND {$scope} ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
+    $stmt->execute(array_merge([$id, $id], $scope_params, [$id]));
+    return $stmt;
+}
+
+// Every entry point reaches here with its session started. Correct the role
+// before any access check reads $_SESSION['admin_role'] directly.
+if (PHP_SAPI !== 'cli' && isset($pdo) && $pdo instanceof PDO) {
+    bk_sync_session_account($pdo);
+}

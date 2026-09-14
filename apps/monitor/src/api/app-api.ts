@@ -117,6 +117,8 @@ export interface ApiUser {
   oauthProvider: string | null;
   createdAt: string | null;
   isSelf: boolean;
+  /** Monitors this account may see. An admin sees every monitor regardless. */
+  monitorIds: number[];
 }
 
 export class ApiError extends Error {
@@ -236,8 +238,16 @@ export const appApi = {
 
   getUsers: () => request<{ users: ApiUser[] }>('users').then((r) => r.users),
 
-  saveUser: (user: { id?: number; username: string; email: string; phone?: string; role: string; password?: string }) =>
-    mutate<{ success: true; id: number; invited?: boolean }>('save_user', user),
+  saveUser: (user: {
+    id?: number;
+    username: string;
+    email: string;
+    phone?: string;
+    role: string;
+    password?: string;
+    /** Omit to keep the current assignment; an empty list removes every monitor. */
+    monitorIds?: number[];
+  }) => mutate<{ success: true; id: number; invited?: boolean }>('save_user', user),
 
   deleteUser: (id: number) => mutate<{ success: true }>('delete_user', { id }),
 

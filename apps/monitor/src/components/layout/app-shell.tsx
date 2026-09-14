@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Outlet, useNavigate } from 'react-router';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { Footer } from './footer';
@@ -24,7 +24,8 @@ export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const closeMobileNav = React.useCallback(() => setMobileNavOpen(false), []);
   const mobileNavRef = useFocusTrap<HTMLDivElement>(mobileNavOpen, closeMobileNav);
-  const { session } = useSession();
+  const { session, loading: sessionLoading } = useSession();
+  const location = useLocation();
 
   // Global search index (⌘K): pages + real monitors.
   // It used to be a static list of four pages and clicking led nowhere.
@@ -159,6 +160,20 @@ export function AppShell() {
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [mobileNavOpen]);
+
+  // The app needs a login. It used to render every page for an anonymous
+  // visitor, fed by endpoints that answered anyone - the dashboard, device
+  // details and charts were a public page nobody had decided to publish. Now a
+  // user sees only the monitors assigned to them, so there is nothing to show
+  // without an account. The public status page, invitations and subscription
+  // links live outside this shell and stay open.
+  if (sessionLoading && !session) {
+    return <LoadingState size="page" label={t('shell.loading_page', 'Načítám stránku…')} />;
+  }
+  if (!session?.authenticated) {
+    const next = location.pathname + location.search;
+    return <Navigate to={`/setup${next && next !== '/' ? `?next=${encodeURIComponent(next)}` : ''}`} replace />;
+  }
 
   return (
     <div className="flex h-dvh overflow-hidden print:h-auto print:overflow-visible print:block">

@@ -21,7 +21,8 @@ require_once __DIR__ . '/lang.php';
 /** How many recent events the feed carries. Readers remember only new ones anyway. */
 const BK_RSS_MAX_ITEMS = 40;
 
-$is_admin = !empty($_SESSION['admin_logged_in']);
+// Hidden pages are the administrator's drafts, not something every account may read.
+$is_admin = bk_viewer()['is_admin'];
 
 /** XML escaping - a `<` in a monitor name would break the whole feed otherwise. */
 function bk_xml(string $value): string {

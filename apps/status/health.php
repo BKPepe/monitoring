@@ -10,7 +10,17 @@ require_once __DIR__ . '/db.php';
 $is_cli = php_sapi_name() === 'cli';
 if (!$is_cli) {
     session_start();
-    if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
+    // The role is read from the users table, not the session: a demoted or
+    // deleted administrator keeps the old session until logging out.
+    $bk_health_role = false;
+    try {
+        $stmt_role = $pdo->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
+        $stmt_role->execute([(int)($_SESSION['admin_id'] ?? 0)]);
+        $bk_health_role = $stmt_role->fetchColumn();
+    } catch (Throwable $e) {
+        $bk_health_role = false;
+    }
+    if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true || $bk_health_role !== 'admin') {
         http_response_code(403);
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['success' => false, 'message' => 'Admin access required']);

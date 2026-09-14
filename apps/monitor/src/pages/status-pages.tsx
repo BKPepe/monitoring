@@ -49,7 +49,8 @@ interface StatusPage {
 export function StatusPagesPage() {
   const { t } = useLanguage();
   const { session } = useSession();
-  const isAdmin = Boolean(session?.authenticated);
+  // Managing status pages is an admin task; a signed-in user is not an admin.
+  const isAdmin = session?.user?.role === 'admin';
 
   const [pages, setPages] = React.useState<StatusPage[] | null>(null);
   const [monitors, setMonitors] = React.useState<ApiMonitor[]>([]);

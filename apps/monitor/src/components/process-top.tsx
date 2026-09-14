@@ -25,7 +25,9 @@ interface Row {
  */
 export function ProcessTop({ monitorId }: { monitorId: number }) {
   const { t, lang } = useLanguage();
-  const { isAdmin } = useSession();
+  // Any signed-in viewer: the server answers only for monitors assigned to them.
+  const { session } = useSession();
+  const signedIn = !!session?.authenticated;
   const [kind, setKind] = React.useState<'cpu' | 'ram'>('cpu');
   /**
    * Keyed by the question it answers, so switching between processor and
@@ -36,7 +38,7 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
   const question = `${monitorId}|${kind}`;
 
   React.useEffect(() => {
-    if (!isAdmin) return;
+    if (!signedIn) return;
     let active = true;
     fetch(`/status/api.php?action=process_top&monitor_id=${monitorId}&kind=${kind}&minutes=1440`, {
       credentials: 'include',
@@ -57,9 +59,9 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
     return () => {
       active = false;
     };
-  }, [isAdmin, monitorId, kind]);
+  }, [signedIn, monitorId, kind]);
 
-  if (!isAdmin || !state || state.key !== question) return null;
+  if (!signedIn || !state || state.key !== question) return null;
 
   if (!state.enabled) {
     return (

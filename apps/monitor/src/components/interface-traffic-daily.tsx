@@ -32,11 +32,13 @@ const GB = 1024 * 1024 * 1024;
  */
 export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
   const { t } = useLanguage();
-  const { isAdmin } = useSession();
+  // Any signed-in viewer: the server answers only for monitors assigned to them.
+  const { session } = useSession();
+  const signedIn = !!session?.authenticated;
   const [interfaces, setInterfaces] = React.useState<Iface[] | null>(null);
 
   React.useEffect(() => {
-    if (!isAdmin) return;
+    if (!signedIn) return;
     let active = true;
     fetch(`/status/api.php?action=interface_traffic_daily&monitor_id=${monitorId}&days=30`, {
       credentials: 'include',
@@ -51,9 +53,9 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
     return () => {
       active = false;
     };
-  }, [isAdmin, monitorId]);
+  }, [signedIn, monitorId]);
 
-  if (!isAdmin || !interfaces) return null;
+  if (!signedIn || !interfaces) return null;
   const shown = interfaces.filter((i) => i.days.length >= 2 && i.total > 0).slice(0, 3);
   if (shown.length === 0) return null;
 

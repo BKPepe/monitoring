@@ -290,6 +290,9 @@ export interface LinkTrafficSide {
   total: { rx_bytes: number; tx_bytes: number } | null;
 }
 
+/** 'public' = the status page's whole fleet; 'app' = only the monitors the signed-in viewer may see. */
+export type PublicStatusScope = 'app' | 'public';
+
 /** Response of `api.php?action=public_status`. */
 export interface PublicStatus {
   status: 'healthy' | 'degraded';
@@ -309,7 +312,7 @@ export interface MetricsSource {
   /** Source name for the UI — the user should see whether the data is real. */
   readonly name: 'api.php' | 'mock';
   getAssetCharts(monitorId: number, range: TimeRange): Promise<ChartData[]>;
-  getPublicStatus(): Promise<PublicStatus>;
+  getPublicStatus(scope?: PublicStatusScope): Promise<PublicStatus>;
   getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail>;
   /** @param previous The window immediately before this one, for comparison. */
   getMetricSeries(

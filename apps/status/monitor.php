@@ -12,12 +12,28 @@ if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
-$is_admin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+// Admin-only controls need the admin role; the rest of this page needs access
+// to the monitor (checked below).
+$is_admin = bk_viewer()['is_admin'];
 $site_title = get_setting('site_title', 'Blood Kings');
 $monitor_id = (int)($_GET['id'] ?? 0);
 
 if ($monitor_id <= 0) {
     http_response_code(404);
+    header('Location: index.php');
+    exit;
+}
+
+// The per-monitor detail - processes, interfaces, traffic, timeline - belongs
+// to the users the monitor is assigned to, and admins. It used to open for
+// anyone who guessed an id. The public status page keeps showing the status.
+// Checked before the lookup, so an id of someone else's monitor answers like
+// one that does not exist.
+if (empty($_SESSION['admin_logged_in'])) {
+    header('Location: admin.php');
+    exit;
+}
+if (!bk_can_view_monitor($pdo, $monitor_id)) {
     header('Location: index.php');
     exit;
 }

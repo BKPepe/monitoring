@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { appApi, ApiError, type ApiUser } from '@/api/app-api';
+import { appApi, ApiError, type ApiMonitor, type ApiUser } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
@@ -275,6 +275,7 @@ function UserDialog({
   const [email, setEmail] = React.useState(user?.email ?? '');
   const [phone, setPhone] = React.useState(user?.phone ?? '');
   const [role, setRole] = React.useState(user?.role ?? 'user');
+  const [monitorIds, setMonitorIds] = React.useState<number[]>(user?.monitorIds ?? []);
   const [password, setPassword] = React.useState('');
   const [saving, setSaving] = React.useState(false);
   const [formError, setFormError] = React.useState<string | null>(null);
@@ -292,6 +293,9 @@ function UserDialog({
         phone,
         role,
         password: password || undefined,
+        // An admin sees every monitor; the assignment only matters for a user.
+        // Sent for a user even when empty, so unticking everything really removes access.
+        monitorIds: role === 'user' ? monitorIds : undefined,
       });
 
       if (user) {
@@ -361,6 +365,7 @@ function UserDialog({
                 <option value="admin">{t('users.role_admin', 'Administrátor')}</option>
               </select>
             </Field>
+            <MonitorAccessField role={role} value={monitorIds} onChange={setMonitorIds} />
             <Field label={user ? t('users.field_new_password', 'Nové heslo') : t('users.field_password', 'Heslo')}>
               <Input
                 type="password"
@@ -436,6 +441,102 @@ function DeleteDialog({ user, onClose, onDeleted }: { user: ApiUser; onClose: ()
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Which monitors a user may see. A monitor can belong to several users, and a
+ * user sees nothing else in the app - not in lists, charts, reports or alerts.
+ * Grouped by device, because a router or a server usually carries several
+ * monitors and handing out half of a device is rarely what the admin means.
+ */
+function MonitorAccessField({
+  role,
+  value,
+  onChange,
+}: {
+  role: string;
+  value: number[];
+  onChange: (ids: number[]) => void;
+}) {
+  const { t } = useLanguage();
+  const [monitors, setMonitors] = React.useState<ApiMonitor[] | null>(null);
+  const [loadError, setLoadError] = React.useState(false);
+
+  React.useEffect(() => {
+    let active = true;
+    appApi
+      .getMonitors()
+      .then((list) => {
+        if (active) setMonitors(list);
+      })
+      .catch(() => {
+        if (active) setLoadError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (role === 'admin') {
+    return (
+      <Field label={t('users.field_monitors', 'Přístup k monitorům')}>
+        <p className="text-muted-foreground text-xs">
+          {t('users.monitors_admin', 'Administrátor vidí všechny monitory.')}
+        </p>
+      </Field>
+    );
+  }
+
+  const selected = new Set(value);
+  // One row per monitor with its target. Two monitors can share a name, and a
+  // checkbox over a shared name used to grant both.
+  const sorted = [...(monitors ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'cs') || a.id - b.id);
+  const toggle = (id: number, on: boolean) => {
+    const next = new Set(selected);
+    if (on) next.add(id);
+    else next.delete(id);
+    onChange([...next].sort((a, b) => a - b));
+  };
+
+  return (
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="text-muted-foreground mb-1.5 text-xs font-medium">
+        {t('users.field_monitors', 'Přístup k monitorům')}
+        <span className="ml-1.5 tabular-nums">
+          {t('users.monitors_count', { count: selected.size }, `${selected.size} přiřazeno`)}
+        </span>
+      </legend>
+      <p className="text-muted-foreground text-xs">
+        {t(
+          'users.monitors_hint',
+          'Uživatel uvidí jen zaškrtnuté monitory a jen je může sledovat. Měnit je může dál jen administrátor.'
+        )}
+      </p>
+      {loadError ? (
+        <ErrorState size="inline" message={t('users.monitors_load_error', 'Seznam monitorů se nepodařilo načíst.')} />
+      ) : monitors === null ? (
+        <LoadingState size="inline" label={t('users.monitors_loading', 'Načítám monitory…')} />
+      ) : monitors.length === 0 ? (
+        <p className="text-muted-foreground text-xs">{t('users.monitors_none', 'Zatím tu nejsou žádné monitory.')}</p>
+      ) : (
+        <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border p-2" tabIndex={0}>
+          {sorted.map((m) => (
+            <label key={m.id} className="flex min-w-0 items-center gap-2 text-sm">
+              <input type="checkbox" checked={selected.has(m.id)} onChange={(e) => toggle(m.id, e.target.checked)} />
+              <span className="min-w-0 truncate">{m.name}</span>
+              <span className="text-muted-foreground text-2xs shrink-0">{m.type}</span>
+              {m.target ? (
+                <span className="text-muted-foreground min-w-0 truncate font-mono text-2xs">
+                  {m.target}
+                  {m.port ? `:${m.port}` : ''}
+                </span>
+              ) : null}
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
   );
 }
 

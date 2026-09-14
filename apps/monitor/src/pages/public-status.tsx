@@ -75,7 +75,7 @@ export function PublicStatusPage() {
   const { theme, toggle: toggleTheme } = useTheme();
   const [params] = useSearchParams();
   // A status page left open on a wall monitor has to stay true without F5.
-  const { data: status, error } = usePublicStatus(REFRESH_MS);
+  const { data: status, error } = usePublicStatus(REFRESH_MS, 'public');
 
   // ?lang=en in the URL wins over the stored preference - existing links to
   // the legacy page carry it and they have to keep meaning the same thing.
@@ -165,7 +165,10 @@ export function PublicStatusPage() {
 
   React.useEffect(() => {
     let active = true;
-    fetch('/status/api.php?action=monitors')
+    // scope=public: the status of every public monitor, the same for everyone.
+    // Without it a signed-in user would see only the monitors assigned to them
+    // here too, and host internals would depend on who happens to be looking.
+    fetch('/status/api.php?action=monitors&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (active) setMonitors(Array.isArray(d.monitors) ? d.monitors : []);
@@ -174,7 +177,7 @@ export function PublicStatusPage() {
         if (active) setMonitors((prev) => prev ?? []);
       });
     // The 30-day strips - one request for every monitor at once, keyed by id.
-    fetch('/status/api.php?action=daily_uptime&days=30')
+    fetch('/status/api.php?action=daily_uptime&days=30&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (active && d.series && typeof d.series === 'object') setUptime(d.series);
@@ -184,7 +187,7 @@ export function PublicStatusPage() {
     // the 30 d value sits next to the strip (same as the legacy card), the
     // rest fills the expanded detail. null stays null and renders as a dash,
     // never as 100 %.
-    fetch('/status/api.php?action=uptime_windows')
+    fetch('/status/api.php?action=uptime_windows&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (!active || d.windows == null || typeof d.windows !== 'object') return;
@@ -209,7 +212,7 @@ export function PublicStatusPage() {
     // labelled the `nodes` list "measurement locations", but nodes are the
     // MONITORED SERVERS; verified against production, the locations live in
     // action=regions (Frankfurt, Cloudflare POPs, GitHub runners).
-    fetch('/status/api.php?action=regions&days=30')
+    fetch('/status/api.php?action=regions&days=30&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (active) setRegions(Array.isArray(d.regions) ? d.regions : []);
@@ -218,7 +221,7 @@ export function PublicStatusPage() {
         if (active) setRegions((prev) => prev ?? []);
       });
     // Recent events - the "what happened lately" strip the legacy page had.
-    fetch('/status/api.php?action=events&limit=200')
+    fetch('/status/api.php?action=events&limit=200&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (active) setEvents(Array.isArray(d.events) ? d.events : []);
@@ -228,7 +231,7 @@ export function PublicStatusPage() {
       });
     // Incidents arrive as JSON and paginate client-side. The legacy page
     // shipped all 200 rows as styled HTML - a third of its 1.1 MB.
-    fetch('/status/api.php?action=incidents')
+    fetch('/status/api.php?action=incidents&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (active) setIncidents(Array.isArray(d.manualIncidents) ? d.manualIncidents : []);

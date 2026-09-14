@@ -262,8 +262,16 @@ if ($action === 'logout') {
 
 // 2. List of all monitors from the database
 if ($action === 'monitors') {
-    $is_admin = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
+    $viewer = bk_viewer();
+    // Two views of one list. scope=public - and every anonymous caller - gets
+    // the public status of every monitor: the same for everyone, with no host
+    // internals. The app view needs a login and shows a user only the monitors
+    // assigned to them, but those whole; an admin sees every monitor.
+    $public_view = ($_GET['scope'] ?? '') === 'public' || !$viewer['logged_in'];
+    $is_admin = $viewer['is_admin'] && !$public_view;
+    [$mon_scope_sql, $mon_scope_params] = bk_monitor_scope_sql($public_view ? null : bk_visible_monitor_ids($pdo), 'm.id');
     $monitors = [];
+    $details_by_id = [];
 
     // The base list. response_time/cpu_usage/ram_usage/hdd_usage are NOT
     // columns of the monitors table (never were - confirmed live: "Unknown column
@@ -273,7 +281,7 @@ if ($action === 'monitors') {
     // (exactly that happened in production: one query for 20+ columns at once,
     // one schema mismatch = the whole monitor list gone, and the app with it).
     try {
-        $stmt = $pdo->query("
+        $stmt = $pdo->prepare("
             SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
                    m.last_checked, m.last_status_change, m.last_details,
                    m.maintenance, m.maintenance_description, m.maintenance_start, m.maintenance_end,
@@ -286,36 +294,26 @@ if ($action === 'monitors') {
                    ON vm.id = (SELECT vm2.id FROM vps_metrics vm2
                                WHERE vm2.monitor_id = m.id
                                ORDER BY vm2.id DESC LIMIT 1)
+            WHERE {$mon_scope_sql}
             ORDER BY m.id ASC
         ");
+        $stmt->execute($mon_scope_params);
         $agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         foreach ($stmt->fetchAll() as $r) {
             $details = json_decode($r['last_details'] ?? '', true) ?: [];
-            // Operational diagnostics (collection error messages, hints naming
-            // config files) belong to the administrator, not the public
-            // dashboard - the public response does not contain them at all.
-            $details_out = $details;
-            if (!$is_admin) {
-                unset($details_out['cpanel_stats_error']);
-                // The infrastructure's network identity (WAN addresses, gateway,
-                // internal subnet, SSIDs, WireGuard endpoints, interface lists) is
-                // a map for an attacker - the anonymous response carries only
-                // aggregates (counts, percentages), no addresses. The old status page gates it the same way.
-                foreach (['wan_ipv4', 'wan_ipv6', 'wan_gateway', 'wan_dns', 'lan_subnet', 'wifi_radios', 'wireguard_peers', 'interfaces', 'dns_servers', 'mwan3_policies', 'service_restarts', 'public_ip', 'asn', 'asn_name'] as $priv_key) {
-                    unset($details_out[$priv_key]);
-                }
-
-                // The list above enumerates KNOWN keys, but agent_api nowadays
-                // passes through keys the server has never heard of - the
-                // enumeration would miss them and a new metric carrying an address
-                // would leak to an anonymous visitor. Hence the extra name-based filter.
-                //
-                // The patterns target network identity and secrets. Aggregates
-                // (counts, percentages, latency) deliberately do not match.
-                foreach (array_keys($details_out) as $priv_key) {
-                    if (preg_match('/(ipv4|ipv6|(^|_)ip($|_)|addr|gateway|subnet|ssid|(^|_)mac($|_)|endpoint|peer|serial|hostname|token|secret|passw|_key$|^key$)/i', (string)$priv_key)) {
-                        unset($details_out[$priv_key]);
-                    }
+            $details_by_id[(int)$r['id']] = $details;
+            if ($public_view) {
+                // An allowlist of what the public card renders. The denylist this
+                // replaced let every new agent key through - process lists,
+                // interface names, per-link traffic - to anyone.
+                $details_out = bk_public_monitor_details($details);
+            } else {
+                // The query is scoped, so the viewer may see this monitor, and a
+                // monitor belongs to its users whole. Only the administrator's
+                // collection diagnostics (hints naming config files) stay admin-only.
+                $details_out = $details;
+                if (!$is_admin) {
+                    unset($details_out['cpanel_stats_error']);
                 }
             }
             $last_change_ts = $r['last_status_change'] ? strtotime($r['last_status_change']) : null;
@@ -323,8 +321,10 @@ if ($action === 'monitors') {
                 'id' => (int)$r['id'],
                 'name' => $r['name'],
                 'type' => strtolower($r['type'] ?? 'web'),
-                'target' => $r['target'],
-                'port' => $r['port'] ? (int)$r['port'] : null,
+                // Targets name internal hosts and, for agent-side checks, the
+                // process itself. The public card never shows them.
+                'target' => $public_view ? null : $r['target'],
+                'port' => ($public_view || !$r['port']) ? null : (int)$r['port'],
                 'status' => strtolower($r['status'] ?? 'up'),
                 'category' => $r['category'] ?? 'Monitory',
                 'assetId' => $r['asset_id'] ? (int)$r['asset_id'] : (int)$r['id'],
@@ -357,8 +357,8 @@ if ($action === 'monitors') {
                 'maintenanceDescription' => !empty($r['maintenance']) ? ($r['maintenance_description'] ?: null) : null,
                 'maintenanceStart' => (!empty($r['maintenance']) && $r['maintenance_start']) ? $r['maintenance_start'] : null,
                 'maintenanceEnd' => (!empty($r['maintenance']) && $r['maintenance_end']) ? $r['maintenance_end'] : null,
-                'agentLastSeen' => $details['agent_last_seen'] ?? null,
-                'hostname' => $details['hostname'] ?? $r['target'],
+                'agentLastSeen' => $public_view ? null : ($details['agent_last_seen'] ?? null),
+                'hostname' => $public_view ? null : ($details['hostname'] ?? $r['target']),
                 'os' => $details['os'] ?? $r['type'],
                 'details' => $details_out,
                 // Outages of data COLLECTION (not of the service) - the frontend MUST
@@ -458,8 +458,12 @@ if ($action === 'monitors') {
                     }
                 }
 
-                $agent_ver = $details['agent_version'] ?? null;
-                $agent_type_key = $details['agent_type'] ?? null;
+                // This row's own details. The loop above leaves $details holding
+                // the LAST monitor's, and reading that here gave every monitor
+                // the agent version of whichever monitor had the highest id.
+                $row_details = $details_by_id[$mid] ?? [];
+                $agent_ver = $row_details['agent_version'] ?? null;
+                $agent_type_key = $row_details['agent_type'] ?? null;
                 if ($agent_ver && $agent_type_key && function_exists('bk_get_agent_latest_version')) {
                     $latest_agent = bk_get_agent_latest_version($agent_type_key);
                     if ($latest_agent !== null) {
@@ -710,6 +714,10 @@ if ($action === 'delete_monitor') {
     $del_id = (int)($input['id'] ?? 0);
     if ($del_id > 0) {
         try {
+            // Explicitly, not only through the foreign key: an install whose table
+            // was created without it must not keep access rows pointing at a
+            // monitor id that a new monitor could later reuse.
+            $pdo->prepare("DELETE FROM monitor_users WHERE monitor_id = ?")->execute([$del_id]);
             $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
             $stmt->execute([$del_id]);
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
@@ -1195,6 +1203,11 @@ if ($action === 'dashboard_layout') {
         exit;
     }
 
+    // The catalogue names agent machines; a user's lists only their monitors.
+    bk_require_login();
+    $dl_visible = bk_visible_monitor_ids($pdo);
+    [$dl_scope, $dl_scope_params] = bk_monitor_scope_sql($dl_visible, 'monitor_id');
+    [$dl_agent_scope, $dl_agent_params] = bk_monitor_scope_sql($dl_visible, 'm.id');
     try {
         // 1. What is actually measured: vps_metrics columns with at least
         //    one non-null value over the last 7 days.
@@ -1210,8 +1223,8 @@ if ($action === 'dashboard_layout') {
         $measured = [];
         foreach ($metric_defs as $key => $def) {
             try {
-                $stmt_m = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE `{$def['col']}` IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
-                $stmt_m->execute();
+                $stmt_m = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE `{$def['col']}` IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND {$dl_scope}");
+                $stmt_m->execute($dl_scope_params);
                 $count = (int)$stmt_m->fetchColumn();
             } catch (Throwable $e) {
                 $count = 0;
@@ -1249,14 +1262,15 @@ if ($action === 'dashboard_layout') {
         // posilaji metriky (jinak by slo zapnout kartu, ktera nikdy nic
         // neukaze). Klic nese id monitoru: metric_cpu_12.
         try {
-            $stmt_a = $pdo->query("
+            $stmt_a = $pdo->prepare("
                 SELECT m.id, m.name,
                        (SELECT vm.cpu_usage FROM vps_metrics vm
                         WHERE vm.monitor_id = m.id ORDER BY vm.id DESC LIMIT 1) AS cpu_usage
                 FROM monitors m
-                WHERE LOWER(m.type) IN ('vps', 'openwrt')
+                WHERE LOWER(m.type) IN ('vps', 'openwrt') AND {$dl_agent_scope}
                 ORDER BY m.name
             ");
+            $stmt_a->execute($dl_agent_params);
             foreach ($stmt_a->fetchAll() as $agent) {
                 if ($agent['cpu_usage'] === null) {
                     continue;
@@ -1487,14 +1501,6 @@ if ($action === 'toggle_maintenance') {
 // moment (the culprits panel), so "what has been chewing the CPU today?" could
 // only be answered by watching the page.
 if ($action === 'process_top') {
-    // Admin only, as the API docs have always said - this used to ask for a
-    // login alone. The current top processes stay public through monitors and
-    // process_history, which are documented as public and back public panels.
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
     $pt_monitor = (int)($_GET['monitor_id'] ?? 0);
     $pt_kind = ($_GET['kind'] ?? 'cpu') === 'ram' ? 'ram' : 'cpu';
     $pt_minutes = min(43200, max(15, (int)($_GET['minutes'] ?? 1440)));
@@ -1503,6 +1509,8 @@ if ($action === 'process_top') {
         echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    // For the users the monitor belongs to, and admins: a monitor is its users' whole.
+    bk_require_monitor_view($pdo, $pt_monitor);
     try {
         if ((int)get_setting('process_history_days', '30') <= 0) {
             echo json_encode(['enabled' => false, 'processes' => []], JSON_UNESCAPED_UNICODE);
@@ -1555,14 +1563,6 @@ if ($action === 'process_top') {
 // move forty gigabytes?" had no answer. Admin only, like every other endpoint
 // that names interfaces - that is network topology.
 if ($action === 'interface_traffic_daily') {
-    // Admin only, as the API docs have always said - this used to ask for a
-    // login alone. link_traffic, documented as public, still reports a router's
-    // traffic by link.
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
     $itd_monitor = (int)($_GET['monitor_id'] ?? 0);
     $itd_days = min(180, max(1, (int)($_GET['days'] ?? 30)));
     if ($itd_monitor <= 0) {
@@ -1570,6 +1570,8 @@ if ($action === 'interface_traffic_daily') {
         echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    // For the users the monitor belongs to, and admins: a monitor is its users' whole.
+    bk_require_monitor_view($pdo, $itd_monitor);
     try {
         $stmt = $pdo->prepare("
             SELECT iface, date, rx_bytes_total, tx_bytes_total
@@ -1760,6 +1762,16 @@ if ($action === 'events') {
     try {
         $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
+        // Public view (scope=public, or no login): the status of every monitor,
+        // the same for everyone, with reasons that name no process and no target.
+        // App view: only the monitors this viewer may see.
+        $ev_public = bk_public_view();
+        if (!$ev_public && $monitor_id > 0) {
+            bk_require_monitor_view($pdo, $monitor_id);
+        }
+        [$ev_scope, $ev_scope_params] = bk_monitor_scope_sql($ev_public ? null : bk_visible_monitor_ids($pdo), 'l.monitor_id');
+        $ev_params = array_merge($monitor_id > 0 ? [$monitor_id] : [], $ev_scope_params);
+        $ev_status_type = '';
 
         // The last N rows COVER ONLY A FEW DOZEN MINUTES (cron writes every
         // minute per monitor), so outages older than the window were simply
@@ -1775,11 +1787,11 @@ if ($action === 'events') {
             SELECT $select_cols
             FROM monitor_logs l
             JOIN monitors m ON l.monitor_id = m.id
-            WHERE 1=1 $where_monitor
+            WHERE 1=1 $where_monitor AND {$ev_scope}
             ORDER BY l.id DESC
             LIMIT $limit
         ");
-        $stmt->execute($monitor_id > 0 ? [$monitor_id] : []);
+        $stmt->execute($ev_params);
         $recent_rows = $stmt->fetchAll();
 
         $fail_limit = min(50, $limit);
@@ -1787,11 +1799,11 @@ if ($action === 'events') {
             SELECT $select_cols
             FROM monitor_logs l
             JOIN monitors m ON l.monitor_id = m.id
-            WHERE l.status IN ('down', 'warning') $where_monitor
+            WHERE l.status IN ('down', 'warning') $where_monitor AND {$ev_scope}
             ORDER BY l.id DESC
             LIMIT $fail_limit
         ");
-        $stmt_fails->execute($monitor_id > 0 ? [$monitor_id] : []);
+        $stmt_fails->execute($ev_params);
 
         $rows_by_id = [];
         foreach (array_merge($recent_rows, $stmt_fails->fetchAll()) as $mr) {
@@ -1839,7 +1851,7 @@ if ($action === 'events') {
                 'timeIso' => date('c', strtotime($r['checked_at'])),
                 'monitorId' => (int)$r['monitor_id'],
                 'monitorName' => $r['monitor_name'],
-                'target' => $r['target'],
+                'target' => $ev_public ? null : $r['target'],
                 'type' => strtoupper($r['type']),
                 // An unknown check location stays null. A hardcoded location
                 // (Frankfurt/RackNerd) used to be filled in here - for 37 of 40
@@ -1847,7 +1859,7 @@ if ($action === 'events') {
                 'location' => $r['checked_from'] ?: null,
                 'status' => $r['status'] === 'down' ? 'VÝPADEK' : ($r['status'] === 'warning' ? 'VAROVÁNÍ' : 'OK'),
                 'rawStatus' => $r['status'],
-                'errorMsg' => $r['error_message'] ?: ($r['status'] === 'down' ? 'Cílový server neodpovídá.' : 'Kontrola proběhla v pořádku.'),
+                'errorMsg' => ($ev_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: ($r['status'] === 'down' ? 'Cílový server neodpovídá.' : 'Kontrola proběhla v pořádku.'),
                 'responseTime' => $r['response_time'] !== null ? (int)$r['response_time'] : null,
                 'isDown' => $r['status'] === 'down',
                 // true = this OK check ended an outage. false on rows whose
@@ -1870,9 +1882,10 @@ if ($action === 'events') {
         $status_change = null;
         if ($monitor_id > 0) {
             try {
-                $stmt_mon = $pdo->prepare("SELECT status, last_status_change FROM monitors WHERE id = ? LIMIT 1");
+                $stmt_mon = $pdo->prepare("SELECT status, last_status_change, type FROM monitors WHERE id = ? LIMIT 1");
                 $stmt_mon->execute([$monitor_id]);
                 $mon_row = $stmt_mon->fetch();
+                $ev_status_type = is_array($mon_row) ? (string)($mon_row['type'] ?? '') : '';
                 $changed_at = is_array($mon_row) ? ($mon_row['last_status_change'] ?? null) : null;
                 $changed_ts = ($changed_at !== null && $changed_at !== '') ? strtotime((string)$changed_at) : false;
 
@@ -1923,6 +1936,9 @@ if ($action === 'events') {
             }
         }
 
+        if ($ev_public && is_array($status_change)) {
+            $status_change['errorMsg'] = bk_public_reason($status_change['errorMsg'], $ev_status_type);
+        }
         echo json_encode(['events' => $events, 'statusChange' => $status_change], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['events' => [], 'statusChange' => null], JSON_UNESCAPED_UNICODE);
@@ -1943,6 +1959,7 @@ if ($action === 'monitor_insights') {
         echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    bk_require_monitor_view($pdo, $monitor_id);
     try {
         $stmt_mon = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
         $stmt_mon->execute([$monitor_id]);
@@ -2021,6 +2038,11 @@ if ($action === 'monitor_insights') {
 // collected across all monitors. An empty array is a legitimate answer: no
 // invented "all good" cards are generated.
 if ($action === 'dashboard_insights') {
+    bk_require_login();
+    // A user's insights come from their monitors only, computed fresh: the cache
+    // is the admin's fleet-wide top list and must not leak into a user's view.
+    $di_visible = bk_visible_monitor_ids($pdo);
+    [$di_scope, $di_scope_params] = bk_monitor_scope_sql($di_visible, 'id');
     try {
         $limit = min(8, max(1, (int)($_GET['limit'] ?? 4)));
 
@@ -2029,7 +2051,7 @@ if ($action === 'dashboard_insights') {
         // dashboard waited for it on every load. The result is therefore
         // cached for 5 minutes; the data changes on the scale of minutes anyway.
         $cache_key = 'dashboard_insights_cache';
-        $cached_raw = get_setting($cache_key, '');
+        $cached_raw = $di_visible === null ? get_setting($cache_key, '') : '';
         if ($cached_raw !== '') {
             $cached = json_decode($cached_raw, true);
             if (is_array($cached) && (time() - (int)($cached['at'] ?? 0)) < 300 && isset($cached['insights'])) {
@@ -2038,7 +2060,8 @@ if ($action === 'dashboard_insights') {
             }
         }
 
-        $stmt = $pdo->query("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') ORDER BY id ASC");
+        $stmt = $pdo->prepare("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') AND {$di_scope} ORDER BY id ASC");
+        $stmt->execute($di_scope_params);
         $items = [];
         while ($monitor = $stmt->fetch()) {
             $details = json_decode($monitor['last_details'] ?? '', true);
@@ -2063,7 +2086,7 @@ if ($action === 'dashboard_insights') {
         usort($items, fn($a, $b) => ($rank[$a['kind']] ?? 4) <=> ($rank[$b['kind']] ?? 4));
         try {
             $stmt_cache = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            $stmt_cache->execute([$cache_key, json_encode(['at' => time(), 'insights' => array_slice($items, 0, 8)], JSON_UNESCAPED_UNICODE)]);
+            if ($di_visible === null) $stmt_cache->execute([$cache_key, json_encode(['at' => time(), 'insights' => array_slice($items, 0, 8)], JSON_UNESCAPED_UNICODE)]);
         } catch (Throwable $ce) { /* cache je volitelná */ }
         echo json_encode(['insights' => array_slice($items, 0, $limit)], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -2079,7 +2102,10 @@ if ($action === 'daily_uptime') {
     try {
         $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
 
-        $stmt_mon = $pdo->query("SELECT id, name FROM monitors WHERE type NOT IN ('node', 'probe') ORDER BY id ASC");
+        // Public view: every monitor. App view: the monitors this viewer may see.
+        [$du_scope, $du_scope_params] = bk_monitor_scope_sql(bk_public_view() ? null : bk_visible_monitor_ids($pdo), 'id');
+        $stmt_mon = $pdo->prepare("SELECT id, name FROM monitors WHERE type NOT IN ('node', 'probe') AND {$du_scope} ORDER BY id ASC");
+        $stmt_mon->execute($du_scope_params);
         $mon_rows = $stmt_mon->fetchAll();
 
         $stmt_days = $pdo->prepare("
@@ -2187,7 +2213,12 @@ if ($action === 'uptime_windows') {
             GROUP BY monitor_id
         ");
         $uw_out = [];
+        // Public view: every monitor. App view: the monitors this viewer may see.
+        $uw_visible = bk_public_view() ? null : bk_visible_monitor_ids($pdo);
         foreach ($stmt_uw->fetchAll() as $r) {
+            if ($uw_visible !== null && !in_array((int)$r['monitor_id'], $uw_visible, true)) {
+                continue;
+            }
             $row = [];
             foreach ([1, 7, 30, 90] as $w) {
                 $total = (int)$r["total{$w}"];
@@ -2325,22 +2356,31 @@ function bk_duration_text(int $diff): string {
 if ($action === 'incidents') {
     try {
         $incidents = [];
+        // Public view: open outages and announced incidents for everyone, without
+        // targets, operator names or reasons that name a process. App view: the
+        // monitors this viewer may see, plus incidents tied to no monitor.
+        $inc_public = bk_public_view();
+        $inc_visible = $inc_public ? null : bk_visible_monitor_ids($pdo);
+        [$inc_scope, $inc_scope_params] = bk_monitor_scope_sql($inc_visible, 'm.id');
+        [$inc_m_scope, $inc_m_params] = bk_monitor_scope_sql($inc_visible, 'monitor_id');
+        $inc_manual_where = $inc_visible === null ? '1=1' : "(monitor_id IS NULL OR {$inc_m_scope})";
 
         // Outages of TARGET monitors that are down RIGHT NOW - takes the latest
         // 'down' row per currently unavailable monitor, not every historical down
         // row (that would show long-resolved outages as still ongoing).
         try {
-            $stmt_logs = $pdo->query("
+            $stmt_logs = $pdo->prepare("
                 SELECT l.id, l.monitor_id, l.checked_at, l.error_message,
                        m.name as monitor_name, m.target, m.type
                 FROM monitor_logs l
                 JOIN monitors m ON l.monitor_id = m.id
-                WHERE m.status = 'down'
+                WHERE m.status = 'down' AND {$inc_scope}
                   AND l.id = (SELECT MAX(l2.id) FROM monitor_logs l2 WHERE l2.monitor_id = l.monitor_id AND l2.status = 'down')
                 ORDER BY l.id DESC
                 LIMIT 50
             ");
-            $log_rows = $stmt_logs ? $stmt_logs->fetchAll() : [];
+            $stmt_logs->execute($inc_scope_params);
+            $log_rows = $stmt_logs->fetchAll();
 
             // Open DB incidents by monitor - a live outage links to them so it
             // can be acknowledged/closed from the UI (the lifecycle creates them
@@ -2368,26 +2408,26 @@ if ($action === 'incidents') {
                 $incidents[] = [
                     'id' => (int)$r['id'],
                     'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
-                    'acknowledgedBy' => $open_inc ? $open_inc['acknowledged_by'] : null,
+                    'acknowledgedBy' => ($open_inc && !$inc_public) ? $open_inc['acknowledged_by'] : null,
                     'acknowledgedAt' => ($open_inc && !empty($open_inc['acknowledged_at']))
                         ? date('c', strtotime((string)$open_inc['acknowledged_at']))
                         : null,
                     // Escalation happened silently: cron stamps it and nobody
                     // could see that an outage had already been escalated past
                     // whoever was supposed to pick it up.
-                    'escalatedAt' => ($open_inc && !empty($open_inc['escalated_at']))
+                    'escalatedAt' => (!$inc_public && $open_inc && !empty($open_inc['escalated_at']))
                         ? date('c', strtotime((string)$open_inc['escalated_at']))
                         : null,
                     'monitor_id' => (int)$r['monitor_id'],
                     'monitor_name' => $r['monitor_name'],
-                    'target' => $r['target'],
+                    'target' => $inc_public ? null : $r['target'],
                     'type' => strtoupper($r['type']),
                     'status' => 'open',
                     'severity' => 'down',
                     'started_at' => date('d.m.Y H:i:s', $start_ts),
                     'resolved_at' => null,
                     'duration_text' => bk_duration_text(time() - $start_ts),
-                    'reason' => $r['error_message'] ?: 'Cílový port neodpovídá',
+                    'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: 'Cílový port neodpovídá',
                 ];
             }
         } catch (Throwable $t) {}
@@ -2396,13 +2436,15 @@ if ($action === 'incidents') {
         // without a link to a specific monitor).
         $manual_incidents = [];
         try {
-            $stmt_inc = $pdo->query("
+            $stmt_inc = $pdo->prepare("
                 SELECT id, title, impact, status, created_at, updated_at, resolved_at,
                        monitor_id, acknowledged_by, acknowledged_at, postmortem
                 FROM incidents
+                WHERE {$inc_manual_where}
                 ORDER BY id DESC
                 LIMIT 50
             ");
+            $stmt_inc->execute($inc_visible === null ? [] : $inc_m_params);
             foreach ($stmt_inc->fetchAll() as $r) {
                 $start_ts = strtotime($r['created_at']);
                 $end_ts = $r['resolved_at'] ? strtotime($r['resolved_at']) : time();
@@ -2411,7 +2453,13 @@ if ($action === 'incidents') {
                     $stmt_upd = $pdo->prepare("SELECT status, message, created_at FROM incident_updates WHERE incident_id = ? ORDER BY id ASC");
                     $stmt_upd->execute([(int)$r['id']]);
                     foreach ($stmt_upd->fetchAll() as $u) {
-                        $updates[] = ['status' => $u['status'], 'message' => $u['message'], 'at' => date('d.m.Y H:i:s', strtotime($u['created_at']))];
+                        // The lifecycle stores the raw check failure and the incident
+                        // actions the operator's name; the public view gets neither.
+                        $updates[] = [
+                            'status' => $u['status'],
+                            'message' => $inc_public ? bk_public_incident_update($u['message']) : $u['message'],
+                            'at' => date('d.m.Y H:i:s', strtotime($u['created_at'])),
+                        ];
                     }
                 } catch (Throwable $t) {}
 
@@ -2421,7 +2469,7 @@ if ($action === 'incidents') {
                     'impact' => $r['impact'],
                     'status' => $r['status'],
                     'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
-                    'acknowledgedBy' => $r['acknowledged_by'],
+                    'acknowledgedBy' => $inc_public ? null : $r['acknowledged_by'],
                     'acknowledgedAt' => $r['acknowledged_at'] ? date('d.m.Y H:i:s', strtotime($r['acknowledged_at'])) : null,
                     'postmortem' => $r['postmortem'],
                     'createdAt' => date('d.m.Y H:i:s', $start_ts),
@@ -2712,6 +2760,7 @@ if ($action === 'check_stages') {
         echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    bk_require_monitor_view($pdo, $monitor_id);
     try {
         $stmt = $pdo->prepare("
             SELECT check_stages, checked_at, response_time, status
@@ -3114,7 +3163,8 @@ if ($action === 'status_page') {
         $stmt_sp = $pdo->prepare("SELECT title, description, is_public, monitor_ids, display_options FROM status_pages WHERE slug = ? LIMIT 1");
         $stmt_sp->execute([$sp_slug]);
         $sp_row = $stmt_sp->fetch();
-        $sp_is_admin = !empty($_SESSION['admin_logged_in']);
+        // Hidden pages are the admin's drafts, not something every account may open.
+        $sp_is_admin = bk_viewer()['is_admin'];
 
         if (!$sp_row || ((int)$sp_row['is_public'] !== 1 && !$sp_is_admin)) {
             http_response_code(404);
@@ -3148,7 +3198,8 @@ if ($action === 'status_page') {
 }
 
 if ($action === 'status_pages') {
-    $is_admin_sp = !empty($_SESSION['admin_logged_in']);
+    // Hidden pages are the admin's drafts, not something every account may open.
+    $is_admin_sp = bk_viewer()['is_admin'];
     try {
         $stmt = $pdo->query("SELECT id, title, slug, description, is_public, monitor_ids, display_options FROM status_pages ORDER BY title");
         $pages = [];
@@ -3285,6 +3336,21 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
 if ($action === 'regions') {
     try {
         $days = max(1, min(30, (int)($_GET['days'] ?? 7)));
+        // Public view: where the checks run from and how often they succeed,
+        // nothing more. A user's app view counts only their monitors and never
+        // reads or writes the fleet-wide cache.
+        $rg_public = bk_public_view();
+        $rg_visible = $rg_public ? null : bk_visible_monitor_ids($pdo);
+        [$rg_scope, $rg_scope_params] = bk_monitor_scope_sql($rg_visible, 'monitor_id');
+        $rg_project = function (array $payload) use ($rg_public): array {
+            if ($rg_public) {
+                $payload['regions'] = array_map(
+                    fn($r) => ['location' => $r['location'] ?? null, 'successRate' => $r['successRate'] ?? null],
+                    $payload['regions'] ?? []
+                );
+            }
+            return $payload;
+        };
 
         // Server-side cache, stejny vzorec jako websites_overview o kus niz.
         //
@@ -3295,11 +3361,11 @@ if ($action === 'regions') {
         // nebo lokalita Cloudflare - 10 minut stara odpoved je porad pravdiva,
         // a `cachedAt` to odpovedi priznava.
         $regions_cache_key = 'regions_cache_' . $days . 'd';
-        $cache_raw = get_setting($regions_cache_key, '');
+        $cache_raw = $rg_visible === null ? get_setting($regions_cache_key, '') : '';
         if ($cache_raw !== '') {
             $cached = json_decode($cache_raw, true);
             if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
-                echo json_encode($cached['data'], JSON_UNESCAPED_UNICODE);
+                echo json_encode($rg_project($cached['data']), JSON_UNESCAPED_UNICODE);
                 exit;
             }
         }
@@ -3316,10 +3382,11 @@ if ($action === 'regions') {
             FROM monitor_logs
             WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
               AND status IN ('up', 'down', 'warning')
+              AND {$rg_scope}
             GROUP BY checked_from
             ORDER BY checks DESC
         ");
-        $stmt->execute([$days]);
+        $stmt->execute(array_merge([$days], $rg_scope_params));
 
         $regions = [];
         foreach ($stmt->fetchAll() as $r) {
@@ -3342,11 +3409,11 @@ if ($action === 'regions') {
         $regions_payload = ['days' => $days, 'regions' => $regions, 'cachedAt' => date('c')];
         try {
             $stmt_c = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
+            if ($rg_visible === null) $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
         } catch (Throwable $e) {
             // Cache je optimalizace - kdyz se nezapise, odpoved stejne odejde.
         }
-        echo json_encode($regions_payload, JSON_UNESCAPED_UNICODE);
+        echo json_encode($rg_project($regions_payload), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Přehled měřicích míst se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
@@ -3355,12 +3422,22 @@ if ($action === 'regions') {
 }
 
 if ($action === 'websites_overview') {
+    bk_require_login();
+    // The cache holds the whole fleet; a user gets only their monitors out of it,
+    // and the filtered map is never written back.
+    $wo_visible = bk_visible_monitor_ids($pdo);
+    $wo_filter = function (array $data) use ($wo_visible): array {
+        if ($wo_visible !== null) {
+            $data['monitors'] = (object)array_intersect_key((array)($data['monitors'] ?? []), array_flip($wo_visible));
+        }
+        return $data;
+    };
     try {
         $cache_raw = get_setting('websites_overview_cache', '');
         if ($cache_raw !== '') {
             $cached = json_decode($cache_raw, true);
             if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
-                echo json_encode($cached['data'], JSON_UNESCAPED_UNICODE);
+                echo json_encode($wo_filter($cached['data']), JSON_UNESCAPED_UNICODE);
                 exit;
             }
         }
@@ -3434,7 +3511,7 @@ if ($action === 'websites_overview') {
         } catch (Throwable $e) {
             // The cache is an optimisation - if it fails to store, the endpoint just computes more often.
         }
-        echo json_encode($data, JSON_UNESCAPED_UNICODE);
+        echo json_encode($wo_filter($data), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Přehled SLA se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
@@ -3443,6 +3520,9 @@ if ($action === 'websites_overview') {
 }
 
 if ($action === 'sla_report') {
+    bk_require_login();
+    // A user's report covers only their monitors, and so do the fleet totals.
+    [$sla_scope, $sla_scope_params] = bk_monitor_scope_sql(bk_visible_monitor_ids($pdo), 'm.id');
     try {
         $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
 
@@ -3455,11 +3535,11 @@ if ($action === 'sla_report') {
                    SUM(CASE WHEN l.status IN ('up','down','warning') THEN 1 ELSE 0 END) as non_maint_checks
             FROM monitors m
             LEFT JOIN monitor_logs l ON l.monitor_id = m.id AND l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-            WHERE m.type NOT IN ('node', 'probe')
+            WHERE m.type NOT IN ('node', 'probe') AND {$sla_scope}
             GROUP BY m.id, m.name, m.target, m.type, m.status, m.last_status_change
             ORDER BY m.id ASC
         ");
-        $stmt->execute([$days]);
+        $stmt->execute(array_merge([$days], $sla_scope_params));
         $monitors = $stmt->fetchAll();
 
         // The loop here used to fire 3 queries PER monitor (last outage, its
@@ -3615,6 +3695,14 @@ if ($action === 'sla_report') {
 
 // 2e. Audit logs from the database (settings changes, sign-ins, audit trail)
 if ($action === 'audit_logs') {
+    // Admin only: the raw check history of every monitor. It used to answer
+    // anyone, with error texts naming processes and internal targets.
+    bk_require_login();
+    if (!bk_viewer()['is_admin']) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     try {
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
 
@@ -3707,8 +3795,9 @@ if ($action === 'metric_series') {
         // The id itself wins over "some monitor of that asset". With OR and a bare
         // LIMIT 1, MySQL is free to return the sibling with the lower id, so an asset
         // with several monitors answered chart requests with another monitor's data.
-        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id');
         $real_id = $stmt_mon->fetchColumn();
 
         if (!$real_id) {
@@ -3846,8 +3935,9 @@ if ($action === 'metric_heatmap') {
     $hm_days = max(1, min(30, (int)($_GET['days'] ?? 30)));
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id');
         $real_id = $stmt_mon->fetchColumn();
         if (!$real_id) {
             echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
@@ -3956,8 +4046,9 @@ if ($action === 'metric_correlations') {
     }
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type');
         $mon_row = $stmt_mon->fetch();
         if (!$mon_row) {
             echo json_encode(['correlations' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
@@ -4061,13 +4152,16 @@ if ($action === 'metric_correlations') {
 // went over the primary line and which over the backup, and when the router
 // was on the backup at all (wan_lost / wan_restored). See bk_get_link_traffic().
 if ($action === 'link_traffic') {
+    // Interface names and per-link traffic are a map of the network: only for
+    // the users a monitor belongs to (and admins), never for anonymous visitors.
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $days = max(1, min(30, (int)($_GET['days'] ?? 30)));
     try {
         // The exact monitor id wins over "a monitor of that asset" - with
         // OR + LIMIT 1 alone a sibling with a lower id answered instead.
-        $stmt_mon = $pdo->prepare("SELECT id, type, last_details FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type, last_details');
         $mon_row = $stmt_mon->fetch();
         if (!$mon_row) {
             http_response_code(404);
@@ -4100,6 +4194,7 @@ if ($action === 'link_traffic') {
 if ($action === 'metric_detail') {
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $metric = (string)($_GET['metric'] ?? '');
+    bk_require_monitor_view($pdo, $monitor_id);
     $map = bk_metric_column_map();
 
     if (!isset($map[$metric]) && $metric !== 'response_time' && $metric !== 'latency') {
@@ -4256,6 +4351,9 @@ if ($action === 'process_history') {
         echo json_encode(['error' => 'Chybí monitor_id nebo čas.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    // Process names, PIDs and per-process usage describe what runs on the machine:
+    // only for the users the monitor belongs to, and admins.
+    bk_require_monitor_view($pdo, $monitor_id);
 
     try {
         // The window is computed in SQL, not in PHP.
@@ -4332,8 +4430,9 @@ if ($action === 'metric_series_batch') {
     $minutes = bk_period_minutes($period) ?? 1440;
 
     try {
-        $stmt_mon = $pdo->prepare("SELECT id, type FROM monitors WHERE id = ? OR asset_id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
-        $stmt_mon->execute([$monitor_id, $monitor_id, $monitor_id]);
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type');
         $mon_row = $stmt_mon->fetch();
         $real_id = $mon_row['id'] ?? null;
         $mon_type = strtolower((string)($mon_row['type'] ?? ''));
@@ -4430,7 +4529,10 @@ if ($action === 'get_subscriptions') {
     }
     $user_id = (int)($_SESSION['admin_id'] ?? 0);
     try {
-        $stmt_mon = $pdo->query("SELECT id, name, type FROM monitors ORDER BY id ASC");
+        // Alerts only about monitors this account may see.
+        [$gs_scope, $gs_scope_params] = bk_monitor_scope_sql(bk_visible_monitor_ids($pdo), 'id');
+        $stmt_mon = $pdo->prepare("SELECT id, name, type FROM monitors WHERE {$gs_scope} ORDER BY id ASC");
+        $stmt_mon->execute($gs_scope_params);
         $monitors = $stmt_mon->fetchAll();
         $stmt_sub = $pdo->prepare("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = ?");
         $stmt_sub->execute([$user_id]);
@@ -4484,7 +4586,9 @@ if ($action === 'save_subscriptions') {
         $stmt_ins = $pdo->prepare("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications, whatsapp_notifications) VALUES (?, ?, ?, ?, ?)");
         foreach ($input['subscriptions'] as $s) {
             $mid = (int)($s['id'] ?? 0);
-            if ($mid <= 0) continue;
+            // A subscription to someone else's monitor would mail its name and
+            // outage reasons to an account that may not see it.
+            if ($mid <= 0 || !bk_can_view_monitor($pdo, $mid)) continue;
             $stmt_ins->execute([$user_id, $mid, (int)($s['email'] ?? 0), (int)($s['sms'] ?? 0), (int)($s['whatsapp'] ?? 0)]);
         }
         $pdo->commit();
@@ -4492,7 +4596,8 @@ if ($action === 'save_subscriptions') {
     } catch (Throwable $e) {
         $pdo->rollBack();
         http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        error_log('[save_subscriptions] ' . $e->getMessage());
+        echo json_encode(['error' => 'Odběry se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -4527,6 +4632,9 @@ if ($action === 'save_user' || $action === 'delete_user') {
                 echo json_encode(['error' => 'Uživatel nenalezen.'], JSON_UNESCAPED_UNICODE);
                 exit;
             }
+            // Explicitly, not only through the foreign key: an install whose
+            // table was created without it must not keep access rows of a deleted account.
+            $pdo->prepare("DELETE FROM monitor_users WHERE user_id = ?")->execute([$du_id]);
             $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$du_id]);
             bk_audit_log($pdo, 'user_deleted', (string)$du_username, 'user', $du_id);
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
@@ -4545,6 +4653,32 @@ if ($action === 'save_user' || $action === 'delete_user') {
     $su_phone = trim((string)($su_input['phone'] ?? ''));
     $su_role = ($su_input['role'] ?? '') === 'admin' ? 'admin' : 'user';
     $su_password = (string)($su_input['password'] ?? '');
+    // Which monitors this account may see. A monitor can belong to several
+    // users. Absent = keep the current assignment (a client that does not send
+    // it must not wipe it); an empty list removes every assignment.
+    $su_monitor_ids = null;
+    if (array_key_exists('monitorIds', $su_input)) {
+        $su_monitor_ids = array_values(array_unique(array_filter(
+            array_map('intval', (array)$su_input['monitorIds']),
+            fn($v) => $v > 0
+        )));
+    }
+    // Replaces the account's assignments inside the caller's transaction. Only
+    // ids of existing monitors are stored. Returns the stored count, or null
+    // when the request did not touch assignments.
+    $su_assign = function (int $uid) use ($pdo, $su_monitor_ids): ?int {
+        if ($su_monitor_ids === null) {
+            return null;
+        }
+        $pdo->prepare("DELETE FROM monitor_users WHERE user_id = ?")->execute([$uid]);
+        if (!$su_monitor_ids) {
+            return 0;
+        }
+        [$su_scope, $su_scope_params] = bk_monitor_scope_sql($su_monitor_ids, 'id');
+        $stmt_assign = $pdo->prepare("INSERT INTO monitor_users (monitor_id, user_id) SELECT id, ? FROM monitors WHERE " . $su_scope);
+        $stmt_assign->execute(array_merge([$uid], $su_scope_params));
+        return $stmt_assign->rowCount();
+    };
 
     if ($su_username === '' || $su_email === '') {
         http_response_code(400);
@@ -4569,6 +4703,7 @@ if ($action === 'save_user' || $action === 'delete_user') {
                 echo json_encode(['error' => 'Uživatel nenalezen.'], JSON_UNESCAPED_UNICODE);
                 exit;
             }
+            $pdo->beginTransaction();
             if ($su_password !== '') {
                 $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?")
                     ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT), $su_id]);
@@ -4576,12 +4711,15 @@ if ($action === 'save_user' || $action === 'delete_user') {
                 $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?")
                     ->execute([$su_username, $su_email, $su_phone, $su_role, $su_id]);
             }
+            $su_assigned = $su_assign($su_id);
+            $pdo->commit();
             $su_changes = [];
             if ($su_old['username'] !== $su_username) $su_changes[] = "jméno {$su_old['username']} -> {$su_username}";
             if ($su_old['email'] !== $su_email) $su_changes[] = "e-mail {$su_old['email']} -> {$su_email}";
             if ((string)$su_old['phone'] !== $su_phone) $su_changes[] = 'telefon změněn';
             if ($su_old['role'] !== $su_role) $su_changes[] = "role {$su_old['role']} -> {$su_role}";
             if ($su_password !== '') $su_changes[] = 'heslo nastaveno adminem';
+            if ($su_assigned !== null) $su_changes[] = "přístup k monitorům: {$su_assigned}";
             bk_audit_log($pdo, 'user_updated', $su_username . (!empty($su_changes) ? ' (' . implode(', ', $su_changes) . ')' : ' (beze změny)'), 'user', $su_id);
             echo json_encode(['success' => true, 'id' => $su_id], JSON_UNESCAPED_UNICODE);
             exit;
@@ -4589,9 +4727,12 @@ if ($action === 'save_user' || $action === 'delete_user') {
 
         if ($su_password !== '') {
             // The admin typed the password by hand - no invitation.
+            $pdo->beginTransaction();
             $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
                 ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT)]);
             $su_new_id = (int)$pdo->lastInsertId();
+            $su_assign($su_new_id);
+            $pdo->commit();
             bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', heslo nastaveno adminem)', 'user', $su_new_id);
             echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => false], JSON_UNESCAPED_UNICODE);
             exit;
@@ -4599,9 +4740,12 @@ if ($action === 'save_user' || $action === 'delete_user') {
 
         // Without a password: a placeholder hash matching no plaintext, and an
         // invitation link - the admin never knows the user's password.
+        $pdo->beginTransaction();
         $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
             ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash(bin2hex(random_bytes(32)), PASSWORD_BCRYPT)]);
         $su_new_id = (int)$pdo->lastInsertId();
+        $su_assign($su_new_id);
+        $pdo->commit();
         $su_token = bk_issue_password_reset_token($pdo, $su_new_id);
         $su_link = $default_origin . '/app/set-password?token=' . $su_token;
         $su_site = get_setting('site_title', 'Blood Kings');
@@ -4614,6 +4758,9 @@ if ($action === 'save_user' || $action === 'delete_user') {
         // created, but the invitation did not go out" instead of a lying "invitation sent".
         echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => (bool)$su_sent], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         if ((string)$e->getCode() === '23000') {
             http_response_code(400);
             echo json_encode(['error' => 'Uživatelské jméno nebo e-mail už existuje.'], JSON_UNESCAPED_UNICODE);
@@ -4642,6 +4789,15 @@ if ($action === 'users') {
     try {
         $stmt = $pdo->query("SELECT id, username, email, phone, role, totp_enabled, oauth_provider, created_at FROM users ORDER BY id ASC");
         $rows = $stmt->fetchAll();
+        // Assigned monitors per account, for the admin's access editor.
+        $assigned_by_user = [];
+        try {
+            foreach ($pdo->query("SELECT user_id, monitor_id FROM monitor_users ORDER BY monitor_id")->fetchAll() as $mu) {
+                $assigned_by_user[(int)$mu['user_id']][] = (int)$mu['monitor_id'];
+            }
+        } catch (PDOException $e) {
+            error_log('[users] monitor_users unavailable: ' . $e->getMessage());
+        }
         $users = [];
         foreach ($rows as $u) {
             $users[] = [
@@ -4654,6 +4810,7 @@ if ($action === 'users') {
                 'oauthProvider' => $u['oauth_provider'] ?? null,
                 'createdAt' => $u['created_at'] ? date('c', strtotime($u['created_at'])) : null,
                 'isSelf' => ($u['id'] == ($_SESSION['admin_id'] ?? 0)),
+                'monitorIds' => $assigned_by_user[(int)$u['id']] ?? [],
             ];
         }
         echo json_encode(['users' => $users], JSON_UNESCAPED_UNICODE);
@@ -4667,6 +4824,16 @@ if ($action === 'users') {
 if ($action === 'metrics_history') {
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $period = $_GET['period'] ?? '24h';
+    // One monitor for the users it belongs to; monitor_id=0 averages every
+    // agent in the fleet, which only an admin may see.
+    if ($monitor_id > 0) {
+        bk_require_monitor_view($pdo, $monitor_id);
+    } elseif (!bk_viewer()['is_admin']) {
+        bk_require_login();
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
     $result = [
         'labels' => [], 'cpu' => [], 'ram' => [], 'hdd' => [], 'net' => [],
@@ -4797,15 +4964,23 @@ if ($action === 'collection_health') {
 
 if ($action === 'public_status') {
     try {
-        $stmt_stats = $pdo->query("
+        // The status page counts the whole fleet for everyone. Inside the app a
+        // user's dashboard counts only the monitors assigned to that user.
+        $ps_visible = bk_public_view() ? null : bk_visible_monitor_ids($pdo);
+        [$ps_scope, $ps_params] = bk_monitor_scope_sql($ps_visible, 'id');
+        [$ps_log_scope, $ps_log_params] = bk_monitor_scope_sql($ps_visible, 'monitor_id');
+        [$ps_m_scope, $ps_m_params] = bk_monitor_scope_sql($ps_visible, 'm.id');
+        $stmt_stats = $pdo->prepare("
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
                 SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
                 MAX(last_checked) as last_checked
             FROM monitors
+            WHERE {$ps_scope}
         ");
-        $stats = $stmt_stats ? $stmt_stats->fetch() : null;
+        $stmt_stats->execute($ps_params);
+        $stats = $stmt_stats->fetch() ?: null;
         $total_monitors = (int)($stats['total'] ?? 0);
         $down_monitors = (int)($stats['down_count'] ?? 0);
 
@@ -4814,14 +4989,15 @@ if ($action === 'public_status') {
         // unmeasured, and the frontend needs to tell those two apart.
         $avg_uptime = null;
         try {
-            $stmt_upt = $pdo->query("
+            $stmt_upt = $pdo->prepare("
                 SELECT monitor_id,
                        SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
                        SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
                 FROM monitor_logs
-                WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND {$ps_log_scope}
                 GROUP BY monitor_id
             ");
+            $stmt_upt->execute($ps_log_params);
             if ($stmt_upt) {
                 $uptime_values = [];
                 while ($row = $stmt_upt->fetch()) {
@@ -4840,12 +5016,14 @@ if ($action === 'public_status') {
         // list is returned, not a hardcoded "Donald"/"Router - Praha".
         $nodes = [];
         try {
-            $stmt_nodes = $pdo->query("
+            $stmt_nodes = $pdo->prepare("
                 SELECT m.name, m.status,
                        (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
                 FROM monitors m
-                WHERE LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router') OR m.last_details IS NOT NULL
+                WHERE (LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router') OR m.last_details IS NOT NULL)
+                  AND {$ps_m_scope}
             ");
+            $stmt_nodes->execute($ps_m_params);
             while ($nd = $stmt_nodes->fetch()) {
                 $nodes[] = [
                     'name' => $nd['name'],
@@ -4860,12 +5038,13 @@ if ($action === 'public_status') {
         // 100% uptime default misrepresented actual availability.
         $avg_latency = null;
         try {
-            $stmt_latency = $pdo->query("
+            $stmt_latency = $pdo->prepare("
                 SELECT AVG(response_time) as avg_latency
                 FROM monitor_logs
-                WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND response_time > 0
+                WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND response_time > 0 AND {$ps_log_scope}
             ");
-            $lat_row = $stmt_latency ? $stmt_latency->fetch() : null;
+            $stmt_latency->execute($ps_log_params);
+            $lat_row = $stmt_latency->fetch() ?: null;
             if ($lat_row && isset($lat_row['avg_latency']) && $lat_row['avg_latency'] !== null) {
                 $avg_latency = (int)round($lat_row['avg_latency']);
             }
@@ -4908,6 +5087,7 @@ if ($action === 'public_status') {
 if ($action === 'speedtest_history') {
     $sp_monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $sp_limit = max(1, min(200, (int)($_GET['limit'] ?? 60)));
+    bk_require_monitor_view($pdo, $sp_monitor_id);
 
     try {
         $stmt = $pdo->prepare("
@@ -5286,6 +5466,7 @@ if ($action === 'setup') {
 if ($action === 'export_csv') {
     $csv_monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $csv_days = max(1, min(366, (int)($_GET['days'] ?? 30)));
+    bk_require_monitor_view($pdo, $csv_monitor_id);
     $csv_is_admin = !empty($_SESSION['admin_logged_in']);
 
     try {
@@ -5416,6 +5597,12 @@ if ($action === 'annotations') {
     $ann_monitor_id = (int)($_GET['monitor_id'] ?? 0);
     $ann_metric = trim((string)($_GET['metric'] ?? ''));
     $ann_hours = max(1, min(8760, (int)($_GET['hours'] ?? 24)));
+    // Notes on someone else's monitor are not this user's to read. The empty
+    // list is the same answer an anonymous caller already gets.
+    if (!bk_can_view_monitor($pdo, $ann_monitor_id)) {
+        echo json_encode(['annotations' => []], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
     try {
         $sql = "SELECT a.id, UNIX_TIMESTAMP(a.timestamp) AS ts, a.note, u.username

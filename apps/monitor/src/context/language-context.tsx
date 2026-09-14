@@ -121,7 +121,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'speed.samples': { cs: 'Měření', en: 'Samples' },
   'speed.last': { cs: 'Poslední měření: {at}', en: 'Last measurement: {at}' },
   'common.refresh': { cs: 'Obnovit', en: 'Refresh' },
-  'common.login_required': { cs: 'Vyžaduje přihlášení', en: 'Login Required' },
   'common.open_details': { cs: 'Otevřít detail', en: 'Open Details' },
   'common.close': { cs: 'Zavřít', en: 'Close' },
 
@@ -1057,10 +1056,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'websites.monitored_count': { cs: 'Sledovaných webů', en: 'Monitored Sites' },
   'websites.load_error': { cs: 'Seznam webů se nepodařilo načíst.', en: 'Failed to load the website list.' },
   'websites.save_error': { cs: 'Web se nepodařilo uložit.', en: 'Failed to save the website.' },
-  'websites.login_required_hint': {
-    cs: 'Pro přidávání a úpravu monitorů se prosím přihlaste',
-    en: 'Please log in to add and edit monitors',
-  },
   'websites.current_uptime': { cs: 'Aktuální dostupnost webů', en: 'Current Website Uptime' },
   'websites.uptime_hint': { cs: '{up} z {total} dostupných právě teď', en: '{up} of {total} available right now' },
   'websites.check_interval': {
@@ -1126,10 +1121,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Probing Infrastructure & Agent Status',
   },
   'incidents.save_error': { cs: 'Incident se nepodařilo uložit.', en: 'Failed to save the incident.' },
-  'incidents.login_required_hint': {
-    cs: 'Pro zakládání incidentů se musíte přihlásit jako administrátor',
-    en: 'You must log in as an administrator to create incidents',
-  },
   'incidents.create_modal_title': {
     cs: 'Nahlásit nový incident / Plánovanou údržbu',
     en: 'Report New Incident / Scheduled Maintenance',
@@ -1371,6 +1362,19 @@ const translations: Record<string, { cs: string; en: string }> = {
   'users.field_email': { cs: 'E-mail', en: 'Email' },
   'users.field_phone': { cs: 'Telefon', en: 'Phone' },
   'users.field_role': { cs: 'Role', en: 'Role' },
+  'users.field_monitors': { cs: 'Přístup k monitorům', en: 'Monitor access' },
+  'users.monitors_admin': { cs: 'Administrátor vidí všechny monitory.', en: 'An administrator sees every monitor.' },
+  'users.monitors_count': { cs: '{count} přiřazeno', en: '{count} assigned' },
+  'users.monitors_hint': {
+    cs: 'Uživatel uvidí jen zaškrtnuté monitory a jen je může sledovat. Měnit je může dál jen administrátor.',
+    en: 'The user sees only the ticked monitors and can only view them. Changes stay with administrators.',
+  },
+  'users.monitors_load_error': {
+    cs: 'Seznam monitorů se nepodařilo načíst.',
+    en: 'The monitor list could not be loaded.',
+  },
+  'users.monitors_loading': { cs: 'Načítám monitory…', en: 'Loading monitors…' },
+  'users.monitors_none': { cs: 'Zatím tu nejsou žádné monitory.', en: 'There are no monitors yet.' },
   'users.field_new_password': { cs: 'Nové heslo', en: 'New Password' },
   'users.field_password': { cs: 'Heslo', en: 'Password' },
   'users.password_unchanged': { cs: 'Beze změny', en: 'Unchanged' },

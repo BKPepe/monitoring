@@ -10,7 +10,9 @@ if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
-$is_admin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+// Admin-only parts (agent keys, hidden pages) need the admin role. Everything a
+// monitor reveals about its machine needs access to that monitor ($bk_can_view below).
+$is_admin = bk_viewer()['is_admin'];
 
 // Získání celkových statistik
 $stmt_stats = $pdo->query("
@@ -92,6 +94,15 @@ if (($_GET['view'] ?? '') === 'metric') {
     $vm_monitor = null;
     foreach ($monitors as $m) {
         if ((int)$m['id'] === $vm_id) { $vm_monitor = $m; break; }
+    }
+    // A metric's charts belong to the users the monitor is assigned to, and admins.
+    if (empty($_SESSION['admin_logged_in'])) {
+        header('Location: admin.php');
+        exit;
+    }
+    if ($vm_monitor === null || !bk_can_view_monitor($pdo, $vm_id)) {
+        header('Location: index.php');
+        exit;
     }
     render_metric_detail_page($pdo, $vm_monitor, $vm_metric, $is_admin);
     // render_metric_detail_page() vždy končí exit; - řádek níže je jen pojistka.
@@ -461,7 +472,7 @@ $portal_url = trim(get_setting('portal_url'));
         // JEN PRO PŘIHLÁŠENÉHO ADMINA - je to provozní diagnostika s detaily
         // konfigurace (STATS_KEY, cesty k souborům), ne veřejný stav služeb.
         $bk_collection_rows = [];
-        if (!empty($_SESSION['admin_logged_in'])) {
+        if ($is_admin) {
             $bk_agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
             foreach ($monitors as $bk_ci_mon) {
                 $bk_ci_details = json_decode($bk_ci_mon['last_details'] ?? '', true) ?: [];
@@ -506,15 +517,18 @@ $portal_url = trim(get_setting('portal_url'));
                 <div class="detail-section-title" style="margin-bottom: 0.75rem;"><i class="fas fa-stream"></i> <?php echo htmlspecialchars(t('recent_events_heading')); ?></div>
                 <div style="display: flex; flex-direction: column; gap: 0.45rem;">
                     <?php foreach ($fleet_events as $fe):
+                        // Event texts name processes ("ts3server restartován (PID ...)") and
+                        // services: only for viewers of that monitor. Others see the label.
+                        $fe_can_view = bk_can_view_monitor($pdo, (int)$fe['monitor_id']);
                         $fe_label_key = 'timeline_event_' . $fe['event_type'];
                         $fe_label = t($fe_label_key);
-                        if ($fe_label === $fe_label_key) { $fe_label = $fe['description'] ?: $fe['event_type']; }
+                        if ($fe_label === $fe_label_key) { $fe_label = ($fe_can_view ? $fe['description'] : '') ?: $fe['event_type']; }
                     ?>
                         <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
                             <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo htmlspecialchars(bk_relative_time_label($fe['occurred_at'])); ?></span>
                             <a href="monitor.php?id=<?php echo (int)$fe['monitor_id']; ?>" style="color: var(--text-primary); font-weight: 500; text-decoration: none;"><?php echo htmlspecialchars($fe['monitor_name']); ?></a>
                             <span style="color: var(--text-secondary);"><?php echo htmlspecialchars($fe_label); ?></span>
-                            <?php if (!empty($fe['description']) && $fe_label !== $fe['description']): ?>
+                            <?php if ($fe_can_view && !empty($fe['description']) && $fe_label !== $fe['description']): ?>
                                 <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($fe['description']); ?></span>
                             <?php endif; ?>
                         </div>
@@ -656,7 +670,15 @@ $portal_url = trim(get_setting('portal_url'));
                             $uptime_known = isset($uptime_pct[$mid]);
                             $uptime = $uptime_pct[$mid] ?? 0.0;
                             $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
-                            $is_expandable = true;
+                            // A visitor who may not see this monitor gets its public status only:
+                            // no processes, ports, interfaces, addresses, or tips naming them.
+                            $bk_can_view = bk_can_view_monitor($pdo, (int)$mid);
+                            if (!$bk_can_view && is_array($details)) {
+                                $details = bk_public_monitor_details($details);
+                            }
+                            // The detail panel is the machine seen from inside - check stages,
+                            // headers, addresses, ports, processes - so only viewers of this monitor open it.
+                            $is_expandable = $bk_can_view;
                             // Service Profiles - null = typ bez checklistu, dashboard zobrazí vše jako dřív
                             $enabled_metrics = bk_get_enabled_metrics($monitor, $pdo);
 
@@ -690,7 +712,7 @@ $portal_url = trim(get_setting('portal_url'));
                                         <div class="status-dot <?php echo $status; ?>"></div>
                                         <div class="monitor-details">
                                             <h3 style="display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;">
-                                                <?php echo monitor_type_icon($m_type, $monitor['target']); ?>
+                                                <?php echo monitor_type_icon($m_type, $bk_can_view ? (string)$monitor['target'] : ''); ?>
                                                 <a href="monitor.php?id=<?php echo $mid; ?>" class="monitor-name-link" title="<?php echo htmlspecialchars(t('mp_detail_page')); ?>" onclick="event.stopPropagation();"><?php echo htmlspecialchars($monitor['name']); ?></a>
                                                 <a href="monitor.php?id=<?php echo $mid; ?>" class="monitor-detail-arrow" onclick="event.stopPropagation();" title="<?php echo htmlspecialchars(t('mp_detail_page')); ?>"><i class="fas fa-arrow-up-right-from-square"></i></a>
                                                 <?php if ($status === 'maintenance'): ?>
@@ -704,6 +726,8 @@ $portal_url = trim(get_setting('portal_url'));
                                                 <?php 
                                                 if ($m_type === 'discord') {
                                                     echo htmlspecialchars(t('type_discord_server'));
+                                                } elseif (!$bk_can_view) {
+                                                    // The target names an internal host and port: a visitor gets the status only.
                                                 } elseif ($m_type === 'teamspeak') {
                                                     $ts_host = $monitor['target'];
                                                     $ts_voice_port = 9987;
@@ -894,7 +918,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                     $check_stages_shared = $decoded_check_stages_shared;
                                                 }
                                             }
-                                            $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages_shared, $status, $enabled_metrics, $pdo);
+                                            $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages_shared, $status, $enabled_metrics, $bk_can_view ? $pdo : null);
 
                                             // Insights a health score se počítají tady nahoře jednou (ne znovu níže u
                                             // Insights panelu / TS3 Health Score sekce), aby to mohl použít i Executive
@@ -902,7 +926,10 @@ $portal_url = trim(get_setting('portal_url'));
                                             $monitor_insights = array_merge(bk_get_forecast_insights($pdo, $monitor), bk_get_anomaly_insights($pdo, $monitor), bk_get_network_insights($pdo, $monitor, $details));
                                             
                                             // Cross-link: Automaticky propojí detaily z VPS agenta (ts3_process, discovered_services atd.)
-                                            bk_enrich_monitor_details($pdo, $monitor, $details);
+                                            // It borrows processes and services from other monitors - only for viewers of this one.
+                                            if ($bk_can_view) {
+                                                bk_enrich_monitor_details($pdo, $monitor, $details);
+                                            }
                                             
                                             $health_areas = null;
                                             $health_score = null;
@@ -928,7 +955,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                 }
                                             }
                                             $monitor_timeline = bk_get_monitor_timeline($pdo, $mid);
-                                            $exec_summary_text = bk_build_executive_summary($monitor, $health_score, $knowledge_tips, $monitor_insights, $monitor_timeline, $pdo, is_array($details) ? $details : []);
+                                            $exec_summary_text = bk_build_executive_summary($monitor, $health_score, $knowledge_tips, $monitor_insights, $monitor_timeline, $bk_can_view ? $pdo : null, is_array($details) ? $details : []);
                                             ?>
                                             <?php if ($exec_summary_text !== ''): ?>
                                             <div class="exec-summary" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary);">
@@ -1040,7 +1067,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                     <?php if (isset($pipeline['http']) && ($enabled_metrics === null || in_array('headers', $enabled_metrics))): ?><button type="button" data-tab="headers"><?php echo htmlspecialchars(t('mtab_headers')); ?></button><?php endif; ?>
                                                 <?php endif; ?>
                                                 <?php
-                                                $has_proc_data = !empty($details['ts3_process']) || !empty($details['top_cpu_processes']) || !empty($details['top_ram_processes']) || !empty($monitor['monitored_processes']) || !empty($details['processes']);
+                                                $has_proc_data = $bk_can_view && (!empty($details['ts3_process']) || !empty($details['top_cpu_processes']) || !empty($details['top_ram_processes']) || !empty($monitor['monitored_processes']) || !empty($details['processes']));
                                                 $has_svc_data = ($check_stages_shared !== null && !empty($check_stages_shared['service'])) || !empty($details['discovered_services']);
                                                 ?>
                                                 <?php if ($has_proc_data && ($enabled_metrics === null || in_array('process', $enabled_metrics))): ?><button type="button" data-tab="process"><?php echo htmlspecialchars(t('mtab_process')); ?></button><?php endif; ?>
@@ -1837,16 +1864,16 @@ $portal_url = trim(get_setting('portal_url'));
                                                                 <?php endif; ?>
                                                                 <?php // IP adresy/brána/DNS jsou identifikující údaje o síti uživatele -
                                                                 // zobrazují se jen přihlášenému adminovi, ne veřejně. ?>
-                                                                <?php if ($is_admin && !empty($details['wan_ipv4'])): ?>
+                                                                <?php if ($bk_can_view && !empty($details['wan_ipv4'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);" title="<?php echo htmlspecialchars(t('openwrt_wan_ipv4_hint')); ?>"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv4')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv4']); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if ($is_admin && !empty($details['wan_ipv6'])): ?>
+                                                                <?php if ($bk_can_view && !empty($details['wan_ipv6'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_ipv6')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_ipv6']); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if ($is_admin && !empty($details['wan_gateway'])): ?>
+                                                                <?php if ($bk_can_view && !empty($details['wan_gateway'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_gateway')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_gateway']); ?></strong></div>
                                                                 <?php endif; ?>
-                                                                <?php if ($is_admin && !empty($details['wan_dns'])): ?>
+                                                                <?php if ($bk_can_view && !empty($details['wan_dns'])): ?>
                                                                     <div style="background: rgba(255,255,255,0.03); padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);"><span style="color: var(--text-muted);"><?php echo htmlspecialchars(t('openwrt_wan_dns')); ?>:</span> <strong style="color: #fff; margin-left: 0.25rem; font-family: monospace;"><?php echo htmlspecialchars($details['wan_dns']); ?></strong></div>
                                                                 <?php endif; ?>
                                                                 <?php if (!empty($details['wan_uptime'])): ?>
@@ -1962,7 +1989,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                      </div>
                                                                      <?php if ($ll_status === 'down' && $ll['error_message']): ?>
                                                                          <div style="color: var(--color-red); font-size: 0.75rem; margin-top: -0.2rem; margin-bottom: 0.2rem; padding-left: 0.5rem; border-left: 2px solid var(--color-red); font-style: italic;">
-                                                                             <?php echo htmlspecialchars($ll['error_message']); ?>
+                                                                             <?php echo htmlspecialchars($bk_can_view ? $ll['error_message'] : (bk_public_reason($ll['error_message'], (string)$m_type) ?? t('unspecified_connection_error'))); ?>
                                                                          </div>
                                                                      <?php endif; ?>
                                                                  <?php endforeach; ?>
@@ -2494,7 +2521,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                                  ?>
                                                                      <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary);">
                                                                          <td style="padding: 0.5rem 0.25rem; font-weight: 500; color: var(--text-primary); white-space: nowrap;"><?php echo $mo_time; ?></td>
-                                                                         <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars($mo['error_message'] ?: t('unspecified_connection_error')); ?></td>
+                                                                         <td style="padding: 0.5rem 0.25rem; color: var(--color-red); font-style: italic; word-break: break-all;"><?php echo htmlspecialchars(($bk_can_view ? $mo['error_message'] : bk_public_reason($mo['error_message'], (string)$m_type)) ?: t('unspecified_connection_error')); ?></td>
                                                                          <td style="padding: 0.5rem 0.25rem; text-align: right; white-space: nowrap;"><i class="fas fa-map-marker-alt" style="font-size: 0.65rem; color: var(--color-red); margin-right: 0.15rem;"></i><?php echo htmlspecialchars($mo['checked_from'] ?: '—'); ?></td>
                                                                      </tr>
                                                                  <?php endforeach; ?>
@@ -2521,12 +2548,12 @@ $portal_url = trim(get_setting('portal_url'));
                                                                      <?php foreach ($tl_items as $tl_item):
                                                                          $tl_label_key = 'timeline_event_' . $tl_item['event_type'];
                                                                          $tl_label = t($tl_label_key);
-                                                                         if ($tl_label === $tl_label_key) { $tl_label = $tl_item['description'] ?: $tl_item['event_type']; }
+                                                                         if ($tl_label === $tl_label_key) { $tl_label = ($bk_can_view ? $tl_item['description'] : '') ?: $tl_item['event_type']; }
                                                                      ?>
                                                                          <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
                                                                              <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo date('H:i', strtotime($tl_item['ts'])); ?></span>
                                                                              <span style="color: var(--text-primary);"><?php echo htmlspecialchars($tl_label); ?></span>
-                                                                             <?php if (!empty($tl_item['description']) && $tl_label !== $tl_item['description']): ?>
+                                                                             <?php if ($bk_can_view && !empty($tl_item['description']) && $tl_label !== $tl_item['description']): ?>
                                                                                  <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($tl_item['description']); ?></span>
                                                                              <?php endif; ?>
                                                                          </div>
@@ -2562,13 +2589,14 @@ $portal_url = trim(get_setting('portal_url'));
                                                                      <?php foreach ($atl_items as $atl_item):
                                                                          $atl_label_key = 'timeline_event_' . $atl_item['event_type'];
                                                                          $atl_label = t($atl_label_key);
-                                                                         if ($atl_label === $atl_label_key) { $atl_label = $atl_item['description'] ?: $atl_item['event_type']; }
+                                                                         $atl_can_view = isset($atl_item['monitor_id']) && bk_can_view_monitor($pdo, (int)$atl_item['monitor_id']);
+                                                                         if ($atl_label === $atl_label_key) { $atl_label = ($atl_can_view ? $atl_item['description'] : '') ?: $atl_item['event_type']; }
                                                                      ?>
                                                                          <div style="display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.8rem; flex-wrap: wrap;">
                                                                              <span style="color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;"><?php echo date('H:i', strtotime($atl_item['ts'])); ?></span>
                                                                              <span style="background: rgba(255,255,255,0.06); border-radius: 4px; padding: 0.1rem 0.4rem; font-size: 0.72rem; color: var(--color-blue, #58a6ff); white-space: nowrap;"><?php echo htmlspecialchars($atl_item['monitor_name']); ?></span>
                                                                              <span style="color: var(--text-primary);"><?php echo htmlspecialchars($atl_label); ?></span>
-                                                                             <?php if (!empty($atl_item['description']) && $atl_label !== $atl_item['description']): ?>
+                                                                             <?php if ($atl_can_view && !empty($atl_item['description']) && $atl_label !== $atl_item['description']): ?>
                                                                                  <span style="color: var(--text-muted); font-size: 0.75rem;">- <?php echo htmlspecialchars($atl_item['description']); ?></span>
                                                                              <?php endif; ?>
                                                                          </div>
@@ -2619,12 +2647,16 @@ $portal_url = trim(get_setting('portal_url'));
                             </tr>
                         </thead>
                         <tbody id="incidents-tbody">
-                            <?php foreach ($incidents as $inc_idx => $inc): ?>
+                            <?php foreach ($incidents as $inc_idx => $inc):
+                                // Targets and agent reasons name internal hosts and processes: only for viewers of that monitor.
+                                $inc_can_view = bk_can_view_monitor($pdo, (int)$inc['monitor_id']);
+                                $inc_reason = $inc_can_view ? $inc['error_message'] : bk_public_reason($inc['error_message'], (string)$inc['type']);
+                            ?>
                                 <tr class="incident-row" data-row-index="<?php echo $inc_idx; ?>">
                                     <td><?php echo date('d.m.Y H:i:s', strtotime($inc['checked_at'])); ?></td>
                                     <td>
                                         <strong><?php echo htmlspecialchars($inc['name']); ?></strong>
-                                        <span style="display: block; font-size: 0.75rem; color: var(--text-muted); font-family: monospace;"><?php echo htmlspecialchars($inc['target'] ?? ''); ?></span>
+                                        <span style="display: block; font-size: 0.75rem; color: var(--text-muted); font-family: monospace;"><?php echo htmlspecialchars($inc_can_view ? ($inc['target'] ?? '') : ''); ?></span>
                                     </td>
                                     <td><span style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);"><?php echo htmlspecialchars($inc['type']); ?></span></td>
                                     <td>
@@ -2640,9 +2672,9 @@ $portal_url = trim(get_setting('portal_url'));
                                     <td style="color: var(--text-secondary);">
                                         <?php 
                                         if ($inc['status'] === 'down') {
-                                            echo htmlspecialchars($inc['error_message'] ?: t('unspecified_connection_error'));
+                                            echo htmlspecialchars($inc_reason ?: t('unspecified_connection_error'));
                                         } else {
-                                            echo htmlspecialchars($inc['error_message'] ?: t('service_recovered'));
+                                            echo htmlspecialchars($inc_reason ?: t('service_recovered'));
                                         }
                                         ?>
                                     </td>

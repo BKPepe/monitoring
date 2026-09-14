@@ -226,6 +226,19 @@ CREATE TABLE IF NOT EXISTS `user_subscriptions` (
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Which users may see which monitors. A monitor can belong to several users;
+-- an admin sees every monitor, a user only the assigned ones. Separate from
+-- user_subscriptions: wanting alerts about a monitor is not access to it.
+CREATE TABLE IF NOT EXISTS `monitor_users` (
+  `monitor_id` INT NOT NULL,
+  `user_id` INT NOT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`monitor_id`, `user_id`),
+  KEY `idx_monitor_users_user` (`user_id`),
+  FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `settings` (
   `key_name` VARCHAR(50) PRIMARY KEY,
   `key_value` TEXT DEFAULT NULL

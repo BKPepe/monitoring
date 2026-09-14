@@ -57,13 +57,29 @@ Odpověď nastaví session cookie. Všechna další volání ji musí posílat
 
 Stav relace: `GET /status/api.php?action=session`.
 
+### Kdo vidí který monitor
+
+Monitor patří účtům, které jsou k němu přiřazené, a jeden monitor jich může mít
+víc. Administrátor vidí a mění všechny monitory. Účet s rolí `user` vidí jen
+přiřazené monitory, jen pro čtení, spolu s vlastním profilem a odběrem
+upozornění pro tyto monitory. Monitor, který volající vidět nesmí, odpoví 404
+stejně jako neexistující, takže id nejde osahávat. Řádky označené **přiřazený
+monitor** se řídí tímto pravidlem a seznamy vracejí jen viditelné monitory.
+
+`scope=public` si u `public_status`, `monitors`, `daily_uptime`, `uptime_windows`, `regions`,
+`events` a `incidents` řekne o pohled veřejné status stránky. Zahrnuje všechny
+monitory, je stejný pro každého a nenese cíle, hostname, procesy ani názvy
+rozhraní. Nepřihlášený volající dostane vždy tento pohled.
+
 ### Co vidí nepřihlášený návštěvník
 
-Veřejné odpovědi procházejí filtrem, který ze struktury `details` odstraňuje
-všechno, co nese síťovou identitu - IP adresy, MAC, SSID, hostname, endpointy,
-sériová čísla, tokeny a hesla. Filtr pracuje podle vzoru v názvu klíče, ne
-podle výčtu, takže zachytí i metriku, která vznikne až v budoucnu. Agregáty
-(`cpu`, `ram`, počty klientů) zůstávají.
+Veřejné odpovědi nechají ze struktury `details` jen povolené klíče: agregáty
+jako `cpu`, `ram` a `hdd`, verzi agenta a počty hráčů či klientů. Všechno
+ostatní - IP adresy, názvy rozhraní, procesy, porty, nalezené služby - zůstává
+na serveru, i klíče přidané v budoucnu. Důvod selhání se zúží na pevnou sadu vět
+- HTTP kód, vypršený čas, DNS, TLS, zavřený port - bez hostitele, portu, procesu
+či hledaného textu a aktualizace incidentů přijdou o automatický důvod kontroly
+i jméno operátora.
 
 ---
 
@@ -278,9 +294,9 @@ jako úspěch. **Dnes neznámá akce vrací 400** a hlídá to lint
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=export_csv&monitor_id=&days=` | veřejné | Historie kontrol monitoru jako CSV. Sloupec s chybovou hláškou dostane jen přihlášený - stránka monitoru je veřejná a hlášky nesou interní jména |
+| `action=export_csv&monitor_id=&days=` | přiřazený monitor | Historie kontrol monitoru jako CSV včetně chybové hlášky každé kontroly |
 | `action=save_annotation` | admin | Poznámka ke grafu (`monitor_id`, `metric_key`, `timestamp`, `note`) |
-| `action=annotations&monitor_id=&metric=&hours=` | přihlášený | Poznámky pro vykreslení. Anonym dostane prázdný seznam, ne 403 - graf bez poznámek není chyba |
+| `action=annotations&monitor_id=&metric=&hours=` | přiřazený monitor | Poznámky pro vykreslení. Anonym i monitor, ke kterému účet není přiřazený, dostanou prázdný seznam, ne 403 - graf bez poznámek není chyba |
 | `action=delete_annotation` | admin, POST | Smaže poznámku podle `id`. Poznámka je tvrzení a chybné tvrzení u grafu musí jít vzít zpět |
 | `action=forgot_password` | veřejné, POST | Odešle odkaz na obnovu hesla. Odpověď je stejná pro existující i neexistující e-mail |
 | `action=setup` | veřejné, POST | Založí prvního administrátora. **Jen do prázdné tabulky uživatelů**, jinak 409 |
@@ -301,7 +317,11 @@ bez ohledu na to, kdo je přihlášený.
 
 ### `GET api.php?action=monitors`
 
-**Přihlášený.** Seznam monitorů s posledním stavem, odezvou a metrikami agenta.
+**Přiřazené monitory, nebo veřejný pohled.** Seznam monitorů s posledním stavem,
+odezvou a metrikami agenta. Účet `user` dostane přiřazené monitory, administrátor
+všechny. Nepřihlášený volající nebo kdokoli se `scope=public` dostane všechny
+monitory s `target`, `port`, `hostname` a `agentLastSeen` nastavenými na `null`
+a jen s povolenými klíči `details`.
 
 Odezva pochází z `monitor_logs`, hodnoty CPU/RAM/HDD z `vps_metrics` - nejsou
 to sloupce tabulky `monitors`. Chybějící hodnota je `null`.
@@ -340,23 +360,23 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=metric_series&monitor_id=&metric=&period=` | veřejné | Jedna metrika v čase |
-| `action=metric_series_batch&monitor_id=&period=` | veřejné | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu |
-| `action=metric_detail&monitor_id=&metric=` | veřejné | Kontext stránky detailu metriky |
-| `action=metric_correlations&monitor_id=&metric=&period=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | veřejné | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`) |
-| `action=metric_heatmap&monitor_id=&metric=&days=` | veřejné | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0` |
-| `action=link_traffic&monitor_id=&days=` | veřejné | Provoz routeru podle role linky: primární (`wan_l3_device`) vs. LTE záloha (`lte_device`) za dnes / 7 / 30 dní z denních součtů per rozhraní, plus období výpadku primární linky (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) spárovaná z událostí `wan_lost`/`wan_restored` - jestli v té době provoz opravdu šel po záloze, říkají bajty na záložním zařízení, ne tato období (otevřené období běží do teď; výpadek, který začal před oknem a dosud neskončil, se dohledá zvlášť a započítá od začátku okna, jinak by router běžící na záloze celé týdny hlásil „nikdy"). Role bere jen z toho, co agent hlásí - bez `wan_l3_device` (agent < 0.1.3) je primární strana `null`, ne odhad podle jména |
-| `action=process_history&monitor_id=&kind=&at=&radius=` | veřejné | Které procesy běžely kolem daného okamžiku |
-| `action=metrics_history&monitor_id=&period=` | veřejné | Historie metrik agenta |
-| `action=daily_uptime&days=` | veřejné | Denní dostupnost z `uptime_daily` |
-| `action=uptime_windows` | veřejné | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d jedním průchodem; nezměřené okno je `null`, nikdy 100 |
-| `action=check_stages&monitor_id=` | veřejné | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
-| `action=regions&days=` | veřejné | Dostupnost podle místa měření (`checked_from`) |
-| `action=public_status` | veřejné | Souhrn pro veřejnou stránku (počty, průměrná dostupnost) |
+| `action=metric_series&monitor_id=&metric=&period=` | přiřazený monitor | Jedna metrika v čase |
+| `action=metric_series_batch&monitor_id=&period=` | přiřazený monitor | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu |
+| `action=metric_detail&monitor_id=&metric=` | přiřazený monitor | Kontext stránky detailu metriky |
+| `action=metric_correlations&monitor_id=&metric=&period=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | přiřazený monitor | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`) |
+| `action=metric_heatmap&monitor_id=&metric=&days=` | přiřazený monitor | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0` |
+| `action=link_traffic&monitor_id=&days=` | přiřazený monitor | Provoz routeru podle role linky: primární (`wan_l3_device`) vs. LTE záloha (`lte_device`) za dnes / 7 / 30 dní z denních součtů per rozhraní, plus období výpadku primární linky (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) spárovaná z událostí `wan_lost`/`wan_restored` - jestli v té době provoz opravdu šel po záloze, říkají bajty na záložním zařízení, ne tato období (otevřené období běží do teď; výpadek, který začal před oknem a dosud neskončil, se dohledá zvlášť a započítá od začátku okna, jinak by router běžící na záloze celé týdny hlásil „nikdy"). Role bere jen z toho, co agent hlásí - bez `wan_l3_device` (agent < 0.1.3) je primární strana `null`, ne odhad podle jména |
+| `action=process_history&monitor_id=&kind=&at=&radius=` | přiřazený monitor | Které procesy běžely kolem daného okamžiku |
+| `action=metrics_history&monitor_id=&period=` | přiřazený monitor | Historie metrik agenta |
+| `action=daily_uptime&days=` | veřejný stav / přiřazené | Denní dostupnost z `uptime_daily` |
+| `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d jedním průchodem; nezměřené okno je `null`, nikdy 100 |
+| `action=check_stages&monitor_id=` | přiřazený monitor | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
+| `action=regions&days=` | veřejný stav / přiřazené | Dostupnost podle místa měření (`checked_from`) |
+| `action=public_status` | veřejný stav / přiřazené | Souhrn pro veřejnou stránku (počty, průměrná dostupnost). V aplikaci dostane účet `user` součty jen za přiřazené monitory |
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` shrnuje celou flotilu, neznámý monitor je 404 |
-| `action=websites_overview` | veřejné | Weby s certifikáty a dostupností v okně |
-| `action=monitor_insights&monitor_id=` | veřejné | Odvozená pozorování k jednomu monitoru |
-| `action=dashboard_insights&limit=` | veřejné | Totéž napříč monitory, pro přehled |
+| `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně |
+| `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru |
+| `action=dashboard_insights&limit=` | přiřazený monitor | Totéž napříč monitory, pro přehled |
 | `action=ui_config` | veřejné | Nastavení vzhledu pro frontend (logo, názvy) |
 | `action=alerts_read_state` | přihlášený | Meze přečtených upozornění (`readUpToId`) |
 | `action=convert_to_agent_check` | admin | Převede proces hlídaný agentem na samostatný monitor |
@@ -453,12 +473,12 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=incidents` | veřejné | Seznam incidentů |
+| `action=incidents` | veřejný stav / přiřazené | Seznam incidentů. Veřejný pohled vynechá cíle, jména operátorů a důvody kontrol, i v `updates` |
 | `action=create_incident` | přihlášený | Ruční založení |
 | `action=incident_action` | přihlášený | `op`: acknowledge / resolve / postmortem |
-| `action=events&monitor_id=&limit=` | veřejné | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky |
-| `action=sla_report&days=` | veřejné | SLA přehled |
-| `action=audit_logs&limit=` | veřejné | Poslední kontroly napříč monitory |
+| `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky |
+| `action=sla_report&days=` | přiřazený monitor | SLA přehled |
+| `action=audit_logs&limit=` | admin | Poslední kontroly napříč monitory |
 
 > **Pozor:** `audit_logs` a `sla_report` jsou dnes bez přihlášení a vracejí
 > názvy monitorů a texty chybových hlášek. Ty můžou obsahovat interní hostname
@@ -478,25 +498,25 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=get_settings` / `save_settings` | admin | Globální nastavení |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): pošle jednu skutečnou testovací zprávu s uloženým nastavením, vrací `{ok, message}` |
 | `action=notification_log&monitor_id=&limit=` | admin | Co se odeslalo, komu, kterým kanálem a jestli to prošlo. Řádek vzniká i u neúspěchu - to je ta zajímavější půlka |
-| `action=interface_traffic_daily&monitor_id=&days=` | admin | Provoz po dnech a rozhraních, seřazený od nejvytíženějšího. Chybějící den = ten den se nehlásilo, ne nulový provoz |
-| `action=process_top&monitor_id=&kind=&minutes=` | admin | Které procesy braly výkon za celé období (průměr, špička, počet vzorků), seskupené podle jména - restartovaná služba se nerozdrobí na řádek na pid. `enabled: false` = historie procesů je v nastavení vypnutá |
+| `action=interface_traffic_daily&monitor_id=&days=` | přiřazený monitor | Provoz po dnech a rozhraních, seřazený od nejvytíženějšího. Chybějící den = ten den se nehlásilo, ne nulový provoz |
+| `action=process_top&monitor_id=&kind=&minutes=` | přiřazený monitor | Které procesy braly výkon za celé období (průměr, špička, počet vzorků), seskupené podle jména - restartovaná služba se nerozdrobí na řádek na pid. `enabled: false` = historie procesů je v nastavení vypnutá |
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: zapne nebo vypne údržbu pro jeden i více monitorů. Vypnutí maže i okno, aby další údržba nevypršela hned po zapnutí |
 | `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: smaže měření, logy i denní agregace monitoru a vrátí ho do stavu „neznámý“. Nevratné, proto chce zpátky přesný název monitoru |
 | `action=redetect_location` | admin | Vynutí nový dotaz na geolokaci serveru a uloží ji do `ip_loc_local` |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | veřejné čtení, admin zápis | Profily metrik |
-| `action=status_pages` / `save_status_page` / `delete_status_page` | přihlášený | Veřejné status stránky |
-| `action=dashboard_layout` | veřejné čtení, admin zápis | Pořadí a viditelnost dlaždic |
-| `action=users` | admin | Seznam uživatelů |
+| `action=status_pages` / `save_status_page` / `delete_status_page` | seznam veřejný, skryté stránky a zápis admin | Veřejné status stránky |
+| `action=dashboard_layout` | přihlášený | Pořadí a viditelnost dlaždic |
+| `action=users` | admin | Seznam uživatelů, každý účet se svými `monitorIds` |
 | `action=export_config` | admin | Export konfigurace bez tajemství |
 | `action=generate_metrics_token` | admin | Token pro Prometheus exporter |
 | `action=upload_logo` | admin | Logo status stránky |
 | `action=send_digest&period=` | admin | Ruční odeslání souhrnu |
 | `action=trigger_remote_action` | admin | Akce na routeru (jen povolené) |
 | `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
-| `action=get_subscriptions` / `save_subscriptions` | přihlášený | Odběr upozornění |
+| `action=get_subscriptions` / `save_subscriptions` | přihlášený | Odběr upozornění, jen pro monitory, které účet vidí |
 | `action=public_subscribe` / `public_subscribe_confirm` / `public_unsubscribe` | veřejné | E-mailový odběr pro návštěvníky bez účtu: double opt-in (nic se neposílá, dokud majitel nepotvrdí), IP rate limit na přihlášení, neutrální odpovědi (žádná enumerace), odhlášení jedním klikem v každém e-mailu |
 | `action=public_subscribers` / `delete_public_subscriber` | admin | Přehled odběratelů a ruční odstranění (GDPR žádosti) |
-| `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
+| `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet; `monitorIds` určuje, které monitory účet `user` vidí - vynechané pole přiřazení zachová, `[]` ho zruší, neexistující id se zahodí); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; nová sada i vypnutí vyžadují heslo |

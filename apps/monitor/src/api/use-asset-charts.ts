@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { resolveSource, type SourceState } from './source';
-import type { ChartData, PublicStatus, TimeRange } from './types';
+import type { ChartData, PublicStatus, TimeRange, PublicStatusScope } from './types';
 
 /**
  * State of the data source for the whole app — the real `api.php`, or the mock.
@@ -59,24 +59,27 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
  * that would be 3 separate requests to the server and DB for the same data.
  * A short module-level TTL cache shares them without dragging React Context in.
  */
-let publicStatusCache: { promise: Promise<PublicStatus>; timestamp: number } | null = null;
+// Keyed by scope: the status page's fleet-wide summary and the app's own one
+// are different answers and must not be served for each other.
+const publicStatusCache = new Map<PublicStatusScope, { promise: Promise<PublicStatus>; timestamp: number }>();
 const PUBLIC_STATUS_CACHE_MS = 10000;
 
-function fetchPublicStatusShared(): Promise<PublicStatus> {
-  if (publicStatusCache && Date.now() - publicStatusCache.timestamp < PUBLIC_STATUS_CACHE_MS) {
-    return publicStatusCache.promise;
+function fetchPublicStatusShared(scope: PublicStatusScope): Promise<PublicStatus> {
+  const hit = publicStatusCache.get(scope);
+  if (hit && Date.now() - hit.timestamp < PUBLIC_STATUS_CACHE_MS) {
+    return hit.promise;
   }
-  const promise = resolveSource().then(({ source }) => source.getPublicStatus());
-  publicStatusCache = { promise, timestamp: Date.now() };
+  const promise = resolveSource().then(({ source }) => source.getPublicStatus(scope));
+  publicStatusCache.set(scope, { promise, timestamp: Date.now() });
   promise.catch(() => {
     // Errors are not cached - let the next call retry rather than replay the same failure.
-    publicStatusCache = null;
+    if (publicStatusCache.get(scope)?.promise === promise) publicStatusCache.delete(scope);
   });
   return promise;
 }
 
 /** Summary state for the dashboard (`action=public_status`). */
-export function usePublicStatus(refreshMs?: number) {
+export function usePublicStatus(refreshMs?: number, scope: PublicStatusScope = 'app') {
   const [data, setData] = React.useState<PublicStatus | null>(null);
   const [error, setError] = React.useState<Error | null>(null);
 
@@ -84,7 +87,7 @@ export function usePublicStatus(refreshMs?: number) {
     let active = true;
 
     const load = () => {
-      fetchPublicStatusShared()
+      fetchPublicStatusShared(scope)
         .then((result) => {
           if (!active) return;
           setData(result);
@@ -110,7 +113,7 @@ export function usePublicStatus(refreshMs?: number) {
       active = false;
       window.clearInterval(id);
     };
-  }, [refreshMs]);
+  }, [refreshMs, scope]);
 
   return { data, error, loading: data === null && error === null };
 }

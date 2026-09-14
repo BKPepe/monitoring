@@ -24,7 +24,7 @@ $monitor_id = getenv('BK_SMOKE_MONITOR_ID') ?: null;
 if ($monitor_id === null) {
     // The first monitor from the public API is taken - the test thus does not
     // depend on which ids happen to be in the database.
-    $json = @file_get_contents($base . '/api.php?action=monitors');
+    $json = @file_get_contents($base . '/api.php?action=monitors&scope=public');
     $decoded = $json ? json_decode($json, true) : null;
     $monitor_id = $decoded['monitors'][0]['id'] ?? 1;
 }
@@ -38,7 +38,10 @@ if ($monitor_id === null) {
 $pages = [
     '/' => ['veřejná status stránka', [200]],
     '/index.php' => ['status stránka přímo', [200]],
-    "/monitor.php?id={$monitor_id}" => ['detail monitoru', [200]],
+    // The per-monitor detail needs a login and access to that monitor since
+    // monitors belong to users; an anonymous visitor is sent to the login.
+    "/monitor.php?id={$monitor_id}" => ['detail monitoru (bez přihlášení na login)', [302]],
+    '/report.php' => ['SLA report (bez přihlášení na login)', [302]],
     "/widget.php?id={$monitor_id}" => ['embed widget', [200]],
     // badge.php je od konsolidace 302 alias na api.php?action=badge -
     // both the redirect AND the target action are checked (right below).

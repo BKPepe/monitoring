@@ -24,6 +24,8 @@ export function WebsitesPage() {
   const { t } = useLanguage();
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
+  // Adding and editing monitors is an admin task; a signed-in user only views.
+  const isAdmin = session?.user?.role === 'admin';
   const [websites, setWebsites] = useState<WebMonitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -114,7 +116,7 @@ export function WebsitesPage() {
 
   const handleAddWebsite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAuthenticated || !newName || !newUrl) return;
+    if (!isAdmin || !newName || !newUrl) return;
 
     const formattedUrl = newUrl.startsWith('http://') || newUrl.startsWith('https://') ? newUrl : `https://${newUrl}`;
 
@@ -158,7 +160,7 @@ export function WebsitesPage() {
           'Výhradně přehled dostupnosti webových stránek, cPanel statistik, SSL certifikátů a HTTP/HTTPS API.'
         )}
         actions={
-          isAuthenticated ? (
+          isAdmin ? (
             <button
               type="button"
               onClick={() => setShowAddModal(true)}
@@ -166,17 +168,7 @@ export function WebsitesPage() {
             >
               <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')}
             </button>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={t('websites.login_required_hint', 'Pro přidávání a úpravu monitorů se prosím přihlaste')}
-              className="inline-flex items-center gap-2 rounded-md bg-secondary text-muted-foreground px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-60"
-            >
-              <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')} (
-              {t('common.login_required', 'Vyžaduje přihlášení')})
-            </button>
-          )
+          ) : null
         }
       />
 
@@ -301,7 +293,7 @@ export function WebsitesPage() {
       {loadError && <ErrorState message={loadError} />}
 
       {/* New website modal */}
-      {showAddModal && isAuthenticated && (
+      {showAddModal && isAdmin && (
         <Card className="p-6 border-primary/50 bg-secondary/40">
           <h3 className="font-bold text-base mb-3">
             {t('websites.add_website_modal_title', 'Přidat nový sledovaný web / HTTP API')}

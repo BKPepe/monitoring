@@ -729,6 +729,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_subscriptions'])
         if (isset($_POST['subs']) && is_array($_POST['subs'])) {
             $stmt_ins = $pdo->prepare("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications, whatsapp_notifications) VALUES (?, ?, ?, ?, ?)");
             foreach ($_POST['subs'] as $mid => $opts) {
+                // Alerts only about monitors assigned to this account: an alert
+                // carries the monitor's name and outage reason.
+                $mid = (int)$mid;
+                if ($mid <= 0 || !bk_can_view_monitor($pdo, $mid)) {
+                    continue;
+                }
                 $email_sub = isset($opts['email']) ? 1 : 0;
                 $sms_sub = isset($opts['sms']) ? 1 : 0;
                 $wa_sub = isset($opts['whatsapp']) ? 1 : 0;
@@ -742,7 +748,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_subscriptions'])
         $success_msg = 'Vaše předvolby notifikací byly úspěšně uloženy.';
     } catch (Exception $e) {
         $pdo->rollBack();
-        $error_msg = 'Chyba při ukládání notifikací: ' . $e->getMessage();
+        error_log('[admin save_subscriptions] ' . $e->getMessage());
+        $error_msg = 'Chyba při ukládání notifikací.';
     }
 }
 
@@ -1166,7 +1173,10 @@ if ($user_role === 'admin' && isset($_GET['action']) && $_GET['action'] === 'edi
 }
 
 // Načtení všech monitorů k zobrazení
-$stmt_all = $pdo->query("SELECT m.*, (SELECT error_message FROM monitor_logs WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as error_message FROM monitors m ORDER BY m.category, m.name");
+// A regular account sees only the monitors assigned to it; an admin sees all.
+[$all_scope, $all_scope_params] = bk_monitor_scope_sql($user_role === 'admin' ? null : bk_visible_monitor_ids($pdo), 'm.id');
+$stmt_all = $pdo->prepare("SELECT m.*, (SELECT error_message FROM monitor_logs WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as error_message FROM monitors m WHERE {$all_scope} ORDER BY m.category, m.name");
+$stmt_all->execute($all_scope_params);
 $all_monitors = $stmt_all->fetchAll();
 
 // Načtení všech uživatelů pro administraci (pouze pro Admina)
@@ -1375,6 +1385,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
         // Výpadky SBĚRU dat - administrace je primární místo, kde tohle admin
         // MUSÍ vidět (veřejný dashboard tuhle diagnostiku záměrně neukazuje).
         $bk_adm_collection_rows = [];
+        // Operational diagnostics naming config files and every monitor: the administrator's only.
+        if ($user_role === 'admin') {
         try {
             $bk_adm_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
             $bk_adm_stmt = $pdo->query("SELECT id, name, status, last_checked, last_details FROM monitors");
@@ -1385,6 +1397,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                 }
             }
         } catch (Exception $e) {}
+        }
         ?>
         <?php if (!empty($bk_adm_collection_rows)): ?>
         <div class="admin-card" style="border: 2px solid var(--color-red); background: rgba(193,18,31,0.08);">
