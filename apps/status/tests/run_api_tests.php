@@ -578,6 +578,25 @@ check('běžný uživatel nezaloží incident', $ri_code, 403);
 check('běžný uživatel neuloží preset', $rp_code, 403);
 [$mp3_code] = api_get_auth($base, 'action=my_profile', $jar3);
 check('vlastní profil běžnému uživateli funguje', $mp3_code, 200);
+
+// The maintenance switch and five admin reads were gated on login alone: a
+// 'user' account could silence every alert by putting the monitors into
+// maintenance, and download every user's e-mail and phone, the delivery log
+// and the configuration export.
+$rtm_before = (int)$pdo->query("SELECT maintenance FROM monitors WHERE id = 1")->fetchColumn();
+[$rtm_code] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1], 'maintenance' => !$rtm_before], $jar3, $u3_csrf);
+check('běžný uživatel nepřepne údržbu', $rtm_code, 403);
+check('údržba monitoru zůstala, jak byla', (int)$pdo->query("SELECT maintenance FROM monitors WHERE id = 1")->fetchColumn(), $rtm_before);
+foreach ([
+    'users' => 'action=users',
+    'notification_log' => 'action=notification_log&monitor_id=1',
+    'export_config' => 'action=export_config',
+    'process_top' => 'action=process_top&monitor_id=1',
+    'interface_traffic_daily' => 'action=interface_traffic_daily&monitor_id=1',
+] as $ra_name => $ra_query) {
+    [$ra_code] = api_get_auth($base, $ra_query, $jar3);
+    check("běžný uživatel nedostane {$ra_name}", $ra_code, 403);
+}
 @unlink($jar3);
 
 [$du_code] = api_post($base, 'action=delete_user', ['id' => $su_new_id], $cookie_jar);
@@ -775,7 +794,13 @@ if ($logged_in) {
     check('známý klíč z téhož požadavku ano', $sp_evil['displayOptions']['showRegions'] ?? null, false);
 
     // --- Export konfigurace ---------------------------------------------
+    // cpanel_stats.php authenticates by ?key= alone - the stored URL is a credential.
+    $cp_url_before = $pdo->query("SELECT cpanel_stats_url FROM monitors WHERE id = 1")->fetchColumn();
+    $pdo->exec("UPDATE monitors SET cpanel_stats_url = 'https://hosting.example/status/cpanel_stats.php?key=tajny-klic-123' WHERE id = 1");
     [$code, , $raw_export] = api_get_auth($base, 'action=export_config', $cookie_jar);
+    $pdo->prepare("UPDATE monitors SET cpanel_stats_url = ? WHERE id = 1")->execute([$cp_url_before === false ? null : $cp_url_before]);
+    check_false('export nevydá klíč z adresy cPanel statistik', str_contains($raw_export, 'tajny-klic-123'));
+    check_true('adresa cPanel statistik v exportu zůstane', str_contains($raw_export, 'hosting.example'));
     check('export vrací 200', $code, 200);
     $export = json_decode($raw_export, true);
     check_true('export je platný JSON', is_array($export));
@@ -2545,6 +2570,33 @@ if (isset($cookie_jar)) {
     // Cleanup: the admin back to the global language.
     $digest_preview('');
 }
+
+// --- Admin role of account 1 across a schema bump -------------------------
+// Every schema bump used to run "UPDATE users SET role = 'admin' WHERE id = 1",
+// giving full rights back to an account an admin had deliberately demoted.
+$role_of = function (int $uid) use ($pdo): ?string {
+    $st = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+    $st->execute([$uid]);
+    $v = $st->fetchColumn();
+    return $v === false ? null : (string)$v;
+};
+$force_schema_bump = function () use ($pdo): void {
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('schema_version', 'test-old') ON DUPLICATE KEY UPDATE key_value = 'test-old'");
+};
+$pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('second_admin', 'second_admin@example.com', ?, 'admin')")
+    ->execute([password_hash('DruheHeslo123!', PASSWORD_DEFAULT)]);
+$second_admin_id = (int)$pdo->lastInsertId();
+$role1_before = $role_of(1);
+$pdo->exec("UPDATE users SET role = 'user' WHERE id = 1");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check_true('migrace skutečně proběhla', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old');
+check('degradovaný účet 1 zůstane uživatelem, když jiný admin existuje', $role_of(1), 'user');
+$pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$second_admin_id]);
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('bez jediného admina migrace účtu 1 roli admin vrátí', $role_of(1), 'admin');
+$pdo->prepare("UPDATE users SET role = ? WHERE id = 1")->execute([$role1_before ?? 'admin']);
 
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {

@@ -486,8 +486,8 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | veřejné čtení, admin zápis | Profily metrik |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | přihlášený | Veřejné status stránky |
 | `action=dashboard_layout` | veřejné čtení, admin zápis | Pořadí a viditelnost dlaždic |
-| `action=users` | přihlášený | Seznam uživatelů |
-| `action=export_config` | přihlášený | Export konfigurace bez tajemství |
+| `action=users` | admin | Seznam uživatelů |
+| `action=export_config` | admin | Export konfigurace bez tajemství |
 | `action=generate_metrics_token` | admin | Token pro Prometheus exporter |
 | `action=upload_logo` | admin | Logo status stránky |
 | `action=send_digest&period=` | admin | Ruční odeslání souhrnu |

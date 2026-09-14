@@ -492,8 +492,8 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | public read, admin write | Metric profiles |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | logged in | Public status pages |
 | `action=dashboard_layout` | public read, admin write | Tile order and visibility |
-| `action=users` | logged in | User list |
-| `action=export_config` | logged in | Configuration export without secrets |
+| `action=users` | admin | User list |
+| `action=export_config` | admin | Configuration export without secrets |
 | `action=generate_metrics_token` | admin | Token for the Prometheus exporter |
 | `action=upload_logo` | admin | Status page logo |
 | `action=send_digest&period=` | admin | Manual digest send |

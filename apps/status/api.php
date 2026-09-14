@@ -1414,7 +1414,10 @@ if ($action === 'redetect_location') {
 // when speed matters, the operator was editing forms. Several monitors at once
 // was not possible at all.
 if ($action === 'toggle_maintenance') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    // Admin only. Maintenance silences every alert for the monitors it covers,
+    // and without an end it lasts forever: a 'user' account - the kind created
+    // for notification subscriptions - could switch off alerting for the fleet.
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -1484,7 +1487,10 @@ if ($action === 'toggle_maintenance') {
 // moment (the culprits panel), so "what has been chewing the CPU today?" could
 // only be answered by watching the page.
 if ($action === 'process_top') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    // Admin only, as the API docs have always said - this used to ask for a
+    // login alone. The current top processes stay public through monitors and
+    // process_history, which are documented as public and back public panels.
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -1549,7 +1555,10 @@ if ($action === 'process_top') {
 // move forty gigabytes?" had no answer. Admin only, like every other endpoint
 // that names interfaces - that is network topology.
 if ($action === 'interface_traffic_daily') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    // Admin only, as the API docs have always said - this used to ask for a
+    // login alone. link_traffic, documented as public, still reports a router's
+    // traffic by link.
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -1602,7 +1611,8 @@ if ($action === 'interface_traffic_daily') {
 // What was actually sent and whether it went. Admin only: it names
 // recipients and carries the delivery errors of the channels.
 if ($action === 'notification_log') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    // Admin only: it names the recipients and carries the channels' delivery errors.
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -2747,7 +2757,8 @@ if ($action === 'check_stages') {
 // Tajemstvi v souboru ke stazeni je uniku na pockani; historie merenі je
 // desitky MB a pro obnovu nastaveni k nicemu.
 if ($action === 'export_config') {
-    if (empty($_SESSION['admin_logged_in'])) {
+    // Admin only: internal targets, notes, SMTP and SMS account identifiers.
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -2773,6 +2784,14 @@ if ($action === 'export_config') {
             FROM monitors ORDER BY id
         ");
         $export['monitors'] = $stmt->fetchAll();
+        // cpanel_stats.php authenticates by ?key= alone, so the stored URL is a
+        // credential. The file promises no secrets: the address stays, the key goes.
+        foreach ($export['monitors'] as &$exp_monitor) {
+            if (!empty($exp_monitor['cpanel_stats_url'])) {
+                $exp_monitor['cpanel_stats_url'] = strtok((string)$exp_monitor['cpanel_stats_url'], '?#');
+            }
+        }
+        unset($exp_monitor);
 
         try {
             $export['presets'] = $pdo->query("SELECT name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name")->fetchAll();
@@ -4611,6 +4630,13 @@ if ($action === 'users') {
     if (empty($_SESSION['admin_logged_in'])) {
         http_response_code(401);
         echo json_encode(['error' => 'Unauthorized'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    // Admin only: every account's e-mail, phone and 2FA state. A non-admin
+    // needs at most their own row, which my_profile already returns.
+    if (($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
     try {

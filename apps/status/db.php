@@ -73,9 +73,12 @@ try {
         // Column already exists - ignore
     }
     
-    // Make sure the first registered user (the main administrator) has the admin role
+    // Account 1 becomes admin only when the install has no admin at all - a
+    // recovery for an install that lost its admin role. It used to run on
+    // every schema bump and silently gave full rights back to account 1 after
+    // an admin had deliberately demoted it.
     try {
-        $pdo->exec("UPDATE users SET role = 'admin' WHERE id = 1");
+        $pdo->exec("UPDATE users SET role = 'admin' WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM (SELECT id FROM users WHERE role = 'admin') AS existing_admins)");
     } catch (PDOException $e) {
         // Ignorujeme
     }
