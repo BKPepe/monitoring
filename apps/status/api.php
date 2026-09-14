@@ -250,6 +250,10 @@ if ($action === 'login') {
 
 // 1c. Logout (SPA)
 if ($action === 'logout') {
+    // Recorded like the legacy admin page's sign-out, while the session still names the account.
+    if (!empty($_SESSION['admin_logged_in'])) {
+        bk_audit_log($pdo, 'logout');
+    }
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {
         $params = session_get_cookie_params();

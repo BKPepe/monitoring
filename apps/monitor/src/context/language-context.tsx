@@ -3291,6 +3291,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   'user_menu.profile_title': { cs: 'Můj účet', en: 'My account' },
   'user_menu.logged_out': { cs: 'Nepřihlášen', en: 'Not Logged In' },
   'user_menu.please_login': { cs: 'Přihlaste se', en: 'Please Log In' },
+  'user_menu.logout': { cs: 'Odhlásit se', en: 'Sign out' },
+  'user_menu.logging_out': { cs: 'Odhlašuji…', en: 'Signing out…' },
+  'user_menu.logout_error': { cs: 'Odhlášení se nepodařilo, zkuste to znovu.', en: 'Sign-out failed. Try again.' },
   'app_shell.close_nav': { cs: 'Zavřít navigaci', en: 'Close Navigation' },
 
   // Header

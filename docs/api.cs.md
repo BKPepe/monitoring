@@ -53,7 +53,7 @@ Content-Type: application/json
 ```
 
 Odpověď nastaví session cookie. Všechna další volání ji musí posílat
-(`credentials: 'include'` ve `fetch`). Odhlášení: `action=logout`.
+(`credentials: 'include'` ve `fetch`). Odhlášení: `POST action=logout`. Ukončí i relaci staré administrace a zapíše do auditu záznam `logout`.
 
 Stav relace: `GET /status/api.php?action=session`.
 

@@ -8,9 +8,13 @@ import { router } from './routes';
 import { LanguageProvider } from './context/language-context';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { installCsrfFetch } from './api/csrf-fetch';
+import { installSessionGuards } from './lib/session-guard';
 
 // Must run before the first render - components fire POSTs from effects.
 installCsrfFetch();
+// A page restored from the back/forward cache, or a tab another tab signed out,
+// reloads and asks the server who is signed in.
+installSessionGuards();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Chybí #root — zkontroluj index.html.');

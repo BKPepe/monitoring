@@ -541,6 +541,50 @@ check('GET na POST-only akci je 405', $wg_code2, 405);
 check('neznámá akce je 400, ne tichých 200', $wg_code3, 400);
 check_true('a nese klíč error', isset($wg_unknown['error']));
 
+// Sign-out from the app: POST only, it ends the session the legacy admin page
+// shares, and it leaves a trace in the audit log like that page's sign-out.
+$jar_lo = tempnam(sys_get_temp_dir(), 'bk_test_lo');
+[$lo_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!'], $jar_lo, '');
+check('druhá relace admina se přihlásí', $lo_login, 200);
+[$lo_get] = api_get_auth($base, 'action=logout', $jar_lo);
+check('odhlášení přes GET se odmítne', $lo_get, 405);
+// The client drops its cookie on any logout answer, so the jar alone cannot
+// prove the server ended the session. The old session id is replayed directly.
+$lo_sid = null;
+foreach (file($jar_lo) ?: [] as $lo_line) {
+    $lo_line = trim($lo_line);
+    if (str_starts_with($lo_line, '#HttpOnly_')) {
+        $lo_line = substr($lo_line, strlen('#HttpOnly_'));
+    } elseif ($lo_line === '' || $lo_line[0] === '#') {
+        continue;
+    }
+    $lo_parts = explode("\t", $lo_line);
+    if (count($lo_parts) >= 7 && $lo_parts[5] === 'PHPSESSID') {
+        $lo_sid = $lo_parts[6];
+    }
+}
+$lo_replay = function (string $sid) use ($base): array {
+    $ch = curl_init($base . '/api.php?action=session');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_COOKIE => 'PHPSESSID=' . $sid]);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($body, true)];
+};
+check_true('relace má ID, které jde přehrát', is_string($lo_sid) && $lo_sid !== '');
+[, $lo_replay_before] = $lo_replay((string)$lo_sid);
+check('přehrané ID je před odhlášením přihlášené', $lo_replay_before['authenticated'] ?? null, true);
+$lo_before = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'logout'")->fetchColumn();
+[$lo_code, $lo_res] = api_post($base, 'action=logout', [], $jar_lo, '');
+check('odhlášení projde', $lo_code, 200);
+check('a server ho potvrdí', $lo_res['success'] ?? null, true);
+[$lo_replay_code, $lo_replay_after] = $lo_replay((string)$lo_sid);
+check('staré ID relace po odhlášení odpoví', $lo_replay_code, 200);
+check('staré ID relace už nikoho nepřihlásí', $lo_replay_after['authenticated'] ?? null, false);
+check('odhlášení se zapíše do auditu', (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'logout'")->fetchColumn(), $lo_before + 1);
+check('záznam nese odhlášený účet', $pdo->query("SELECT actor_username FROM audit_log WHERE action = 'logout' ORDER BY id DESC LIMIT 1")->fetchColumn(), 'admin');
+[, $lo_main] = api_get_auth($base, 'action=session', $cookie_jar);
+check_true('jiná relace téhož admina zůstane přihlášená', !empty($lo_main['authenticated']));
+@unlink($jar_lo);
+
 // CORS: a response to a foreign Origin must not carry Allow-Origin (anyone
 // could read credentialed responses otherwise); the own origin gets it.
 $cors_probe = function (string $origin) use ($base): string {

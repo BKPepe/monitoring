@@ -144,8 +144,10 @@ export function setCsrfToken(token: string | null): void {
 
 async function request<T>(action: string, init?: RequestInit): Promise<T> {
   let url = `${STATUS_API}/api.php?action=${action}`;
-  if (action === 'session') {
-    url = `/status/api.php?action=session`;
+  // Signing in and out lives in the PHP session the legacy admin page shares,
+  // whatever backend serves the data.
+  if (action === 'session' || action === 'logout') {
+    url = `/status/api.php?action=${action}`;
   }
 
   const res = await fetch(url, {
@@ -232,6 +234,15 @@ export const appApi = {
     const session = await request<SessionInfo>('session');
     csrfToken = session.csrfToken;
     return session;
+  },
+
+  /** Ends the session on the server. Throws when the server did not confirm it. */
+  async logout(): Promise<void> {
+    const res = await request<{ success?: boolean }>('logout', { method: 'POST' });
+    // A 200 that is not the API's answer (a proxy or hosting challenge page)
+    // does not prove the session ended.
+    if (res?.success !== true) throw new ApiError('Odhlášení server nepotvrdil.', 0);
+    csrfToken = null;
   },
 
   getMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors').then((r) => r.monitors),

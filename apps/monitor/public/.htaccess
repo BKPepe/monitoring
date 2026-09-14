@@ -15,3 +15,12 @@ RewriteRule . index.html [L]
 
 # Výpis adresáře nemá u buildových assetů co dělat.
 Options -Indexes
+
+# The app page itself is never stored: after a sign-out, Back or a cache must not
+# bring back the previous account's screen. Every load asks the server again.
+# Hashed assets keep their own caching.
+<IfModule mod_headers.c>
+    <FilesMatch "^index\.html$">
+        Header set Cache-Control "no-store"
+    </FilesMatch>
+</IfModule>

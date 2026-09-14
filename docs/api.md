@@ -52,7 +52,7 @@ Content-Type: application/json
 ```
 
 The response sets a session cookie. Every further call has to send it
-(`credentials: 'include'` in `fetch`). Logout: `action=logout`.
+(`credentials: 'include'` in `fetch`). Logout: `POST action=logout`. It ends the session the legacy admin page shares and writes a `logout` entry to the audit log.
 
 Session state: `GET /status/api.php?action=session`.
 
