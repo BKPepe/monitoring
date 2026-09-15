@@ -28,7 +28,7 @@ $bk_cron_started = microtime(true);
 $last_schema_check = get_setting('last_schema_check', '');
 if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 hours')) {
     try {
-        $required_cols = ['iowait_pct','inode_usage_pct','zombie_count','fork_rate','temperature_c','wifi_clients_total','conntrack_pct'];
+        $required_cols = ['iowait_pct','inode_usage_pct','zombie_count','fork_rate','temperature_c','wifi_clients_total','wifi_clients_24g','wifi_6e_known_24g','conntrack_pct'];
         $stmt_cols = $pdo->query("DESCRIBE vps_metrics");
         $existing = array_column($stmt_cols->fetchAll(PDO::FETCH_ASSOC), 'Field');
         $missing = array_diff($required_cols, $existing);

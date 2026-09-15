@@ -47,7 +47,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260914');
+    define('BK_SCHEMA_VERSION', '20260915');
 
     $bk_current_schema = false;
     try {
@@ -368,6 +368,14 @@ try {
         // Provoz pres LTE zalohu v case: spolu s udalostmi wan_lost/wan_restored
         // rika, ktere bajty sly po primarni lince a ktere po zaloze.
         "ALTER TABLE vps_metrics ADD COLUMN net_lte_kbps FLOAT DEFAULT NULL",
+        // Wi-Fi clients per band and their Wi-Fi 6E support (bk_wifi_band_totals).
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_24g INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_5g INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_clients_6g INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_capable_24g INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_known_24g INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_capable_5g INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_known_5g INT DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

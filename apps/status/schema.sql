@@ -163,6 +163,13 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `fork_rate` INT DEFAULT NULL, -- Nové procesy (fork) od posledního běhu agenta
   `temperature_c` FLOAT DEFAULT NULL, -- Teplota CPU/desky ve °C (NULL, pokud hostitel/VM nevystavuje thermal zóny)
   `wifi_clients_total` INT DEFAULT NULL, -- Celkový počet Wi-Fi klientů (OpenWrt)
+  `wifi_clients_24g` INT DEFAULT NULL, -- Wi-Fi clients on 2.4 GHz radios (NULL = no such radio reported a count)
+  `wifi_clients_5g` INT DEFAULT NULL, -- Wi-Fi clients on 5 GHz radios
+  `wifi_clients_6g` INT DEFAULT NULL, -- Wi-Fi clients on 6 GHz radios
+  `wifi_6e_capable_24g` INT DEFAULT NULL, -- clients on 2.4 GHz that list a 6 GHz operating class (Wi-Fi 6E)
+  `wifi_6e_known_24g` INT DEFAULT NULL, -- clients on 2.4 GHz whose operating classes are known at all
+  `wifi_6e_capable_5g` INT DEFAULT NULL, -- clients on 5 GHz that list a 6 GHz operating class
+  `wifi_6e_known_5g` INT DEFAULT NULL, -- clients on 5 GHz whose operating classes are known at all
   `conntrack_pct` FLOAT DEFAULT NULL, -- Využití conntrack tabulky v % (OpenWrt/firewall)
   `net_ipv4_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv4 provozu v KB/s
   `net_ipv6_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv6 provozu v KB/s

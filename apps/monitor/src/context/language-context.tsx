@@ -2114,6 +2114,34 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Náhlý skok často znamená smyčku ve skriptu nebo restartující se službu.',
     en: 'A sudden jump often means a loop in a script or a service restarting over and over.',
   },
+  'help.wifi_band_clients_what': {
+    cs: 'Počet zařízení připojených k rádiím v tomto pásmu.',
+    en: 'Number of devices connected to the radios in this band.',
+  },
+  'help.wifi_band_clients_how': {
+    cs: 'Klienti rádií daného pásma podle iwinfo; server je sčítá z každého hlášení routeru.',
+    en: "Clients of this band's radios according to iwinfo; the server adds them up from every router report.",
+  },
+  'help.wifi_6e_capable_what': {
+    cs: 'Kolik klientů v tomto pásmu uvádí podporu 6 GHz, tedy Wi-Fi 6E.',
+    en: 'How many clients in this band list support for 6 GHz, which is Wi-Fi 6E.',
+  },
+  'help.wifi_6e_capable_how': {
+    cs: 'Seznam provozních tříd, který klient pošle při připojení (hostapd_cli all_sta); třídy 131 až 137 jsou 6 GHz.',
+    en: 'The list of operating classes a client sends when it connects (hostapd_cli all_sta); classes 131 to 137 are 6 GHz.',
+  },
+  'help.wifi_6e_capable_caveat': {
+    cs: 'Ne každé zařízení seznam posílá. Kolik jich ho poslalo, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory.',
+    en: 'Not every device sends the list. The chart of clients with known band support shows how many did; the rest are unknown, not unsupported.',
+  },
+  'help.wifi_6e_known_what': {
+    cs: 'U kolika klientů v tomto pásmu je podpora pásem známá.',
+    en: 'For how many clients in this band band support is known.',
+  },
+  'help.wifi_6e_known_how': {
+    cs: 'Klienti, kteří při připojení poslali seznam provozních tříd. Router potřebuje balíček hostapd-utils a agenta 0.1.6 nebo novějšího.',
+    en: 'Clients that sent their list of operating classes when connecting. The router needs the hostapd-utils package and agent 0.1.6 or newer.',
+  },
   'help.wifi_clients_what': { cs: 'Počet zařízení připojených k Wi-Fi.', en: 'Number of devices connected to Wi-Fi.' },
   'help.wifi_clients_how': {
     cs: 'Součet klientů všech rádií podle iwinfo.',
@@ -3065,6 +3093,15 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.reconnects': { cs: 'Reconnecty (od startu)', en: 'Reconnects (since boot)' },
   'net.last_reconnect': { cs: 'Poslední reconnect', en: 'Last reconnect' },
   'net.clients': { cs: 'klientů', en: 'clients' },
+  'net.wifi6e_known': {
+    cs: 'Podpora Wi-Fi 6E: {capable} z {known} klientů, kteří ji uvedli',
+    en: 'Wi-Fi 6E support: {capable} of {known} clients that reported it',
+  },
+  'net.wifi6e_unreported': { cs: ', u {count} neznámá', en: ', unknown for {count}' },
+  'net.wifi6e_unknown': {
+    cs: 'Podpora Wi-Fi 6E: neznámá (router ji bez hostapd-utils nezjistí)',
+    en: 'Wi-Fi 6E support: unknown (the router cannot tell without hostapd-utils)',
+  },
   'net.clients_short': { cs: 'kl.', en: 'cl.' },
   'net.lan_title': { cs: 'LAN & DHCP', en: 'LAN & DHCP' },
   'net.subnet': { cs: 'Subnet', en: 'Subnet' },

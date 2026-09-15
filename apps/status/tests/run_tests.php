@@ -48,6 +48,8 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_public_monitor_details',
     'bk_public_reason',
     'bk_public_incident_update',
+    'bk_wifi_band_totals',
+    'bk_wifi_count',
     'bk_sync_session_account',
 ]);
 
@@ -763,6 +765,24 @@ if (function_exists('bk_public_incident_update')) {
     check('poznámka ztratí jméno autora', bk_public_incident_update('[pepe] Vyměňujeme disk'), 'Vyměňujeme disk');
     check('ruční zpráva bez jména zůstane celá', bk_public_incident_update('Pracujeme na opravě'), 'Pracujeme na opravě');
     check('zpráva jen se jménem je prázdná', bk_public_incident_update('[pepe] '), null);
+}
+
+if (function_exists('bk_wifi_band_totals')) {
+    $wb = bk_wifi_band_totals([
+        ['band' => '2.4GHz', 'clients' => 3, 'clients_6ghz_capable' => 1, 'clients_caps_known' => 3],
+        ['band' => '2.4GHz', 'clients' => '2', 'clients_6ghz_capable' => '0', 'clients_caps_known' => '1'],
+        ['band' => '5GHz', 'clients' => 4],
+        ['band' => '6GHz', 'clients' => 1, 'clients_6ghz_capable' => 1, 'clients_caps_known' => 1],
+        ['band' => '60GHz', 'clients' => 9],
+        'not a radio',
+    ]);
+    check('pásma se sčítají po rádiích', [$wb['wifi_clients_24g'], $wb['wifi_clients_5g'], $wb['wifi_clients_6g']], [5, 4, 1]);
+    check('podpora 6E na 2.4 GHz se sečte i z čísel v textu', [$wb['wifi_6e_capable_24g'], $wb['wifi_6e_known_24g']], [1, 4]);
+    check('rádio bez údaje o podpoře nechá pásmo neznámé, ne nulové', [$wb['wifi_6e_capable_5g'], $wb['wifi_6e_known_5g']], [null, null]);
+    $wb_bad = bk_wifi_band_totals([['band' => '2.4GHz', 'clients' => -1, 'clients_6ghz_capable' => 5, 'clients_caps_known' => 2]]);
+    check('záporný počet ani víc schopných než známých se neuloží', [$wb_bad['wifi_clients_24g'], $wb_bad['wifi_6e_capable_24g'], $wb_bad['wifi_6e_known_24g']], [null, null, null]);
+    check('bez rádií je všechno neznámé', array_values(array_unique(array_values(bk_wifi_band_totals(null)), SORT_REGULAR)), [null]);
+    check('pravdivostní hodnota ani desetinné číslo nejsou počet', [bk_wifi_count(true), bk_wifi_count(2.5), bk_wifi_count('7')], [null, null, 7]);
 }
 
 $failed = bk_test_report('čisté funkce');

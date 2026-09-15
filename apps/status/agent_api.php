@@ -220,6 +220,8 @@ $ow_swap_pct = bk_agent_num($data, 'swap_pct');
 $ow_entropy = bk_agent_int($data, 'entropy');
 $ow_upgradable_packages = bk_agent_int($data, 'upgradable_packages');
 $ow_wifi_clients_count = bk_agent_int($data, 'wifi_clients_count');
+// Per band, and how many clients could use 6 GHz - see bk_wifi_band_totals().
+$ow_wifi_bands = bk_wifi_band_totals($ow_wifi_radios);
 $ow_net_ipv4_kbps = bk_agent_num($data, 'net_ipv4_kbps');
 $ow_net_ipv6_kbps = bk_agent_num($data, 'net_ipv6_kbps');
 // Throughput over the LTE backup device and the name of the WAN device
@@ -859,6 +861,13 @@ try {
             'fork_rate' => $fork_rate,
             'temperature_c' => $temperature,
             'wifi_clients_total' => $ow_wifi_clients_count,
+            'wifi_clients_24g' => $ow_wifi_bands['wifi_clients_24g'],
+            'wifi_clients_5g' => $ow_wifi_bands['wifi_clients_5g'],
+            'wifi_clients_6g' => $ow_wifi_bands['wifi_clients_6g'],
+            'wifi_6e_capable_24g' => $ow_wifi_bands['wifi_6e_capable_24g'],
+            'wifi_6e_known_24g' => $ow_wifi_bands['wifi_6e_known_24g'],
+            'wifi_6e_capable_5g' => $ow_wifi_bands['wifi_6e_capable_5g'],
+            'wifi_6e_known_5g' => $ow_wifi_bands['wifi_6e_known_5g'],
             'conntrack_pct' => $ow_conntrack_pct,
             'net_ipv4_kbps' => $ow_net_ipv4_kbps,
             'net_ipv6_kbps' => $ow_net_ipv6_kbps,

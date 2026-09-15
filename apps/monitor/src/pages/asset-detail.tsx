@@ -44,6 +44,7 @@ import { resolveSource } from '@/api/source';
 import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
+import { describeWifi6e } from '@/lib/wifi-6e';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { useLanguage } from '@/context/language-context';
@@ -1548,6 +1549,10 @@ function NetworkTab({
                     rating={busy}
                     helpKey="busy"
                   />
+                  {(() => {
+                    const wifi6e = describeWifi6e(r, t);
+                    return wifi6e ? <p className="text-muted-foreground text-2xs pt-0.5">{wifi6e}</p> : null;
+                  })()}
                 </div>
               </div>
             );

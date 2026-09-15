@@ -1972,6 +1972,46 @@ check('WAN: AP bez rozhraní wan 2×', $post_agent(['wan_up' => false]), 200);
 check('WAN: AP nespouští wan_lost', $lte_events('wan_lost'), 2);
 $post_agent($wan_ok);
 
+// --- Wi-Fi clients per band and their Wi-Fi 6E support -------------------------
+//
+// Only the total used to be stored, so "how many were on 2.4 GHz" had no answer
+// once the next report replaced the radio list. The server sums each band from
+// the radios; 6E support comes from agent 0.1.6+ and stays null when unknown.
+$wifi_before_id = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+$wifi_ni = fn ($v) => $v === null ? null : (int)$v;
+$wifi_row = function () use ($pdo): array {
+    return $pdo->query("SELECT wifi_clients_24g, wifi_clients_5g, wifi_clients_6g, wifi_6e_capable_24g, wifi_6e_known_24g, wifi_6e_capable_5g, wifi_6e_known_5g FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+};
+check('hlášení s rádii a podporou 6E agent přijme', $post_agent([
+    'wifi_clients_count' => 12,
+    'wifi_radios' => [
+        ['radio' => 'wlan0', 'band' => '2.4GHz', 'clients' => 7, 'clients_6ghz_capable' => 2, 'clients_caps_known' => 6],
+        ['radio' => 'wlan1', 'band' => '5GHz', 'clients' => 4, 'clients_6ghz_capable' => 3, 'clients_caps_known' => 4],
+        ['radio' => 'wlan2', 'band' => '2.4GHz', 'clients' => 1, 'clients_6ghz_capable' => null, 'clients_caps_known' => null],
+    ],
+]), 200);
+$w = $wifi_row();
+check('klienti na 2.4 GHz se sečtou přes obě rádia', $wifi_ni($w['wifi_clients_24g'] ?? null), 8);
+check('klienti na 5 GHz se uloží', $wifi_ni($w['wifi_clients_5g'] ?? null), 4);
+check_true('bez rádia na 6 GHz je počet neznámý, ne nula', array_key_exists('wifi_clients_6g', $w) && $w['wifi_clients_6g'] === null);
+check('na 2.4 GHz umí 6E dva klienti ze šesti známých', [$wifi_ni($w['wifi_6e_capable_24g']), $wifi_ni($w['wifi_6e_known_24g'])], [2, 6]);
+check('na 5 GHz umí 6E tři ze čtyř', [$wifi_ni($w['wifi_6e_capable_5g']), $wifi_ni($w['wifi_6e_known_5g'])], [3, 4]);
+check('hlášení staršího agenta bez podpory 6E agent přijme', $post_agent([
+    'wifi_radios' => [
+        ['radio' => 'wlan0', 'band' => '2.4GHz', 'clients' => 5],
+        ['radio' => 'wlan1', 'band' => '6GHz', 'clients' => 2],
+    ],
+]), 200);
+$w = $wifi_row();
+check('starší agent: pásma se přesto sečtou', [$wifi_ni($w['wifi_clients_24g']), $wifi_ni($w['wifi_clients_5g']), $wifi_ni($w['wifi_clients_6g'])], [5, null, 2]);
+check('starší agent: podpora 6E zůstane neznámá, ne nulová', [$w['wifi_6e_capable_24g'], $w['wifi_6e_known_24g']], [null, null]);
+[, $wifi_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
+check_true('graf klientů na 2.4 GHz je v grafech routeru', count($wifi_batch['series']['wifi_clients_24g']['points'] ?? []) >= 2);
+[$wifi_s_code, $wifi_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wifi_6e_capable_24g&period=24h', $cookie_jar);
+check('metric_series zná podporu 6E na 2.4 GHz', $wifi_s_code, 200);
+check_true('a vrátí změřenou hodnotu', in_array(2.0, array_map(fn ($p) => (float)$p[1], $wifi_s['points'] ?? []), true));
+$pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$wifi_before_id]);
+
 // --- Threshold hysteresis -----------------------------------------------------
 //
 // The CPU alert clears five points below the threshold, and a latch set under

@@ -288,6 +288,70 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       how: t('help.wifi_clients_how', 'Součet klientů všech rádií podle iwinfo.'),
       source: agent,
     },
+    wifi_clients_24g: {
+      what: t('help.wifi_band_clients_what', 'Počet zařízení připojených k rádiím v tomto pásmu.'),
+      how: t(
+        'help.wifi_band_clients_how',
+        'Klienti rádií daného pásma podle iwinfo; server je sčítá z každého hlášení routeru.'
+      ),
+      source: agent,
+    },
+    wifi_clients_5g: {
+      what: t('help.wifi_band_clients_what', 'Počet zařízení připojených k rádiím v tomto pásmu.'),
+      how: t(
+        'help.wifi_band_clients_how',
+        'Klienti rádií daného pásma podle iwinfo; server je sčítá z každého hlášení routeru.'
+      ),
+      source: agent,
+    },
+    wifi_clients_6g: {
+      what: t('help.wifi_band_clients_what', 'Počet zařízení připojených k rádiím v tomto pásmu.'),
+      how: t(
+        'help.wifi_band_clients_how',
+        'Klienti rádií daného pásma podle iwinfo; server je sčítá z každého hlášení routeru.'
+      ),
+      source: agent,
+    },
+    wifi_6e_capable_24g: {
+      what: t('help.wifi_6e_capable_what', 'Kolik klientů v tomto pásmu uvádí podporu 6 GHz, tedy Wi-Fi 6E.'),
+      how: t(
+        'help.wifi_6e_capable_how',
+        'Seznam provozních tříd, který klient pošle při připojení (hostapd_cli all_sta); třídy 131 až 137 jsou 6 GHz.'
+      ),
+      source: agent,
+      caveat: t(
+        'help.wifi_6e_capable_caveat',
+        'Ne každé zařízení seznam posílá. Kolik jich ho poslalo, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory.'
+      ),
+    },
+    wifi_6e_capable_5g: {
+      what: t('help.wifi_6e_capable_what', 'Kolik klientů v tomto pásmu uvádí podporu 6 GHz, tedy Wi-Fi 6E.'),
+      how: t(
+        'help.wifi_6e_capable_how',
+        'Seznam provozních tříd, který klient pošle při připojení (hostapd_cli all_sta); třídy 131 až 137 jsou 6 GHz.'
+      ),
+      source: agent,
+      caveat: t(
+        'help.wifi_6e_capable_caveat',
+        'Ne každé zařízení seznam posílá. Kolik jich ho poslalo, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory.'
+      ),
+    },
+    wifi_6e_known_24g: {
+      what: t('help.wifi_6e_known_what', 'U kolika klientů v tomto pásmu je podpora pásem známá.'),
+      how: t(
+        'help.wifi_6e_known_how',
+        'Klienti, kteří při připojení poslali seznam provozních tříd. Router potřebuje balíček hostapd-utils a agenta 0.1.6 nebo novějšího.'
+      ),
+      source: agent,
+    },
+    wifi_6e_known_5g: {
+      what: t('help.wifi_6e_known_what', 'U kolika klientů v tomto pásmu je podpora pásem známá.'),
+      how: t(
+        'help.wifi_6e_known_how',
+        'Klienti, kteří při připojení poslali seznam provozních tříd. Router potřebuje balíček hostapd-utils a agenta 0.1.6 nebo novějšího.'
+      ),
+      source: agent,
+    },
     conntrack_count: {
       what: t('help.conntrack_count_what', 'Počet sledovaných spojení.'),
       how: t('help.conntrack_count_how', 'Z nf_conntrack_count.'),

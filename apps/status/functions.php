@@ -930,6 +930,17 @@ function bk_metric_column_map(): array {
     'zombie_count' => ['col' => 'zombie_count', 'unit' => '', 'label' => 'Zombie procesy'],
     'fork_rate' => ['col' => 'fork_rate', 'unit' => '/s', 'label' => 'Fork rate'],
     'wifi_clients' => ['col' => 'wifi_clients_total', 'unit' => '', 'label' => 'Wi-Fi klienti'],
+    // Clients per band. The total alone could not say how many were on 2.4 GHz;
+    // the server sums each band from the radios every OpenWrt agent reports.
+    'wifi_clients_24g' => ['col' => 'wifi_clients_24g', 'unit' => '', 'label' => 'Wi-Fi klienti na 2.4 GHz', 'only' => ['openwrt']],
+    'wifi_clients_5g' => ['col' => 'wifi_clients_5g', 'unit' => '', 'label' => 'Wi-Fi klienti na 5 GHz', 'only' => ['openwrt']],
+    'wifi_clients_6g' => ['col' => 'wifi_clients_6g', 'unit' => '', 'label' => 'Wi-Fi klienti na 6 GHz', 'only' => ['openwrt']],
+    // Of the clients on 2.4 and 5 GHz: how many list a 6 GHz operating class
+    // (Wi-Fi 6E), and how many told at all - the rest are unknown, not "no".
+    'wifi_6e_capable_24g' => ['col' => 'wifi_6e_capable_24g', 'unit' => '', 'label' => 'Klienti na 2.4 GHz s podporou Wi-Fi 6E', 'only' => ['openwrt']],
+    'wifi_6e_known_24g' => ['col' => 'wifi_6e_known_24g', 'unit' => '', 'label' => 'Klienti na 2.4 GHz se známou podporou pásem', 'only' => ['openwrt']],
+    'wifi_6e_capable_5g' => ['col' => 'wifi_6e_capable_5g', 'unit' => '', 'label' => 'Klienti na 5 GHz s podporou Wi-Fi 6E', 'only' => ['openwrt']],
+    'wifi_6e_known_5g' => ['col' => 'wifi_6e_known_5g', 'unit' => '', 'label' => 'Klienti na 5 GHz se známou podporou pásem', 'only' => ['openwrt']],
     'conntrack' => ['col' => 'conntrack_pct', 'unit' => '%', 'label' => 'Conntrack tabulka'],
     // Metrics added 08/2026: agents sent them every minute, but only the
     // last snapshot was stored, so no history survived.
@@ -6411,6 +6422,72 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
 
     // Renormalise over the actually measured components (0-100).
     return (int)round(min(100, max(0, $score / $weight_used)));
+}
+
+/**
+ * A client count an agent sent: a non-negative whole number, or null.
+ */
+function bk_wifi_count($value): ?int {
+    if (is_int($value)) {
+        return $value >= 0 ? $value : null;
+    }
+    if (is_string($value) && preg_match('/^\d{1,6}$/', $value)) {
+        return (int)$value;
+    }
+    return null;
+}
+
+/**
+ * Wi-Fi clients per band, summed over the radios an OpenWrt agent reports.
+ *
+ * Only the total used to be stored, so "how many were on 2.4 GHz" had no
+ * answer once the next report replaced the radio list. Every agent already
+ * sends band and clients per radio, so these sums need no agent update.
+ *
+ * Wi-Fi 6E comes from agent 0.1.6+ with hostapd_cli: clients_caps_known is how
+ * many stations listed their operating classes, clients_6ghz_capable how many
+ * of those listed a 6 GHz one. A band with no radio that knows stays null -
+ * unknown, not zero - and a radio claiming more capable than known is ignored.
+ * On 6 GHz itself every client supports it, so there is nothing to count.
+ *
+ * @return array<string, ?int> keyed by the vps_metrics column
+ */
+function bk_wifi_band_totals($radios): array {
+    $out = [
+        'wifi_clients_24g' => null, 'wifi_clients_5g' => null, 'wifi_clients_6g' => null,
+        'wifi_6e_capable_24g' => null, 'wifi_6e_known_24g' => null,
+        'wifi_6e_capable_5g' => null, 'wifi_6e_known_5g' => null,
+    ];
+    if (!is_array($radios)) {
+        return $out;
+    }
+    $suffix = ['2.4GHz' => '24g', '5GHz' => '5g', '6GHz' => '6g'];
+    foreach ($radios as $radio) {
+        if (!is_array($radio) || !is_string($radio['band'] ?? null) || !isset($suffix[$radio['band']])) {
+            continue;
+        }
+        $band = $suffix[$radio['band']];
+        // A band's sum starts at the first radio that reported a count; one
+        // without a count leaves the sum as it is instead of starting it at zero.
+        $add = function (string $key, int $value) use (&$out): void {
+            $out[$key] = $out[$key] === null ? $value : $out[$key] + $value;
+        };
+        $clients = bk_wifi_count($radio['clients'] ?? null);
+        if ($clients !== null) {
+            $add("wifi_clients_{$band}", $clients);
+        }
+        if ($band === '6g') {
+            continue;
+        }
+        $known = bk_wifi_count($radio['clients_caps_known'] ?? null);
+        $capable = bk_wifi_count($radio['clients_6ghz_capable'] ?? null);
+        if ($known === null || $capable === null || $capable > $known) {
+            continue;
+        }
+        $add("wifi_6e_known_{$band}", $known);
+        $add("wifi_6e_capable_{$band}", $capable);
+    }
+    return $out;
 }
 
 /**
