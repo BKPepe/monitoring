@@ -135,6 +135,9 @@ export function IncidentsPage() {
   // actions sat on the second card while the first had only "acknowledge".
   const incidentById = new Map<number, any>(manualIncidents.map((inc) => [inc.id, inc]));
   const linkedIncidentIds = new Set(dbIncidents.map((inc) => inc.incidentId).filter((id) => id != null));
+  // Monitors that are down at this moment. A resolved incident of one of them is
+  // history for the record only - the outage is still running above.
+  const downMonitorIds = new Set(dbIncidents.map((inc) => inc.monitor_id));
   const standaloneIncidents = ongoingIncidents.filter((inc) => !linkedIncidentIds.has(inc.id));
 
   // The count in the heading must match what is listed below it.
@@ -144,6 +147,35 @@ export function IncidentsPage() {
     few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} aktivní výpadky`),
     other: t('incidents.active_badge_other', { count: ongoingCount }, `${ongoingCount} aktivních výpadků`),
   }[pluralForm(lang, ongoingCount)];
+
+  // Resolving an incident closes the RECORD, not the outage. The monitor stays
+  // down, its card stays on this page - and because every action hangs off the
+  // open incident, the card was left with nothing: no notes, no acknowledge, and
+  // an outage the escalation no longer knew about. This opens a record again.
+  const openIncidentFor = async (inc: any) => {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const res = await fetch('/status/api.php?action=create_incident', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: t('incidents.reopen_title', { name: inc.monitor_name }, `Výpadek: ${inc.monitor_name}`),
+          impact: 'major',
+          monitorId: inc.monitor_id,
+          message: t('incidents.reopen_message', 'Incident znovu otevřen, monitor je stále nedostupný.'),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      loadIncidents();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : t('incidents.action_failed', 'Akce se nezdařila.'));
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   const toggleIncident = (inc: any) => {
     setExpandedId(expandedId === inc.id ? null : inc.id);
@@ -462,6 +494,14 @@ export function IncidentsPage() {
                               {linked.updates[linked.updates.length - 1].message}
                             </p>
                           )}
+                          {!linked && (
+                            <p className="text-warning text-2xs font-semibold">
+                              {t(
+                                'incidents.no_open_incident',
+                                'Incident je uzavřený, ale monitor je stále nedostupný - výpadek trvá.'
+                              )}
+                            </p>
+                          )}
                         </div>
                         <div className="shrink-0 flex flex-col items-end gap-1.5">
                           <Link
@@ -511,8 +551,19 @@ export function IncidentsPage() {
                                 : t('incidents.detail_btn', 'Poznámky a akce')}
                             </button>
                           )}
+                          {!linked && isAdmin && (
+                            <button
+                              type="button"
+                              disabled={actionBusy}
+                              onClick={() => void openIncidentFor(inc)}
+                              className="rounded-md bg-warning text-warning-foreground px-3 py-1.5 text-xs font-semibold hover:bg-warning/90 disabled:opacity-50"
+                            >
+                              {t('incidents.reopen_btn', 'Otevřít incident')}
+                            </button>
+                          )}
                         </div>
                       </div>
+                      {!linked && actionError && <ErrorState size="inline" message={actionError} />}
                       {expanded && linked && renderIncidentDetail(linked)}
                     </div>
                   );
@@ -602,6 +653,9 @@ export function IncidentsPage() {
                       <h4 className="text-sm font-semibold">{inc.title}</h4>
                       {inc.monitorId == null && (
                         <Badge variant="warning">{t('incidents.manual_badge', 'Ručně nahlášeno')}</Badge>
+                      )}
+                      {inc.monitorId != null && downMonitorIds.has(inc.monitorId) && (
+                        <Badge variant="down">{t('incidents.still_down_badge', 'Monitor je stále nedostupný')}</Badge>
                       )}
                     </div>
                     <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-3 font-mono text-2xs">

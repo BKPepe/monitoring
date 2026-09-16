@@ -2524,7 +2524,7 @@ if ($action === 'incidents') {
         try {
             $stmt_logs = $pdo->prepare("
                 SELECT l.id, l.monitor_id, l.checked_at, l.error_message,
-                       m.name as monitor_name, m.target, m.type
+                       m.name as monitor_name, m.target, m.type, m.last_status_change
                 FROM monitor_logs l
                 JOIN monitors m ON l.monitor_id = m.id
                 WHERE m.status = 'down' AND {$inc_scope}
@@ -2556,7 +2556,19 @@ if ($action === 'incidents') {
             } catch (Throwable $t) {}
 
             foreach ($log_rows as $r) {
-                $start_ts = strtotime($r['checked_at']);
+                // When the outage STARTED, not when it was last confirmed. For an
+                // actively checked monitor cron writes a log every cycle, so the
+                // newest 'down' row is a few minutes old and the duration on the
+                // card reset with every check - an outage running since morning
+                // kept reporting "2 minutes". last_status_change is stamped once,
+                // on the transition to down. Rows from before that column existed
+                // fall back to the log.
+                $start_ts = !empty($r['last_status_change'])
+                    ? strtotime((string)$r['last_status_change'])
+                    : false;
+                if ($start_ts === false || $start_ts <= 0) {
+                    $start_ts = strtotime($r['checked_at']);
+                }
                 $open_inc = $open_by_monitor[(int)$r['monitor_id']] ?? null;
                 $incidents[] = [
                     'id' => (int)$r['id'],
@@ -2655,7 +2667,15 @@ if ($action === 'incident_action') {
     $username = $_SESSION['admin_username'] ?? 'admin';
 
     try {
-        $stmt = $pdo->prepare("SELECT id, status FROM incidents WHERE id = ?");
+        // The monitor's state comes along: closing an incident does not end the
+        // outage, and the caller has to be told so plainly instead of watching
+        // the outage stay on the page with no explanation.
+        $stmt = $pdo->prepare("
+            SELECT i.id, i.status, i.monitor_id, m.status AS monitor_status
+            FROM incidents i
+            LEFT JOIN monitors m ON m.id = i.monitor_id
+            WHERE i.id = ?
+        ");
         $stmt->execute([$incident_id]);
         $incident = $stmt->fetch();
         if (!$incident) {
@@ -2663,6 +2683,12 @@ if ($action === 'incident_action') {
             echo json_encode(['error' => 'Incident nenalezen.'], JSON_UNESCAPED_UNICODE);
             exit;
         }
+
+        // Extra fields for the answer - empty unless an operation has something
+        // to report beyond success.
+        $ia_extra = [];
+        $ia_still_down = $incident['monitor_id'] !== null
+            && (string)($incident['monitor_status'] ?? '') === 'down';
 
         $add_update = function (string $status, string $message) use ($pdo, $incident_id) {
             $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)")
@@ -2690,7 +2716,14 @@ if ($action === 'incident_action') {
             $note = trim((string)($input['note'] ?? ''));
             $pdo->prepare("UPDATE incidents SET status = 'resolved', resolved_at = NOW() WHERE id = ?")
                 ->execute([$incident_id]);
-            $add_update('resolved', "[{$username}] " . ($note !== '' ? $note : 'Incident uzavřen ručně.'));
+            // A closed incident over a monitor that is still down is a record
+            // closed, not an outage ended. The timeline says which one happened.
+            $ia_note = "[{$username}] " . ($note !== '' ? $note : 'Incident uzavřen ručně.');
+            if ($ia_still_down) {
+                $ia_note .= ' Monitor byl v tu chvíli stále nedostupný.';
+                $ia_extra['monitorStillDown'] = true;
+            }
+            $add_update('resolved', $ia_note);
             bk_audit_log($pdo, 'incident_resolve', "Incident #{$incident_id} uzavřen", 'incident', $incident_id);
         } elseif ($op === 'postmortem') {
             $text = trim((string)($input['postmortem'] ?? ''));
@@ -2704,7 +2737,7 @@ if ($action === 'incident_action') {
             exit;
         }
 
-        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+        echo json_encode(array_merge(['success' => true], $ia_extra), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Akci se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
@@ -2724,16 +2757,42 @@ if ($action === 'create_incident') {
     $title = trim($input['title'] ?? '');
     $message = trim($input['message'] ?? '');
     $impact = in_array($input['impact'] ?? '', ['minor', 'major', 'critical'], true) ? $input['impact'] : 'minor';
+    // An incident may belong to a monitor. Closing the incident of a monitor that
+    // is still down used to leave its outage with no record to work in: the
+    // outage card hangs off the open incident, and there was none - no notes, no
+    // acknowledge, and the escalation had nothing to escalate. Opening one again
+    // must not wait for the service to recover.
+    $ci_monitor_id = isset($input['monitorId']) ? (int)$input['monitorId'] : 0;
 
     if ($title === '') {
         http_response_code(400);
         echo json_encode(['error' => 'Název incidentu je povinný.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    if ($ci_monitor_id > 0) {
+        $stmt_ci_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ?");
+        $stmt_ci_mon->execute([$ci_monitor_id]);
+        if ($stmt_ci_mon->fetchColumn() === false) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        bk_refuse_archived_write($pdo, $ci_monitor_id);
+        $stmt_ci_open = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved' LIMIT 1");
+        $stmt_ci_open->execute([$ci_monitor_id]);
+        $ci_open = $stmt_ci_open->fetchColumn();
+        if ($ci_open !== false) {
+            // Two open incidents for one monitor would split the timeline and the
+            // outage card can only ever link to one of them.
+            http_response_code(409);
+            echo json_encode(['error' => 'Tento monitor už má otevřený incident.', 'id' => (int)$ci_open], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
 
     try {
-        $stmt = $pdo->prepare("INSERT INTO incidents (title, impact, status) VALUES (?, ?, 'investigating')");
-        $stmt->execute([$title, $impact]);
+        $stmt = $pdo->prepare("INSERT INTO incidents (title, impact, status, monitor_id) VALUES (?, ?, 'investigating', ?)");
+        $stmt->execute([$title, $impact, $ci_monitor_id > 0 ? $ci_monitor_id : null]);
         $incident_id = (int)$pdo->lastInsertId();
 
         if ($message !== '') {

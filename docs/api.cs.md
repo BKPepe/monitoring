@@ -493,9 +493,9 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=incidents` | veřejný stav / přiřazené | Seznam incidentů. Veřejný pohled vynechá cíle, jména operátorů a důvody kontrol, i v `updates` |
-| `action=create_incident` | přihlášený | Ruční založení |
-| `action=incident_action` | přihlášený | `op`: acknowledge / resolve / postmortem |
+| `action=incidents` | veřejný stav / přiřazené | Seznam incidentů. Začátek výpadku je okamžik, kdy monitor spadl (`last_status_change`), ne poslední potvrzení výpadku. Veřejný pohled vynechá cíle, jména operátorů a důvody kontrol, i v `updates` |
+| `action=create_incident` | přihlášený | Ruční založení. Volitelné `monitorId` naváže incident na monitor: 404 neznámý, 409 archivovaný, 409 když už monitor otevřený incident má |
+| `action=incident_action` | přihlášený | `op`: acknowledge / resolve / postmortem. `resolve` vrátí `monitorStillDown: true`, když je monitor i po uzavření incidentu dál nedostupný |
 | `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky |
 | `action=sla_report&days=` | přiřazený monitor | SLA přehled |
 | `action=audit_logs&limit=` | admin | Poslední kontroly napříč monitory |

@@ -2606,6 +2606,17 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.note_placeholder': { cs: 'Poznámka do timeline…', en: 'Note for the timeline…' },
   'incidents.note_btn': { cs: 'Přidat poznámku', en: 'Add note' },
   'incidents.resolve_btn': { cs: 'Uzavřít incident', en: 'Resolve incident' },
+  'incidents.no_open_incident': {
+    cs: 'Incident je uzavřený, ale monitor je stále nedostupný - výpadek trvá.',
+    en: 'The incident is closed, but the monitor is still down - the outage is still running.',
+  },
+  'incidents.reopen_btn': { cs: 'Otevřít incident', en: 'Open an incident' },
+  'incidents.reopen_title': { cs: 'Výpadek: {name}', en: 'Outage: {name}' },
+  'incidents.reopen_message': {
+    cs: 'Incident znovu otevřen, monitor je stále nedostupný.',
+    en: 'Incident reopened, the monitor is still down.',
+  },
+  'incidents.still_down_badge': { cs: 'Monitor je stále nedostupný', en: 'The monitor is still down' },
   'incidents.postmortem_placeholder': {
     cs: 'Postmortem: co se stalo, proč, a co uděláme jinak…',
     en: 'Postmortem: what happened, why, and what we will change…',

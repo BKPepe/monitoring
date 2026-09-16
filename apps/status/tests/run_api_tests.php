@@ -788,6 +788,83 @@ check_true('admin vidí, kdo incident převzal', str_contains($pi_admin_raw, 'op
 $pdo->prepare("DELETE FROM incident_updates WHERE incident_id = ?")->execute([$pi_id]);
 $pdo->prepare("DELETE FROM incidents WHERE id = ?")->execute([$pi_id]);
 
+// An outage whose incident gets closed while the monitor is still down. Closing
+// the record used to leave the outage on the page with no incident behind it:
+// no notes, no acknowledge, nothing for the escalation to find - and its
+// duration restarted with every check, because cron writes a 'down' log each
+// cycle and the card read the newest one.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_status_change)
+            VALUES (96, 'Router s trvajícím výpadkem', 'openwrt', '10.0.0.96', 'down', 'Síť', DATE_SUB(NOW(), INTERVAL 3 HOUR))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (96, 'down', 'Agent routeru neodpovídá', DATE_SUB(NOW(), INTERVAL 3 HOUR))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (96, 'down', 'Agent routeru neodpovídá', NOW())");
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Router s trvajícím výpadkem', 'major', 'investigating', 96)");
+$oi_id = (int)$pdo->lastInsertId();
+
+$oi_find = function (array $payload): ?array {
+    foreach ($payload['incidents'] ?? [] as $row) {
+        if ((int)($row['monitor_id'] ?? 0) === 96) {
+            return $row;
+        }
+    }
+    return null;
+};
+
+[, $oi_list] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_row = $oi_find($oi_list);
+check_true('trvající výpadek je v seznamu', $oi_row !== null);
+$oi_start = $oi_row !== null ? DateTime::createFromFormat('d.m.Y H:i:s', (string)$oi_row['started_at']) : false;
+check_true(
+    'začátek výpadku je pád monitoru, ne poslední kontrola',
+    $oi_start !== false && (time() - $oi_start->getTimestamp()) > 7000
+);
+
+[$oi_res_code, $oi_res] = api_post($base, 'action=incident_action', ['id' => $oi_id, 'op' => 'resolve'], $cookie_jar);
+check('incident trvajícího výpadku jde uzavřít', $oi_res_code, 200);
+check_true('uzavření řekne, že monitor je pořád nedostupný', !empty($oi_res['monitorStillDown']));
+
+[, $oi_list2] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_row2 = $oi_find($oi_list2);
+check_true('výpadek zůstane v seznamu i po uzavření incidentu', $oi_row2 !== null);
+check_true('a zůstane bez otevřeného incidentu', $oi_row2 !== null && $oi_row2['incidentId'] === null);
+
+[$oi_new_code, $oi_new] = api_post(
+    $base,
+    'action=create_incident',
+    ['title' => 'Výpadek: Router s trvajícím výpadkem', 'impact' => 'major', 'monitorId' => 96],
+    $cookie_jar
+);
+check('k trvajícímu výpadku jde incident otevřít znovu', $oi_new_code, 200);
+[, $oi_list3] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_row3 = $oi_find($oi_list3);
+check_true(
+    'a karta výpadku na něj zase odkazuje',
+    $oi_row3 !== null && (int)$oi_row3['incidentId'] === (int)($oi_new['id'] ?? 0)
+);
+
+[$oi_dup_code] = api_post(
+    $base,
+    'action=create_incident',
+    ['title' => 'Druhý incident', 'monitorId' => 96],
+    $cookie_jar
+);
+check('druhý otevřený incident k témuž monitoru neprojde', $oi_dup_code, 409);
+[$oi_missing_code] = api_post(
+    $base,
+    'action=create_incident',
+    ['title' => 'Incident bez monitoru', 'monitorId' => 999999],
+    $cookie_jar
+);
+check('incident k neexistujícímu monitoru neprojde', $oi_missing_code, 404);
+
+$pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id = 96)");
+$pdo->exec("DELETE FROM incidents WHERE monitor_id = 96");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 96");
+$pdo->exec("DELETE FROM monitors WHERE id = 96");
+// The explicit id moved the counter to 97, so the next monitor created without
+// an id took 97 and the archive fixture below collided with it. InnoDB lowers a
+// counter set below the highest id to that id + 1 - back to where it was.
+$pdo->exec("ALTER TABLE monitors AUTO_INCREMENT = 1");
+
 // A failure text named the host it could not resolve.
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at) VALUES (1, 'down', NULL, 'cURL chyba: Could not resolve host: tajny-host.internal', DATE_SUB(NOW(), INTERVAL 5 SECOND))");
 $pr_log = (int)$pdo->lastInsertId();

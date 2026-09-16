@@ -500,9 +500,9 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 
 | Endpoint | Access | Description |
 |---|---|---|
-| `action=incidents` | public status / assigned | List of incidents. The public view drops targets, operator names and check reasons, also from `updates` |
-| `action=create_incident` | logged in | Manual creation |
-| `action=incident_action` | logged in | `op`: acknowledge / resolve / postmortem |
+| `action=incidents` | public status / assigned | List of incidents. An outage starts when the monitor went down (`last_status_change`), not when the outage was last confirmed. The public view drops targets, operator names and check reasons, also from `updates` |
+| `action=create_incident` | logged in | Manual creation. Optional `monitorId` ties the incident to a monitor: 404 unknown, 409 archived, 409 when that monitor already has an open incident |
+| `action=incident_action` | logged in | `op`: acknowledge / resolve / postmortem. `resolve` answers `monitorStillDown: true` when the monitor is down even after the incident is closed |
 | `action=events&monitor_id=&limit=` | public status / assigned | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures |
 | `action=sla_report&days=` | assigned monitor | SLA overview |
 | `action=audit_logs&limit=` | admin | Latest checks across monitors |
