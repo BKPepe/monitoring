@@ -40,7 +40,7 @@ $action = isset($_GET['action']) ? $_GET['action'] : '';
 // --- ACTION: fetch the list of monitors to test ---
 if ($action === 'get_monitors') {
     try {
-        $stmt = $pdo->query("SELECT id, name, type, target, port FROM monitors");
+        $stmt = $pdo->query("SELECT id, name, type, target, port FROM monitors WHERE archived_at IS NULL");
         $monitors = $stmt->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['monitors' => $monitors]);
     } catch (PDOException $e) {
@@ -122,9 +122,14 @@ if ($action === 'post_results') {
         
         try {
             // Find the monitor's previous state
-            $stmt_old = $pdo->prepare("SELECT status FROM monitors WHERE id = ?");
+            $stmt_old = $pdo->prepare("SELECT status, archived_at FROM monitors WHERE id = ?");
             $stmt_old->execute([$mid]);
-            $old_status = $stmt_old->fetchColumn();
+            $old_row = $stmt_old->fetch();
+            // An unknown or archived monitor gets no measurement from a probe.
+            if (!$old_row || !empty($old_row['archived_at'])) {
+                continue;
+            }
+            $old_status = $old_row['status'];
             
             // Write the measurement log including the node's location
             $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, ?, ?, ?)");

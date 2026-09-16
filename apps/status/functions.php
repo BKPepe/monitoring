@@ -1268,7 +1268,7 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
                    i.acknowledged_at, i.escalated_at, i.monitor_id, m.name AS monitor_name
             FROM incidents i
             LEFT JOIN monitors m ON m.id = i.monitor_id
-            WHERE i.status != 'resolved' AND i.escalated_at IS NULL
+            WHERE i.status != 'resolved' AND i.escalated_at IS NULL AND (i.monitor_id IS NULL OR m.archived_at IS NULL)
             ORDER BY i.id ASC
             LIMIT 50
         ");
@@ -2957,7 +2957,7 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
     $timeline = [];
 
     // Fetch all the asset's monitors
-    $stmt = $pdo->prepare("SELECT id, name FROM monitors WHERE asset_id = ?");
+    $stmt = $pdo->prepare("SELECT id, name FROM monitors WHERE asset_id = ? AND archived_at IS NULL");
     $stmt->execute([$asset_id]);
     $monitors = $stmt->fetchAll();
 
@@ -5836,6 +5836,10 @@ function bk_log_notification(
 }
 
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
+    // An archived monitor is out of service for good: nobody is told anything about it.
+    if (!empty($monitor['archived_at']) || ($pdo instanceof PDO && !empty($monitor['id']) && bk_monitor_is_archived($pdo, (int)$monitor['id']))) {
+        return;
+    }
     bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg);
     $name = $monitor['name'];
     $type = $monitor['type'];
@@ -6638,6 +6642,8 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
 
     // --- Core KPIs ---
+    // Archived monitors are out of the digest, history included.
+    [$dg_active, $dg_active_params] = bk_active_monitor_sql($pdo, 'monitor_id');
     $stmt_overall = $pdo->prepare("
         SELECT
             SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
@@ -6646,9 +6652,9 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             COUNT(*) as all_rows,
             AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
         FROM monitor_logs
-        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND {$dg_active}
     ");
-    $stmt_overall->execute([$days]);
+    $stmt_overall->execute(array_merge([$days], $dg_active_params));
     $overall = $stmt_overall->fetch();
     $total_checks = (int)($overall['all_rows'] ?? 0);
     $availability = ($overall['total_count'] ?? 0) > 0 ? round(($overall['up_count'] / $overall['total_count']) * 100, 3) : 100.0;
@@ -6658,7 +6664,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     // --- Agents (only those that ever actually reported - same logic as index.php) ---
     $offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
     $agent_count = 0;
-    $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != ''");
+    $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != '' AND archived_at IS NULL");
     while ($row = $stmt_agents->fetch()) {
         $det = json_decode($row['last_details'] ?? '', true);
         if (($det['agent_last_seen'] ?? 0) > 0) {
@@ -6673,12 +6679,12 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
                SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count,
                AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
         FROM monitor_logs
-        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND checked_from IS NOT NULL
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND checked_from IS NOT NULL AND {$dg_active}
               AND checked_from != 'Main Server'" . ($hub_location !== '' ? " AND checked_from != ?" : "") . "
         GROUP BY checked_from
         ORDER BY checked_from ASC
     ");
-    $stmt_regions->execute($hub_location !== '' ? [$days, $hub_location] : [$days]);
+    $stmt_regions->execute(array_merge([$days], $dg_active_params, $hub_location !== '' ? [$hub_location] : []));
     $regions_raw = $stmt_regions->fetchAll();
     $regions = [];
     foreach ($regions_raw as $r) {
@@ -6707,7 +6713,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
                SUM(CASE WHEN l.status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
         FROM monitor_logs l
         JOIN monitors m ON m.id = l.monitor_id
-        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND m.archived_at IS NULL
         GROUP BY l.monitor_id, m.name, m.type
         ORDER BY down_count DESC
         LIMIT 30
@@ -6744,6 +6750,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             GROUP BY monitor_id
         ) latest ON latest.monitor_id = vm.monitor_id AND latest.max_at = vm.checked_at
         JOIN monitors m ON m.id = vm.monitor_id
+        WHERE m.archived_at IS NULL
     ");
     $stmt_agent_health->execute([$days]);
     $agent_health = $stmt_agent_health->fetchAll();
@@ -6759,7 +6766,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             GROUP BY monitor_id
         ) latest ON latest.monitor_id = l.monitor_id AND latest.max_at = l.checked_at
         JOIN monitors m ON m.id = l.monitor_id
-        WHERE m.type = 'web'
+        WHERE m.type = 'web' AND m.archived_at IS NULL
     ");
     $stmt_ssl->execute([$days]);
     $ssl_rows = $stmt_ssl->fetchAll();
@@ -6895,7 +6902,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         SELECT l.monitor_id, m.name, l.checked_at, l.checked_from, l.error_message, m.status as current_status
         FROM monitor_logs l
         JOIN monitors m ON m.id = l.monitor_id
-        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND l.status = 'down'
+        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND l.status = 'down' AND m.archived_at IS NULL
         ORDER BY l.monitor_id ASC, l.checked_at ASC
         LIMIT 2000
     ");
@@ -6955,7 +6962,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         $recommendations[] = sprintf(t('digest_dns_failing'), $dns_failures);
     }
     // Monitors without IPv6 (current last_details, 'web' type only)
-    $stmt_ipv6 = $pdo->query("SELECT name, last_details FROM monitors WHERE type = 'web'");
+    $stmt_ipv6 = $pdo->query("SELECT name, last_details FROM monitors WHERE type = 'web' AND archived_at IS NULL");
     foreach ($stmt_ipv6->fetchAll() as $m) {
         $ld = json_decode($m['last_details'] ?? '', true);
         if (is_array($ld) && ($ld['has_ipv4'] ?? false) && empty($ld['has_ipv6'])) {
@@ -8931,7 +8938,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
     // 1. Try matching via asset_id (when set)
     if (!empty($asset_id)) {
         try {
-            $stmt = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL AND agent_key IS NOT NULL AND agent_key != '' AND {$vis_sql} LIMIT 1");
+            $stmt = $pdo->prepare("SELECT last_details FROM monitors WHERE asset_id = ? AND id != ? AND last_details IS NOT NULL AND agent_key IS NOT NULL AND agent_key != '' AND archived_at IS NULL AND {$vis_sql} LIMIT 1");
             $stmt->execute(array_merge([$asset_id, $mid], $vis_params));
             $sib_details_raw = $stmt->fetchColumn();
         } catch (Exception $e) {}
@@ -8961,7 +8968,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
                 SELECT last_details FROM monitors 
                 WHERE id != ? AND agent_key IS NOT NULL AND agent_key != '' AND last_details IS NOT NULL
                   AND (target = ? OR target = ? OR last_details LIKE ?)
-                  AND {$vis_sql}
+                  AND archived_at IS NULL AND {$vis_sql}
                 ORDER BY updated_at DESC LIMIT 1
             ");
             $stmt->execute(array_merge([$mid, $target, $resolved_ip, '%' . $resolved_ip . '%'], $vis_params));
@@ -8977,7 +8984,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
                 WHERE agent_key IS NOT NULL AND agent_key != '' 
                   AND last_details LIKE '%\"ts3_process\"%' 
                   AND last_details NOT LIKE '%\"ts3_process\":null%'
-                  AND {$vis_sql}
+                  AND archived_at IS NULL AND {$vis_sql}
                 ORDER BY updated_at DESC LIMIT 1
             ");
             $stmt->execute($vis_params);
@@ -9122,6 +9129,92 @@ function bk_monitor_scope_sql(?array $ids, string $column): array {
         return ['1=0', []];
     }
     return [$column . ' IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids];
+}
+
+/**
+ * SQL that leaves the given monitor ids out: [sql, params]. No ids, no filter.
+ */
+function bk_exclude_ids_sql(array $ids, string $column): array {
+    if (!preg_match('/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/i', $column)) {
+        throw new InvalidArgumentException('Invalid column reference: ' . $column);
+    }
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn($id) => $id > 0)));
+    if (!$ids) {
+        return ['1=1', []];
+    }
+    return [$column . ' NOT IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids];
+}
+
+/**
+ * Ids of archived monitors, read once per request.
+ *
+ * An archived monitor keeps its history and takes no part in anything live: no
+ * checks, no alerts, no lists, no summaries, no agent reports. Before the
+ * migration adds the column nothing is archived, so a failed read is an empty list.
+ */
+function bk_archived_monitor_ids(PDO $pdo, bool $refresh = false): array {
+    static $cache = null;
+    if ($cache !== null && !$refresh) {
+        return $cache;
+    }
+    try {
+        $cache = array_map('intval', $pdo->query("SELECT id FROM monitors WHERE archived_at IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (PDOException $e) {
+        $cache = [];
+    }
+    return $cache;
+}
+
+/** [sql, params] that leaves archived monitors out of a list or a summary. */
+function bk_active_monitor_sql(PDO $pdo, string $column): array {
+    return bk_exclude_ids_sql(bk_archived_monitor_ids($pdo), $column);
+}
+
+/**
+ * The scope of a list or a summary: the monitors the viewer may see, without
+ * the archived ones. A detail by id keeps bk_monitor_scope_sql, so an archived
+ * monitor stays readable.
+ */
+function bk_list_scope_sql(PDO $pdo, ?array $visible, string $column): array {
+    [$scope, $params] = bk_monitor_scope_sql($visible, $column);
+    [$active, $active_params] = bk_active_monitor_sql($pdo, $column);
+    return ["({$scope} AND {$active})", array_merge($params, $active_params)];
+}
+
+function bk_monitor_is_archived(PDO $pdo, int $monitor_id): bool {
+    return in_array($monitor_id, bk_archived_monitor_ids($pdo), true);
+}
+
+/** Stops a change to an archived monitor: it is read-only until restored. */
+function bk_refuse_archived_write(PDO $pdo, int $monitor_id): void {
+    if ($monitor_id > 0 && bk_monitor_is_archived($pdo, $monitor_id)) {
+        http_response_code(409);
+        echo json_encode(['error' => 'Monitor je archivovaný a nejde upravovat. Nejdřív ho obnovte.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+/** An agent of an archived monitor: its report is refused, not stored. */
+function bk_agent_refuse_archived(): void {
+    http_response_code(403);
+    echo json_encode([
+        'success' => false,
+        'archived' => true,
+        'message' => 'Monitor je archivovaný, hlášení se neukládá. Obnovte ho v aplikaci, nebo agenta na tomto zařízení odinstalujte.',
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/** "Agent routeru" or "Agent serveru" - an OpenWrt monitor is not a VPS. */
+function bk_agent_label(string $monitor_type): string {
+    return strtolower($monitor_type) === 'openwrt' ? 'Agent routeru' : 'Agent serveru';
+}
+
+/** What to check when an agent stops reporting, in the words of its device. */
+function bk_agent_silence_hint(string $monitor_type): string {
+    return strtolower($monitor_type) === 'openwrt'
+        ? 'Zkontrolujte, zda router běží, má připojení k internetu a agent je zařazený v cronu routeru.'
+        : 'Zkontrolujte, zda na serveru běží cron úloha agenta, server je zapnutý a síť ani firewall neblokují spojení.';
 }
 
 /**

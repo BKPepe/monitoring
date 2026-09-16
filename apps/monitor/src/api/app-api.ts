@@ -26,6 +26,8 @@ export interface ApiMonitor {
   category: string | null;
   assetId: number | null;
   assetName: string | null;
+  /** When the monitor was archived (ISO). Missing or null = a live monitor. */
+  archivedAt?: string | null;
   lastCheck: string | null;
   lastStatusChange: string | null;
   responseMs: number | null;
@@ -247,6 +249,18 @@ export const appApi = {
 
   getMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors').then((r) => r.monitors),
 
+  /** Archived monitors: read-only history, left out of every live list. */
+  getArchivedMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors&archived=1').then((r) => r.monitors),
+
+  archiveMonitor: (id: number) => mutate<{ success: true; incidentsClosed: number }>('archive_monitor', { id }),
+
+  unarchiveMonitor: (id: number) => mutate<{ success: true }>('unarchive_monitor', { id }),
+
+  deleteMonitor: (id: number) => mutate<{ success: true }>('delete_monitor', { id }),
+
+  /** The agent key and this server's addresses for installing one monitor's agent (admin only). */
+  getAgentInstallInfo: (monitorId: number) => request<AgentInstallInfo>(`agent_install_info&monitor_id=${monitorId}`),
+
   getUsers: () => request<{ users: ApiUser[] }>('users').then((r) => r.users),
 
   saveUser: (user: {
@@ -273,6 +287,16 @@ export const appApi = {
 
   deleteAnnotation: (id: number) => mutate<{ success: true }>('delete_annotation', { id }),
 };
+
+/** What `action=agent_install_info` returns: the key and the addresses on this server. */
+export interface AgentInstallInfo {
+  monitorId: number;
+  name: string;
+  type: string;
+  agentKey: string;
+  apiUrl: string;
+  files: { openwrt: string; shell: string; python: string; windows: string; docker: string };
+}
 
 /** One chart note as `action=annotations` returns it. */
 export interface ChartAnnotation {

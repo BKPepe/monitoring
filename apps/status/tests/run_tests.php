@@ -50,6 +50,9 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_public_incident_update',
     'bk_wifi_band_totals',
     'bk_wifi_count',
+    'bk_exclude_ids_sql',
+    'bk_agent_label',
+    'bk_agent_silence_hint',
     'bk_sync_session_account',
 ]);
 
@@ -783,6 +786,21 @@ if (function_exists('bk_wifi_band_totals')) {
     check('záporný počet ani víc schopných než známých se neuloží', [$wb_bad['wifi_clients_24g'], $wb_bad['wifi_6e_capable_24g'], $wb_bad['wifi_6e_known_24g']], [null, null, null]);
     check('bez rádií je všechno neznámé', array_values(array_unique(array_values(bk_wifi_band_totals(null)), SORT_REGULAR)), [null]);
     check('pravdivostní hodnota ani desetinné číslo nejsou počet', [bk_wifi_count(true), bk_wifi_count(2.5), bk_wifi_count('7')], [null, null, 7]);
+}
+
+if (function_exists('bk_exclude_ids_sql')) {
+    check('bez archivovaných monitorů se nic nefiltruje', bk_exclude_ids_sql([], 'id'), ['1=1', []]);
+    check('archivované id se vynechá, jednou a jen kladné', bk_exclude_ids_sql([5, '7', 5, 0, -2], 'm.id'), ['m.id NOT IN (?,?)', [5, 7]]);
+    $bk_bad_column = false;
+    try {
+        bk_exclude_ids_sql([1], 'id; DROP TABLE monitors');
+    } catch (InvalidArgumentException $e) {
+        $bk_bad_column = true;
+    }
+    check_true('neplatný název sloupce se odmítne', $bk_bad_column);
+    check('router má agenta routeru', bk_agent_label('openwrt'), 'Agent routeru');
+    check('server má agenta serveru', bk_agent_label('vps'), 'Agent serveru');
+    check_false('rada u routeru nemluví o VPS', str_contains(bk_agent_silence_hint('OpenWrt'), 'VPS'));
 }
 
 $failed = bk_test_report('čisté funkce');

@@ -23,6 +23,7 @@ $stmt_stats = $pdo->query("
         SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) as maintenance_count,
         MAX(last_checked) as last_checked
     FROM monitors
+    WHERE archived_at IS NULL
 ");
 $stats = $stmt_stats->fetch();
 
@@ -40,9 +41,10 @@ $last_checked_global = $stats['last_checked'] ?? null;
 // přestavby celé té smyčky.
 $stmt_monitors = $pdo->query("
     SELECT m.*, a.name AS asset_name,
-           (SELECT COUNT(*) FROM monitors m2 WHERE m2.asset_id = m.asset_id) AS asset_member_count
+           (SELECT COUNT(*) FROM monitors m2 WHERE m2.asset_id = m.asset_id AND m2.archived_at IS NULL) AS asset_member_count
     FROM monitors m
     LEFT JOIN assets a ON a.id = m.asset_id
+    WHERE m.archived_at IS NULL
     ORDER BY m.category, COALESCE(a.name, m.name), m.name
 ");
 $monitors = $stmt_monitors->fetchAll();
@@ -214,8 +216,9 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
         SELECT l.*, m.name, m.type, m.target
         FROM monitor_logs l
         JOIN monitors m ON l.monitor_id = m.id
-        WHERE l.status = 'down'
-           OR (l.status = 'up' AND l.error_message IS NOT NULL AND l.error_message != '')
+        WHERE m.archived_at IS NULL
+          AND (l.status = 'down'
+           OR (l.status = 'up' AND l.error_message IS NOT NULL AND l.error_message != ''))
         ORDER BY l.checked_at DESC
         LIMIT 200
     ");
@@ -509,7 +512,7 @@ $portal_url = trim(get_setting('portal_url'));
         // Recent Events - napříč celou flotilou monitorů (Level 1 Dashboard).
         // Čte se přímo z monitor_events, ne přes plný Insights výpočet pro každý
         // monitor - to by na hlavní stránce znamenalo N+1 dotazů navíc.
-        $stmt_fleet_events = $pdo->query("SELECT me.monitor_id, COALESCE(m.name, me.monitor_name) AS monitor_name, me.monitor_type, me.event_type, me.description, me.occurred_at FROM monitor_events me LEFT JOIN monitors m ON m.id = me.monitor_id ORDER BY me.occurred_at DESC LIMIT 8");
+        $stmt_fleet_events = $pdo->query("SELECT me.monitor_id, COALESCE(m.name, me.monitor_name) AS monitor_name, me.monitor_type, me.event_type, me.description, me.occurred_at FROM monitor_events me LEFT JOIN monitors m ON m.id = me.monitor_id WHERE m.id IS NULL OR m.archived_at IS NULL ORDER BY me.occurred_at DESC LIMIT 8");
         $fleet_events = $stmt_fleet_events->fetchAll();
         ?>
         <?php if (!empty($fleet_events)): ?>

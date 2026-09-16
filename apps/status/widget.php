@@ -9,7 +9,7 @@ require_once __DIR__ . '/functions.php';
 $mid = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $monitor = null;
 if ($mid > 0) {
-    $stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ? LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ? AND archived_at IS NULL LIMIT 1");
     $stmt->execute([$mid]);
     $monitor = $stmt->fetch();
 }

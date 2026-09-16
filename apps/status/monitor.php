@@ -84,7 +84,7 @@ $iface_traffic_stats = bk_get_interface_traffic_stats($pdo, $monitor_id);
 // Asset siblings
 $asset_siblings = [];
 if (!empty($monitor['asset_id'])) {
-    $stmt_sib = $pdo->prepare("SELECT id, name, type, status FROM monitors WHERE asset_id = ? AND id != ?");
+    $stmt_sib = $pdo->prepare("SELECT id, name, type, status FROM monitors WHERE asset_id = ? AND id != ? AND archived_at IS NULL");
     $stmt_sib->execute([$monitor['asset_id'], $monitor_id]);
     $asset_siblings = $stmt_sib->fetchAll();
 }

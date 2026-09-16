@@ -26,7 +26,7 @@ export function ServicesPage() {
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+    unknown: t('status.unknown', 'Neznámý'),
   };
   const { session } = useSession();
   const [monitors, setMonitors] = React.useState<ApiMonitor[]>([]);

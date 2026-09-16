@@ -429,7 +429,7 @@ export function DashboardPage() {
             {/* Silent agents had no tab - they were invisible in every filter but "all". */}
             {(monitors.some((m) => m.status === 'unknown') || filter === 'unknown') && (
               <TabsTrigger value="unknown">
-                {t('status.unknown', 'Neznámý (agent mlčí)')} ({monitors.filter((m) => m.status === 'unknown').length})
+                {t('status.unknown', 'Neznámý')} ({monitors.filter((m) => m.status === 'unknown').length})
               </TabsTrigger>
             )}
           </TabsList>
@@ -550,7 +550,7 @@ export function DashboardPage() {
               variant: 'maintenance',
             },
             {
-              label: t('status.unknown', 'Neznámý (agent mlčí)'),
+              label: t('status.unknown', 'Neznámý'),
               value: monitors.filter((m) => m.status === 'unknown').length,
               variant: 'unknown',
             },
@@ -848,7 +848,7 @@ function MonitorTable({
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+    unknown: t('status.unknown', 'Neznámý'),
   };
 
   if (rows.length === 0) {

@@ -2012,6 +2012,88 @@ check('metric_series zná podporu 6E na 2.4 GHz', $wifi_s_code, 200);
 check_true('a vrátí změřenou hodnotu', in_array(2.0, array_map(fn ($p) => (float)$p[1], $wifi_s['points'] ?? []), true));
 $pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$wifi_before_id]);
 
+// --- First report after a reboot: the load is not measured yet ---------------------
+//
+// Agents send cpu/ram/hdd as null on their first run and after a reboot. The
+// server answered 400, so a new router's first report ended in an error.
+check('hlášení s neznámým CPU, RAM a diskem agent přijme', $post_agent(['cpu' => null, 'ram' => null, 'hdd' => null]), 200);
+$null_row = $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+check('neznámé hodnoty zůstanou NULL, ne nula', [$null_row['cpu_usage'] ?? 'chybí', $null_row['ram_usage'] ?? 'chybí', $null_row['hdd_usage'] ?? 'chybí'], ['chybí', 'chybí', 'chybí']);
+check_true('a řádek se opravdu uložil', array_key_exists('cpu_usage', $null_row) && $null_row['cpu_usage'] === null);
+check('hlášení bez klíče se dál odmítne', $post_agent(['agent_key' => '']), 400);
+
+// --- Archive: a monitor gone for good ------------------------------------------------
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (97, 'Starý router', 'openwrt', 'Turris - domov', 'down', 'Síť', 'archive-test-key-97')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (97, 'down', 'Agent routeru neodpovídá', NOW())");
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Starý router', 'major', 'investigating', 97)");
+$arc_incident = (int)$pdo->lastInsertId();
+$pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (97, 'reboot_router', 'pending')");
+$arc_ids = fn (?array $list): array => array_map(fn ($m) => (int)$m['id'], $list['monitors'] ?? []);
+[, $arc_status_before] = api_get_auth($base, 'action=public_status', $cookie_jar);
+[, $arc_live_before] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_true('před archivací je monitor v seznamu', in_array(97, $arc_ids($arc_live_before), true));
+
+[$arc_code, $arc_res] = api_post($base, 'action=archive_monitor', ['id' => 97], $cookie_jar);
+check('admin monitor archivuje', $arc_code, 200);
+check_true('archivace zapíše čas', $pdo->query("SELECT archived_at FROM monitors WHERE id = 97")->fetchColumn() !== null);
+check('otevřený incident se při archivaci uzavře', $pdo->query("SELECT status FROM incidents WHERE id = {$arc_incident}")->fetchColumn(), 'resolved');
+check('a server řekne kolik jich uzavřel', $arc_res['incidentsClosed'] ?? null, 1);
+check('čekající vzdálená akce selže', $pdo->query("SELECT status FROM agent_actions WHERE monitor_id = 97")->fetchColumn(), 'failed');
+[$arc_again] = api_post($base, 'action=archive_monitor', ['id' => 97], $cookie_jar);
+check('archivovaný monitor znovu archivovat nejde', $arc_again, 409);
+[$arc_get] = api_get_auth($base, 'action=archive_monitor', $cookie_jar);
+check('archivace přes GET se odmítne', $arc_get, 405);
+
+[, $arc_live] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_false('archivovaný monitor zmizí ze seznamu', in_array(97, $arc_ids($arc_live), true));
+[, $arc_list] = api_get_auth($base, 'action=monitors&archived=1', $cookie_jar);
+check('archiv vypíše jen archivované monitory', $arc_ids($arc_list), [97]);
+check_true('i s časem archivace', !empty($arc_list['monitors'][0]['archivedAt'] ?? null));
+[, $arc_public] = api_get($base, 'action=monitors&scope=public&archived=1');
+check_false('veřejný pohled archiv neukáže', in_array(97, $arc_ids($arc_public), true));
+[, $arc_status] = api_get_auth($base, 'action=public_status', $cookie_jar);
+check('souhrn archivovaný monitor nepočítá', (int)($arc_status['totalMonitors'] ?? 0), (int)($arc_status_before['totalMonitors'] ?? 0) - 1);
+[, $arc_incidents] = api_get_auth($base, 'action=incidents', $cookie_jar);
+check_false('probíhající výpadky ho nevypíšou', in_array(97, array_map(fn ($i) => (int)($i['monitor_id'] ?? 0), $arc_incidents['incidents'] ?? []), true));
+[, $arc_windows] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+check_false('dostupnost po oknech ho vynechá', isset($arc_windows['windows']['97']) || isset($arc_windows['windows'][97]));
+[$arc_history_code, $arc_history] = api_get_auth($base, 'action=events&monitor_id=97&limit=5', $cookie_jar);
+check('historie archivovaného monitoru zůstane čitelná', $arc_history_code, 200);
+check_true('a nese jeho záznamy', count($arc_history['events'] ?? []) > 0);
+
+[$arc_save] = api_post($base, 'action=save_monitor', ['id' => 97, 'name' => 'Přejmenovaný', 'type' => 'openwrt'], $cookie_jar);
+check('archivovaný monitor nejde upravit', $arc_save, 409);
+check('jméno zůstane', $pdo->query("SELECT name FROM monitors WHERE id = 97")->fetchColumn(), 'Starý router');
+[$arc_maint] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [97], 'maintenance' => true], $cookie_jar);
+check('ani mu nejde zapnout údržbu', $arc_maint, 409);
+[$arc_info] = api_get_auth($base, 'action=agent_install_info&monitor_id=97', $cookie_jar);
+check('instalační údaje archivovaného monitoru se nevydají', $arc_info, 409);
+$arc_metrics_before = (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 97")->fetchColumn();
+check('hlášení agenta archivovaného monitoru se odmítne', $post_agent(['agent_key' => 'archive-test-key-97']), 403);
+check('a nic se z něj neuloží', (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 97")->fetchColumn(), $arc_metrics_before);
+
+[$arc_restore] = api_post($base, 'action=unarchive_monitor', ['id' => 97], $cookie_jar);
+check('admin monitor obnoví', $arc_restore, 200);
+[, $arc_live_after] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_true('obnovený monitor je zpět v seznamu', in_array(97, $arc_ids($arc_live_after), true));
+check('a jeho stav je neznámý do příští kontroly', $pdo->query("SELECT status FROM monitors WHERE id = 97")->fetchColumn(), 'unknown');
+check('hlášení obnoveného monitoru se zase uloží', $post_agent(['agent_key' => 'archive-test-key-97']), 200);
+check_true('archivace i obnovení jsou v auditu', (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action IN ('monitor_archived', 'monitor_restored') AND target_id = 97")->fetchColumn() === 2);
+$pdo->exec("DELETE FROM monitors WHERE id = 97");
+
+// --- Install details for an agent ------------------------------------------------------
+//
+// The app never showed the key, so an agent installed by its instructions
+// stopped at "AGENT_KEY is not set".
+[$ai_code, $ai] = api_get_auth($base, 'action=agent_install_info&monitor_id=2', $cookie_jar);
+check('admin dostane údaje pro instalaci agenta', $ai_code, 200);
+check('klíč je ten z databáze', $ai['agentKey'] ?? null, $pdo->query("SELECT agent_key FROM monitors WHERE id = 2")->fetchColumn());
+check_true('adresa API míří na agent_api.php', str_ends_with((string)($ai['apiUrl'] ?? ''), '/agent_api.php'));
+check_true('a nabídne skript routeru', str_ends_with((string)($ai['files']['openwrt'] ?? ''), '/agent_openwrt.sh'));
+check_true('čtení klíče se zapíše do auditu', (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'agent_key_viewed'")->fetchColumn() > 0);
+[$ai_anon] = api_get($base, 'action=agent_install_info&monitor_id=2');
+check('anonym klíč agenta nedostane', $ai_anon, 403);
+
 // --- Threshold hysteresis -----------------------------------------------------
 //
 // The CPU alert clears five points below the threshold, and a latch set under

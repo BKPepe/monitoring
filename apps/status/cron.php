@@ -63,7 +63,8 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
 }
 
 // Load all monitors
-$stmt = $pdo->query("SELECT * FROM monitors");
+// Archived monitors are never checked and never alert.
+$stmt = $pdo->query("SELECT * FROM monitors WHERE archived_at IS NULL");
 $monitors = $stmt->fetchAll();
 
 // last_details is shared with agent_api.php, which rewrites it on every agent
@@ -115,9 +116,9 @@ foreach ($monitors as $monitor) {
 
                 $mins_since = round($seconds_since_report / 60);
                 $last_seen_str = date('d.m.Y H:i', intval($agent_last_seen));
-                $error_msg_agent = "Agent monitoru '{$name}' nehlásí žádná data déle než {$offline_timeout_mins} minut. "
+                $error_msg_agent = bk_agent_label((string)$type) . " monitoru '{$name}' nehlásí žádná data déle než {$offline_timeout_mins} minut. "
                     . "Poslední hlášení: {$last_seen_str} (před {$mins_since} min). "
-                    . "Možné příčiny: cron úloha agenta na VPS neběží, VPS je vypnuté/restartuje se, nebo je nedostupná síť/firewall blokuje spojení.";
+                    . bk_agent_silence_hint((string)$type);
                 trigger_notifications($pdo, $monitor, 'agent_offline', $error_msg_agent);
                 log_monitor_event($pdo, $id, $name, $type, 'agent_disconnected', "Agent přestal hlásit data (poslední hlášení před {$mins_since} min)");
             }
@@ -272,8 +273,8 @@ foreach ($monitors as $monitor) {
                 // The agent is not responding
                 $new_status = 'down';
                 $last_report_str = $last_report > 0 ? date('d.m.Y H:i', intval($last_report)) : 'nikdy';
-                $error_msg = "VPS Agent neodpovídá déle než {$offline_timeout_mins} minut (poslední hlášení: {$last_report_str}). "
-                    . "Zkontrolujte, zda na VPS běží cron úloha agenta a zda je server dostupný.";
+                $error_msg = bk_agent_label((string)$type) . " neodpovídá déle než {$offline_timeout_mins} minut (poslední hlášení: {$last_report_str}). "
+                    . bk_agent_silence_hint((string)$type);
                 
                 // Update monitoru
                 $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_status_change = NOW() WHERE id = ?");

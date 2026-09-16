@@ -13,6 +13,8 @@ import {
   Settings2,
   ShieldCheck,
   Gamepad2,
+  Archive,
+  ArchiveRestore,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge, StatusDot, statusVariant } from '@/components/ui/badge';
@@ -20,6 +22,7 @@ import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
 import { MaintenanceToggle } from '@/components/maintenance-toggle';
+import { useSession } from '@/api/use-session';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
 import { ProcessTop } from '@/components/process-top';
 import {
@@ -97,6 +100,8 @@ interface AssetDetail {
   /** Remote Actions - admin session only (the API omits the fields otherwise). */
   remoteActionsEnabled: boolean;
   allowedActions: string[];
+  /** Archived: read-only history, out of every live list. */
+  archived: boolean;
   monitoredProcesses: string | null;
   sslCert?: { days_remaining?: number | null; issuer?: string | null; valid_to?: string | null } | null;
   events: TimelineEvent[];
@@ -166,12 +171,18 @@ export function AssetDetailPage() {
 
     appApi
       .getMonitors()
-      .then((rows) => {
+      .then(async (rows) => {
         if (!active) return;
         const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
-        const match =
+        let match: ApiMonitor | undefined =
           list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
           list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
+        if (!match) {
+          // An archived monitor is out of the live list; its history stays readable here.
+          const archivedList = await appApi.getArchivedMonitors().catch(() => [] as ApiMonitor[]);
+          if (!active) return;
+          match = archivedList.find((m) => Number(m.id) === idNum);
+        }
         // Monitors sharing the asset - the agent's own checks. The card that
         // lists them had a dead main branch: `related` was hardcoded to an
         // empty array, so it always fell through to the ports fallback.
@@ -381,14 +392,24 @@ export function AssetDetailPage() {
         {/* One click, not "open the form, tick a box, save the whole monitor" -
             which is what a maintenance window used to cost at the moment speed
             matters most. */}
-        <MaintenanceToggle
-          monitorId={Number(asset.id)}
-          active={rawMonitor?.maintenance === true}
-          onChanged={() => setReloadToken((n) => n + 1)}
-        />
+        {!asset.archived && (
+          <MaintenanceToggle
+            monitorId={Number(asset.id)}
+            active={rawMonitor?.maintenance === true}
+            onChanged={() => setReloadToken((n) => n + 1)}
+          />
+        )}
       </div>
 
-      <CollectionIssuesBanner monitors={rawMonitor ? [rawMonitor] : []} />
+      {asset.archived && (
+        <ArchivedNotice
+          monitorId={Number(asset.id)}
+          archivedAt={rawMonitor?.archivedAt ?? null}
+          onRestored={() => setReloadToken((n) => n + 1)}
+        />
+      )}
+
+      <CollectionIssuesBanner monitors={rawMonitor && !asset.archived ? [rawMonitor] : []} />
 
       <Tabs defaultValue="overview" className="space-y-6">
         {/* Sticky under the header (h-16): on a long detail the tabs and
@@ -792,6 +813,7 @@ export function AssetDetailPage() {
 
 function Hero({ asset }: { asset: AssetDetail }) {
   const { t } = useLanguage();
+  const { isAdmin } = useSession();
   const upperKind = (asset.kind || '').toUpperCase();
   const Icon =
     upperKind === 'ROUTER' || asset.id === 5
@@ -812,7 +834,7 @@ function Hero({ asset }: { asset: AssetDetail }) {
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+    unknown: t('status.unknown', 'Neznámý'),
   };
 
   return (
@@ -833,17 +855,39 @@ function Hero({ asset }: { asset: AssetDetail }) {
       </div>
 
       <div className="flex items-center gap-2">
-        {asset.remoteActionsEnabled && asset.allowedActions.length > 0 && <ActionsMenu asset={asset} />}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            window.location.href = `/app/infrastructure?edit=${asset.id}`;
-          }}
-          title={t('asset.edit_monitor_title', 'Upravit nastavení monitoru')}
-        >
-          <Pencil className="size-4" /> {t('asset.edit_monitor', 'Upravit monitor')}
-        </Button>
+        {!asset.archived && asset.remoteActionsEnabled && asset.allowedActions.length > 0 && (
+          <ActionsMenu asset={asset} />
+        )}
+        {/* Remote Actions are switched on in the monitor's settings. Without this
+            the detail simply had no Actions button and gave no hint why. */}
+        {!asset.archived &&
+          isAdmin &&
+          (upperKind === 'ROUTER' || upperKind === 'OPENWRT') &&
+          !asset.remoteActionsEnabled && (
+            <Button variant="outline" size="sm" asChild>
+              <a
+                href={`/app/infrastructure?edit=${asset.id}&tab=advanced`}
+                title={t(
+                  'asset.ra_setup_title',
+                  'Vzdálené akce jsou pro tento router vypnuté. Zapnete je v nastavení monitoru, záložka Rozšíření & Agent.'
+                )}
+              >
+                <Settings2 className="size-4" /> {t('asset.ra_setup', 'Nastavit vzdálené akce')}
+              </a>
+            </Button>
+          )}
+        {!asset.archived && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              window.location.href = `/app/infrastructure?edit=${asset.id}`;
+            }}
+            title={t('asset.edit_monitor_title', 'Upravit nastavení monitoru')}
+          >
+            <Pencil className="size-4" /> {t('asset.edit_monitor', 'Upravit monitor')}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -1195,7 +1239,7 @@ function OverviewTab({
                 warning: t('common.warning', 'Varování'),
                 paused: t('common.paused', 'Pozastaveno'),
                 maintenance: t('common.maintenance', 'Údržba'),
-                unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+                unknown: t('status.unknown', 'Neznámý'),
               };
               return (
                 <div
@@ -2398,6 +2442,8 @@ function mapInsightsTimeline(
     wan_restored: t('asset.tl_wan_restored', 'Primární připojení (WAN) obnoveno'),
     monitor_added: t('asset.tl_monitor_added', 'Monitor přidán'),
     monitor_updated: t('asset.tl_monitor_updated', 'Monitor upraven'),
+    monitor_archived: t('asset.tl_monitor_archived', 'Monitor archivován'),
+    monitor_restored: t('asset.tl_monitor_restored', 'Monitor obnoven z archivu'),
     // The server logs twenty-three types; the map knew thirteen, so the rest
     // arrived with a raw key as their title and a neutral severity - an agent
     // that stopped reporting looked like a routine note.
@@ -2761,6 +2807,7 @@ function buildDynamicAsset(
     thresholds: m.effectiveThresholds,
     rawDetails: m.details && typeof m.details === 'object' ? m.details : {},
     remoteActionsEnabled: Boolean(m.remoteActionsEnabled),
+    archived: Boolean(m.archivedAt),
     allowedActions: Array.isArray(m.allowedActions) ? m.allowedActions : [],
     monitoredProcesses: m.monitoredProcesses ?? null,
     sslCert: (() => {
@@ -2799,4 +2846,68 @@ function buildDynamicAsset(
       detail: [s.target, s.port ? `:${s.port}` : null].filter(Boolean).join('') || (s.hostname ?? ''),
     })),
   };
+}
+
+/** The detail of an archived monitor: history only, with the way back for an administrator. */
+function ArchivedNotice({
+  monitorId,
+  archivedAt,
+  onRestored,
+}: {
+  monitorId: number;
+  archivedAt: string | null;
+  onRestored: () => void;
+}) {
+  const { t, lang } = useLanguage();
+  const { isAdmin } = useSession();
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const restore = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await appApi.unarchiveMonitor(monitorId);
+      onRestored();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t('asset.archived_restore_failed', 'Obnovení z archivu se nepodařilo.')
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const when = archivedAt ? new Date(archivedAt).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB') : null;
+
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 p-3 text-xs"
+    >
+      <Archive className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <p className="min-w-0 flex-1">
+        <strong>
+          {when
+            ? t('asset.archived_title_when', { when }, `Archivováno ${when}.`)
+            : t('asset.archived_title', 'Archivovaný monitor.')}
+        </strong>{' '}
+        {t(
+          'asset.archived_desc',
+          'Nekontroluje se, neposílá upozornění a hlášení jeho agenta se odmítají. Historie zůstává k nahlédnutí.'
+        )}
+      </p>
+      {isAdmin && (
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => void restore()} className="gap-1.5">
+          <ArchiveRestore className="size-4" aria-hidden="true" />
+          {busy ? t('asset.archived_restoring', 'Obnovuji…') : t('asset.archived_restore', 'Obnovit z archivu')}
+        </Button>
+      )}
+      {error && (
+        <p role="alert" className="basis-full text-down">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }

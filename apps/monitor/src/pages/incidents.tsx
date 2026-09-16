@@ -10,6 +10,7 @@ import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { EventsHistoryTable } from '@/components/events-history-table';
 import { LoadingState, ErrorState } from '@/components/ui/states';
+import { pluralForm } from '@/lib/plural';
 
 export function IncidentsPage() {
   const { t, lang } = useLanguage();
@@ -118,8 +119,6 @@ export function IncidentsPage() {
     };
   }, [publicData]);
 
-  const activeTargetOutages = targetMonitors.filter((m) => m.status === 'down' || m.status === 'warning');
-
   // A resolved incident does not belong under "Ongoing outages".
   //
   // The card counted only monitors that are down right now in its heading, but
@@ -130,8 +129,123 @@ export function IncidentsPage() {
   const ongoingIncidents = manualIncidents.filter((inc) => inc.status !== 'resolved');
   const resolvedIncidents = manualIncidents.filter((inc) => inc.status === 'resolved');
 
+  // A live outage and the incident the lifecycle opened for it are one story.
+  // Listed twice they looked like two outages, the count said 3 for one router
+  // (the down monitor, its outage row and its incident), and the notes and
+  // actions sat on the second card while the first had only "acknowledge".
+  const incidentById = new Map<number, any>(manualIncidents.map((inc) => [inc.id, inc]));
+  const linkedIncidentIds = new Set(dbIncidents.map((inc) => inc.incidentId).filter((id) => id != null));
+  const standaloneIncidents = ongoingIncidents.filter((inc) => !linkedIncidentIds.has(inc.id));
+
   // The count in the heading must match what is listed below it.
-  const ongoingCount = activeTargetOutages.length + dbIncidents.length + ongoingIncidents.length;
+  const ongoingCount = dbIncidents.length + standaloneIncidents.length;
+  const activeBadge = {
+    one: t('incidents.active_badge_one', { count: ongoingCount }, `${ongoingCount} aktivní výpadek`),
+    few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} aktivní výpadky`),
+    other: t('incidents.active_badge_other', { count: ongoingCount }, `${ongoingCount} aktivních výpadků`),
+  }[pluralForm(lang, ongoingCount)];
+
+  const toggleIncident = (inc: any) => {
+    setExpandedId(expandedId === inc.id ? null : inc.id);
+    setNoteText('');
+    setPostmortemText(inc.postmortem ?? '');
+    setActionError(null);
+  };
+
+  const renderIncidentDetail = (inc: any) => {
+    const open = inc.status !== 'resolved';
+    return (
+      <div className="mt-3 space-y-3 border-t border-border pt-3">
+        {/* Timeline of all steps - automatic and manual alike. */}
+        <ol className="space-y-1.5">
+          {(inc.updates ?? []).map((u: any, i: number) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              <span
+                className={`mt-1 size-1.5 shrink-0 rounded-full ${u.status === 'resolved' ? 'bg-up' : 'bg-warning'}`}
+              />
+              <span className="text-muted-foreground font-mono shrink-0">{u.at}</span>
+              <span className="text-muted-foreground shrink-0">[{u.status}]</span>
+              <span className="min-w-0">{u.message}</span>
+            </li>
+          ))}
+        </ol>
+
+        {inc.postmortem && (
+          <div className="rounded-md bg-secondary/40 border border-border p-3">
+            <p className="text-xs font-bold mb-1">{t('incidents.postmortem', 'Postmortem')}</p>
+            <p className="text-xs whitespace-pre-wrap">{inc.postmortem}</p>
+          </div>
+        )}
+
+        {actionError && <ErrorState size="inline" message={actionError} />}
+
+        {isAdmin && (
+          <div className="space-y-2">
+            {open && (
+              <div className="flex flex-wrap items-center gap-2">
+                {!inc.acknowledgedBy && (
+                  <button
+                    type="button"
+                    disabled={actionBusy}
+                    onClick={() => incidentAction(inc.id, 'ack')}
+                    className="rounded-md bg-warning text-warning-foreground px-3 py-1.5 text-xs font-semibold hover:bg-warning/90 disabled:opacity-50"
+                  >
+                    {t('incidents.ack_btn', 'Převzít incident')}
+                  </button>
+                )}
+                <input
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  placeholder={t('incidents.note_placeholder', 'Poznámka do timeline…')}
+                  className="min-w-40 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                />
+                <button
+                  type="button"
+                  disabled={actionBusy || !noteText.trim()}
+                  onClick={async () => {
+                    if (await incidentAction(inc.id, 'note', { message: noteText })) setNoteText('');
+                  }}
+                  className="rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 disabled:opacity-50"
+                >
+                  {t('incidents.note_btn', 'Přidat poznámku')}
+                </button>
+                <button
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={() => incidentAction(inc.id, 'resolve', { note: noteText })}
+                  className="rounded-md bg-up text-up-foreground px-3 py-1.5 text-xs font-semibold hover:bg-up/90 disabled:opacity-50"
+                >
+                  {t('incidents.resolve_btn', 'Uzavřít incident')}
+                </button>
+              </div>
+            )}
+
+            {/* A postmortem makes sense mostly after resolution, but can be written anytime. */}
+            <div className="flex flex-col gap-1.5">
+              <textarea
+                value={postmortemText}
+                onChange={(e) => setPostmortemText(e.target.value)}
+                placeholder={t(
+                  'incidents.postmortem_placeholder',
+                  'Postmortem: co se stalo, proč, a co uděláme jinak…'
+                )}
+                rows={3}
+                className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+              />
+              <button
+                type="button"
+                disabled={actionBusy || postmortemText === (inc.postmortem ?? '')}
+                onClick={() => incidentAction(inc.id, 'postmortem', { postmortem: postmortemText })}
+                className="self-end rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 disabled:opacity-50"
+              >
+                {t('incidents.postmortem_save', 'Uložit postmortem')}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const handleCreateIncident = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -292,9 +406,7 @@ export function IncidentsPage() {
                 </h3>
               </div>
               <Badge variant={ongoingCount > 0 ? 'down' : 'up'}>
-                {ongoingCount > 0
-                  ? `${ongoingCount} ${t('incidents.active_badge', 'Aktivní výpadek')}`
-                  : t('status.healthy', 'Všechny služby OK')}
+                {ongoingCount > 0 ? activeBadge : t('status.healthy', 'Všechny služby OK')}
               </Badge>
             </div>
 
@@ -310,80 +422,103 @@ export function IncidentsPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {dbIncidents.map((inc) => (
-                  <div
-                    key={inc.id}
-                    className="p-4 rounded-lg bg-down/10 border border-down/30 flex items-start justify-between gap-4"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`size-2.5 rounded-full ${inc.status === 'open' ? 'bg-down animate-pulse' : 'bg-warning'}`}
-                        />
-                        <h4 className="font-bold text-sm text-foreground">{inc.monitor_name}</h4>
-                        <Badge variant={inc.severity === 'down' ? 'down' : 'warning'}>{inc.type}</Badge>
-                      </div>
-                      <p className="text-xs font-mono text-muted-foreground">
-                        {t('common.target', 'Cíl')}: {inc.target}
-                      </p>
-                      <p className="text-xs text-down font-medium">{inc.reason}</p>
-                      <div className="flex items-center gap-3 pt-1 text-2xs font-mono text-muted-foreground flex-wrap">
-                        <span>
-                          {t('incidents.outage_start', 'Začátek výpadku')}:{' '}
-                          <strong className="text-foreground">{inc.started_at}</strong>
-                        </span>
-                        {inc.resolved_at && (
-                          <span>
-                            {t('incidents.outage_end', 'Konec')}: <strong className="text-up">{inc.resolved_at}</strong>
-                          </span>
-                        )}
-                        <span className="px-2 py-0.5 rounded bg-muted border border-border text-warning font-bold">
-                          {t('incidents.duration', 'Doba trvání')}: {inc.duration_text}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 flex flex-col items-end gap-1.5">
-                      <Link
-                        to={`/infrastructure/${inc.monitor_id}`}
-                        className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
-                      >
-                        {t('incidents.view_outage', 'Detail výpadku')} <ArrowRight className="size-3" />
-                      </Link>
-                      {/* Escalation used to happen silently: cron stamps it and
-                          nothing showed that the outage had already gone past
-                          whoever was meant to pick it up. */}
-                      {inc.escalatedAt && (
-                        <span className="text-down text-2xs font-semibold">
-                          {t(
-                            'incidents.escalated_at',
-                            { when: new Date(inc.escalatedAt).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB') },
-                            `Eskalováno ${new Date(inc.escalatedAt).toLocaleString('cs-CZ')}`
+                {dbIncidents.map((inc) => {
+                  const linked = inc.incidentId != null ? incidentById.get(inc.incidentId) : undefined;
+                  const expanded = linked != null && expandedId === linked.id;
+                  return (
+                    <div key={inc.id} className="p-4 rounded-lg bg-down/10 border border-down/30">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`size-2.5 rounded-full ${inc.status === 'open' ? 'bg-down animate-pulse' : 'bg-warning'}`}
+                            />
+                            <h4 className="font-bold text-sm text-foreground">{inc.monitor_name}</h4>
+                            <Badge variant={inc.severity === 'down' ? 'down' : 'warning'}>{inc.type}</Badge>
+                          </div>
+                          <p className="text-xs font-mono text-muted-foreground">
+                            {t('common.target', 'Cíl')}: {inc.target}
+                          </p>
+                          <p className="text-xs text-down font-medium">{inc.reason}</p>
+                          <div className="flex items-center gap-3 pt-1 text-2xs font-mono text-muted-foreground flex-wrap">
+                            <span>
+                              {t('incidents.outage_start', 'Začátek výpadku')}:{' '}
+                              <strong className="text-foreground">{inc.started_at}</strong>
+                            </span>
+                            {inc.resolved_at && (
+                              <span>
+                                {t('incidents.outage_end', 'Konec')}:{' '}
+                                <strong className="text-up">{inc.resolved_at}</strong>
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded bg-muted border border-border text-warning font-bold">
+                              {t('incidents.duration', 'Doba trvání')}: {inc.duration_text}
+                            </span>
+                          </div>
+                          {/* The newest note of the incident this outage opened - the
+                              card says what is being done, not only that it is down. */}
+                          {linked && !expanded && linked.updates?.length > 0 && (
+                            <p className="truncate text-xs text-muted-foreground">
+                              {linked.updates[linked.updates.length - 1].message}
+                            </p>
                           )}
-                        </span>
-                      )}
-                      {inc.acknowledgedBy ? (
-                        <span className="text-2xs text-muted-foreground">
-                          {t('incidents.ack_by', { user: inc.acknowledgedBy }, `Převzal: ${inc.acknowledgedBy}`)}
-                        </span>
-                      ) : (
-                        isAdmin &&
-                        inc.incidentId != null && (
-                          <button
-                            type="button"
-                            disabled={actionBusy}
-                            onClick={() => incidentAction(inc.incidentId, 'ack')}
-                            className="inline-flex items-center gap-1 rounded-md bg-warning text-warning-foreground px-3 py-1.5 text-xs font-semibold hover:bg-warning/90 disabled:opacity-50"
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-1.5">
+                          <Link
+                            to={`/infrastructure/${inc.monitor_id}`}
+                            className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
                           >
-                            {t('incidents.ack_btn', 'Převzít incident')}
-                          </button>
-                        )
-                      )}
+                            {t('incidents.view_outage', 'Detail výpadku')} <ArrowRight className="size-3" />
+                          </Link>
+                          {/* Escalation used to happen silently: cron stamps it and
+                              nothing showed that the outage had already gone past
+                              whoever was meant to pick it up. */}
+                          {inc.escalatedAt && (
+                            <span className="text-down text-2xs font-semibold">
+                              {t(
+                                'incidents.escalated_at',
+                                { when: new Date(inc.escalatedAt).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB') },
+                                `Eskalováno ${new Date(inc.escalatedAt).toLocaleString('cs-CZ')}`
+                              )}
+                            </span>
+                          )}
+                          {inc.acknowledgedBy ? (
+                            <span className="text-2xs text-muted-foreground">
+                              {t('incidents.ack_by', { user: inc.acknowledgedBy }, `Převzal: ${inc.acknowledgedBy}`)}
+                            </span>
+                          ) : (
+                            isAdmin &&
+                            inc.incidentId != null && (
+                              <button
+                                type="button"
+                                disabled={actionBusy}
+                                onClick={() => incidentAction(inc.incidentId, 'ack')}
+                                className="inline-flex items-center gap-1 rounded-md bg-warning text-warning-foreground px-3 py-1.5 text-xs font-semibold hover:bg-warning/90 disabled:opacity-50"
+                              >
+                                {t('incidents.ack_btn', 'Převzít incident')}
+                              </button>
+                            )
+                          )}
+                          {linked && (
+                            <button
+                              type="button"
+                              onClick={() => toggleIncident(linked)}
+                              aria-expanded={expanded}
+                              className="rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80"
+                            >
+                              {expanded
+                                ? t('incidents.collapse', 'Sbalit')
+                                : t('incidents.detail_btn', 'Poznámky a akce')}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {expanded && linked && renderIncidentDetail(linked)}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
-                {ongoingIncidents.map((inc) => {
+                {standaloneIncidents.map((inc) => {
                   const expanded = expandedId === inc.id;
                   const open = inc.status !== 'resolved';
                   return (
@@ -429,109 +564,15 @@ export function IncidentsPage() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => {
-                            setExpandedId(expanded ? null : inc.id);
-                            setNoteText('');
-                            setPostmortemText(inc.postmortem ?? '');
-                            setActionError(null);
-                          }}
+                          onClick={() => toggleIncident(inc)}
+                          aria-expanded={expanded}
                           className="shrink-0 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80"
                         >
                           {expanded ? t('incidents.collapse', 'Sbalit') : t('incidents.detail_btn', 'Timeline & akce')}
                         </button>
                       </div>
 
-                      {expanded && (
-                        <div className="mt-3 space-y-3 border-t border-border pt-3">
-                          {/* Timeline of all steps - automatic and manual alike. */}
-                          <ol className="space-y-1.5">
-                            {(inc.updates ?? []).map((u: any, i: number) => (
-                              <li key={i} className="flex items-start gap-2 text-xs">
-                                <span
-                                  className={`mt-1 size-1.5 shrink-0 rounded-full ${u.status === 'resolved' ? 'bg-up' : 'bg-warning'}`}
-                                />
-                                <span className="text-muted-foreground font-mono shrink-0">{u.at}</span>
-                                <span className="text-muted-foreground shrink-0">[{u.status}]</span>
-                                <span className="min-w-0">{u.message}</span>
-                              </li>
-                            ))}
-                          </ol>
-
-                          {inc.postmortem && (
-                            <div className="rounded-md bg-secondary/40 border border-border p-3">
-                              <p className="text-xs font-bold mb-1">{t('incidents.postmortem', 'Postmortem')}</p>
-                              <p className="text-xs whitespace-pre-wrap">{inc.postmortem}</p>
-                            </div>
-                          )}
-
-                          {actionError && <ErrorState size="inline" message={actionError} />}
-
-                          {isAdmin && (
-                            <div className="space-y-2">
-                              {open && (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  {!inc.acknowledgedBy && (
-                                    <button
-                                      type="button"
-                                      disabled={actionBusy}
-                                      onClick={() => incidentAction(inc.id, 'ack')}
-                                      className="rounded-md bg-warning text-warning-foreground px-3 py-1.5 text-xs font-semibold hover:bg-warning/90 disabled:opacity-50"
-                                    >
-                                      {t('incidents.ack_btn', 'Převzít incident')}
-                                    </button>
-                                  )}
-                                  <input
-                                    value={noteText}
-                                    onChange={(e) => setNoteText(e.target.value)}
-                                    placeholder={t('incidents.note_placeholder', 'Poznámka do timeline…')}
-                                    className="min-w-40 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
-                                  />
-                                  <button
-                                    type="button"
-                                    disabled={actionBusy || !noteText.trim()}
-                                    onClick={async () => {
-                                      if (await incidentAction(inc.id, 'note', { message: noteText })) setNoteText('');
-                                    }}
-                                    className="rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 disabled:opacity-50"
-                                  >
-                                    {t('incidents.note_btn', 'Přidat poznámku')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={actionBusy}
-                                    onClick={() => incidentAction(inc.id, 'resolve', { note: noteText })}
-                                    className="rounded-md bg-up text-up-foreground px-3 py-1.5 text-xs font-semibold hover:bg-up/90 disabled:opacity-50"
-                                  >
-                                    {t('incidents.resolve_btn', 'Uzavřít incident')}
-                                  </button>
-                                </div>
-                              )}
-
-                              {/* A postmortem makes sense mostly after resolution, but can be written anytime. */}
-                              <div className="flex flex-col gap-1.5">
-                                <textarea
-                                  value={postmortemText}
-                                  onChange={(e) => setPostmortemText(e.target.value)}
-                                  placeholder={t(
-                                    'incidents.postmortem_placeholder',
-                                    'Postmortem: co se stalo, proč, a co uděláme jinak…'
-                                  )}
-                                  rows={3}
-                                  className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
-                                />
-                                <button
-                                  type="button"
-                                  disabled={actionBusy || postmortemText === (inc.postmortem ?? '')}
-                                  onClick={() => incidentAction(inc.id, 'postmortem', { postmortem: postmortemText })}
-                                  className="self-end rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 disabled:opacity-50"
-                                >
-                                  {t('incidents.postmortem_save', 'Uložit postmortem')}
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      {expanded && renderIncidentDetail(inc)}
                     </div>
                   );
                 })}

@@ -37,9 +37,13 @@ if (isset($data['action_result']) && is_array($data['action_result']) && !isset(
         echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
         exit;
     }
-    $stmt_ar_mon = $pdo->prepare("SELECT id FROM monitors WHERE agent_key = ? LIMIT 1");
+    $stmt_ar_mon = $pdo->prepare("SELECT id, archived_at FROM monitors WHERE agent_key = ? LIMIT 1");
     $stmt_ar_mon->execute([$ar_agent_key]);
-    $ar_monitor_id = $stmt_ar_mon->fetchColumn();
+    $ar_row = $stmt_ar_mon->fetch();
+    $ar_monitor_id = $ar_row ? $ar_row['id'] : false;
+    if ($ar_row && !empty($ar_row['archived_at'])) {
+        bk_agent_refuse_archived();
+    }
     if (!$ar_monitor_id) {
         http_response_code(401);
         echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
@@ -72,7 +76,7 @@ if (isset($data['service_check_results']) && is_array($data['service_check_resul
         echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
         exit;
     }
-    $stmt_sc_mon = $pdo->prepare("SELECT id, asset_id FROM monitors WHERE agent_key = ? LIMIT 1");
+    $stmt_sc_mon = $pdo->prepare("SELECT id, asset_id, archived_at FROM monitors WHERE agent_key = ? LIMIT 1");
     $stmt_sc_mon->execute([$sc_agent_key]);
     $sc_agent = $stmt_sc_mon->fetch();
     if (!$sc_agent) {
@@ -80,13 +84,16 @@ if (isset($data['service_check_results']) && is_array($data['service_check_resul
         echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
         exit;
     }
+    if (!empty($sc_agent['archived_at'])) {
+        bk_agent_refuse_archived();
+    }
     require_once __DIR__ . '/lang.php';
     $sc_applied = 0;
     foreach (array_slice($data['service_check_results'], 0, 50) as $res) {
         if (!is_array($res)) continue;
         $sc_id = (int)($res['monitor_id'] ?? 0);
         if ($sc_id <= 0 || $sc_agent['asset_id'] === null) continue;
-        $stmt_svc = $pdo->prepare("SELECT * FROM monitors WHERE id = ? AND asset_id = ? AND type = 'agent_service' LIMIT 1");
+        $stmt_svc = $pdo->prepare("SELECT * FROM monitors WHERE id = ? AND asset_id = ? AND type = 'agent_service' AND archived_at IS NULL LIMIT 1");
         $stmt_svc->execute([$sc_id, $sc_agent['asset_id']]);
         $svc_row = $stmt_svc->fetch();
         if (!$svc_row) continue;
@@ -286,9 +293,13 @@ $ow_installed_packages = bk_agent_int($data, 'installed_packages');
 $ow_log_errors_24h = bk_agent_int($data, 'log_errors_24h');
 $ow_log_warnings_24h = bk_agent_int($data, 'log_warnings_24h');
 
-if (empty($agent_key) || $cpu === null || $ram === null || $hdd === null) {
+// CPU, RAM and disk may be null: agents send null on their first run and after a
+// reboot, because a load needs two readings, and a host that cannot read one
+// sends null for good. Refusing those reports turned an honest "not measured
+// yet" into a 400 and a new router's first report into an error.
+if (empty($agent_key)) {
     http_response_code(400);
-    echo json_encode(['success' => false, 'message' => 'Chybí povinné údaje (agent_key, cpu, ram, hdd).']);
+    echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
     exit;
 }
 
@@ -302,6 +313,10 @@ if (!$monitor) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Neplatný klíč agenta nebo monitor neexistuje.']);
     exit;
+}
+
+if (!empty($monitor['archived_at'])) {
+    bk_agent_refuse_archived();
 }
 
 $monitor_id = $monitor['id'];
@@ -401,33 +416,33 @@ try {
     if ($hdd_alert_sent && isset($old_details['hdd_alert_threshold']) && (float)$old_details['hdd_alert_threshold'] !== $hdd_threshold) {
         $hdd_alert_sent = false;
     }
-    if ($cpu >= $cpu_threshold) {
+    if ($cpu !== null && $cpu >= $cpu_threshold) {
         if (!$cpu_alert_sent) {
             $bk_pending_notifications[] = ['vps_warning', "Vytížení CPU dosáhlo {$cpu}%."];
             log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "CPU dosáhlo {$cpu}% (limit {$cpu_threshold}%)");
             $cpu_alert_sent = true;
         }
-    } elseif ($cpu < $bk_clear_below($cpu_threshold)) {
+    } elseif ($cpu !== null && $cpu < $bk_clear_below($cpu_threshold)) {
         $cpu_alert_sent = false;
     }
 
-    if ($ram >= $ram_threshold) {
+    if ($ram !== null && $ram >= $ram_threshold) {
         if (!$ram_alert_sent) {
             $bk_pending_notifications[] = ['vps_warning', "Vytížení RAM dosáhlo {$ram}%."];
             log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "RAM dosáhla {$ram}% (limit {$ram_threshold}%)");
             $ram_alert_sent = true;
         }
-    } elseif ($ram < $bk_clear_below($ram_threshold)) {
+    } elseif ($ram !== null && $ram < $bk_clear_below($ram_threshold)) {
         $ram_alert_sent = false;
     }
 
-    if ($hdd >= $hdd_threshold) {
+    if ($hdd !== null && $hdd >= $hdd_threshold) {
         if (!$hdd_alert_sent) {
             $bk_pending_notifications[] = ['vps_warning', "Vytížení disku (HDD) dosáhlo {$hdd}%."];
             log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "Disk (HDD) dosáhl {$hdd}% (limit {$hdd_threshold}%)");
             $hdd_alert_sent = true;
         }
-    } elseif ($hdd < $bk_clear_below($hdd_threshold)) {
+    } elseif ($hdd !== null && $hdd < $bk_clear_below($hdd_threshold)) {
         $hdd_alert_sent = false;
     }
 
@@ -1182,7 +1197,7 @@ try {
     // and the results arrive shortly after as service_check_results.
     try {
         if ($monitor['asset_id'] !== null) {
-            $stmt_svcs = $pdo->prepare("SELECT * FROM monitors WHERE asset_id = ? AND type = 'agent_service' AND id != ?");
+            $stmt_svcs = $pdo->prepare("SELECT * FROM monitors WHERE asset_id = ? AND type = 'agent_service' AND id != ? AND archived_at IS NULL");
             $stmt_svcs->execute([$monitor['asset_id'], $monitor_id]);
             $agent_services = $stmt_svcs->fetchAll();
 

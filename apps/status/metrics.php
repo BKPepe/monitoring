@@ -68,7 +68,7 @@ header('Content-Type: text/plain; version=0.0.4; charset=utf-8');
 $lines = [];
 
 try {
-    $stmt = $pdo->query("SELECT id, name, type, category, status, last_details, last_status_change FROM monitors ORDER BY id");
+    $stmt = $pdo->query("SELECT id, name, type, category, status, last_details, last_status_change FROM monitors WHERE archived_at IS NULL ORDER BY id");
     $monitors = $stmt->fetchAll();
 
     // Latest responses from monitor_logs (one newest row per monitor)
@@ -82,6 +82,7 @@ try {
                 WHERE l.monitor_id = m.id
                 ORDER BY l.id DESC LIMIT 1) AS response_time
         FROM monitors m
+        WHERE m.archived_at IS NULL
     ");
     while ($row = $stmt_rt->fetch()) {
         $response_times[$row['monitor_id']] = $row['response_time'];

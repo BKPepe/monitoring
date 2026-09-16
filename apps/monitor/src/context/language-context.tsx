@@ -801,8 +801,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'infra.action_pppoe': { cs: 'Znovu připojit PPPoE', en: 'Reconnect PPPoE' },
   'infra.action_restart_service': { cs: 'Restartovat službu', en: 'Restart service' },
   'infra.one_time_install': { cs: 'Jednorázová instalace OpenWrt agenta', en: 'One-time OpenWrt agent installation' },
-  'infra.copied_to_clipboard': { cs: 'Příkaz zkopírován do schránky!', en: 'Command copied to clipboard!' },
-  'infra.copy_command': { cs: 'Kopírovat příkaz', en: 'Copy Command' },
   'infra.monitored_processes': {
     cs: 'Sledované procesy (čárkou oddělené)',
     en: 'Monitored processes (comma-separated)',
@@ -1134,7 +1132,9 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Popis problému, předpokládaná doba vyřešení...',
     en: 'Description of the problem, expected time to resolution...',
   },
-  'incidents.active_badge': { cs: 'Aktivní výpadek', en: 'Active Outage' },
+  'incidents.active_badge_one': { cs: '{count} aktivní výpadek', en: '{count} active outage' },
+  'incidents.active_badge_few': { cs: '{count} aktivní výpadky', en: '{count} active outages' },
+  'incidents.active_badge_other': { cs: '{count} aktivních výpadků', en: '{count} active outages' },
   'incidents.view_outage': { cs: 'Detail výpadku', en: 'View Outage Detail' },
   'incidents.manual_badge': { cs: 'Ručně nahlášeno', en: 'Manually Reported' },
   'incidents.created_label': { cs: 'Vytvořeno', en: 'Created' },
@@ -1419,25 +1419,13 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Automatický sběr CPU, RAM, zátěže disku, běžících procesů a služeb pro Debian, Ubuntu, CentOS a RHEL.',
     en: 'Automatic collection of CPU, RAM, disk load, running processes, and services for Debian, Ubuntu, CentOS, and RHEL.',
   },
-  'api_agents.note_linux': {
-    cs: 'Skript automaticky nainstaluje systémovou službu systemd (bk-agent.service) a spustí pozadí polling.',
-    en: 'The script automatically installs a systemd service (bk-agent.service) and starts background polling.',
-  },
   'api_agents.desc_openwrt': {
     cs: 'Lehký shell agent přímo pro routery OpenWrt/LEDE. Využívá ubus, iwinfo, /proc a podporuje bezpečné Remote Actions (potvrzovací pingy).',
     en: 'A lightweight shell agent built for OpenWrt/LEDE routers. Uses ubus, iwinfo, /proc, and supports secure Remote Actions (confirmation pings).',
   },
-  'api_agents.note_openwrt': {
-    cs: 'Do /etc/crontabs/root přidejte řádek: * * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1',
-    en: 'Add this line to /etc/crontabs/root: * * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1',
-  },
   'api_agents.desc_windows': {
     cs: 'PowerShell agent pro Windows Server 2016 / 2019 / 2022 s automatickou registrací do Windows Task Scheduler.',
     en: 'A PowerShell agent for Windows Server 2016 / 2019 / 2022 with automatic registration in Windows Task Scheduler.',
-  },
-  'api_agents.note_windows': {
-    cs: 'Spusťte v PowerShell okénku správce (Run as Administrator).',
-    en: 'Run it in an administrator PowerShell window (Run as Administrator).',
   },
   'api_agents.desc_cpanel': {
     cs: 'Stáhněte cpanel_stats.php do kořenového adresáře hostingu pro veřejný sběr diskového prostoru, RAM a MySQL zátěže.',
@@ -1450,10 +1438,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'api_agents.desc_docker': {
     cs: 'Izolovaný Docker kontejner pro provoz v prostředí Docker / Kubernetes bez zásahu do hostitelského OS.',
     en: 'An isolated Docker container for running in Docker / Kubernetes environments without touching the host OS.',
-  },
-  'api_agents.note_docker': {
-    cs: 'Kontejner mapuje pouze /proc v režimu jen pro čtení (read-only) pro nulové bezpečnostní riziko.',
-    en: 'The container mounts only /proc in read-only mode for zero security risk.',
   },
   'api_agents.install_scripts_title': {
     cs: 'Instalační skripty agentů dle platformy',
@@ -2617,7 +2601,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.ack_by': { cs: 'Převzal: {user}', en: 'Acknowledged by: {user}' },
   'incidents.ack_btn': { cs: 'Převzít incident', en: 'Acknowledge' },
   'incidents.collapse': { cs: 'Sbalit', en: 'Collapse' },
-  'incidents.detail_btn': { cs: 'Timeline & akce', en: 'Timeline & actions' },
+  'incidents.detail_btn': { cs: 'Poznámky a akce', en: 'Notes & actions' },
   'incidents.postmortem': { cs: 'Postmortem', en: 'Postmortem' },
   'incidents.note_placeholder': { cs: 'Poznámka do timeline…', en: 'Note for the timeline…' },
   'incidents.note_btn': { cs: 'Přidat poznámku', en: 'Add note' },
@@ -2707,7 +2691,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'asset.event_unknown': { cs: 'Stav neznámý (agent nehlásí)', en: 'State unknown (agent not reporting)' },
   'asset.event_recovered': { cs: 'Služba obnovena', en: 'Service recovered' },
-  'status.unknown': { cs: 'Neznámý (agent mlčí)', en: 'Unknown (agent silent)' },
+  'status.unknown': { cs: 'Neznámý', en: 'Unknown' },
   'dashboard.outages': { cs: 'Výpadky', en: 'Outages' },
   'dashboard.down_for': { cs: 'Výpadek', en: 'Down' },
   'asset.down_for': { cs: 'Výpadek trvá', en: 'Down for' },
@@ -3276,6 +3260,116 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)',
     en: '•••••••• (saved, leave blank to keep unchanged)',
   },
+  'agent_install.download': { cs: 'Stáhněte agenta', en: 'Download the agent' },
+  'agent_install.config': {
+    cs: 'Vytvořte konfiguraci s adresou serveru a klíčem',
+    en: 'Create the config with the server address and key',
+  },
+  'agent_install.config_next_to_script': {
+    cs: 'Soubor musí ležet ve stejné složce jako skript.',
+    en: 'The file must sit in the same folder as the script.',
+  },
+  'agent_install.test': {
+    cs: 'Spusťte agenta ručně a zkontrolujte výpis',
+    en: 'Run the agent by hand and check its output',
+  },
+  'agent_install.openwrt_fetch': {
+    cs: 'Když wget neumí HTTPS, použijte uclient-fetch se stejnými parametry.',
+    en: 'If wget cannot do HTTPS, use uclient-fetch with the same arguments.',
+  },
+  'agent_install.first_run': {
+    cs: 'První běh ještě nezná vytížení CPU, to agent změří až při dalším spuštění.',
+    en: 'The first run does not know the CPU load yet; the agent measures it on the next run.',
+  },
+  'agent_install.cron_minute': {
+    cs: 'Zařaďte agenta do cronu, jednou za minutu',
+    en: 'Add the agent to cron, once a minute',
+  },
+  'agent_install.wifi6e': {
+    cs: 'Volitelně: podpora Wi-Fi 6E u klientů',
+    en: 'Optional: Wi-Fi 6E support of the clients',
+  },
+  'agent_install.wifi6e_note': {
+    cs: 'Bez tohoto balíčku agent nezjistí, kteří klienti umí 6 GHz.',
+    en: 'Without this package the agent cannot tell which clients support 6 GHz.',
+  },
+  'agent_install.cron_five': {
+    cs: 'Zařaďte agenta do cronu, jednou za pět minut',
+    en: 'Add the agent to cron, every five minutes',
+  },
+  'agent_install.task': {
+    cs: 'Naplánujte spouštění každých pět minut (PowerShell jako správce)',
+    en: 'Schedule a run every five minutes (PowerShell as administrator)',
+  },
+  'agent_install.docker_env': {
+    cs: 'Doplňte adresu serveru a klíč do docker-compose.agent.yml',
+    en: 'Fill the server address and key into docker-compose.agent.yml',
+  },
+  'agent_install.docker_run': { cs: 'Spusťte kontejner', en: 'Start the container' },
+  'agent_install.docker_logs': { cs: 'Zkontrolujte výpis kontejneru', en: 'Check the container output' },
+  'agent_install.load_error': {
+    cs: 'Údaje pro instalaci se nepodařilo načíst.',
+    en: 'The install details could not be loaded.',
+  },
+  'agent_install.loading': { cs: 'Načítám klíč a adresy pro instalaci…', en: 'Loading the key and install addresses…' },
+  'agent_install.platform_shell': { cs: 'Linux, Bash', en: 'Linux, Bash' },
+  'agent_install.platform_python': { cs: 'Linux, Python 3', en: 'Linux, Python 3' },
+  'agent_install.platform': { cs: 'Systém', en: 'System' },
+  'agent_install.key_hint': {
+    cs: 'Klíč agenta najdete v nastavení monitoru, záložka Rozšíření & Agent. V příkazech jím nahraďte {placeholder}.',
+    en: 'The agent key is in the monitor settings, Advanced & Agent tab. Replace {placeholder} with it in the commands.',
+  },
+  'agent_install.copy': { cs: 'Kopírovat', en: 'Copy' },
+  'infra.archived_load_error': {
+    cs: 'Seznam archivovaných monitorů se nepodařilo načíst.',
+    en: 'The archived monitors could not be loaded.',
+  },
+  'infra.restore_failed': { cs: 'Obnovení z archivu se nepodařilo.', en: 'Restoring from the archive failed.' },
+  'infra.install_after_save': {
+    cs: 'Klíč agenta vznikne při uložení monitoru. Po uložení se tu zobrazí celý postup instalace i s klíčem.',
+    en: 'The agent key is created when the monitor is saved. After saving, the full install steps with the key appear here.',
+  },
+  'infra.vps_install_title': { cs: 'Instalace agenta na server', en: 'Installing the agent on the server' },
+  'infra.archive_hint': {
+    cs: 'Monitor zůstane i s historií, ale zmizí ze seznamů a přehledů, přestane se kontrolovat, nepošle žádné upozornění a jeho agent se odmítne. Obnovit ho jde kdykoli.',
+    en: 'The monitor keeps its history but leaves every list and overview, stops being checked, sends no alerts and its agent is refused. It can be restored at any time.',
+  },
+  'infra.archive_confirm': {
+    cs: 'Archivovat tento monitor? Zůstane i s historií, ale zmizí ze seznamů, přestane se kontrolovat a nebude posílat upozornění. Otevřené incidenty se uzavřou. Obnovit ho jde kdykoli.',
+    en: 'Archive this monitor? It keeps its history but leaves every list, stops being checked and sends no alerts. Open incidents are closed. It can be restored at any time.',
+  },
+  'infra.archive_failed': { cs: 'Archivace se nepodařila.', en: 'Archiving failed.' },
+  'infra.archive_btn': { cs: 'Archivovat', en: 'Archive' },
+  'infra.archived_title': { cs: 'Archivované monitory ({count})', en: 'Archived monitors ({count})' },
+  'infra.archived_hint': {
+    cs: 'Archivované monitory se nekontrolují, neposílají upozornění a nejsou v žádném přehledu. Jejich historie zůstává k nahlédnutí.',
+    en: 'Archived monitors are not checked, send no alerts and appear in no overview. Their history stays readable.',
+  },
+  'infra.archived_at': { cs: 'archivováno {when}', en: 'archived {when}' },
+  'infra.archived_history': { cs: 'Historie', en: 'History' },
+  'infra.archived_restore': { cs: 'Obnovit', en: 'Restore' },
+  'asset.ra_setup_title': {
+    cs: 'Vzdálené akce jsou pro tento router vypnuté. Zapnete je v nastavení monitoru, záložka Rozšíření & Agent.',
+    en: 'Remote Actions are off for this router. Switch them on in the monitor settings, Advanced & Agent tab.',
+  },
+  'asset.ra_setup': { cs: 'Nastavit vzdálené akce', en: 'Set up Remote Actions' },
+  'asset.tl_monitor_archived': { cs: 'Monitor archivován', en: 'Monitor archived' },
+  'asset.tl_monitor_restored': { cs: 'Monitor obnoven z archivu', en: 'Monitor restored from the archive' },
+  'asset.archived_restore_failed': {
+    cs: 'Obnovení z archivu se nepodařilo.',
+    en: 'Restoring from the archive failed.',
+  },
+  'asset.archived_title_when': { cs: 'Archivováno {when}.', en: 'Archived {when}.' },
+  'asset.archived_title': { cs: 'Archivovaný monitor.', en: 'Archived monitor.' },
+  'asset.archived_desc': {
+    cs: 'Nekontroluje se, neposílá upozornění a hlášení jeho agenta se odmítají. Historie zůstává k nahlédnutí.',
+    en: 'It is not checked, sends no alerts and its agent reports are refused. Its history stays readable.',
+  },
+  'asset.archived_restoring': { cs: 'Obnovuji…', en: 'Restoring…' },
+  'asset.archived_restore': { cs: 'Obnovit z archivu', en: 'Restore from the archive' },
+  'uaudit.monitor_archived': { cs: 'Monitor archivován', en: 'Monitor archived' },
+  'uaudit.monitor_restored': { cs: 'Monitor obnoven z archivu', en: 'Monitor restored' },
+  'uaudit.agent_key_viewed': { cs: 'Zobrazen klíč agenta', en: 'Agent key viewed' },
   'infra.delete_monitor_btn': { cs: 'Smazat monitor', en: 'Delete Monitor' },
   'infra.delete_confirm': {
     cs: 'Opravdu smazat tento monitor včetně celé jeho historie měření? Akce je nevratná.',

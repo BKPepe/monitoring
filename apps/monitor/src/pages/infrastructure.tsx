@@ -21,6 +21,8 @@ import {
   AlertTriangle,
   Radar,
   X,
+  Archive,
+  ArchiveRestore,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -40,6 +42,7 @@ import { appApi, type ApiAsset, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
+import { AgentInstallSteps } from '@/components/agent-install-steps';
 import { cn, formatRelative, formatUptime } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
@@ -187,6 +190,51 @@ export function InfrastructurePage() {
     return cancel;
   }, [session, loadMonitors]);
 
+  // The archive is a list of its own: monitors kept for their history and out
+  // of everything live - no checks, no alerts, no overviews.
+  const [archivedMonitors, setArchivedMonitors] = React.useState<ApiMonitor[]>([]);
+  const [archivedError, setArchivedError] = React.useState<string | null>(null);
+  const [showArchived, setShowArchived] = React.useState(false);
+  const loadArchived = React.useCallback(() => {
+    appApi
+      .getArchivedMonitors()
+      .then((rows) => {
+        setArchivedMonitors(Array.isArray(rows) ? rows : []);
+        setArchivedError(null);
+      })
+      .catch(() =>
+        setArchivedError(t('infra.archived_load_error', 'Seznam archivovaných monitorů se nepodařilo načíst.'))
+      );
+  }, [t]);
+  React.useEffect(() => {
+    loadArchived();
+  }, [session, loadArchived]);
+
+  const restoreArchived = async (id: number) => {
+    try {
+      await appApi.unarchiveMonitor(id);
+      loadArchived();
+      loadMonitors();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : t('infra.restore_failed', 'Obnovení z archivu se nepodařilo.'));
+    }
+  };
+
+  const deleteArchived = async (id: number) => {
+    if (
+      !window.confirm(
+        t('infra.delete_confirm', 'Opravdu smazat tento monitor včetně celé jeho historie měření? Akce je nevratná.')
+      )
+    )
+      return;
+    try {
+      await appApi.deleteMonitor(id);
+      loadArchived();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : t('infra.delete_failed', 'Smazání monitoru selhalo.'));
+    }
+  };
+
   // The list reloads every minute. The rows show how long each device has
   // been in its state, and a value fetched once at page load kept saying
   // "2 min" an hour later - an old outage read as a fresh one, and a device
@@ -223,8 +271,12 @@ export function InfrastructurePage() {
     if (editIdStr) {
       const editId = parseInt(editIdStr, 10);
       if (!isNaN(editId)) {
+        // ?tab=advanced opens the agent tab straight away - the device detail links
+        // there to switch Remote Actions on.
+        const openAdvanced = params.get('tab') === 'advanced';
         setTimeout(() => {
           handleStartEditRef.current(editId);
+          if (openAdvanced) setActiveTab('advanced');
         }, 200);
       }
     }
@@ -473,6 +525,14 @@ export function InfrastructurePage() {
         );
         return;
       }
+      if (editingId == null && (monitorType === 'openwrt' || monitorType === 'vps') && Number(data.id) > 0) {
+        // A new agent monitor is useless until its agent runs: the form stays open
+        // on the agent tab, where the install steps now carry the new key.
+        setEditingId(Number(data.id));
+        setActiveTab('advanced');
+        loadMonitors();
+        return;
+      }
     } catch {
       alert(t('infra.save_failed_network', 'Uložení selhalo - zkontrolujte připojení.'));
       return;
@@ -530,7 +590,7 @@ export function InfrastructurePage() {
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+    unknown: t('status.unknown', 'Neznámý'),
   };
 
   return (
@@ -1111,7 +1171,8 @@ export function InfrastructurePage() {
                     {/* OpenWrt Remote Actions */}
                     {monitorType === 'openwrt' &&
                       (() => {
-                        const mon = editingId ? rawMonitors.find((m) => m.id === editingId) : selectedMonitor;
+                        // A new monitor has no agent yet - the device selected in the list is not its agent.
+                        const mon = editingId ? rawMonitors.find((m) => m.id === editingId) : undefined;
                         // Evidence of an agent that is still reporting. "status up" used
                         // to count as evidence, so a router that answered ping looked
                         // like it had an agent; and a silent agent stayed green.
@@ -1279,34 +1340,47 @@ export function InfrastructurePage() {
 
                             {!hasActiveAgent && (
                               <div className="pt-3 border-t border-border space-y-2">
-                                <div className="flex items-center justify-between">
-                                  <p className="font-bold text-foreground flex items-center gap-1.5">
-                                    <Terminal className="size-3.5 text-muted-foreground" />{' '}
-                                    {t('infra.one_time_install', 'Jednorázová instalace OpenWrt agenta')} (
-                                    <code>agent_openwrt.sh</code>):
+                                <p className="font-bold text-foreground flex items-center gap-1.5">
+                                  <Terminal className="size-3.5 text-muted-foreground" />
+                                  {t('infra.one_time_install', 'Jednorázová instalace OpenWrt agenta')}
+                                </p>
+                                {editingId ? (
+                                  <AgentInstallSteps monitorId={editingId} platforms={['openwrt']} />
+                                ) : (
+                                  <p className="text-2xs text-muted-foreground">
+                                    {t(
+                                      'infra.install_after_save',
+                                      'Klíč agenta vznikne při uložení monitoru. Po uložení se tu zobrazí celý postup instalace i s klíčem.'
+                                    )}
                                   </p>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const cmd =
-                                        'wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh';
-                                      navigator.clipboard.writeText(cmd);
-                                      alert(t('infra.copied_to_clipboard', 'Příkaz zkopírován do schránky!'));
-                                    }}
-                                    className="text-2xs font-semibold text-primary hover:underline bg-primary/10 px-2 py-0.5 rounded border border-primary/30 cursor-pointer"
-                                  >
-                                    {t('infra.copy_command', 'Kopírovat příkaz')}
-                                  </button>
-                                </div>
-                                <code className="block bg-muted p-2.5 rounded-lg text-2xs font-mono text-foreground border border-border break-all whitespace-pre-wrap select-all">
-                                  wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh &&
-                                  chmod +x /usr/bin/agent_openwrt.sh
-                                </code>
+                                )}
                               </div>
                             )}
                           </div>
                         );
                       })()}
+
+                    {monitorType === 'vps' && (
+                      <div className="p-4 rounded-xl bg-secondary/30 border border-border text-xs space-y-2">
+                        <p className="font-bold text-foreground flex items-center gap-1.5">
+                          <Terminal className="size-3.5 text-muted-foreground" />
+                          {t('infra.vps_install_title', 'Instalace agenta na server')}
+                        </p>
+                        {editingId ? (
+                          <AgentInstallSteps
+                            monitorId={editingId}
+                            platforms={['shell', 'python', 'windows', 'docker']}
+                          />
+                        ) : (
+                          <p className="text-2xs text-muted-foreground">
+                            {t(
+                              'infra.install_after_save',
+                              'Klíč agenta vznikne při uložení monitoru. Po uložení se tu zobrazí celý postup instalace i s klíčem.'
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {/* VPS & TeamSpeak monitored processes */}
                     {(monitorType === 'vps' || monitorType === 'teamspeak') && (
@@ -1660,6 +1734,45 @@ export function InfrastructurePage() {
                     {t('infra.clear_history', 'Smazat historii měření')}
                   </Button>
                 )}
+                {/* For a device that is gone for good: its history stays, it leaves
+                    every live list and nobody is alerted about it again. */}
+                {editingId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-1.5 text-xs font-semibold"
+                    title={t(
+                      'infra.archive_hint',
+                      'Monitor zůstane i s historií, ale zmizí ze seznamů a přehledů, přestane se kontrolovat, nepošle žádné upozornění a jeho agent se odmítne. Obnovit ho jde kdykoli.'
+                    )}
+                    onClick={async () => {
+                      if (
+                        !window.confirm(
+                          t(
+                            'infra.archive_confirm',
+                            'Archivovat tento monitor? Zůstane i s historií, ale zmizí ze seznamů, přestane se kontrolovat a nebude posílat upozornění. Otevřené incidenty se uzavřou. Obnovit ho jde kdykoli.'
+                          )
+                        )
+                      )
+                        return;
+                      try {
+                        await appApi.archiveMonitor(editingId);
+                        setShowAddModal(false);
+                        setEditingId(null);
+                        setSelectedId(null);
+                        loadMonitors();
+                        loadArchived();
+                      } catch (err) {
+                        window.alert(
+                          err instanceof Error ? err.message : t('infra.archive_failed', 'Archivace se nepodařila.')
+                        );
+                      }
+                    }}
+                  >
+                    <Archive className="size-3.5" aria-hidden="true" />
+                    {t('infra.archive_btn', 'Archivovat')}
+                  </Button>
+                )}
                 <Button type="button" variant="outline" className="ml-auto" onClick={() => setShowAddModal(false)}>
                   {t('common.cancel', 'Zrušit')}
                 </Button>
@@ -1908,6 +2021,84 @@ export function InfrastructurePage() {
           )}
         </Card>
       </div>
+
+      {(archivedMonitors.length > 0 || archivedError) && (
+        <Card className="p-4 space-y-3">
+          <button
+            type="button"
+            onClick={() => setShowArchived((open) => !open)}
+            aria-expanded={showArchived}
+            className="flex w-full items-center justify-between gap-2 text-left"
+          >
+            <span className="flex items-center gap-2 text-sm font-bold">
+              <Archive className="size-4 text-muted-foreground" aria-hidden="true" />
+              {t(
+                'infra.archived_title',
+                { count: archivedMonitors.length },
+                `Archivované monitory (${archivedMonitors.length})`
+              )}
+            </span>
+            <ChevronRight
+              className={cn('size-4 text-muted-foreground transition-transform', showArchived && 'rotate-90')}
+              aria-hidden="true"
+            />
+          </button>
+          {archivedError && <ErrorState size="inline" message={archivedError} />}
+          {showArchived && (
+            <>
+              <p className="text-2xs text-muted-foreground">
+                {t(
+                  'infra.archived_hint',
+                  'Archivované monitory se nekontrolují, neposílají upozornění a nejsou v žádném přehledu. Jejich historie zůstává k nahlédnutí.'
+                )}
+              </p>
+              <ul className="divide-y divide-border">
+                {archivedMonitors.map((m) => (
+                  <li key={m.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
+                    <span className="min-w-0 flex-1 truncate font-medium">{m.name}</span>
+                    <Badge variant="paused" className="text-3xs">
+                      {m.type}
+                    </Badge>
+                    {m.archivedAt && (
+                      <span className="text-muted-foreground">
+                        {t(
+                          'infra.archived_at',
+                          { when: formatRelative(m.archivedAt) },
+                          `archivováno ${formatRelative(m.archivedAt)}`
+                        )}
+                      </span>
+                    )}
+                    <Button size="sm" variant="outline" asChild className="text-xs">
+                      <Link to={`/infrastructure/${m.id}`}>{t('infra.archived_history', 'Historie')}</Link>
+                    </Button>
+                    {isAdmin && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 text-xs"
+                          onClick={() => void restoreArchived(m.id)}
+                        >
+                          <ArchiveRestore className="size-3.5" aria-hidden="true" />
+                          {t('infra.archived_restore', 'Obnovit')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="text-xs"
+                          onClick={() => void deleteArchived(m.id)}
+                        >
+                          {t('infra.delete_monitor_btn', 'Smazat monitor')}
+                        </Button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
@@ -1931,7 +2122,7 @@ function AssetRow({
     warning: t('common.warning', 'Varování'),
     paused: t('common.paused', 'Pozastaveno'),
     maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý (agent mlčí)'),
+    unknown: t('status.unknown', 'Neznámý'),
   };
   const Icon = kindIcon[asset.kind] ?? Server;
   return (

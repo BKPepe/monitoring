@@ -38,7 +38,7 @@ if ($token === '' || !preg_match('/^[0-9a-f]{16,64}$/', $token)) {
 }
 
 try {
-    $stmt = $pdo->prepare("SELECT id, name, type FROM monitors WHERE heartbeat_token = ? AND type = 'heartbeat' LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, name, type, archived_at FROM monitors WHERE heartbeat_token = ? AND type = 'heartbeat' LIMIT 1");
     $stmt->execute([$token]);
     $monitor = $stmt->fetch();
 } catch (PDOException $e) {
@@ -53,6 +53,13 @@ if (!$monitor) {
     // from here by trying.
     http_response_code(404);
     echo json_encode(['error' => 'Neznámý token.'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (!empty($monitor['archived_at'])) {
+    // The job still pings a monitor nobody watches any more: say so, store nothing.
+    http_response_code(410);
+    echo json_encode(['error' => 'Monitor je archivovaný, signál se neukládá.'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

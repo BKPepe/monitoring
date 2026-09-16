@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `remote_actions_enabled` TINYINT(1) DEFAULT 0, -- Souhlas s Remote Actions pro tento konkrétní monitor - výchozí VYPNUTO
   `allowed_actions` VARCHAR(255) DEFAULT NULL, -- Čárkou oddělený seznam povolených akcí (podmnožina restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe)
   `asset_id` INT DEFAULT NULL, -- Fyzické/logické zařízení, ke kterému monitor patří (viz `assets`) - NULL = zatím nepřiřazeno
+  `archived_at` DATETIME DEFAULT NULL, -- set when archived: history kept, no checks, alerts, lists or agent reports
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`),
   FOREIGN KEY (`asset_id`) REFERENCES `assets`(`id`) ON DELETE SET NULL

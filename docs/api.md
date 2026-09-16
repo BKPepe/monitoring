@@ -321,7 +321,8 @@ real email of the logged-in user - it used to return a hardcoded
 ### `GET api.php?action=monitors`
 
 **Assigned monitors, or the public view.** List of monitors with their last
-state, response time and agent metrics. A `user` account gets its assigned
+state, response time and agent metrics, without archived monitors unless `archived=1`
+asks for only those. A `user` account gets its assigned
 monitors and an administrator all of them. An anonymous caller, or any caller
 with `scope=public`, gets every monitor with `target`, `port`, `hostname` and
 `agentLastSeen` set to `null` and only the allowlisted `details` keys.
@@ -358,6 +359,26 @@ command.
 ### `POST api.php?action=delete_monitor`
 
 **Admin.** Body `{"id": 12}`.
+
+### `POST api.php?action=archive_monitor` / `unarchive_monitor`
+
+**Administrator.** Body `{"id": N}`. Archiving is for a monitor that is gone for
+good, such as a replaced router. It keeps the monitor and its history but takes
+it out of everything live: lists and summaries leave it out, cron does not check
+it, no alert is sent, open incidents are closed, waiting remote actions fail, its
+agent's reports are refused with 403 and `heartbeat.php` answers 410. A detail by
+id stays readable and `action=monitors&archived=1` lists the archive. Any write
+to an archived monitor answers 409. Restoring sets the state to `unknown` until
+the next check or report. Both are written to the audit log.
+
+### `GET api.php?action=agent_install_info&monitor_id=`
+
+**Administrator.** What installing one monitor's agent needs: `agentKey`, the
+`apiUrl` of this server and the download addresses in `files`. The key is a
+credential, so every read is written to the audit log. An archived monitor
+answers 409.
+
+---
 
 ---
 
@@ -544,7 +565,10 @@ so the form showed empty fields and the next save overwrote the real values.
 ### `POST agent_api.php`
 
 Telemetry from agents (VPS, OpenWrt). Authorised by the `agent_key` field in the
-body. Requires POST and valid JSON, otherwise 405 / 400.
+body. Requires POST and valid JSON, otherwise 405 / 400. Only `agent_key` is
+required: `cpu`, `ram` and `hdd` may be `null`, which agents send on their first
+run and after a reboot. The report of an archived monitor is refused with 403 and
+`archived: true`.
 
 The server accepts keys it does not know in advance - otherwise a new metric from
 an agent would vanish silently. Limits apply though: a typed server-side value

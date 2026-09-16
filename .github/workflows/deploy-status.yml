@@ -44,13 +44,13 @@ jobs:
       - name: Zkopirovat agenty ze submodulu do nasazovane slozky
         run: |
           set -e
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
+          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh docker-compose.agent.yml; do
             cp "agents/vps-agent/$f" "apps/status/$f"
           done
           # Kontrola, ze soubory opravdu dorazily: prazdny nebo chybejici agent
           # by se jinak nahral az na produkci a projevil se rozbitym
           # self-updatem, ne chybou v CI.
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
+          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh docker-compose.agent.yml; do
             test -s "apps/status/$f" || { echo "CHYBI nebo je prazdny: $f"; exit 1; }
           done
           echo "Agenti zkopirovani ze submodulu:"

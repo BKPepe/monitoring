@@ -33,7 +33,7 @@ if ($monitor_id > 0) {
     $monitors = bk_can_view_monitor($pdo, $monitor_id) ? $stmt->fetchAll() : [];
 } else {
     [$report_scope, $report_scope_params] = bk_monitor_scope_sql($report_visible_ids, 'id');
-    $stmt = $pdo->prepare("SELECT * FROM monitors WHERE {$report_scope} ORDER BY name ASC");
+    $stmt = $pdo->prepare("SELECT * FROM monitors WHERE {$report_scope} AND archived_at IS NULL ORDER BY name ASC");
     $stmt->execute($report_scope_params);
     $monitors = $stmt->fetchAll();
 }

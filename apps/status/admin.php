@@ -353,6 +353,22 @@ $success_msg = '';
 $error_msg = '';
 
 // 1. Zpracování přidání / úpravy monitoru
+// An archived monitor is read-only here too: none of its forms may change it.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $user_role === 'admin') {
+    $bk_arch_id = (int)($_POST['id'] ?? $_POST['monitor_id'] ?? $_POST['source_monitor_id'] ?? 0);
+    if ($bk_arch_id > 0 && bk_monitor_is_archived($pdo, $bk_arch_id)) {
+        foreach (['save_monitor', 'toggle_notif', 'toggle_maintenance', 'clear_history', 'trigger_remote_action', 'action_import_service'] as $bk_arch_form) {
+            if (isset($_POST[$bk_arch_form])) {
+                unset($_POST[$bk_arch_form]);
+                $error_msg = 'Monitor je archivovaný a nejde upravovat. Nejdřív ho obnovte v aplikaci.';
+            }
+        }
+    }
+    if (isset($_POST['bulk_ids']) && is_array($_POST['bulk_ids'])) {
+        $_POST['bulk_ids'] = array_values(array_filter($_POST['bulk_ids'], fn($bid) => !bk_monitor_is_archived($pdo, (int)$bid)));
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $user_role === 'admin') {
     bk_csrf_check();
     $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
@@ -1175,7 +1191,7 @@ if ($user_role === 'admin' && isset($_GET['action']) && $_GET['action'] === 'edi
 // Načtení všech monitorů k zobrazení
 // A regular account sees only the monitors assigned to it; an admin sees all.
 [$all_scope, $all_scope_params] = bk_monitor_scope_sql($user_role === 'admin' ? null : bk_visible_monitor_ids($pdo), 'm.id');
-$stmt_all = $pdo->prepare("SELECT m.*, (SELECT error_message FROM monitor_logs WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as error_message FROM monitors m WHERE {$all_scope} ORDER BY m.category, m.name");
+$stmt_all = $pdo->prepare("SELECT m.*, (SELECT error_message FROM monitor_logs WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as error_message FROM monitors m WHERE {$all_scope} AND m.archived_at IS NULL ORDER BY m.category, m.name");
 $stmt_all->execute($all_scope_params);
 $all_monitors = $stmt_all->fetchAll();
 
@@ -1389,7 +1405,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
         if ($user_role === 'admin') {
         try {
             $bk_adm_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
-            $bk_adm_stmt = $pdo->query("SELECT id, name, status, last_checked, last_details FROM monitors");
+            $bk_adm_stmt = $pdo->query("SELECT id, name, status, last_checked, last_details FROM monitors WHERE archived_at IS NULL");
             foreach ($bk_adm_stmt->fetchAll() as $bk_adm_mon) {
                 $bk_adm_details = json_decode($bk_adm_mon['last_details'] ?? '', true) ?: [];
                 foreach (bk_get_collection_issues($bk_adm_mon, $bk_adm_details, $bk_adm_offline_secs) as $bk_adm_ci) {
@@ -1441,7 +1457,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
         $stmt_assets_panel = $pdo->query("
             SELECT a.id, a.name, COUNT(m.id) AS member_count,
                    GROUP_CONCAT(m.name ORDER BY m.name SEPARATOR ', ') AS monitor_names
-            FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id
+            FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id AND m.archived_at IS NULL
             GROUP BY a.id, a.name ORDER BY member_count DESC, a.name
         ");
         $assets_panel = $stmt_assets_panel->fetchAll();
@@ -1761,7 +1777,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     SELECT l.*, m.name 
                     FROM monitor_logs l 
                     JOIN monitors m ON l.monitor_id = m.id 
-                    WHERE l.status = 'maintenance' 
+                    WHERE l.status = 'maintenance' AND m.archived_at IS NULL 
                     ORDER BY l.checked_at DESC 
                     LIMIT 20
                 ");
@@ -2751,7 +2767,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                             $ds_services = $ds_details['discovered_services'] ?? [];
                             if (!empty($ds_services) && is_array($ds_services)):
                                 // Najdi existující monitory se stejným target+port pro párování
-                                $ds_stmt = $pdo->prepare("SELECT id, name, target, port, type FROM monitors WHERE id != ?");
+                                $ds_stmt = $pdo->prepare("SELECT id, name, target, port, type FROM monitors WHERE id != ? AND archived_at IS NULL");
                                 $ds_stmt->execute([$edit_monitor['id']]);
                                 $ds_existing = $ds_stmt->fetchAll();
                         ?>
@@ -2815,7 +2831,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         // Asset (Phase 4) - fyzické/logické zařízení, ke kterému monitor patří.
                         // Víc monitorů se stejným assetem (např. web + TeamSpeak na jednom VPS)
                         // se na veřejném dashboardu zobrazí vizuálně seskupené.
-                        $stmt_all_assets = $pdo->query("SELECT a.id, a.name, COUNT(m.id) AS member_count FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id GROUP BY a.id, a.name ORDER BY a.name");
+                        $stmt_all_assets = $pdo->query("SELECT a.id, a.name, COUNT(m.id) AS member_count FROM assets a LEFT JOIN monitors m ON m.asset_id = a.id AND m.archived_at IS NULL GROUP BY a.id, a.name ORDER BY a.name");
                         $all_assets = $stmt_all_assets->fetchAll();
                         ?>
                         <div class="form-group">

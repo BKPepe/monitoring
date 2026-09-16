@@ -318,7 +318,8 @@ bez ohledu na to, kdo je přihlášený.
 ### `GET api.php?action=monitors`
 
 **Přiřazené monitory, nebo veřejný pohled.** Seznam monitorů s posledním stavem,
-odezvou a metrikami agenta. Účet `user` dostane přiřazené monitory, administrátor
+odezvou a metrikami agenta, bez archivovaných, pokud si `archived=1` neřekne
+právě o ně. Účet `user` dostane přiřazené monitory, administrátor
 všechny. Nepřihlášený volající nebo kdokoli se `scope=public` dostane všechny
 monitory s `target`, `port`, `hostname` a `agentLastSeen` nastavenými na `null`
 a jen s povolenými klíči `details`.
@@ -353,6 +354,25 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 ### `POST api.php?action=delete_monitor`
 
 **Admin.** Tělo `{"id": 12}`.
+
+### `POST api.php?action=archive_monitor` / `unarchive_monitor`
+
+**Administrátor.** Tělo `{"id": N}`. Archivace je pro monitor, který skončil
+nadobro, třeba nahrazený router. Monitor i jeho historie zůstanou, ale vypadne ze
+všeho živého: seznamy a souhrny ho vynechají, cron ho nekontroluje, žádné
+upozornění neodejde, otevřené incidenty se uzavřou, čekající vzdálené akce
+selžou, hlášení jeho agenta se odmítnou s 403 a `heartbeat.php` odpoví 410. Detail
+podle id zůstává čitelný a `action=monitors&archived=1` vypíše archiv. Každý zápis
+do archivovaného monitoru odpoví 409. Obnovení nastaví stav na `unknown` do příští
+kontroly nebo hlášení. Obojí se zapíše do auditu.
+
+### `GET api.php?action=agent_install_info&monitor_id=`
+
+**Administrátor.** Co potřebuje instalace agenta jednoho monitoru: `agentKey`,
+`apiUrl` tohoto serveru a adresy ke stažení ve `files`. Klíč je přihlašovací
+údaj, proto se každé čtení zapíše do auditu. Archivovaný monitor odpoví 409.
+
+---
 
 ---
 
@@ -538,7 +558,9 @@ uložení skutečné hodnoty přepsalo.
 ### `POST agent_api.php`
 
 Telemetrie z agentů (VPS, OpenWrt). Autorizace polem `agent_key` v těle.
-Vyžaduje POST a platný JSON, jinak 405 / 400.
+Vyžaduje POST a platný JSON, jinak 405 / 400. Povinný je jen `agent_key`:
+`cpu`, `ram` a `hdd` smí být `null`, což agenti posílají při prvním běhu a po
+restartu. Hlášení archivovaného monitoru se odmítne s 403 a `archived: true`.
 
 Server přijímá i klíče, o kterých předem neví - jinak by nová metrika z agenta
 tiše zmizela. Platí ale omezení: typovaná hodnota serveru vždy vyhrává,

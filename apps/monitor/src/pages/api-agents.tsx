@@ -22,6 +22,8 @@ import { appApi } from '@/api/app-api';
 import { Link } from 'react-router';
 import { cn } from '@/lib/utils';
 import { LoadingState } from '@/components/ui/states';
+import { AgentInstallSteps } from '@/components/agent-install-steps';
+import type { AgentPlatform } from '@/lib/agent-install';
 
 type PlatformId = 'linux' | 'openwrt' | 'windows' | 'cpanel' | 'docker';
 
@@ -31,8 +33,11 @@ interface PlatformInstaller {
   badge: string;
   icon: any;
   desc: string;
-  command: string;
+  /** One command - only for what is not an agent (cPanel stats). */
+  command?: string;
   extraNote?: string;
+  /** Agent platforms get the full install steps instead of one command. */
+  steps?: AgentPlatform[];
 }
 
 export function ApiAgentsPage() {
@@ -102,12 +107,7 @@ export function ApiAgentsPage() {
         'api_agents.desc_linux',
         'Automatický sběr CPU, RAM, zátěže disku, běžících procesů a služeb pro Debian, Ubuntu, CentOS a RHEL.'
       ),
-      command:
-        'curl -sSL https://bloodkings.eu/status/agent.sh | bash -s -- --server=https://bloodkings.eu --key=YOUR_MONITOR_KEY',
-      extraNote: t(
-        'api_agents.note_linux',
-        'Skript automaticky nainstaluje systémovou službu systemd (bk-agent.service) a spustí pozadí polling.'
-      ),
+      steps: ['shell', 'python'],
     },
     {
       id: 'openwrt',
@@ -118,12 +118,7 @@ export function ApiAgentsPage() {
         'api_agents.desc_openwrt',
         'Lehký shell agent přímo pro routery OpenWrt/LEDE. Využívá ubus, iwinfo, /proc a podporuje bezpečné Remote Actions (potvrzovací pingy).'
       ),
-      command:
-        'wget -O /usr/bin/agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh',
-      extraNote: t(
-        'api_agents.note_openwrt',
-        'Do /etc/crontabs/root přidejte řádek: * * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1'
-      ),
+      steps: ['openwrt'],
     },
     {
       id: 'windows',
@@ -134,8 +129,7 @@ export function ApiAgentsPage() {
         'api_agents.desc_windows',
         'PowerShell agent pro Windows Server 2016 / 2019 / 2022 s automatickou registrací do Windows Task Scheduler.'
       ),
-      command: 'iwr -useb https://bloodkings.eu/status/agent.ps1 | iex',
-      extraNote: t('api_agents.note_windows', 'Spusťte v PowerShell okénku správce (Run as Administrator).'),
+      steps: ['windows'],
     },
     {
       id: 'cpanel',
@@ -146,7 +140,7 @@ export function ApiAgentsPage() {
         'api_agents.desc_cpanel',
         'Stáhněte cpanel_stats.php do kořenového adresáře hostingu pro veřejný sběr diskového prostoru, RAM a MySQL zátěže.'
       ),
-      command: 'wget -O cpanel_stats.php https://bloodkings.eu/status/cpanel_stats.php',
+      command: `wget -O cpanel_stats.php ${window.location.origin}/status/cpanel_stats.php`,
       extraNote: t(
         'api_agents.note_cpanel',
         'URL k souboru s vaším tajným klíčem následně zadejte v detailu monitoru v záložce Nastavení Webu.'
@@ -161,12 +155,7 @@ export function ApiAgentsPage() {
         'api_agents.desc_docker',
         'Izolovaný Docker kontejner pro provoz v prostředí Docker / Kubernetes bez zásahu do hostitelského OS.'
       ),
-      command:
-        'docker run -d --name bk-agent --restart=always -v /proc:/host/proc:ro -e SERVER_URL=https://bloodkings.eu -e AGENT_KEY=YOUR_MONITOR_KEY bloodkings/agent:latest',
-      extraNote: t(
-        'api_agents.note_docker',
-        'Kontejner mapuje pouze /proc v režimu jen pro čtení (read-only) pro nulové bezpečnostní riziko.'
-      ),
+      steps: ['docker'],
     },
   ];
 
@@ -261,27 +250,32 @@ export function ApiAgentsPage() {
                 {currentPlatform.badge}
               </Badge>
             </div>
-            <button
-              type="button"
-              onClick={() => handleCopy(currentPlatform.id, currentPlatform.command)}
-              className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 bg-primary/20 text-primary text-xs font-semibold hover:bg-primary/30 transition-colors cursor-pointer border border-primary/40"
-            >
-              {copiedKey === currentPlatform.id ? (
-                <Check className="size-3.5 text-up" />
-              ) : (
-                <Copy className="size-3.5" />
-              )}
-              {copiedKey === currentPlatform.id
-                ? t('common.copied', 'Zkopírováno!')
-                : t('api_agents.copy_cmd', 'Kopírovat příkaz')}
-            </button>
+            {currentPlatform.command && (
+              <button
+                type="button"
+                onClick={() => handleCopy(currentPlatform.id, currentPlatform.command ?? '')}
+                className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 bg-primary/20 text-primary text-xs font-semibold hover:bg-primary/30 transition-colors cursor-pointer border border-primary/40"
+              >
+                {copiedKey === currentPlatform.id ? (
+                  <Check className="size-3.5 text-up" />
+                ) : (
+                  <Copy className="size-3.5" />
+                )}
+                {copiedKey === currentPlatform.id
+                  ? t('common.copied', 'Zkopírováno!')
+                  : t('api_agents.copy_cmd', 'Kopírovat příkaz')}
+              </button>
+            )}
           </div>
 
           <p className="text-xs text-muted-foreground leading-relaxed">{currentPlatform.desc}</p>
 
-          <div className="p-3 rounded-lg bg-muted font-mono text-xs text-foreground flex items-center justify-between overflow-x-auto border border-border break-all select-all">
-            <code>{currentPlatform.command}</code>
-          </div>
+          {currentPlatform.command && (
+            <div className="p-3 rounded-lg bg-muted font-mono text-xs text-foreground flex items-center justify-between overflow-x-auto border border-border break-all select-all">
+              <code>{currentPlatform.command}</code>
+            </div>
+          )}
+          {currentPlatform.steps && <AgentInstallSteps key={currentPlatform.id} platforms={currentPlatform.steps} />}
 
           {currentPlatform.extraNote && (
             <p className="text-2xs text-warning bg-warning/10 p-2.5 rounded-md border border-warning/30 font-mono">

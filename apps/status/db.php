@@ -47,7 +47,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260915');
+    define('BK_SCHEMA_VERSION', '20260916');
 
     $bk_current_schema = false;
     try {
@@ -376,6 +376,8 @@ try {
         "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_known_24g INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_capable_5g INT DEFAULT NULL",
         "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_known_5g INT DEFAULT NULL",
+        // Archive: a monitor gone for good keeps its history and leaves everything live.
+        "ALTER TABLE monitors ADD COLUMN archived_at DATETIME DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

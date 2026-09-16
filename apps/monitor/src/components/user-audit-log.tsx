@@ -94,9 +94,12 @@ export function UserAuditLog() {
     totp_recovery_regenerated: t('uaudit.totp_recovery_regenerated', 'Nové záložní kódy'),
     setup_completed: t('uaudit.setup_completed', 'Dokončena instalace'),
     annotation_created: t('uaudit.annotation_created', 'Poznámka v grafu'),
+    monitor_archived: t('uaudit.monitor_archived', 'Monitor archivován'),
+    monitor_restored: t('uaudit.monitor_restored', 'Monitor obnoven z archivu'),
+    agent_key_viewed: t('uaudit.agent_key_viewed', 'Zobrazen klíč agenta'),
   };
 
-  const isSecurity = (action: string) => /login|logout|password|totp|token|oauth|denied/.test(action);
+  const isSecurity = (action: string) => /login|logout|password|totp|token|oauth|denied|key/.test(action);
   const isDestructive = (action: string) => /deleted|failed|denied/.test(action);
 
   // Filter before pagination: page 2 of "security" should be the second
