@@ -408,7 +408,7 @@ export function DashboardPage() {
         </div>
       </CardHeader>
 
-      <CardContent className="px-0 pb-0 overflow-x-auto">
+      <CardContent className="px-0 pb-0">
         <Tabs value={filter} onValueChange={(v) => setFilter(v as StatusFilter)}>
           <TabsList className="mx-5 mb-0">
             <TabsTrigger value="all">
@@ -910,18 +910,29 @@ function MonitorTable({
         })}
       </div>
 
-      <div className="hidden overflow-x-auto md:block">
-        <Table>
+      {/* No overflow-x-auto here and none on the CardContent above: the Table
+          primitive brings its own scroll box, focusable and labelled, and
+          three boxes inside one another meant the outer two never knew the
+          table was wider than the card - only the innermost clipped it. The
+          eight columns fit a 1440 card again since the monitor column stopped
+          taking its full content width (a long "type · target" pushed the
+          last column past the card edge, so "Poslední kontrola" read "Posl"). */}
+      <div className="hidden md:block">
+        <Table aria-label={t('dashboard.monitors_card_title', 'Sledované Monitory & Služby')}>
           <TableHeader>
             <TableRow>
               <TableHead className="pl-5">{t('dashboard.col_monitor_name', 'Monitor')}</TableHead>
-              <TableHead>{t('common.status', 'Stav')}</TableHead>
-              <TableHead>{t('common.response', 'Odezva')}</TableHead>
-              <TableHead>CPU</TableHead>
-              <TableHead>RAM</TableHead>
-              <TableHead>HDD</TableHead>
-              <TableHead>{t('common.uptime', 'Uptime')}</TableHead>
-              <TableHead className="pr-5">{t('common.last_check', 'Poslední kontrola')}</TableHead>
+              <TableHead className="px-2">{t('common.status', 'Stav')}</TableHead>
+              <TableHead className="px-2">{t('common.response', 'Odezva')}</TableHead>
+              <TableHead className="px-2">CPU</TableHead>
+              <TableHead className="px-2">RAM</TableHead>
+              <TableHead className="px-2">HDD</TableHead>
+              <TableHead className="px-2">{t('common.uptime', 'Uptime')}</TableHead>
+              {/* The one header allowed to wrap: two words on two lines cost 40 px
+                  of column, which is what pushed the values off the card edge. */}
+              <TableHead className="pr-5 pl-2 whitespace-normal">
+                {t('common.last_check', 'Poslední kontrola')}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -941,20 +952,24 @@ function MonitorTable({
                         </span>
                       );
                     })()}
-                    <div className="leading-tight min-w-0">
+                    <div className="leading-tight min-w-0 max-w-[10rem]">
                       <Link
                         to={`/infrastructure/${monitor.id}`}
-                        className="font-medium hover:underline text-foreground"
+                        className="block truncate font-medium hover:underline text-foreground"
+                        title={monitor.name}
                       >
                         {monitor.name}
                       </Link>
-                      <p className="text-muted-foreground text-xs truncate">
+                      <p
+                        className="text-muted-foreground text-xs truncate"
+                        title={`${monitor.type} · ${monitor.target}`}
+                      >
                         {monitor.type} · {monitor.target}
                       </p>
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>
+                <TableCell className="px-2">
                   {/* Mockup: status as coloured text with a dot, not a pill badge. */}
                   <span className="flex items-center gap-1.5 text-xs font-semibold">
                     <StatusDot variant={statusVariant[monitor.status]} />
@@ -973,11 +988,11 @@ function MonitorTable({
                     </span>
                   </span>
                 </TableCell>
-                <TableCell className="tabular-nums">
-                  <div className="flex items-center gap-2">
+                <TableCell className="tabular-nums px-2">
+                  <div className="flex items-center gap-1.5">
                     <span>{formatMs(monitor.responseMs)}</span>
                     {(latencySeries[monitor.id]?.length ?? 0) >= 2 && (
-                      <Sparkline data={latencySeries[monitor.id]} tone="latency" className="h-4 w-14 shrink-0" />
+                      <Sparkline data={latencySeries[monitor.id]} tone="latency" className="h-4 w-10 shrink-0" />
                     )}
                   </div>
                 </TableCell>
@@ -988,10 +1003,10 @@ function MonitorTable({
                   const isProc = (monitor.type || '').toLowerCase() === 'agent_service';
                   return (
                     <>
-                      <TableCell className="tabular-nums">
+                      <TableCell className="tabular-nums px-2">
                         <ThresholdValue value={usage.cpu} limit={thresholdFor(monitor, 'cpu')} />
                       </TableCell>
-                      <TableCell className="tabular-nums">
+                      <TableCell className="tabular-nums px-2">
                         {isProc ? (
                           usage.ram != null ? (
                             <span className="text-muted-foreground">{usage.ram} MB</span>
@@ -1005,13 +1020,11 @@ function MonitorTable({
                     </>
                   );
                 })()}
-                <TableCell className="tabular-nums">
+                <TableCell className="tabular-nums px-2">
                   <ThresholdValue value={monitor.hdd} limit={thresholdFor(monitor, 'hdd')} />
                 </TableCell>
                 <TableCell
-                  className={
-                    monitor.status === 'down' ? 'tabular-nums text-down' : 'tabular-nums text-muted-foreground'
-                  }
+                  className={cn('tabular-nums px-2', monitor.status === 'down' ? 'text-down' : 'text-muted-foreground')}
                 >
                   {/* A monitor that is down has no uptime - it has an outage duration. */}
                   {monitor.status === 'down' && monitor.sinceStatusChangeSeconds != null
@@ -1020,7 +1033,7 @@ function MonitorTable({
                       ? '—'
                       : formatUptime(monitor.uptimeSeconds)}
                 </TableCell>
-                <TableCell className="text-muted-foreground pr-5 text-xs">
+                <TableCell className="text-muted-foreground pr-5 pl-2 text-xs whitespace-nowrap">
                   {monitor.lastCheck ? formatRelative(monitor.lastCheck) : '—'}
                 </TableCell>
               </TableRow>

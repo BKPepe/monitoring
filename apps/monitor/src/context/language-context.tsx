@@ -15,7 +15,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'nav.websites': { cs: 'Weby & HTTP', en: 'Websites & HTTP' },
   'nav.status-pages': { cs: 'Status Stránky', en: 'Status Pages' },
   'nav.incidents': { cs: 'Incidenty', en: 'Incidents' },
-  'nav.insights': { cs: 'AI Insights', en: 'System Insights' },
+  'nav.insights': { cs: 'Zjištění AI', en: 'System Insights' },
   'nav.reports': { cs: 'SLA Výkazy', en: 'Reports & SLA' },
   'nav.users': { cs: 'Uživatelé', en: 'Users' },
   'nav.api-agents': { cs: 'API & Agenti', en: 'API & Agents' },
@@ -38,6 +38,20 @@ const translations: Record<string, { cs: string; en: string }> = {
   'common.status': { cs: 'Stav', en: 'Status' },
   'common.target': { cs: 'Cíl', en: 'Target' },
   'common.type': { cs: 'Typ', en: 'Type' },
+
+  // Human names of the monitor types, so no page has to print the stored enum
+  // ("Typ: AGENT_SERVICE"). Same wording as the type picker in admin.php.
+  'montype.web': { cs: 'Web (HTTP/S)', en: 'Website (HTTP/S)' },
+  'montype.port': { cs: 'TCP port', en: 'TCP port' },
+  'montype.dns': { cs: 'DNS dotaz', en: 'DNS query' },
+  'montype.vps': { cs: 'Server s agentem', en: 'Server with agent' },
+  'montype.openwrt': { cs: 'OpenWrt router', en: 'OpenWrt router' },
+  'montype.cpanel': { cs: 'cPanel hosting', en: 'cPanel hosting' },
+  'montype.agent_service': { cs: 'Služba pod agentem', en: 'Service under an agent' },
+  'montype.teamspeak': { cs: 'TeamSpeak server', en: 'TeamSpeak server' },
+  'montype.minecraft': { cs: 'Minecraft server', en: 'Minecraft server' },
+  'montype.discord': { cs: 'Discord server', en: 'Discord server' },
+  'montype.heartbeat': { cs: 'Heartbeat (úloha se hlásí)', en: 'Heartbeat (job reports itself)' },
   'common.category': { cs: 'Kategorie', en: 'Category' },
   'common.response': { cs: 'Odezva', en: 'Latency' },
   'common.last_check': { cs: 'Poslední kontrola', en: 'Last Check' },
@@ -562,7 +576,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Tato status stránka neexistuje nebo není veřejná.',
     en: 'This status page does not exist or is not public.',
   },
-  'dashboard.title': { cs: 'Status Overview', en: 'Status Overview' },
+  'dashboard.title': { cs: 'Přehled stavu', en: 'Status Overview' },
   'dashboard.subtitle': {
     cs: 'Přehled všech vašich monitorovaných služeb, domén a serverů v reálném čase.',
     en: 'Real-time overview of all monitored services, domains, and servers.',
@@ -981,8 +995,21 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_threshold': { cs: 'Překročen limit', en: 'Threshold Exceeded' },
   'asset.tl_monitor_added': { cs: 'Monitor přidán', en: 'Monitor Added' },
   'asset.tl_monitor_updated': { cs: 'Monitor upraven', en: 'Monitor Updated' },
-  'asset.summary_title': { cs: 'Executive Summary', en: 'Executive Summary' },
+  'asset.summary_title': { cs: 'Souhrn stavu', en: 'Executive Summary' },
   'asset.params_title': { cs: 'Parametry monitoru / serveru', en: 'Monitor / Server Parameters' },
+  // A service watched by an agent has no process list of its own - the ranking
+  // is collected on the server it runs under, and the card says so with a link
+  // instead of claiming that no agent is connected.
+  'asset.processes_on_parent': {
+    cs: 'Procesy sbírá agent na serveru, pod kterým tato služba běží.',
+    en: 'Processes are collected by the agent on the server this service runs under.',
+  },
+  'asset.processes_open_parent': { cs: 'Otevřít {name}', en: 'Open {name}' },
+  // A type that stores no metric history gets one line, not an empty chart frame.
+  'asset.no_series_type': {
+    cs: 'Tento typ monitoru neukládá časové řady - sleduje se jen dostupnost.',
+    en: 'This monitor type stores no time series - only availability is tracked.',
+  },
   'asset.no_agent_cpanel_hint': {
     cs: 'Webhosting nemá systémového agenta, výpis procesů proto není k dispozici. Zdroje hostingu (RAM, disk, databáze, bandwidth) z cPanel exporteru najdete na záložce „Procesy".',
     en: 'This webhosting has no system agent, so a process list is not available. Hosting resources (RAM, disk, databases, bandwidth) from the cPanel exporter are on the "Processes" tab.',
@@ -3167,6 +3194,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'sidebar.custom_links': { cs: 'Vlastní odkazy', en: 'Custom links' },
   'asset.temperature': { cs: 'Teplota', en: 'Temperature' },
+  // The CPU tile shows the all-core average; on a router one core forwards
+  // the packets and the average hides it (gap item, WAN 3.6).
+  'asset.cpu_core_hint': { cs: 'nejvytíženější jádro {core}: {pct} %', en: 'busiest core {core}: {pct} %' },
+  'asset.cpu_core_hint_anon': { cs: 'nejvytíženější jádro: {pct} %', en: 'busiest core: {pct} %' },
   'asset.ra_restart_wan': { cs: 'Restart WAN', en: 'Restart WAN' },
   'asset.ra_restart_wireguard': { cs: 'Restart WireGuard', en: 'Restart WireGuard' },
   'asset.ra_reboot_router': { cs: 'Restartovat router', en: 'Reboot router' },
@@ -3191,7 +3222,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'asset.ra_failed': { cs: 'Akci se nepodařilo zařadit.', en: 'Failed to queue the action.' },
   'asset.ra_working': { cs: 'Zařazuji…', en: 'Queueing…' },
-  'dashboard.insights_title': { cs: 'System Insights', en: 'System Insights' },
+  'dashboard.insights_title': { cs: 'Zjištění ze systému', en: 'System Insights' },
   'dashboard.insights_subtitle': {
     cs: 'Automatická analýza trendů a anomálií napříč infrastrukturou.',
     en: 'Automatic analysis of trends and anomalies across your infrastructure.',
@@ -3295,6 +3326,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'agent_install.cron_minute': {
     cs: 'Zařaďte agenta do cronu, jednou za minutu',
     en: 'Add the agent to cron, once a minute',
+  },
+  'agent_install.cron_check': {
+    cs: 'Ověřte, že je agent naplánovaný a odesílá',
+    en: 'Check that the agent is scheduled and reporting',
+  },
+  'agent_install.cron_check_note': {
+    cs: 'První řádek musí vypsat plánovací záznam. Do minuty pak monitor v aplikaci přestane hlásit, že agent mlčí.',
+    en: 'The first line must print the scheduled entry. Within a minute the monitor stops reporting a silent agent.',
   },
   'agent_install.wifi6e': {
     cs: 'Volitelně: podpora Wi-Fi 6E u klientů',

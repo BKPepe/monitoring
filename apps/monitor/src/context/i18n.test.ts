@@ -69,6 +69,25 @@ describe('i18n slovník', () => {
     expect(dynamic).toEqual([]);
   });
 
+  it('nenechává anglický titulek na české straně', () => {
+    // Four headings shipped with English on BOTH sides, so a Czech admin read
+    // "Status Overview", "Executive Summary", "System Insights" and
+    // "AI Insights" in an otherwise Czech page. The keys below must differ -
+    // a translation identical to the English one is what the bug looked like.
+    const bilingual = ['dashboard.title', 'asset.summary_title', 'dashboard.insights_title', 'nav.insights'];
+    const sameOnBothSides: string[] = [];
+
+    for (const key of bilingual) {
+      const entry = new RegExp(`^\\s{2}'${key.replace('.', '\\.')}':\\s*\\{([^}]*)\\}`, 'm').exec(dictionarySource);
+      expect(entry, key).not.toBeNull();
+      const cs = /cs:\s*'([^']*)'/.exec(entry![1])?.[1];
+      const en = /en:\s*'([^']*)'/.exec(entry![1])?.[1];
+      if (cs === undefined || en === undefined || cs === en) sameOnBothSides.push(key);
+    }
+
+    expect(sameOnBothSides).toEqual([]);
+  });
+
   it('má pro každý klíč českou i anglickou variantu', () => {
     // The body is read by bracket matching, not a regex: values contain
     // placeholders like '{count}', where /\{([^}]*)\}/ would stop early and

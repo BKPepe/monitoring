@@ -61,6 +61,9 @@ import { HeartbeatCard } from '@/components/heartbeat-card';
 import { StorageCard } from '@/components/storage-card';
 import { SpeedtestCard } from '@/components/speedtest-card';
 import { LoadingState } from '@/components/ui/states';
+import { monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
+import { processUsage } from '@/lib/monitor-grouping';
+import { busiestCoreHint, socTemperatureC } from '@/lib/router-overview';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -71,6 +74,8 @@ interface HealthMetric {
   label: string;
   value: string;
   tone?: 'latency' | 'cpu' | 'memory' | 'disk' | 'temperature';
+  /** One quiet line under the value: what the number does not say by itself. */
+  hint?: string;
   /** Mini trend for the chosen period (from already-loaded chart data - no extra fetch). */
   series?: (number | null)[];
   delta?: { pct: number; direction: 'up' | 'down'; good: boolean | null };
@@ -108,6 +113,10 @@ interface AssetDetail {
   /** Merged top-CPU + top-RAM processes from the agent; null = the agent does not report that dimension. */
   processes: { name: string; cpu: number | null; memory: number | null }[];
   related: { name: string; kind: string; status: MonitorStatus; detail: string }[];
+  /** What this monitor TYPE can ever report - decides which tiles and cards exist at all. */
+  typeProfile: MonitorTypeProfile;
+  /** The agent monitor this one runs under; null when it has none (or none is loaded). */
+  parent: { id: number; name: string } | null;
 }
 
 /**
@@ -985,7 +994,10 @@ function OverviewTab({
         that the data is live shows in the numbers - and the spacing was built
         for content that is only here occasionally.
       */}
-      <Card className="xl:col-span-8">
+      {/* self-start: grid items stretch to the row, so two sentences were pulled
+          to the height of the parameter list next to them - 200 px of card for
+          40 px of text. The row still grows with whichever card is taller. */}
+      <Card className="self-start xl:col-span-8">
         <CardHeader className="pb-2">
           <CardTitle>{t('asset.summary_title', 'Executive Summary')}</CardTitle>
         </CardHeader>
@@ -1052,7 +1064,10 @@ function OverviewTab({
                 <div key={row.label} className="flex items-baseline justify-between gap-3">
                   <dt className="text-muted-foreground text-xs">{row.label}</dt>
                   <dd className="min-w-0 text-right font-medium">
-                    <span className="block truncate" title={row.hint ?? undefined}>
+                    {/* Wrapping, not truncating: a date cut in half ("12. 8. 2026 0:…")
+                        is worse than a value on two lines, and `truncate` hid the end
+                        of every long row here - kernel, model, board. */}
+                    <span className="block [overflow-wrap:anywhere]" title={row.hint ?? undefined}>
                       {row.value}
                     </span>
                     {/* Without this the row only said WHEN the status changed. What
@@ -1082,6 +1097,7 @@ function OverviewTab({
           assetId={assetId ?? asset.id}
           monitorId={asset.id}
           thresholds={asset.thresholds}
+          hasTimeSeries={asset.typeProfile.timeSeries}
         />
       </div>
 
@@ -1118,54 +1134,72 @@ function OverviewTab({
         </CardContent>
       </Card>
 
-      <Card className="xl:col-span-3">
-        <CardHeader>
-          <CardTitle>{t('asset.tab_processes', 'Nejvytíženější procesy')}</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0">
-          {asset.processes.length > 0 && (
-            <p className="text-2xs text-muted-foreground px-5 pb-2">
-              {t(
-                'asset.processes_top_hint',
-                'Agent hlásí 5 nejnáročnějších procesů podle CPU a 5 podle RAM z posledního reportu — není to kompletní výpis všeho, co na stroji běží.'
-              )}
-            </p>
-          )}
-          {asset.processes.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-5 py-6 text-center">
-              {asset.cpanelStats
-                ? t(
-                    'asset.no_agent_cpanel_hint',
-                    'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.'
-                  )
-                : t('asset.no_agent_processes', 'Zatím není připojen agent pro výpis procesů.')}
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">{t('asset.process', 'Proces')}</TableHead>
-                  <TableHead className="text-right">CPU</TableHead>
-                  <TableHead className="pr-5 text-right">RAM</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {asset.processes.map((proc) => (
-                  <TableRow key={proc.name}>
-                    <TableCell className="pl-5 font-mono text-xs">{proc.name}</TableCell>
-                    <TableCell className="tabular-nums text-right">
-                      {proc.cpu != null ? formatPercent(proc.cpu, 1) : '—'}
-                    </TableCell>
-                    <TableCell className="tabular-nums pr-5 text-right">
-                      {proc.memory != null ? `${proc.memory} MB` : '—'}
-                    </TableCell>
+      {/* A type that never has a process ranking gets no card. One that has it
+          somewhere else (a service watched by its server's agent) gets the
+          pointer instead of "no agent is connected" - the agent IS connected,
+          just one level up. */}
+      {asset.typeProfile.processes !== 'none' && (
+        <Card className="xl:col-span-3">
+          <CardHeader>
+            <CardTitle>{t('asset.tab_processes', 'Nejvytíženější procesy')}</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            {asset.processes.length > 0 && (
+              <p className="text-2xs text-muted-foreground px-5 pb-2">
+                {t(
+                  'asset.processes_top_hint',
+                  'Agent hlásí 5 nejnáročnějších procesů podle CPU a 5 podle RAM z posledního reportu — není to kompletní výpis všeho, co na stroji běží.'
+                )}
+              </p>
+            )}
+            {asset.processes.length === 0 ? (
+              <div className="text-xs text-muted-foreground px-5 py-6 text-center">
+                <p>
+                  {asset.typeProfile.processes === 'parent'
+                    ? t('asset.processes_on_parent', 'Procesy sbírá agent na serveru, pod kterým tato služba běží.')
+                    : asset.cpanelStats
+                      ? t(
+                          'asset.no_agent_cpanel_hint',
+                          'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.'
+                        )
+                      : t('asset.no_agent_processes', 'Zatím není připojen agent pro výpis procesů.')}
+                </p>
+                {asset.typeProfile.processes === 'parent' && asset.parent && (
+                  <Link
+                    to={`/infrastructure/${asset.parent.id}`}
+                    className="text-primary mt-1.5 inline-block font-medium hover:underline"
+                  >
+                    {t('asset.processes_open_parent', { name: asset.parent.name }, `Otevřít ${asset.parent.name}`)}
+                  </Link>
+                )}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-5">{t('asset.process', 'Proces')}</TableHead>
+                    <TableHead className="text-right">CPU</TableHead>
+                    <TableHead className="pr-5 text-right">RAM</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                </TableHeader>
+                <TableBody>
+                  {asset.processes.map((proc) => (
+                    <TableRow key={proc.name}>
+                      <TableCell className="pl-5 font-mono text-xs">{proc.name}</TableCell>
+                      <TableCell className="tabular-nums text-right">
+                        {proc.cpu != null ? formatPercent(proc.cpu, 1) : '—'}
+                      </TableCell>
+                      <TableCell className="tabular-nums pr-5 text-right">
+                        {proc.memory != null ? `${proc.memory} MB` : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="xl:col-span-4">
         <CardHeader>
@@ -1295,9 +1329,26 @@ function hasNetworkData(d: Record<string, any>): boolean {
  *   this tab is a snapshot of the last report, but a good half of these
  *   numbers are recorded every minute and were readable only as "now".
  */
-function Row({ label, value, to }: { label: string; value: React.ReactNode; to?: string }) {
-  if (value == null || value === '') return null;
-  const shown = <span className="text-right font-mono font-medium">{value}</span>;
+function Row({
+  label,
+  value,
+  to,
+  dash,
+}: {
+  label: string;
+  value: React.ReactNode;
+  to?: string;
+  /**
+   * G24: this value used to be a claim the agent made up when it did not
+   * know (a resolver called "Dnsmasq", "unencrypted DNS", zero reconnects).
+   * The claims are gone, so the row prints an em dash - "nobody measured
+   * this" - instead of vanishing, which reads as "there is nothing here".
+   */
+  dash?: boolean;
+}) {
+  const missing = value == null || value === '';
+  if (missing && !dash) return null;
+  const shown = <span className="text-right font-mono font-medium">{missing ? '—' : value}</span>;
   return (
     <div className="border-border/40 flex items-center justify-between gap-3 border-b py-1.5 text-xs last:border-0">
       <span className="text-muted-foreground">{label}</span>
@@ -2060,6 +2111,9 @@ function HealthCard({ metric }: { metric: HealthMetric }) {
           </span>
         )}
       </div>
+      {/* An average that hides one saturated core is the most misread number
+          on a router page - the line says so right under it. */}
+      {metric.hint && <p className="text-muted-foreground text-2xs">{metric.hint}</p>}
       {metric.series && metric.tone && (
         <div className="mt-auto pt-0.5">
           <Sparkline data={metric.series} tone={metric.tone} className="h-7 w-full" />
@@ -2111,6 +2165,7 @@ function PerformanceCharts({
   assetId,
   monitorId,
   thresholds,
+  hasTimeSeries = true,
 }: {
   data: ChartData[] | null;
   error: Error | null;
@@ -2122,6 +2177,8 @@ function PerformanceCharts({
   monitorId: number;
   /** The monitor's effective limits, so the charts show the same line the alerts use. */
   thresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
+  /** False = this monitor TYPE stores no metric history, so "no data" is not news. */
+  hasTimeSeries?: boolean;
 }) {
   const { t } = useLanguage();
 
@@ -2172,6 +2229,16 @@ function PerformanceCharts({
   }
 
   if (!data || data.length === 0) {
+    // A type that never stores a time series (an agent-side service check, a
+    // heartbeat) used to get a full-width box announcing an empty database.
+    // Nothing is missing there, so one line says it and the page moves on.
+    if (!hasTimeSeries) {
+      return (
+        <p className="text-muted-foreground text-xs">
+          {t('asset.no_series_type', 'Tento typ monitoru neukládá časové řady - sleduje se jen dostupnost.')}
+        </p>
+      );
+    }
     return (
       <div className="p-8 rounded-lg bg-secondary/30 border border-border text-center text-xs text-muted-foreground space-y-1">
         <p className="font-semibold text-foreground text-sm">
@@ -2560,11 +2627,22 @@ function buildDynamicAsset(
             : m.status === 'unknown'
               ? 'unknown'
               : 'paused';
+  // "Před 1 měsíci (12. 8. 2026 0:27:52)" did not fit the narrow parameter
+  // column and was cut mid-date. The relative part already answers "when", so
+  // the absolute one keeps the minute and drops the seconds.
+  const stamp = (iso: string) =>
+    new Date(iso).toLocaleString('cs-CZ', {
+      day: 'numeric',
+      month: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   const lastCheckDisplay = m.lastCheck
-    ? `${timeAgo(m.lastCheck, t)} (${new Date(m.lastCheck).toLocaleString('cs-CZ')})`
+    ? `${timeAgo(m.lastCheck, t)} (${stamp(m.lastCheck)})`
     : t('asset.moment_ago', 'Před chvílí');
   const lastChangeDisplay = m.lastStatusChange
-    ? `${timeAgo(m.lastStatusChange, t)} (${new Date(m.lastStatusChange).toLocaleString('cs-CZ')})`
+    ? `${timeAgo(m.lastStatusChange, t)} (${stamp(m.lastStatusChange)})`
     : '—';
 
   // The agent sends two TOP rankings (5 by CPU, 5 by RAM) - not a complete
@@ -2618,6 +2696,23 @@ function buildDynamicAsset(
   const ts3Clients: number | null = m.details?.ts3_clients ?? ts3Servers?.clients_online ?? null;
   const ts3Max: number | null = m.details?.ts3_max ?? ts3Servers?.clients_max ?? null;
   const hasTs3Counts = ts3Clients != null && ts3Max != null;
+  // The SoC temperature is read by its payload key (G22) and the CPU tile says
+  // which core was busy while the all-core average stayed calm.
+  const os = (m.os ?? '').trim();
+  const osLabel = os !== '' && os !== 'web' && os !== m.type ? os : null;
+  const socTemp = socTemperatureC(m.details ?? {});
+  const coreHint = busiestCoreHint(m.details ?? {}, m.cpu ?? null, t);
+
+  // Per-type page shape. A tile exists when the TYPE can report the value (an
+  // honest "—" until it does) or when a value is actually here; a value this
+  // type never measures gets no tile - the page used to show five tiles of
+  // which four said "—" on every agent_service.
+  const profile = monitorTypeProfile(m.type);
+  // CPU and memory of a watched process live in its parent agent's rankings -
+  // the dashboard has read them from there all along, the detail page did not.
+  const usage = profile.processes === 'parent' ? processUsage(m, [m, ...siblings]) : { cpu: m.cpu, ram: m.ram };
+  const parentMonitor = siblings.find((sib) => ['vps', 'openwrt'].includes((sib.type ?? '').toLowerCase())) ?? null;
+  const typeLabel = monitorTypeLabel(m.type, t);
 
   return {
     id: m.id,
@@ -2625,9 +2720,9 @@ function buildDynamicAsset(
     kind: m.type.toUpperCase(),
     // Mockup: "OpenWrt 23.05.3 · 192.168.1.1 · Prague, CZ" - the OS first
     // when the agent reports it (for websites m.os merely echoes the type, skip it).
-    subtitle: [m.os && m.os !== 'web' && m.os !== m.type ? m.os : null, m.target, m.category ?? 'Monitory']
-      .filter(Boolean)
-      .join(' · '),
+    // `m.os` arrived as a single space from agents that could not read the
+    // system name (G24): trimmed away, or the subtitle started with " · ".
+    subtitle: [osLabel, m.target, m.category ?? 'Monitory'].filter(Boolean).join(' · '),
     status,
     breadcrumb: [m.category ?? 'Monitory'],
     // The KPI row per the mockup: uptime, latency, CPU, RAM, disk, temperature.
@@ -2646,12 +2741,16 @@ function buildDynamicAsset(
         : m.uptimeSeconds != null
           ? [{ key: 'uptime', label: 'Uptime', value: formatUptime(m.uptimeSeconds) }]
           : []),
-      {
-        key: 'latency',
-        label: t('common.response', 'Odezva'),
-        value: m.responseMs != null ? `${m.responseMs} ms` : '—',
-        tone: 'latency' as const,
-      },
+      ...(profile.latency || m.responseMs != null
+        ? [
+            {
+              key: 'latency',
+              label: t('common.response', 'Odezva'),
+              value: m.responseMs != null ? `${m.responseMs} ms` : '—',
+              tone: 'latency' as const,
+            },
+          ]
+        : []),
       ...(isTS3 && hasTs3Counts
         ? [
             {
@@ -2666,30 +2765,45 @@ function buildDynamicAsset(
             },
           ]
         : []),
-      {
-        key: 'cpu',
-        label: t('common.cpu', 'Využití CPU'),
-        value: m.cpu != null ? `${m.cpu.toFixed(1)} %` : '—',
-        tone: 'cpu' as const,
-      },
-      {
-        key: 'ram',
-        label: t('common.ram', 'Využití RAM'),
-        value: m.ram != null ? `${m.ram.toFixed(1)} %` : '—',
-        tone: 'memory' as const,
-      },
-      {
-        key: 'hdd',
-        label: t('common.hdd', 'Využití disku'),
-        value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—',
-        tone: 'disk' as const,
-      },
-      ...(m.details?.temperature_c != null
+      ...(profile.cpu || usage.cpu != null
+        ? [
+            {
+              key: 'cpu',
+              label: t('common.cpu', 'Využití CPU'),
+              value: usage.cpu != null ? `${usage.cpu.toFixed(1)} %` : '—',
+              tone: 'cpu' as const,
+              ...(coreHint ? { hint: coreHint } : {}),
+            },
+          ]
+        : []),
+      ...(profile.ram !== false || usage.ram != null
+        ? [
+            {
+              key: 'ram',
+              label: t('common.ram', 'Využití RAM'),
+              // A watched process reports resident megabytes, a machine a share
+              // of its memory - the unit follows the type, not the number.
+              value: usage.ram == null ? '—' : profile.ram === 'mb' ? `${usage.ram} MB` : `${usage.ram.toFixed(1)} %`,
+              tone: 'memory' as const,
+            },
+          ]
+        : []),
+      ...(profile.disk || m.hdd != null
+        ? [
+            {
+              key: 'hdd',
+              label: t('common.hdd', 'Využití disku'),
+              value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—',
+              tone: 'disk' as const,
+            },
+          ]
+        : []),
+      ...(socTemp != null
         ? [
             {
               key: 'temp',
               label: t('asset.temperature', 'Teplota'),
-              value: `${Number(m.details.temperature_c).toFixed(0)} °C`,
+              value: `${socTemp.toFixed(0)} °C`,
               tone: 'temperature' as const,
             },
           ]
@@ -2708,7 +2822,8 @@ function buildDynamicAsset(
             : t('asset.outage_detected', 'Detekován výpadek'),
         variant: status === 'up' ? 'up' : 'warning',
       },
-      { label: `${t('common.type', 'Typ')}: ${m.type.toUpperCase()}`, variant: 'info' },
+      // The badge printed the stored enum ("Typ: AGENT_SERVICE"); it says a word now.
+      { label: `${t('common.type', 'Typ')}: ${typeLabel}`, variant: 'info' },
       // Stored for years, never displayed: a server awaiting restart and watched
       // processes that are not running - both belong at first sight.
       ...(m.details?.reboot_required
@@ -2731,8 +2846,12 @@ function buildDynamicAsset(
     info: [
       { label: t('common.last_check', 'Poslední kontrola'), value: lastCheckDisplay },
       { label: t('common.last_change', 'Poslední změna stavu'), value: lastChangeDisplay },
-      { label: t('common.response', 'Odezva'), value: m.responseMs != null ? `${m.responseMs} ms` : '—' },
-      { label: t('infra.os', 'Operační systém'), value: m.os ?? '—' },
+      ...(profile.latency || m.responseMs != null
+        ? [{ label: t('common.response', 'Odezva'), value: m.responseMs != null ? `${m.responseMs} ms` : '—' }]
+        : []),
+      // `os` echoes the type for monitors that report no system name - the row
+      // then said "Operační systém: agent_service" next to "Typ protokolu".
+      ...(osLabel ? [{ label: t('infra.os', 'Operační systém'), value: osLabel }] : []),
       ...(m.details?.model ? [{ label: t('asset.model', 'Model'), value: String(m.details.model) }] : []),
       ...(m.details?.board_name ? [{ label: t('asset.board', 'Board'), value: String(m.details.board_name) }] : []),
       ...(m.details?.kernel ? [{ label: t('asset.kernel', 'Kernel'), value: String(m.details.kernel) }] : []),
@@ -2745,7 +2864,7 @@ function buildDynamicAsset(
       ...(m.details?.timezone
         ? [{ label: t('asset.timezone', 'Časová zóna'), value: String(m.details.timezone) }]
         : []),
-      { label: t('asset.protocol_type', 'Typ protokolu'), value: m.type.toUpperCase() },
+      { label: t('asset.protocol_type', 'Typ protokolu'), value: typeLabel },
       ...(isTS3 && hasTs3Counts
         ? [
             {
@@ -2828,9 +2947,12 @@ function buildDynamicAsset(
     // Monitors on the same asset: the TeamSpeak server running on the VPS the
     // agent reports about, the web check on the same machine. Their own status
     // is shown, not the parent's.
+    typeProfile: profile,
+    parent: parentMonitor ? { id: parentMonitor.id, name: parentMonitor.name } : null,
     related: siblings.map((s) => ({
       name: s.name,
-      kind: (s.type ?? '').toUpperCase(),
+      // The card next to it used to read "AGENT_SERVICE · nginx:443".
+      kind: monitorTypeLabel(s.type, t),
       status:
         s.status === 'up'
           ? 'up'

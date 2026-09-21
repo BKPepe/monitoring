@@ -129,7 +129,8 @@ describe('smoke: stránky se vykreslí', () => {
 
   it('Dashboard ukazuje nadpis a poctivé nuly, žádná vymyšlená čísla', async () => {
     renderPage(<DashboardPage />);
-    expect(await screen.findByText('Status Overview')).toBeTruthy();
+    // The Czech side of this title used to read 'Status Overview' (F2).
+    expect(await screen.findByText('Přehled stavu')).toBeTruthy();
     // Uptime without data = a dash, never a fictional 100 %.
     expect(screen.queryByText('100.00')).toBeNull();
   });
