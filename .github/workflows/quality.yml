@@ -242,8 +242,11 @@ jobs:
       # ktery mesice vracel 500, protoze volal funkci, co v kodu nebyla.
       # Level 0 hlasi na teto kodove zakladne nula falesnych poplachu, takze
       # nema baseline a kazdy budouci pad je skutecny.
+      # 1G na worker prestalo stacit, kdyz functions.php prerostl 15 tisic radku:
+      # PHPStan deli praci po souborech, takze jeden worker drzi cely ten soubor
+      # a spadl na limitu - hlasi to jako "Child process error", ne jako nalez.
       - name: PHPStan (level 0, bez baseline)
-        run: phpstan analyse --no-progress --memory-limit=1G
+        run: phpstan analyse --no-progress --memory-limit=2G
 
       # Taint analyza: sleduje cestu od $_GET/$_POST/$_COOKIE/$_SERVER az k
       # nebezpecnemu mistu (echo do HTML, SQL, include). Pri prvnim behu nasla
