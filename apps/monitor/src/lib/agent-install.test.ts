@@ -35,7 +35,7 @@ describe('agentInstallSteps', () => {
     expect(config).toContain('/usr/bin/agent_openwrt.cfg');
     expect(config).toContain('AGENT_KEY="abc123"');
     expect(config).toContain('API_URL="https://example.test/status/agent_api.php"');
-    expect(steps.map((s) => s.id)).toEqual(['download', 'config', 'test', 'schedule', 'wifi6e']);
+    expect(steps.map((s) => s.id)).toEqual(['download', 'config', 'test', 'schedule', 'schedule_check', 'wifi6e']);
   });
 
   it('keeps agent.cfg in the same folder as agent.sh and agent.py', () => {
@@ -45,6 +45,15 @@ describe('agentInstallSteps', () => {
       expect(text).toContain(`/opt/bk-agent/${platform === 'shell' ? 'agent.sh' : 'agent.py'}`);
       expect(text).toContain('--verbose');
     }
+  });
+
+  it('schedules through crontab, because Turris runs cronie and ignores /etc/crontabs', () => {
+    const schedule = agentInstallSteps('openwrt', target, t).find((s) => s.id === 'schedule')!.command;
+    expect(schedule).toContain('| crontab -');
+    expect(schedule).toContain('crontab -l');
+    // Repeating the step must not schedule the agent twice.
+    expect(schedule).toContain('grep -v agent_openwrt.sh');
+    expect(schedule).not.toContain('/etc/crontabs');
   });
 
   it('uses no flag or image the agents do not have', () => {

@@ -85,8 +85,23 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
         {
           id: 'schedule',
           title: t('agent_install.cron_minute', 'Zařaďte agenta do cronu, jednou za minutu'),
+          // Through `crontab`, not by appending to /etc/crontabs/root: that path
+          // belongs to busybox crond, and Turris OS runs cronie, which reads
+          // /var/spool/cron/crontabs and ignores the file. An agent installed by
+          // the old instructions ran once by hand and then never again, while
+          // the server reported the router as down. The `grep -v` keeps the step
+          // repeatable - running it twice must not schedule the agent twice.
           command:
-            "echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' >> /etc/crontabs/root && /etc/init.d/cron restart",
+            "( crontab -l 2>/dev/null | grep -v agent_openwrt.sh; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -",
+        },
+        {
+          id: 'schedule_check',
+          title: t('agent_install.cron_check', 'Ověřte, že je agent naplánovaný a odesílá'),
+          command: 'crontab -l | grep agent_openwrt.sh && sleep 70 && logread | grep -i agent | tail -5',
+          note: t(
+            'agent_install.cron_check_note',
+            'První řádek musí vypsat plánovací záznam. Do minuty pak monitor v aplikaci přestane hlásit, že agent mlčí.'
+          ),
         },
         {
           id: 'wifi6e',
