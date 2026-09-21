@@ -50,6 +50,9 @@ describe('agentInstallSteps', () => {
   it('schedules through crontab, because Turris runs cronie and ignores /etc/crontabs', () => {
     const schedule = agentInstallSteps('openwrt', target, t).find((s) => s.id === 'schedule')!.command;
     expect(schedule).toContain('| crontab -');
+    // cronie backs the old crontab up into $HOME/.cache/crontab and creates that
+    // directory with one non-recursive mkdir; on a Turris /root/.cache is absent.
+    expect(schedule).toContain('mkdir -p "${HOME:-/root}/.cache/crontab"');
     expect(schedule).toContain('crontab -l');
     // Repeating the step must not schedule the agent twice.
     expect(schedule).toContain('grep -v agent_openwrt.sh');

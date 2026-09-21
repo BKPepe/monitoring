@@ -91,7 +91,14 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
           // the old instructions ran once by hand and then never again, while
           // the server reported the router as down. The `grep -v` keeps the step
           // repeatable - running it twice must not schedule the agent twice.
+          //
+          // The mkdir is cronie's, not ours: before writing, crontab(1) backs the
+          // old file up into $HOME/.cache/crontab and creates that directory with
+          // a single mkdir (crontab.c:568). On a Turris /root/.cache does not
+          // exist, so the backup fails with ENOENT and the step dies before it
+          // schedules anything.
           command:
+            'mkdir -p "${HOME:-/root}/.cache/crontab" && ' +
             "( crontab -l 2>/dev/null | grep -v agent_openwrt.sh; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -",
         },
         {
