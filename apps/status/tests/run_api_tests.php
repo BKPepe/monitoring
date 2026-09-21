@@ -22,7 +22,16 @@ require_once __DIR__ . '/assert_helpers.php';
 
 $db_host = getenv('BK_TEST_DB_HOST') ?: '127.0.0.1';
 $db_port = (int)(getenv('BK_TEST_DB_PORT') ?: 3306);
-$db_name = getenv('BK_TEST_DB_NAME') ?: 'bk_test';
+// An empty BK_TEST_DB_NAME is a typo in the caller's environment, never a wish
+// to run against the default database: falling back to 'bk_test' would drop a
+// database the caller did not name, and several suites in parallel would then
+// share one and destroy each other. It ends the run instead.
+$db_name_env = getenv('BK_TEST_DB_NAME');
+if ($db_name_env !== false && trim($db_name_env) === '') {
+    fwrite(STDERR, "BK_TEST_DB_NAME je prázdné - jméno testovací databáze musí být uvedené. Testy neproběhly.\n");
+    exit(1);
+}
+$db_name = $db_name_env !== false ? trim($db_name_env) : 'bk_test';
 $db_user = getenv('BK_TEST_DB_USER') ?: 'root';
 $db_pass = getenv('BK_TEST_DB_PASS') ?: '';
 $port = (int)(getenv('BK_TEST_PORT') ?: 8123);
@@ -35,8 +44,12 @@ try {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
 } catch (PDOException $e) {
-    fwrite(STDERR, "MySQL není dostupná ({$e->getMessage()}) - integrační testy se přeskakují.\n");
-    exit(0);
+    // Not a skip: this suite IS the gate over api.php, and a run that never
+    // reached the database verified nothing. Exiting 0 here made CI green on
+    // zero checks - louder and red is the only honest answer.
+    fwrite(STDERR, "MySQL není dostupná ({$e->getMessage()}) - integrační testy NEPROBĚHLY.\n");
+    fwrite(STDERR, "Spusť databázi (kontejner bk-test-mysql) nebo oprav BK_TEST_DB_* a zkus to znovu.\n");
+    exit(1);
 }
 
 $pdo->exec("DROP DATABASE IF EXISTS `{$db_name}`");

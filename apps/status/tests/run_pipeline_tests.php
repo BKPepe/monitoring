@@ -388,6 +388,63 @@ check('cron předává klíčové slovo první kontrole i opakování',
 check_false('SMS neřeže chybovou zprávu po bajtech',
     (bool)preg_match('/substr\(\$error_msg, 0,/', $fn_src));
 
+// --- testovací brány: běh bez kontrol musí skončit červeně -----------------
+// Why here: run_api_tests.php used to exit 0 when MySQL was unreachable, so a
+// wrong password looked exactly like 980 passing checks. A gate that can be
+// green without running is the one failure mode nobody notices, so the
+// behaviour itself is tested - in subprocesses, because an exit code is the
+// only thing a caller (CI) ever sees.
+$gate_run = function (array $env, string $script, array $args = []): array {
+    $cmd = escapeshellarg(PHP_BINARY);
+    foreach ($args as $a) {
+        $cmd .= ' ' . escapeshellarg($a);
+    }
+    $prefix = '';
+    foreach ($env as $k => $v) {
+        $prefix .= $k . '=' . escapeshellarg($v) . ' ';
+    }
+    $out = [];
+    $code = 0;
+    exec($prefix . $cmd . ' ' . escapeshellarg($script) . ' 2>&1', $out, $code);
+    return ['code' => $code, 'out' => implode("\n", $out)];
+};
+
+// bk_test_report() over an untouched counter: no check ran, so the run is red.
+$gate_empty = $gate_run([], __DIR__ . '/assert_helpers.php', [
+    '-r',
+    'require ' . var_export(__DIR__ . '/assert_helpers.php', true) . '; exit(bk_test_report("prázdná ukázka") > 0 ? 1 : 0);',
+]);
+check('sada, která neprovedla ani jednu kontrolu, končí nenulovým kódem', $gate_empty['code'], 1);
+check_true('a řekne, že neověřila nic', str_contains($gate_empty['out'], 'PRÁZDNÁ SADA'));
+check_true('a počty v souhrnu si nevymýšlí', str_contains($gate_empty['out'], '0 prošlo, 0 selhalo'));
+
+// The API suite without a reachable database. Port 1 has no listener, so the
+// connection is refused before the suite writes config.php or touches any schema.
+$gate_db = $gate_run(['BK_TEST_DB_HOST' => '127.0.0.1', 'BK_TEST_DB_PORT' => '1', 'BK_TEST_DB_NAME' => 'bk_gate_nikdy'],
+    __DIR__ . '/run_api_tests.php');
+check('API sada bez dostupné databáze končí nenulovým kódem', $gate_db['code'], 1);
+check_true('a přizná, že testy neproběhly', str_contains($gate_db['out'], 'NEPROBĚHLY'));
+
+// An empty database name is a typo in the environment, not a request for the default.
+$gate_name = $gate_run(['BK_TEST_DB_NAME' => ''], __DIR__ . '/run_api_tests.php');
+check('prázdné BK_TEST_DB_NAME API sadu zastaví', $gate_name['code'], 1);
+check_true('a vysvětlí proč', str_contains($gate_name['out'], 'BK_TEST_DB_NAME je prázdné'));
+
+// The same hole in the two linters that discover their own inputs: a copy of
+// the script into an empty tree finds nothing to read. No test hook in the
+// lint itself - the real path is the one worth proving.
+$gate_tmp = sys_get_temp_dir() . '/bk_gate_' . getmypid() . '/tests';
+@mkdir($gate_tmp, 0777, true);
+foreach (['run_query_lint.php', 'run_honesty_lint.php'] as $gate_lint) {
+    copy(__DIR__ . '/' . $gate_lint, $gate_tmp . '/' . $gate_lint);
+    $gate_res = $gate_run([], $gate_tmp . '/' . $gate_lint);
+    check("lint {$gate_lint} bez jediného souboru ke čtení končí červeně", $gate_res['code'], 1);
+    check_true("a {$gate_lint} řekne, že neověřil nic", str_contains($gate_res['out'], 'neověřil nic'));
+    @unlink($gate_tmp . '/' . $gate_lint);
+}
+@rmdir($gate_tmp);
+@rmdir(dirname($gate_tmp));
+
 $failed = bk_test_report('sběr, e-maily, notifikace');
 // Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {

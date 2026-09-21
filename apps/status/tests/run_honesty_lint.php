@@ -70,6 +70,15 @@ $targets = array_filter(
         && !str_contains($f, '.test.ts')
 );
 
+// A scan that found no file has verified nothing, and a lint that passes on
+// zero inputs is a green gate over an empty room (the same hole the API suite
+// had when MySQL was unreachable). Missing inputs end the run red.
+if (!$targets) {
+    fwrite(STDERR, "Honesty lint: nenašel ani jeden soubor ke kontrole - neověřil nic. Zkontroluj cesty, nebo jestli se lint spouští ze správného stromu.\n");
+    exit(1);
+}
+
+
 /**
  * Data fields where an invented STRING is the same lie as an invented zero.
  *

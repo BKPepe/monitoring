@@ -53,11 +53,24 @@ if (!function_exists('bk_test_report')) {
     function bk_test_report(string $suite): int {
         $passed = $GLOBALS['bk_test_passed'];
         $failed = $GLOBALS['bk_test_failed'];
+        // A suite that executed no check verified nothing, and a green gate over
+        // nothing is worse than no gate: it reports success for a run that never
+        // happened (a missing driver, an early return, a filter that matched no
+        // case). Such a run ends red and says so, the same as a real failure.
+        $empty = $passed === 0 && $failed === 0;
         printf("\n[%s] %d prošlo, %d selhalo\n", $suite, $passed, $failed);
+        if ($empty) {
+            // The counts above stay honest (nothing passed, nothing failed); the
+            // non-zero return is about the run itself, not about a failed check.
+            fwrite(STDERR, sprintf(
+                "PRÁZDNÁ SADA [%s]: neproběhla ani jedna kontrola, sada tedy nic neověřila.\n",
+                $suite
+            ));
+        }
         // Counters reset so a second suite in the same process
         // (the coverage runner) reports its own results.
         $GLOBALS['bk_test_passed'] = 0;
         $GLOBALS['bk_test_failed'] = 0;
-        return $failed;
+        return $empty ? $failed + 1 : $failed;
     }
 }

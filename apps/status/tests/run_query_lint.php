@@ -18,6 +18,14 @@ $files = array_merge(
 );
 $files = array_filter($files, fn($f) => !str_contains($f, '/lib/PHPMailer.php') && !str_contains($f, 'config'));
 
+// A scan that found no file has verified nothing, and a lint that passes on
+// zero inputs is a green gate over an empty room (the same hole the API suite
+// had when MySQL was unreachable). Missing inputs end the run red.
+if (!$files) {
+    fwrite(STDERR, "Query lint: nenašel ani jeden soubor ke kontrole - neověřil nic. Zkontroluj cesty, nebo jestli se lint spouští ze správného stromu.\n");
+    exit(1);
+}
+
 $violations = [];
 
 /** Tables that grow with time - a full scan is a killer on them. */
