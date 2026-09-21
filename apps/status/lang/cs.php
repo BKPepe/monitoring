@@ -978,4 +978,25 @@ return [
     'digest_router_silent' => 'Router se %1$d dní neozval, doporučení nejde spočítat.',
     'digest_router_more_items' => '… a dalších %1$d v aplikaci.',
     'digest_routers_more' => 'Dalších %1$d routerů najdete v aplikaci.',
+
+    // --- Daily reminder of what is still broken ------------------------
+    // An alert fires on a CHANGE of state, so a running outage is announced
+    // once and then never again. These strings are the message that keeps
+    // saying it - and only while something really is wrong.
+    'reminder_subject' => 'Denní připomínka: pořád je něco rozbité',
+    'reminder_title' => 'Denní připomínka',
+    'reminder_intro' => 'Tohle je pořád rozbité. Zpráva chodí jednou denně, dokud to trvá; když je všechno v pořádku, neodejde nic.',
+    'reminder_section_outages' => 'Výpadky a varování',
+    'reminder_section_silent' => 'Tichý sběr dat',
+    'reminder_section_silent_note' => 'Nic nespadlo, jen přestala téct data. Tenhle druh poruchy není z výpadků vidět.',
+    'reminder_silent_also' => 'Navíc:',
+    'reminder_section_incidents' => 'Nepřevzaté incidenty',
+    'reminder_duration' => 'trvá %1$s',
+    'reminder_duration_unknown' => 'délka není známá',
+    'reminder_incident_age' => 'nikdo ho nepřevzal %1$s',
+    'reminder_no_reason' => 'Důvod není uložený.',
+    'reminder_cron_last' => 'Poslední dokončený běh sběru: %1$s (před %2$s).',
+    'reminder_cron_never' => 'Sběr dat zatím nedokončil ani jeden běh.',
+    'reminder_cron_stale' => 'Sběr se dlouho nedokončil, hodnoty výše mohou být zastaralé.',
+    'reminder_skipped' => 'Nic rozbitého, připomínka se neodesílala.',
 ];

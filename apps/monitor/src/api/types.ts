@@ -818,3 +818,49 @@ export interface SpeedtestMeasurement {
   tool: string | null;
   linkMbit: number | null;
 }
+
+/**
+ * One row of the outgoing message log (`api.php?action=notification_log`).
+ *
+ * Written centrally in `send_email()` and in the channel senders, so the row
+ * exists for every attempt - including the ones that failed, which are the
+ * half worth reading. It never carries the message body; the recipient is
+ * personal data and the endpoint is admin-only.
+ */
+export interface OutgoingMessage {
+  id: number;
+  /** `null` for messages that are not about one monitor (invitation, digest). */
+  monitorId: number | null;
+  monitorName: string | null;
+  /** `alert`, `daily_reminder`, `digest`, `invitation`, ... - `other` when the sender named none. */
+  kind: string;
+  /** What the alert said about the monitor ('down', 'up'); empty for the other kinds. */
+  status: string | null;
+  channel: string;
+  recipient: string | null;
+  subject: string | null;
+  /** E-mail only: `smtp` = a server acknowledged it, `fallback` = handed to the local mailer. */
+  method: string | null;
+  ok: boolean;
+  error: string | null;
+  atIso: string;
+}
+
+/** Counts over one time window, as the log's `summary` returns them. */
+export interface OutgoingMessageWindow {
+  total: number;
+  failed: number;
+  byChannel: { channel: string; total: number; failed: number }[];
+}
+
+/** A page of the log plus the values the filters offer. */
+export interface OutgoingMessagePage {
+  entries: OutgoingMessage[];
+  /** Id to pass as `before_id` for the next page; `null` = this was the last one. */
+  nextCursor: number | null;
+  /** Kinds and channels that really occur in the log - the filters offer no empty option. */
+  kinds: string[];
+  channels: string[];
+  /** Only when asked for with `summary=1`; `null` from a server that does not send it yet. */
+  summary: { last24h: OutgoingMessageWindow; last7d: OutgoingMessageWindow } | null;
+}

@@ -1766,36 +1766,146 @@ if ($action === 'notification_log') {
     }
     $nl_monitor = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
     $nl_limit = min(200, max(1, (int)($_GET['limit'] ?? 50)));
+    // Paging by cursor, not by OFFSET: rows keep being written while somebody
+    // reads the log, and an offset page would repeat one row and skip another.
+    $nl_before = isset($_GET['before_id']) ? max(0, (int)$_GET['before_id']) : 0;
+    $nl_kind = trim((string)($_GET['kind'] ?? ''));
+    $nl_channel = trim((string)($_GET['channel'] ?? ''));
+    $nl_recipient = trim((string)($_GET['q'] ?? ''));
+    $nl_ok = isset($_GET['ok']) ? trim((string)$_GET['ok']) : '';
+    $nl_want_summary = ($_GET['summary'] ?? '') === '1';
+
+    if ($nl_ok !== '' && $nl_ok !== '0' && $nl_ok !== '1') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Parametr ok smí být jen 0 nebo 1.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // A time bound that cannot be parsed must not quietly become "no bound":
+    // the answer would then hold more rows than the administrator asked for
+    // and still look like the complete one.
+    $nl_range = ['from' => null, 'to' => null];
+    foreach (['from', 'to'] as $nl_bound) {
+        $nl_raw = trim((string)($_GET[$nl_bound] ?? ''));
+        if ($nl_raw === '') {
+            continue;
+        }
+        $nl_ts = strtotime($nl_raw);
+        if ($nl_ts === false) {
+            http_response_code(400);
+            echo json_encode(['error' => "Parametr {$nl_bound} není platné datum."], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // A bare date as the upper bound means the whole day. "to=2026-09-20"
+        // asked for that day, not for the split second it began.
+        if ($nl_bound === 'to' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $nl_raw)) {
+            $nl_ts += 86399;
+        }
+        $nl_range[$nl_bound] = date('Y-m-d H:i:s', $nl_ts);
+    }
+
+    $nl_where = [];
+    $nl_params = [];
+    if ($nl_monitor > 0) {
+        $nl_where[] = 'n.monitor_id = ?';
+        $nl_params[] = $nl_monitor;
+    }
+    if ($nl_kind !== '') {
+        $nl_where[] = 'n.kind = ?';
+        $nl_params[] = $nl_kind;
+    }
+    if ($nl_channel !== '') {
+        $nl_where[] = 'n.channel = ?';
+        $nl_params[] = $nl_channel;
+    }
+    if ($nl_ok !== '') {
+        $nl_where[] = 'n.ok = ?';
+        $nl_params[] = (int)$nl_ok;
+    }
+    if ($nl_range['from'] !== null) {
+        $nl_where[] = 'n.created_at >= ?';
+        $nl_params[] = $nl_range['from'];
+    }
+    if ($nl_range['to'] !== null) {
+        $nl_where[] = 'n.created_at <= ?';
+        $nl_params[] = $nl_range['to'];
+    }
+    if ($nl_recipient !== '') {
+        // The LIKE wildcards in the needle are escaped: a search for "a_b" must
+        // not also match "axb", or the filter would silently widen itself.
+        $nl_where[] = 'n.recipient LIKE ?';
+        $nl_params[] = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $nl_recipient) . '%';
+    }
+    if ($nl_before > 0) {
+        $nl_where[] = 'n.id < ?';
+        $nl_params[] = $nl_before;
+    }
+    $where = $nl_where ? 'WHERE ' . implode(' AND ', $nl_where) : '';
+
     try {
-        $where = $nl_monitor > 0 ? 'WHERE n.monitor_id = ?' : '';
+        // One row more than asked for tells us whether another page exists,
+        // without a second COUNT over the whole table.
+        $nl_fetch = $nl_limit + 1;
         $stmt = $pdo->prepare("
-            SELECT n.id, n.monitor_id, n.status, n.channel, n.recipient, n.ok, n.error_message, n.created_at,
+            SELECT n.id, n.monitor_id, n.kind, n.status, n.channel, n.recipient, n.subject,
+                   n.method, n.ok, n.error_message, n.created_at,
                    m.name AS monitor_name
             FROM notification_log n
             LEFT JOIN monitors m ON m.id = n.monitor_id
             {$where}
             ORDER BY n.id DESC
-            LIMIT {$nl_limit}
+            LIMIT {$nl_fetch}
         ");
-        $stmt->execute($nl_monitor > 0 ? [$nl_monitor] : []);
+        $stmt->execute($nl_params);
+        $nl_fetched = $stmt->fetchAll();
+        $nl_has_more = count($nl_fetched) > $nl_limit;
+        if ($nl_has_more) {
+            array_pop($nl_fetched);
+        }
         $rows = [];
-        foreach ($stmt->fetchAll() as $r) {
+        foreach ($nl_fetched as $r) {
             $rows[] = [
                 'id' => (int)$r['id'],
                 'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
                 'monitorName' => $r['monitor_name'],
+                'kind' => (string)($r['kind'] ?? 'other'),
                 'status' => $r['status'],
                 'channel' => $r['channel'],
                 // The address is the point of the record: "did it reach ME?"
                 'recipient' => $r['recipient'],
+                // The subject is the only part of a message ever stored.
+                'subject' => $r['subject'],
+                'method' => $r['method'],
                 'ok' => (bool)$r['ok'],
                 'error' => $r['error_message'],
                 'atIso' => date('c', strtotime((string)$r['created_at'])),
             ];
         }
-        echo json_encode(['entries' => $rows], JSON_UNESCAPED_UNICODE);
+
+        // The offered values come from the WHOLE log, not from the page on
+        // screen: a filter must never take away the option that would undo it.
+        $nl_kinds = $pdo->query("SELECT DISTINCT kind FROM notification_log ORDER BY kind")->fetchAll(PDO::FETCH_COLUMN);
+        $nl_channels = $pdo->query("SELECT DISTINCT channel FROM notification_log ORDER BY channel")->fetchAll(PDO::FETCH_COLUMN);
+
+        echo json_encode([
+            'entries' => $rows,
+            'nextCursor' => $nl_has_more && $rows ? $rows[count($rows) - 1]['id'] : null,
+            'kinds' => array_map('strval', $nl_kinds ?: []),
+            'channels' => array_map('strval', $nl_channels ?: []),
+            // Only when asked for: the second page does not need it, and it is
+            // two more aggregations. Never narrowed by the filters above - see
+            // bk_notification_summary().
+            'summary' => $nl_want_summary ? [
+                'last24h' => bk_notification_summary($pdo, 24),
+                'last7d' => bk_notification_summary($pdo, 24 * 7),
+            ] : null,
+        ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[api.php action=notification_log] ' . $e->getMessage());
+        // 500, not a 200 with an empty list: both readers of this endpoint show
+        // an empty log as "nothing was sent", and a failed read is no evidence
+        // of that. The admin page turns the status code into a visible error.
+        http_response_code(500);
         echo json_encode(['entries' => [], 'error' => 'Historii notifikací se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
@@ -4999,7 +5109,9 @@ if ($action === 'save_user' || $action === 'delete_user') {
             . '<p>Byl pro vás vytvořen účet <strong>' . htmlspecialchars($su_username) . '</strong>. Nastavte si prosím heslo kliknutím na odkaz níže (platnost 48 hodin):</p>'
             . '<p><a href="' . htmlspecialchars($su_link) . '">' . htmlspecialchars($su_link) . '</a></p>';
         bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', pozvánka e-mailem)', 'user', $su_new_id);
-        $su_sent = send_email($su_email, 'Nastavení hesla - ' . $su_site, $su_body);
+        $su_sent = send_email($su_email, 'Nastavení hesla - ' . $su_site, $su_body, [], [
+            'kind' => 'invitation',
+        ]);
         // invited=false when the mail fails: the UI then truthfully says "account
         // created, but the invitation did not go out" instead of a lying "invitation sent".
         echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => (bool)$su_sent], JSON_UNESCAPED_UNICODE);

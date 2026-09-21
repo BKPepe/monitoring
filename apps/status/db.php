@@ -76,7 +76,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260920');
+    define('BK_SCHEMA_VERSION', '20260921');
 
     $bk_current_schema = false;
     try {
@@ -967,6 +967,23 @@ try {
           KEY `idx_rec_state_seen` (`last_seen`),
           CONSTRAINT `fk_rec_state_monitor` FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // The message log used to record only alerts, so "did that invitation
+        // e-mail go out?" had no answer at all. Logging moved inside
+        // send_email(), which means every kind of message now lands here and
+        // the row has to say WHICH kind it was.
+        // `kind` groups them (alert, digest, invitation, password_reset, ...),
+        // `subject` is the only part of the message ever stored - never the
+        // body, which would turn the log into a copy of people's mail.
+        // `method` is how it left: 'smtp' = an authenticated server confirmed
+        // it, 'fallback' = only handed to the local mail(), NULL = no route
+        // confirmed anything (a failed attempt).
+        "ALTER TABLE notification_log ADD COLUMN kind VARCHAR(32) NOT NULL DEFAULT 'other'",
+        "ALTER TABLE notification_log ADD COLUMN subject VARCHAR(190) DEFAULT NULL",
+        "ALTER TABLE notification_log ADD COLUMN method VARCHAR(16) DEFAULT NULL",
+        // The admin page filters by kind and pages by id - without this the
+        // "show me every failed invitation" query is a full table scan.
+        "CREATE INDEX idx_notif_kind ON notification_log (kind, id)",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);
@@ -1092,6 +1109,10 @@ function bk_settings_keys(): array {
         'pushover_user_key', 'pushover_api_token', 'pagerduty_routing_key',
         'ssl_alert_days', 'agent_registration_token',
         'escalation_enabled', 'escalation_after_mins', 'escalation_webhook_url',
+        // The daily reminder of what is still broken. On by default: an alert
+        // fires only on a CHANGE of state, so without it a running outage is
+        // announced once and then never mentioned again.
+        'daily_reminder_enabled', 'daily_reminder_hour',
         'collection_max_age_secs', 'trusted_proxies',
         'process_history_days', 'process_history_peak_after_days', 'process_history_peak_pct',
     ];

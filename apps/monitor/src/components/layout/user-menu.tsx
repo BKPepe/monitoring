@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import { Link } from 'react-router';
-import { AlertTriangle, LogIn, LogOut } from 'lucide-react';
+import { AlertTriangle, LogIn, LogOut, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/language-context';
 import { useLogout } from '@/api/use-session';
@@ -71,6 +71,21 @@ export function UserMenu({
         >
           {identity}
         </Link>
+        {/* The outgoing message log, one click from every page: it answers
+            "did that alert go out?", and an administrator asks that exactly
+            when something has just gone wrong. Admin only - the rows name
+            recipients, and the server refuses anyone else anyway. */}
+        {role === 'admin' && (
+          <Link
+            to="/outgoing-messages"
+            title={t('user_menu.outgoing', 'Odchozí zprávy')}
+            aria-label={t('user_menu.outgoing', 'Odchozí zprávy')}
+            className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/50 focus-visible:ring-ring grid size-8 shrink-0 place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2"
+          >
+            <Mail className="size-4" aria-hidden="true" data-icon="outgoing" />
+          </Link>
+        )}
+
         {/* Its own control next to the profile link, not inside it: one tab stop
             each, and a sign-out never fires by clicking the name. */}
         <button

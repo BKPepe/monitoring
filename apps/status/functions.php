@@ -887,6 +887,29 @@ function bk_prune_wan_data(PDO $pdo): array {
     return $result;
 }
 
+/**
+ * Retention for the outgoing message log.
+ *
+ * Half a year, twice what the audit trail keeps. Since `send_email()` writes
+ * here, the table stopped being an alert history: it also answers "did that
+ * invitation ever arrive?", which somebody asks the next time the invited
+ * person fails to log in - months later. The rows are cheap (no message body
+ * is ever stored) and their number is bounded by what this installation
+ * really sends, so the length costs almost nothing.
+ *
+ * A function, not the inline DELETE it replaced, so the suite can hand it
+ * rows on both sides of the boundary; nothing in a suite runs cron.php.
+ * Returns the deleted count, like the prune functions above it.
+ */
+function bk_prune_notification_log(PDO $pdo, int $days = 180): array {
+    $days = max(1, $days);
+
+    $stmt = $pdo->prepare("DELETE FROM notification_log WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)");
+    $stmt->execute([$days]);
+
+    return ['deleted' => $stmt->rowCount()];
+}
+
 function bk_rollup_daily_metrics(PDO $pdo, int $days = 2): int {
     $days = max(1, min(400, $days));
     $written = 0;
@@ -5791,9 +5814,56 @@ function check_discord($guild_id, $timeout = 3) {
 }
 
 /**
- * Sends an e-mail via PHPMailer (SMTP auth) or PHP mail() as fallback
+ * Sends an e-mail and writes down that it happened.
+ *
+ * The logging sits HERE and not at the call sites on purpose. It used to be at
+ * one of nine of them, so an administrator could answer "did that alert go
+ * out?" and nothing else - an invitation, a password reset or a digest left no
+ * trace whatsoever. A call site can forget to log; send_email() cannot, and
+ * neither can the next feature that starts sending something.
+ *
+ * $context describes the message for the log:
+ *   kind       - one of bk_notification_kinds(), default 'other'
+ *   monitor_id - the monitor it is about, when there is one
+ *   status     - the monitor event ('down', 'up', ...); defaults to the kind,
+ *                because for a password reset the kind IS what happened.
+ * The body is never passed on: the log must not become a copy of people's mail.
+ *
+ * Returns exactly what the delivery returned - the log is bookkeeping and
+ * never changes the answer.
  */
-function send_email($to, $subject, $html_body, array $extra_headers = []) {
+function send_email($to, $subject, $html_body, array $extra_headers = [], array $context = []) {
+    $ok = bk_deliver_email($to, $subject, $html_body, $extra_headers);
+
+    $kind = (string)($context['kind'] ?? 'other');
+    bk_log_notification(
+        // The same guard as everywhere else in this file: bookkeeping must
+        // never be able to throw a TypeError over a mail that did go out.
+        ($GLOBALS['pdo'] ?? null) instanceof PDO ? $GLOBALS['pdo'] : null,
+        isset($context['monitor_id']) ? (int)$context['monitor_id'] : null,
+        (string)($context['status'] ?? $kind),
+        'email',
+        is_string($to) ? $to : null,
+        (bool)$ok,
+        // Only on a failure: a success has nothing to explain, and an error
+        // text next to ok=1 would read as "it went out, but...".
+        $ok ? null : ($GLOBALS['last_mail_error'] ?? null),
+        $kind,
+        is_string($subject) ? $subject : null,
+        // NULL when nothing confirmed a route - that is what a failed attempt
+        // honestly knows, and the row must not claim 'smtp' because SMTP was tried.
+        $GLOBALS['last_mail_method'] ?? null
+    );
+
+    return $ok;
+}
+
+/**
+ * Sends an e-mail via PHPMailer (SMTP auth) or PHP mail() as fallback.
+ *
+ * Private to send_email() - call that one, so the attempt gets logged.
+ */
+function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) {
     $GLOBALS['last_mail_error'] = '';
     // 'smtp' = verified delivery through an authenticated SMTP server (a strong
     // success signal), 'fallback' = unauthenticated PHP mail() - returns true even
@@ -6048,6 +6118,10 @@ function bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg = '') {
  * looked exactly like a channel with nothing to report. The row is written
  * whether the attempt succeeded or not - a failure is the interesting half.
  *
+ * $subject is the only part of a message ever stored; the body never is, and
+ * the recipient is kept as the bare address (no name), because the whole log
+ * is personal data that only an administrator gets to see.
+ *
  * Never throws: an alert must go out even when its bookkeeping cannot.
  */
 function bk_log_notification(
@@ -6057,15 +6131,18 @@ function bk_log_notification(
     string $channel,
     ?string $recipient,
     bool $ok,
-    ?string $error = null
+    ?string $error = null,
+    string $kind = 'other',
+    ?string $subject = null,
+    ?string $method = null
 ): void {
     if ($pdo === null) {
         return;
     }
     try {
         $stmt = $pdo->prepare("
-            INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message, kind, subject, method)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             $monitor_id !== null && $monitor_id > 0 ? $monitor_id : null,
@@ -6074,10 +6151,665 @@ function bk_log_notification(
             $recipient !== null && $recipient !== '' ? substr($recipient, 0, 190) : null,
             $ok ? 1 : 0,
             $error !== null && $error !== '' ? substr($error, 0, 255) : null,
+            // Stored as given, not forced into bk_notification_kinds(): a typo in
+            // a future call site must stay visible in the log instead of quietly
+            // joining the 'other' pile, where nobody would ever find it.
+            substr($kind !== '' ? $kind : 'other', 0, 32),
+            $subject !== null && $subject !== '' ? mb_strimwidth($subject, 0, 190, '', 'UTF-8') : null,
+            $method !== null && $method !== '' ? substr($method, 0, 16) : null,
         ]);
     } catch (Throwable $e) {
         error_log('[bk_log_notification] ' . $e->getMessage());
     }
+}
+
+/**
+ * The canonical kinds of outgoing message.
+ *
+ * One list so the admin filter, the tests and the call sites cannot drift
+ * apart. It is deliberately NOT an allow-list for writing - see the comment
+ * at the INSERT above.
+ */
+function bk_notification_kinds(): array {
+    return [
+        'alert',
+        'daily_reminder',
+        'digest',
+        'digest_preview',
+        'invitation',
+        'password_reset',
+        'subscriber_confirm',
+        'subscriber_broadcast',
+        'admin_notice',
+        'test',
+        'other',
+    ];
+}
+
+/**
+ * How much went out over the last $hours and how much of it failed, per channel.
+ *
+ * A function of its own so the suite can call it with known rows, and because
+ * the admin page needs the answer for two windows at once - counting a whole
+ * log in PHP to get there would be the obvious wrong way.
+ *
+ * It deliberately knows nothing about the page's filters: the number feeds a
+ * banner that says "something did not go out", and a banner that a filter can
+ * talk out of a failure is the quiet failure this release exists to end.
+ *
+ * A database error is not caught here. A summary that counts to zero because
+ * the query died would claim nothing failed, which is the one answer this
+ * function must never give.
+ */
+function bk_notification_summary(PDO $pdo, int $hours): array {
+    $hours = max(1, $hours);
+    $result = ['total' => 0, 'failed' => 0, 'byChannel' => []];
+
+    $stmt = $pdo->prepare("
+        SELECT channel, COUNT(*) AS total, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed
+        FROM notification_log
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+        GROUP BY channel
+        ORDER BY total DESC, channel ASC
+    ");
+    $stmt->execute([$hours]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $total = (int)$row['total'];
+        $failed = (int)$row['failed'];
+        $result['total'] += $total;
+        $result['failed'] += $failed;
+        $result['byChannel'][] = [
+            'channel' => (string)$row['channel'],
+            'total' => $total,
+            'failed' => $failed,
+        ];
+    }
+
+    return $result;
+}
+
+/**
+ * Is the daily reminder due on this cron run?
+ *
+ * Pure, because the whole feature rests on this guard: a router's cron runs
+ * every minute, so "send from 8:00" without a written-down stamp would mean
+ * nine hundred identical e-mails a day. The stamp is a DATE, exactly like
+ * `last_weekly_digest_sent` holds a week (cron.php) - comparing timestamps
+ * would leave the decision to arithmetic that daylight saving gets to break.
+ *
+ * @param string $last_sent Y-m-d of the last send, '' = never sent
+ * @param int    $hour      0-23, the hour from which the reminder may go out
+ * @param ?int   $now       evaluation time; NULL = now (a parameter for tests)
+ */
+function bk_daily_reminder_due(string $last_sent, int $hour, ?int $now = null): bool {
+    $now = $now ?? time();
+    // A value outside the dial is not a reason to go silent forever - it falls
+    // back to the documented default, the same one get_setting() hands out.
+    if ($hour < 0 || $hour > 23) {
+        $hour = 8;
+    }
+    if ((int)date('G', $now) < $hour) {
+        return false;
+    }
+    return trim($last_sent) !== date('Y-m-d', $now);
+}
+
+/**
+ * What is broken right now - the content of the daily reminder.
+ *
+ * Pure on purpose: rows in, verdict out. The decision whether anybody gets an
+ * e-mail at all is then testable without a database; the reading is
+ * bk_daily_reminder_collect()'s job.
+ *
+ * Two sections, never one. A silent agent is not an outage: nothing crashed,
+ * the data simply stopped arriving - and that is the fault this whole feature
+ * exists for (four days invisible, because the service itself was fine).
+ * Folded into the outage list it would be buried among them again.
+ *
+ * Excluded: monitors in maintenance (a planned outage is not news) and
+ * archived ones (out of service for good - trigger_notifications() ignores
+ * them too, and a reminder must not resurrect them).
+ *
+ * @param array   $monitors  `monitors` rows plus 'details' (decoded
+ *                           last_details) and 'last_error' (the reason stored
+ *                           with the last check)
+ * @param array   $incidents open incidents nobody has acknowledged
+ * @param ?string $last_cron_run  the `last_cron_run` setting, NULL = never
+ * @param int     $agent_offline_timeout seconds of silence that make an agent silent
+ * @param int     $cron_max_age  age at which a collection run counts as late
+ * @param ?int    $now
+ * @return array{outages: array, silent: array, incidents: array, cron: array, problem_count: int}
+ */
+function bk_daily_reminder_select(
+    array $monitors,
+    array $incidents,
+    ?string $last_cron_run,
+    int $agent_offline_timeout = 3000,
+    int $cron_max_age = 900,
+    ?int $now = null
+): array {
+    $now = $now ?? time();
+    $report = ['outages' => [], 'silent' => [], 'incidents' => [], 'cron' => [], 'problem_count' => 0];
+
+    $age_of = static function ($stamp) use ($now): ?int {
+        if ($stamp === null || $stamp === '') {
+            return null;
+        }
+        $ts = is_int($stamp) ? $stamp : strtotime((string)$stamp);
+        // An unreadable date stays unknown. "0 seconds" would read as "it
+        // started just now" - the invented value this project keeps out.
+        return $ts === false ? null : max(0, $now - $ts);
+    };
+
+    // One monitor = one row in the silent section, however many rules noticed
+    // it. A heartbeat past its grace period and a stalled check are two real
+    // findings, but they are the same subject: printed as two rows the reader
+    // sees the name twice and the summary counts one monitor as two problems.
+    // The extra findings are kept in 'also' - nothing measured is thrown away,
+    // it just stops being counted (and read) twice.
+    $silent_at = [];
+    $add_silent = static function (int $id, string $name, string $type, string $issue, string $message, ?int $age) use (&$report, &$silent_at): void {
+        $key = $id !== 0 ? 'id:' . $id : 'name:' . $name;
+        if (isset($silent_at[$key])) {
+            $at = $silent_at[$key];
+            // Deduplicated by the wording too: two rules describing the silence
+            // with the same sentence say nothing new the second time.
+            if ($message !== '' && $message !== $report['silent'][$at]['message']
+                && !in_array($message, array_column($report['silent'][$at]['also'], 'message'), true)) {
+                $report['silent'][$at]['also'][] = ['issue' => $issue, 'message' => $message];
+            }
+            // The row keeps the longest silence it knows about: a summary that
+            // shortened the outage because a second rule noticed later would
+            // under-report it.
+            if ($age !== null && ($report['silent'][$at]['age_secs'] === null || $age > $report['silent'][$at]['age_secs'])) {
+                $report['silent'][$at]['age_secs'] = $age;
+            }
+            return;
+        }
+        $silent_at[$key] = count($report['silent']);
+        $report['silent'][] = [
+            'id' => $id,
+            'name' => $name,
+            'type' => $type,
+            'issue' => $issue,
+            'message' => $message,
+            'age_secs' => $age,
+            'also' => [],
+        ];
+    };
+
+    foreach ($monitors as $m) {
+        if (!empty($m['archived_at'])) {
+            continue;
+        }
+        $status = strtolower(trim((string)($m['status'] ?? '')));
+        if (!empty($m['maintenance']) || $status === 'maintenance') {
+            continue;
+        }
+        $id = (int)($m['id'] ?? 0);
+        $name = (string)($m['name'] ?? '');
+        $type = (string)($m['type'] ?? '');
+        $details = is_array($m['details'] ?? null) ? $m['details'] : [];
+
+        // A heartbeat past interval + grace belongs to the silent section: the
+        // job did not fail, it stopped reporting. One that announced its own
+        // failure DID fail and falls through to the outage list below.
+        $heartbeat_silent = false;
+        if ($type === 'heartbeat') {
+            $hb = bk_heartbeat_evaluate($m, $now);
+            if ($hb['overdue_secs'] !== null) {
+                $heartbeat_silent = true;
+                $add_silent($id, $name, $type, 'heartbeat_overdue', (string)$hb['error'], $hb['age_secs']);
+            }
+        }
+
+        // 'unknown' and 'paused' are not faults: the first means nobody has
+        // measured yet, the second that nobody is supposed to. Reported daily
+        // they would teach the reader to skip the whole message.
+        $alert_class = bk_alert_color_class($status);
+        if (!$heartbeat_silent
+            && !in_array($status, ['unknown', 'paused', ''], true)
+            && $alert_class !== 'good') {
+            $report['outages'][] = [
+                'id' => $id,
+                'name' => $name,
+                'type' => $type,
+                'status' => $status,
+                'reason' => ($m['last_error'] ?? null) !== null && $m['last_error'] !== ''
+                    ? (string)$m['last_error']
+                    : null,
+                'since' => ($m['last_status_change'] ?? null) ?: null,
+                'duration_secs' => $age_of($m['last_status_change'] ?? null),
+                'warning' => $alert_class === 'warn',
+            ];
+        }
+
+        // The collection outages of this monitor - read from the same source
+        // as the app's banner, so the e-mail cannot disagree with the screen.
+        foreach (bk_get_collection_issues($m, $details, $agent_offline_timeout) as $issue) {
+            $add_silent($id, $name, $type, (string)($issue['type'] ?? 'other'),
+                (string)($issue['message'] ?? ''), $age_of($issue['since'] ?? null));
+        }
+    }
+
+    foreach ($incidents as $inc) {
+        $report['incidents'][] = [
+            'id' => (int)($inc['id'] ?? 0),
+            'title' => (string)($inc['title'] ?? ''),
+            'impact' => (string)($inc['impact'] ?? ''),
+            'status' => (string)($inc['status'] ?? ''),
+            'monitor_name' => ($inc['monitor_name'] ?? null) !== null && $inc['monitor_name'] !== ''
+                ? (string)$inc['monitor_name']
+                : null,
+            'age_secs' => $age_of($inc['created_at'] ?? null),
+        ];
+    }
+
+    // Longest first, and an unknown duration goes last: it cannot claim to be
+    // the longest outage of the lot.
+    $longest_first = static function (array $a, array $b, string $key): int {
+        $av = $a[$key];
+        $bv = $b[$key];
+        if ($av === $bv) {
+            return 0;
+        }
+        if ($av === null) {
+            return 1;
+        }
+        if ($bv === null) {
+            return -1;
+        }
+        return $bv <=> $av;
+    };
+    usort($report['outages'], static fn (array $a, array $b): int => $longest_first($a, $b, 'duration_secs'));
+    usort($report['silent'], static fn (array $a, array $b): int => $longest_first($a, $b, 'age_secs'));
+    usort($report['incidents'], static fn (array $a, array $b): int => $longest_first($a, $b, 'age_secs'));
+
+    // The last finished cron run. Context, never a reason to send on its own:
+    // this code runs FROM cron, so a reminder whose only content was "the
+    // collector is late" would be a message from the machine proving it runs.
+    // It is here so a dead collector cannot hide behind an otherwise quiet
+    // report - the stamp is written only when a whole run completes.
+    //
+    // "Late" is the same limit the collection watchdog uses
+    // (collection_max_age_secs, api.php action=collection_health). Two numbers
+    // for one question would let the e-mail and the app disagree about whether
+    // collection is alive.
+    $cron_age = $age_of($last_cron_run);
+    $report['cron'] = [
+        'last' => $last_cron_run !== null && $last_cron_run !== '' ? (string)$last_cron_run : null,
+        'age_secs' => $cron_age,
+        'stale' => $cron_age === null || $cron_age > max(60, $cron_max_age),
+    ];
+
+    $report['problem_count'] = count($report['outages']) + count($report['silent']) + count($report['incidents']);
+
+    return $report;
+}
+
+/**
+ * Reads what bk_daily_reminder_select() needs and hands it the rows.
+ *
+ * Split from the selection so the rule "what counts as broken" can be tested
+ * without a database - the part that talks to MySQL stays this thin on purpose.
+ */
+function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
+    $now = $now ?? time();
+
+    // Archived monitors are filtered in SQL as well as in the selection: no
+    // reason to read rows nobody may ever be told about.
+    $stmt = $pdo->query("
+        SELECT id, name, type, status, last_checked, last_status_change, last_details,
+               maintenance, archived_at,
+               heartbeat_interval, heartbeat_grace, last_heartbeat,
+               heartbeat_last_result, heartbeat_last_message
+        FROM monitors
+        WHERE archived_at IS NULL
+        ORDER BY name ASC
+    ");
+    $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+
+    // The reason of the last check. Read per monitor through the (monitor_id,
+    // id) index and only for the ones that are not fine - on a healthy system
+    // this loop does not run at all.
+    $reason_stmt = $pdo->prepare("
+        SELECT error_message FROM monitor_logs
+        WHERE monitor_id = ? ORDER BY id DESC LIMIT 1
+    ");
+    $monitors = [];
+    foreach ($rows as $row) {
+        $decoded = json_decode((string)($row['last_details'] ?? ''), true);
+        $row['details'] = is_array($decoded) ? $decoded : [];
+        $row['last_error'] = null;
+        $status = strtolower(trim((string)($row['status'] ?? '')));
+        if (!in_array($status, ['up', 'maintenance', 'paused', 'unknown', ''], true) && empty($row['maintenance'])) {
+            $reason_stmt->execute([(int)$row['id']]);
+            $reason = $reason_stmt->fetchColumn();
+            $row['last_error'] = ($reason !== false && $reason !== null && $reason !== '') ? (string)$reason : null;
+        }
+        $monitors[] = $row;
+    }
+
+    // Open incidents nobody has taken over. An acknowledged one has an owner -
+    // reminding them daily is what makes people filter the sender.
+    $inc_stmt = $pdo->query("
+        SELECT i.id, i.title, i.impact, i.status, i.created_at, m.name AS monitor_name
+        FROM incidents i
+        LEFT JOIN monitors m ON m.id = i.monitor_id
+        WHERE i.status != 'resolved' AND i.acknowledged_at IS NULL
+          AND (i.monitor_id IS NULL OR (m.archived_at IS NULL AND m.maintenance = 0))
+        ORDER BY i.created_at ASC
+        LIMIT 50
+    ");
+    $incidents = $inc_stmt ? $inc_stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+
+    // Minutes in the setting, seconds in the function - the same conversion
+    // the app and the public page make, so the three cannot disagree about
+    // which agent is silent.
+    $offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
+    $last_cron = (string)get_setting('last_cron_run', '');
+    // The watchdog's own limit, so the reminder and action=collection_health
+    // cannot disagree about whether collection is still alive.
+    $cron_max_age = max(60, (int)get_setting('collection_max_age_secs', '900'));
+
+    return bk_daily_reminder_select($monitors, $incidents, $last_cron !== '' ? $last_cron : null,
+        $offline_secs, $cron_max_age, $now);
+}
+
+/**
+ * Who gets the reminder - the alert's recipient rule, widened to several
+ * monitors at once.
+ *
+ * One alert asks about one monitor (trigger_notifications()); the reminder is
+ * about everything that is broken, so a user belongs in the list when they
+ * would get an alert for at least ONE of those monitors: an administrator, or
+ * a subscriber who still has access to it. The monitor's own
+ * `email_notifications` switch is respected exactly as there - a monitor that
+ * sends no mail must not start sending it once a day.
+ *
+ * @param array $monitor_ids ids of the monitors the reminder talks about
+ * @param bool  $admins_only agent internals only (see agent_notify_admin_only)
+ */
+function bk_daily_reminder_recipients(PDO $pdo, array $monitor_ids, bool $admins_only): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $monitor_ids), fn (int $id): bool => $id > 0)));
+
+    // Administrators always, even when the reminder is only about incidents
+    // that belong to no monitor - then there is nothing to subscribe to.
+    $sql = "SELECT DISTINCT u.id, u.email, u.email_lang, u.role, u.phone, u.whatsapp_apikey,
+                   u.whatsapp_notifications
+            FROM users u
+            WHERE u.email IS NOT NULL AND u.email != '' AND u.role = 'admin'";
+    $params = [];
+
+    if (!$admins_only && $ids !== []) {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql .= "
+            UNION
+            SELECT DISTINCT u.id, u.email, u.email_lang, u.role, u.phone, u.whatsapp_apikey,
+                   u.whatsapp_notifications
+            FROM users u
+            JOIN user_subscriptions s ON s.user_id = u.id
+            JOIN monitors m ON m.id = s.monitor_id
+            JOIN monitor_users mu ON mu.user_id = u.id AND mu.monitor_id = m.id
+            WHERE u.email IS NOT NULL AND u.email != ''
+              AND m.id IN ({$placeholders})
+              AND COALESCE(s.email_notifications, m.email_notifications) = 1";
+        $params = $ids;
+    }
+
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        // The same fallback as the alert path: without the access table the
+        // message still reaches every administrator. Losing the reminder
+        // entirely over a migration that has not run is the worse half.
+        error_log('[reminder] Seznam příjemců selhal, posílá se jen administrátorům: ' . $e->getMessage());
+        $stmt = $pdo->query("SELECT id, email, email_lang, role, phone, whatsapp_apikey, whatsapp_notifications
+                             FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
+        return $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+    }
+}
+
+/**
+ * The reminder as a subject and an HTML body, in the language that is set at
+ * the moment of the call (see bk_with_email_lang()).
+ *
+ * @param array $report the output of bk_daily_reminder_select()
+ * @return array{0: string, 1: string}
+ */
+function bk_render_daily_reminder(array $report): array {
+    $font = "font-family: Arial, Helvetica, sans-serif;";
+    $muted = 'color:#888896; font-size:12px; ' . $font;
+    $duration = static function (?int $secs): string {
+        // An unknown length is said out loud. "0 s" would claim it started now.
+        return $secs === null ? t('reminder_duration_unknown') : sprintf(t('reminder_duration'), bk_format_duration_secs($secs));
+    };
+    $section = static function (string $title, string $note, string $rows) use ($font): string {
+        return '<h2 style="margin:22px 0 8px 0; font-size:16px; color:#ffffff; ' . $font . '">' . htmlspecialchars($title) . '</h2>'
+            . ($note !== '' ? '<p style="margin:0 0 10px 0; color:#888896; font-size:12px; ' . $font . '">' . htmlspecialchars($note) . '</p>' : '')
+            . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' . $rows . '</table>';
+    };
+    $row = static function (string $accent, string $head, string $detail) use ($font): string {
+        return '<tr><td style="border-left:3px solid ' . $accent . '; background-color:#12121a; padding:12px 14px; margin:0 0 8px 0; ' . $font . '">'
+            . '<strong style="color:#ffffff;">' . $head . '</strong>'
+            . ($detail !== '' ? '<br><span style="color:#b9b9c4; font-size:13px;">' . $detail . '</span>' : '')
+            . '</td></tr><tr><td style="height:8px; line-height:8px;">&nbsp;</td></tr>';
+    };
+
+    $body = '<p style="margin:0 0 4px 0; ' . $font . '">' . htmlspecialchars(t('reminder_intro')) . '</p>';
+
+    if ($report['outages'] !== []) {
+        $rows = '';
+        foreach ($report['outages'] as $item) {
+            $head = htmlspecialchars($item['name']) . ' &mdash; ' . htmlspecialchars(strtoupper($item['status']));
+            $detail = htmlspecialchars($duration($item['duration_secs']));
+            $detail .= ' &middot; ' . htmlspecialchars(strtoupper($item['type']));
+            $detail .= '<br>' . htmlspecialchars($item['reason'] ?? t('reminder_no_reason'));
+            $rows .= $row($item['warning'] ? '#f39c12' : '#ef233c', $head, $detail);
+        }
+        $body .= $section(t('reminder_section_outages'), '', $rows);
+    }
+
+    if ($report['silent'] !== []) {
+        $rows = '';
+        foreach ($report['silent'] as $item) {
+            $head = htmlspecialchars($item['name']);
+            $detail = htmlspecialchars($item['message']);
+            // The other rules that noticed the same monitor. Kept under the
+            // first finding instead of in a row of their own: one subject, one
+            // row, but no finding is dropped.
+            foreach ($item['also'] ?? [] as $also) {
+                $detail .= '<br>' . htmlspecialchars(t('reminder_silent_also') . ' ' . $also['message']);
+            }
+            if ($item['age_secs'] !== null) {
+                $detail .= '<br>' . htmlspecialchars($duration($item['age_secs']));
+            }
+            $rows .= $row('#f39c12', $head, $detail);
+        }
+        $body .= $section(t('reminder_section_silent'), t('reminder_section_silent_note'), $rows);
+    }
+
+    if ($report['incidents'] !== []) {
+        $rows = '';
+        foreach ($report['incidents'] as $item) {
+            $head = htmlspecialchars($item['title']);
+            $detail = htmlspecialchars(sprintf(t('reminder_incident_age'),
+                $item['age_secs'] === null ? t('reminder_duration_unknown') : bk_format_duration_secs($item['age_secs'])));
+            if ($item['monitor_name'] !== null) {
+                $detail .= ' &middot; ' . htmlspecialchars($item['monitor_name']);
+            }
+            $rows .= $row('#ef233c', $head, $detail);
+        }
+        $body .= $section(t('reminder_section_incidents'), '', $rows);
+    }
+
+    // The collection stamp closes the message so a dead collector cannot hide
+    // behind a report that happens to be short.
+    $cron = $report['cron'];
+    if ($cron['last'] === null) {
+        $cron_line = t('reminder_cron_never');
+    } else {
+        $cron_line = sprintf(t('reminder_cron_last'), $cron['last'],
+            $cron['age_secs'] === null ? t('reminder_duration_unknown') : bk_format_duration_secs($cron['age_secs']));
+        if ($cron['stale']) {
+            $cron_line .= ' ' . t('reminder_cron_stale');
+        }
+    }
+    $body .= '<p style="margin:22px 0 0 0; padding-top:14px; border-top:1px solid #22222f; ' . $muted . '">'
+        . htmlspecialchars($cron_line) . '</p>';
+
+    $subject = '🔔 ' . t('reminder_subject') . ' – ' . get_setting('site_title', 'Blood Kings Status');
+
+    return [$subject, render_email_wrapper(t('reminder_title'), htmlspecialchars(date('d.m.Y H:i')), '#f39c12', $body)];
+}
+
+/**
+ * The same reminder as a short text for the chat channels.
+ *
+ * Czech only, like every other webhook text in this file: the e-mail follows
+ * the recipient's language, a shared Discord channel has no recipient to ask.
+ */
+function bk_daily_reminder_text(array $report): string {
+    $parts = [];
+    foreach (array_slice($report['outages'], 0, 5) as $item) {
+        $parts[] = '• ' . $item['name'] . ' – ' . strtoupper($item['status'])
+            . ($item['duration_secs'] !== null ? ' (' . bk_format_duration_secs($item['duration_secs']) . ')' : '');
+    }
+    foreach (array_slice($report['silent'], 0, 5) as $item) {
+        $parts[] = '• ' . $item['name'] . ' – ' . $item['message'];
+    }
+    foreach (array_slice($report['incidents'], 0, 5) as $item) {
+        $parts[] = '• ' . $item['title'] . ' – nepřevzatý incident';
+    }
+    $shown = count($parts);
+    if ($report['problem_count'] > $shown) {
+        $parts[] = '… a dalších ' . ($report['problem_count'] - $shown) . ' v aplikaci.';
+    }
+    return "🔔 **Denní připomínka: pořád je něco rozbité**\n" . implode("\n", $parts);
+}
+
+/**
+ * Sends the daily reminder - or writes down that there was nothing to send.
+ *
+ * When nothing is wrong, nothing goes out. A daily "all good" teaches the
+ * reader to filter the sender, and the first real message is filtered with it.
+ * The decision is not silent though: it lands in the outgoing message log as a
+ * skipped row, so "no e-mail came" can be told apart from "the reminder is
+ * broken" - exactly the question this release exists to answer.
+ *
+ * @return array{sent: bool, reason: string, problems: int, emails: int, channels: int}
+ */
+function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
+    $report = bk_daily_reminder_collect($pdo, $now);
+    $result = [
+        'sent' => false,
+        'reason' => 'nothing_wrong',
+        'problems' => $report['problem_count'],
+        'emails' => 0,
+        'channels' => 0,
+    ];
+    $default_lang = get_setting('email_lang', 'cs');
+
+    if ($report['problem_count'] === 0) {
+        // ok = 1: nothing failed here. A zero would light up the "something did
+        // not go out" banner every single healthy day, and a banner that cries
+        // daily is a banner nobody reads on the day it matters.
+        bk_log_notification(
+            $pdo,
+            null,
+            'skipped',
+            'none',
+            null,
+            true,
+            null,
+            'daily_reminder',
+            bk_with_email_lang($default_lang, fn (): string => t('reminder_skipped')),
+            null
+        );
+        return $result;
+    }
+
+    $monitor_ids = [];
+    foreach (array_merge($report['outages'], $report['silent']) as $item) {
+        $monitor_ids[] = (int)$item['id'];
+    }
+
+    // Nothing but silent collection and unacknowledged incidents means nothing
+    // a subscriber would have been alerted about either - that is the agent
+    // class of events, and agent_notify_admin_only keeps those internal.
+    $admins_only = get_setting('agent_notify_admin_only', '1') === '1' && $report['outages'] === [];
+    $recipients = bk_daily_reminder_recipients($pdo, $monitor_ids, $admins_only);
+
+    $rendered_by_lang = [];
+    $text = bk_daily_reminder_text($report);
+    foreach ($recipients as $rec) {
+        $lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_lang;
+        if (!isset($rendered_by_lang[$lang])) {
+            $rendered_by_lang[$lang] = bk_with_email_lang($lang, fn (): array => bk_render_daily_reminder($report));
+        }
+        [$subject, $html_body] = $rendered_by_lang[$lang];
+        // send_email() writes the log row itself - one per attempt, failures included.
+        if (send_email($rec['email'], $subject, $html_body, [], ['kind' => 'daily_reminder'])) {
+            $result['emails']++;
+        }
+
+        // WhatsApp goes through CallMeBot with the user's own key. SMS is
+        // deliberately NOT used: a paid message every day is a cost nobody
+        // agreed to, and the alert that pays for itself already went out.
+        if (!empty($rec['whatsapp_notifications']) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
+            $wa_ok = send_sms($rec['phone'], mb_strimwidth($text, 0, 900, '…', 'UTF-8'), $rec['whatsapp_apikey'], 'whatsapp');
+            bk_log_notification($pdo, null, 'daily_reminder', 'whatsapp', $rec['phone'], (bool)$wa_ok, null, 'daily_reminder');
+            if ($wa_ok) {
+                $result['channels']++;
+            }
+        }
+    }
+
+    // The shared channels - global settings only. A per-monitor webhook belongs
+    // to one monitor and this message is about all of them at once.
+    $discord = (string)get_setting('discord_webhook_url', '');
+    if ($discord !== '') {
+        $ok = send_webhook_post($discord, json_encode(['content' => $text], JSON_UNESCAPED_UNICODE));
+        bk_log_notification($pdo, null, 'daily_reminder', 'discord', null, $ok,
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder');
+        $result['channels'] += $ok ? 1 : 0;
+    }
+    $slack = (string)get_setting('slack_webhook_url', '');
+    if ($slack !== '') {
+        $ok = send_webhook_post($slack, json_encode(['text' => $text], JSON_UNESCAPED_UNICODE));
+        bk_log_notification($pdo, null, 'daily_reminder', 'slack', null, $ok,
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder');
+        $result['channels'] += $ok ? 1 : 0;
+    }
+    $tg_token = (string)get_setting('telegram_bot_token', '');
+    $tg_chat = (string)get_setting('telegram_chat_id', '');
+    if ($tg_token !== '' && $tg_chat !== '') {
+        $ok = send_webhook_post('https://api.telegram.org/bot' . $tg_token . '/sendMessage',
+            json_encode(['chat_id' => $tg_chat, 'text' => $text, 'parse_mode' => 'Markdown'], JSON_UNESCAPED_UNICODE));
+        bk_log_notification($pdo, null, 'daily_reminder', 'telegram', $tg_chat, $ok,
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder');
+        $result['channels'] += $ok ? 1 : 0;
+    }
+    $po_user = (string)get_setting('pushover_user_key', '');
+    $po_token = (string)get_setting('pushover_api_token', '');
+    if ($po_user !== '' && $po_token !== '') {
+        // Priority 0: the reminder is a summary of what is already known, not
+        // a page. The outage itself paged when it happened.
+        $ok = send_pushover_alert($po_user, $po_token, 'Blood Kings: denní připomínka',
+            mb_strimwidth($text, 0, 900, '…', 'UTF-8'), 0);
+        bk_log_notification($pdo, null, 'daily_reminder', 'pushover', null, (bool)$ok, null, 'daily_reminder');
+        $result['channels'] += $ok ? 1 : 0;
+    }
+
+    // "Sent" means at least one message really left. Without this the cron
+    // would stamp the day as done even when every channel refused, and the
+    // next attempt would be tomorrow.
+    $result['sent'] = $result['emails'] > 0 || $result['channels'] > 0;
+    $result['reason'] = $result['sent'] ? 'sent' : 'no_recipient';
+
+    return $result;
 }
 
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
@@ -6350,16 +7082,14 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
                 $alert_email_by_lang[$rec_lang] = $render_alert_email($rec_lang);
             }
             [$email_subject, $html_body] = $alert_email_by_lang[$rec_lang];
-            $mail_ok = send_email($rec['email'], $email_subject, $html_body);
-            bk_log_notification(
-                $pdo,
-                (int)($monitor['id'] ?? 0),
-                $new_status,
-                'email',
-                $rec['email'],
-                (bool)$mail_ok,
-                $mail_ok ? null : ($GLOBALS['last_mail_error'] ?? null)
-            );
+            // send_email() writes the row itself now. The explicit
+            // bk_log_notification() that used to stand here would make it two
+            // rows for one mail - and every count over the log twice the truth.
+            send_email($rec['email'], $email_subject, $html_body, [], [
+                'kind' => 'alert',
+                'monitor_id' => (int)($monitor['id'] ?? 0),
+                'status' => $new_status,
+            ]);
         }
         
         // SMS notifications (Twilio / SMSbrana) - independent of WhatsApp
@@ -6367,7 +7097,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         if ($rec['sms_notifications'] && !empty($rec['phone'])) {
             if ($gateway_type === 'twilio' || $gateway_type === 'smsbrana') {
                 $sms_ok = send_sms($rec['phone'], $sms_body);
-                bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'sms', $rec['phone'], (bool)$sms_ok);
+                bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'sms', $rec['phone'], (bool)$sms_ok, null, 'alert');
             }
         }
 
@@ -6375,7 +7105,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         // The key is bound to a specific phone number, so it exists per-user only.
         if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
             $wa_ok = send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
-            bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'whatsapp', $rec['phone'], (bool)$wa_ok);
+            bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'whatsapp', $rec['phone'], (bool)$wa_ok, null, 'alert');
         }
     }
 
@@ -6412,7 +7142,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             'discord',
             null,
             $discord_ok,
-            $discord_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+            $discord_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
+            'alert'
         );
     }
 
@@ -6426,7 +7157,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             'slack',
             null,
             $slack_ok,
-            $slack_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+            $slack_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
+            'alert'
         );
     }
 
@@ -6446,7 +7178,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             'telegram',
             $telegram_chat,
             $tg_ok,
-            $tg_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+            $tg_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
+            'alert'
         );
     }
 
@@ -6456,7 +7189,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     if (!empty($po_user) && !empty($po_token)) {
         $po_prio = ($new_status === 'down') ? 1 : 0;
         $po_ok = send_pushover_alert($po_user, $po_token, "Blood Kings Alert: $name", "$emoji Monitor $name je $status_text. $error_msg", $po_prio);
-        bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'pushover', null, (bool)$po_ok);
+        bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'pushover', null, (bool)$po_ok, null, 'alert');
     }
 
     // PagerDuty notifikace
@@ -6482,7 +7215,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
                 'pagerduty',
                 $pd_action,
                 (bool)$pd_ok,
-                $pd_ok ? null : ($GLOBALS['last_webhook_error'] ?? null)
+                $pd_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
+                'alert'
             );
         }
     }
@@ -6539,7 +7273,7 @@ function bk_send_test_notification(string $channel, ?string $to_email, string $l
                     . '<p>' . htmlspecialchars(t('test_email_sent_at')) . ' ' . $time . '</p>';
                 return [t('test_email_subject'), $body];
             });
-            if (send_email($to_email, $subject, $body)) {
+            if (send_email($to_email, $subject, $body, [], ['kind' => 'test'])) {
                 $fallback = ($GLOBALS['last_mail_method'] ?? null) === 'fallback';
                 return ['ok' => true, 'message' => $fallback
                     ? "Předáno systémové funkci mail() (SMTP není nastaveno) na {$to_email} - zkontrolujte, zda opravdu dorazil."
@@ -10644,7 +11378,7 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
             });
         }
         [$subject, $html_body] = $rendered_by_lang[$lang];
-        if (send_email($adm['email'], $subject, $html_body)) {
+        if (send_email($adm['email'], $subject, $html_body, [], ['kind' => 'digest'])) {
             $any_success = true;
         }
     }
@@ -10992,7 +11726,7 @@ function bk_public_sub_send_confirm(string $email, string $lang, string $confirm
         $body = '<p>' . htmlspecialchars(sprintf(t('pubsub_confirm_intro'), $site)) . '</p>'
             . '<p><a href="' . htmlspecialchars($link) . '">' . htmlspecialchars(t('pubsub_confirm_button')) . '</a></p>'
             . '<p style="color:#888;font-size:12px">' . htmlspecialchars(t('pubsub_confirm_ignore')) . '</p>';
-        return send_email($email, $subject, $body);
+        return send_email($email, $subject, $body, [], ['kind' => 'subscriber_confirm']);
     });
 }
 
@@ -11031,7 +11765,11 @@ function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): voi
         [$subject, $body, $unsub_label] = $rendered[$lang];
         $unsub_link = $base_origin . '/app/unsubscribe?token=' . $sub['unsubscribe_token'];
         $full_body = $body . '<p style="color:#888;font-size:12px"><a href="' . htmlspecialchars($unsub_link) . '">' . htmlspecialchars($unsub_label) . '</a></p>';
-        send_email($sub['email'], $subject, $full_body, ['List-Unsubscribe' => '<' . $unsub_link . '>']);
+        send_email($sub['email'], $subject, $full_body, ['List-Unsubscribe' => '<' . $unsub_link . '>'], [
+            'kind' => 'subscriber_broadcast',
+            'monitor_id' => (int)($monitor['id'] ?? 0),
+            'status' => $new_status,
+        ]);
     }
 }
 
@@ -11403,7 +12141,7 @@ function bk_password_reset_request(PDO $pdo, string $email, string $site_title):
         . '<p><a href="' . htmlspecialchars($set_link) . '">' . htmlspecialchars($set_link) . '</a></p>'
         . '<p>Pokud jste o obnovení hesla nežádali, tento e-mail můžete ignorovat.</p>';
 
-    send_email($email, $subject, $body);
+    send_email($email, $subject, $body, [], ['kind' => 'password_reset']);
     bk_audit_log($pdo, 'password_reset_requested', $email, 'user', $user['id'], $user['id'], $user['username']);
     return true;
 }

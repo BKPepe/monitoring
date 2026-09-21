@@ -437,9 +437,14 @@ CREATE TABLE IF NOT EXISTS `notification_log` (
   `recipient` VARCHAR(190) DEFAULT NULL,
   `ok` TINYINT(1) NOT NULL DEFAULT 0,
   `error_message` VARCHAR(255) DEFAULT NULL,
+  -- Written inside send_email(), so this table is no longer alerts only.
+  `kind` VARCHAR(32) NOT NULL DEFAULT 'other', -- alert, digest, invitation, password_reset, ... (bk_notification_kinds)
+  `subject` VARCHAR(190) DEFAULT NULL, -- the only part of a message ever stored; the body never is
+  `method` VARCHAR(16) DEFAULT NULL, -- 'smtp' = an authenticated server confirmed it, 'fallback' = only handed to the local mail(), NULL = nothing confirmed a route (a failed attempt)
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   KEY `idx_notif_monitor` (`monitor_id`, `id`),
-  KEY `idx_notif_created` (`created_at`)
+  KEY `idx_notif_created` (`created_at`),
+  KEY `idx_notif_kind` (`kind`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `metrics_daily` (

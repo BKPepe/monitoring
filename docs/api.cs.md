@@ -283,6 +283,38 @@ Bez vyplněného kanálu se razítko **nedává**. Kdyby se dalo, incident by se
 tvářil jako eskalovaný a po doplnění kanálu by se už neozval - tiché selhání
 přesně tam, kde má pojistka fungovat.
 
+### Denní připomínka toho, co je pořád rozbité
+
+Není to endpoint, ale chování cronu hned za blokem digestů. Výstraha odchází
+jen při ZMĚNĚ stavu, takže monitor, který spadl ve středu, se po zbytek týdne
+neozval - právě tak zůstal čtyřdenní výpadek neviditelný.
+
+Nastavení (administrace → Notifikace):
+
+| Klíč | Význam |
+|---|---|
+| `daily_reminder_enabled` | `1` zapíná; **výchozí zapnuto** |
+| `daily_reminder_hour` | Od které hodiny smí odejít, 0-23, výchozí 8 |
+| `last_daily_reminder_sent` | Stráž: datum posledního rozhodnutí, zapisuje cron |
+
+Odchází nejvýš jednou denně, od nastavené hodiny, a **jen když je opravdu něco
+rozbité**: monitory ve výpadku nebo varování (od nejdelšího, s uloženým
+důvodem), zvlášť sekce tichého sběru dat (agenti, kteří přestali hlásit,
+heartbeaty po lhůtě, `bk_get_collection_issues`), nepřevzaté otevřené incidenty
+a jeden řádek s posledním dokončeným během sběru - aby se mrtvý sběrač nemohl
+schovat za krátkou zprávu. Monitory v údržbě a archivované se nepočítají.
+
+Když není nic rozbité, **neodejde nic**: denní „vše v pořádku" naučí čtenáře
+filtrovat odesílatele a s ním i první opravdovou zprávu. Rozhodnutí se přesto
+zapíše - do protokolu odchozích zpráv jde řádek s `kind=daily_reminder`,
+`channel=none` a `status=skipped`, takže „žádný e-mail nepřišel" jde odlišit od
+„připomínka je rozbitá".
+
+Razítko dne se zapisuje bez ohledu na to, jak to dopadlo, tedy i u přeskočení.
+Na routeru běží cron každou minutu: bez razítka by zdravý stav zapsal řádek
+každou minutu a odmítnutý kanál by se zkoušel do půlnoci a pohřbil své vlastní
+selhání pod stovkami řádků.
+
 ---
 
 ## Endpointy, které dřív chyběly
@@ -615,7 +647,7 @@ restartoval nebo čítač přetekl) a hodnota je dolní odhad.
 |---|---|---|
 | `action=get_settings` / `save_settings` | admin | Globální nastavení |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): pošle jednu skutečnou testovací zprávu s uloženým nastavením, vrací `{ok, message}` |
-| `action=notification_log&monitor_id=&limit=` | admin | Co se odeslalo, komu, kterým kanálem a jestli to prošlo. Řádek vzniká i u neúspěchu - to je ta zajímavější půlka |
+| `action=notification_log&monitor_id=&kind=&channel=&ok=&from=&to=&q=&before_id=&limit=&summary=1` | admin | Co se odeslalo, komu, kterým kanálem a jestli to prošlo. Řádek vzniká i u neúspěchu - to je ta zajímavější půlka. Od chvíle, kdy protokoluje přímo `send_email()`, jsou tu všechny druhy zpráv, ne jen výstrahy: `kind` je filtruje (`alert`, `daily_reminder`, `digest`, `invitation`, …), `channel` vybírá cestu, `ok=0` jen neúspěchy, `q` je část adresy příjemce. `from`/`to` berou datum i datum s časem; holé datum v `to` znamená celý ten den a hodnota, která se nedá přečíst, je 400, ne tiše širší odpověď. Stránkuje se kurzorem - vrácený `nextCursor` se pošle jako `before_id` - protože během čtení přibývají řádky a stránkování přes offset by jeden řádek zopakovalo a jiný přeskočilo. `kinds` a `channels` v odpovědi vypisují hodnoty z CELÉHO protokolu, takže filtr nikdy nevezme možnost, která by ho zrušila. `summary=1` přidá `last24h` a `last7d` (`total`, `failed` a totéž po kanálech), rovněž přes celý protokol a nikdy zúžené filtry: živí pruh „něco neodešlo" a pruh, kterému filtr dokáže výpadek rozmluvit, je horší než žádný. Obsah zprávy se neukládá nikdy, řádky se mažou po 180 dnech |
 | `action=interface_traffic_daily&monitor_id=&days=` | přiřazený monitor | Provoz po dnech a rozhraních, seřazený od nejvytíženějšího. Chybějící den = ten den se nehlásilo, ne nulový provoz |
 | `action=process_top&monitor_id=&kind=&minutes=` | přiřazený monitor | Které procesy braly výkon za celé období (průměr, špička, počet vzorků), seskupené podle jména - restartovaná služba se nerozdrobí na řádek na pid. `enabled: false` = historie procesů je v nastavení vypnutá |
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: zapne nebo vypne údržbu pro jeden i více monitorů. Vypnutí maže i okno, aby další údržba nevypršela hned po zapnutí |

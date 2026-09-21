@@ -3,9 +3,12 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
+import { kindLabel } from '@/lib/outgoing-message';
 
 interface Entry {
   id: number;
+  /** Added with the outgoing message log; an old row from before the migration has none. */
+  kind?: string;
   status: string;
   channel: string;
   recipient: string | null;
@@ -80,6 +83,10 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
               <Badge variant={e.ok ? 'up' : 'down'} className="text-3xs">
                 {e.channel}
               </Badge>
+              {/* What kind of message it was. Alerts are no longer the only
+                  thing logged, so "down" alone stopped being the whole story;
+                  a row written before the kind existed simply has none. */}
+              {e.kind && <span className="text-muted-foreground shrink-0 text-2xs">{kindLabel(e.kind, t)}</span>}
               <span className="min-w-0 flex-1 truncate">
                 {e.status}
                 {e.recipient ? <span className="text-muted-foreground font-mono"> · {e.recipient}</span> : null}

@@ -17,7 +17,7 @@ require_once __DIR__ . '/assert_helpers.php';
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_get_collection_issues', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
     'bk_relative_time_label', 'bk_format_duration', 'bk_compute_baseline_anomaly',
-    'bk_half_window_rate', 'bk_latency_score',
+    'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds',
 ]);
 
 
@@ -663,6 +663,318 @@ check_true('sekce Routery se staví jen pro týdenní přehled',
     str_contains($digest_routers_call, '$period === ' . "'weekly'"));
 check_true('měsíční přehled sekci Routery nestaví',
     substr_count($fn_src, 'bk_digest_routers($pdo') === 1);
+
+// =======================================================================
+// Outgoing message log - the logging has to sit in ONE place
+// =======================================================================
+// bk_log_notification() used to be called at ONE of the nine send_email()
+// call sites, so only alerts left a trace and "did that invitation go out?"
+// had no answer. The logging moved inside send_email(); these checks guard
+// that it stays there, alone, and that every call site says WHICH kind of
+// message it is sending.
+$mail_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+// Comments explain WHY the second log call is gone - and would otherwise make
+// the checks below believe it is still there.
+$without_comments = fn(string $code): string => (string)preg_replace('~^\s*(//|\*|/\*).*$~m', '', $code);
+
+$send_email_body = (function () use ($mail_src): string {
+    $start = strpos($mail_src, 'function send_email(');
+    $end = strpos($mail_src, 'function bk_deliver_email(', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
+})();
+check_true('send_email() přijímá kontext zprávy jako pátý argument',
+    str_contains($send_email_body, 'array $context = []'));
+check_true('a sám zapíše jeden řádek do protokolu',
+    substr_count($send_email_body, 'bk_log_notification(') === 1);
+check_true('protokolu se předává předmět, nikdy tělo zprávy',
+    str_contains($send_email_body, '$subject') && !str_contains($send_email_body, 'bk_log_notification($html_body')
+    && !preg_match('/bk_log_notification\((?:[^;]*?)\$html_body/s', $send_email_body));
+
+$deliver_body = (function () use ($mail_src): string {
+    $start = strpos($mail_src, 'function bk_deliver_email(');
+    $end = strpos($mail_src, 'function send_sms(', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
+})();
+check_true('doručovací funkce sama nic neprotokoluje (jinak by řádky byly dva)',
+    $deliver_body !== '' && !str_contains($without_comments($deliver_body), 'bk_log_notification('));
+
+// The e-mail branch of trigger_notifications(): send_email() logs the attempt,
+// so the explicit call that used to stand right after it would double every row.
+$alert_mail_branch = (function () use ($mail_src): string {
+    $start = strpos($mail_src, "\$alert_email_by_lang[\$rec_lang];");
+    $end = strpos($mail_src, '// SMS notifications', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
+})();
+check_true('větev alertu e-mailem neprotokoluje podruhé',
+    $alert_mail_branch !== '' && !str_contains($without_comments($alert_mail_branch), 'bk_log_notification('));
+check_true('a předává druh zprávy i monitor', str_contains($alert_mail_branch, "'kind' => 'alert'")
+    && str_contains($alert_mail_branch, "'monitor_id' =>"));
+
+// Every call site names its kind. Without this a new feature adds a tenth
+// send_email() and its messages land in the log as anonymous 'other'.
+$kind_gaps = [];
+$kind_calls = 0;
+$kinds_used = [];
+foreach (['functions.php', 'api.php', 'admin.php'] as $mail_file) {
+    $src = (string)file_get_contents(__DIR__ . '/../' . $mail_file);
+    preg_match_all('/(?<![a-z_])send_email\s*\(/', $src, $hits, PREG_OFFSET_CAPTURE);
+    foreach ($hits[0] as [$_, $offset]) {
+        $line_no = substr_count($src, "\n", 0, $offset) + 1;
+        $line = strtok(substr($src, (int)strrpos(substr($src, 0, $offset), "\n")), "\n");
+        if (str_contains((string)$line, 'function send_email(') || str_starts_with(ltrim((string)$line), '*')
+            || str_starts_with(ltrim((string)$line), '//')) {
+            continue;
+        }
+        $kind_calls++;
+        // The arguments may wrap over several lines - look at the call as a whole.
+        $call = substr($src, $offset, 400);
+        if (!str_contains($call, "'kind' =>")) {
+            $kind_gaps[] = $mail_file . ':' . $line_no;
+        }
+        if (preg_match("/'kind' => '([a-z_]+)'/", $call, $km)) {
+            $kinds_used[$km[1]] = true;
+        }
+    }
+}
+// Nine call sites when the log was built, ten since the daily reminder. The
+// number is hard-coded on purpose: a new send_email() has to be noticed here,
+// where someone decides which kind it writes into the log.
+check_true('kontrola opravdu našla všech deset volání', $kind_calls === 10);
+check('každé volání send_email() uvádí druh zprávy', $kind_gaps, []);
+
+if (function_exists('bk_notification_kinds')) {
+    $kinds = bk_notification_kinds();
+    check_true('seznam druhů zná výstrahu i denní připomínku',
+        in_array('alert', $kinds, true) && in_array('daily_reminder', $kinds, true));
+    check('a nemá duplicity', count($kinds), count(array_unique($kinds)));
+    // Every kind that a call site really uses must be in the canonical list,
+    // otherwise the admin filter would offer a value nothing ever writes - or
+    // worse, hide one that does.
+    check('použité druhy jsou všechny v kanonickém seznamu',
+        array_values(array_diff(array_keys($kinds_used), $kinds)), []);
+}
+
+// =======================================================================
+// Daily reminder - the whole path from the database to the message
+//
+// The rule that counts ("what is broken") is tested in run_tests.php without
+// a database. Here the parts are put together: does anything actually leave,
+// how often, and what stays behind in the outgoing message log when nothing
+// does. The database is an in-memory SQLite - the queries are plain enough to
+// run on both, and the alternative would be no coverage of this path at all
+// until someone ran the integration suite with MySQL.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_send_daily_reminder', 'bk_daily_reminder_collect', 'bk_daily_reminder_select',
+    'bk_daily_reminder_recipients', 'bk_daily_reminder_due', 'bk_daily_reminder_text',
+    'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification',
+    'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
+]);
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting']);
+
+// The mail stub: nothing leaves the machine, and every attempt is kept so the
+// tests can ask what the reminder said. send_email() writes the log row
+// itself in production - here that row is not the subject of the test.
+if (!function_exists('send_email')) {
+    function send_email($to, $subject, $html_body, array $extra_headers = [], array $context = []) {
+        $GLOBALS['bk_test_mails'][] = ['to' => $to, 'subject' => $subject, 'body' => $html_body, 'context' => $context];
+        return true;
+    }
+}
+
+$dr_pdo = null;
+if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    $dr_pdo = new PDO('sqlite::memory:');
+    $dr_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $dr_pdo->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, name TEXT, type TEXT, status TEXT,
+        last_checked TEXT, last_status_change TEXT, last_details TEXT, maintenance INTEGER DEFAULT 0,
+        archived_at TEXT, email_notifications INTEGER DEFAULT 1, heartbeat_interval INTEGER,
+        heartbeat_grace INTEGER, last_heartbeat TEXT, heartbeat_last_result TEXT, heartbeat_last_message TEXT)");
+    $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, error_message TEXT)");
+    $dr_pdo->exec("CREATE TABLE incidents (id INTEGER PRIMARY KEY, title TEXT, impact TEXT, status TEXT,
+        created_at TEXT, acknowledged_at TEXT, monitor_id INTEGER)");
+    $dr_pdo->exec("CREATE TABLE notification_log (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT,
+        channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT)");
+    $dr_pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, email_lang TEXT, role TEXT,
+        phone TEXT, whatsapp_apikey TEXT, whatsapp_notifications INTEGER DEFAULT 0)");
+    $dr_pdo->exec("CREATE TABLE user_subscriptions (user_id INTEGER, monitor_id INTEGER, email_notifications INTEGER)");
+    $dr_pdo->exec("CREATE TABLE monitor_users (user_id INTEGER, monitor_id INTEGER)");
+    $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role) VALUES (1, 'admin@example.com', 'cs', 'admin')");
+}
+
+if ($dr_pdo instanceof PDO) {
+    // The real clock, for the same reason as in run_tests.php:
+    // bk_get_collection_issues() reads time() itself, so a frozen "now" would
+    // make these fixtures age against it during the day.
+    $dr_now = time();
+    $dr_at = fn (int $secs_ago): string => date('Y-m-d H:i:s', $dr_now - $secs_ago);
+    // No webhook is configured, so nothing can reach the network from here;
+    // the reminder has only the e-mail channel to use.
+    $GLOBALS['system_settings'] = [
+        'agent_offline_timeout' => '50',
+        'last_cron_run' => $dr_at(120),
+        'email_lang' => 'cs',
+        'site_title' => 'Blood Kings Status',
+    ];
+    $dr_reset = function () use ($dr_pdo): void {
+        $dr_pdo->exec('DELETE FROM monitors');
+        $dr_pdo->exec('DELETE FROM monitor_logs');
+        $dr_pdo->exec('DELETE FROM incidents');
+        $dr_pdo->exec('DELETE FROM notification_log');
+        $GLOBALS['bk_test_mails'] = [];
+    };
+    $dr_add = function (array $row) use ($dr_pdo): void {
+        $row = array_merge([
+            'id' => 1, 'name' => 'Web', 'type' => 'web', 'status' => 'up', 'last_checked' => null,
+            'last_status_change' => null, 'last_details' => null, 'maintenance' => 0, 'archived_at' => null,
+            'heartbeat_interval' => null, 'heartbeat_grace' => null, 'last_heartbeat' => null,
+            'heartbeat_last_result' => null, 'heartbeat_last_message' => null,
+        ], $row);
+        $stmt = $dr_pdo->prepare("INSERT INTO monitors (id, name, type, status, last_checked, last_status_change,
+            last_details, maintenance, archived_at, heartbeat_interval, heartbeat_grace, last_heartbeat,
+            heartbeat_last_result, heartbeat_last_message) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $stmt->execute(array_values($row));
+    };
+
+    // --- 1. A healthy system says nothing ---------------------------------
+    // A daily "all good" would teach the reader to filter the sender, and the
+    // first real reminder would be filtered with it.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'up', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('zdravý systém: nic se neposílá', [$dr_res['sent'], $dr_res['problems']], [false, 0]);
+    check('a žádný e-mail neodešel', count($GLOBALS['bk_test_mails']), 0);
+
+    // ... but the decision is not silent: without a row nobody could tell
+    // "there was nothing to report" from "the reminder is broken".
+    $dr_rows = $dr_pdo->query("SELECT kind, channel, status, ok, recipient, subject FROM notification_log")->fetchAll(PDO::FETCH_ASSOC);
+    check('rozhodnutí neposílat je v protokolu', count($dr_rows), 1);
+    check('jako přeskočená denní připomínka',
+        [$dr_rows[0]['kind'] ?? null, $dr_rows[0]['status'] ?? null, $dr_rows[0]['channel'] ?? null],
+        ['daily_reminder', 'skipped', 'none']);
+    // ok = 1: nothing failed. A zero would light up the "something did not go
+    // out" banner every healthy day, and then nobody reads it on the day it matters.
+    check('a není to neúspěch', (int)($dr_rows[0]['ok'] ?? -1), 1);
+    check('bez příjemce (nikomu se neposílalo)', $dr_rows[0]['recipient'], null);
+    check_true('důvod je u toho napsaný', trim((string)($dr_rows[0]['subject'] ?? '')) !== '');
+
+    // --- 2. A broken system sends, and says what is wrong -----------------
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(4 * 86400)]);
+    $dr_add(['id' => 2, 'name' => 'Router', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400),
+        'last_details' => json_encode(['agent_last_seen' => $dr_now - 7200])]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, error_message) VALUES (1, 'HTTP 502 Bad Gateway')");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('rozbitý systém posílá', [$dr_res['sent'], $dr_res['emails'], $dr_res['problems']], [true, 1, 2]);
+    $dr_mail = $GLOBALS['bk_test_mails'][0] ?? ['to' => null, 'subject' => '', 'body' => '', 'context' => []];
+    check('administrátorovi', $dr_mail['to'], 'admin@example.com');
+    check('jako denní připomínka', $dr_mail['context']['kind'] ?? null, 'daily_reminder');
+    check_true('předmět říká, co to je', str_contains((string)$dr_mail['subject'], 'Denní připomínka'));
+    check_true('zpráva jmenuje rozbitý monitor a uložený důvod',
+        str_contains($dr_mail['body'], 'Web') && str_contains($dr_mail['body'], 'HTTP 502 Bad Gateway'));
+    check_true('a říká, jak dlouho to trvá', str_contains($dr_mail['body'], 'trvá 4 d'));
+    // The two sections stay apart: the silent agent is the fault nothing else
+    // makes visible, and among the outages it would be buried again.
+    check_true('tichý sběr má vlastní sekci', str_contains($dr_mail['body'], 'Tichý sběr dat')
+        && str_contains($dr_mail['body'], 'Výpadky a varování'));
+    check_true('a mlčící agent je v ní jmenovaný', str_contains($dr_mail['body'], 'Router'));
+    // The collection stamp closes the message so a dead collector cannot hide
+    // behind a report that happens to be short.
+    check_true('zpráva končí otiskem posledního běhu sběru',
+        str_contains($dr_mail['body'], 'Poslední dokončený běh sběru'));
+
+    // The e2e case behind the fix: "Záloha NAS" was in the silent section
+    // twice - once from the heartbeat rule, once from the stalled checks -
+    // and the summary counted one monitor as two problems.
+    $dr_reset();
+    $dr_add(['id' => 3, 'name' => 'Záloha NAS', 'type' => 'heartbeat', 'status' => 'down',
+        'last_checked' => $dr_at(300 * 60), 'last_status_change' => $dr_at(18000),
+        'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(18000)]);
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('monitor nalezený dvěma pravidly je jeden problém', $dr_res['problems'], 1);
+    $dr_dup_body = $GLOBALS['bk_test_mails'][0]['body'] ?? '';
+    check('a ve zprávě je jmenovaný jednou', substr_count($dr_dup_body, 'Záloha NAS'), 1);
+    check_true('druhý nález je pod ním, ne v dalším řádku sekce',
+        str_contains($dr_dup_body, 'Navíc:') && str_contains($dr_dup_body, 'Kontroly dostupnosti'));
+
+    // --- 3. A cron every minute must not send twice -----------------------
+    // This is what the whole guard is for: without the stamp the reminder
+    // would arrive nine hundred times a day and be filtered by the evening.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(2 * 86400)]);
+    $dr_stamp = '';
+    $dr_runs = 0;
+    $dr_today = [(int)date('n'), (int)date('j'), (int)date('Y')];
+    foreach ([7, 8, 9, 13, 23] as $dr_hour) {
+        $dr_ts = mktime($dr_hour, 0, 0, $dr_today[0], $dr_today[1], $dr_today[2]);
+        // Exactly what cron.php does: ask the guard, send, write the date.
+        if (bk_daily_reminder_due($dr_stamp, 8, $dr_ts)) {
+            bk_send_daily_reminder($dr_pdo, $dr_ts);
+            $dr_stamp = date('Y-m-d', $dr_ts);
+            $dr_runs++;
+        }
+    }
+    check('pět běhů cronu za den = jedno odeslání', $dr_runs, 1);
+    check('a právě jeden e-mail', count($GLOBALS['bk_test_mails']), 1);
+    check('první odešlo v nastavenou hodinu, ne dřív', $dr_stamp, date('Y-m-d'));
+
+    // The next day it speaks up again - the outage is still running.
+    $dr_tomorrow = mktime(8, 0, 0, $dr_today[0], $dr_today[1] + 1, $dr_today[2]);
+    if (bk_daily_reminder_due($dr_stamp, 8, $dr_tomorrow)) {
+        bk_send_daily_reminder($dr_pdo, $dr_tomorrow);
+    }
+    check('druhý den se ozve znovu', count($GLOBALS['bk_test_mails']), 2);
+
+    // --- 4. Exclusions on the real path -----------------------------------
+    // The same rules as in the pure test, but this time read out of the
+    // database: a query that forgot the condition would pass there and fail here.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Údržba', 'status' => 'down', 'maintenance' => 1, 'last_checked' => $dr_at(60)]);
+    $dr_add(['id' => 2, 'name' => 'Archiv', 'status' => 'down', 'archived_at' => $dr_at(86400), 'last_checked' => $dr_at(60)]);
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (1, 'Převzatý', 'major', 'identified', '2026-09-20 08:00:00', '2026-09-20 08:05:00', NULL)");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('údržba, archiv ani převzatý incident zprávu nevyvolají',
+        [$dr_res['problems'], count($GLOBALS['bk_test_mails'])], [0, 0]);
+
+    // An unacknowledged incident does - nobody has taken it over.
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (2, 'Nikdo nepřevzal', 'major', 'investigating', '2026-09-20 08:00:00', NULL, NULL)");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('nepřevzatý incident zprávu vyvolá', $dr_res['problems'], 1);
+    check_true('a je v ní jmenovaný',
+        str_contains($GLOBALS['bk_test_mails'][0]['body'] ?? '', 'Nikdo nepřevzal'));
+} elseif (function_exists('bk_send_daily_reminder')) {
+    // Reported, never skipped in silence: a suite that quietly tests nothing
+    // is the same lie as a chart with invented values.
+    check_true('SQLite ovladač pro testy denní připomínky je k dispozici', false);
+}
+
+// --- cron: the reminder really is wired in --------------------------------
+// Nothing executes cron.php here, so what can be checked is that the block
+// exists, that it asks the guard BEFORE sending, that it writes the date
+// stamp, and that it lives in a try of its own - inside the digest's try a
+// failing reminder would take the escalations down with it.
+$dr_block = (function () use ($cron_src): string {
+    $start = strpos($cron_src, '// --- Daily reminder');
+    $end = strpos($cron_src, '// --- Escalation of unacknowledged incidents', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($cron_src, $start, $end - $start) : '';
+})();
+check_true('cron má blok denní připomínky za digesty', $dr_block !== '');
+check_true('ptá se nejdřív stráže, pak posílá',
+    $dr_block !== '' && strpos($dr_block, 'bk_daily_reminder_due(') < strpos($dr_block, 'bk_send_daily_reminder('));
+check_true('a respektuje vypínač', str_contains($dr_block, "get_setting('daily_reminder_enabled', '1')"));
+check_true('zapisuje razítko dne', str_contains($dr_block, 'last_daily_reminder_sent')
+    && str_contains($dr_block, "date('Y-m-d')"));
+// The stamp is written whichever way it ended. Only inside an `if ($sent)` it
+// would let a refused channel be retried every minute until midnight.
+check_false('razítko není podmíněné úspěchem odeslání',
+    str_contains($dr_block, "if (\$reminder['sent'])") && strpos($dr_block, 'last_daily_reminder_sent') > strpos($dr_block, "if (\$reminder['sent'])"));
+check_true('běží ve vlastním try/catch', str_contains($dr_block, '} catch (Throwable $e) {'));
+check_true('a selhání nezůstane potichu', str_contains($dr_block, 'Denní připomínka selhala'));
 
 // --- testovací brány: běh bez kontrol musí skončit červeně -----------------
 // Why here: run_api_tests.php used to exit 0 when MySQL was unreachable, so a

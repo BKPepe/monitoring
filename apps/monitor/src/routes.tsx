@@ -33,6 +33,9 @@ const ReportsPage = React.lazy(() => import('@/pages/reports').then((m) => ({ de
 const InsightsPage = React.lazy(() => import('@/pages/insights').then((m) => ({ default: m.InsightsPage })));
 const SettingsPage = React.lazy(() => import('@/pages/settings').then((m) => ({ default: m.SettingsPage })));
 const ApiAgentsPage = React.lazy(() => import('@/pages/api-agents').then((m) => ({ default: m.ApiAgentsPage })));
+const OutgoingMessagesPage = React.lazy(() =>
+  import('@/pages/outgoing-messages').then((m) => ({ default: m.OutgoingMessagesPage }))
+);
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';
@@ -196,6 +199,7 @@ export const router = createBrowserRouter(
         { path: 'reports', element: <ReportsPage /> },
         { path: 'settings', element: <SettingsPage /> },
         { path: 'api-agents', element: <ApiAgentsPage /> },
+        { path: 'outgoing-messages', element: <OutgoingMessagesPage /> },
         { path: 'users', element: <UsersPage /> },
         { path: 'profile', element: <ProfilePage /> },
         { path: '*', element: <NotFoundPage /> },

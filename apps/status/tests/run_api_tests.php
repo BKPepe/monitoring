@@ -668,6 +668,9 @@ check('údržba monitoru zůstala, jak byla', (int)$pdo->query("SELECT maintenan
 foreach ([
     'users' => 'action=users',
     'notification_log' => 'action=notification_log&monitor_id=1',
+    // Filtry ani souhrn nejsou jiná dvířka do téže tabulky - adresáti jsou
+    // osobní údaj bez ohledu na to, jak se na ně někdo zeptá.
+    'notification_log se souhrnem' => 'action=notification_log&summary=1&kind=alert&ok=0',
     'export_config' => 'action=export_config',
     'audit_logs' => 'action=audit_logs',
 ] as $ra_name => $ra_query) {
@@ -3010,6 +3013,123 @@ if ($logged_in) {
     check('i s důvodem', $nl_fail['error'] ?? null, 'HTTP 404');
     $pdo->exec("DELETE FROM notification_log");
 
+    // --- Protokol odchozích zpráv: filtry, stránkování, souhrn -------------
+    // Od chvíle, kdy zapisuje send_email(), tu nejsou jen výstrahy, ale i
+    // pozvánky, digesty a resety hesla. Bez filtrů a stránkování se v tom
+    // nedá hledat a bez souhrnu se jeden neúspěch schová mezi úspěchy.
+    // [monitor, druh, kanál, příjemce, ok, chyba, předmět, způsob, stáří v minutách]
+    // Od nejstaršího: řadí se podle id, protože podle něj se i stránkuje, a
+    // ve skutečném provozu řádky přibývají v čase.
+    foreach ([
+        [null, 'password_reset', 'email', 'admin@example.com', 1, null, 'Nové heslo', 'smtp', 4320],
+        [null, 'daily_reminder', 'email', 'admin@example.com', 1, null, 'Co je rozbité', 'smtp', 1500],
+        [null, 'digest', 'email', 'sef@example.com', 0, 'SMTP connect() failed', 'Týdenní přehled', null, 120],
+        [null, 'invitation', 'email', 'novy@example.com', 1, null, 'Pozvánka', 'fallback', 30],
+        [1, 'alert', 'discord', null, 0, 'HTTP 404', null, null, 10],
+        [1, 'alert', 'email', 'admin@example.com', 1, null, 'Monitor je dole', 'smtp', 5],
+    ] as $nl_seed) {
+        $st = $pdo->prepare("INSERT INTO notification_log
+            (monitor_id, status, channel, recipient, ok, error_message, kind, subject, method, created_at)
+            VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+        $st->execute([$nl_seed[0], $nl_seed[2], $nl_seed[3], $nl_seed[4], $nl_seed[5], $nl_seed[1], $nl_seed[6], $nl_seed[7], $nl_seed[8]]);
+    }
+
+    [, $nl_all] = api_get_auth($base, 'action=notification_log&limit=50', $cookie_jar);
+    check('bez filtru vrátí celý protokol, ne jen výstrahy', count($nl_all['entries'] ?? []), 6);
+    check('nejnovější je první', $nl_all['entries'][0]['subject'] ?? null, 'Monitor je dole');
+    check('řádek nese druh zprávy', $nl_all['entries'][0]['kind'] ?? null, 'alert');
+    check('i způsob odeslání', $nl_all['entries'][0]['method'] ?? null, 'smtp');
+    // array_key_exists, ne ??: ?? by z testovaného nullu udělalo náhradní
+    // hodnotu a klíč, který server vůbec neposlal, by prošel jako null.
+    check_true('na jedné stránce se kurzor nenabízí', array_key_exists('nextCursor', $nl_all ?: []) && $nl_all['nextCursor'] === null);
+    // Nabídka filtrů se bere z celého protokolu - jinak by filtr sebral
+    // možnost, která ho zruší.
+    check('nabídka druhů je celý protokol', $nl_all['kinds'] ?? [], ['alert', 'daily_reminder', 'digest', 'invitation', 'password_reset']);
+    check('nabídka kanálů taky', $nl_all['channels'] ?? [], ['discord', 'email']);
+
+    [, $nl_kind] = api_get_auth($base, 'action=notification_log&kind=alert', $cookie_jar);
+    check('filtr na druh vybere jen výstrahy', count($nl_kind['entries'] ?? []), 2);
+    check_true('a nabídka zůstane úplná', count($nl_kind['kinds'] ?? []) === 5);
+    [, $nl_ch] = api_get_auth($base, 'action=notification_log&channel=discord', $cookie_jar);
+    check('filtr na kanál vybere jen ten kanál', count($nl_ch['entries'] ?? []), 1);
+    [, $nl_bad] = api_get_auth($base, 'action=notification_log&kind=neexistuje', $cookie_jar);
+    check('neznámý druh vrátí prázdno, ne všechno', count($nl_bad['entries'] ?? []), 0);
+    [, $nl_fails] = api_get_auth($base, 'action=notification_log&ok=0', $cookie_jar);
+    check('ok=0 vybere jen neúspěchy', count($nl_fails['entries'] ?? []), 2);
+    check_true('a opravdu jen neúspěchy', !array_filter($nl_fails['entries'] ?? [], fn($e) => $e['ok'] !== false));
+    [$nl_ok_code] = api_get_auth($base, 'action=notification_log&ok=mozna', $cookie_jar);
+    check('nesmyslné ok je 400, ne tiše širší odpověď', $nl_ok_code, 400);
+
+    [, $nl_q] = api_get_auth($base, 'action=notification_log&q=' . rawurlencode('novy@'), $cookie_jar);
+    check('hledání podle příjemce', count($nl_q['entries'] ?? []), 1);
+    check('a najde toho správného', $nl_q['entries'][0]['recipient'] ?? null, 'novy@example.com');
+    // Podtržítko je v LIKE zástupný znak. Kdyby se neescapovalo, „admin_example"
+    // by našlo „admin@example.com" a filtr by se sám rozšířil.
+    [, $nl_wild] = api_get_auth($base, 'action=notification_log&q=' . rawurlencode('admin_example'), $cookie_jar);
+    check('zástupný znak v hledání se nebere jako zástupný', count($nl_wild['entries'] ?? []), 0);
+
+    // Stránkuje se kurzorem: během čtení přibývají řádky a offset by jeden
+    // zopakoval a jiný přeskočil. Stránky proto musí být disjunktní.
+    $nl_seen = [];
+    $nl_cursor = null;
+    $nl_pages = 0;
+    do {
+        [, $nl_page] = api_get_auth($base, 'action=notification_log&limit=2' . ($nl_cursor !== null ? '&before_id=' . $nl_cursor : ''), $cookie_jar);
+        foreach ($nl_page['entries'] ?? [] as $e) {
+            $nl_seen[] = (int)$e['id'];
+        }
+        $nl_cursor = $nl_page['nextCursor'] ?? null;
+        $nl_pages++;
+    } while ($nl_cursor !== null && $nl_pages < 10);
+    check('kurzor projde celý protokol', count($nl_seen), 6);
+    check('a žádný řádek nedá dvakrát', count(array_unique($nl_seen)), 6);
+    check('po třech stránkách po dvou končí', $nl_pages, 3);
+    $nl_desc = $nl_seen;
+    rsort($nl_desc);
+    check('a chodí od nejnovějšího', $nl_seen, $nl_desc);
+    // Karta u monitoru volá pořád to samé volání jako dřív - filtry ji nesmí
+    // rozbít.
+    [, $nl_mon] = api_get_auth($base, 'action=notification_log&monitor_id=1&limit=50', $cookie_jar);
+    check('filtr na monitor bere jen jeho zprávy', count($nl_mon['entries'] ?? []), 2);
+    check('a nese jméno monitoru jako dřív', $nl_mon['entries'][0]['monitorName'] ?? null, 'Testovací web');
+
+    // Souhrn se neptá na filtry. Pruh „něco neodešlo" musí říct pravdu i
+    // uživateli, který si právě prohlíží jen pozvánky.
+    [, $nl_sum] = api_get_auth($base, 'action=notification_log&summary=1', $cookie_jar);
+    check('souhrn za 24 h počítá jen posledních 24 h', $nl_sum['summary']['last24h']['total'] ?? null, 4);
+    check('a ví, kolik z toho neodešlo', $nl_sum['summary']['last24h']['failed'] ?? null, 2);
+    check('souhrn za 7 dní vidí i starší', $nl_sum['summary']['last7d']['total'] ?? null, 6);
+    check('a neúspěchy se mu nerozmnožily', $nl_sum['summary']['last7d']['failed'] ?? null, 2);
+    $nl_by = [];
+    foreach ($nl_sum['summary']['last24h']['byChannel'] ?? [] as $c) {
+        $nl_by[$c['channel']] = $c;
+    }
+    check('souhrn rozpadá 24 h po kanálech', $nl_by['email'] ?? null, ['channel' => 'email', 'total' => 3, 'failed' => 1]);
+    check('včetně kanálu, kde selhalo všechno', $nl_by['discord'] ?? null, ['channel' => 'discord', 'total' => 1, 'failed' => 1]);
+    [, $nl_sum_f] = api_get_auth($base, 'action=notification_log&summary=1&kind=invitation', $cookie_jar);
+    check('filtr zúží tabulku', count($nl_sum_f['entries'] ?? []), 1);
+    check('ale souhrn ne - jinak by pruh mlčel kvůli filtru', $nl_sum_f['summary']['last24h']['failed'] ?? null, 2);
+    [, $nl_nosum] = api_get_auth($base, 'action=notification_log', $cookie_jar);
+    check_true('bez summary=1 se souhrn nepočítá', array_key_exists('summary', $nl_nosum ?: []) && $nl_nosum['summary'] === null);
+
+    // Časové meze se porovnávají v databázi, takže hranice musí přijít taky
+    // z ní - PHP testu a MySQL nesdílí časovou zónu.
+    $nl_hour_ago = (string)$pdo->query("SELECT DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 MINUTE), '%Y-%m-%d %H:%i:%s')")->fetchColumn();
+    [, $nl_from] = api_get_auth($base, 'action=notification_log&from=' . rawurlencode($nl_hour_ago), $cookie_jar);
+    check('from vybere jen novější', count($nl_from['entries'] ?? []), 3);
+    [, $nl_to] = api_get_auth($base, 'action=notification_log&to=' . rawurlencode($nl_hour_ago), $cookie_jar);
+    check('to vybere jen starší', count($nl_to['entries'] ?? []), 3);
+    [$nl_date_code] = api_get_auth($base, 'action=notification_log&from=vcera', $cookie_jar);
+    check('nečitelné datum je 400, ne odpověď bez meze', $nl_date_code, 400);
+    // Holé datum v „to" znamená celý den. Kdyby znamenalo půlnoc, tenhle
+    // řádek by ve výběru nebyl a filtr by tiše mlžil o tom, co ten den odešlo.
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, subject, created_at)
+                VALUES (NULL, '', 'email', 'historik@example.com', 1, 'admin_notice', 'Starý dopis', '2026-01-15 20:00:00')");
+    [, $nl_day] = api_get_auth($base, 'action=notification_log&from=2026-01-15&to=2026-01-15', $cookie_jar);
+    check('holé datum v to znamená celý den', count($nl_day['entries'] ?? []), 1);
+    check('a je to ten řádek', $nl_day['entries'][0]['recipient'] ?? null, 'historik@example.com');
+    $pdo->exec("DELETE FROM notification_log");
+
     [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'fax'], $cookie_jar);
     check('test_notification: neznámý kanál je 400', $tn_code, 400);
     $pdo->exec("DELETE FROM settings WHERE key_name IN ('discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id')");
@@ -4409,6 +4529,97 @@ api_get($base, 'action=public_status');
 check('opakovaná migrace nesmaže malou hodnotu, kterou agent 0.1.7 opravdu naměřil', $speedtest_row('2026-09-04 05:00:00'), ['download_mbps' => 0.05, 'upload_mbps' => 0.04, 'source' => 'agent']);
 check('opakovaná migrace nechá dřív opravené řádky být', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
 $pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// =======================================================================
+// Outgoing message log - one row per attempt, written inside send_email()
+// =======================================================================
+// Only alerts used to be logged, so "did that invitation e-mail go out?" had
+// no answer. These checks run against a real database and a real (failing)
+// SMTP server, because the interesting half is the failure.
+check('migrace doplní protokolu zpráv druh, předmět a způsob odeslání', [
+    $column_exists('notification_log', 'kind'),
+    $column_exists('notification_log', 'subject'),
+    $column_exists('notification_log', 'method'),
+], [true, true, true]);
+
+$pdo->exec("DELETE FROM notification_log");
+
+// A closed privileged port on loopback refuses the connection at once: nothing
+// is really sent anywhere and the failure looks the same on every machine.
+// Port 1 deliberately - an unprivileged process cannot occupy it, so the test
+// cannot accidentally meet a listening server and wait out PHPMailer's timeout.
+$set_setting('smtp_host', '127.0.0.1');
+$set_setting('smtp_port', '1');
+$set_setting('smtp_user', 'odesilatel@example.invalid');
+$set_setting('smtp_pass', 'tajne');
+
+$mail_kinds = ['invitation', 'password_reset', 'digest', 'subscriber_confirm', 'test', 'daily_reminder'];
+$secret_body = '<p>TAJNE-TELO-ZPRAVY</p>';
+$claimed_sent = 0;
+foreach ($mail_kinds as $mk) {
+    if (send_email('prijemce-' . $mk . '@example.invalid', 'Předmět ' . $mk, $secret_body, [], ['kind' => $mk])) {
+        $claimed_sent++;
+    }
+}
+check('neodeslaná zpráva se nehlásí jako odeslaná', $claimed_sent, 0);
+
+$log_rows = $pdo->query("SELECT kind, channel, recipient, subject, ok, error_message, method, status
+                         FROM notification_log ORDER BY id")->fetchAll();
+check('každý pokus o odeslání má v protokolu právě jeden řádek', count($log_rows), count($mail_kinds));
+check('a každý zná svůj druh zprávy', array_column($log_rows, 'kind'), $mail_kinds);
+check('kanálem je e-mail', array_values(array_unique(array_column($log_rows, 'channel'))), ['email']);
+check('bez události monitoru se stavem stává druh zprávy', array_column($log_rows, 'status'), $mail_kinds);
+check('adresáta protokol drží', $log_rows[0]['recipient'] ?? null, 'prijemce-invitation@example.invalid');
+check('předmět protokol drží', $log_rows[0]['subject'] ?? null, 'Předmět invitation');
+check('selhání je zapsané jako selhání', array_values(array_unique(array_map('intval', array_column($log_rows, 'ok')))), [0]);
+check_true('a nese text chyby, ne prázdno',
+    str_contains((string)($log_rows[0]['error_message'] ?? ''), 'SMTP'));
+// A failed attempt honestly knows no delivery route - claiming 'smtp' because
+// SMTP was tried would turn the column into a guess.
+// array_key_exists, ne ?? - fallback by pod testem zaměnil NULL za hodnotu.
+check_true('u selhání zůstává způsob odeslání neznámý',
+    array_key_exists('method', $log_rows[0] ?? []) && $log_rows[0]['method'] === null);
+
+$body_leak = (int)$pdo->query("SELECT COUNT(*) FROM notification_log
+    WHERE subject LIKE '%TAJNE-TELO%' OR error_message LIKE '%TAJNE-TELO%'
+       OR recipient LIKE '%TAJNE-TELO%' OR status LIKE '%TAJNE-TELO%'")->fetchColumn();
+check('tělo zprávy se do protokolu nikdy neukládá', $body_leak, 0);
+
+// The other half: a confirmed delivery keeps the route it really used.
+bk_log_notification($pdo, null, 'digest', 'email', 'admin@example.invalid', true, null, 'digest', 'Týdenní přehled', 'smtp');
+$ok_row = $pdo->query("SELECT ok, method, error_message FROM notification_log ORDER BY id DESC LIMIT 1")->fetch();
+check('potvrzené odeslání má ok = 1', (int)($ok_row['ok'] ?? -1), 1);
+check('a pojmenuje ověřenou cestu', $ok_row['method'] ?? null, 'smtp');
+check_true('a nevymýšlí si chybu',
+    array_key_exists('error_message', $ok_row ?: []) && $ok_row['error_message'] === null);
+
+$pdo->exec("DELETE FROM notification_log");
+foreach (['smtp_host', 'smtp_user', 'smtp_pass'] as $smtp_key) {
+    $set_setting($smtp_key, '');
+}
+$set_setting('smtp_port', '587');
+
+// Retence protokolu: 180 dnů. Hranice se testuje z obou stran, protože chyba
+// o den se pozná až tím, že důkaz o odeslání zmizel dřív, než na něj došlo.
+$pdo->exec("DELETE FROM notification_log");
+foreach ([
+    'cerstvy' => 'DATE_SUB(NOW(), INTERVAL 1 HOUR)',
+    'tesne_uvnitr' => 'DATE_ADD(DATE_SUB(NOW(), INTERVAL 180 DAY), INTERVAL 1 MINUTE)',
+    'tesne_venku' => 'DATE_SUB(DATE_SUB(NOW(), INTERVAL 180 DAY), INTERVAL 1 MINUTE)',
+    'davny' => 'DATE_SUB(NOW(), INTERVAL 400 DAY)',
+] as $ret_key => $ret_when) {
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, subject, created_at)
+                VALUES (NULL, '', 'email', '{$ret_key}@example.invalid', 1, 'digest', 'Retence', {$ret_when})");
+}
+$ret_result = bk_prune_notification_log($pdo);
+check('retence smaže jen řádky za hranicí 180 dnů', $ret_result['deleted'], 2);
+$ret_left = $pdo->query("SELECT recipient FROM notification_log ORDER BY recipient")->fetchAll(PDO::FETCH_COLUMN);
+check('a nechá ty uvnitř, včetně řádku minutu před hranicí', $ret_left, ['cerstvy@example.invalid', 'tesne_uvnitr@example.invalid']);
+// Kratší retence je volba volajícího, ne přepsaná konstanta - test si ji smí
+// zavolat, aniž by čekal půl roku.
+check('kratší retence se řídí parametrem', bk_prune_notification_log($pdo, 1)['deleted'], 1);
+check_true('a nechá to, co je mladší než den', (int)$pdo->query("SELECT COUNT(*) FROM notification_log")->fetchColumn() === 1);
+$pdo->exec("DELETE FROM notification_log");
 
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {

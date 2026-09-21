@@ -851,7 +851,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                         . '<p><a href="' . htmlspecialchars($set_link) . '">' . htmlspecialchars($set_link) . '</a></p>';
 
                     bk_audit_log($pdo, 'user_created', $u_username . ' (' . $u_role . ', pozvánka e-mailem)', 'user', $new_user_id);
-                    if (send_email($u_email, $subject, $body)) {
+                    if (send_email($u_email, $subject, $body, [], ['kind' => 'invitation'])) {
                         $success_msg = 'Nový uživatel byl vytvořen. Na jeho e-mail byl odeslán odkaz pro nastavení hesla.';
                     } else {
                         $detail = !empty($GLOBALS['last_mail_error']) ? ' (' . htmlspecialchars($GLOBALS['last_mail_error']) . ')' : '';
@@ -1107,7 +1107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $use
             return [$subject, $body];
         });
 
-        if (send_email($to, $subject, $body)) {
+        if (send_email($to, $subject, $body, [], ['kind' => 'test'])) {
             bk_audit_log($pdo, 'test_email_sent', $to);
             $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
                 ? 'Testovací e-mail byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) na adresu ' . htmlspecialchars($to) . ' - zkontrolujte, zda opravdu dorazil, tohle jen potvrzuje, že to webhosting přijal ke zpracování.'

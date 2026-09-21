@@ -15,6 +15,7 @@ import { UsersPage } from './users';
 import { ApiAgentsPage } from './api-agents';
 import { StatusPagesPage } from './status-pages';
 import { SettingsPage } from './settings';
+import { OutgoingMessagesPage } from './outgoing-messages';
 import { NotFoundPage } from './not-found';
 
 /**
@@ -48,6 +49,8 @@ const emptyApi = (url: string): Response => {
   if (url.includes('action=sla_report')) return jsonResponse({ slaGoal: 99.95, overallUptime: null, monitors: [] });
   if (url.includes('action=users')) return jsonResponse({ users: [] });
   if (url.includes('action=audit_logs')) return jsonResponse({ logs: [] });
+  if (url.includes('action=notification_log'))
+    return jsonResponse({ entries: [], nextCursor: null, kinds: [], channels: [], summary: null });
   if (url.includes('action=discovered_services')) return jsonResponse({ services: [] });
   if (url.includes('action=events')) return jsonResponse({ events: [] });
   if (url.includes('action=daily_uptime')) return jsonResponse({ rows: [] });
@@ -97,6 +100,7 @@ const pages: [string, () => React.ReactElement][] = [
   ['ApiAgents', () => <ApiAgentsPage />],
   ['StatusPages', () => <StatusPagesPage />],
   ['Settings', () => <SettingsPage />],
+  ['OutgoingMessages', () => <OutgoingMessagesPage />],
   ['NotFound', () => <NotFoundPage />],
 ];
 

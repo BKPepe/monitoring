@@ -1,5 +1,6 @@
 import { STATUS_API } from './http-source';
 import type {
+  OutgoingMessagePage,
   RouterRecommendationMuteResponse,
   RouterRecommendationsResponse,
   StorageHistoryResponse,
@@ -331,7 +332,45 @@ export const appApi = {
    * classifier stay silent about the line, so it is sent as null, never as 0.
    */
   saveWanSettings: (body: WanSettingsSaveRequest) => mutate<WanSettingsSaveResponse>('wan_settings_save', body),
+
+  /**
+   * The outgoing message log (admin only): what was sent, through which
+   * channel, to whom, and whether it went.
+   *
+   * Paging is by cursor, not by offset: rows keep arriving while somebody
+   * reads the log, and an offset would show the same row twice and skip
+   * another. `summary` is asked for once, with the first page.
+   */
+  getOutgoingMessages: (params: OutgoingMessageQuery = {}) => {
+    const q = new URLSearchParams();
+    if (params.monitorId) q.set('monitor_id', String(params.monitorId));
+    if (params.kind) q.set('kind', params.kind);
+    if (params.channel) q.set('channel', params.channel);
+    // Only "failures only" is a filter; "successes only" answers no question
+    // anybody asks of this page.
+    if (params.failedOnly) q.set('ok', '0');
+    if (params.q) q.set('q', params.q);
+    if (params.beforeId) q.set('before_id', String(params.beforeId));
+    if (params.limit) q.set('limit', String(params.limit));
+    if (params.summary) q.set('summary', '1');
+    const qs = q.toString();
+    return request<OutgoingMessagePage>('notification_log' + (qs ? `&${qs}` : ''));
+  },
 };
+
+/** Filters of `action=notification_log`; everything left out means "no restriction". */
+export interface OutgoingMessageQuery {
+  monitorId?: number;
+  kind?: string;
+  channel?: string;
+  failedOnly?: boolean;
+  /** Substring of the recipient. */
+  q?: string;
+  /** Cursor: only rows older than this id. */
+  beforeId?: number;
+  limit?: number;
+  summary?: boolean;
+}
 
 /** What `action=agent_install_info` returns: the key and the addresses on this server. */
 export interface AgentInstallInfo {

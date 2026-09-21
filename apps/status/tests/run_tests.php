@@ -2716,6 +2716,198 @@ if (function_exists('bk_rec_command')) {
     check('ztlumení si pamatuje závažnost, při které vzniklo', $json['mute']['severity'], 'info');
 }
 
+// --- Daily reminder: what counts as broken --------------------------------
+// The feature exists because of a four-day outage nobody was told about: the
+// alert goes out on a CHANGE of state and then never again. These tests guard
+// the one decision the whole reminder rests on - what gets into it, and what
+// must never, because a message that cries wolf daily is a message nobody reads.
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_daily_reminder_due', 'bk_daily_reminder_select',
+    'bk_get_collection_issues', 'bk_disk_label',
+]);
+
+if (function_exists('bk_daily_reminder_select')) {
+    // Relative to the real clock, not a fixed date: the selection asks
+    // bk_get_collection_issues(), which reads time() itself (it is shared with
+    // the app and the public page). With a frozen "now" the fixtures would age
+    // against the real clock and a suite that passed at nine would fail at noon.
+    $dr_now = time();
+    $dr_at = fn (int $secs_ago): string => date('Y-m-d H:i:s', $dr_now - $secs_ago);
+    $dr_monitor = fn (array $over): array => array_merge([
+        'id' => 1, 'name' => 'Web', 'type' => 'web', 'status' => 'up',
+        'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(3600),
+        'maintenance' => 0, 'archived_at' => null, 'details' => [], 'last_error' => null,
+    ], $over);
+    // The message texts come from lang/, so the selection runs inside the
+    // e-mail language exactly as the cron does.
+    $dr_select = fn (array $monitors, array $incidents = [], ?string $cron = null): array =>
+        bk_with_email_lang('cs', fn (): array => bk_daily_reminder_select($monitors, $incidents, $cron, 3000, 900, $dr_now));
+
+    // Nothing wrong = nothing to send. Without this the reminder would arrive
+    // every morning saying "all good" and be filtered within a week.
+    $dr_ok = $dr_select([$dr_monitor([])]);
+    check('zdravý systém nemá co hlásit', $dr_ok['problem_count'], 0);
+    check('a ani jednu sekci', [count($dr_ok['outages']), count($dr_ok['silent']), count($dr_ok['incidents'])], [0, 0, 0]);
+
+    $dr_down = $dr_select([$dr_monitor([
+        'status' => 'down', 'last_status_change' => $dr_at(4 * 86400), 'last_error' => 'HTTP 502',
+    ])]);
+    check('výpadek se hlásí', count($dr_down['outages']), 1);
+    check('i s uloženým důvodem', $dr_down['outages'][0]['reason'], 'HTTP 502');
+    check('a s délkou trvání', $dr_down['outages'][0]['duration_secs'], 4 * 86400);
+    check_false('výpadek není varování', $dr_down['outages'][0]['warning']);
+
+    // A slow service and an expiring certificate are warnings, not outages -
+    // the same classification the alert e-mail uses.
+    $dr_warn = $dr_select([$dr_monitor(['status' => 'latency_degraded'])]);
+    check_true('zhoršená odezva se hlásí jako varování', $dr_warn['outages'][0]['warning'] ?? false);
+
+    // Longest first: the four-day outage must not end up under the ten-minute one.
+    $dr_order = $dr_select([
+        $dr_monitor(['id' => 1, 'name' => 'Krátký', 'status' => 'down', 'last_status_change' => $dr_at(600)]),
+        $dr_monitor(['id' => 2, 'name' => 'Dlouhý', 'status' => 'down', 'last_status_change' => $dr_at(4 * 86400)]),
+        $dr_monitor(['id' => 3, 'name' => 'Neznámý', 'status' => 'down', 'last_status_change' => null]),
+    ]);
+    check('nejdéle trvající výpadek je první',
+        array_column($dr_order['outages'], 'name'), ['Dlouhý', 'Krátký', 'Neznámý']);
+    check('neznámá délka se nevymýšlí', $dr_order['outages'][2]['duration_secs'], null);
+
+    // Maintenance is a planned outage: announcing it daily would teach the
+    // reader that the message is usually about nothing.
+    check('monitor v údržbě se nehlásí',
+        $dr_select([$dr_monitor(['status' => 'down', 'maintenance' => 1])])['problem_count'], 0);
+    check('ani stav maintenance',
+        $dr_select([$dr_monitor(['status' => 'maintenance'])])['problem_count'], 0);
+    // Archived = out of service for good; trigger_notifications() ignores it too.
+    check('archivovaný monitor se nehlásí',
+        $dr_select([$dr_monitor(['status' => 'down', 'archived_at' => $dr_at(86400)])])['problem_count'], 0);
+    check('nezměřený a pozastavený monitor není porucha', [
+        $dr_select([$dr_monitor(['status' => 'unknown', 'last_checked' => null])])['problem_count'],
+        $dr_select([$dr_monitor(['status' => 'paused', 'last_checked' => null])])['problem_count'],
+    ], [0, 0]);
+
+    // The case that started the whole feature: nothing crashed, the data just
+    // stopped arriving. It has its own section - merged into the outages it
+    // would be buried among them again.
+    $dr_silent = $dr_select([$dr_monitor([
+        'type' => 'vps', 'status' => 'up', 'details' => ['agent_last_seen' => $dr_now - 7200],
+    ])]);
+    check('mlčící agent se hlásí', count($dr_silent['silent']), 1);
+    check('a NE mezi výpadky', count($dr_silent['outages']), 0);
+    check('sekce zná svůj druh problému', $dr_silent['silent'][0]['issue'], 'agent_silent');
+
+    // A heartbeat past interval + grace stopped reporting - the silent half.
+    $dr_hb = $dr_select([$dr_monitor([
+        'type' => 'heartbeat', 'status' => 'down', 'last_checked' => null, 'last_status_change' => $dr_at(7200),
+        'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(7200),
+    ])]);
+    check('heartbeat po lhůtě je tichý sběr', array_column($dr_hb['silent'], 'issue'), ['heartbeat_overdue']);
+    check('a nepočítá se zároveň jako výpadek', count($dr_hb['outages']), 0);
+    // A job that reported its own failure DID fail - that belongs to the outages.
+    $dr_hb_fail = $dr_select([$dr_monitor([
+        'type' => 'heartbeat', 'status' => 'down', 'last_checked' => null,
+        'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(120),
+        'heartbeat_last_result' => 'fail', 'last_error' => 'Záloha skončila chybou',
+    ])]);
+    check('ohlášené selhání úlohy je výpadek, ne ticho',
+        [count($dr_hb_fail['outages']), count($dr_hb_fail['silent'])], [1, 0]);
+
+    // Two rules, one monitor: the heartbeat is past its grace period AND the
+    // checks stopped running (this is how it looked in the e2e message -
+    // "Zaloha NAS" twice, counted as two problems). One subject, one row, and
+    // the second finding stays readable under the first.
+    $dr_dup = $dr_select([$dr_monitor([
+        'id' => 7, 'name' => 'Záloha NAS', 'type' => 'heartbeat', 'status' => 'down',
+        'last_checked' => $dr_at(300 * 60), 'last_status_change' => $dr_at(7200),
+        'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(18000),
+    ])]);
+    check('jeden monitor je v tichém sběru jednou, i když ho našla dvě pravidla',
+        [count($dr_dup['silent']), $dr_dup['problem_count']], [1, 1]);
+    check('hlavní nález je ten od heartbeatu', $dr_dup['silent'][0]['issue'], 'heartbeat_overdue');
+    check('a druhý nález se neztratil, jen nepočítá znovu',
+        array_column($dr_dup['silent'][0]['also'], 'issue'), ['checks_stalled']);
+    check_true('text druhého nálezu zůstal celý',
+        str_contains($dr_dup['silent'][0]['also'][0]['message'] ?? '', '300'));
+    // Řádek si nechává to delší ticho - kratší věk by poruchu zlehčil.
+    check('řádek hlásí delší z obou dob ticha', $dr_dup['silent'][0]['age_secs'], 300 * 60);
+
+    // The same rule for two collection issues on one monitor.
+    $dr_dup2 = $dr_select([$dr_monitor([
+        'id' => 8, 'name' => 'VPS', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
+        'details' => [
+            'agent_last_seen' => $dr_now - 7200,
+            'cpanel_stats_error' => ['error' => 'HTTP 403', 'since' => $dr_at(9000)],
+        ],
+    ])]);
+    check('dva výpadky sběru na jednom monitoru jsou jeden problém',
+        [count($dr_dup2['silent']), count($dr_dup2['silent'][0]['also']), $dr_dup2['problem_count']], [1, 1, 1]);
+
+    // Two monitors stay two problems - the deduplication is per monitor, not per section.
+    $dr_two = $dr_select([
+        $dr_monitor(['id' => 1, 'name' => 'A', 'type' => 'vps', 'details' => ['agent_last_seen' => $dr_now - 7200]]),
+        $dr_monitor(['id' => 2, 'name' => 'B', 'type' => 'vps', 'details' => ['agent_last_seen' => $dr_now - 7200]]),
+    ]);
+    check('dva mlčící monitory jsou dva problémy',
+        [count($dr_two['silent']), $dr_two['problem_count']], [2, 2]);
+
+    // Unacknowledged incidents, oldest first.
+    $dr_inc = $dr_select([$dr_monitor([])], [
+        ['id' => 5, 'title' => 'Nový', 'impact' => 'minor', 'status' => 'investigating', 'created_at' => $dr_at(600), 'monitor_name' => null],
+        ['id' => 4, 'title' => 'Starý', 'impact' => 'major', 'status' => 'identified', 'created_at' => $dr_at(86400), 'monitor_name' => 'Web'],
+    ]);
+    check('nepřevzaté incidenty se hlásí od nejstaršího',
+        array_column($dr_inc['incidents'], 'title'), ['Starý', 'Nový']);
+    check('a znají svůj věk', $dr_inc['incidents'][0]['age_secs'], 86400);
+    // A healthy monitor plus two incidents: the reminder goes out for the
+    // incidents alone, nothing else is needed.
+    check('incidenty se počítají mezi problémy', $dr_inc['problem_count'], 2);
+
+    // The collection stamp is context, never a reason to send: this code runs
+    // FROM cron, so "the collector is late" alone would be a message from the
+    // machine proving it runs.
+    $dr_cron = $dr_select([$dr_monitor([])], [], $dr_at(4 * 3600));
+    check('starý běh sběru sám o sobě zprávu nevyvolá', $dr_cron['problem_count'], 0);
+    check_true('ale je označený jako zastaralý', $dr_cron['cron']['stale']);
+    check('a ví, jak je starý', $dr_cron['cron']['age_secs'], 4 * 3600);
+    check_true('žádný dokončený běh = taky zastaralý', $dr_select([$dr_monitor([])], [], null)['cron']['stale']);
+    check('čerstvý běh zastaralý není',
+        $dr_select([$dr_monitor([])], [], $dr_at(120))['cron']['stale'], false);
+    // The limit is the collection watchdog's own (collection_max_age_secs), not
+    // a second number invented here: the e-mail and the app must not disagree
+    // about whether collection is alive.
+    check('hranice zastaralosti se řídí nastavením hlídače', bk_with_email_lang('cs', fn (): bool =>
+        bk_daily_reminder_select([$dr_monitor([])], [], $dr_at(1200), 3000, 1800, $dr_now)['cron']['stale']), false);
+}
+
+// --- Daily reminder: the once-a-day guard ---------------------------------
+// The router's cron runs every minute. Without the stamp the reminder would
+// go out nine hundred times a day, and the next real one would be filtered.
+if (function_exists('bk_daily_reminder_due')) {
+    $dr_day = mktime(8, 0, 0, 9, 21, 2026);
+    check_false('před nastavenou hodinou se nic neposílá', bk_daily_reminder_due('', 8, $dr_day - 60));
+    check_true('od nastavené hodiny ano', bk_daily_reminder_due('', 8, $dr_day));
+    check_false('podruhé týž den už ne', bk_daily_reminder_due('2026-09-21', 8, $dr_day + 3600));
+    check_true('a další den zase ano', bk_daily_reminder_due('2026-09-21', 8, $dr_day + 86400));
+    check_true('pozdě večer se dnešek ještě dožene', bk_daily_reminder_due('2026-09-20', 8, $dr_day + 14 * 3600));
+    // A nonsensical hour must not silence the reminder forever - it falls back
+    // to the documented default, the same one get_setting() hands out.
+    check_true('nesmyslná hodina spadne na výchozích 8:00', bk_daily_reminder_due('', 99, $dr_day));
+    check_false('a před osmou pak taky mlčí', bk_daily_reminder_due('', -5, $dr_day - 60));
+
+    // A whole day of a per-minute cron sends exactly once.
+    $dr_last = '';
+    $dr_sends = 0;
+    for ($dr_min = 0; $dr_min < 48 * 60; $dr_min++) {
+        $dr_ts = mktime(0, 0, 0, 9, 21, 2026) + $dr_min * 60;
+        if (bk_daily_reminder_due($dr_last, 8, $dr_ts)) {
+            $dr_sends++;
+            $dr_last = date('Y-m-d', $dr_ts);
+        }
+    }
+    check('cron každou minutu odešle za dva dny právě dvakrát', $dr_sends, 2);
+}
+
+
 // --- Přejímka na routeru majitele (INDEX 4, CORE 7.2-7.4) -------------------
 // Celý engine nad fixture, ne jedna skupina pravidel: tohle je seznam, který
 // majitel dostane v pondělním e-mailu. „Nespustilo se" musí znamenat, že

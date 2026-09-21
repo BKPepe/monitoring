@@ -183,6 +183,19 @@ Související funkcionalita:
 - alerty na offline agenta (`agent_notifications_enabled`,
   `agent_offline_timeout`, `agent_notify_admin_only`)
 - prahové hodnoty na monitor (`cpu_threshold`, `ram_threshold`, `hdd_threshold`)
+- protokol odchozích zpráv: zapisuje se uvnitř `send_email()`, takže ho příští
+  odesílatel nemůže obejít. Řádek vzniká i u neúspěchu, nese druh zprávy,
+  kanál, příjemce, předmět a způsob odeslání (`smtp` / `fallback`), nikdy obsah.
+  Čte ho `api.php?action=notification_log` (jen admin: filtry, kurzorové
+  stránkování, souhrn za 24 h a 7 dní), maže se po 180 dnech
+  (`bk_prune_notification_log`)
+- denní připomínka rozbitých věcí (`daily_reminder_enabled` výchozí `1`,
+  `daily_reminder_hour` výchozí 8, stráž `last_daily_reminder_sent`): cron ji
+  pošle nejvýš jednou denně a jen když je něco rozbité - výpadky a varování,
+  zvlášť tichý sběr dat (mlčící agenti, heartbeaty po lhůtě), nepřevzaté
+  incidenty a poslední dokončený běh sběru. Když není nic rozbité, neodejde nic
+  a do protokolu jde řádek `kind=daily_reminder`, `channel=none`,
+  `status=skipped` (`bk_send_daily_reminder`)
 
 ---
 
@@ -236,6 +249,7 @@ Stav vůči dnešnímu `apps/monitor` (Sprint 1–4).
 | Odběry stavu | ✅ | ❌ | ❌ |
 | Notifikace (9 kanálů) | ✅ | ❌ | ❌ |
 | Digesty, SSL alerty | ✅ | ❌ | ❌ |
+| Protokol odchozích zpráv | ✅ | ✅ | ❌ |
 | SLA reporty | ✅ | ❌ zástupná stránka | ❌ |
 | Prometheus exportér | ✅ | — | ❌ |
 | Badge / widget | ✅ | — | ❌ |

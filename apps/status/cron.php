@@ -876,10 +876,6 @@ try {
     $pdo->exec("DELETE FROM vps_metrics WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
     // Audit log: longer retention (90 days) - security records
     $pdo->exec("DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)");
-    // Delivery history: the same 90 days as the audit trail. It answers "did
-    // the alert reach me?" for an outage anyone still remembers, and a row per
-    // channel per alert adds up otherwise.
-    $pdo->exec("DELETE FROM notification_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)");
     // Event timeline: a year. It was never pruned at all - every threshold,
     // agent reconnect and remote action since the install, forever.
     $pdo->exec("DELETE FROM monitor_events WHERE occurred_at < DATE_SUB(NOW(), INTERVAL 365 DAY)");
@@ -918,6 +914,14 @@ try {
         . " {$health['rec_state']} stavů doporučení.\n";
     $wan = bk_prune_wan_data($pdo);
     echo "Měření WAN: smazáno {$wan['speedtests']} testů rychlosti, vymazána diagnostika u {$wan['diagnostics']}.\n";
+
+    // --- Outgoing messages -------------------------------------------------
+    //
+    // 180 days, moved out of the inline DELETE above: the log stopped being an
+    // alert history when send_email() started writing every kind of message
+    // into it, and "did that invitation ever arrive?" gets asked months later.
+    $notif = bk_prune_notification_log($pdo);
+    echo "Protokol odchozích zpráv: smazáno {$notif['deleted']} řádků starších 180 dnů.\n";
 } catch (PDOException $e) {
     echo "Chyba při čištění starých logů: " . $e->getMessage() . "\n";
 }
@@ -960,6 +964,46 @@ try {
     }
 } catch (Exception $e) {
     echo "Chyba při automatickém odesílání digestů: " . $e->getMessage() . "\n";
+}
+
+// --- Daily reminder of what is still broken -------------------------------
+//
+// An alert fires on a CHANGE of state, so a monitor that went down on a
+// Wednesday said nothing for the rest of the week - which is how a four-day
+// outage stayed invisible. This is the recurring half: once a day, from the
+// configured hour, and ONLY while something really is wrong.
+//
+// The date stamp is written whichever way it ends, including "there was
+// nothing to send". This cron runs every minute on a router: without the
+// stamp the healthy case would write a skipped row every minute, and a
+// refused channel would be retried until midnight and bury its own failure
+// under hundreds of rows. One decision a day - and the outgoing message log
+// says how that decision ended.
+try {
+    if (get_setting('daily_reminder_enabled', '1') === '1'
+        && bk_daily_reminder_due((string)get_setting('last_daily_reminder_sent', ''),
+            (int)get_setting('daily_reminder_hour', '8'))) {
+        $reminder = bk_send_daily_reminder($pdo);
+        $stmt_rem = $pdo->prepare(
+            "INSERT INTO settings (key_name, key_value) VALUES ('last_daily_reminder_sent', ?)
+             ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)"
+        );
+        $stmt_rem->execute([date('Y-m-d')]);
+        if ($reminder['problems'] === 0) {
+            echo "Denní připomínka: nic rozbitého, neodesílá se.\n";
+        } elseif ($reminder['sent']) {
+            echo "Denní připomínka odeslána: {$reminder['problems']} problémů,"
+                . " {$reminder['emails']} e-mailů, {$reminder['channels']} dalších kanálů.\n";
+        } else {
+            echo "VAROVÁNÍ: denní připomínka ({$reminder['problems']} problémů) neodešla nikam"
+                . " - důvod je v protokolu odchozích zpráv.\n";
+        }
+    }
+} catch (Throwable $e) {
+    // Never takes the run down with it: the reminder is a report about
+    // monitoring, and monitoring itself has to keep running.
+    error_log('[cron] Denní připomínka selhala: ' . $e->getMessage());
+    echo "Chyba při odesílání denní připomínky: " . $e->getMessage() . "\n";
 }
 
 // --- Escalation of unacknowledged incidents -------------------------------

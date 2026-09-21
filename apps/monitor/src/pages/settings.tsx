@@ -926,6 +926,89 @@ export function SettingsPage() {
               </CardContent>
             </Card>
 
+            {/*
+              The daily reminder. An alert fires on a CHANGE of state, so a
+              monitor that went down on a Wednesday said nothing for the rest
+              of the week - which is exactly how a four-day outage went
+              unnoticed. This one speaks up while something is still broken.
+            */}
+            <Card>
+              <CardHeader className="items-center justify-start">
+                <Bell aria-hidden="true" className="text-muted-foreground size-5" />
+                <CardTitle>{t('settings.reminder_title', 'Denní připomínka rozbitých věcí')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <label className="flex cursor-pointer items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    /* The server default is on (1). A value that was never saved
+                       must therefore read as on here, or the page would show the
+                       reminder as off while the cron keeps sending it. */
+                    checked={settings.daily_reminder_enabled !== '0'}
+                    onChange={(e) => set('daily_reminder_enabled', e.target.checked ? '1' : '0')}
+                    className="border-border mt-0.5 rounded"
+                  />
+                  <span>
+                    <span className="text-foreground font-medium">
+                      {t('settings.reminder_enabled_label', 'Posílat denní připomínku')}
+                    </span>
+                    <span className={hintCls + ' block'}>
+                      {t(
+                        'settings.reminder_enabled_hint',
+                        'Výstraha odejde jen při změně stavu, takže dlouhý výpadek zůstane po první zprávě potichu. Připomínka se ozve každý den, dokud je něco rozbité — a jen tehdy. Když je všechno v pořádku, neodešle se nic.'
+                      )}
+                    </span>
+                  </span>
+                </label>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <FieldInput
+                    ctx={fieldCtx}
+                    k="daily_reminder_hour"
+                    type="number"
+                    label={t('settings.reminder_hour_label', 'Hodina odeslání (0–23)')}
+                    placeholder="8"
+                    hint={t(
+                      'settings.reminder_hour_hint',
+                      'Čas serveru. Připomínka odejde při prvním běhu cronu od této hodiny, nejvýš jednou denně. Výchozí 8:00.'
+                    )}
+                  />
+                </div>
+
+                <p className={hintCls}>
+                  {t(
+                    'settings.reminder_log_hint',
+                    'Každé odeslání i rozhodnutí neposílat nic je vidět v protokolu odchozích zpráv.'
+                  )}
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* The log lives on its own page; this is the signpost, next to the
+                settings that decide what ends up in it. */}
+            <Card>
+              <CardHeader className="items-center justify-start">
+                <Mail aria-hidden="true" className="text-muted-foreground size-5" />
+                <div>
+                  <CardTitle>{t('settings.outgoing_link_title', 'Protokol odchozích zpráv')}</CardTitle>
+                  <CardDescription>
+                    {t(
+                      'settings.outgoing_link_desc',
+                      'Kdy co odešlo, komu a jestli to kanál přijal — včetně neúspěchů. Odpoví na otázku „odešel ten e-mail?“.'
+                    )}
+                  </CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/outgoing-messages" className="gap-2">
+                    <Mail aria-hidden="true" />
+                    {t('settings.outgoing_link_btn', 'Otevřít protokol')}
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+
             {/* Pushover & PagerDuty */}
             <Card>
               <CardHeader className="items-center justify-start">

@@ -974,4 +974,25 @@ return [
     'digest_router_silent' => 'The router has not reported for %1$d days; no recommendations can be computed.',
     'digest_router_more_items' => '… and %1$d more in the app.',
     'digest_routers_more' => '%1$d more routers are in the app.',
+
+    // --- Daily reminder of what is still broken ------------------------
+    // An alert fires on a CHANGE of state, so a running outage is announced
+    // once and then never again. These strings are the message that keeps
+    // saying it - and only while something really is wrong.
+    'reminder_subject' => 'Daily reminder: something is still broken',
+    'reminder_title' => 'Daily reminder',
+    'reminder_intro' => 'This is still broken. The message goes out once a day for as long as it lasts; when everything is fine, nothing is sent.',
+    'reminder_section_outages' => 'Outages and warnings',
+    'reminder_section_silent' => 'Silent data collection',
+    'reminder_section_silent_note' => 'Nothing crashed, the data simply stopped arriving. This kind of fault is invisible among outages.',
+    'reminder_silent_also' => 'Also:',
+    'reminder_section_incidents' => 'Unacknowledged incidents',
+    'reminder_duration' => 'running for %1$s',
+    'reminder_duration_unknown' => 'duration unknown',
+    'reminder_incident_age' => 'nobody took it over for %1$s',
+    'reminder_no_reason' => 'No reason was stored.',
+    'reminder_cron_last' => 'Last completed collection run: %1$s (%2$s ago).',
+    'reminder_cron_never' => 'Data collection has not completed a single run yet.',
+    'reminder_cron_stale' => 'Collection has not completed for a long time; the values above may be stale.',
+    'reminder_skipped' => 'Nothing broken, no reminder was sent.',
 ];

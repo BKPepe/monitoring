@@ -130,8 +130,27 @@ describe('UserMenu sign-out', () => {
 
   it('keeps the profile link and the sign-out as two separate controls', () => {
     renderMenu();
-    const link = screen.getByRole('link');
-    expect(link.getAttribute('href')).toBe('/profile');
+    // By href, not "the only link": the rail also carries the admin's link to
+    // the outgoing message log.
+    const link = screen.getAllByRole('link').find((a) => a.getAttribute('href') === '/profile')!;
+    expect(link).toBeTruthy();
     expect(link.contains(signOutButton())).toBe(false);
+  });
+
+  it('an administrator reaches the outgoing message log from every page', () => {
+    renderMenu();
+    const link = screen.getByRole('link', { name: /odchozí zprávy|outgoing messages/i });
+    expect(link.getAttribute('href')).toBe('/outgoing-messages');
+  });
+
+  it('a non-admin does not get that link - the rows name recipients', () => {
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <UserMenu name="pepe" role="user" collapsed={false} isLoggedOut={false} />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    expect(screen.queryByRole('link', { name: /odchozí zprávy|outgoing messages/i })).toBeNull();
   });
 });

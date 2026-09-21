@@ -286,6 +286,39 @@ Without a channel configured, the stamp is **not** written. If it were, the
 incident would look escalated and would never speak up again once a channel was
 added - a silent failure exactly where the backstop is supposed to work.
 
+### Daily reminder of what is still broken
+
+Not an endpoint but cron behaviour, next to the digest block. An alert goes out
+on a CHANGE of state, so a monitor that went down on a Wednesday said nothing
+for the rest of the week - which is how a four-day outage stayed invisible.
+
+Settings (admin → Notifications):
+
+| Key | Meaning |
+|---|---|
+| `daily_reminder_enabled` | `1` enables it; **on by default** |
+| `daily_reminder_hour` | The hour it may go out from, 0-23, default 8 |
+| `last_daily_reminder_sent` | The guard: the date of the last decision, written by cron |
+
+It goes out at most once a day, from the configured hour, and **only when
+something really is wrong**: monitors down or in warning (longest first, with
+the stored reason), a separate section for silent data (agents that stopped
+reporting, heartbeats past their grace, `bk_get_collection_issues`), open
+incidents nobody has acknowledged, and one line naming the last completed
+collection run - so a dead collector cannot hide behind a short report.
+Monitors in maintenance and archived ones are left out.
+
+When nothing is broken, **nothing is sent**: a daily "all good" teaches the
+reader to filter the sender, and the first real message is filtered with it.
+The decision is still written down - the outgoing message log gets a row with
+`kind=daily_reminder`, `channel=none` and `status=skipped`, so "no e-mail came"
+can be told apart from "the reminder is broken".
+
+The date stamp is written whichever way it ended, including that skip. This
+cron runs every minute on a router: without it the healthy case would write a
+row every minute, and a refused channel would be retried until midnight and
+bury its own failure under hundreds of rows.
+
 ---
 
 ## Endpoints that used to be missing
@@ -623,7 +656,7 @@ plan:
 |---|---|---|
 | `action=get_settings` / `save_settings` | admin | Global settings |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): sends one real test message with the saved settings, returns `{ok, message}` |
-| `action=notification_log&monitor_id=&limit=` | admin | What was sent, to whom, on which channel and whether it went. A row is written for a failure too - that is the interesting half |
+| `action=notification_log&monitor_id=&kind=&channel=&ok=&from=&to=&q=&before_id=&limit=&summary=1` | admin | What was sent, to whom, on which channel and whether it went. A row is written for a failure too - that is the interesting half. Since `send_email()` logs centrally, this is every kind of message, not only alerts: `kind` filters them (`alert`, `daily_reminder`, `digest`, `invitation`, …), `channel` the route, `ok=0` the failures alone, `q` is a substring of the recipient. `from`/`to` take a date or a date and time; a bare date in `to` means that whole day, and a value that cannot be parsed is a 400 rather than a silently wider answer. Paging is by cursor - pass the returned `nextCursor` as `before_id` - because rows keep arriving while somebody reads, and an offset page would repeat one row and skip another. `kinds` and `channels` in the answer list the values present in the WHOLE log, so a filter can never remove the option that would undo it. `summary=1` adds `last24h` and `last7d` (`total`, `failed`, and the same pair per channel), likewise over the whole log and never narrowed by the filters: it feeds the "something did not go out" banner, and a banner a filter can talk out of a failure is worse than none. The body of a message is never stored; rows are pruned after 180 days |
 | `action=interface_traffic_daily&monitor_id=&days=` | assigned monitor | Traffic per day and interface, busiest first. A missing day means nothing was reported that day, not zero traffic |
 | `action=process_top&monitor_id=&kind=&minutes=` | assigned monitor | Which processes used the machine over the whole window (average, peak, sample count), grouped by name so a restarting service is not split per pid. `enabled: false` = process history is switched off in the settings |
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: switches maintenance on or off for one or more monitors. Off also clears the window, so the next maintenance does not expire the moment it starts |
