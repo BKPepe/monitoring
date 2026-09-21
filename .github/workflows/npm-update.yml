@@ -26,16 +26,36 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      # Node 22 ships npm 10.9.9, and that npm dies on this workspace during
+      # `npm update` with "Cannot read properties of null (reading 'edgesOut')".
+      # It is a bug in npm's tree walk, not a broken lockfile: npm 11.17 updates
+      # the very same lockfile without a complaint. Only npm is pinned, not Node
+      # - the build below has to run on the same runtime as quality.yml and
+      # deploy.yml, or a green run here would prove nothing about CI. The version
+      # is exact for the same reason the overrides block is exact: a floating
+      # range lets a patch release nobody chose break Monday's run.
+      - name: Pin npm (ten z Node 22 padá na `npm update`)
+        run: npm install -g npm@11.17.0
+
+      # A failing `npm update` is a real problem - an unresolvable range, a peer
+      # conflict - and has to stop the run, otherwise the job opens a PR that
+      # changed nothing and looks healthy. `npm audit fix` is different: it exits
+      # non-zero whenever advisories remain that it cannot fix without a major
+      # bump, which is the normal state of this workspace, so its exit code is
+      # reported as a warning instead of failing the week's update.
       - name: Update NPM Packages & Audit Fix
         run: |
           npm ci
           npm update
-          npm audit fix || true
+          npm audit fix || echo "::warning::npm audit fix nechal zranitelnosti, ktere jdou opravit jen major bumpem"
 
+      # Both workspaces build today, so neither failure may be swallowed: the
+      # point of this job is to find out whether the new dependencies still
+      # build, and `|| true` turned that answer into a green tick either way.
       - name: Verify Build
         run: |
           npm run build --workspace=apps/monitor
-          npm run build --workspace=apps/site || true
+          npm run build --workspace=apps/site
 
       - name: Create Pull Request for Updates
         uses: peter-evans/create-pull-request@v8

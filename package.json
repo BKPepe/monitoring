@@ -32,9 +32,9 @@
     "check:i18n-dead": "node scripts/check-dead-i18n.mjs",
     "check:palette": "node scripts/check-raw-palette.mjs"
   },
-  "//overrides": "undici 7.0.0-7.28.0 je high (desync odpovedi mezi uzivateli); miniflare ho ma zamcene na 7.28.0 a wrangler opravenou verzi zatim nevydal. Po KAZDE zmene tohoto bloku je nutne pregenerovat package-lock.json - `npm ci` odmita bezet, kdyz override neni promitnuty v locku, a v CI to spadne az pri instalaci. Verze jsou PRESNE, ne rozsahy: npm 10 v CI porovnava rozsahovy override s registrem, takze cizi patch (undici 7.29.1, 4. 9. 2026) shodil build bez jedine zmeny v repozitari. Hlida to scripts/check-lock-sync.mjs.",
+  "//overrides": "undici 7.0.0-7.28.0 je high (desync odpovedi mezi uzivateli); miniflare ho ma zamcene na 7.28.0 a wrangler opravenou verzi zatim nevydal. Po KAZDE zmene tohoto bloku je nutne pregenerovat package-lock.json - `npm ci` odmita bezet, kdyz override neni promitnuty v locku, a v CI to spadne az pri instalaci. Verze jsou PRESNE, ne rozsahy: npm 10 v CI porovnava rozsahovy override s registrem, takze cizi patch (undici 7.29.1, 4. 9. 2026) shodil build bez jedine zmeny v repozitari. Hlida to scripts/check-lock-sync.mjs. sharp sleduje spodni hranici astro (7.3.3 uz chce ^0.35.4), takze s kazdou aktualizaci astro se tahle verze zvedne - neni to strop, ale pripnuty bod.",
   "overrides": {
-    "sharp": "0.35.3",
+    "sharp": "0.35.4",
     "undici": "7.29.0",
     "nanoid": "3.3.18"
   },
