@@ -28,7 +28,9 @@ $bk_cron_started = microtime(true);
 $last_schema_check = get_setting('last_schema_check', '');
 if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 hours')) {
     try {
-        $required_cols = ['iowait_pct','inode_usage_pct','zombie_count','fork_rate','temperature_c','wifi_clients_total','wifi_clients_24g','wifi_6e_known_24g','conntrack_pct'];
+        $required_cols = ['iowait_pct','inode_usage_pct','zombie_count','fork_rate','temperature_c','wifi_clients_total','wifi_clients_24g','wifi_6e_known_24g','conntrack_pct',
+            // Router release 20260920: one early, one late Wi-Fi column and the LAST column of the migration block.
+            'wifi_busy_5g','wifi_6e_unserved','clock_skew_s'];
         $stmt_cols = $pdo->query("DESCRIBE vps_metrics");
         $existing = array_column($stmt_cols->fetchAll(PDO::FETCH_ASSOC), 'Field');
         $missing = array_diff($required_cols, $existing);
@@ -806,6 +808,19 @@ foreach ($monitors as $monitor) {
     }
 }
 
+// How many of the last 24 h of minute reports really arrived (G42). Hourly,
+// one indexed COUNT per agent monitor: the banner must be able to say that
+// 142 of 1440 minutes are missing, and until now a partial loss was invisible
+// (the agent goes quiet for a minute, the old check waits 3000 s of silence).
+try {
+    $bk_reports_counted = bk_update_reports_24h($pdo);
+    if ($bk_reports_counted > 0) {
+        echo "Hlášení agentů za 24 h: přepočítáno u {$bk_reports_counted} monitorů.\n";
+    }
+} catch (Throwable $e) {
+    error_log('[cron] Přepočet hlášení za 24 h selhal: ' . $e->getMessage());
+}
+
 // Daily rollups must be recomputed BEFORE pruning - otherwise data deleted
 // a moment later would never make it into the long-term history.
 //
@@ -891,6 +906,18 @@ try {
         echo "Historie procesů: smazáno {$proc['deleted']} po retenci, prořezáno {$proc['pruned']}"
             . " (ponecháno {$proc['marked']} špiček).\n";
     }
+
+    // --- Router health ----------------------------------------------------
+    //
+    // Disk history two years, recommendation state 90 days after the item
+    // last fired (mutes never), speed tests 400 days with the per-test
+    // diagnostics nulled after 90. Both are functions so the API suite can
+    // call them with boundary rows; nothing in a suite ever runs this file.
+    $health = bk_prune_router_health($pdo);
+    echo "Zdraví routeru: smazáno {$health['disk_daily']} denních řádků disků, {$health['disks']} disků,"
+        . " {$health['rec_state']} stavů doporučení.\n";
+    $wan = bk_prune_wan_data($pdo);
+    echo "Měření WAN: smazáno {$wan['speedtests']} testů rychlosti, vymazána diagnostika u {$wan['diagnostics']}.\n";
 } catch (PDOException $e) {
     echo "Chyba při čištění starých logů: " . $e->getMessage() . "\n";
 }

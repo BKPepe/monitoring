@@ -29,6 +29,9 @@
                 'label' => $def['label'],
                 'unit' => $def['unit'],
                 'counter' => !empty($def['counter']),
+                // A step series is already an increment per report: a bucket is
+                // the SUM of its minutes, so the app must not average it either.
+                'step' => !empty($def['step']),
             ],
             // `warning` is DERIVED (the band below the configured limit), not
             // something an admin ever typed. The frontend words the two
@@ -42,6 +45,19 @@
             ],
             'related' => $related,
             'events' => $events,
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'monitorId' => $rr_monitor_id,
+            'applicable' => (bool)$rr_res['applicable'],
+            'reason' => $rr_res['reason'],
+            'generatedAt' => date('c'),
+            'window' => $rr_window,
+            // Muting is an admin decision: it silences a finding for everybody
+            // who can see the router, not just for the person clicking.
+            'canMute' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'missingPackages' => bk_rec_missing_packages($rr_details['agent_tools'] ?? null),
+            'items' => $rr_items,
+            'muted' => $rr_muted,
         ], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode([
             'summary' => $summary,
@@ -62,6 +78,8 @@
       <code><![CDATA[json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
+            JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['services' => $services], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE)]]></code>
@@ -94,6 +112,9 @@
                 'label' => $def['label'],
                 'unit' => $def['unit'],
                 'counter' => !empty($def['counter']),
+                // A step series is already an increment per report: a bucket is
+                // the SUM of its minutes, so the app must not average it either.
+                'step' => !empty($def['step']),
             ],
             // `warning` is DERIVED (the band below the configured limit), not
             // something an admin ever typed. The frontend words the two
@@ -107,6 +128,19 @@
             ],
             'related' => $related,
             'events' => $events,
+        ], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode([
+            'monitorId' => $rr_monitor_id,
+            'applicable' => (bool)$rr_res['applicable'],
+            'reason' => $rr_res['reason'],
+            'generatedAt' => date('c'),
+            'window' => $rr_window,
+            // Muting is an admin decision: it silences a finding for everybody
+            // who can see the router, not just for the person clicking.
+            'canMute' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'missingPackages' => bk_rec_missing_packages($rr_details['agent_tools'] ?? null),
+            'items' => $rr_items,
+            'muted' => $rr_muted,
         ], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode([
             'summary' => $summary,
@@ -127,6 +161,8 @@
       <code><![CDATA[json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE)]]></code>
+      <code><![CDATA[json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
+            JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['services' => $services], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE)]]></code>

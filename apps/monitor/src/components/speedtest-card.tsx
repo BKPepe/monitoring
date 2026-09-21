@@ -5,17 +5,9 @@ import { Gauge, ArrowDown, ArrowUp } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { MetricChart } from '@/components/charts/metric-chart';
 import { insertGaps } from '@/lib/series-gaps';
-import type { ChartData } from '@/api/types';
+import { ErrorState } from '@/components/ui/states';
+import type { ChartData, SpeedtestMeasurement } from '@/api/types';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-
-interface Measurement {
-  measuredAt: string;
-  downloadMbps: number | null;
-  uploadMbps: number | null;
-  pingMs: number | null;
-  jitterMs: number | null;
-  server: string | null;
-}
 
 interface Average {
   days: number;
@@ -29,11 +21,24 @@ interface Average {
 }
 
 interface SpeedtestData {
-  measurements: Measurement[];
+  measurements: SpeedtestMeasurement[];
   averages: Record<string, Average>;
 }
 
 const fmt = (v: number | null | undefined, unit: string) => (v === null || v === undefined ? '—' : `${v} ${unit}`);
+
+type TranslateFn = ReturnType<typeof useLanguage>['t'];
+
+/**
+ * Who started the test. Spelled out key by key, and an unknown value stays a
+ * dash: rows stored before agent 0.1.7 do not say, and guessing "Turris OS"
+ * would invent the answer.
+ */
+function startedByLabel(startedBy: SpeedtestMeasurement['startedBy'], t: TranslateFn): string {
+  if (startedBy === 'turris') return t('speed.started_turris', 'Turris OS');
+  if (startedBy === 'agent') return t('speed.started_agent', 'Monitoring');
+  return '—';
+}
 
 /**
  * Link speed measured by the router itself (librespeed-cli).
@@ -59,8 +64,26 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
     load();
   }, [load]);
 
-  // Until it loads, or when there are no measurements, the card does not render
-  // at all - an empty "nothing yet" frame just takes space on a page full of other data.
+  // A failed request is not "no measurements". Silence here would read as a
+  // line that was never tested, so the failure gets its own card (WAN 3.6).
+  if (data === null) {
+    return (
+      <Card className="space-y-3 p-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <Gauge className="text-primary size-5" />
+          <h3 className="text-base font-bold">{t('speed.title', 'Rychlost linky')}</h3>
+        </div>
+        <ErrorState
+          message={t('speed.error', 'Naměřené rychlosti se nepodařilo načíst.')}
+          onRetry={() => void load()}
+        />
+      </Card>
+    );
+  }
+
+  // While it loads, and when the router has no measurement at all, the card
+  // does not render - an empty "nothing yet" frame just takes space on a page
+  // full of other data.
   if (!data || !data.measurements || data.measurements.length === 0) {
     return null;
   }
@@ -71,6 +94,8 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
   // a ramdisk - so it gets drawn. A failed test stays null and reads as a gap,
   // never as zero throughput.
   const ascending = [...data.measurements].reverse();
+  // The table shows the newest ten; the chart above carries the whole answer.
+  const recent = data.measurements.slice(0, 10);
   const speedChart: ChartData | null =
     ascending.length >= 2
       ? {
@@ -129,6 +154,35 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
       </div>
 
       {speedChart && <MetricChart data={speedChart} height={170} />}
+
+      <div>
+        <h4 className="mb-1.5 text-xs font-semibold">
+          {t('speed.recent_title', { n: recent.length }, `Last ${recent.length} measurements`)}
+        </h4>
+        <Table dense>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('speed.when', 'Kdy')}</TableHead>
+              <TableHead>{t('speed.download', 'Stahování')}</TableHead>
+              <TableHead>{t('speed.upload', 'Odesílání')}</TableHead>
+              <TableHead>{t('speed.server', 'Server')}</TableHead>
+              <TableHead>{t('speed.started_by', 'Spustil')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {recent.map((m) => (
+              <TableRow key={m.measuredAt}>
+                <TableCell className="whitespace-nowrap tabular-nums">{m.measuredAt}</TableCell>
+                {/* A damaged or failed measurement has no speed: a dash, never 0 Mb/s. */}
+                <TableCell className="tabular-nums">{fmt(m.downloadMbps, 'Mb/s')}</TableCell>
+                <TableCell className="tabular-nums">{fmt(m.uploadMbps, 'Mb/s')}</TableCell>
+                <TableCell className="text-muted-foreground">{m.server ?? '—'}</TableCell>
+                <TableCell className="text-muted-foreground">{startedByLabel(m.startedBy, t)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
 
       <Table dense>
         <TableHeader>

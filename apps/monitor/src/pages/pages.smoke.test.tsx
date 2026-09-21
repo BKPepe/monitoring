@@ -52,6 +52,28 @@ const emptyApi = (url: string): Response => {
   if (url.includes('action=events')) return jsonResponse({ events: [] });
   if (url.includes('action=daily_uptime')) return jsonResponse({ rows: [] });
   if (url.includes('action=ui_config')) return jsonResponse({ title: 'Blood Kings', navLinks: [] });
+  // The router endpoints answer honestly for a monitor that is not a router:
+  // an empty list, not an invented recommendation or an invented disk.
+  if (url.includes('action=router_recommendations'))
+    return jsonResponse({ monitorId: 0, applicable: false, reason: 'not_router', items: [], muted: [] });
+  if (url.includes('action=storage_history')) return jsonResponse({ monitorId: 0, days: 90, disks: [] });
+  if (url.includes('action=wan_bottleneck'))
+    return jsonResponse({
+      monitorId: 0,
+      generatedAt: '',
+      canEdit: false,
+      plan: { downMbit: null, upMbit: null, okPct: null },
+      probe: { enabledServer: false, state: null, waitSince: null, budgetSpent: false },
+      verdict: {
+        dl: { class: 'inconclusive', reason: 'no_result' },
+        ul: { class: 'inconclusive', reason: 'no_result' },
+      },
+      tests: [],
+      wanPath: null,
+      linkDev: null,
+      linkMbit: null,
+      tools: { librespeedCli: null, ethtool: null, tc: null },
+    });
   return jsonResponse({});
 };
 

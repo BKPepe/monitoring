@@ -76,7 +76,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260916');
+    define('BK_SCHEMA_VERSION', '20260920');
 
     $bk_current_schema = false;
     try {
@@ -809,6 +809,169 @@ try {
             $pdo->exec($idx_sql);
         } catch (PDOException $e) {
             // Index already exists (or the table does not yet) - ignore
+        }
+    }
+
+    // --- Router release 20260920: Wi-Fi profile, disk health, WAN path -------
+    //
+    // One block at the END of the migrations, not spread over the lists above:
+    // `speedtest_results` is only created further up in this file, so its new
+    // columns cannot sit in the early ALTER list - on an install that predates
+    // the table they would fail first and the CREATE would then add the old
+    // shape. Every statement is safe to repeat: an ALTER of an existing column
+    // fails and is ignored, CREATE is IF NOT EXISTS, the UPDATEs match nothing
+    // the second time. DDL added after the first deploy of this version needs
+    // a new BK_SCHEMA_VERSION, because the block above runs only when the
+    // stored version differs.
+    foreach ([
+        // Wi-Fi per band (worst AP radio of the band; NULL = no AP radio of
+        // that band measured it). Raw 30 days, then metrics_daily.
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_noise_24g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_noise_5g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_noise_6g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_busy_24g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_busy_5g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_busy_6g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_busy_other_24g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_busy_other_5g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_busy_other_6g FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_weak_clients SMALLINT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_wpa2_clients SMALLINT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_6e_unserved TINYINT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wifi_5g_capable_24g SMALLINT DEFAULT NULL",
+        // WAN path. The five counters are STEPS (new events since the previous
+        // report, NULL across a reboot or a device change), not cumulative
+        // values - a day is their sum, never an average.
+        "ALTER TABLE vps_metrics ADD COLUMN cpu_core_max FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN cpu_core_max_softirq FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_rx_mbps FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_tx_mbps FLOAT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_errors INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_drops INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_ring_drops INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_link_flaps INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN conntrack_drops INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN agent_run_ms INT DEFAULT NULL",
+        // Absolute value: a weekly mean of a signed skew would cancel out.
+        "ALTER TABLE vps_metrics ADD COLUMN clock_skew_s INT DEFAULT NULL",
+
+        // The owner's line plan; NULL = not entered, so nothing is ever called
+        // "below the plan". wan_plan_ok_pct NULL means the default of 85 %.
+        "ALTER TABLE monitors ADD COLUMN wan_plan_down_mbit INT DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN wan_plan_up_mbit INT DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN wan_plan_ok_pct TINYINT UNSIGNED DEFAULT NULL",
+        // Consent to the router's own speed test. OFF by default: it moves
+        // gigabytes over the owner's line.
+        "ALTER TABLE monitors ADD COLUMN wan_probe_enabled TINYINT NOT NULL DEFAULT 0",
+
+        // Speed test context. Who started the test lives in the existing
+        // `source` column ('turris' / 'agent'), so there is no started_by column.
+        "ALTER TABLE speedtest_results ADD COLUMN iface VARCHAR(32) DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN tool VARCHAR(24) DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN link_mbit INT DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN bytes_received BIGINT DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN bytes_sent BIGINT DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN diagnostics TEXT DEFAULT NULL",
+        // 'librespeed' was a constant no query read; every such row was started
+        // by the Turris scheduler.
+        "UPDATE speedtest_results SET source = 'turris' WHERE source = 'librespeed'",
+        // Agents before 0.1.7 divided results of 1000 Mbit/s and more once too
+        // often and stored 0.01-0.08. No real line measures that, so the value
+        // is unmeasured, not slow. Per column; a file still on the router
+        // repairs the row when 0.1.7 sends it again. Only rows without
+        // bytes_received (= written by an older agent) are touched, so a later
+        // schema bump can never erase a value a 0.1.7 agent really measured.
+        "UPDATE speedtest_results SET download_mbps = NULL WHERE download_mbps < 0.1 AND bytes_received IS NULL",
+        "UPDATE speedtest_results SET upload_mbps = NULL WHERE upload_mbps < 0.1 AND bytes_received IS NULL",
+
+        // One row per physical disk of a router. disk_key is a hash of
+        // transport, port, sysfs model and size - never a serial number or a
+        // WWN, neither of which may leave the router. Retention: 730 days after
+        // last_seen (column comments are in schema.sql).
+        "CREATE TABLE IF NOT EXISTS `storage_disks` (
+          `id` INT AUTO_INCREMENT PRIMARY KEY,
+          `monitor_id` INT NOT NULL,
+          `disk_key` CHAR(16) NOT NULL,
+          `name` VARCHAR(16) NOT NULL,
+          `transport` VARCHAR(8) NOT NULL,
+          `port` VARCHAR(32) DEFAULT NULL,
+          `model` VARCHAR(64) DEFAULT NULL,
+          `smart_model` VARCHAR(64) DEFAULT NULL,
+          `size_bytes` BIGINT UNSIGNED DEFAULT NULL,
+          `rotational` TINYINT(1) DEFAULT NULL,
+          `first_seen` DATETIME NOT NULL,
+          `last_seen` DATETIME NOT NULL,
+          `replaced_at` DATETIME DEFAULT NULL,
+          `last_sample_at` DATETIME DEFAULT NULL,
+          `last_checked_at` INT UNSIGNED DEFAULT NULL,
+          `last_power_on_hours` INT UNSIGNED DEFAULT NULL,
+          `last_write_sectors` BIGINT UNSIGNED DEFAULT NULL,
+          `last_uptime` INT UNSIGNED DEFAULT NULL,
+          `alert_state` TEXT DEFAULT NULL,
+          UNIQUE KEY `uniq_storage_disk` (`monitor_id`, `disk_key`),
+          KEY `idx_storage_disks_seen` (`last_seen`),
+          CONSTRAINT `fk_storage_disks_monitor` FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        // The disk's day: the only history longer than last_details, which the
+        // next report overwrites. At most one upsert per disk per hour.
+        // Retention: 730 days, then the row goes (a drive's life is judged in
+        // years, and 1,000 routers x 2 disks are about 730,000 rows a year).
+        "CREATE TABLE IF NOT EXISTS `storage_disk_daily` (
+          `disk_id` INT NOT NULL,
+          `day` DATE NOT NULL,
+          `samples` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+          `smart_passed` TINYINT(1) DEFAULT NULL,
+          `temp_min` SMALLINT DEFAULT NULL,
+          `temp_max` SMALLINT DEFAULT NULL,
+          `temp_sum` INT DEFAULT NULL,
+          `temp_n` SMALLINT UNSIGNED DEFAULT NULL,
+          `power_on_hours` INT UNSIGNED DEFAULT NULL,
+          `power_cycles` INT UNSIGNED DEFAULT NULL,
+          `unsafe_shutdowns` INT UNSIGNED DEFAULT NULL,
+          `reallocated_sectors` BIGINT UNSIGNED DEFAULT NULL,
+          `pending_sectors` BIGINT UNSIGNED DEFAULT NULL,
+          `offline_uncorrectable` BIGINT UNSIGNED DEFAULT NULL,
+          `reported_uncorrect` BIGINT UNSIGNED DEFAULT NULL,
+          `crc_errors` BIGINT UNSIGNED DEFAULT NULL,
+          `runtime_bad_blocks` BIGINT UNSIGNED DEFAULT NULL,
+          `media_errors` BIGINT UNSIGNED DEFAULT NULL,
+          `error_log_count` INT UNSIGNED DEFAULT NULL,
+          `wear_pct` SMALLINT UNSIGNED DEFAULT NULL,
+          `emmc_life` TINYINT UNSIGNED DEFAULT NULL,
+          `written_bytes` BIGINT UNSIGNED DEFAULT NULL,
+          `host_written_bytes` BIGINT UNSIGNED DEFAULT NULL,
+          `host_written_partial` TINYINT(1) NOT NULL DEFAULT 0,
+          PRIMARY KEY (`disk_id`, `day`),
+          KEY `idx_sdd_day` (`day`),
+          CONSTRAINT `fk_sdd_disk` FOREIGN KEY (`disk_id`) REFERENCES `storage_disks`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        // What the recommendation engine remembers between evaluations: the
+        // hysteresis state, the digest week an item first went out in, and the
+        // mutes. Retention: an unmuted row 90 days after last_seen; a mute is
+        // the owner's decision and goes only with the monitor.
+        "CREATE TABLE IF NOT EXISTS `router_rec_state` (
+          `monitor_id` INT NOT NULL,
+          `rec_key` VARCHAR(80) NOT NULL,
+          `rule_id` VARCHAR(40) NOT NULL,
+          `active` TINYINT(1) NOT NULL DEFAULT 0,
+          `severity` VARCHAR(10) DEFAULT NULL,
+          `first_seen` DATETIME DEFAULT NULL,
+          `last_seen` DATETIME DEFAULT NULL,
+          `first_digest_week` CHAR(8) DEFAULT NULL,
+          `raised_digest_week` CHAR(8) DEFAULT NULL,
+          `muted_at` DATETIME DEFAULT NULL,
+          `muted_by` VARCHAR(50) DEFAULT NULL,
+          `muted_severity` VARCHAR(10) DEFAULT NULL,
+          `mute_reason` VARCHAR(255) DEFAULT NULL,
+          PRIMARY KEY (`monitor_id`, `rec_key`),
+          KEY `idx_rec_state_seen` (`last_seen`),
+          CONSTRAINT `fk_rec_state_monitor` FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    ] as $migration_sql) {
+        try {
+            $pdo->exec($migration_sql);
+        } catch (PDOException $e) {
+            // Column or table already exists - ignore
         }
     }
 

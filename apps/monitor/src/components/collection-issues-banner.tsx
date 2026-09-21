@@ -11,6 +11,29 @@ import { useLanguage } from '@/context/language-context';
  * Silently rendering fewer charts is forbidden. That's why this banner has
  * no dismiss button - it disappears only when collection actually recovers.
  */
+/**
+ * What stopped being collected, in two or three words.
+ *
+ * The server sends the sentence (it knows the numbers and the language), the
+ * app names the KIND: five of the eight types are new in release 0.1.7 and
+ * three of them are about a router's disks or its reports, which read as the
+ * same outage in a list of one-line messages. A type nobody mapped here keeps
+ * the server's sentence and simply has no chip.
+ */
+function issueKindLabel(type: string, t: (key: string, fallback?: string) => string): string | null {
+  const byType: Record<string, string> = {
+    cpanel_stats: t('collection.kind_cpanel', 'Statistiky cPanel'),
+    agent_silent: t('collection.kind_agent_silent', 'Agent'),
+    checks_stalled: t('collection.kind_checks', 'Kontroly dostupnosti'),
+    smart_probe_stuck: t('collection.kind_smart_probe', 'Čtení SMART'),
+    smart_read_failing: t('collection.kind_smart_read', 'SMART disku'),
+    storage_list_dropped: t('collection.kind_details_dropped', 'Podrobnosti routeru'),
+    ingest_dropped: t('collection.kind_ingest_dropped', 'Ukládání hlášení'),
+    reports_missing: t('collection.kind_reports_missing', 'Minutová hlášení'),
+  };
+  return byType[type] ?? null;
+}
+
 export function CollectionIssuesBanner({ monitors }: { monitors: ApiMonitor[] }) {
   const { t } = useLanguage();
 
@@ -37,6 +60,11 @@ export function CollectionIssuesBanner({ monitors }: { monitors: ApiMonitor[] })
           >
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <span className="font-bold text-foreground">{monitor.name}</span>
+              {issueKindLabel(issue.type, t) && (
+                <span className="rounded border border-down/30 bg-down/10 px-1.5 py-0.5 text-2xs font-semibold text-down">
+                  {issueKindLabel(issue.type, t)}
+                </span>
+              )}
               <span className="text-down font-medium">{issue.message}</span>
               {issue.since && (
                 <span className="text-muted-foreground font-mono text-2xs">

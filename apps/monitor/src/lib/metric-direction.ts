@@ -45,6 +45,31 @@ const LOWER_IS_BETTER = new Set([
   'zombie_count',
   'ts_process_cpu',
   'ts_process_ram',
+  // Wi-Fi per band (agent 0.1.7). Noise is in negative dBm, where the lower
+  // number is the quieter channel, so it belongs here and not with the signals.
+  'wifi_noise_24g',
+  'wifi_noise_5g',
+  'wifi_noise_6g',
+  'wifi_busy_24g',
+  'wifi_busy_5g',
+  'wifi_busy_6g',
+  'wifi_busy_other_24g',
+  'wifi_busy_other_5g',
+  'wifi_busy_other_6g',
+  'wifi_weak_clients',
+  'wifi_wpa2_clients',
+  'wifi_6e_unserved',
+  // WAN path and the agent itself (agent 0.1.7).
+  'cpu_core_max',
+  'cpu_core_max_softirq',
+  'wan_errors',
+  'wan_drops',
+  'wan_ring_drops',
+  'conntrack_drops',
+  'wan_link_flaps',
+  'agent_run_ms',
+  // Stored as an absolute value, so zero is the good end whichever way the clock is off.
+  'clock_skew_s',
 ]);
 
 /**

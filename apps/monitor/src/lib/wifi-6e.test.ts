@@ -9,15 +9,23 @@ const t = (key: string, params?: Record<string, string | number> | string, fallb
 };
 
 describe('describeWifi6e', () => {
-  it('counts the capable clients among those that told', () => {
+  it('counts the capable clients among those the router knows it for', () => {
     expect(describeWifi6e({ band: '2.4GHz', clients: 6, clients_6ghz_capable: 2, clients_caps_known: 6 }, t)).toBe(
-      'Podpora Wi-Fi 6E: 2 z 6 klientů, kteří ji uvedli'
+      'Podpora Wi-Fi 6E: 2 z 6 klientů, u kterých ji router zná'
     );
   });
 
-  it('says how many clients did not tell', () => {
+  // The user's router: four stations, two of them Wi-Fi 6 that sent the list
+  // and two older ones that are known because they cannot do 6 GHz at all.
+  it('reads "2 of 4" on a radio where every client is known', () => {
+    expect(describeWifi6e({ band: '5GHz', clients: 4, clients_6ghz_capable: 2, clients_caps_known: 4 }, t)).toBe(
+      'Podpora Wi-Fi 6E: 2 z 4 klientů, u kterých ji router zná'
+    );
+  });
+
+  it('says for how many clients it stays unknown', () => {
     expect(describeWifi6e({ band: '5GHz', clients: 5, clients_6ghz_capable: 1, clients_caps_known: 3 }, t)).toBe(
-      'Podpora Wi-Fi 6E: 1 z 3 klientů, kteří ji uvedli, u 2 neznámá'
+      'Podpora Wi-Fi 6E: 1 z 3 klientů, u kterých ji router zná, u 2 neznámá'
     );
   });
 

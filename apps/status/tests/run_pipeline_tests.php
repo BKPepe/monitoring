@@ -15,7 +15,7 @@ require_once __DIR__ . '/../lang.php';
 
 require_once __DIR__ . '/assert_helpers.php';
 bk_test_load_functions(__DIR__ . '/../functions.php', [
-    'bk_get_collection_issues', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
+    'bk_get_collection_issues', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
     'bk_relative_time_label', 'bk_format_duration', 'bk_compute_baseline_anomaly',
     'bk_half_window_rate', 'bk_latency_score',
 ]);
@@ -64,6 +64,95 @@ if (function_exists('bk_get_collection_issues')) {
         ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s', time() - 3600)], []);
     check_true('zastavené kontroly se hlásí',
         count(array_filter($stalled, fn($i) => $i['type'] === 'checks_stalled')) === 1);
+
+    // --- Router (CORE 3.6, X15): SMART and the two records of dropped data ---
+    // A disk card showing yesterday's values as if they were current is the
+    // same silent loss as a dead exporter.
+    $ci_probe = bk_get_collection_issues($healthy_monitor, ['agent_tools' => ['smart_probe_running_s' => 1000]]);
+    check_true('zaseknuté čtení SMART se hlásí',
+        count(array_filter($ci_probe, fn($i) => $i['type'] === 'smart_probe_stuck')) === 1);
+    check('a říká, jak dlouho už visí', $ci_probe[0]['message'] ?? null,
+        sprintf(t('collection_issue_smart_probe_stuck'), 16));
+    check('krátká sonda SMART není problém',
+        count(bk_get_collection_issues($healthy_monitor, ['agent_tools' => ['smart_probe_running_s' => 120]])), 0);
+
+    $ci_disk = fn(?int $checked): array => ['storage_disks' => [[
+        'name' => 'sdb', 'smart' => ['state' => 'error', 'checked_at' => $checked, 'model' => 'WDC WD10JPVX'],
+    ]]];
+    check_true('den nečitelný SMART se hlásí',
+        count(array_filter(bk_get_collection_issues($healthy_monitor, $ci_disk(time() - 90000)),
+            fn($i) => $i['type'] === 'smart_read_failing')) === 1);
+    check('nikdy nepřečtený SMART se hlásí taky',
+        bk_get_collection_issues($healthy_monitor, $ci_disk(null))[0]['message'] ?? null,
+        sprintf(t('collection_issue_smart_read_failing'), 'WDC WD10JPVX (sdb)', t('collection_issue_smart_read_never')));
+    check('čerstvě selhané čtení ještě není výpadek sběru',
+        count(bk_get_collection_issues($healthy_monitor, $ci_disk(time() - 600))), 0);
+    check('disk v pořádku nehlásí nic',
+        count(bk_get_collection_issues($healthy_monitor, ['storage_disks' => [[
+            'name' => 'sda', 'smart' => ['state' => 'ok', 'checked_at' => time() - 90000],
+        ]]])), 0);
+
+    $ci_dropped = bk_get_collection_issues($healthy_monitor, ['details_dropped' => ['storage_disks', 'wifi_radios']]);
+    check('zahozený seznam disků se jmenuje', $ci_dropped[0]['message'] ?? null,
+        sprintf(t('collection_issue_storage_list_dropped'), 'storage_disks, wifi_radios'));
+    check('prázdný details_dropped nic nehlásí',
+        count(bk_get_collection_issues($healthy_monitor, ['details_dropped' => []])), 0);
+
+    // G42: minute reports that never arrived. The counting is cron's, this
+    // only reads it - a partial loss used to be invisible until the agent
+    // went silent for the whole 3000 s.
+    $ci_missing = bk_get_collection_issues($healthy_monitor,
+        ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time() - 600]]);
+    check('chybějící minutová hlášení se hlásí i s počty', $ci_missing[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440));
+    check('agentovy vlastní přeskoky se k tomu dopíšou',
+        bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_lock' => 96, 'runs_skipped_post' => 4])[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4));
+    check('ztráta pod deseti procenty se nehlásí',
+        count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1300, 'checked_at' => time()]])), 0);
+    check('krátké okno (router po restartu) se nesoudí',
+        count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 100, 'received' => 10, 'checked_at' => time()]])), 0);
+
+    $ci_ingest = bk_get_collection_issues($healthy_monitor, ['ingest_issues' => [
+        ['type' => 'passthrough_too_large', 'key' => 'logread', 'bytes' => 12000],
+        ['type' => 'metrics_insert_failed'],
+    ]]);
+    check('neuložená část hlášení se jmenuje', $ci_ingest[0]['message'] ?? null,
+        sprintf(t('collection_issue_ingest_dropped'), 'passthrough_too_large (logread), metrics_insert_failed'));
+    check('prázdné ingest_issues nic nehlásí',
+        count(bk_get_collection_issues($healthy_monitor, ['ingest_issues' => []])), 0);
+}
+
+// =======================================================================
+// 1b. NETWORK INSIGHTS - a radio without a measured noise floor (CORE 3.10)
+// `?? -95` used to turn "iwinfo printed unknown" into a clean band nobody
+// measured - and agent 0.1.7 sends null exactly where that happened.
+// =======================================================================
+if (function_exists('bk_get_network_insights')) {
+    // The insights start with one query; a stub that refuses it leaves the
+    // rest of the function exactly as production runs it.
+    $ni_pdo = new class {
+        public function prepare(string $sql) { throw new PDOException('no db in a pure test'); }
+    };
+    $ni = fn (array $radio): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], ['wifi_radios' => [$radio]]));
+    check('rádio bez změřeného šumu rušení nehlásí', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X', 'noise' => null]), 0);
+    check('a chybějící klíč šumu taky ne', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X']), 0);
+    check('změřený šum −60 dBm rušení hlásí', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X', 'noise' => -60]), 1);
+    check('čistý kanál −95 dBm nehlásí', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X', 'noise' => -95]), 0);
+
+    // X17: a lookup made on a line saturated by the router's own speed test is
+    // slow because of the test. The value is stored and charted, only not
+    // turned into advice.
+    $ni_dns = fn (array $extra): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], array_merge(['dns_latency_ms' => 620.0], $extra)));
+    check('pomalé DNS se běžně hlásí', $ni_dns([]), 1);
+    check('pomalé DNS během testu se nehlásí', $ni_dns(['speedtest_active' => true]), 0);
+
+    // G31: the OOM counter only resets at the next reboot, so without the
+    // event's timestamp the warning hung on the page for weeks.
+    $ni_oom = fn (array $extra): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], array_merge(['oom_kills' => 3], $extra)));
+    check('OOM z posledních 24 h se hlásí', $ni_oom(['oom_kill_at' => time() - 3600]), 1);
+    check('týden starý OOM už ne', [$ni_oom(['oom_kill_at' => time() - 7 * 86400]), $ni_oom([])], [0, 0]);
 }
 
 // =======================================================================
@@ -387,6 +476,193 @@ check('cron předává klíčové slovo první kontrole i opakování',
     substr_count($cron_src, 'check_http($target, $timeout, $monitor[\'body_keyword\'] ?? null)'), 2);
 check_false('SMS neřeže chybovou zprávu po bajtech',
     (bool)preg_match('/substr\(\$error_msg, 0,/', $fn_src));
+
+
+// --- Storage alerts: colour, page, and what a recovery does NOT do ---------
+// (CORE 6.4). `storage_recovered` is shared by `disk_temp_normal`, `fs_freed`
+// and by the OTHER disks of the same router, so an automatic resolve could
+// close the page of a disk that is still failing.
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_pagerduty_action', 'bk_alert_color_class', 'bk_pagerduty_dedup_key',
+]);
+if (function_exists('bk_pagerduty_action')) {
+    check('storage_failing pageuje', bk_pagerduty_action('storage_failing'), 'trigger');
+    check('storage_recovered nezavírá incident', bk_pagerduty_action('storage_recovered'), null);
+    check('storage_warning nepageuje', bk_pagerduty_action('storage_warning'), null);
+    check('výpadek WAN nezavře incident disku',
+        [bk_pagerduty_dedup_key(6, 'storage_failing'), bk_pagerduty_dedup_key(6, 'wan_restored')],
+        ['bk-monitor-6-storage', 'bk-monitor-6']);
+    check('barvy tří stavů úložiště',
+        [bk_alert_color_class('storage_failing'), bk_alert_color_class('storage_warning'),
+            bk_alert_color_class('storage_recovered')],
+        ['bad', 'warn', 'good']);
+}
+
+// =======================================================================
+// 5. ROUTERS IN THE WEEKLY DIGEST (CORE 3.8)
+// The e-mail is what most owners ever read, so what it prints has to be
+// decided by data and not by the language it happens to be built in: the
+// split into "new" and "unchanged", the facts line and the sentences of
+// each item.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_router_rec_thresholds', 'bk_rec_num', 'bk_rec_band_label', 'bk_rec_item', 'bk_rec_sort_items',
+    'bk_router_rec_split', 'bk_router_rec_render', 'bk_digest_router_new_split', 'bk_digest_router_facts_lines',
+    'bk_rec_days_with_data', 'bk_router_rec_window', 'bk_format_bytes_cz',
+]);
+
+if (function_exists('bk_digest_router_new_split')) {
+    $week = '2026-W39';
+    $dg_item = fn (string $key, string $sev): array => bk_rec_item('disk_temp_warm', $key, 'storage', $sev,
+        ['kind' => 'disk', 'disk_key' => $key], ['disk' => 'SSD (sda)', 'name' => 'sda', 'avg_c' => 67, 'max_c' => 69, 'limit_c' => 70]);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')], [], $week);
+    check('položka bez historie jde do e-mailu celá', count($split['full']), 1);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')],
+        ['a' => ['severity' => 'warning', 'first_digest_week' => '2026-W30']], $week);
+    check('stará položka je jen titulek v řádku beze změny', [count($split['full']), count($split['open'])], [0, 1]);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'critical')],
+        ['a' => ['severity' => 'critical', 'first_digest_week' => '2026-W30']], $week);
+    check('kritická položka je celá i po letech', count($split['full']), 1);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')],
+        ['a' => ['severity' => 'info', 'first_digest_week' => '2026-W30']], $week);
+    check('položka, která se zhoršila, je zase celá', count($split['full']), 1);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'info')],
+        ['a' => ['severity' => 'warning', 'first_digest_week' => '2026-W30']], $week);
+    check('položka, která se zlepšila, celá není', count($split['open']), 1);
+
+    // A retry of the same week must render the same e-mail: the first build
+    // stamped first_digest_week with THIS week.
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')],
+        ['a' => ['severity' => 'warning', 'first_digest_week' => $week]], $week);
+    check('opakované sestavení ve stejném týdnu vypadá stejně', count($split['full']), 1);
+}
+
+if (function_exists('bk_router_rec_split')) {
+    $mute_item = bk_rec_item('disk_temp_warm', 'disk_temp_warm:d:x', 'storage', 'warning',
+        ['kind' => 'disk', 'disk_key' => 'x'], ['disk' => 'SSD (sda)', 'name' => 'sda']);
+    $muted = ['disk_temp_warm:d:x' => ['muted_at' => '2026-09-01 10:00:00', 'muted_severity' => 'warning',
+        'mute_reason' => 'vím o tom', 'first_seen' => '2026-08-01 10:00:00']];
+    $res = bk_router_rec_split([$mute_item], $muted);
+    check('ztlumená položka se do e-mailu nedostane', [count($res['items']), count($res['muted'])], [0, 1]);
+
+    $worse = $mute_item;
+    $worse['severity'] = 'critical';
+    $res = bk_router_rec_split([$worse], $muted);
+    check('ztlumená položka se vrátí, když se zhorší', count($res['items']), 1);
+    check_true('a přizná, že byla ztlumená', !empty($res['items'][0]['params']['was_muted']));
+    check('otevřeno od data z uloženého stavu', $res['items'][0]['openSince'], '2026-08-01 10:00:00');
+}
+
+if (function_exists('bk_router_rec_render')) {
+    $GLOBALS['BK_LANG'] = 'cs';
+    $GLOBALS['BK_STRINGS'] = require __DIR__ . '/../lang/cs.php';
+    $warm = bk_rec_item('disk_temp_warm', 'disk_temp_warm:d:x', 'storage', 'warning', ['kind' => 'disk'],
+        ['disk' => 'KINGSTON (sda)', 'name' => 'sda', 'avg_c' => 67.0, 'max_c' => 69.0, 'limit_c' => 70]);
+    $cs = bk_router_rec_render($warm);
+    check('titulek pravidla zná jméno disku', $cs['title'], 'Disk sda je trvale teplý');
+    check_true('naměřená věta nese průměr, maximum i limit',
+        str_contains($cs['measured'], '67') && str_contains($cs['measured'], '69') && str_contains($cs['measured'], '70'));
+    check_true('rada říká, kdy teprve přijde upozornění', str_contains($cs['action'], '70 °C'));
+    $en = bk_with_email_lang('en', fn () => bk_router_rec_render($warm));
+    check('stejná položka se vykreslí i anglicky', $en['title'], 'Disk sda runs warm all the time');
+    check('a jazyk se vrátí zpátky', $GLOBALS['BK_LANG'], 'cs');
+
+    // A rule whose text was never written must still say WHAT fired. The id
+    // is deliberately one no rule uses: every id of the rank list now has its
+    // texts (the Wi-Fi twelve landed last), so a real one would not reach the
+    // fallback any more.
+    $unknown = bk_rec_item('future_rule', 'future_rule:5g', 'wifi', 'warning', ['kind' => 'band'], []);
+    check('pravidlo bez textů se přizná svým id', bk_router_rec_render($unknown)['title'], 'future_rule');
+
+    $fs = bk_rec_item('fs_nearly_full', 'fs_nearly_full:m:abc', 'storage', 'critical', ['kind' => 'mount'],
+        ['mount' => '/srv', 'pct' => 98.5, 'free' => 1073741824.0, 'schnapps' => true]);
+    $fs_cs = bk_router_rec_render($fs);
+    check('plný oddíl se jmenuje přípojným bodem', $fs_cs['title'], 'Plný oddíl /srv');
+    check_true('a rada na Turrisu zmíní snapshoty', str_contains($fs_cs['action'], 'schnapps'));
+}
+
+if (function_exists('bk_digest_router_facts_lines')) {
+    $lines = bk_digest_router_facts_lines(['radios' => [[
+        'band' => '5GHz', 'channel' => 36, 'generation' => 6, 'width_mhz' => 80, 'encryption' => 'wpa2_wpa3',
+        'clients' => 4, 'clients_gen' => ['wifi6' => 2, 'wifi5' => 1, 'wifi4' => 1],
+        'noise_week' => -92.0, 'busy_week' => 3.5,
+    ]], 'disks' => [[
+        'name' => 'sda', 'model' => 'KINGSTON SUV500MS120G', 'transport' => 'sata', 'rotational' => false,
+        'size_bytes' => 120034123776, 'smart_state' => 'ok', 'smart_passed' => true, 'temperature_c' => 67,
+        'wear_pct' => 0.0, 'written_bytes' => 451021000000, 'runtime_bad_blocks' => 3, 'reallocated_sectors' => 0,
+    ]]]);
+    check('fakta popíšou rádio i disk', count($lines), 2);
+    check_true('řádek rádia nese pásmo, generaci, šířku, kanál a klienty',
+        str_contains($lines[0], '5 GHz · Wi-Fi 6 · 80 MHz · kanál 36')
+        && str_contains($lines[0], '4 klienti (Wi-Fi 6: 2, Wi-Fi 5: 1, Wi-Fi 4: 1)'));
+    check_true('a týdenní šum i vytížení', str_contains($lines[0], 'šum -92 dBm') && str_contains($lines[0], 'vytížení 3,5 %'));
+    check_true('řádek disku přizná stabilní vadné bloky místo poplachu',
+        str_contains($lines[1], 'vadné bloky za běhu: 3') && str_contains($lines[1], 'SMART v pořádku'));
+    check_false('nulové přemapované sektory se nevypisují', str_contains($lines[1], 'přemapované'));
+    // No SSID may ever appear in a router text (CORE 3.7 / 3.10).
+    check_false('fakta neobsahují SSID', str_contains(implode(' ', $lines), 'Domov'));
+
+    $sparse = bk_digest_router_facts_lines(['radios' => [[
+        'band' => '2.4GHz', 'channel' => null, 'generation' => null, 'width_mhz' => null, 'encryption' => null,
+        'clients' => null, 'clients_gen' => null, 'noise_week' => null, 'busy_week' => null,
+    ]], 'disks' => []]);
+    check('nezměřené údaje se vynechávají, ne nulují', $sparse[0], '2,4 GHz');
+}
+
+if (function_exists('bk_rec_days_with_data')) {
+    $window = bk_router_rec_window('2026-09-21');
+    check('týden končí dnem před zadaným', [$window['days'][0], end($window['days'])], ['2026-09-14', '2026-09-20']);
+    check('předchozí týden na něj navazuje', end($window['prev_days']), '2026-09-13');
+    $window['metrics']['cpu'] = [
+        '2026-09-14' => ['avg' => 5.0, 'samples' => 1440],
+        '2026-09-15' => ['avg' => 5.0, 'samples' => 300],
+        '2026-09-16' => ['avg' => 5.0, 'samples' => 1440],
+        '2026-09-13' => ['avg' => 5.0, 'samples' => 1440],
+    ];
+    check('den s málo vzorky se do týdne nepočítá a starší den taky ne', bk_rec_days_with_data($window), 2);
+}
+
+// --- cron: the router tables really are pruned ----------------------------
+// Nothing executes cron.php, so the only thing that can be checked here is
+// that the two retention functions are CALLED, and called inside the prune
+// try block - outside it a PDOException would take the whole cron run down
+// with it, and every later step (digests, rollups) would stop with it.
+$prune_block = (function () use ($cron_src): string {
+    $start = strpos($cron_src, '// Prune old logs');
+    $end = strpos($cron_src, 'Chyba při čištění starých logů', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($cron_src, $start, $end - $start) : '';
+})();
+check_true('cron maže historii disků a stavy doporučení voláním bk_prune_router_health',
+    str_contains($prune_block, 'bk_prune_router_health($pdo)'));
+check_true('cron maže stará měření WAN voláním bk_prune_wan_data',
+    str_contains($prune_block, 'bk_prune_wan_data($pdo)'));
+check_true('cron řekne, kolik toho smazal',
+    str_contains($prune_block, 'Zdraví routeru: smazáno ') && str_contains($prune_block, 'Měření WAN: smazáno '));
+
+// --- The Routers section is WEEKLY only (CORE 3.8, X16) --------------------
+// `build_digest_data` needs thirty other functions, so the guard is read from
+// the source: the section asks what a WEEK of measurements says, and a
+// monthly e-mail carrying it would compare a week's items with a month's
+// heading. The mutation "call bk_digest_routers unconditionally" turns this
+// red and nothing else does.
+$fn_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+$digest_routers_call = (function () use ($fn_src): string {
+    $at = strpos($fn_src, '$rt = bk_digest_routers(');
+    if ($at === false) {
+        return '';
+    }
+    $from = max(0, $at - 200);
+    return substr($fn_src, $from, $at - $from);
+})();
+check_true('sekce Routery se staví jen pro týdenní přehled',
+    str_contains($digest_routers_call, '$period === ' . "'weekly'"));
+check_true('měsíční přehled sekci Routery nestaví',
+    substr_count($fn_src, 'bk_digest_routers($pdo') === 1);
 
 // --- testovací brány: běh bez kontrol musí skončit červeně -----------------
 // Why here: run_api_tests.php used to exit 0 when MySQL was unreachable, so a

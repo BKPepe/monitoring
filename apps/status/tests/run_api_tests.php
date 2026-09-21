@@ -623,7 +623,8 @@ $cors_probe = function (string $origin) use ($base): string {
     return $resp;
 };
 check_false('cizí Origin nedostane Allow-Origin', stripos($cors_probe('https://evil.example'), 'Access-Control-Allow-Origin') !== false);
-check_true('vlastní Origin Allow-Origin dostane', stripos($cors_probe('http://127.0.0.1:8123'), 'Access-Control-Allow-Origin: http://127.0.0.1:8123') !== false);
+// $base, not a fixed port: a run on a scratch copy (BK_TEST_PORT) has another origin.
+check_true('vlastní Origin Allow-Origin dostane', stripos($cors_probe($base), 'Access-Control-Allow-Origin: ' . $base) !== false);
 
 // save_user/delete_user: do 2026-08-17 v api.php neexistovaly - React je
 // called them, got 400 "unknown action" and user management from the app did not work.
@@ -647,6 +648,12 @@ $u3_csrf = (string)($u3_login['csrfToken'] ?? '');
 check('běžný uživatel nezaloží incident', $ri_code, 403);
 [$rp_code] = api_post($base, 'action=save_preset', ['name' => 'nesmí projít'], $jar3, $u3_csrf);
 check('běžný uživatel neuloží preset', $rp_code, 403);
+// Muting a router recommendation silences a finding for EVERYBODY who can see
+// the router, so it is an admin decision (CORE 3.9) - the CSRF token alone
+// must not be enough.
+[$rm3_code] = api_post($base, 'action=router_recommendation_mute',
+    ['monitor_id' => 2, 'key' => 'fs_nearly_full:m:x', 'muted' => true], $jar3, $u3_csrf);
+check('běžný uživatel neztlumí doporučení routeru', $rm3_code, 403);
 [$mp3_code] = api_get_auth($base, 'action=my_profile', $jar3);
 check('vlastní profil běžnému uživateli funguje', $mp3_code, 200);
 
@@ -1899,6 +1906,31 @@ if ($cpu_row) {
 $swap_rows = (int)$pdo->query("SELECT COUNT(*) FROM metrics_daily WHERE metric_key = 'swap'")->fetchColumn();
 check('nezměřená metrika se neagreguje', $swap_rows, 0);
 
+// The 24 metrics of the router release ride along without a line of rollup
+// code - but only while their key is in the map AND the column exists. A
+// column added to the migration and forgotten in the map is invisible for a
+// month, until the raw rows are pruned and nothing can be recomputed.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, wifi_noise_5g, wifi_busy_5g, wifi_6e_unserved, cpu_core_max, wan_errors, wan_link_flaps, agent_run_ms, clock_skew_s, checked_at)
+            VALUES (2, -92, 3.5, 1, 40, 4, 2, 4200, 3, TIMESTAMP('{$sample_day}', '00:30:00'))");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, wifi_noise_5g, wifi_busy_5g, wifi_6e_unserved, cpu_core_max, wan_errors, wan_link_flaps, agent_run_ms, clock_skew_s, checked_at)
+            VALUES (2, -86, 7.5, 0, 96, 6, 0, 4400, 1, TIMESTAMP('{$sample_day}', '00:40:00'))");
+bk_rollup_daily_metrics($pdo, 2);
+$router_daily = $pdo->prepare("SELECT metric_key, avg_val, max_val, samples FROM metrics_daily WHERE monitor_id = 2 AND day = ? AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g', 'wifi_6e_unserved', 'cpu_core_max', 'wan_errors', 'wan_link_flaps', 'agent_run_ms', 'clock_skew_s')");
+$router_daily->execute([$sample_day]);
+$router_rows = [];
+foreach ($router_daily->fetchAll() as $rr) {
+    $router_rows[$rr['metric_key']] = $rr;
+}
+check('metriky routeru se agregují pod svými klíči', count($router_rows), 8);
+check('nejhorší šum dne je vidět v maximu', (int)round((float)($router_rows['wifi_noise_5g']['max_val'] ?? 0)), -86);
+// A step metric's day is avg x samples: 5 x 2 = 10 errors, not "5".
+check('den krokové metriky je průměr × vzorky', [(float)($router_rows['wan_errors']['avg_val'] ?? 0) * (int)($router_rows['wan_errors']['samples'] ?? 0), (int)($router_rows['wan_errors']['samples'] ?? 0)], [10.0, 2]);
+// Three-valued: the daily average IS the share of samples on which the answer
+// was known, so 1 and 0 average to 0.5 - never "rounded to no".
+check('wifi_6e_unserved se průměruje jako podíl času', (float)($router_rows['wifi_6e_unserved']['avg_val'] ?? -1), 0.5);
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g', 'wifi_6e_unserved', 'cpu_core_max', 'wan_errors', 'wan_link_flaps', 'agent_run_ms', 'clock_skew_s')");
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2 AND checked_at IN (TIMESTAMP('{$sample_day}', '00:30:00'), TIMESTAMP('{$sample_day}', '00:40:00'))");
+
 // A repeated run must neither duplicate nor double the counts.
 bk_rollup_daily_metrics($pdo, 2);
 $stmt_cpu_count = $pdo->prepare("SELECT COUNT(*) FROM metrics_daily
@@ -2085,9 +2117,12 @@ $wifi_row = function () use ($pdo): array {
 check('hlášení s rádii a podporou 6E agent přijme', $post_agent([
     'wifi_clients_count' => 12,
     'wifi_radios' => [
-        ['radio' => 'wlan0', 'band' => '2.4GHz', 'clients' => 7, 'clients_6ghz_capable' => 2, 'clients_caps_known' => 6],
-        ['radio' => 'wlan1', 'band' => '5GHz', 'clients' => 4, 'clients_6ghz_capable' => 3, 'clients_caps_known' => 4],
-        ['radio' => 'wlan2', 'band' => '2.4GHz', 'clients' => 1, 'clients_6ghz_capable' => null, 'clients_caps_known' => null],
+        // `channel` decides whether the claimed band is believed: a disabled
+        // 0.1.6 radio prints "2.4GHz" with no channel and no clients, and its
+        // stale band must not land in a chart (sanitizer, D6).
+        ['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => 6, 'clients' => 7, 'clients_6ghz_capable' => 2, 'clients_caps_known' => 6],
+        ['radio' => 'wlan1', 'band' => '5GHz', 'channel' => 36, 'clients' => 4, 'clients_6ghz_capable' => 3, 'clients_caps_known' => 4],
+        ['radio' => 'wlan2', 'band' => '2.4GHz', 'channel' => 11, 'clients' => 1, 'clients_6ghz_capable' => null, 'clients_caps_known' => null],
     ],
 ]), 200);
 $w = $wifi_row();
@@ -2098,13 +2133,20 @@ check('na 2.4 GHz umí 6E dva klienti ze šesti známých', [$wifi_ni($w['wifi_6
 check('na 5 GHz umí 6E tři ze čtyř', [$wifi_ni($w['wifi_6e_capable_5g']), $wifi_ni($w['wifi_6e_known_5g'])], [3, 4]);
 check('hlášení staršího agenta bez podpory 6E agent přijme', $post_agent([
     'wifi_radios' => [
-        ['radio' => 'wlan0', 'band' => '2.4GHz', 'clients' => 5],
-        ['radio' => 'wlan1', 'band' => '6GHz', 'clients' => 2],
+        ['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => 1, 'clients' => 5],
+        ['radio' => 'wlan1', 'band' => '6GHz', 'channel' => 37, 'clients' => 2],
     ],
 ]), 200);
 $w = $wifi_row();
 check('starší agent: pásma se přesto sečtou', [$wifi_ni($w['wifi_clients_24g']), $wifi_ni($w['wifi_clients_5g']), $wifi_ni($w['wifi_clients_6g'])], [5, null, 2]);
 check('starší agent: podpora 6E zůstane neznámá, ne nulová', [$w['wifi_6e_capable_24g'], $w['wifi_6e_known_24g']], [null, null]);
+// A radio that claims a band but has no channel is the shape a DISABLED 0.1.6
+// radio has. Believing it would draw yesterday's clients as today's.
+check('vypnuté rádio bez kanálu agent přijme', $post_agent([
+    'wifi_radios' => [['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => null, 'clients' => 3]],
+]), 200);
+$w = $wifi_row();
+check('vypnuté rádio (pásmo bez kanálu) se do pásem nepočítá', [$w['wifi_clients_24g'], $w['wifi_clients_5g'], $w['wifi_clients_6g']], [null, null, null]);
 [, $wifi_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
 check_true('graf klientů na 2.4 GHz je v grafech routeru', count($wifi_batch['series']['wifi_clients_24g']['points'] ?? []) >= 2);
 [$wifi_s_code, $wifi_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wifi_6e_capable_24g&period=24h', $cookie_jar);
@@ -3074,6 +3116,1189 @@ api_get($base, 'action=public_status');
 check('bez jediného admina migrace účtu 1 roli admin vrátí', $role_of(1), 'admin');
 $pdo->prepare("UPDATE users SET role = ? WHERE id = 1")->execute([$role1_before ?? 'admin']);
 
+// --- Ingest of an 0.1.7 report (fixture: the user's Turris Omnia) -------------
+//
+// The payload of a real router goes in and what comes out is checked column by
+// column: the sanitizers, the band totals and the step metrics all sit on this
+// one path, and a value that quietly became 0 or a bound would look exactly
+// like a measurement on the page.
+$omnia_fx = require __DIR__ . '/fixtures/omnia_router.php';
+$omnia_pl = $omnia_fx['payload'];
+$omnia_before_id = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+$omnia_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+$omnia_metrics = function (string $cols) use ($pdo): array {
+    return $pdo->query("SELECT {$cols} FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+};
+$omnia_num = fn ($v) => $v === null ? null : (float)$v;
+// `?? ` cannot tell a key that is missing from one that is honestly null.
+$omnia_at = fn ($a, string $k) => is_array($a) && array_key_exists($k, $a) ? $a[$k] : 'chybí';
+
+// The router's clock is read as the distance from ours, so the fixture's own
+// moment (2026-09-16) would be stored as a five-day skew.
+check('Omnia 0.1.7: hlášení z fixture agent přijme', $post_agent(array_merge($omnia_pl, ['agent_time' => time()])), 200);
+$om = $omnia_metrics('wifi_noise_24g, wifi_noise_5g, wifi_noise_6g, wifi_busy_24g, wifi_busy_5g, wifi_busy_6g, wifi_busy_other_24g, wifi_busy_other_5g, wifi_busy_other_6g, wifi_weak_clients, wifi_wpa2_clients, wifi_6e_unserved, wifi_5g_capable_24g');
+check('Omnia: šum a vytížení kanálu na 5 GHz', [$omnia_num($om['wifi_noise_5g']), $omnia_num($om['wifi_busy_5g']), $omnia_num($om['wifi_busy_other_5g'])], [-92.0, 3.5, 1.2]);
+check('Omnia: slabý klient jeden, WPA2 klientů opravdu nula', [$omnia_num($om['wifi_weak_clients']), $omnia_num($om['wifi_wpa2_clients'])], [1.0, 0.0]);
+check('Omnia: dva klienti s 6 GHz bez 6GHz rádia = 1', $omnia_num($om['wifi_6e_unserved']), 1.0);
+check('Omnia: pásma bez rádia zůstanou NULL, ne nula', [
+    $om['wifi_noise_24g'], $om['wifi_noise_6g'], $om['wifi_busy_24g'], $om['wifi_busy_6g'],
+    $om['wifi_busy_other_24g'], $om['wifi_busy_other_6g'], $om['wifi_5g_capable_24g'],
+], [null, null, null, null, null, null, null]);
+$om_wan = $omnia_metrics('wan_link_mbit, cpu_core_max, cpu_core_max_softirq, wan_rx_mbps, wan_tx_mbps, wan_errors, wan_drops, wan_ring_drops, wan_link_flaps, conntrack_drops, agent_run_ms, clock_skew_s, conntrack_pct');
+check('Omnia: rychlost linky WAN se uloží', $omnia_num($om_wan['wan_link_mbit']), 2500.0);
+check('Omnia: nezměřené CPU jádro, rychlosti WAN a doba běhu zůstanou NULL', [
+    $om_wan['cpu_core_max'], $om_wan['cpu_core_max_softirq'], $om_wan['wan_rx_mbps'],
+    $om_wan['wan_tx_mbps'], $om_wan['agent_run_ms'], $om_wan['conntrack_pct'],
+], [null, null, null, null, null, null]);
+check('Omnia: první hlášení nemá s čím porovnat, kroky jsou NULL', [
+    $om_wan['wan_errors'], $om_wan['wan_drops'], $om_wan['wan_ring_drops'],
+    $om_wan['wan_link_flaps'], $om_wan['conntrack_drops'],
+], [null, null, null, null, null]);
+check_true('Omnia: odchylka hodin je změřená a malá', ($om_wan['clock_skew_s'] ?? null) !== null && (int)$om_wan['clock_skew_s'] <= 5);
+
+$omd = $omnia_details();
+check('Omnia: rádio dostane odvozenou generaci a šířku', [$omd['wifi_radios'][0]['generation'] ?? null, $omd['wifi_radios'][0]['width_mhz'] ?? null], [6, 80]);
+check('Omnia: nástroje routeru jsou striktní booly', [
+    $omd['agent_tools']['librespeed_cli'] ?? 'chybí', $omd['agent_tools']['ethtool'] ?? 'chybí',
+    $omd['agent_tools']['tc'] ?? 'chybí', $omd['agent_tools']['pkg_manager'] ?? 'chybí',
+], [true, false, false, 'opkg']);
+check('Omnia: cesta WAN si nese conduit a strop portů LAN', [
+    $omd['wan_path']['lan_port_cap_mbit'] ?? null, $omd['wan_path']['lan_conduits'][0]['dev'] ?? null,
+    $omd['wan_path']['lan_conduits'][0]['mbit'] ?? null, $omnia_at($omd['wan_path'] ?? null, 'wan_rx_ring_drops'),
+], [1000, 'eth1', 1000, null]);
+check('Omnia: seznam disků se uloží i s časem odběru a klíčem', [
+    count($omd['storage_disks'] ?? []), strlen((string)($omd['storage_disks'][0]['key'] ?? '')),
+    isset($omd['storage_disks_at']), $omnia_at($omd['storage_disks'][0] ?? null, 'emmc'),
+], [1, 16, true, null]);
+check('Omnia: čisté hlášení nehlásí žádnou ztrátu dat', [$omnia_at($omd, 'details_dropped'), $omnia_at($omd, 'ingest_issues')], [[], []]);
+
+// G24: co router nepozná, dojde jako null a null také zůstane. Agent 0.1.7
+// posílá null, když žádnou konfiguraci SQM nenašel ani resolver nerozpoznal;
+// dřív se z toho na serveru stala tvrzení „shaper vypnutý" a „Dnsmasq".
+$omnia_unknown = array_merge($omnia_pl, ['agent_time' => time(),
+    'sqm_enabled' => null, 'dns_engine' => null, 'dns_encryption' => null,
+    'dns_servers' => null, 'wan_reconnect_count' => null]);
+check('G24: hlášení, kde router pět věcí nepozná, agent přijme', $post_agent($omnia_unknown), 200);
+$omd_unknown = $omnia_details();
+check('G24: neznámý stav SQM a resolveru zůstane null, ne tvrzení', [
+    $omnia_at($omd_unknown, 'sqm_enabled'), $omnia_at($omd_unknown, 'dns_engine'),
+    $omnia_at($omd_unknown, 'dns_encryption'), $omnia_at($omd_unknown, 'dns_servers'),
+], [null, null, null, null]);
+// Starší agent posílá booly dál a nic se mu nemění.
+check('G24: agent, který SQM zná, hlásí dál true/false', [
+    $post_agent(array_merge($omnia_pl, ['agent_time' => time(), 'sqm_enabled' => false])),
+    $omnia_at($omnia_details(), 'sqm_enabled'),
+], [200, false]);
+
+// Identifiers injected at three levels: the allow-lists must drop every one of
+// them, whatever the agent calls itself. Nothing here may reach last_details.
+$omnia_dirty = array_merge($omnia_pl, ['agent_time' => time()]);
+$omnia_dirty['wifi_radios'][0]['bssid'] = 'aa:bb:cc:dd:ee:ff';
+$omnia_dirty['wifi_radios'][0]['hwmodes'] = ['a', 'n', 'ac'];
+$omnia_dirty['storage_disks'][0]['serial_number'] = 'SN50026B7683';
+$omnia_dirty['storage_disks'][0]['smart']['wwn'] = '0x50026b7683';
+$omnia_dirty['storage_disks'][0]['partitions'][0]['eui64'] = 'ABCDEF0123456789';
+check('Omnia: hlášení s vloženými identifikátory agent přijme', $post_agent($omnia_dirty), 200);
+$omd = $omnia_details();
+check('vložený sériový klíč, WWN ani BSSID se do details nedostanou',
+    preg_grep('/serial|wwn|eui|guid|cid|bssid|hwmodes/i', array_keys(array_merge(
+        $omd['wifi_radios'][0] ?? [], $omd['storage_disks'][0] ?? [],
+        $omd['storage_disks'][0]['smart'] ?? [], $omd['storage_disks'][0]['partitions'][0] ?? []
+    ))), []);
+check_true('a ani jejich hodnota nikde v details není',
+    !str_contains((string)json_encode($omd), '50026b7683') && !str_contains(strtolower((string)json_encode($omd)), 'aa:bb:cc'));
+
+// --- Step metrics of the WAN port: what grew since the previous report --------
+//
+// The stored series is the STEP, never the lifetime total: a counter that shows
+// 4 000 errors since boot says nothing about this minute, and a reboot would
+// otherwise book its whole bring-up as one minute's spike.
+$omnia_counters = function (array $extra) use ($post_agent, $omnia_pl): int {
+    return $post_agent(array_merge($omnia_pl, ['agent_time' => time()], $extra));
+};
+$wan_cols = 'wan_errors, wan_drops, wan_ring_drops, wan_link_flaps, conntrack_drops';
+$wan_base = ['uptime' => 100000, 'wan_link_dev' => 'eth2', 'wan_rx_errors' => 10, 'wan_tx_errors' => 5,
+    'wan_rx_dropped' => 7, 'wan_tx_dropped' => 3, 'conntrack_drop' => 2, 'wan_carrier_down_count' => 1];
+check('WAN kroky: základní hlášení agent přijme', $omnia_counters($wan_base), 200);
+check('WAN kroky: proti čemu porovnat se teprve uložilo', $omnia_metrics($wan_cols),
+    ['wan_errors' => null, 'wan_drops' => null, 'wan_ring_drops' => null, 'wan_link_flaps' => null, 'conntrack_drops' => null]);
+check('WAN kroky: další hlášení s vyššími čítači agent přijme', $omnia_counters(array_merge($wan_base, [
+    'uptime' => 100060, 'wan_rx_errors' => 14, 'wan_tx_errors' => 5, 'wan_rx_dropped' => 9, 'wan_tx_dropped' => 3,
+    'conntrack_drop' => 5, 'wan_carrier_down_count' => 3,
+])), 200);
+check('WAN kroky: uloží se přírůstek, ne celkový součet', $omnia_metrics($wan_cols),
+    ['wan_errors' => 4, 'wan_drops' => 2, 'wan_ring_drops' => null, 'wan_link_flaps' => 2, 'conntrack_drops' => 3]);
+check('WAN kroky: po restartu (nižší uptime) hlášení agent přijme', $omnia_counters(array_merge($wan_base, [
+    'uptime' => 120, 'wan_rx_errors' => 20, 'wan_tx_errors' => 5, 'wan_rx_dropped' => 12, 'wan_tx_dropped' => 3,
+    'conntrack_drop' => 8, 'wan_carrier_down_count' => 4,
+])), 200);
+check('WAN kroky: restart nevyrobí špičku, kroky jsou NULL', $omnia_metrics($wan_cols),
+    ['wan_errors' => null, 'wan_drops' => null, 'wan_ring_drops' => null, 'wan_link_flaps' => null, 'conntrack_drops' => null]);
+check('WAN kroky: hlášení z jiného portu WAN agent přijme', $omnia_counters(array_merge($wan_base, [
+    'uptime' => 180, 'wan_link_dev' => 'eth0', 'wan_rx_errors' => 25, 'wan_tx_errors' => 5,
+    'wan_rx_dropped' => 14, 'wan_tx_dropped' => 3, 'conntrack_drop' => 9, 'wan_carrier_down_count' => 5,
+])), 200);
+check('WAN kroky: cizí port není krok toho starého', $omnia_metrics($wan_cols),
+    ['wan_errors' => null, 'wan_drops' => null, 'wan_ring_drops' => null, 'wan_link_flaps' => null, 'conntrack_drops' => null]);
+
+// Ring drops come from ethtool once an hour: their step belongs to the report
+// that carries a NEW wan_path.checked_at, every other minute is null.
+$wan_path_ring = function (int $checked_at, ?int $ring) use ($omnia_pl): array {
+    $path = $omnia_pl['wan_path'];
+    $path['checked_at'] = $checked_at;
+    $path['wan_rx_ring_drops'] = $ring;
+    return $path;
+};
+$ring_base = array_merge($wan_base, ['uptime' => 200000, 'wan_link_dev' => 'eth2']);
+check('prstenec: první hodinové čtení agent přijme', $omnia_counters(array_merge($ring_base, ['wan_path' => $wan_path_ring(1789600000, 40)])), 200);
+check('prstenec: druhé čtení s novým časem agent přijme', $omnia_counters(array_merge($ring_base, [
+    'uptime' => 200060, 'wan_path' => $wan_path_ring(1789603600, 46),
+])), 200);
+check('prstenec: krok se zapíše na hlášení s novým hodinovým čtením', $omnia_metrics('wan_ring_drops'), ['wan_ring_drops' => 6]);
+check('prstenec: minuta beze změny času agent přijme', $omnia_counters(array_merge($ring_base, [
+    'uptime' => 200120, 'wan_path' => $wan_path_ring(1789603600, 46),
+])), 200);
+check('prstenec: minuta beze změny času nemá krok', $omnia_metrics('wan_ring_drops'), ['wan_ring_drops' => null]);
+
+// --- Nothing is dropped silently (details_dropped, ingest_issues) -------------
+//
+// last_details is one 64 KB column. A report that does not fit used to shed its
+// largest lists with nothing but an error_log line, so a router whose disk list
+// was dropped looked exactly like a router without disks.
+$omnia_now = fn (array $extra = []) => array_merge($omnia_pl, ['agent_time' => time()], $extra);
+// Each list is under the pass-through's own 8 KB cap, so they really are
+// stored - and together they push the blob over the column.
+$omnia_pad = [];
+foreach (range(1, 9) as $pad_n) {
+    $omnia_pad["pad_{$pad_n}"] = array_fill(0, 70, str_repeat('x', 100 + 9 - $pad_n));
+}
+check('přetečení: hlášení s devíti seznamy agent přijme', $post_agent($omnia_now(array_merge(['uptime' => 300000], $omnia_pad))), 200);
+$omd = $omnia_details();
+$omnia_shed = $omd['details_dropped'] ?? [];
+check_true('přetečení: zahozené klíče jsou pojmenované a jdou od největšího',
+    $omnia_shed !== [] && $omnia_shed[0] === 'pad_1' && preg_grep('/^pad_\d$/', $omnia_shed) === $omnia_shed);
+check_true('přetečení: details se vejdou a malé klíče přežijí',
+    isset($omd['wifi_radios'], $omd['storage_disks'], $omd['ingest_issues'], $omd['wan_counters_prev'])
+    && strlen((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn()) <= 60000);
+check('přetečení: další hlášení, které se vejde, agent přijme', $post_agent($omnia_now(['uptime' => 300060])), 200);
+check('přetečení: seznam zahozených klíčů se vyprázdní sám', $omnia_details()['details_dropped'] ?? null, []);
+
+// The pass-through has its own limits (8 KB per key, 64 new keys). What it
+// refuses is named in ingest_issues instead of vanishing.
+check('příjem: hlášení s přerostlým klíčem agent přijme', $post_agent($omnia_now([
+    'uptime' => 300120, 'obri_klic' => str_repeat('y', 9000),
+])), 200);
+$omd = $omnia_details();
+check('příjem: přerostlý klíč se nezapíše a je vidět v ingest_issues',
+    [array_key_exists('obri_klic', $omd), $omd['ingest_issues'][0]['type'] ?? null, $omd['ingest_issues'][0]['key'] ?? null, $omd['ingest_issues'][0]['bytes'] ?? null],
+    [false, 'passthrough_too_large', 'obri_klic', 9000]);
+check('příjem: čisté hlášení seznam problémů vynuluje', [$post_agent($omnia_now(['uptime' => 300180])), $omnia_details()['ingest_issues'] ?? null], [200, []]);
+
+// X15: a light run that stepped aside for the router's own speed test measured
+// almost nothing ON PURPOSE. It is no evidence of loss, so it neither raises
+// the two records nor clears what the last full report put there.
+check('zkrácené hlášení: nejdřív přetečení agent přijme', $post_agent($omnia_now(array_merge(['uptime' => 300240], $omnia_pad))), 200);
+$omnia_shed = $omnia_details()['details_dropped'] ?? [];
+check_true('zkrácené hlášení: předtím je co ztratit', $omnia_shed !== []);
+check('zkrácené hlášení agent přijme', $post_agent([
+    'agent_type' => 'openwrt', 'version' => '0.1.7', 'agent_time' => time(),
+    'uptime' => 300300, 'reduced' => 'wan_probe', 'speedtest_active' => true,
+]), 200);
+$omd = $omnia_details();
+check('zkrácené hlášení ztrátu nevyvolá ani nesmaže', [$omd['details_dropped'] ?? null, $omd['reduced'] ?? null], [$omnia_shed, 'wan_probe']);
+check('po zkráceném hlášení plné hlášení seznam uklidí', [$post_agent($omnia_now(['uptime' => 300360])), $omnia_details()['details_dropped'] ?? null], [200, []]);
+
+// --- An 0.1.6 report must not erase what 0.1.7 measured -----------------------
+// The old agent sends no storage_disks at all. Treating "absent" as "no disks"
+// would wipe the list the router reported a minute ago.
+check('agent 0.1.6 (bez seznamu disků) hlášení pošle', $post_agent([
+    'agent_type' => 'openwrt', 'version' => '0.1.6', 'uptime' => 300420,
+    'wifi_radios' => [['radio' => 'phy0-ap0', 'band' => '5GHz', 'channel' => 36, 'clients' => 4]],
+]), 200);
+$omd = $omnia_details();
+check('agent 0.1.6 seznam disků nepřepíše', [count($omd['storage_disks'] ?? []), $omd['storage_disks'][0]['name'] ?? null], [1, 'sda']);
+check('agent 0.1.6 nemá nástroje ani cestu WAN, a null se nepředstírá',
+    [$omnia_at($omd, 'agent_tools'), $omnia_at($omd, 'wan_path')], [null, null]);
+
+// --- The new series reach the charts -----------------------------------------
+[, $om_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
+check_true('graf šumu na 5 GHz je mezi grafy routeru', isset($om_batch['series']['wifi_noise_5g']));
+[$om_s_code, $om_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wifi_busy_5g&period=24h', $cookie_jar);
+check('metric_series zná vytížení kanálu na 5 GHz', $om_s_code, 200);
+check_true('a vrátí změřenou hodnotu 3,5 %', in_array(3.5, array_map(fn ($p) => (float)$p[1], $om_s['points'] ?? []), true));
+[$om_e_code, $om_e] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wan_errors&period=24h', $cookie_jar);
+check('metric_series zná krokovou metriku chyb na WAN', $om_e_code, 200);
+check_true('a krok 4 chyb je v ní vidět', in_array(4.0, array_map(fn ($p) => (float)$p[1], $om_e['points'] ?? []), true));
+$pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$omnia_before_id]);
+
+// --- A step metric is summed, never averaged ---------------------------------
+//
+// The 90-day view reads metrics_daily, where a step metric's day is
+// avg_val x samples. Drawing avg_val instead would show a day with 2 880
+// errors as "2 errors" and the chart would look healthy.
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wan_errors', 'cpu_core_max')")->execute();
+$pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, DATE_SUB(CURDATE(), INTERVAL 3 DAY), 'wan_errors', 0, 2, 40, 1440)")->execute();
+$pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, DATE_SUB(CURDATE(), INTERVAL 3 DAY), 'cpu_core_max', 3, 12.5, 97, 1440)")->execute();
+[$step_code, $step_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wan_errors&period=90d', $cookie_jar);
+check('90 dní: kroková metrika se načte', $step_code, 200);
+check('90 dní: den kroků je součet, ne průměr (2 × 1440)', array_map(fn ($p) => (float)$p[1], $step_s['points'] ?? []), [2880.0]);
+[, $avg_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu_core_max&period=90d', $cookie_jar);
+check('90 dní: běžná metrika zůstává průměrem', array_map(fn ($p) => (float)$p[1], $avg_s['points'] ?? []), [12.5]);
+[$step_d_code, $step_d] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=wan_errors', $cookie_jar);
+check('detail metriky přizná, že jde o krok', [$step_d_code, $step_d['metric']['step'] ?? null, $step_d['metric']['counter'] ?? null], [200, true, false]);
+[, $avg_d] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=cpu_core_max', $cookie_jar);
+check('a u běžné metriky ne', $avg_d['metric']['step'] ?? null, false);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wan_errors', 'cpu_core_max')")->execute();
+
+
+// --- Disk tables: what one hourly SMART reading writes (CORE 3.4) -------------
+//
+// last_details keeps only the LATEST reading, so without these two tables
+// "did the bad blocks grow since spring" has no answer at all. The reading is
+// hourly, which means every gate here has to be proved on real reports: a
+// report replayed twice must not become two samples, and a router whose disk
+// list did not fit must not get one upsert per disk per minute.
+$st_wipe = function () use ($pdo): void {
+    $pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+    $st_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    unset($st_d['storage_sample_at'], $st_d['storage_disks'], $st_d['storage_disks_at'], $st_d['fs_alerts']);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($st_d)]);
+};
+// Opens the hourly gate without waiting an hour - and ONLY the gate, so what
+// the database decides about freshness stays visible.
+$st_force = function () use ($pdo): void {
+    $st_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    unset($st_d['storage_sample_at']);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($st_d)]);
+};
+$st_strip_list = function () use ($pdo): void {
+    $st_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    unset($st_d['storage_disks']);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($st_d)]);
+};
+$st_disk = fn (): array => $pdo->query("SELECT * FROM storage_disks WHERE monitor_id = 2 ORDER BY id LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+$st_day = fn (): array => $pdo->query("SELECT d.* FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2 ORDER BY d.day DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+$st_ev = function (string $type) use ($pdo): int {
+    $q = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
+    $q->execute([$type]);
+    return (int)$q->fetchColumn();
+};
+$st_report = function (int $checked, array $smart = [], array $extra = []) use ($post_agent, $omnia_pl): int {
+    $pl = array_merge($omnia_pl, ['agent_time' => time()], $extra);
+    $pl['storage_disks'][0]['smart'] = array_merge($pl['storage_disks'][0]['smart'], $smart, ['checked_at' => $checked]);
+    return $post_agent($pl);
+};
+$st_checked = (int)$omnia_pl['storage_disks'][0]['smart']['checked_at'];
+
+$st_wipe();
+check('Disky: hlášení s čerstvým čtením SMART agent přijme', $st_report($st_checked), 200);
+$st_r = $st_disk();
+check('Disky: disk dostane řádek s 16znakovým klíčem', [
+    strlen((string)($st_r['disk_key'] ?? '')), $st_r['name'] ?? null, $st_r['transport'] ?? null,
+    $st_r['smart_model'] ?? null, (int)($st_r['last_checked_at'] ?? 0),
+], [16, 'sda', 'sata', 'KINGSTON SUV500MS120G', $st_checked]);
+$st_d1 = $st_day();
+check('Disky: den disku má jeden vzorek a nezměřené čítače zůstanou NULL', [
+    (int)$st_d1['samples'], (int)$st_d1['temp_max'], (int)$st_d1['temp_n'], (int)$st_d1['unsafe_shutdowns'],
+    (int)$st_d1['runtime_bad_blocks'], $st_d1['offline_uncorrectable'], $st_d1['host_written_bytes'],
+], [1, 67, 1, 227, 3, null, null]);
+
+check('Disky: stejné hlášení podruhé neotevře ani bránu', $st_report($st_checked), 200);
+check('Disky: a nepřidá vzorek', (int)$st_day()['samples'], 1);
+$st_force();
+$st_report($st_checked);
+check('Disky: ani s otevřenou bránou - o čerstvosti rozhoduje databáze', (int)$st_day()['samples'], 1);
+$st_report($st_checked + 60);
+$st_d2 = $st_day();
+check('Disky: novější checked_at přidá vzorek', [(int)$st_d2['samples'], (int)$st_d2['temp_n']], [2, 2]);
+
+// The dropped disk list (storage_list_dropped) must fall back to the SCALAR
+// throttle: three reports in three minutes are one hourly pass, not three.
+$st_wipe();
+$st_strip_list();
+$st_report($st_checked + 100, ['temperature_c' => 70]);
+$st_sampled_at = $st_disk()['last_sample_at'] ?? null;
+for ($st_i = 1; $st_i < 3; $st_i++) {
+    $st_strip_list();
+    $st_report($st_checked + 100 + $st_i, ['temperature_c' => 70]);
+}
+$st_d3 = $st_day();
+$st_state = json_decode((string)($st_disk()['alert_state'] ?? ''), true) ?: [];
+$st_temp0 = $st_ev('disk_temp_critical');
+check('Disky bez seznamu v details: tři hlášení za tři minuty dají jeden vzorek',
+    [(int)$st_d3['samples'], (int)$st_d3['temp_n']], [1, 1]);
+check('a druhé ani třetí hlášení do storage_disks nesáhne', $st_disk()['last_sample_at'] ?? null, $st_sampled_at);
+check('teplotní série je 1, takže 70 °C zatím neupozorní',
+    [$st_state['temp_streak'] ?? null, $st_temp0], [1, 0]);
+
+// --- Host writes: the kernel counter is 32-bit and restarts at every boot ------
+$st_wipe();
+$pdo->exec("DELETE FROM storage_disk_daily");
+$st_dev = fn (int $sectors, int $uptime): array => [
+    'uptime' => $uptime,
+    'disk_devices' => [['device' => 'sda', 'read_kbps' => null, 'write_kbps' => null,
+        'read_sectors_total' => 10, 'write_sectors_total' => $sectors]],
+];
+$st_report($st_checked + 200, [], $st_dev(1000, 100000));
+check('Zápisy hostitele: první vzorek nepřičte nic', $st_day()['host_written_bytes'], null);
+
+// An hour of wall clock, faked on the row the delta is measured against.
+$st_hour_ago = function () use ($pdo): void {
+    $pdo->exec("UPDATE storage_disks SET last_sample_at = DATE_SUB(NOW(), INTERVAL 1 HOUR) WHERE monitor_id = 2");
+    $pdo->exec("DELETE FROM storage_disk_daily");
+};
+$st_hour_ago();
+$st_report($st_checked + 201, [], $st_dev(3048, 103600));
+check('Zápisy hostitele: 2048 sektorů za hodinu = 1 MiB', (int)$st_day()['host_written_bytes'], 1048576);
+
+$st_hour_ago();
+$st_report($st_checked + 202, [], $st_dev(500, 300));
+$st_d4 = $st_day();
+check('Zápisy hostitele: po restartu se počítá od nuly a den je neúplný',
+    [(int)$st_d4['host_written_bytes'], (int)$st_d4['host_written_partial']], [256000, 1]);
+
+$st_hour_ago();
+$pdo->exec("UPDATE storage_disks SET last_write_sectors = 5000, last_uptime = 300 WHERE monitor_id = 2");
+$st_report($st_checked + 203, [], $st_dev(400, 3900));
+$st_d5 = $st_day();
+check('Zápisy hostitele: nižší čítač při plynulém uptime nepřičte nic, jen označí den',
+    [$st_d5['host_written_bytes'], (int)$st_d5['host_written_partial']], [null, 1]);
+
+// --- Disk and filesystem alerts (CORE 3.5) -------------------------------------
+$st_wipe();
+$pdo->exec("DELETE FROM storage_disk_daily");
+$st_notif = function () use ($pdo): int {
+    return (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 2 AND status = 'storage_warning'")->fetchColumn();
+};
+// An earlier block of this suite leaves the agent switch off; the alert path
+// is only observable with it on, so it is set here and restored afterwards.
+$st_agent_switch = (string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_notifications_enabled'")->fetchColumn();
+$set_setting('agent_notifications_enabled', '1');
+$st_grow0 = $st_ev('disk_errors_growing');
+$st_notif0 = $st_notif();
+$st_report($st_checked + 300);
+check('Upozornění: první pohled na 3 vadné bloky je tichý', $st_ev('disk_errors_growing') - $st_grow0, 0);
+$st_report($st_checked + 301, ['runtime_bad_blocks' => 4]);
+check('Upozornění: 3 → 4 vadné bloky dají právě jednu událost', $st_ev('disk_errors_growing') - $st_grow0, 1);
+$st_warn_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'disk_errors_growing' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('a událost říká, který čítač a z čeho kam', str_contains((string)$st_warn_ev, 'vadné bloky 3 → 4'));
+check('a se zapnutými zprávami agenta odejde i notifikace', $st_notif() - $st_notif0, 1);
+$st_report($st_checked + 302, ['runtime_bad_blocks' => 4]);
+check('Upozornění: stejné čtení se už neohlásí', $st_ev('disk_errors_growing') - $st_grow0, 1);
+
+// The gate of agent_notifications_enabled must silence the NOTIFICATION, never
+// the event: the timeline is the record that the disk is getting worse.
+$pdo->exec("UPDATE storage_disks SET alert_state = '{\"base\":{\"badblk\":6}}' WHERE monitor_id = 2");
+$st_n0 = $st_notif();
+$st_e0 = $st_ev('disk_errors_growing');
+$set_setting('agent_notifications_enabled', '0');
+$st_report($st_checked + 304, ['runtime_bad_blocks' => 7]);
+check('Upozornění: s vypnutými zprávami agenta událost vznikne, notifikace ne',
+    [$st_ev('disk_errors_growing') - $st_e0, $st_notif() - $st_n0], [1, 0]);
+$set_setting('agent_notifications_enabled', $st_agent_switch === '' ? '1' : $st_agent_switch);
+
+// The user's SSD idles at 67 °C with a lifetime maximum of 68 - forever.
+$st_wipe();
+$st_temp1 = $st_ev('disk_temp_critical');
+for ($st_i = 0; $st_i < 5; $st_i++) {
+    $st_report($st_checked + 400 + $st_i, ['temperature_c' => 67]);
+}
+check('Upozornění: 67 °C pětkrát po sobě nic nehlásí', $st_ev('disk_temp_critical') - $st_temp1, 0);
+
+$st_fs = fn (float $pct, string $mount = '/srv'): array => ['filesystems' => [[
+    'mount' => $mount, 'device' => '/dev/sda1', 'fstype' => 'btrfs',
+    'total_kb' => 117217792, 'used_kb' => 1, 'avail_kb' => 1, 'used_pct' => $pct,
+]]];
+$st_full0 = $st_ev('fs_full');
+$st_freed0 = $st_ev('fs_freed');
+$st_report($st_checked + 500, [], $st_fs(95));
+check('Oddíl: jedno hlášení nad limitem ještě nealertuje', $st_ev('fs_full') - $st_full0, 0);
+$st_report($st_checked + 501, [], $st_fs(95));
+check('Oddíl: /srv na 95 % dvakrát = jedna událost fs_full', $st_ev('fs_full') - $st_full0, 1);
+$st_report($st_checked + 502, [], $st_fs(84));
+check('Oddíl: 84 % uvolní a ohlásí fs_freed', $st_ev('fs_freed') - $st_freed0, 1);
+$st_report($st_checked + 503, [], $st_fs(99, '/'));
+$st_report($st_checked + 504, [], $st_fs(99, '/'));
+check('Oddíl: kořen zůstává na starém hdd alertu', $st_ev('fs_full') - $st_full0, 1);
+$st_wipe();
+// --- Speed tests: ack, repair of damaged rows, nothing lost silently ---------
+//
+// W01 divided real speeds by 125000, W02 threw the files away on a bare 200.
+// Both are fixed here: the response says how far the batch was dealt with, and
+// a re-sent file repairs the damaged row instead of being ignored.
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+$sp_post = function (array $extra) use ($base, $agent_payload): array {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(array_merge($agent_payload, $extra), JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($body, true) ?: []];
+};
+$sp_rows = function () use ($pdo): array {
+    return $pdo->query("SELECT measured_at, download_mbps, upload_mbps, ping_ms, source, iface, tool, link_mbit,"
+        . " bytes_received, bytes_sent, diagnostics FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at")->fetchAll();
+};
+$sp_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+$sp_ts1 = '2026-09-19T05:23:41+02:00';
+$sp_ts2 = '2026-09-20T05:11:07+02:00';
+$sp_probe = [
+    'timestamp' => $sp_ts2, 'download_mbps' => 1350.12, 'upload_mbps' => 902.4, 'ping_ms' => 2.1, 'jitter_ms' => 0.3,
+    'server' => 'Prague, Czech Republic (CESNET)', 'bytes_received' => 2531000000, 'bytes_sent' => 1692000000,
+    'started_by' => 'agent', 'iface' => 'eth2', 'tool' => 'go-1.0.12', 'link_mbit' => 2500,
+    'diagnostics' => ['v' => 1, 'cpu_measured' => true, 'path_verified' => true, 'samples' => 45,
+        'dl' => ['secs' => 15.0, 'wan_mbps' => 1400.0, 'core' => 0, 'core_busy_pct' => 100.0], 'client' => ['ip' => '10.0.0.1']],
+];
+$sp_turris = ['timestamp' => $sp_ts1, 'download_mbps' => 830.0, 'upload_mbps' => 560.0,
+    'bytes_received' => 1556250000, 'bytes_sent' => 1050000000, 'started_by' => 'turris', 'link_mbit' => 2500];
+
+[$sp_code, $sp_body] = $sp_post(['speedtests' => [$sp_turris, $sp_probe]]);
+check('Speedtesty: dávku agent přijme', $sp_code, 200);
+check('Speedtesty: odpověď potvrdí nejnovější vyřízenou položku (holá 200 stačit nesmí)',
+    $sp_body['speedtests_acked'] ?? null, $sp_ts2);
+$sp_r = $sp_rows();
+check('Speedtesty: obě měření se uloží se svým původem', [count($sp_r), $sp_r[0]['source'], $sp_r[1]['source']], [2, 'turris', 'agent']);
+check('Speedtesty: kontext měření se uloží do nových sloupců',
+    [(float)$sp_r[1]['download_mbps'], $sp_r[1]['iface'], $sp_r[1]['tool'], (int)$sp_r[1]['link_mbit'], (int)$sp_r[1]['bytes_received']],
+    [1350.12, 'eth2', 'go-1.0.12', 2500, 2531000000]);
+check('Speedtesty: měření z Turrisu rozhraní nevymýšlí', [$sp_r[0]['iface'], $sp_r[0]['tool']], [null, null]);
+check_true('Speedtesty: diagnostika se uloží bez bloku client',
+    str_contains((string)$sp_r[1]['diagnostics'], '"wan_mbps"') && !str_contains((string)$sp_r[1]['diagnostics'], '10.0.0.1'));
+$spd = $sp_details();
+check('Speedtesty: dávka se do details nedostane ani jako neznámý klíč',
+    [array_key_exists('speedtests', $spd), $spd['ingest_issues'] ?? null], [false, []]);
+
+// A row damaged by the pre-0.1.7 unit bug is repaired by the file the agent
+// re-sends once; a healthy row is the same measurement and stays as it is.
+$pdo->exec("UPDATE speedtest_results SET download_mbps = 0.0148, upload_mbps = NULL, iface = NULL WHERE monitor_id = 2 AND source = 'agent'");
+$pdo->exec("UPDATE speedtest_results SET download_mbps = 830, upload_mbps = 560 WHERE monitor_id = 2 AND source = 'turris'");
+[$sp_code2] = $sp_post(['speedtests' => [array_merge($sp_turris, ['download_mbps' => 111.0]), $sp_probe]]);
+$sp_r = $sp_rows();
+check('Speedtesty: opakovaná dávka projde', $sp_code2, 200);
+check('Speedtesty: poškozený řádek se opraví (a doplní chybějící kontext)',
+    [(float)$sp_r[1]['download_mbps'], (float)$sp_r[1]['upload_mbps'], $sp_r[1]['iface']], [1350.12, 902.4, 'eth2']);
+check('Speedtesty: zdravý řádek se nepřepíše pomalejším čtením', (float)$sp_r[0]['download_mbps'], 830.0);
+check('Speedtesty: dávka se neduplikuje', count($sp_r), 2);
+
+// An item from an agent before 0.1.7: no byte counter, and 0.01 Mbit/s is the
+// artefact of the unit bug, not a line. Unmeasured is NULL.
+$sp_old = ['timestamp' => '2026-09-18T04:02:00+02:00', 'download_mbps' => 0.0148, 'upload_mbps' => 0.0095];
+[, $sp_body3] = $sp_post(['speedtests' => [$sp_old]]);
+$sp_r = $sp_rows();
+check('Speedtesty: poškozená hodnota bez bajtů se uloží jako NULL, ne jako 0.01',
+    [$sp_r[0]['download_mbps'], $sp_r[0]['upload_mbps'], $sp_r[0]['source']], [null, null, 'turris']);
+check('Speedtesty: i tak je položka vyřízená a potvrzená', $sp_body3['speedtests_acked'] ?? null, $sp_old['timestamp']);
+
+// A rejected item is acked (re-sending repairs nothing) and NAMED.
+[, $sp_body4] = $sp_post(['speedtests' => [['download_mbps' => 500.0], $sp_probe]]);
+$spd = $sp_details();
+check('Speedtesty: položka bez času měření se odmítne a je vidět',
+    [$spd['ingest_issues'][0]['type'] ?? null, $sp_body4['speedtests_acked'] ?? null], ['speedtest_rejected', $sp_ts2]);
+[, $sp_body5] = $sp_post(['speedtests' => [array_merge($sp_probe, ['timestamp' => '2026-09-21T05:00:00+02:00', 'download_mbps' => 0.0148])]]);
+$spd = $sp_details();
+check('Speedtesty: neshoda jednotek se uloží i ohlásí',
+    [$spd['ingest_issues'][0]['type'] ?? null, $sp_body5['speedtests_acked'] ?? null], ['unit_mismatch', '2026-09-21T05:00:00+02:00']);
+check_true('Speedtesty: a je u samotného měření',
+    str_contains((string)($pdo->query("SELECT diagnostics FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at DESC LIMIT 1")->fetchColumn()), '"unit_mismatch":true'));
+check('Speedtesty: hlášení bez dávky klíč speedtests_acked vůbec nenese',
+    array_key_exists('speedtests_acked', $sp_post([])[1]), false);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// X17: while the router's own test runs, the CPU of that minute is the test.
+// The latch is left exactly as it was - not set, and not cleared either.
+$sp_thr = function () use ($pdo): int {
+    return (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = 'threshold_exceeded'")->fetchColumn();
+};
+$sp_latch = fn () => $sp_details()['cpu_alert_sent'] ?? null;
+$pdo->exec("UPDATE monitors SET last_details = JSON_SET(COALESCE(last_details, '{}'), '$.cpu_alert_sent', false) WHERE id = 2");
+$sp_thr0 = $sp_thr();
+$sp_post(['cpu' => 97.0, 'speedtest_active' => true]);
+check('test rychlosti v minutě hlášení nespustí poplach CPU',
+    [$sp_thr() - $sp_thr0, $sp_latch()], [0, false]);
+$sp_post(['cpu' => 97.0, 'speedtest_active' => false]);
+check('Hygiena: bez měření se stejná hodnota ohlásí', [$sp_thr() - $sp_thr0, $sp_latch()], [1, true]);
+$sp_post(['cpu' => 12.5, 'speedtest_active' => true]);
+check('Hygiena: hlášení s měřením západku ani nezhasne', $sp_latch(), true);
+$sp_post(['cpu' => 12.5, 'speedtests' => [array_merge($sp_probe, ['timestamp' => date('c')])]]);
+check('Hygiena: měření v téhle minutě si hlášení označí samo (agent o něm vědět nemusel)',
+    [$sp_latch(), $sp_thr() - $sp_thr0], [true, 1]);
+$sp_post(['cpu' => 12.5]);
+check('Hygiena: čisté hlášení pod limitem západku zhasne', $sp_latch(), false);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// --- Latches and events of the router (X14, alert sheet 2.2) -----------------
+//
+// Every one of them follows the debounce the WAN and LTE alerts already use: a
+// streak, a latch so the alert goes out once, and a recovery that clears it.
+// The timeline-only events (a restart, an emptied connection table, an OOM
+// kill) must NOT turn into a notification - a router that loses power every
+// few days would otherwise wake somebody up every few days.
+$ra_ev = function (string $type) use ($pdo): int {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
+    $st->execute([$type]);
+    return (int)$st->fetchColumn();
+};
+$ra_notif = function (string $status) use ($pdo): int {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 2 AND status = ?");
+    $st->execute([$status]);
+    return (int)$st->fetchColumn();
+};
+$ra_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+// Only the keys of these rules are reset: the blocks around this one live in
+// the same column.
+$ra_reset = function (array $keys) use ($pdo, $ra_details): void {
+    $details = $ra_details();
+    foreach ($keys as $key) {
+        unset($details[$key]);
+    }
+    $st = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2");
+    $st->execute([json_encode($details, JSON_UNESCAPED_UNICODE)]);
+};
+$ra_switch = (string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_notifications_enabled'")->fetchColumn();
+$set_setting('agent_notifications_enabled', '1');
+
+// Link rate of the WAN port (W14).
+$ra_reset(['wan_link_baseline', 'wan_link_low_since', 'wan_link_bad_streak', 'wan_link_alert_sent']);
+$ra_deg0 = $ra_ev('wan_link_degraded');
+$ra_notif0 = $ra_notif('wan_link_degraded');
+$post_agent(['wan_link_mbit' => 2500, 'wan_link_dev' => 'eth2']);
+check('Port WAN: první rychlost je jen základ', $ra_ev('wan_link_degraded') - $ra_deg0, 0);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+check('Port WAN: dvě pomalejší hlášení ještě mlčí', $ra_ev('wan_link_degraded') - $ra_deg0, 0);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+check('Port WAN: třetí pomalejší hlášení ohlásí degradaci právě jednou',
+    [$ra_ev('wan_link_degraded') - $ra_deg0, $ra_notif('wan_link_degraded') - $ra_notif0], [1, 1]);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+check('Port WAN: opakování už neohlásí nic', $ra_ev('wan_link_degraded') - $ra_deg0, 1);
+$ra_res0 = $ra_ev('wan_link_restored');
+$post_agent(['wan_link_mbit' => 2500, 'wan_link_dev' => 'eth2']);
+check('Port WAN: návrat na plnou rychlost se ohlásí jednou',
+    [$ra_ev('wan_link_restored') - $ra_res0, (float)($ra_details()['wan_link_baseline']['mbit'] ?? 0)], [1, 2500.0]);
+
+// Connection table (W09).
+$ra_reset(['conntrack_bad_streak', 'conntrack_full_sent']);
+$ra_ct0 = $ra_ev('conntrack_full');
+$ra_ctn0 = $ra_ev('conntrack_normal');
+$post_agent(['conntrack_pct' => 92.0]);
+check('Tabulka spojení: jedno hlášení na 92 % nealertuje', $ra_ev('conntrack_full') - $ra_ct0, 0);
+$post_agent(['conntrack_pct' => 92.0]);
+check('Tabulka spojení: druhé hlášení ohlásí plnou tabulku', $ra_ev('conntrack_full') - $ra_ct0, 1);
+$post_agent(['conntrack_pct' => 80.0]);
+check('Tabulka spojení: pod 85 % jde návrat do normálu jen do časové osy',
+    [$ra_ev('conntrack_normal') - $ra_ctn0, $ra_notif('conntrack_normal')], [1, 0]);
+
+// Firewall (G20): only a device with a WAN role.
+$ra_reset(['firewall_bad_streak', 'firewall_alert_sent', 'firewall_off_since']);
+$ra_fw0 = $ra_ev('firewall_disabled');
+$post_agent(['firewall_enabled' => false, 'wan_up' => true]);
+$post_agent(['firewall_enabled' => false, 'wan_up' => true]);
+check('Firewall: dvě hlášení bez pravidel ještě mlčí', $ra_ev('firewall_disabled') - $ra_fw0, 0);
+$post_agent(['firewall_enabled' => false, 'wan_up' => true]);
+check('Firewall: tři hlášení po sobě ohlásí nenačtená pravidla a zapamatují si čas',
+    [$ra_ev('firewall_disabled') - $ra_fw0, isset($ra_details()['firewall_off_since'])], [1, true]);
+$ra_fwr0 = $ra_ev('firewall_restored');
+$post_agent(['firewall_enabled' => true, 'wan_up' => true]);
+check('Firewall: načtená pravidla ohlásí zotavení a čas zapomenou',
+    [$ra_ev('firewall_restored') - $ra_fwr0, array_key_exists('firewall_off_since', $ra_details())], [1, true]);
+check('Firewall: a čas je opravdu prázdný, ne jen chybějící', $ra_details()['firewall_off_since'], null);
+$ra_reset(['firewall_bad_streak', 'firewall_alert_sent', 'firewall_off_since']);
+$ra_fw1 = $ra_ev('firewall_disabled');
+for ($ra_i = 0; $ra_i < 3; $ra_i++) {
+    $post_agent(['firewall_enabled' => false, 'wan_up' => null]);
+}
+check('AP bez WAN role nedostane poplach o firewallu', $ra_ev('firewall_disabled') - $ra_fw1, 0);
+
+// Local DNS resolver (G41): judged only while the line itself works.
+$ra_reset(['dns_resolver_bad_streak', 'dns_resolver_alert_sent']);
+$ra_dns0 = $ra_ev('dns_resolver_failed');
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => false, 'wan_up' => true]);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => false, 'wan_up' => true]);
+check('DNS resolver: při výpadku linky se nesoudí (mluví poplach o WAN)', $ra_ev('dns_resolver_failed') - $ra_dns0, 0);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => null, 'wan_up' => true]);
+check('DNS resolver: bez měření dosažitelnosti taky ne', $ra_ev('dns_resolver_failed') - $ra_dns0, 0);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => true, 'wan_up' => true]);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => true, 'wan_up' => true]);
+check('DNS resolver: dvě selhání s funkční linkou ohlásí výpadek resolveru', $ra_ev('dns_resolver_failed') - $ra_dns0, 1);
+$ra_dnsr0 = $ra_ev('dns_resolver_restored');
+$post_agent(['dns_resolver_ok' => true, 'wan_internet' => true, 'wan_up' => true]);
+check('DNS resolver: odpovídající resolver ohlásí návrat', $ra_ev('dns_resolver_restored') - $ra_dnsr0, 1);
+
+// Restart (G21) and OOM kills (G31): timeline only.
+$ra_rb0 = $ra_ev('router_rebooted');
+$post_agent(['uptime' => 400000, 'oom_kills' => 1]);
+$post_agent(['uptime' => 400060, 'oom_kills' => 1]);
+check('Restart: rostoucí uptime restart není', $ra_ev('router_rebooted') - $ra_rb0, 0);
+$post_agent(['uptime' => 90, 'oom_kills' => 0]);
+check('Restart: klesající uptime je událost, notifikace ne',
+    [$ra_ev('router_rebooted') - $ra_rb0, $ra_notif('router_rebooted')], [1, 0]);
+$ra_oom0 = $ra_ev('oom_kill');
+$post_agent(['uptime' => 150, 'oom_kills' => 0]);
+$post_agent(['uptime' => 210, 'oom_kills' => 2]);
+check('OOM: růst čítače je událost a zapíše si čas',
+    [$ra_ev('oom_kill') - $ra_oom0, isset($ra_details()['oom_kill_at'])], [1, true]);
+$post_agent(['uptime' => 270, 'oom_kills' => 2]);
+check('OOM: stejný čítač už událost nevyrobí', $ra_ev('oom_kill') - $ra_oom0, 1);
+
+// The step of the connection table is the `drop` column ALONE: insert_failed
+// counts unresolved clashes and early_drop successful evictions (WAN 3.1.4),
+// and summing them would report a busy router as one refusing connections.
+$ra_ct_base = ['uptime' => 500000, 'wan_link_dev' => 'eth2', 'conntrack_drop' => 2,
+    'conntrack_insert_failed' => 100, 'conntrack_early_drop' => 200];
+$post_agent($ra_ct_base);
+$post_agent(array_merge($ra_ct_base, ['uptime' => 500060, 'conntrack_drop' => 5,
+    'conntrack_insert_failed' => 140, 'conntrack_early_drop' => 260]));
+check('krok conntracku je jen sloupec drop',
+    (int)$pdo->query("SELECT conntrack_drops FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetchColumn(), 3);
+
+// ... and the other two columns are kept as evidence: early_drop is the
+// sentence under the rule conntrack_drops ("evicted to make room"),
+// insert_failed is support material that no rule reads. Typed on the way in,
+// not left to the pass-through - a rule renders one of them.
+$ra_ct_det = $ra_details();
+check('vytlačená a neuložená spojení se ukládají jako čísla',
+    [$ra_ct_det['conntrack_early_drop'] ?? 'chybí', $ra_ct_det['conntrack_insert_failed'] ?? 'chybí'], [260, 140]);
+$post_agent(array_merge($ra_ct_base, ['uptime' => 500120, 'conntrack_early_drop' => 'nesmysl',
+    'conntrack_insert_failed' => -5]));
+$ra_ct_det = $ra_details();
+check('nečíselný čítač se neuloží jako text',
+    [$ra_ct_det['conntrack_early_drop'], $ra_ct_det['conntrack_insert_failed']], [null, null]);
+
+// G26: the metric column used to be NULL every minute - the list is a list.
+$post_agent(['wireguard_peers' => [
+    ['public_key' => 'aaa', 'latest_handshake' => 1789891000],
+    ['public_key' => 'bbb', 'latest_handshake' => 1789891100],
+]]);
+check('WireGuard: do sloupce se uloží počet protějšků, ne NULL',
+    (int)$pdo->query("SELECT wireguard_peers FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetchColumn(), 2);
+
+// G42: the hourly cron pass. Without it the banner could never say how many
+// minutes are missing - the pure function has no database to count with.
+$ra_reset(['reports_24h', 'boot_time']);
+check_true('Hlášení za 24 h: hodinový krok cronu monitor přepočítá', bk_update_reports_24h($pdo) >= 1);
+$ra_rep = $ra_details()['reports_24h'] ?? [];
+check('Hlášení za 24 h: uloží se očekávání, skutečnost i čas výpočtu',
+    [is_int($ra_rep['expected'] ?? null) && $ra_rep['expected'] >= 120, is_int($ra_rep['received'] ?? null), is_int($ra_rep['checked_at'] ?? null)], [true, true, true]);
+check_true('Hlášení za 24 h: napočítá právě ta, která opravdu dorazila',
+    ($ra_rep['received'] ?? 0) === (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 2 AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn());
+check('Hlášení za 24 h: do hodiny se nepočítá znovu', bk_update_reports_24h($pdo), 0);
+$set_setting('agent_notifications_enabled', $ra_switch === '' ? '1' : $ra_switch);
+
+// --- The Routers section of the weekly digest (CORE 3.8) ----------------------
+//
+// The engine is only worth as much as what reaches the e-mail, and that path
+// touches the database three times: the inputs batch, the weekly snapshot and
+// the build itself. The snapshot is the dangerous one - it decides what counts
+// as "new this week", so a wrong write would either mail the whole list again
+// every Monday or never mail anything again.
+bk_test_load_functions($root . '/functions.php', [
+    'bk_router_rec_thresholds', 'bk_router_rec_window', 'bk_router_rec_inputs_batch', 'bk_router_rec_evaluate',
+    'bk_router_rec_split', 'bk_router_rec_render', 'bk_router_rec_state_save', 'bk_rec_week_stat',
+    'bk_rec_days_with_data', 'bk_rec_sort_items', 'bk_rec_item', 'bk_rec_num', 'bk_rec_band_label',
+    'bk_rec_daily_value', 'bk_rec_over', 'bk_rec_above', 'bk_rec_state_active', 'bk_rec_state_severity',
+    'bk_rec_disk_label', 'bk_rec_rules_disk_health', 'bk_rec_rules_disk_week', 'bk_rec_rules_filesystems',
+    'bk_digest_routers', 'bk_digest_router_facts', 'bk_digest_router_facts_lines', 'bk_digest_router_new_split',
+    'bk_disk_label', 'bk_disk_error_counters', 'bk_disk_temp_limit', 'bk_wifi_radio_profile',
+    'bk_version_is_older', 'bk_format_bytes_cz',
+]);
+
+if (function_exists('bk_digest_routers')) {
+    $dg_state = fn (): array => $pdo->query("SELECT rec_key, active, severity, first_digest_week, raised_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_ASSOC);
+    $dg_week = date('o-\WW');
+    $dg_item = fn (string $key, string $sev, string $rule = 'disk_temp_warm'): array =>
+        bk_rec_item($rule, $key, 'storage', $sev, ['kind' => 'disk'], ['name' => 'sda', 'disk' => 'SSD (sda)']);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+
+    // The blocks above leave the router in whatever state their own last case
+    // needed (one of them deliberately strips the disk list), so this block
+    // seeds what it measures: the fixture's radios and disks, one disk row and
+    // two days of its history.
+    $dg_seed = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    $dg_seed['agent_version'] = $omnia_fx['payload']['version'];
+    $dg_seed['agent_last_seen'] = time();
+    $dg_seed['wifi_radios'] = $omnia_fx['payload']['wifi_radios'];
+    $dg_seed['storage_disks'] = $omnia_fx['payload']['storage_disks'];
+    $dg_seed['storage_disks'][0]['key'] = 'digestdiskaaaaaa';
+    // The fixture payload carries no `filesystems` (the capture did not have
+    // one), so the mount this block needs is written out here.
+    $dg_seed['filesystems'] = [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576,
+        'used_pct' => 19.0, 'avail_kb' => 800000]];
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_seed)]);
+    $pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+    $pdo->prepare(
+        "INSERT INTO storage_disks (monitor_id, disk_key, name, transport, rotational, size_bytes, first_seen, last_seen)
+         VALUES (2, 'digestdiskaaaaaa', 'sda', 'sata', 0, 120034123776, DATE_SUB(NOW(), INTERVAL 400 DAY), NOW())"
+    )->execute();
+    $dg_disk_id = (int)$pdo->lastInsertId();
+    $dg_day = $pdo->prepare(
+        "INSERT INTO storage_disk_daily (disk_id, day, samples, temp_sum, temp_n, temp_max, runtime_bad_blocks)
+         VALUES (?, DATE_SUB(CURDATE(), INTERVAL ? DAY), 24, ?, 24, 69, 3)"
+    );
+    $dg_day->execute([$dg_disk_id, 2, 24 * 67]);
+    $dg_day->execute([$dg_disk_id, 3, 24 * 66]);
+
+    // 1. The inputs batch: three queries for the whole chunk, the result keyed
+    //    by monitor id. Monitor 2 has the fixture's disks and a week of metrics.
+    $dg_in = bk_router_rec_inputs_batch($pdo, [2, 96], date('Y-m-d'));
+    check('Digest: dávka vstupů odpoví na každý router zvlášť', array_keys($dg_in), [2, 96]);
+    check('Digest: okno je sedm celých dní před dneškem', count($dg_in[2]['window']['days']), 7);
+    check('Digest: disky routeru se načtou i se svými dny',
+        [count($dg_in[2]['disks']), count($dg_in[2]['disks']['digestdiskaaaaaa']['daily'] ?? [])], [1, 2]);
+    // A column the reading never filled has to come back NULL: the counter
+    // rules ask "did it grow", and a zero would be an answer nobody measured.
+    // (The day keys come from the database, whose date may be a timezone away
+    // from PHP's, so the newest key is read rather than computed here.)
+    $dg_daily = $dg_in[2]['disks']['digestdiskaaaaaa']['daily'];
+    $dg_newest = $dg_daily[max(array_keys($dg_daily))] ?? [];
+    check('Digest: den bez záznamu zůstane nezměřený, ne nulový',
+        [array_key_exists('media_errors', $dg_newest), $dg_newest['media_errors'], $dg_newest['runtime_bad_blocks']],
+        [true, null, 3]);
+    check('Digest: prázdný stav je prázdné pole, ne null', $dg_in[96]['state'], []);
+
+    // 2. The snapshot: the first build of a week writes, a retry does not.
+    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], []);
+    $rows = $dg_state();
+    check('Digest: první sestavení týdne uloží položku jako novou',
+        [count($rows), $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week'], $rows[0]['raised_digest_week']],
+        [1, 1, 'warning', $dg_week, null]);
+
+    // Back-date last_seen inside the SAME week: a retry between 08:00 and
+    // 12:00 must leave the row completely alone.
+    $pdo->exec("UPDATE router_rec_state SET last_seen = DATE_SUB(NOW(), INTERVAL 30 MINUTE) WHERE monitor_id = 2");
+    $before = $dg_state()[0]['seen'];
+    $state_now = [];
+    foreach ($dg_state() as $r) {
+        $state_now[$r['rec_key']] = ['active' => (int)$r['active'], 'severity' => $r['severity'],
+            'first_digest_week' => $r['first_digest_week'], 'last_seen' => date('Y-m-d H:i:s', (int)$r['seen'])];
+    }
+    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], $state_now);
+    check('Digest: opakované sestavení ve stejném týdnu nic nepřepíše', $dg_state()[0]['seen'], $before);
+
+    // 3. A severity that rose is the reason an old item is mailed in full again.
+    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'critical')], $dg_week, [], $state_now);
+    $rows = $dg_state();
+    check('Digest: zhoršení zapíše týden, kdy se zhoršilo',
+        [$rows[0]['severity'], $rows[0]['raised_digest_week']], ['critical', $dg_week]);
+
+    // 4. What was evaluated and stopped firing is cleared; what could NOT be
+    //    evaluated keeps everything, or the next data would mail it as new.
+    $state_now = [
+        'disk_temp_warm:d:a' => ['active' => 1, 'severity' => 'critical', 'first_digest_week' => $dg_week],
+        'disk_temp_warm:d:b' => ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'],
+    ];
+    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], $state_now);
+    $rows = $dg_state();
+    check('Digest: vyhodnocená a už nehořící položka se zhasne',
+        [$rows[0]['rec_key'], $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']],
+        ['disk_temp_warm:d:a', 0, null, null]);
+
+    $pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning', first_digest_week = '2026-W30' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+    $state_now['disk_temp_warm:d:a'] = ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'];
+    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, ['disk_temp_warm:d:a'], $state_now);
+    $rows = $dg_state();
+    check('Digest: nevyhodnocená položka si nechá všechno',
+        [$rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']], [1, 'warning', '2026-W30']);
+
+    // A mute survives the snapshot: it is the owner's decision, not a state.
+    $pdo->prepare("UPDATE router_rec_state SET muted_at = NOW(), muted_severity = 'warning', mute_reason = 'vím o tom' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b'")->execute();
+    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], []);
+    check('Digest: ztlumení přežije zápis snímku',
+        (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b' AND muted_at IS NOT NULL")->fetchColumn(), 1);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+
+    // 5. The whole section, against the routers the suite really has.
+    $dg = bk_digest_routers($pdo, false);
+    $dg_by_id = [];
+    foreach ($dg['routers'] as $r) {
+        $dg_by_id[(int)$r['id']] = $r;
+    }
+    check_true('Digest: sekce zná routery této databáze', isset($dg_by_id[2]));
+    check('Digest: náhled nic nezapíše',
+        (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2")->fetchColumn(), 0);
+    check_true('Digest: router s 0.1.7 se hodnotí', (bool)$dg_by_id[2]['applicable']);
+    check_true('Digest: fakta se staví jen pro vykreslené routery a nesou rádio i disk',
+        count($dg_by_id[2]['facts']['radios'] ?? []) >= 1 && count($dg_by_id[2]['facts']['disks'] ?? []) >= 1);
+    check_false('Digest: v faktech není SSID',
+        str_contains(json_encode($dg_by_id[2]['facts'], JSON_UNESCAPED_UNICODE), 'Domov'));
+    check('Digest: nejhorší závažnost řadí routery, nejvýš deset', count($dg['routers']) <= 10, true);
+    foreach ($dg['routers'] as $r) {
+        check_true('Digest: každý router má jen položky bez page_only',
+            !array_filter($r['items_full'], fn ($i) => !empty($i['page_only'])));
+    }
+
+    // A router whose agent is older than 0.1.7 says so instead of looking healthy.
+    $dg_old = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    $dg_keep = $dg_old['agent_version'] ?? null;
+    $dg_old['agent_version'] = '0.1.6';
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
+    $dg2 = bk_digest_routers($pdo, false);
+    foreach ($dg2['routers'] as $r) {
+        if ((int)$r['id'] === 2) {
+            check('Digest: starší agent se nehodnotí a řekne proč', [$r['applicable'], $r['reason']], [false, 'agent_old']);
+            check('Digest: a jeho verze je v datech', $r['reason_params']['version'] ?? null, '0.1.6');
+        }
+    }
+    $dg_old['agent_version'] = $dg_keep;
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
+
+    // 6. The snapshot really is written when the build is not a preview.
+    //    The fixture's filesystems are a fifth full, so the monitor's own
+    //    threshold is lowered to make a real rule fire through the real path.
+    $dg_thr = $pdo->query("SELECT hdd_threshold FROM monitors WHERE id = 2")->fetchColumn();
+    $pdo->prepare("UPDATE monitors SET hdd_threshold = 5 WHERE id = 2")->execute();
+    $dg3 = bk_digest_routers($pdo, true);
+    $dg_fired = [];
+    foreach ($dg3['routers'] as $r) {
+        if ((int)$r['id'] === 2) {
+            foreach (array_merge($r['items_full'], $r['items_open']) as $i) {
+                $dg_fired[] = (string)$i['key'];
+            }
+        }
+    }
+    sort($dg_fired);
+    check_true('Digest: plný oddíl se do sekce dostane', count($dg_fired) >= 1);
+    $dg_saved = $pdo->query("SELECT rec_key FROM router_rec_state WHERE monitor_id = 2 AND active = 1 ORDER BY rec_key")->fetchAll(PDO::FETCH_COLUMN);
+    check('Digest: ostré sestavení uloží právě to, co hoří', $dg_saved, $dg_fired);
+    check('Digest: a označí to za novinku tohoto týdne',
+        $pdo->query("SELECT DISTINCT first_digest_week FROM router_rec_state WHERE monitor_id = 2 AND active = 1")->fetchAll(PDO::FETCH_COLUMN),
+        [$dg_week]);
+
+    // 7. And the same thing as HTML: the admin preview renders with the very
+    //    template the e-mail uses, so this is the only place where a fatal in
+    //    the section or a missing dictionary key would show up.
+    if (isset($cookie_jar)) {
+        $ch = curl_init($base . '/admin.php?action=preview_weekly_digest');
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
+            CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
+        $dg_html = (string)curl_exec($ch);
+        check_true('Digest: e-mail má sekci Routery', str_contains($dg_html, 'Routery'));
+        check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku',
+            str_contains($dg_html, 'Router bez metrik') && str_contains($dg_html, 'index.php?expand=2'));
+        check_true('Digest: položka je vidět i s tím, co se naměřilo a co s tím',
+            str_contains($dg_html, 'Plný oddíl') && str_contains($dg_html, 'Uvolněte místo'));
+        check_true('Digest: fakta o disku jsou v e-mailu, ne poplach',
+            str_contains($dg_html, 'vadné bloky za běhu: 3'));
+        check_false('Digest: e-mail neobsahuje SSID', str_contains($dg_html, 'Domov'));
+    }
+    $pdo->prepare("UPDATE monitors SET hdd_threshold = ? WHERE id = 2")->execute([$dg_thr]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+}
+
+
+// --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
+//
+// They are read-only except the mute, and the mute is the only place where a
+// client could otherwise decide how loud a finding has to get before it is
+// heard again. That is what most of this block is about.
+if ($logged_in) {
+    $ra_id = 2;                                     // the suite's OpenWrt monitor
+    $ra_web = 1;                                    // a web monitor: not a router
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode(['agent_version' => '0.1.7', 'agent_last_seen' => time(), 'wan_up' => true,
+            'agent_tools' => ['iw' => false, 'smartctl' => true],
+            'filesystems' => [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 2097152,
+                'used_pct' => 96.0, 'avail_kb' => 60000]]], JSON_UNESCAPED_UNICODE), $ra_id]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$ra_id]);
+
+    [$ra_code, $ra] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    check('doporučení routeru: 200 a tvar odpovědi', [$ra_code, is_array($ra['items'] ?? null),
+        is_array($ra['muted'] ?? null), $ra['monitorId'] ?? null, $ra['canMute'] ?? null],
+        [200, true, true, $ra_id, true]);
+    check_true('doporučení routeru: plný oddíl se opravdu najde',
+        in_array('fs_nearly_full', array_map(fn (array $i): string => (string)$i['id'], $ra['items']), true));
+    check_true('doporučení routeru: chybějící balíček je v missingPackages i mezi položkami',
+        in_array('iw', $ra['missingPackages'] ?? [], true)
+        && in_array('pkg_iw', array_map(fn (array $i): string => (string)$i['id'], $ra['items']), true));
+    check('doporučení routeru: GET nezapíše žádný stav',
+        (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = " . (int)$ra_id)->fetchColumn(), 0);
+
+    [$ra_code, $ra_web_res] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_web, $cookie_jar);
+    check('doporučení routeru: web monitor není router',
+        [$ra_code, $ra_web_res['applicable'] ?? null, $ra_web_res['reason'] ?? null], [200, false, 'not_router']);
+    [$ra_code] = api_get($base, 'action=router_recommendations&monitor_id=' . $ra_id);
+    check('doporučení routeru: bez přihlášení 401', $ra_code, 401);
+
+    // The English answer must not leak Czech: the texts are rendered per call.
+    [, $ra_en] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=en', $cookie_jar);
+    $ra_en_text = '';
+    foreach ($ra_en['items'] ?? [] as $ra_item) {
+        $ra_en_text .= (string)($ra_item['title'] ?? '') . (string)($ra_item['measured'] ?? '')
+            . (string)($ra_item['action'] ?? '');
+    }
+    check_true('doporučení routeru: anglická odpověď nemá českou diakritiku',
+        $ra_en_text !== '' && preg_match('/[ěščřžýáíéůúňťď]/u', $ra_en_text) === 0);
+
+    // A Wi-Fi item over the wire (CORE 3.7). The item is stored language-
+    // neutral and rendered per request, so the SAME key must come back as
+    // „2,4 GHz" in Czech and "2.4 GHz" in English - and its key must survive
+    // the interface being renamed, which is what a mute is stored under.
+    $ra_wifi_details = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = " . (int)$ra_id)->fetchColumn(), true);
+    $ra_radio = ['radio' => 'phy3-ap0', 'phy' => 'phy3', 'ssid' => 'Domov', 'mode' => 'ap',
+        'band' => '2.4GHz', 'frequency_mhz' => 2432, 'channel' => 5, 'htmode' => 'HT20',
+        'htmodes_supported' => ['HT20', 'HT40'], 'encryption' => 'wpa2',
+        'encryption_enterprise' => false, 'phy_has_6ghz' => false, 'clients' => 2];
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode(array_merge($ra_wifi_details, ['wifi_radios' => [$ra_radio]]), JSON_UNESCAPED_UNICODE), $ra_id]);
+    $ra_wifi_of = function (array $res): ?array {
+        foreach ($res['items'] ?? [] as $item) {
+            if ((string)($item['id'] ?? '') === 'wifi_wpa2_only') {
+                return $item;
+            }
+        }
+        return null;
+    };
+    // `lang=en` above stuck to the session (lang.php:11-21), so the Czech
+    // call has to say `lang=cs` - exactly what the app's language switch does.
+    [, $ra_w_cs] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=cs', $cookie_jar);
+    [, $ra_w_en] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=en', $cookie_jar);
+    $ra_item_cs = $ra_wifi_of($ra_w_cs);
+    $ra_item_en = $ra_wifi_of($ra_w_en);
+    check('doporučení Wi-Fi: pásmo se vykreslí v jazyce požadavku, klíč je jeden',
+        [(string)($ra_item_cs['title'] ?? ''), (string)($ra_item_en['title'] ?? ''),
+            (string)($ra_item_cs['key'] ?? '') === (string)($ra_item_en['key'] ?? '')],
+        ['Jen WPA2 na 2,4 GHz, kanál 5', 'WPA2 only on 2.4 GHz, channel 5', true]);
+    check_true('doporučení Wi-Fi: měření nese naměřenou hodnotu, ne holý pokyn',
+        str_contains((string)($ra_item_cs['measured'] ?? ''), '2,4 GHz, kanál 5'));
+    // The key is keyed on band + SSID, never on the interface name.
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode(array_merge($ra_wifi_details, ['wifi_radios' => [array_merge($ra_radio, ['radio' => 'phy1-ap0', 'phy' => 'phy1'])]]), JSON_UNESCAPED_UNICODE), $ra_id]);
+    [, $ra_w_renamed] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=cs', $cookie_jar);
+    check('doporučení Wi-Fi: přejmenované rozhraní klíč nezmění',
+        (string)($ra_wifi_of($ra_w_renamed)['key'] ?? ''), (string)($ra_item_cs['key'] ?? ''));
+    // And the mute accepts that key, which is what V5 needs.
+    [$ra_wm_code, $ra_wm] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => (string)($ra_item_cs['key'] ?? ''), 'muted' => true,
+            'reason' => 'stará tiskárna WPA3 neumí'], $cookie_jar);
+    check('doporučení Wi-Fi: klíč rádia lze ztlumit', [$ra_wm_code, $ra_wm['ok'] ?? null], [200, true]);
+    [, $ra_w_muted] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    check('doporučení Wi-Fi: ztlumená položka je mezi ztlumenými, ne v seznamu',
+        [$ra_wifi_of($ra_w_muted) === null,
+            in_array('wifi_wpa2_only', array_map(fn (array $i): string => (string)$i['id'], $ra_w_muted['muted'] ?? []), true)],
+        [true, true]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$ra_id]);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode($ra_wifi_details, JSON_UNESCAPED_UNICODE), $ra_id]);
+
+    // The mute. GET is refused, a missing token is refused, a non-admin is
+    // refused, an unknown rule id is refused - and only then does it work.
+    [$ra_code] = api_get_auth($base, 'action=router_recommendation_mute&monitor_id=' . $ra_id, $cookie_jar);
+    check('ztlumení: GET je 405', $ra_code, 405);
+    [$ra_code] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => 'fs_nearly_full:m:x', 'muted' => true], $cookie_jar, '');
+    check('ztlumení: bez CSRF tokenu 403', $ra_code, 403);
+    [$ra_code] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => 'nesmysl', 'muted' => true], $cookie_jar);
+    check('ztlumení: neznámé id pravidla je 400', $ra_code, 400);
+
+    $ra_key = (string)($ra['items'][0]['key'] ?? '');
+    $ra_audit_before = (int)$pdo->query("SELECT COUNT(*) FROM audit_log")->fetchColumn();
+    [$ra_code, $ra_mute] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => $ra_key, 'muted' => true, 'reason' => 'Vím o tom'], $cookie_jar);
+    check('ztlumení: uloží se', [$ra_code, $ra_mute['ok'] ?? null, $ra_mute['muted'] ?? null], [200, true, true]);
+    check_true('ztlumení: vznikne řádek v auditu',
+        (int)$pdo->query("SELECT COUNT(*) FROM audit_log")->fetchColumn() > $ra_audit_before);
+    [, $ra_after] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    $ra_muted_keys = array_map(fn (array $i): string => (string)$i['key'], $ra_after['muted'] ?? []);
+    check_true('ztlumení: položka se přesune do muted i s důvodem',
+        in_array($ra_key, $ra_muted_keys, true)
+        && !in_array($ra_key, array_map(fn (array $i): string => (string)$i['key'], $ra_after['items']), true)
+        && ($ra_after['muted'][0]['mute']['reason'] ?? null) === 'Vím o tom'
+        && ($ra_after['muted'][0]['mute']['by'] ?? '') !== ''
+        && ($ra_after['muted'][0]['mute']['at'] ?? null) !== null);
+    [$ra_code] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => $ra_key, 'muted' => false], $cookie_jar);
+    [, $ra_back] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    check('ztlumení: zrušení vrátí položku mezi items',
+        [$ra_code, in_array($ra_key, array_map(fn (array $i): string => (string)$i['key'], $ra_back['items']), true)],
+        [200, true]);
+
+    // storage_history: shape, nulls kept, days clamped.
+    [$ra_code, $ra_hist] = api_get_auth($base, 'action=storage_history&monitor_id=' . $ra_id . '&days=99999', $cookie_jar);
+    check('historie disků: 200, tvar a ořezaný počet dní',
+        [$ra_code, $ra_hist['monitorId'] ?? null, $ra_hist['days'] ?? null, is_array($ra_hist['disks'] ?? null)],
+        [200, $ra_id, 400, true]);
+
+    // wan_bottleneck + wan_settings_save.
+    [$ra_code, $ra_wan] = api_get_auth($base, 'action=wan_bottleneck&monitor_id=' . $ra_id, $cookie_jar);
+    check('rozbor WAN: 200 a oba směry mají verdikt',
+        [$ra_code, $ra_wan['verdict']['dl']['class'] ?? null, $ra_wan['verdict']['ul']['reason'] ?? null],
+        [200, 'inconclusive', 'not_enough_tests']);
+    [$ra_code] = api_get($base, 'action=wan_bottleneck&monitor_id=' . $ra_id);
+    check('rozbor WAN: bez přihlášení 401', $ra_code, 401);
+    [$ra_code] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => 2000, 'plan_up_mbit' => 1000], $cookie_jar, '');
+    check('tarif WAN: bez CSRF tokenu 403', $ra_code, 403);
+    [$ra_code] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => 0], $cookie_jar);
+    check('tarif WAN: hodnota mimo rozsah je 400, ne oříznutí', $ra_code, 400);
+    [$ra_code, $ra_save] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => 2000, 'plan_up_mbit' => 1000, 'plan_ok_pct' => 60], $cookie_jar);
+    check('tarif WAN: uloží se a vrátí se zpátky',
+        [$ra_code, $ra_save['plan']['downMbit'] ?? null, $ra_save['plan']['okPct'] ?? null], [200, 2000, 60]);
+    check('tarif WAN: chybějící probe_enabled nechá souhlas být',
+        (int)$pdo->query("SELECT wan_probe_enabled FROM monitors WHERE id = " . (int)$ra_id)->fetchColumn(), 0);
+    [$ra_code, $ra_clear] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => null, 'plan_up_mbit' => null, 'plan_ok_pct' => null], $cookie_jar);
+    // `?? ` would read a real null as "missing", and the difference between
+    // "no plan" and "a plan of zero" is the whole point of WAN 3.0.
+    check('tarif WAN: prázdná hodnota tarif smaže, nenastaví nulu',
+        [$ra_code, array_key_exists('downMbit', $ra_clear['plan'] ?? []), $ra_clear['plan']['downMbit']],
+        [200, true, null]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$ra_id]);
+}
+
+// --- What the digest costs at 120 routers (X13) -------------------------------
+//
+// The build runs on every cron minute from 08:00 to 12:00 until a send
+// succeeds, on shared hosting. The bound is therefore a number and not a
+// hope: at most 7 queries per chunk of 50 routers, and a router without a
+// spike costs nothing extra. Measured with the server's own SELECT counter,
+// so a rule that starts querying per router shows up here and not in
+// production.
+if (function_exists('bk_digest_routers')) {
+    $selects = function () use ($pdo): int {
+        $row = $pdo->query("SHOW SESSION STATUS LIKE 'Com_select'")->fetch(PDO::FETCH_ASSOC);
+        return (int)($row['Value'] ?? 0);
+    };
+    $cost_ins = $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, ?, 'openwrt', '10.9.0.1', 'up', 'Síť', ?)");
+    $cost_details = json_encode(['agent_version' => '0.1.7', 'agent_last_seen' => time(),
+        'filesystems' => [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576, 'used_pct' => 19.0, 'avail_kb' => 800000]]]);
+    for ($i = 0; $i < 120; $i++) {
+        $cost_ins->execute([9000 + $i, 'Cost router ' . $i, $cost_details]);
+    }
+    // The counter also sees the two SHOW statements themselves; they are not
+    // SELECTs, so nothing has to be subtracted.
+    $cost_before = $selects();
+    $cost_data = bk_digest_routers($pdo, false);
+    $cost_used = $selects() - $cost_before;
+    check_true('Cena digestu: 120 routerů se sestaví ve třech dávkách', count($cost_data['routers']) === 10 && $cost_data['more'] >= 110);
+    // 1 list + 3 chunks x at most 7 (X13) + the second fetch of facts, which
+    // is one more batch of at most 7 plus its own details query. The bound is
+    // per CHUNK, so it does not move when a router is added.
+    check_true('Cena digestu: nejvýše 7 dotazů na dávku po 50 routerech (' . $cost_used . ' celkem)', $cost_used <= 1 + 4 * 7 + 1);
+    check_true('Cena digestu: routery bez špiček žádný dotaz navíc', $cost_used < 120);
+    $pdo->exec("DELETE FROM monitors WHERE id >= 9000 AND id < 9120");
+    check('Cena digestu: testovací routery po sobě uklidí',
+        (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE id >= 9000 AND id < 9120")->fetchColumn(), 0);
+}
+
+// --- Retention of the router tables (X7) -------------------------------------
+//
+// Disk history, recommendation state and speed tests are the three tables of
+// this release that nothing else ever deletes from. The boundaries are tested
+// against a real database because every one of them is a day apart from a
+// deletion that cannot be undone, and because the mute exception ("a muted
+// item is never pruned") only exists in the WHERE clause.
+bk_test_load_functions($root . '/functions.php', ['bk_prune_router_health', 'bk_prune_wan_data']);
+
+$pr_count = fn (string $sql): int => (int)$pdo->query($sql)->fetchColumn();
+$pr_disks = "SELECT COUNT(*) FROM storage_disks WHERE monitor_id = 2";
+$pr_days = "SELECT COUNT(*) FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2";
+$pr_state = "SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2";
+$pr_speed = "SELECT COUNT(*) FROM speedtest_results WHERE monitor_id = 2";
+
+// A disk seen yesterday with one daily row just inside the window and one just
+// outside it, and a second disk that has not been seen for two years.
+$pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM speedtest_results WHERE monitor_id = 2")->execute();
+$pr_add_disk = function (string $key, int $seen_days_ago) use ($pdo): int {
+    $st = $pdo->prepare(
+        "INSERT INTO storage_disks (monitor_id, disk_key, name, transport, first_seen, last_seen)
+         VALUES (2, ?, 'sda', 'sata', DATE_SUB(NOW(), INTERVAL 900 DAY), DATE_SUB(NOW(), INTERVAL ? DAY))"
+    );
+    $st->execute([$key, $seen_days_ago]);
+    return (int)$pdo->lastInsertId();
+};
+$pr_add_day = function (int $disk_id, int $days_ago) use ($pdo): void {
+    $st = $pdo->prepare(
+        "INSERT INTO storage_disk_daily (disk_id, day, samples, temp_max)
+         VALUES (?, DATE_SUB(CURDATE(), INTERVAL ? DAY), 1, 40)"
+    );
+    $st->execute([$disk_id, $days_ago]);
+};
+$pr_live = $pr_add_disk('pruneliveaaaaaaa', 1);
+$pr_gone = $pr_add_disk('prunegoneaaaaaaa', 731);
+$pr_add_day($pr_live, 729);
+$pr_add_day($pr_live, 731);
+$pr_add_day($pr_gone, 3);
+
+// Recommendation state: a live item, an unmuted one just inside 90 days, an
+// unmuted one past it and a muted one that is years old.
+$pr_add_state = function (string $key, ?int $seen_days_ago, bool $muted) use ($pdo): void {
+    $st = $pdo->prepare(
+        "INSERT INTO router_rec_state (monitor_id, rec_key, rule_id, active, severity, first_seen, last_seen, muted_at)
+         VALUES (2, ?, 'disk_temp_warm', 1, 'warning', DATE_SUB(NOW(), INTERVAL 400 DAY),
+                 " . ($seen_days_ago === null ? "NULL" : "DATE_SUB(NOW(), INTERVAL ? DAY)") . ",
+                 " . ($muted ? "NOW()" : "NULL") . ")"
+    );
+    $st->execute($seen_days_ago === null ? [$key] : [$key, $seen_days_ago]);
+};
+$pr_add_state('disk_temp_warm:d:live', 1, false);
+$pr_add_state('disk_temp_warm:d:edge', 89, false);
+$pr_add_state('disk_temp_warm:d:old', 91, false);
+$pr_add_state('disk_temp_warm:d:muted', 400, true);
+$pr_add_state('disk_temp_warm:d:never', null, false);
+
+$pr_before = [$pr_count($pr_disks), $pr_count($pr_days), $pr_count($pr_state)];
+$pr_r = bk_prune_router_health($pdo);
+$pr_after = [$pr_count($pr_disks), $pr_count($pr_days), $pr_count($pr_state)];
+
+check('Retence: denní řádek disku z -731 dní zmizí, z -729 zůstane',
+    $pdo->query("SELECT DATEDIFF(CURDATE(), day) FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2 ORDER BY day")->fetchAll(PDO::FETCH_COLUMN),
+    [729]);
+check('Retence: disk neviděný dva roky zmizí i se svými dny (kaskáda)',
+    (int)$pdo->query("SELECT COUNT(*) FROM storage_disks WHERE monitor_id = 2 AND disk_key = 'prunegoneaaaaaaa'")->fetchColumn(), 0);
+// The counts are what the three statements deleted THEMSELVES: the day row of
+// the two-year-old disk disappears as well, but through the FK cascade, so it
+// is in the table difference (3 -> 1) and not in `disk_daily` (1).
+check('Retence: vrácené počty sedí na to, co opravdu zmizelo',
+    [$pr_r['disk_daily'], $pr_r['disks'], $pr_r['rec_state'], $pr_before[1] - $pr_after[1]],
+    [1, $pr_before[0] - $pr_after[0], $pr_before[2] - $pr_after[2], 2]);
+check('Retence: ze stavů doporučení zůstane živý, hraničních 89 dní a ztlumený',
+    $pdo->query("SELECT rec_key FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_COLUMN),
+    ['disk_temp_warm:d:edge', 'disk_temp_warm:d:live', 'disk_temp_warm:d:muted']);
+check('Retence: ztlumený stav se nemaže ani po 400 dnech',
+    (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:muted'")->fetchColumn(), 1);
+check('Retence: druhé volání už nemá co mazat', bk_prune_router_health($pdo), ['disk_daily' => 0, 'disks' => 0, 'rec_state' => 0]);
+
+// Speed tests: the row lives 400 days, the per-test diagnostics 90.
+$pr_add_speed = function (int $days_ago, ?string $diag) use ($pdo): void {
+    $st = $pdo->prepare(
+        "INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, diagnostics)
+         VALUES (2, DATE_SUB(NOW(), INTERVAL ? DAY), 300.0, 30.0, 'turris', ?)"
+    );
+    $st->execute([$days_ago, $diag]);
+};
+$pr_add_speed(401, '{"cpu_max_pct":42}');
+$pr_add_speed(399, '{"cpu_max_pct":43}');
+$pr_add_speed(91, '{"cpu_max_pct":44}');
+$pr_add_speed(89, '{"cpu_max_pct":45}');
+$pr_w = bk_prune_wan_data($pdo);
+check('Retence WAN: test starší 400 dní zmizí, mladší zůstane',
+    $pdo->query("SELECT DATEDIFF(NOW(), measured_at) FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at")->fetchAll(PDO::FETCH_COLUMN),
+    [399, 91, 89]);
+check('Retence WAN: diagnostika se po 90 dnech vymaže, měření zůstane',
+    $pdo->query("SELECT DATEDIFF(NOW(), measured_at) FROM speedtest_results WHERE monitor_id = 2 AND diagnostics IS NULL")->fetchAll(PDO::FETCH_COLUMN),
+    [399, 91]);
+check('Retence WAN: diagnostika mladší 90 dní zůstane',
+    (int)$pdo->query("SELECT COUNT(*) FROM speedtest_results WHERE monitor_id = 2 AND diagnostics IS NOT NULL")->fetchColumn(), 1);
+check('Retence WAN: vrácené počty', [$pr_w['speedtests'], $pr_w['diagnostics']], [1, 2]);
+check('Retence WAN: druhé volání už nemá co mazat', bk_prune_wan_data($pdo), ['speedtests' => 0, 'diagnostics' => 0]);
+$pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM speedtest_results WHERE monitor_id = 2")->execute();
+
 // --- Časová zóna databázové relace (oprava mimo release) ------------------
 // db.php nastavuje zónu RELACE na aktuální posun PHP. Bez toho každé
 // porovnání SQL NOW() / CURDATE() s časem naformátovaným v PHP mlčky závisí
@@ -3116,6 +4341,74 @@ check_true('NOW() z databáze je stejný okamžik jako time() v PHP',
 check_true('bez nastavení zóny se NOW() míjí přesně o rozdíl zón',
     isset($tz['raw_skew'], $tz['server_offset'], $tz['php_offset'])
         && abs($tz['raw_skew'] - ($tz['server_offset'] - $tz['php_offset'])) <= 2);
+
+// --- Router release migration (schema 20260920) ---------------------------
+// The schema lint compares db.php with schema.sql as TEXT. Only a real run on
+// an older database shows that the block at the end of the migrations works:
+// that the speedtest columns arrive although their table is created late, and
+// that the repair UPDATEs run after the column they filter on exists.
+// Keep this block at the END of the suite: it drops and re-creates the router
+// tables, so rows an earlier test stored in them are gone afterwards.
+$column_exists = function (string $table, string $column) use ($pdo, $db_name): bool {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+    $st->execute([$db_name, $table, $column]);
+    return (int)$st->fetchColumn() === 1;
+};
+$table_exists = function (string $table) use ($pdo, $db_name): bool {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?");
+    $st->execute([$db_name, $table]);
+    return (int)$st->fetchColumn() === 1;
+};
+$speedtest_row = function (string $measured_at) use ($pdo): array {
+    $st = $pdo->prepare("SELECT download_mbps, upload_mbps, source FROM speedtest_results WHERE monitor_id = 2 AND measured_at = ?");
+    $st->execute([$measured_at]);
+    $row = $st->fetch() ?: [];
+    foreach (['download_mbps', 'upload_mbps'] as $k) {
+        $row[$k] = isset($row[$k]) ? round((float)$row[$k], 4) : null;
+    }
+    return $row;
+};
+
+// Back to the shape of 20260916: no router tables, none of the new columns.
+foreach (['storage_disk_daily', 'storage_disks', 'router_rec_state'] as $old_missing) {
+    $pdo->exec("DROP TABLE IF EXISTS `{$old_missing}`");
+}
+$pdo->exec("ALTER TABLE vps_metrics DROP COLUMN wifi_busy_5g, DROP COLUMN wan_link_flaps, DROP COLUMN clock_skew_s");
+$pdo->exec("ALTER TABLE monitors DROP COLUMN wan_plan_ok_pct, DROP COLUMN wan_probe_enabled");
+$pdo->exec("ALTER TABLE speedtest_results DROP COLUMN bytes_received, DROP COLUMN diagnostics");
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+// What agents before 0.1.7 stored: a line of 1000 Mbit/s and more divided once
+// too often (0.0148), next to honest results.
+$old_speedtest = $pdo->prepare("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source) VALUES (2, ?, ?, ?, ?)");
+$old_speedtest->execute(['2026-09-01 05:00:00', 0.0148, 0.0087, 'librespeed']);
+$old_speedtest->execute(['2026-09-02 05:00:00', 0.5, 0.0121, 'librespeed']);
+$old_speedtest->execute(['2026-09-03 05:00:00', 940.25, 48.5, 'librespeed']);
+
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check_true('migrace routerového vydání doběhla', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old');
+check('migrace doplní starší databázi sloupce metrik, monitoru i měření rychlosti', [
+    $column_exists('vps_metrics', 'wifi_busy_5g'), $column_exists('vps_metrics', 'wan_link_flaps'), $column_exists('vps_metrics', 'clock_skew_s'),
+    $column_exists('monitors', 'wan_plan_ok_pct'), $column_exists('monitors', 'wan_probe_enabled'),
+    $column_exists('speedtest_results', 'bytes_received'), $column_exists('speedtest_results', 'diagnostics'),
+], [true, true, true, true, true, true, true]);
+check('migrace založí tabulky disků a stavu doporučení', [
+    $table_exists('storage_disks'), $table_exists('storage_disk_daily'), $table_exists('router_rec_state'),
+], [true, true, true]);
+check_false('tabulka grantů vlastního měření do téhle vlny nepatří', $table_exists('wan_probe_grants'));
+check('souhlas s vlastním měřením je po migraci vypnutý', (int)$pdo->query("SELECT wan_probe_enabled FROM monitors WHERE id = 2")->fetchColumn(), 0);
+check('migrace udělá z poškozené rychlosti 0.0148 neznámou a zdroj přepíše na turris', $speedtest_row('2026-09-01 05:00:00'), ['download_mbps' => null, 'upload_mbps' => null, 'source' => 'turris']);
+check('migrace nechá 0.5 být a maže jen poškozený sloupec', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
+check('zdravé měření migrace nezmění', $speedtest_row('2026-09-03 05:00:00'), ['download_mbps' => 940.25, 'upload_mbps' => 48.5, 'source' => 'turris']);
+
+// A later schema bump runs the same statements again. A result that a 0.1.7
+// agent really measured (it carries bytes_received) must survive it, however small.
+$pdo->exec("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, bytes_received) VALUES (2, '2026-09-04 05:00:00', 0.05, 0.04, 'agent', 93750)");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('opakovaná migrace nesmaže malou hodnotu, kterou agent 0.1.7 opravdu naměřil', $speedtest_row('2026-09-04 05:00:00'), ['download_mbps' => 0.05, 'upload_mbps' => 0.04, 'source' => 'agent']);
+check('opakovaná migrace nechá dřív opravené řádky být', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
 
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {

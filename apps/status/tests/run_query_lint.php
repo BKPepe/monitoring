@@ -29,7 +29,8 @@ if (!$files) {
 $violations = [];
 
 /** Tables that grow with time - a full scan is a killer on them. */
-$hot_tables = ['monitor_logs', 'vps_metrics', 'monitor_events', 'audit_log'];
+// storage_disk_daily: one row per disk per day for 730 days (about 730,000 rows a year per 1,000 routers).
+$hot_tables = ['monitor_logs', 'vps_metrics', 'monitor_events', 'audit_log', 'storage_disk_daily'];
 
 foreach ($files as $file) {
     $src = file_get_contents($file);

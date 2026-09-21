@@ -431,6 +431,13 @@ export function MetricDetailPage() {
                 'agent_disconnected',
                 'latency_degraded',
                 'dns_lost',
+                // Router statuses of release 0.1.7 (contract X14): without
+                // them a chart of `conntrack_pct` would mark the minute the
+                // table filled up as an ordinary note.
+                'wan_link_degraded',
+                'conntrack_full',
+                'firewall_disabled',
+                'dns_resolver_failed',
               ].includes(e.type)
                 ? ('alert' as const)
                 : ('info' as const),
@@ -665,7 +672,11 @@ export function MetricDetailPage() {
         />
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile label={t('metric.average', 'Průměr')} value={stats.avg} unit={unit} />
+        <StatTile
+          label={detail?.metric.step ? t('metric.average_step', 'Průměrný přírůstek') : t('metric.average', 'Průměr')}
+          value={stats.avg}
+          unit={unit}
+        />
         <StatTile
           label={direction === 'neutral' ? t('metric.min_neutral', 'Minimum') : t('metric.best_high', 'Nejlepší')}
           value={direction === 'higher' ? stats.max : stats.min}
@@ -863,20 +874,37 @@ export function MetricDetailPage() {
         )}
 
         <div className="text-muted-foreground space-y-1 text-2xs">
-          {detail?.metric.counter && (
+          {/* A step series is stored as the increment itself (X8), so a
+              bucket is a SUM. Said here, because the tiles and the daily
+              points would otherwise read as averages of a level. */}
+          {detail?.metric.step ? (
             <p>
               {t(
-                'metric.counter_note',
-                'Jde o počítadlo - graf ukazuje přírůstek mezi měřeními, ne celkovou hodnotu. Po restartu zařízení se bod přeskočí, aby nevznikla špička, která se nestala.'
+                'metric.step_note',
+                'Jde o přírůstek od minulého hlášení - bod v grafu je součet za dané období, ne průměrná hodnota.'
               )}
             </p>
+          ) : (
+            detail?.metric.counter && (
+              <p>
+                {t(
+                  'metric.counter_note',
+                  'Jde o počítadlo - graf ukazuje přírůstek mezi měřeními, ne celkovou hodnotu. Po restartu zařízení se bod přeskočí, aby nevznikla špička, která se nestala.'
+                )}
+              </p>
+            )
           )}
           {series?.resolution === 'daily' && (
             <p>
-              {t(
-                'metric.daily_note',
-                'Pro období delší než 30 dní je jeden bod denní průměr - syrová měření se po 30 dnech mažou.'
-              )}
+              {detail?.metric.step
+                ? t(
+                    'metric.daily_note_step',
+                    'Pro období delší než 30 dní je jeden bod denní součet - syrová měření se po 30 dnech mažou.'
+                  )
+                : t(
+                    'metric.daily_note',
+                    'Pro období delší než 30 dní je jeden bod denní průměr - syrová měření se po 30 dnech mažou.'
+                  )}
             </p>
           )}
           {detail && detail.events.length > 0 && (

@@ -25,15 +25,7 @@ import { MaintenanceToggle } from '@/components/maintenance-toggle';
 import { useSession } from '@/api/use-session';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
 import { ProcessTop } from '@/components/process-top';
-import {
-  lteVerdict,
-  rateChannelBusy,
-  rateRsrp,
-  rateRsrq,
-  rateSinr,
-  rateWifiNoise,
-  signalTone,
-} from '@/lib/signal-quality';
+import { lteVerdict, rateRsrp, rateRsrq, rateSinr, signalTone } from '@/lib/signal-quality';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -42,12 +34,11 @@ import { Sparkline } from '@/components/sparkline';
 import { lteBackupState } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
-import type { ChartData, LinkTrafficResponse, MetricSeries } from '@/api/types';
+import type { ChartData, LinkTrafficResponse, MetricSeries, RecommendationArea } from '@/api/types';
 import { resolveSource } from '@/api/source';
 import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
-import { describeWifi6e } from '@/lib/wifi-6e';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { useLanguage } from '@/context/language-context';
@@ -60,10 +51,21 @@ import { TeamspeakCard } from '@/components/teamspeak-card';
 import { HeartbeatCard } from '@/components/heartbeat-card';
 import { StorageCard } from '@/components/storage-card';
 import { SpeedtestCard } from '@/components/speedtest-card';
+import { WanBottleneckCard } from '@/components/wan-bottleneck-card';
 import { LoadingState } from '@/components/ui/states';
+import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
+import { WifiRadioList } from '@/components/wifi-radio-list';
+import { timelineSeverity, timelineTitle } from '@/lib/timeline-events';
 import { monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
 import { processUsage } from '@/lib/monitor-grouping';
-import { busiestCoreHint, socTemperatureC } from '@/lib/router-overview';
+import {
+  agentRunText,
+  agentSkippedText,
+  busiestCoreHint,
+  dnsResolverText,
+  reportsReceivedText,
+  socTemperatureC,
+} from '@/lib/router-overview';
 
 type MonitorStatus = ApiMonitor['status'];
 
@@ -337,6 +339,34 @@ export function AssetDetailPage() {
     };
   }, [loadedAssetId, lang]);
 
+  // Asked once per page and only for a router; every copy of the card below
+  // reads this one answer. A hook, so it sits above the early returns.
+  const routerMonitorId = asset && isRouterKind(asset.kind) ? Number(asset.id) : null;
+  const recommendations = useRouterRecommendations(routerMonitorId);
+  /** Controlled, because a compact recommendation on another tab links to the full list on the overview. */
+  const [tab, setTab] = React.useState('overview');
+  const showAllRecommendations = React.useCallback(() => {
+    setTab('overview');
+    // The card exists only once the overview tab has rendered.
+    window.requestAnimationFrame(() => {
+      document.getElementById('router-recommendations')?.scrollIntoView({ block: 'start' });
+    });
+  }, []);
+  /** The compact copy that sits on top of the card its area is about (X21). */
+  const compactRecommendations = React.useCallback(
+    (area: RecommendationArea) =>
+      routerMonitorId == null ? null : (
+        <RouterRecommendations
+          monitorId={routerMonitorId}
+          source={recommendations}
+          area={area}
+          compact
+          onShowAll={showAllRecommendations}
+        />
+      ),
+    [routerMonitorId, recommendations, showAllRecommendations]
+  );
+
   if (loading) {
     return <LoadingState size="page" label={t('asset.loading', 'Načítám detail zařízení a diagnostické metriky…')} />;
   }
@@ -365,7 +395,7 @@ export function AssetDetailPage() {
 
   const upperKind = (asset.kind || '').toUpperCase();
   // The router has its own Services section - a TLS certificate makes no sense for it.
-  const isRouter = upperKind === 'ROUTER' || upperKind === 'OPENWRT';
+  const isRouter = isRouterKind(asset.kind);
   const isDiscord = upperKind === 'DISCORD';
   const isMinecraft = upperKind === 'MINECRAFT';
   // Rozpad kontroly dava smysl jen u HTTP cilu (DNS -> TCP -> TLS -> HTTP).
@@ -420,7 +450,7 @@ export function AssetDetailPage() {
 
       <CollectionIssuesBanner monitors={rawMonitor && !asset.archived ? [rawMonitor] : []} />
 
-      <Tabs defaultValue="overview" className="space-y-6">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
         {/* Sticky under the header (h-16): on a long detail the tabs and
             the range switcher stay at hand without scrolling back up. */}
         {/* Two things about this bar. On a phone five triggers do not fit: the
@@ -462,12 +492,30 @@ export function AssetDetailPage() {
             serverInsights={serverInsights}
             assetId={assetId}
             statusChangeHint={statusChangeHint}
+            recommendations={
+              isRouter ? (
+                <RouterRecommendations
+                  monitorId={Number(asset.id)}
+                  source={recommendations}
+                  agentVersion={typeof asset.rawDetails?.version === 'string' ? asset.rawDetails.version : null}
+                />
+              ) : null
+            }
           />
         </TabsContent>
 
         {hasNetworkData(asset.rawDetails) && (
           <TabsContent value="network">
-            <NetworkTab d={asset.rawDetails} monitorId={Number(asset.id)} assetId={assetId ?? asset.id} />
+            <NetworkTab
+              d={asset.rawDetails}
+              monitorId={Number(asset.id)}
+              assetId={assetId ?? asset.id}
+              recommendations={isRouter ? compactRecommendations : undefined}
+              // Where the line speed ends - only a router has a WAN to judge (X21).
+              wanBottleneck={isRouter ? <WanBottleneckCard monitorId={asset.id} /> : undefined}
+              // A router's link speed belongs to its network, not to its services (X21).
+              speedtest={isRouter ? <SpeedtestCard monitorId={asset.id} /> : undefined}
+            />
           </TabsContent>
         )}
 
@@ -632,9 +680,13 @@ export function AssetDetailPage() {
             {isHeartbeat && <HeartbeatCard monitorId={asset.id} />}
             {/* Storage renders itself only where the agent reports partitions
                 sent them - a website or Discord shows nothing. */}
-            <StorageCard d={asset.rawDetails ?? {}} />
-            {/* Link speed shows only where measurements arrived. */}
-            <SpeedtestCard monitorId={asset.id} />
+            <StorageCard
+              d={asset.rawDetails ?? {}}
+              monitorId={isRouter ? Number(asset.id) : undefined}
+              recommendations={isRouter ? compactRecommendations('storage') : undefined}
+            />
+            {/* Link speed shows only where measurements arrived; a router shows it on its Network tab. */}
+            {!isRouter && <SpeedtestCard monitorId={asset.id} />}
 
             {/* A heartbeat has no target to connect to - a certificate
                 nor "the protocol uses no TLS" makes sense for it. */}
@@ -735,37 +787,45 @@ export function AssetDetailPage() {
                         {t('common.protocol', 'Protokol')}: {asset.kind}
                       </p>
                     </div>
-                    <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
-                      <p className="font-semibold text-sm">
-                        {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
-                      </p>
-                      {(() => {
-                        // "N/A (smartctl missing)" is not a healthy state - it is a missing
-                        // tool and the admin should know what to install.
-                        const raw = asset.smartStatus ?? null;
-                        const missingTool = !raw || /n\/a|chyb|not available|unavailable|missing/i.test(raw);
-                        return (
-                          <>
-                            <p
-                              className={cn('text-xs font-medium font-mono', missingTool ? 'text-warning' : 'text-up')}
-                            >
-                              {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
-                            </p>
-                            <p className="text-2xs text-muted-foreground font-mono">
-                              {missingTool
-                                ? t(
-                                    'asset.smart_install_hint',
-                                    'Pro sledování zdraví disku nainstalujte na cílovém stroji smartmontools (Debian/Ubuntu: apt install smartmontools, OpenWrt: opkg install smartmontools) a agent hodnoty začne hlásit sám.'
-                                  )
-                                : t(
-                                    'asset.smart_desc',
-                                    'Sledování opotřebení NVMe buněk, chyb a realokovaných sektorů z rozhraní smartctl.'
-                                  )}
-                            </p>
-                          </>
-                        );
-                      })()}
-                    </div>
+                    {/* The one-line SMART verdict of the old agent. From 0.1.7 the
+                        Storage card carries a block per disk, so this would only
+                        repeat a worse version of it. */}
+                    {!Array.isArray(asset.rawDetails?.storage_disks) && (
+                      <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
+                        <p className="font-semibold text-sm">
+                          {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
+                        </p>
+                        {(() => {
+                          // "N/A (smartctl missing)" is not a healthy state - it is a missing
+                          // tool and the admin should know what to install.
+                          const raw = asset.smartStatus ?? null;
+                          const missingTool = !raw || /n\/a|chyb|not available|unavailable|missing/i.test(raw);
+                          return (
+                            <>
+                              <p
+                                className={cn(
+                                  'text-xs font-medium font-mono',
+                                  missingTool ? 'text-warning' : 'text-up'
+                                )}
+                              >
+                                {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
+                              </p>
+                              <p className="text-2xs text-muted-foreground font-mono">
+                                {missingTool
+                                  ? t(
+                                      'asset.smart_install_hint',
+                                      'Pro sledování zdraví disku nainstalujte na cílovém stroji smartmontools (Debian/Ubuntu: apt install smartmontools, OpenWrt: opkg install smartmontools) a agent hodnoty začne hlásit sám.'
+                                    )
+                                  : t(
+                                      'asset.smart_desc',
+                                      'Sledování opotřebení NVMe buněk, chyb a realokovaných sektorů z rozhraní smartctl.'
+                                    )}
+                              </p>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -942,11 +1002,14 @@ function OverviewTab({
   serverInsights,
   assetId,
   statusChangeHint,
+  recommendations,
 }: {
   asset: AssetDetail;
   range: TimeRange;
   events: TimelineEvent[];
   serverInsights: ServerInsights | null;
+  /** The router's full recommendation card; null for everything that is not a router. */
+  recommendations?: React.ReactNode;
   /** What happened at the last status change and why; undefined = unknown yet. */
   statusChangeHint?: string;
   /** The URL segment - carried further down the path so that navigating to a
@@ -1080,6 +1143,9 @@ function OverviewTab({
           </dl>
         </CardContent>
       </Card>
+
+      {/* Right under the summary: it is the to-do list the summary only hints at. */}
+      {recommendations && <div className="xl:col-span-12">{recommendations}</div>}
 
       {/* How good this monitor has actually been - the server has computed it
           in one request all along and only the public page ever asked. */}
@@ -1299,6 +1365,12 @@ function OverviewTab({
 }
 
 /** Does the monitor carry network telemetry worth a Network tab? */
+/** The router has its own cards and its own recommendations. */
+function isRouterKind(kind: string | null | undefined): boolean {
+  const upper = (kind || '').toUpperCase();
+  return upper === 'ROUTER' || upper === 'OPENWRT';
+}
+
 function hasNetworkData(d: Record<string, any>): boolean {
   return (
     d.wan_proto != null ||
@@ -1523,11 +1595,20 @@ function NetworkTab({
   d,
   monitorId,
   assetId,
+  recommendations,
+  wanBottleneck,
+  speedtest,
 }: {
   d: Record<string, any>;
   monitorId: number;
   /** For linking a row to the history of that metric. */
   assetId: string | number;
+  /** The compact recommendations of one area, placed next to the card they are about (routers only). */
+  recommendations?: (area: 'wifi' | 'wan') => React.ReactNode;
+  /** The WAN verdict card; it explains the speed tests below it, so it comes first. */
+  wanBottleneck?: React.ReactNode;
+  /** The router's speed tests belong with its network, not with its services. */
+  speedtest?: React.ReactNode;
 }) {
   // Rows whose number is also a stored metric: measured every minute, kept for
   // months, and until now readable only as its latest value.
@@ -1579,362 +1660,359 @@ function NetworkTab({
   const wan = wanLinkState(d);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-      {(d.wan_proto != null || d.wan_up != null || d.wan_internet != null) && (
-        <Section title={`🌐 ${t('net.wan_title', 'WAN připojení')}`}>
-          <Row
-            label={t('common.status', 'Stav')}
-            value={
-              wan.ok === null
-                ? null
-                : wan.reason === 'no_internet'
-                  ? t('rsvc.wan_no_internet', 'Nahoře, ale bez internetu')
-                  : wan.ok
-                    ? t('common.online', 'Online')
-                    : t('common.offline', 'Offline')
-            }
-          />
-          <Row label={t('net.proto', 'Protokol')} value={d.wan_proto} />
-          <Row label="IPv4" value={d.wan_ipv4} />
-          <Row label="IPv6" value={d.wan_ipv6} />
-          <Row label={t('net.gateway', 'Brána')} value={d.wan_gateway} />
-          <Row label="DNS" value={d.wan_dns} />
-          <Row label={t('net.wan_uptime', 'WAN uptime')} value={fmtDur(d.wan_uptime)} to={history('wan_uptime')} />
-          <Row label={t('net.reconnects', 'Reconnecty (od startu)')} value={d.wan_reconnect_count} />
-          <Row label={t('net.last_reconnect', 'Poslední reconnect')} value={fmtAgo(d.wan_last_reconnect)} />
-          {d.mwan3_active_gw != null && <Row label="mwan3" value={String(d.mwan3_active_gw)} />}
-        </Section>
-      )}
-
+    <div className="space-y-4">
+      {/* Wi-Fi first and full width: with the radio profile, the client lines
+          and five readings per radio it no longer fits a grid cell. Its
+          recommendations sit at its top, so the finding and the numbers it
+          came from are on one screen. */}
       {wifi.length > 0 && (
-        <Section
-          title={`📶 Wi-Fi (${d.wifi_clients_count ?? wifi.reduce((s, r) => s + (Number(r.clients) || 0), 0)} ${t('net.clients', 'klientů')})`}
-        >
-          {wifi.map((r, i) => {
-            const noise = rateWifiNoise(r.noise == null ? null : Number(r.noise));
-            const busy = rateChannelBusy(r.busy_pct == null ? null : Number(r.busy_pct));
-            return (
-              <div key={i} className="border-border/40 border-b py-1.5 text-xs last:border-0">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium">
-                    {r.ssid}{' '}
-                    <span className="text-muted-foreground">
-                      ({r.band}
-                      {r.channel ? `, ch ${r.channel}` : ''})
-                    </span>
-                  </span>
-                  <span className="text-muted-foreground font-mono">
-                    {Number(r.clients) || 0} {t('net.clients_short', 'kl.')}
-                    {r.tx_power ? ` · ${r.tx_power} dBm TX` : ''}
-                  </span>
-                </div>
-                {/* The two numbers that decide how the Wi-Fi actually behaves,
-                    each with its scale and what helps - they used to be
-                    appended to the line as bare values. */}
-                <div className="mt-0.5 pl-1">
-                  <SignalReading
-                    label={t('net.wifi_noise', 'Šum na kanálu')}
-                    value={r.noise != null ? `${r.noise} dBm` : null}
-                    rating={noise}
-                    helpKey="noise"
-                  />
-                  <SignalReading
-                    label={t('net.busy_label', 'Vytížení kanálu')}
-                    value={r.busy_pct != null ? `${r.busy_pct} %` : null}
-                    rating={busy}
-                    helpKey="busy"
-                  />
-                  {(() => {
-                    const wifi6e = describeWifi6e(r, t);
-                    return wifi6e ? <p className="text-muted-foreground text-2xs pt-0.5">{wifi6e}</p> : null;
-                  })()}
-                </div>
-              </div>
-            );
-          })}
-        </Section>
+        <Card className="space-y-3 p-4">
+          <h4 className="text-sm font-bold">
+            📶 Wi-Fi ({d.wifi_clients_count ?? wifi.reduce((s, r) => s + (Number(r.clients) || 0), 0)}{' '}
+            {t('net.clients', 'klientů')})
+          </h4>
+          {recommendations?.('wifi')}
+          <WifiRadioList radios={wifi} history={history} />
+        </Card>
       )}
+      {recommendations?.('wan')}
+      {wanBottleneck}
+      {speedtest}
 
-      {(d.lan_subnet != null || d.dhcp_leases_count != null) && (
-        <Section title={`🏠 ${t('net.lan_title', 'LAN & DHCP')}`}>
-          <Row label={t('net.subnet', 'Subnet')} value={d.lan_subnet} />
-          <Row
-            label={t('net.dhcp_leases', 'Aktivní DHCP lease')}
-            value={d.dhcp_leases_count}
-            to={history('dhcp_leases_count')}
-          />
-          <Row
-            label={t('net.dhcp_reservations', 'Rezervace')}
-            value={d.dhcp_reservations_count}
-            to={history('dhcp_reservations_count')}
-          />
-        </Section>
-      )}
-
-      {d.dns_engine != null && (
-        <Section title={`🧭 DNS (${d.dns_engine})`}>
-          <Row label={t('net.dns_encryption', 'Šifrování')} value={d.dns_encryption} />
-          <Row label={t('net.dns_servers', 'Servery')} value={d.dns_servers} />
-          <Row label={t('net.dns_queries', 'Dotazy')} value={d.dns_queries} to={history('dns_queries')} />
-          <Row
-            label={t('net.dns_cache', 'Cache hit rate')}
-            value={dnsTotal > 0 ? `${Math.round((Number(d.dns_cache_hits) / dnsTotal) * 100)} %` : null}
-          />
-          <Row
-            label={t('net.dns_latency', 'Latence dotazu')}
-            value={d.dns_latency_ms != null ? `${Math.round(d.dns_latency_ms)} ms` : null}
-          />
-        </Section>
-      )}
-
-      {(d.fw_accepted != null || d.conntrack_pct != null) && (
-        <Section title={`🛡 ${t('net.fw_title', 'Firewall & Conntrack')}`}>
-          <Row label={t('net.fw_accepted', 'Přijato paketů')} value={d.fw_accepted} to={history('fw_accepted')} />
-          <Row label={t('net.fw_dropped', 'Zahozeno')} value={d.fw_dropped} to={history('fw_dropped')} />
-          <Row label={t('net.fw_rejected', 'Odmítnuto')} value={d.fw_rejected} to={history('fw_rejected')} />
-          <Row
-            label="Conntrack"
-            value={
-              d.conntrack_pct != null
-                ? `${d.conntrack_pct} %${d.conntrack_count != null ? ` (${d.conntrack_count})` : ''}`
-                : null
-            }
-          />
-        </Section>
-      )}
-
-      {wg.length > 0 && (
-        <Section title={`🔒 WireGuard (${wg.length})`}>
-          {wg.map((p, i) => (
-            <div key={i} className="py-1.5 border-b border-border/40 last:border-0 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-mono">{p.public_key ?? p.interface}</span>
-                <span className="text-muted-foreground">
-                  {fmtAgo(p.latest_handshake)
-                    ? `${t('net.handshake', 'handshake před')} ${fmtAgo(p.latest_handshake)}`
-                    : t('net.no_handshake', 'bez handshake')}
-                </span>
-              </div>
-              {(p.rx_bytes != null || p.tx_bytes != null) && (
-                <p className="text-muted-foreground mt-0.5">
-                  ↓ {fmtBytes(p.rx_bytes) ?? '—'} · ↑ {fmtBytes(p.tx_bytes) ?? '—'}
-                  {p.endpoint ? ` · ${p.endpoint}` : ''}
-                </p>
-              )}
-            </div>
-          ))}
-        </Section>
-      )}
-
-      {ifaces.length > 0 && (
-        <Section title={`🔌 ${t('net.ifaces_title', 'Rozhraní')} (${ifaces.length})`}>
-          {ifaces.map((it, i) => (
-            <div
-              key={i}
-              className="py-1 border-b border-border/40 last:border-0 text-xs flex items-center justify-between gap-2"
-            >
-              <span className="font-mono font-medium">{it.name ?? it.iface}</span>
-              <span className="text-muted-foreground font-mono">
-                {it.up != null && <span className={it.up ? 'text-up' : 'text-down'}>{it.up ? '●' : '○'} </span>}
-                {fmtBytes(it.rx_bytes) != null ? `↓${fmtBytes(it.rx_bytes)}` : ''}{' '}
-                {fmtBytes(it.tx_bytes) != null ? `↑${fmtBytes(it.tx_bytes)}` : ''}
-                {/* The agent reports rx_errors and tx_errors; the renderer used to
-                    read `errors`, which nobody sends, so interface errors were
-                    collected every minute and never shown. */}
-                {(Number(it.rx_errors) || 0) + (Number(it.tx_errors) || 0) + (Number(it.errors) || 0) > 0
-                  ? ` · ⚠ ${(Number(it.rx_errors) || 0) + (Number(it.tx_errors) || 0) + (Number(it.errors) || 0)} err`
-                  : ''}
-              </span>
-            </div>
-          ))}
-        </Section>
-      )}
-
-      {(d.lte_device != null || d.wan_l3_device != null || d.lte_up != null) && (
-        <LinkTrafficSection monitorId={monitorId} />
-      )}
-
-      {/* The daily rows behind those totals - kept for a long time, summed by
-          the only reader, and never drawn. */}
-      <InterfaceTrafficDaily monitorId={monitorId} />
-
-      {(d.sqm_enabled != null || d.lte_rsrp != null || d.lte_up != null) && (
-        <Section title={`⚙️ ${t('net.link_title', 'SQM & LTE')}`}>
-          {d.sqm_enabled != null && (
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {(d.wan_proto != null || d.wan_up != null || d.wan_internet != null) && (
+          <Section title={`🌐 ${t('net.wan_title', 'WAN připojení')}`}>
             <Row
-              label="SQM"
+              label={t('common.status', 'Stav')}
               value={
-                d.sqm_enabled
-                  ? `${t('common.online', 'Online')}${d.sqm_download_kbps ? ` · ↓${Math.round(d.sqm_download_kbps / 1000)} Mb/s` : ''}${d.sqm_upload_kbps ? ` ↑${Math.round(d.sqm_upload_kbps / 1000)} Mb/s` : ''}`
-                  : t('net.sqm_off', 'Vypnuto')
+                wan.ok === null
+                  ? null
+                  : wan.reason === 'no_internet'
+                    ? t('rsvc.wan_no_internet', 'Nahoře, ale bez internetu')
+                    : wan.ok
+                      ? t('common.online', 'Online')
+                      : t('common.offline', 'Offline')
               }
             />
-          )}
-          <Row label={t('net.sqm_dropped', 'SQM zahozeno')} value={d.sqm_dropped} />
-          <Row label="SQM ECN" value={d.sqm_ecn != null ? (d.sqm_ecn ? 'ECN' : 'noECN') : null} />
-          {/* The connection is detectable even without ModemManager (ubus
+            <Row label={t('net.proto', 'Protokol')} value={d.wan_proto} />
+            <Row label="IPv4" value={d.wan_ipv4} />
+            <Row label="IPv6" value={d.wan_ipv6} />
+            <Row label={t('net.gateway', 'Brána')} value={d.wan_gateway} />
+            <Row label="DNS" value={d.wan_dns} />
+            <Row label={t('net.wan_uptime', 'WAN uptime')} value={fmtDur(d.wan_uptime)} to={history('wan_uptime')} />
+            {/* Until 0.1.7 this was 0 whenever the router could not count
+                them, which read as a perfectly stable line (G24). */}
+            <Row label={t('net.reconnects', 'Reconnecty (od startu)')} value={d.wan_reconnect_count} dash />
+            <Row label={t('net.last_reconnect', 'Poslední reconnect')} value={fmtAgo(d.wan_last_reconnect)} />
+            {d.mwan3_active_gw != null && <Row label="mwan3" value={String(d.mwan3_active_gw)} />}
+          </Section>
+        )}
+
+        {(d.lan_subnet != null || d.dhcp_leases_count != null) && (
+          <Section title={`🏠 ${t('net.lan_title', 'LAN & DHCP')}`}>
+            <Row label={t('net.subnet', 'Subnet')} value={d.lan_subnet} />
+            <Row
+              label={t('net.dhcp_leases', 'Aktivní DHCP lease')}
+              value={d.dhcp_leases_count}
+              to={history('dhcp_leases_count')}
+            />
+            <Row
+              label={t('net.dhcp_reservations', 'Rezervace')}
+              value={d.dhcp_reservations_count}
+              to={history('dhcp_reservations_count')}
+            />
+          </Section>
+        )}
+
+        {/* The section used to hang on `dns_engine`, which the agent always
+            filled with "Dnsmasq" whether it knew or not (G24). With the claim
+            gone the section has to survive an unknown engine - and a resolver
+            that answers nothing is exactly when it must be on the page. */}
+        {(d.dns_engine != null || d.dns_resolver_ok != null || d.dns_queries != null || d.dns_latency_ms != null) && (
+          <Section title="🧭 DNS">
+            <Row label={t('net.dns_engine', 'Resolver')} value={d.dns_engine} dash />
+            {'dns_resolver_ok' in d && (
+              <Row label={t('net.dns_resolver', 'DNS resolver')} value={dnsResolverText(d, t)} dash />
+            )}
+            <Row label={t('net.dns_encryption', 'Šifrování')} value={d.dns_encryption} dash />
+            <Row label={t('net.dns_servers', 'Servery')} value={d.dns_servers} dash />
+            <Row label={t('net.dns_queries', 'Dotazy')} value={d.dns_queries} to={history('dns_queries')} />
+            <Row
+              label={t('net.dns_cache', 'Cache hit rate')}
+              value={dnsTotal > 0 ? `${Math.round((Number(d.dns_cache_hits) / dnsTotal) * 100)} %` : null}
+            />
+            <Row
+              label={t('net.dns_latency', 'Latence dotazu')}
+              value={d.dns_latency_ms != null ? `${Math.round(d.dns_latency_ms)} ms` : null}
+            />
+          </Section>
+        )}
+
+        {(d.fw_accepted != null || d.conntrack_pct != null) && (
+          <Section title={`🛡 ${t('net.fw_title', 'Firewall & Conntrack')}`}>
+            <Row label={t('net.fw_accepted', 'Přijato paketů')} value={d.fw_accepted} to={history('fw_accepted')} />
+            <Row label={t('net.fw_dropped', 'Zahozeno')} value={d.fw_dropped} to={history('fw_dropped')} />
+            <Row label={t('net.fw_rejected', 'Odmítnuto')} value={d.fw_rejected} to={history('fw_rejected')} />
+            <Row
+              label="Conntrack"
+              value={
+                d.conntrack_pct != null
+                  ? `${d.conntrack_pct} %${d.conntrack_count != null ? ` (${d.conntrack_count})` : ''}`
+                  : null
+              }
+            />
+          </Section>
+        )}
+
+        {wg.length > 0 && (
+          <Section title={`🔒 WireGuard (${wg.length})`}>
+            {wg.map((p, i) => (
+              <div key={i} className="py-1.5 border-b border-border/40 last:border-0 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono">{p.public_key ?? p.interface}</span>
+                  <span className="text-muted-foreground">
+                    {fmtAgo(p.latest_handshake)
+                      ? `${t('net.handshake', 'handshake před')} ${fmtAgo(p.latest_handshake)}`
+                      : t('net.no_handshake', 'bez handshake')}
+                  </span>
+                </div>
+                {(p.rx_bytes != null || p.tx_bytes != null) && (
+                  <p className="text-muted-foreground mt-0.5">
+                    ↓ {fmtBytes(p.rx_bytes) ?? '—'} · ↑ {fmtBytes(p.tx_bytes) ?? '—'}
+                    {p.endpoint ? ` · ${p.endpoint}` : ''}
+                  </p>
+                )}
+              </div>
+            ))}
+          </Section>
+        )}
+
+        {ifaces.length > 0 && (
+          <Section title={`🔌 ${t('net.ifaces_title', 'Rozhraní')} (${ifaces.length})`}>
+            {ifaces.map((it, i) => (
+              <div
+                key={i}
+                className="py-1 border-b border-border/40 last:border-0 text-xs flex items-center justify-between gap-2"
+              >
+                <span className="font-mono font-medium">{it.name ?? it.iface}</span>
+                <span className="text-muted-foreground font-mono">
+                  {it.up != null && <span className={it.up ? 'text-up' : 'text-down'}>{it.up ? '●' : '○'} </span>}
+                  {fmtBytes(it.rx_bytes) != null ? `↓${fmtBytes(it.rx_bytes)}` : ''}{' '}
+                  {fmtBytes(it.tx_bytes) != null ? `↑${fmtBytes(it.tx_bytes)}` : ''}
+                  {/* The agent reports rx_errors and tx_errors; the renderer used to
+                    read `errors`, which nobody sends, so interface errors were
+                    collected every minute and never shown. */}
+                  {(Number(it.rx_errors) || 0) + (Number(it.tx_errors) || 0) + (Number(it.errors) || 0) > 0
+                    ? ` · ⚠ ${(Number(it.rx_errors) || 0) + (Number(it.tx_errors) || 0) + (Number(it.errors) || 0)} err`
+                    : ''}
+                </span>
+              </div>
+            ))}
+          </Section>
+        )}
+
+        {(d.lte_device != null || d.wan_l3_device != null || d.lte_up != null) && (
+          <LinkTrafficSection monitorId={monitorId} />
+        )}
+
+        {/* The daily rows behind those totals - kept for a long time, summed by
+          the only reader, and never drawn. */}
+        <InterfaceTrafficDaily monitorId={monitorId} />
+
+        {(d.sqm_enabled != null || d.lte_rsrp != null || d.lte_up != null) && (
+          <Section title={`⚙️ ${t('net.link_title', 'SQM & LTE')}`}>
+            {d.sqm_enabled != null && (
+              <Row
+                label="SQM"
+                value={
+                  d.sqm_enabled
+                    ? `${t('common.online', 'Online')}${d.sqm_download_kbps ? ` · ↓${Math.round(d.sqm_download_kbps / 1000)} Mb/s` : ''}${d.sqm_upload_kbps ? ` ↑${Math.round(d.sqm_upload_kbps / 1000)} Mb/s` : ''}`
+                    : t('net.sqm_off', 'Vypnuto')
+                }
+              />
+            )}
+            <Row label={t('net.sqm_dropped', 'SQM zahozeno')} value={d.sqm_dropped} />
+            <Row label="SQM ECN" value={d.sqm_ecn != null ? (d.sqm_ecn ? 'ECN' : 'noECN') : null} />
+            {/* The connection is detectable even without ModemManager (ubus
               the signal does not - hence reported separately, and missing metrics
               stay empty instead of an excuse. */}
-          {/* Interface state and backup verdict are two different things: the
+            {/* Interface state and backup verdict are two different things: the
               interface is up with no SIM in a HiLink modem. Both are shown. */}
-          <Row
-            label={t('net.lte_state', 'LTE spojení')}
-            value={
-              d.lte_up == null
-                ? null
-                : d.lte_up
-                  ? `${t('net.lte_iface_up', 'Rozhraní běží')}${d.lte_device ? ` · ${d.lte_device}` : ''}${
-                      d.lte_uptime != null ? ` · ${formatUptime(d.lte_uptime)}` : ''
-                    }`
-                  : t('common.offline', 'Offline')
-            }
-          />
-          <Row
-            label={t('net.lte_backup', 'LTE záloha')}
-            value={(() => {
-              const b = lteBackupState(d);
-              if (b.ok === true) return t('net.lte_backup_ok', 'Funkční - modem přihlášen, SIM připravená');
-              if (b.ok === false)
-                return {
-                  no_sim: t('net.lte_backup_no_sim', 'NEFUNKČNÍ - SIM karta nenalezena'),
-                  pin_required: t('net.lte_backup_pin', 'NEFUNKČNÍ - SIM čeká na PIN'),
-                  puk_required: t('net.lte_backup_puk', 'NEFUNKČNÍ - SIM zablokovaná (PUK)'),
-                  invalid: t('net.lte_backup_invalid', 'NEFUNKČNÍ - SIM neplatná'),
-                  not_connected: t('net.lte_backup_not_connected', 'NEFUNKČNÍ - modem není přihlášen do sítě'),
-                  interface_down: t('net.lte_backup_iface_down', 'NEFUNKČNÍ - rozhraní vypnuté'),
-                }[b.reason ?? 'not_connected'];
-              return d.lte_up === true ? t('net.lte_backup_unverified', 'Neověřeno - modem nehlásí stav SIM') : null;
-            })()}
-          />
-          <Row label={t('net.lte_ip', 'LTE adresa')} value={d.lte_ipv4} />
-          {/* Three raw numbers used to sit here with no scale and no verdict.
+            <Row
+              label={t('net.lte_state', 'LTE spojení')}
+              value={
+                d.lte_up == null
+                  ? null
+                  : d.lte_up
+                    ? `${t('net.lte_iface_up', 'Rozhraní běží')}${d.lte_device ? ` · ${d.lte_device}` : ''}${
+                        d.lte_uptime != null ? ` · ${formatUptime(d.lte_uptime)}` : ''
+                      }`
+                    : t('common.offline', 'Offline')
+              }
+            />
+            <Row
+              label={t('net.lte_backup', 'LTE záloha')}
+              value={(() => {
+                const b = lteBackupState(d);
+                if (b.ok === true) return t('net.lte_backup_ok', 'Funkční - modem přihlášen, SIM připravená');
+                if (b.ok === false)
+                  return {
+                    no_sim: t('net.lte_backup_no_sim', 'NEFUNKČNÍ - SIM karta nenalezena'),
+                    pin_required: t('net.lte_backup_pin', 'NEFUNKČNÍ - SIM čeká na PIN'),
+                    puk_required: t('net.lte_backup_puk', 'NEFUNKČNÍ - SIM zablokovaná (PUK)'),
+                    invalid: t('net.lte_backup_invalid', 'NEFUNKČNÍ - SIM neplatná'),
+                    not_connected: t('net.lte_backup_not_connected', 'NEFUNKČNÍ - modem není přihlášen do sítě'),
+                    interface_down: t('net.lte_backup_iface_down', 'NEFUNKČNÍ - rozhraní vypnuté'),
+                  }[b.reason ?? 'not_connected'];
+                return d.lte_up === true ? t('net.lte_backup_unverified', 'Neověřeno - modem nehlásí stav SIM') : null;
+              })()}
+            />
+            <Row label={t('net.lte_ip', 'LTE adresa')} value={d.lte_ipv4} />
+            {/* Three raw numbers used to sit here with no scale and no verdict.
               Read together they also say WHICH problem it is: a weak signal is
               distance and antenna, good signal with bad quality is
               interference, which moving the antenna does not fix. */}
-          {lteOverall && (
-            <Row
-              label={t('net.lte_quality', 'Kvalita LTE signálu')}
-              value={
-                <span className="inline-flex items-center gap-2">
-                  <Badge variant={signalTone(lteOverall.level)} className="text-3xs">
-                    {
+            {lteOverall && (
+              <Row
+                label={t('net.lte_quality', 'Kvalita LTE signálu')}
+                value={
+                  <span className="inline-flex items-center gap-2">
+                    <Badge variant={signalTone(lteOverall.level)} className="text-3xs">
                       {
-                        excellent: t('signal.level_excellent', 'výborný'),
-                        good: t('signal.level_good', 'dobrý'),
-                        fair: t('signal.level_fair', 'slabší'),
-                        poor: t('signal.level_poor', 'špatný'),
-                      }[lteOverall.level]
-                    }
-                  </Badge>
-                </span>
+                        {
+                          excellent: t('signal.level_excellent', 'výborný'),
+                          good: t('signal.level_good', 'dobrý'),
+                          fair: t('signal.level_fair', 'slabší'),
+                          poor: t('signal.level_poor', 'špatný'),
+                        }[lteOverall.level]
+                      }
+                    </Badge>
+                  </span>
+                }
+              />
+            )}
+            <SignalReading
+              label="LTE RSRP"
+              value={d.lte_rsrp != null ? `${d.lte_rsrp} dBm` : null}
+              rating={rateRsrp(d.lte_rsrp)}
+              helpKey="rsrp"
+            />
+            <SignalReading
+              label="LTE RSRQ"
+              value={d.lte_rsrq != null ? `${d.lte_rsrq} dB` : null}
+              rating={rateRsrq(d.lte_rsrq)}
+              helpKey="rsrq"
+            />
+            <SignalReading
+              label="LTE SINR"
+              value={d.lte_sinr != null ? `${d.lte_sinr} dB` : null}
+              rating={rateSinr(d.lte_sinr)}
+              helpKey="sinr"
+            />
+            <Row
+              label={t('net.lte_band', 'Pásmo / operátor')}
+              value={[d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null}
+            />
+            {d.lte_up === true && d.lte_rsrp == null && (
+              <p className="text-muted-foreground col-span-full text-2xs leading-relaxed">
+                {t(
+                  'net.lte_no_signal_data',
+                  'Spojení běží, ale sílu signálu router nehlásí — modem není dostupný přes ModemManager. Doinstalováním balíčku umodem-manager (nebo uqmi) začne agent hlásit i RSRP, RSRQ a pásmo.'
+                )}
+              </p>
+            )}
+            <Row
+              label="Tailscale"
+              value={
+                d.tailscale_up != null
+                  ? `${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}${d.tailscale_peers != null ? ` · ${d.tailscale_peers} peerů` : ''}`
+                  : null
               }
             />
-          )}
-          <SignalReading
-            label="LTE RSRP"
-            value={d.lte_rsrp != null ? `${d.lte_rsrp} dBm` : null}
-            rating={rateRsrp(d.lte_rsrp)}
-            helpKey="rsrp"
-          />
-          <SignalReading
-            label="LTE RSRQ"
-            value={d.lte_rsrq != null ? `${d.lte_rsrq} dB` : null}
-            rating={rateRsrq(d.lte_rsrq)}
-            helpKey="rsrq"
-          />
-          <SignalReading
-            label="LTE SINR"
-            value={d.lte_sinr != null ? `${d.lte_sinr} dB` : null}
-            rating={rateSinr(d.lte_sinr)}
-            helpKey="sinr"
-          />
-          <Row
-            label={t('net.lte_band', 'Pásmo / operátor')}
-            value={[d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null}
-          />
-          {d.lte_up === true && d.lte_rsrp == null && (
-            <p className="text-muted-foreground col-span-full text-2xs leading-relaxed">
-              {t(
-                'net.lte_no_signal_data',
-                'Spojení běží, ale sílu signálu router nehlásí — modem není dostupný přes ModemManager. Doinstalováním balíčku umodem-manager (nebo uqmi) začne agent hlásit i RSRP, RSRQ a pásmo.'
-              )}
-            </p>
-          )}
-          <Row
-            label="Tailscale"
-            value={
-              d.tailscale_up != null
-                ? `${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}${d.tailscale_peers != null ? ` · ${d.tailscale_peers} peerů` : ''}`
-                : null
-            }
-          />
-          <Row
-            label="ZeroTier"
-            value={d.zerotier_networks != null && d.zerotier_networks > 0 ? `${d.zerotier_networks}× síť` : null}
-          />
-          <Row
-            label="UPS"
-            value={
-              d.ups_status != null
-                ? `${d.ups_status}${d.ups_battery_pct != null ? ` · baterie ${d.ups_battery_pct} %` : ''}`
-                : null
-            }
-          />
-        </Section>
-      )}
+            <Row
+              label="ZeroTier"
+              value={d.zerotier_networks != null && d.zerotier_networks > 0 ? `${d.zerotier_networks}× síť` : null}
+            />
+            <Row
+              label="UPS"
+              value={
+                d.ups_status != null
+                  ? `${d.ups_status}${d.ups_battery_pct != null ? ` · baterie ${d.ups_battery_pct} %` : ''}`
+                  : null
+              }
+            />
+          </Section>
+        )}
 
-      {(d.installed_packages != null || d.log_errors_24h != null || restarts.length > 0 || d.entropy != null) && (
-        <Section title={`🧰 ${t('net.sys_title', 'Systém & Služby')}`}>
-          <Row
-            label={t('net.packages', 'Balíčky (instalované / aktualizace)')}
-            value={
-              d.installed_packages != null
-                ? `${d.installed_packages}${d.upgradable_packages != null ? ` / ${d.upgradable_packages}` : ''}`
-                : null
-            }
-          />
-          <Row
-            label={t('net.log_errors', 'Chyby v logu (24 h)')}
-            value={d.log_errors_24h}
-            to={history('log_errors_24h')}
-          />
-          <Row
-            label={t('net.log_warnings', 'Varování v logu (24 h)')}
-            value={d.log_warnings_24h}
-            to={history('log_warnings_24h')}
-          />
-          <Row label={t('net.entropy', 'Entropie')} value={d.entropy} to={history('entropy')} />
-          <Row
-            label={t('net.oom_kills', 'OOM kills (od startu)')}
-            value={d.oom_kills != null && d.oom_kills > 0 ? d.oom_kills : d.oom_kills === 0 ? '0' : null}
-          />
-          <Row
-            label={t('net.boot_time', 'Systém běží od')}
-            value={d.boot_time != null && d.boot_time > 0 ? new Date(d.boot_time * 1000).toLocaleString('cs-CZ') : null}
-          />
-          <Row
-            label="OpenVPN"
-            value={d.openvpn_tunnels != null && d.openvpn_tunnels > 0 ? `${d.openvpn_tunnels}× tunel` : null}
-          />
-          <Row
-            label={t('net.usb_devices', 'USB zařízení')}
-            value={d.usb_devices != null && d.usb_devices > 0 ? d.usb_devices : null}
-          />
-          <Row label="Btrfs errors" value={d.btrfs_errors != null && d.btrfs_errors > 0 ? d.btrfs_errors : null} />
-          {restarts.length > 0 && (
-            <div className="pt-1.5 text-xs">
-              <p className="text-muted-foreground mb-1">
-                {t('net.service_restarts', 'Restarty služeb (od startu agenta):')}
-              </p>
-              {restarts.map(([name, cnt]) => (
-                <p key={name} className="font-mono">
-                  {name}: {String(cnt)}×
+        {(d.installed_packages != null ||
+          d.log_errors_24h != null ||
+          restarts.length > 0 ||
+          d.entropy != null ||
+          d.agent_run_ms != null) && (
+          <Section title={`🧰 ${t('net.sys_title', 'Systém & Služby')}`}>
+            <Row
+              label={t('net.packages', 'Balíčky (instalované / aktualizace)')}
+              value={
+                d.installed_packages != null
+                  ? `${d.installed_packages}${d.upgradable_packages != null ? ` / ${d.upgradable_packages}` : ''}`
+                  : null
+              }
+            />
+            <Row
+              label={t('net.log_errors', 'Chyby v logu (24 h)')}
+              value={d.log_errors_24h}
+              to={history('log_errors_24h')}
+            />
+            <Row
+              label={t('net.log_warnings', 'Varování v logu (24 h)')}
+              value={d.log_warnings_24h}
+              to={history('log_warnings_24h')}
+            />
+            <Row label={t('net.entropy', 'Entropie')} value={d.entropy} to={history('entropy')} />
+            {/* G42: what the minute run itself costs. Until 0.1.7 a run that
+                found the previous one still going, or failed to send, left no
+                trace at all - the minute was simply missing from the charts. */}
+            <Row
+              label={t('net.agent_run', 'Doba běhu agenta')}
+              value={agentRunText(d, t)}
+              to={history('agent_run_ms')}
+            />
+            <Row label={t('net.agent_skipped', 'Vynechané běhy')} value={agentSkippedText(d, t)} />
+            <Row label={t('net.agent_reports', 'Hlášení za 24 h')} value={reportsReceivedText(d, t)} />
+            <Row
+              label={t('net.oom_kills', 'OOM kills (od startu)')}
+              value={d.oom_kills != null && d.oom_kills > 0 ? d.oom_kills : d.oom_kills === 0 ? '0' : null}
+            />
+            <Row
+              label={t('net.boot_time', 'Systém běží od')}
+              value={
+                d.boot_time != null && d.boot_time > 0 ? new Date(d.boot_time * 1000).toLocaleString('cs-CZ') : null
+              }
+            />
+            <Row
+              label="OpenVPN"
+              value={d.openvpn_tunnels != null && d.openvpn_tunnels > 0 ? `${d.openvpn_tunnels}× tunel` : null}
+            />
+            <Row
+              label={t('net.usb_devices', 'USB zařízení')}
+              value={d.usb_devices != null && d.usb_devices > 0 ? d.usb_devices : null}
+            />
+            <Row label="Btrfs errors" value={d.btrfs_errors != null && d.btrfs_errors > 0 ? d.btrfs_errors : null} />
+            {restarts.length > 0 && (
+              <div className="pt-1.5 text-xs">
+                <p className="text-muted-foreground mb-1">
+                  {t('net.service_restarts', 'Restarty služeb (od startu agenta):')}
                 </p>
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
+                {restarts.map(([name, cnt]) => (
+                  <p key={name} className="font-mono">
+                    {name}: {String(cnt)}×
+                  </p>
+                ))}
+              </div>
+            )}
+          </Section>
+        )}
+      </div>
     </div>
   );
 }
@@ -2495,87 +2573,14 @@ function mapInsightsTimeline(
   timeline: ServerInsights['timeline'],
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
 ): TimelineEvent[] {
-  const titleByType: Record<string, string> = {
-    status_changed_down: t('asset.tl_down', 'Výpadek služby'),
-    status_changed_up: t('asset.tl_up', 'Obnovení provozu'),
-    status_changed_warning: t('asset.tl_warning', 'Zhoršená odezva'),
-    status_changed_maintenance: t('asset.tl_maintenance', 'Plánovaná údržba'),
-    remote_action: t('asset.tl_remote_action', 'Vzdálená akce'),
-    ssl_warning: t('asset.tl_ssl_warning', 'SSL varování'),
-    threshold_exceeded: t('asset.tl_threshold', 'Překročen limit'),
-    lte_backup_lost: t('asset.tl_lte_lost', 'LTE záloha nefunkční'),
-    lte_backup_restored: t('asset.tl_lte_restored', 'LTE záloha obnovena'),
-    wan_lost: t('asset.tl_wan_lost', 'Výpadek primárního připojení (WAN)'),
-    wan_restored: t('asset.tl_wan_restored', 'Primární připojení (WAN) obnoveno'),
-    monitor_added: t('asset.tl_monitor_added', 'Monitor přidán'),
-    monitor_updated: t('asset.tl_monitor_updated', 'Monitor upraven'),
-    monitor_archived: t('asset.tl_monitor_archived', 'Monitor archivován'),
-    monitor_restored: t('asset.tl_monitor_restored', 'Monitor obnoven z archivu'),
-    // The server logs twenty-three types; the map knew thirteen, so the rest
-    // arrived with a raw key as their title and a neutral severity - an agent
-    // that stopped reporting looked like a routine note.
-    agent_connected: t('asset.tl_agent_connected', 'Agent se ozval'),
-    agent_disconnected: t('asset.tl_agent_disconnected', 'Agent přestal hlásit'),
-    dns_lost: t('asset.tl_dns_lost', 'DNS nefunguje'),
-    dns_recovered: t('asset.tl_dns_recovered', 'DNS obnoveno'),
-    latency_degraded: t('asset.tl_latency_degraded', 'Trvale zhoršená odezva'),
-    latency_recovered: t('asset.tl_latency_recovered', 'Odezva zpět v normálu'),
-    maintenance_ended: t('asset.tl_maintenance_ended', 'Údržba skončila'),
-    service_discovered: t('asset.tl_service_discovered', 'Objevena běžící služba'),
-    service_lost: t('asset.tl_service_lost', 'Služba zmizela'),
-    process_restarted: t('asset.tl_process_restarted', 'Proces byl restartován'),
-    cert_renewed: t('asset.tl_cert_renewed', 'Certifikát obnoven'),
-    scheme_upgraded: t('asset.tl_scheme_upgraded', 'Přechod na HTTPS'),
-    wan_reconnected: t('asset.tl_wan_reconnected', 'WAN se znovu připojila'),
-    config_change: t('asset.tl_config_change', 'Změna konfigurace cíle'),
-  };
-  const severityFor = (type: string): TimelineEvent['severity'] => {
-    // A dead primary link is an outage of the line itself, even while the
-    // router still answers through the LTE backup.
-    if (['status_changed_down', 'wan_lost', 'agent_disconnected', 'dns_lost', 'service_lost'].includes(type)) {
-      return 'down';
-    }
-    if (
-      [
-        'status_changed_warning',
-        'ssl_warning',
-        'threshold_exceeded',
-        'lte_backup_lost',
-        'latency_degraded',
-        'config_change',
-        'process_restarted',
-      ].includes(type)
-    ) {
-      return 'warning';
-    }
-    if (
-      [
-        'status_changed_up',
-        'lte_backup_restored',
-        'wan_restored',
-        'wan_reconnected',
-        'agent_connected',
-        'dns_recovered',
-        'latency_recovered',
-        'cert_renewed',
-        'maintenance_ended',
-      ].includes(type)
-    ) {
-      return 'up';
-    }
-    // Everything genuinely informational: a monitor added or edited, a service
-    // discovered, a scheme upgrade, a remote action.
-    return 'info';
-  };
-
   return timeline.map((e, i) => ({
     // Negative synthetic ids so they can never collide with real
     // monitor_logs ids used by the per-check timeline below.
     id: -(i + 1),
-    title: titleByType[e.type] ?? e.type,
+    title: timelineTitle(e.type, t),
     detail: e.description ?? '',
     at: e.relative ? `${e.relative} · ${e.at}` : e.at,
-    severity: severityFor(e.type),
+    severity: timelineSeverity(e.type),
   }));
 }
 

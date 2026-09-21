@@ -39,6 +39,46 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
   const agent = t('help.source_agent', 'Agent na zařízení, při každém hlášení (obvykle jednou za minutu).');
   const server = t('help.source_server', 'Kontrola ze serveru monitoringu, při každém běhu cronu.');
 
+  // One explainer per measurement, shared by its per-band keys: the registry
+  // has a column per band, but what is measured and how does not change with it.
+  const wifiNoise: MetricHelp = {
+    what: t('help.wifi_noise_band_what', 'Šum na kanálu rádií v tomto pásmu; při více rádiích ten nejhorší.'),
+    how: t('help.wifi_noise_band_how', 'iwinfo <rádio> info (Noise), hodnota z ovladače karty.'),
+    source: agent,
+  };
+  const wifiBusy: MetricHelp = {
+    what: t('help.wifi_busy_band_what', 'Jak velkou část času byl kanál obsazený (kýmkoli, i sousedy).'),
+    how: t('help.wifi_busy_band_how', 'iw dev <rádio> survey dump: přírůstek busy/active času mezi dvěma hlášeními.'),
+    source: agent,
+    caveat: t('help.wifi_busy_band_caveat', 'Některé ovladače čas nepočítají; pak zůstane prázdné.'),
+  };
+  const wifiBusyOther: MetricHelp = {
+    what: t(
+      'help.wifi_busy_other_what',
+      'Část vytížení, která nepatří vaší síti: obsazený čas bez vlastního vysílání a příjmu.'
+    ),
+    how: t(
+      'help.wifi_busy_other_how',
+      'iw dev <rádio> survey dump: přírůstek času busy bez vlastního vysílání (transmit) a bez příjmu vlastní sítě (BSS receive), dělený přírůstkem času active mezi dvěma hlášeními.'
+    ),
+    source: agent,
+  };
+  // Shared by the step metrics: each point is the growth of a counter between
+  // two reports, which has the same two blind spots whatever is being counted.
+  const stepCaveat = t(
+    'help.step_caveat',
+    'Po restartu routeru nebo změně portu se přírůstek nepočítá, takže jde o dolní odhad. V delším období graf ukazuje součet, ne průměr.'
+  );
+
+  const wanRateHow = t(
+    'help.wan_rate_how',
+    'Přírůstek počítadel rx_bytes a tx_bytes rozhraní WAN mezi dvěma hlášeními, dělený časem podle uptime routeru.'
+  );
+  const wanRateCaveat = t(
+    'help.wan_rate_caveat',
+    'Minutový průměr, krátká špička se v něm rozpustí. Po startu routeru nebo změně rozhraní WAN zůstane prázdné.'
+  );
+
   const catalogue: Record<string, MetricHelp> = {
     response_time: {
       what: t('help.response_time_what', 'Doba, za kterou služba odpověděla na kontrolu.'),
@@ -321,7 +361,7 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       source: agent,
       caveat: t(
         'help.wifi_6e_capable_caveat',
-        'Ne každé zařízení seznam posílá. Kolik jich ho poslalo, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory.'
+        'Ne každé zařízení Wi-Fi 6 seznam posílá. U kolika klientů je podpora známá, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory. Starší zařízení (Wi-Fi 4 a 5) se od agenta 0.1.7 počítají jako známá bez podpory.'
       ),
     },
     wifi_6e_capable_5g: {
@@ -333,14 +373,14 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       source: agent,
       caveat: t(
         'help.wifi_6e_capable_caveat',
-        'Ne každé zařízení seznam posílá. Kolik jich ho poslalo, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory.'
+        'Ne každé zařízení Wi-Fi 6 seznam posílá. U kolika klientů je podpora známá, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory. Starší zařízení (Wi-Fi 4 a 5) se od agenta 0.1.7 počítají jako známá bez podpory.'
       ),
     },
     wifi_6e_known_24g: {
       what: t('help.wifi_6e_known_what', 'U kolika klientů v tomto pásmu je podpora pásem známá.'),
       how: t(
         'help.wifi_6e_known_how',
-        'Klienti, kteří při připojení poslali seznam provozních tříd. Router potřebuje balíček hostapd-utils a agenta 0.1.6 nebo novějšího.'
+        'Klienti, u kterých router ví, zda 6 GHz umí: zařízení Wi-Fi 6 a 7, která při připojení poslala seznam provozních tříd, a na síti Wi-Fi 6 také starší zařízení (Wi-Fi 4 a 5), která 6 GHz umět nemohou. Takto se počítá od agenta 0.1.7; starší agent počítal jen zařízení, která seznam poslala, takže řada může při aktualizaci agenta skokově vzrůst. Úplný údaj potřebuje balíček hostapd-utils.'
       ),
       source: agent,
     },
@@ -348,7 +388,7 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       what: t('help.wifi_6e_known_what', 'U kolika klientů v tomto pásmu je podpora pásem známá.'),
       how: t(
         'help.wifi_6e_known_how',
-        'Klienti, kteří při připojení poslali seznam provozních tříd. Router potřebuje balíček hostapd-utils a agenta 0.1.6 nebo novějšího.'
+        'Klienti, u kterých router ví, zda 6 GHz umí: zařízení Wi-Fi 6 a 7, která při připojení poslala seznam provozních tříd, a na síti Wi-Fi 6 také starší zařízení (Wi-Fi 4 a 5), která 6 GHz umět nemohou. Takto se počítá od agenta 0.1.7; starší agent počítal jen zařízení, která seznam poslala, takže řada může při aktualizaci agenta skokově vzrůst. Úplný údaj potřebuje balíček hostapd-utils.'
       ),
       source: agent,
     },
@@ -400,6 +440,174 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       what: t('help.tailscale_peers_what', 'Počet protějšků v síti Tailscale.'),
       how: t('help.tailscale_peers_how', 'Z tailscale status.'),
       source: agent,
+    },
+    wifi_noise_24g: wifiNoise,
+    wifi_noise_5g: wifiNoise,
+    wifi_noise_6g: wifiNoise,
+    wifi_busy_24g: wifiBusy,
+    wifi_busy_5g: wifiBusy,
+    wifi_busy_6g: wifiBusy,
+    wifi_busy_other_24g: wifiBusyOther,
+    wifi_busy_other_5g: wifiBusyOther,
+    wifi_busy_other_6g: wifiBusyOther,
+    wifi_weak_clients: {
+      what: t('help.wifi_weak_clients_what', 'Kolik klientů slyší router na −75 dBm a slaběji.'),
+      how: t(
+        'help.wifi_weak_clients_how',
+        'iwinfo <rádio> assoclist: klienti se signálem −75 dBm a slabším, sečtení přes všechna rádia. Klient s neznámým signálem se nepočítá.'
+      ),
+      source: agent,
+    },
+    wifi_wpa2_clients: {
+      what: t('help.wifi_wpa2_clients_what', 'Kolik klientů se přihlásilo přes WPA2 (PSK).'),
+      how: t(
+        'help.wifi_wpa2_clients_how',
+        'hostapd_cli all_sta: klienti, jejichž AKMSuiteSelector je WPA2 (PSK). Potřebuje balíček hostapd-utils; bez něj zůstane prázdné.'
+      ),
+      source: agent,
+    },
+    // Derived by the server, but from the agent's report and at its cadence -
+    // "a check from the monitoring server, every cron run" would be false.
+    wifi_6e_unserved: {
+      what: t(
+        'help.wifi_6e_unserved_what',
+        'Podíl času, kdy byli připojeni aspoň dva klienti s podporou 6 GHz a router na 6 GHz nevysílal.'
+      ),
+      how: t(
+        'help.wifi_6e_unserved_how',
+        'Server ji počítá z každého hlášení: žádné rádio nevysílá na 6 GHz a aspoň dva připojení klienti uvádějí provozní třídu 6 GHz (131–137). Když to nejde rozhodnout, protože část klientů podporu neuvedla, hlášení se nezapočítá.'
+      ),
+      source: agent,
+    },
+    wifi_5g_capable_24g: {
+      what: t('help.wifi_5g_capable_what', 'Kolik klientů na 2.4 GHz uvádí podporu 5 GHz.'),
+      how: t(
+        'help.wifi_5g_capable_how',
+        'hostapd_cli all_sta: klienti na 2.4 GHz, kteří v seznamu provozních tříd (supp_op_classes) uvádějí třídu pásma 5 GHz (115–130). Potřebuje balíček hostapd-utils.'
+      ),
+      source: agent,
+    },
+    // The all-core `cpu` of the same report hides a single saturated core: on
+    // a two-core router forwarding can pin one core while the average says 50 %.
+    cpu_core_max: {
+      what: t('help.cpu_core_max_what', 'Vytížení nejvytíženějšího jádra procesoru za poslední minutu.'),
+      how: t(
+        'help.cpu_core_max_how',
+        'Z /proc/stat, řádky cpu0, cpu1, …: rozdíl čítačů mezi dvěma hlášeními pro každé jádro zvlášť; ukazuje se to nejvytíženější.'
+      ),
+      source: agent,
+      caveat: t(
+        'help.cpu_core_max_caveat',
+        'Průměr přes všechna jádra může být poloviční, protože přeposílání paketů často zatíží jediné jádro. Po startu routeru zůstane prázdné.'
+      ),
+    },
+    cpu_core_max_softirq: {
+      what: t(
+        'help.cpu_core_max_softirq_what',
+        'Jakou část času strávilo nejvytíženější jádro zpracováním paketů a přerušení (irq + softirq).'
+      ),
+      how: t(
+        'help.cpu_core_max_softirq_how',
+        'Z /proc/stat: přírůstek sloupců irq a softirq téhož jádra, dělený přírůstkem všech sloupců.'
+      ),
+      source: agent,
+      caveat: t(
+        'help.cpu_core_max_softirq_caveat',
+        'Část síťové práce (vlákna NAPI, ovladač Wi-Fi) jádro účtuje jako system, ne softirq, takže skutečný podíl sítě může být vyšší.'
+      ),
+    },
+    wan_rx_mbps: {
+      what: t('help.wan_rx_mbps_what', 'Rychlost stahování na rozhraní WAN, průměr za minutu.'),
+      how: wanRateHow,
+      source: agent,
+      caveat: wanRateCaveat,
+    },
+    wan_tx_mbps: {
+      what: t('help.wan_tx_mbps_what', 'Rychlost odesílání na rozhraní WAN, průměr za minutu.'),
+      how: wanRateHow,
+      source: agent,
+      caveat: wanRateCaveat,
+    },
+    wan_errors: {
+      what: t('help.wan_errors_what', 'Nové chyby příjmu a odesílání na fyzickém portu WAN od předchozího hlášení.'),
+      how: t(
+        'help.wan_errors_how',
+        'Počítadla rx_errors a tx_errors portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.'
+      ),
+      source: agent,
+      caveat: `${t('help.wan_errors_caveat', 'Rostoucí počet ukazuje na kabel, modul SFP nebo port, ne na zahlcení.')} ${stepCaveat}`,
+    },
+    // rx_dropped also counts frames nobody handles (LLDP, foreign VLAN tags),
+    // so the explainer must not let it read as "the router is overloaded".
+    wan_drops: {
+      what: t(
+        'help.wan_drops_what',
+        'Nově zahozené pakety na portu WAN od předchozího hlášení (včetně neznámých protokolů).'
+      ),
+      how: t(
+        'help.wan_drops_how',
+        'Počítadla rx_dropped a tx_dropped portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.'
+      ),
+      source: agent,
+      caveat: `${t('help.wan_drops_caveat', 'Většinou jde o neškodné rámce, které router nezpracovává (LLDP, cizí VLAN, PPPoE discovery), ne o přetížení. Žádné doporučení z této hodnoty nevychází.')} ${stepCaveat}`,
+    },
+    wan_ring_drops: {
+      what: t(
+        'help.wan_ring_drops_what',
+        'Pakety, které port WAN nestihl převzít z přijímací fronty (rx_discard + rx_overrun).'
+      ),
+      how: t(
+        'help.wan_ring_drops_how',
+        'ethtool -S <port WAN>, čte se jednou za hodinu; server ukládá přírůstek mezi dvěma čteními. Potřebuje balíček ethtool; bez něj zůstane prázdné.'
+      ),
+      source: agent,
+      caveat: stepCaveat,
+    },
+    // Only `drop` with a full table is a refused connection; on its own the
+    // column also grows on harmless races, so the text must not say "refused".
+    conntrack_drops: {
+      what: t('help.conntrack_drops_what', 'Pakety nově zahozené sledováním spojení od předchozího hlášení.'),
+      how: t(
+        'help.conntrack_drops_how',
+        'Sloupec drop v /proc/net/stat/nf_conntrack, součet přes jádra; server ukládá přírůstek mezi dvěma hlášeními.'
+      ),
+      source: agent,
+      caveat: `${t('help.conntrack_drops_caveat', 'O odmítnutá spojení jde jen tehdy, když je zároveň plná tabulka spojení (Conntrack tabulka na 90 % a výš).')} ${stepCaveat}`,
+    },
+    wan_link_flaps: {
+      what: t('help.wan_link_flaps_what', 'Kolikrát od předchozího hlášení spadla linka na fyzickém portu WAN.'),
+      how: t(
+        'help.wan_link_flaps_how',
+        'Počítadlo carrier_down_count portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.'
+      ),
+      source: agent,
+      caveat: stepCaveat,
+    },
+    agent_run_ms: {
+      what: t(
+        'help.agent_run_ms_what',
+        'Jak dlouho agentovi na routeru trvalo jedno měření, od startu po sestavení hlášení.'
+      ),
+      how: t('help.agent_run_ms_how', 'Rozdíl /proc/uptime na začátku běhu a při sestavení hlášení, v milisekundách.'),
+      source: agent,
+      caveat: t(
+        'help.agent_run_ms_caveat',
+        'Odeslání hlášení se do hodnoty nepočítá. Běh, který se blíží 60 sekundám, začne vynechávat minuty.'
+      ),
+    },
+    // Computed by the server, but from the agent's report and at its cadence,
+    // like wifi_6e_unserved above.
+    clock_skew_s: {
+      what: t('help.clock_skew_s_what', 'O kolik sekund se hodiny routeru liší od hodin serveru, bez ohledu na směr.'),
+      how: t(
+        'help.clock_skew_s_how',
+        'Server odečte čas, který agent uvedl v hlášení (date +%s), od času, kdy hlášení přijal, a uloží absolutní hodnotu.'
+      ),
+      source: agent,
+      caveat: t(
+        'help.clock_skew_s_caveat',
+        'Zhruba 2 sekundy připadají na přenos hlášení. Při rozdílu nad 30 sekund router odmítá vzdálené akce.'
+      ),
     },
   };
 

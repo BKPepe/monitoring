@@ -115,6 +115,362 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Jádro tohoto zařízení neúčtuje zápisy po procesech (chybí CONFIG_TASK_IO_ACCOUNTING), takže tenhle údaj nejde získat. Celkový zápis na disky výše měřit lze.',
     en: 'This device kernel does not account writes per process (CONFIG_TASK_IO_ACCOUNTING is missing), so this cannot be measured. Total disk writes above still work.',
   },
+  // Disk health (agent 0.1.7). The `storage.smart_*` sentences are picked by lib/disk-health.ts.
+  'storage.smart_ok': { cs: 'SMART v pořádku', en: 'SMART OK' },
+  'storage.smart_failing': {
+    cs: 'SMART hlásí selhání – zálohujte a vyměňte disk',
+    en: 'SMART reports a failure – back up and replace the disk',
+  },
+  'storage.smart_standby': {
+    cs: 'Disk spí – SMART se nečetl, aby se neroztočil. Hodnoty jsou z {ago}.',
+    en: 'Disk asleep – SMART was not read so it stays asleep. Values are from {ago}.',
+  },
+  'storage.smart_standby_never': {
+    cs: 'Disk spí a ještě nebyl změřen.',
+    en: 'The disk is asleep and has not been measured yet.',
+  },
+  'storage.smart_idle_skipped': {
+    cs: 'Čeká na aktivitu disku – spící disk agent nebudí.',
+    en: 'Waiting for disk activity – the agent never wakes a sleeping disk.',
+  },
+  'storage.smart_pending': {
+    cs: 'SMART se čte poprvé, hodnoty přibudou během několika minut.',
+    en: 'Reading SMART for the first time; values arrive within minutes.',
+  },
+  'storage.smart_not_installed': {
+    cs: 'Zdraví disku router nezjistí – chybí smartctl. Nainstalujte: {cmd}',
+    en: 'The router cannot read disk health – smartctl is missing. Install: {cmd}',
+  },
+  'storage.smart_unsupported': {
+    cs: 'Disk nebo jeho USB rámeček SMART nepředává.',
+    en: 'The disk or its USB enclosure does not pass SMART through.',
+  },
+  'storage.smart_error': {
+    cs: 'Čtení SMART selhalo; hodnoty jsou z posledního úspěšného čtení ({ago}).',
+    en: 'Reading SMART failed; values are from the last successful reading ({ago}).',
+  },
+  'storage.smart_error_never': {
+    cs: 'Čtení SMART selhalo a žádné hodnoty zatím nejsou.',
+    en: 'Reading SMART failed and there are no values yet.',
+  },
+  'storage.smart_stuck': {
+    cs: 'smartctl neodpovídá déle než 15 minut.',
+    en: 'smartctl has not answered for over 15 minutes.',
+  },
+  'storage.smart_not_applicable': { cs: 'Tento typ úložiště SMART nemá.', en: 'This kind of storage has no SMART.' },
+  'storage.not_measured': { cs: 'neměřeno', en: 'not measured' },
+  'storage.wear_estimate': { cs: 'odhad z atributu výrobce', en: 'estimate from a vendor attribute' },
+  'storage.wear_unknown': { cs: 'neznámé', en: 'unknown' },
+  'storage.wear_unknown_nodb': {
+    cs: 'neznámé – chybí smartmontools-drivedb',
+    en: 'unknown – smartmontools-drivedb is missing',
+  },
+  'storage.install_package': { cs: 'balíček {pkg}', en: 'the {pkg} package' },
+  // Disk health (agent 0.1.7): the block per physical disk on the Storage card.
+  'storage.disks': { cs: 'Disky', en: 'Disks' },
+  'storage.transport_sata': { cs: 'SATA/mSATA', en: 'SATA/mSATA' },
+  'storage.transport_usb': { cs: 'USB', en: 'USB' },
+  'storage.transport_nvme': { cs: 'NVMe', en: 'NVMe' },
+  'storage.transport_emmc': { cs: 'eMMC', en: 'eMMC' },
+  'storage.transport_sd': { cs: 'SD karta', en: 'SD card' },
+  'storage.transport_virtio': { cs: 'Virtuální', en: 'Virtual' },
+  'storage.transport_other': { cs: 'Jiné', en: 'Other' },
+  'storage.kind_ssd': { cs: 'SSD', en: 'SSD' },
+  'storage.kind_hdd': { cs: 'HDD (rotační)', en: 'HDD (spinning)' },
+  'storage.smart_age': { cs: 'SMART změřen {ago}', en: 'SMART read {ago}' },
+  'storage.temperature': { cs: 'Teplota', en: 'Temperature' },
+  'storage.temp_limit': { cs: 'limit {limit} °C', en: 'limit {limit} °C' },
+  'storage.power_on': { cs: 'Doba provozu', en: 'Power-on time' },
+  'storage.power_on_value': { cs: '{days} dní ({hours} h)', en: '{days} days ({hours} h)' },
+  'storage.power_cycles': { cs: 'Zapnutí', en: 'Power cycles' },
+  'storage.unclean_of': { cs: 'z toho {n} nečistých vypnutí', en: '{n} of them ended uncleanly' },
+  'storage.wear': { cs: 'Opotřebení', en: 'Wear' },
+  'storage.emmc_wear': {
+    cs: 'Opotřebení eMMC: {a} (typ A), {b} (typ B) · rezervní bloky {eol}',
+    en: 'eMMC wear: {a} (type A), {b} (type B) · reserve blocks {eol}',
+  },
+  'storage.emmc_pre_eol_1': { cs: 'v normě', en: 'normal' },
+  'storage.emmc_pre_eol_2': { cs: 'z 80 % spotřebované', en: '80 % consumed' },
+  'storage.emmc_pre_eol_3': { cs: 'téměř vyčerpané', en: 'nearly exhausted' },
+  'storage.reallocated': { cs: 'Přemapované sektory', en: 'Reallocated sectors' },
+  'storage.pending': { cs: 'Čekající sektory', en: 'Pending sectors' },
+  'storage.uncorrectable': { cs: 'Neopravitelné sektory', en: 'Uncorrectable sectors' },
+  'storage.reported_uncorrect': { cs: 'Neopravitelné chyby čtení', en: 'Uncorrectable read errors' },
+  'storage.crc_errors': { cs: 'Chyby přenosu (CRC)', en: 'Transfer (CRC) errors' },
+  'storage.runtime_bad_blocks': { cs: 'Vadné bloky za běhu', en: 'Runtime bad blocks' },
+  'storage.error_log': { cs: 'Záznamy v protokolu chyb', en: 'Error-log entries' },
+  'storage.media_errors': { cs: 'Chyby média', en: 'Media errors' },
+  'storage.spare': { cs: 'Rezervní kapacita', en: 'Spare capacity' },
+  'storage.unchanged_days': { cs: 'beze změny {n} dní', en: 'unchanged for {n} days' },
+  'storage.written_total': { cs: 'Zapsáno za život disku', en: "Written over the disk's life" },
+  'storage.written_source_attr': { cs: '(hlásí disk, atribut 241)', en: '(reported by the disk, attribute 241)' },
+  'storage.written_per_day': {
+    cs: 'průměrně {x} denně za celou dobu provozu',
+    en: '{x} a day on average over its whole life',
+  },
+  'storage.written_7d': { cs: 'za 7 dní průměrně {x} denně', en: '7-day average {x} a day' },
+  'storage.written_now': { cs: 'Zápis teď', en: 'Writing now' },
+  'storage.partial_day': { cs: 'den neúplný (restart routeru)', en: 'incomplete day (router restart)' },
+  'storage.selftest_never': {
+    cs: 'Vlastní test disku se nikdy nespustil',
+    en: 'The disk has never run a self-test',
+  },
+  'storage.selftest_count': { cs: 'Vlastní testy v protokolu: {n}', en: 'Self-tests in the log: {n}' },
+  'storage.partition_unmounted': { cs: 'nepřipojený', en: 'not mounted' },
+  'storage.history': { cs: 'Historie disku', en: 'Disk history' },
+  'storage.history_error': {
+    cs: 'Historii disku se nepodařilo načíst.',
+    en: 'Could not load the disk history.',
+  },
+  'storage.no_disks': { cs: 'Router nehlásí žádný disk.', en: 'The router reports no disk.' },
+  'storage.disks_unreadable': {
+    cs: 'Seznam disků se na routeru nepodařilo přečíst.',
+    en: 'The disk list could not be read on the router.',
+  },
+  'storage.agent_outdated': {
+    cs: 'Zdraví disků posílá agent 0.1.7 a novější.',
+    en: 'Disk health needs agent 0.1.7 or newer.',
+  },
+  // Router recommendations. The rule texts themselves come from the server (rr_*), never from here.
+  'rec.title': { cs: 'Doporučení pro router', en: 'Router recommendations' },
+  'rec.subtitle': {
+    cs: 'Z měření za posledních 7 dní ({from}–{to}) a z aktuálního nastavení. Stejný seznam chodí v pondělním e-mailu.',
+    en: 'From the last 7 days of measurements ({from}–{to}) and the current configuration. The same list goes out in the Monday e-mail.',
+  },
+  'rec.severity_critical': { cs: 'Kritické', en: 'Critical' },
+  'rec.severity_warning': { cs: 'Varování', en: 'Warning' },
+  'rec.severity_info': { cs: 'Pro informaci', en: 'For information' },
+  'rec.measured': { cs: 'Zjištěno', en: 'Found' },
+  'rec.action': { cs: 'Co udělat', en: 'What to do' },
+  'rec.copy': { cs: 'Kopírovat', en: 'Copy' },
+  'rec.copied': { cs: 'Zkopírováno', en: 'Copied' },
+  'rec.open_since': { cs: 'trvá od {date}', en: 'open since {date}' },
+  'rec.info_group': { cs: 'Pro informaci ({n})', en: 'For information ({n})' },
+  'rec.muted_group': { cs: 'Ztlumená ({n})', en: 'Muted ({n})' },
+  'rec.mute': { cs: 'Ztlumit', en: 'Mute' },
+  'rec.unmute': { cs: 'Zrušit ztlumení', en: 'Unmute' },
+  'rec.mute_title': { cs: 'Ztlumit doporučení pro tento router', en: 'Mute this recommendation for this router' },
+  'rec.mute_desc': {
+    cs: 'Ztlumené doporučení zůstane vidět tady v seznamu „Ztlumená“, ale přestane chodit v pondělním e-mailu. Pokud se jeho závažnost zvýší, ozve se znovu.',
+    en: 'A muted recommendation stays visible here under "Muted" but leaves the Monday e-mail. If its severity rises, it comes back.',
+  },
+  'rec.mute_reason': {
+    cs: 'Důvod (nepovinný), např. „6 GHz obsluhuje jiný přístupový bod“',
+    en: 'Reason (optional), e.g. "another access point serves 6 GHz"',
+  },
+  'rec.muted_by': { cs: 'Ztlumil(a) {who} dne {date}', en: 'Muted by {who} on {date}' },
+  'rec.muted_reason': { cs: 'Důvod: {reason}', en: 'Reason: {reason}' },
+  'rec.muted_inactive': {
+    cs: 'Toto doporučení teď neplatí; ztlumení zůstává uložené.',
+    en: 'This recommendation does not apply right now; the mute is kept.',
+  },
+  'rec.was_muted': { cs: 'Bylo ztlumené, ale závažnost vzrostla.', en: 'It was muted, but its severity rose.' },
+  'rec.mute_failed': { cs: 'Ztlumení se nepodařilo uložit.', en: 'The mute could not be saved.' },
+  'rec.all': { cs: 'Všechna doporučení', en: 'All recommendations' },
+  'rec.none': {
+    cs: 'Žádné doporučení – vše, co se měří, je v pořádku.',
+    en: 'No recommendations – everything measured looks fine.',
+  },
+  'rec.few_days': {
+    cs: 'Týdenní doporučení potřebují aspoň 4 dny měření – zatím jsou {days}.',
+    en: 'Weekly recommendations need at least 4 days of measurements – {days} so far.',
+  },
+  'rec.agent_old': {
+    cs: 'Doporučení posílá agent 0.1.7 a novější (router hlásí {version}).',
+    en: 'Recommendations need agent 0.1.7 or newer (the router reports {version}).',
+  },
+  'rec.silent': {
+    cs: 'Router se delší dobu neozval, doporučení nejde spočítat.',
+    en: 'The router has not reported for a while; recommendations cannot be computed.',
+  },
+  'rec.error': { cs: 'Doporučení se nepodařilo načíst.', en: 'Could not load recommendations.' },
+  // WAN: kde končí rychlost linky (klasifikuje server, appka jen vykresluje).
+  'wan.class_none': { cs: 'Bez omezení', en: 'No bottleneck' },
+  'wan.class_link_limited': { cs: 'Strop linky', en: 'Link ceiling' },
+  'wan.class_cpu_limited': { cs: 'Omezuje router (CPU)', en: 'Limited by the router (CPU)' },
+  'wan.class_line_limited': { cs: 'Omezuje linka poskytovatele', en: 'Limited by the provider line' },
+  'wan.class_inconclusive': { cs: 'Neprůkazné', en: 'Inconclusive' },
+  'wan.verdict.plan_reached': {
+    cs: 'Měření dosáhlo tarifu – router ani linka nebrzdí.',
+    en: 'The measurement reached the plan – neither the router nor the line held it back.',
+  },
+  'wan.verdict.sqm_shaper': {
+    cs: 'Rychlost odpovídá nastavenému omezení SQM. Je to záměr, ne závada.',
+    en: 'The speed matches the configured SQM limit. That is intended, not a fault.',
+  },
+  'wan.verdict.wan_port': {
+    cs: 'Rychlost odpovídá stropu WAN portu routeru.',
+    en: 'The speed matches the ceiling of the router WAN port.',
+  },
+  'wan.verdict.packet_path': {
+    cs: 'Jedno jádro vyčerpalo zpracování paketů v jádře systému. Platí pro provoz, který na routeru končí; přeposílání pro zařízení za routerem se tímhle testem neměří.',
+    en: 'One core ran out of headroom in the kernel network path. This is about traffic terminating on the router; forwarding for the devices behind it is not measured by this test.',
+  },
+  'wan.verdict.test_client': {
+    cs: 'Jedno jádro vyčerpal samotný měřicí klient – výsledek je dolní mez linky.',
+    en: 'One core was used up by the measuring client itself – the result is a lower bound of the line.',
+  },
+  'wan.verdict.mixed': {
+    cs: 'Jedno jádro bylo vytížené, ale nelze rozdělit, kolik patří klientovi a kolik zpracování paketů.',
+    en: 'One core was saturated, but the split between the client and packet processing cannot be told.',
+  },
+  'wan.verdict.below_plan': {
+    cs: 'Měření zůstalo pod tarifem a router měl přitom volno.',
+    en: 'The measurement stayed below the plan while the router had headroom.',
+  },
+  'wan.verdict.upstream_loss': {
+    cs: 'Odesílání se opakovaně ztrácelo (retransmise nad 1 %).',
+    en: 'Upload segments were retransmitted repeatedly (over 1 %).',
+  },
+  'wan.verdict.no_result': {
+    cs: 'Zatím není žádný použitelný výsledek měření.',
+    en: 'There is no usable measurement yet.',
+  },
+  'wan.verdict.path_unverified': {
+    cs: 'Nešlo ověřit, že měření šlo přes WAN – verdikt by mohl mluvit o jiné trase.',
+    en: 'It could not be verified that the test used the WAN path – a verdict could describe a different route.',
+  },
+  'wan.verdict.background_traffic': {
+    cs: 'Po lince šel během měření i jiný provoz, naměřená rychlost je proto jen dolní mez.',
+    en: 'Other traffic shared the line during the test, so the measured speed is only a lower bound.',
+  },
+  'wan.verdict.minute_run_overlap': {
+    cs: 'Během měření běžel i minutový sběr dat, čísla by byla zkreslená.',
+    en: 'The minute data collection ran during the test, so the figures would be skewed.',
+  },
+  'wan.verdict.cpu_not_measured': {
+    cs: 'K tomuto měření nejsou data o vytížení jader – router proto nelze ani obvinit, ani očistit.',
+    en: 'This measurement has no per-core CPU data, so the router can be neither blamed nor cleared.',
+  },
+  'wan.verdict.cpu_borderline': {
+    cs: 'Jádro bylo vytížené na hranici (80–90 %), na jednoznačný verdikt to nestačí.',
+    en: 'A core was borderline busy (80–90 %), which is not enough for a clear verdict.',
+  },
+  'wan.verdict.no_plan_known': {
+    cs: 'Není zadaná rychlost tarifu, takže se nic neoznačí za pomalé.',
+    en: 'No plan speed is set, so nothing is called slow.',
+  },
+  'wan.verdict.not_enough_tests': {
+    cs: 'Na verdikt jsou potřeba aspoň dvě platná měření.',
+    en: 'A verdict needs at least two valid measurements.',
+  },
+  'wan.verdict.tests_disagree': {
+    cs: 'Poslední měření se neshodují, společný verdikt z nich nevyjde.',
+    en: 'The last measurements disagree; they give no common verdict.',
+  },
+  'wan.verdict.single_server': {
+    cs: 'Měřilo se jen proti jednomu serveru – na obvinění linky to nestačí.',
+    en: 'Only one test server was used – not enough to blame the line.',
+  },
+  'wan.verdict.server_limited': {
+    cs: 'Servery se liší o víc než 15 %, limit je nejspíš na straně serveru.',
+    en: 'The servers differ by more than 15 %, so the limit is most likely on the server side.',
+  },
+  'wan.verdict.server_capacity_unproven': {
+    cs: 'Žádný z použitých serverů zatím rychlost tarifu nedodal, nemůže ji tedy vyvrátit.',
+    en: 'None of the servers used has ever delivered the plan speed, so none of them can disprove it.',
+  },
+  'wan.verdict.port_plateau': {
+    cs: 'Výsledky sedí na stropu gigabitového portu – něco v cestě má pomalejší port než tarif.',
+    en: 'The results sit at a Gigabit port ceiling – something in the path has a port slower than the plan.',
+  },
+  'wan.confidence_high': { cs: 'vysoká jistota', en: 'high confidence' },
+  'wan.confidence_medium': { cs: 'střední jistota', en: 'medium confidence' },
+  'wan.confidence_low': { cs: 'nízká jistota', en: 'low confidence' },
+  'wan.bar_measured': { cs: 'Naměřeno', en: 'Measured' },
+  'wan.bar_plan': { cs: 'Tarif', en: 'Plan' },
+  'wan.bar_port': { cs: 'Port', en: 'Port' },
+  'wan.bar_sqm': { cs: 'SQM', en: 'SQM' },
+  'wan.title': { cs: 'Kde končí rychlost linky', en: 'Where the line speed ends' },
+  'wan.subtitle': {
+    cs: 'Vyhodnocuje monitoring z měření rychlosti a z vytížení routeru. Měří se z routeru po drátě.',
+    en: 'Evaluated here from speed measurements and the router load. Measured from the router, over the wire.',
+  },
+  'wan.loading': { cs: 'Načítám vyhodnocení linky…', en: 'Loading the line verdict…' },
+  'wan.error': { cs: 'Vyhodnocení linky se nepodařilo načíst.', en: 'Could not load the line verdict.' },
+  'wan.generated_at': { cs: 'Vyhodnoceno: {at}', en: 'Evaluated: {at}' },
+  'wan.download': { cs: 'Stahování', en: 'Download' },
+  'wan.upload': { cs: 'Odesílání', en: 'Upload' },
+  'wan.no_tests': { cs: 'Zatím žádné měření.', en: 'No measurement yet.' },
+  'wan.based_on': { cs: 'Z {count} měření, poslední {at}.', en: 'From {count} measurement(s), last {at}.' },
+  'wan.flag_no_cpu_headroom': {
+    cs: 'Tarif sice vyšel, ale router při tom neměl volné jádro – rezervu nemá.',
+    en: 'The plan was reached, but no core had headroom left – there is nothing to spare.',
+  },
+  'wan.flag_negotiated_below_port_max': {
+    cs: 'Port se domluvil na nižší rychlosti, než umí.',
+    en: 'The port negotiated a lower rate than it supports.',
+  },
+  'wan.not_measured': { cs: 'neměřeno', en: 'not measured' },
+  'wan.yes': { cs: 'ano', en: 'yes' },
+  'wan.no': { cs: 'ne', en: 'no' },
+  'wan.on': { cs: 'zapnuto', en: 'on' },
+  'wan.off': { cs: 'vypnuto', en: 'off' },
+  'wan.unknown': { cs: 'neznámo', en: 'unknown' },
+  'wan.ev_squeeze': { cs: 'Přetížení fronty paketů', en: 'Packet queue overruns' },
+  'wan.ev_drops': { cs: 'Zahozené pakety při zpracování', en: 'Packets dropped while processing' },
+  'wan.ev_ring_drops': { cs: 'Přetečení fronty síťovky', en: 'Network card ring overflows' },
+  'wan.ev_retrans': { cs: 'Opakované odeslání', en: 'Retransmitted segments' },
+  'wan.ev_background': { cs: 'Provoz na pozadí', en: 'Background traffic' },
+  'wan.ev_path': { cs: 'Ověřeno, že měření šlo přes WAN', en: 'Verified that the test used the WAN path' },
+  'wan.cpu_title': { cs: 'Vytížení jader během měření', en: 'Per-core load during the test' },
+  'wan.cpu_turris': {
+    cs: 'Vytížení jader se neměřilo: tenhle test spustil Turris OS, ne monitoring.',
+    en: 'Per-core load was not sampled: this test was started by Turris OS, not by the monitoring.',
+  },
+  'wan.cpu_missing': {
+    cs: 'K poslednímu měření nejsou data o jádrech.',
+    en: 'The last test carries no per-core data.',
+  },
+  'wan.cpu_core': { cs: 'jádro {n}', en: 'core {n}' },
+  'wan.cpu_user': { cs: 'Měřicí klient', en: 'Measuring client' },
+  'wan.cpu_system': { cs: 'Systém', en: 'System' },
+  'wan.cpu_packets': { cs: 'Zpracování paketů', en: 'Packet processing' },
+  'wan.avg_hidden': {
+    cs: 'Průměr přes všechna jádra ({avg} %) by tohle schoval.',
+    en: 'The all-core average ({avg} %) would have hidden this.',
+  },
+  'wan.path_title': { cs: 'Cesta paketů', en: 'Packet path' },
+  'wan.path_port': { cs: 'WAN port', en: 'WAN port' },
+  'wan.path_steering': { cs: 'Rozdělování paketů mezi jádra', en: 'Packet steering across cores' },
+  'wan.path_offload': { cs: 'Flow offloading', en: 'Flow offloading' },
+  'wan.path_flowtable': { cs: 'flowtable', en: 'flowtable' },
+  'wan.path_sqm': { cs: 'SQM (tvarování provozu)', en: 'SQM (traffic shaping)' },
+  'wan.limits_title': { cs: 'Co z toho nepoznáte', en: 'What this does not tell you' },
+  'wan.limits_wifi': {
+    cs: 'Rychlost Wi-Fi ani rychlost jednotlivých zařízení – měří se z routeru po drátě.',
+    en: 'Wi-Fi speed or the speed of individual devices – this is measured from the router, over the wire.',
+  },
+  'wan.limits_forwarding': {
+    cs: 'Kolik router přepošle zařízením za sebou. Test končí na routeru, přeposílání se při něm neměří.',
+    en: 'How much the router forwards to the devices behind it. The test terminates on the router.',
+  },
+  'wan.limits_lan': {
+    cs: 'Drátové porty do LAN zvládnou nejvýš {mbit} Mb/s.',
+    en: 'The wired LAN ports do at most {mbit} Mb/s.',
+  },
+  'wan.plan_title': { cs: 'Rychlost tarifu', en: 'Plan speed' },
+  'wan.plan_hint': {
+    cs: 'Bez tarifu se nic neoznačí za pomalé – verdikt pak jen popisuje, co se naměřilo.',
+    en: 'Without a plan nothing is called slow – the verdict then only describes what was measured.',
+  },
+  'wan.plan_down': { cs: 'Stahování (Mb/s)', en: 'Download (Mb/s)' },
+  'wan.plan_up': { cs: 'Odesílání (Mb/s)', en: 'Upload (Mb/s)' },
+  'wan.plan_ok_pct': {
+    cs: 'Podíl tarifu, který se počítá jako dodaný (%)',
+    en: 'Share of the plan that counts as delivered (%)',
+  },
+  'wan.plan_ok_hint': {
+    cs: 'Prázdné = 85 %. Zadejte „běžně dostupnou rychlost“ ze smlouvy, jinak bude poskytovatel v mezích smlouvy označen za pomalého.',
+    en: 'Empty = 85 %. Use the "commonly available speed" from your contract, otherwise a provider within its contract is called slow.',
+  },
+  'wan.plan_save': { cs: 'Uložit tarif', en: 'Save the plan' },
+  'wan.plan_saved': { cs: 'Uloženo.', en: 'Saved.' },
+  'wan.plan_invalid': {
+    cs: 'Rychlost zadejte celým číslem 1–100000, podíl 30–100, nebo nechte pole prázdné.',
+    en: 'Enter a whole number 1–100000 for a rate, 30–100 for the share, or leave the field empty.',
+  },
+  'wan.plan_save_failed': { cs: 'Tarif se nepodařilo uložit.', en: 'Could not save the plan.' },
   // Rychlost linky z routeru (librespeed-cli).
   'speed.title': { cs: 'Rychlost linky', en: 'Line speed' },
   'speed.subtitle': {
@@ -134,6 +490,13 @@ const translations: Record<string, { cs: string; en: string }> = {
   'speed.range': { cs: 'Rozsah ↓', en: 'Range ↓' },
   'speed.samples': { cs: 'Měření', en: 'Samples' },
   'speed.last': { cs: 'Poslední měření: {at}', en: 'Last measurement: {at}' },
+  'speed.error': { cs: 'Naměřené rychlosti se nepodařilo načíst.', en: 'Could not load the measured speeds.' },
+  'speed.recent_title': { cs: 'Posledních {n} měření', en: 'Last {n} measurements' },
+  'speed.when': { cs: 'Kdy', en: 'When' },
+  'speed.server': { cs: 'Server', en: 'Server' },
+  'speed.started_by': { cs: 'Spustil', en: 'Started by' },
+  'speed.started_turris': { cs: 'Turris OS', en: 'Turris OS' },
+  'speed.started_agent': { cs: 'Monitoring', en: 'Monitoring' },
   'common.refresh': { cs: 'Obnovit', en: 'Refresh' },
   'common.open_details': { cs: 'Otevřít detail', en: 'Open Details' },
   'common.close': { cs: 'Zavřít', en: 'Close' },
@@ -218,6 +581,16 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Pro období delší než 30 dní je jeden bod denní průměr - syrová měření se po 30 dnech mažou.',
     en: 'For periods longer than 30 days each point is a daily average - raw measurements are purged after 30 days.',
   },
+  // A step metric (X8) already stores the increment, so its buckets are sums.
+  'metric.step_note': {
+    cs: 'Jde o přírůstek od minulého hlášení - bod v grafu je součet za dané období, ne průměrná hodnota.',
+    en: 'This is the increase since the previous report - a point in the chart is the sum over its period, not an average.',
+  },
+  'metric.daily_note_step': {
+    cs: 'Pro období delší než 30 dní je jeden bod denní součet - syrová měření se po 30 dnech mažou.',
+    en: 'For periods longer than 30 days each point is a daily sum - raw measurements are purged after 30 days.',
+  },
+  'metric.average_step': { cs: 'Průměrný přírůstek', en: 'Average increase' },
   'metric.events_note': {
     cs: 'Svislé čáry v grafu jsou události ({count} za 30 dní); najetím se zobrazí která.',
     en: 'Vertical lines in the chart are events ({count} in 30 days); hover to see which.',
@@ -1974,6 +2347,25 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_scheme_upgraded': { cs: 'Přechod na HTTPS', en: 'Upgraded to HTTPS' },
   'asset.tl_wan_reconnected': { cs: 'WAN se znovu připojila', en: 'WAN reconnected' },
   'asset.tl_config_change': { cs: 'Změna konfigurace cíle', en: 'The target configuration changed' },
+  // Router statuses of release 0.1.7 (contract X14). The last three are
+  // timeline-only: no notification, no digest line, so this is the only
+  // place the user ever reads them.
+  'asset.tl_wan_link_degraded': { cs: 'Port WAN spojen pomaleji', en: 'WAN port linked at a lower rate' },
+  'asset.tl_wan_link_restored': { cs: 'Port WAN opět na plné rychlosti', en: 'WAN port is back at full rate' },
+  'asset.tl_conntrack_full': { cs: 'Tabulka spojení byla plná', en: 'The connection table was full' },
+  'asset.tl_conntrack_normal': { cs: 'Tabulka spojení má zase místo', en: 'The connection table has room again' },
+  'asset.tl_firewall_disabled': { cs: 'Pravidla firewallu nebyla načtená', en: 'Firewall rules were not loaded' },
+  'asset.tl_firewall_restored': { cs: 'Pravidla firewallu jsou opět načtená', en: 'Firewall rules are loaded again' },
+  'asset.tl_dns_resolver_failed': {
+    cs: 'DNS resolver routeru neodpovídal',
+    en: 'The router DNS resolver did not answer',
+  },
+  'asset.tl_dns_resolver_restored': {
+    cs: 'DNS resolver routeru opět odpovídá',
+    en: 'The router DNS resolver answers again',
+  },
+  'asset.tl_router_rebooted': { cs: 'Router se restartoval', en: 'The router rebooted' },
+  'asset.tl_oom_kill': { cs: 'Došla paměť, systém ukončil proces', en: 'Out of memory: the system killed a process' },
   'asset.more_metrics_hint': {
     cs: 'Tohle zařízení je hlásí každou minutu a historie se ukládá. Klikněte na kteroukoli pro graf, rozložení hodnot a souvislosti.',
     en: 'This device reports them every minute and the history is stored. Open any of them for its chart, distribution and correlations.',
@@ -2142,16 +2534,196 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'The list of operating classes a client sends when it connects (hostapd_cli all_sta); classes 131 to 137 are 6 GHz.',
   },
   'help.wifi_6e_capable_caveat': {
-    cs: 'Ne každé zařízení seznam posílá. Kolik jich ho poslalo, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory.',
-    en: 'Not every device sends the list. The chart of clients with known band support shows how many did; the rest are unknown, not unsupported.',
+    cs: 'Ne každé zařízení Wi-Fi 6 seznam posílá. U kolika klientů je podpora známá, ukazuje graf se známou podporou pásem; zbytek je neznámý, ne bez podpory. Starší zařízení (Wi-Fi 4 a 5) se od agenta 0.1.7 počítají jako známá bez podpory.',
+    en: 'Not every Wi-Fi 6 device sends the list. The chart of clients with known band support shows for how many it is known; the rest are unknown, not unsupported. From agent 0.1.7 older devices (Wi-Fi 4 and 5) count as known without support.',
   },
   'help.wifi_6e_known_what': {
     cs: 'U kolika klientů v tomto pásmu je podpora pásem známá.',
     en: 'For how many clients in this band band support is known.',
   },
   'help.wifi_6e_known_how': {
-    cs: 'Klienti, kteří při připojení poslali seznam provozních tříd. Router potřebuje balíček hostapd-utils a agenta 0.1.6 nebo novějšího.',
-    en: 'Clients that sent their list of operating classes when connecting. The router needs the hostapd-utils package and agent 0.1.6 or newer.',
+    cs: 'Klienti, u kterých router ví, zda 6 GHz umí: zařízení Wi-Fi 6 a 7, která při připojení poslala seznam provozních tříd, a na síti Wi-Fi 6 také starší zařízení (Wi-Fi 4 a 5), která 6 GHz umět nemohou. Takto se počítá od agenta 0.1.7; starší agent počítal jen zařízení, která seznam poslala, takže řada může při aktualizaci agenta skokově vzrůst. Úplný údaj potřebuje balíček hostapd-utils.',
+    en: 'Clients for which the router knows whether they can use 6 GHz: Wi-Fi 6 and 7 devices that sent their list of operating classes when connecting, and on a Wi-Fi 6 network also older devices (Wi-Fi 4 and 5), which cannot support 6 GHz. Counted this way from agent 0.1.7; an older agent counted only the devices that sent the list, so the series may jump when the agent is updated. The full figure needs the hostapd-utils package.',
+  },
+  'help.wifi_noise_band_what': {
+    cs: 'Šum na kanálu rádií v tomto pásmu; při více rádiích ten nejhorší.',
+    en: "Noise on the channel of this band's radios; with several radios, the worst.",
+  },
+  'help.wifi_noise_band_how': {
+    cs: 'iwinfo <rádio> info (Noise), hodnota z ovladače karty.',
+    en: 'iwinfo <radio> info (Noise), as reported by the driver.',
+  },
+  'help.wifi_busy_band_what': {
+    cs: 'Jak velkou část času byl kanál obsazený (kýmkoli, i sousedy).',
+    en: 'Share of time the channel was busy (anyone, neighbours too).',
+  },
+  'help.wifi_busy_band_how': {
+    cs: 'iw dev <rádio> survey dump: přírůstek busy/active času mezi dvěma hlášeními.',
+    en: 'iw dev <radio> survey dump: growth of busy/active time between two reports.',
+  },
+  'help.wifi_busy_band_caveat': {
+    cs: 'Některé ovladače čas nepočítají; pak zůstane prázdné.',
+    en: 'Some drivers do not count the time; then it stays empty.',
+  },
+  'help.wifi_busy_other_what': {
+    cs: 'Část vytížení, která nepatří vaší síti: obsazený čas bez vlastního vysílání a příjmu.',
+    en: "The part of the airtime that is not your network's: busy time minus own transmit and receive.",
+  },
+  'help.wifi_busy_other_how': {
+    cs: 'iw dev <rádio> survey dump: přírůstek času busy bez vlastního vysílání (transmit) a bez příjmu vlastní sítě (BSS receive), dělený přírůstkem času active mezi dvěma hlášeními.',
+    en: 'iw dev <radio> survey dump: growth of the busy time minus own transmit and minus BSS receive, divided by the growth of the active time between two reports.',
+  },
+  'help.wifi_weak_clients_what': {
+    cs: 'Kolik klientů slyší router na −75 dBm a slaběji.',
+    en: 'How many clients the router hears at −75 dBm or weaker.',
+  },
+  'help.wifi_weak_clients_how': {
+    cs: 'iwinfo <rádio> assoclist: klienti se signálem −75 dBm a slabším, sečtení přes všechna rádia. Klient s neznámým signálem se nepočítá.',
+    en: 'iwinfo <radio> assoclist: clients with a signal of −75 dBm or weaker, summed over all radios. A client with an unknown signal is not counted.',
+  },
+  'help.wifi_wpa2_clients_what': {
+    cs: 'Kolik klientů se přihlásilo přes WPA2 (PSK).',
+    en: 'How many clients signed in with WPA2 (PSK).',
+  },
+  'help.wifi_wpa2_clients_how': {
+    cs: 'hostapd_cli all_sta: klienti, jejichž AKMSuiteSelector je WPA2 (PSK). Potřebuje balíček hostapd-utils; bez něj zůstane prázdné.',
+    en: 'hostapd_cli all_sta: clients whose AKMSuiteSelector is WPA2 (PSK). Needs the hostapd-utils package; without it the value stays empty.',
+  },
+  'help.wifi_6e_unserved_what': {
+    cs: 'Podíl času, kdy byli připojeni aspoň dva klienti s podporou 6 GHz a router na 6 GHz nevysílal.',
+    en: 'Share of time with at least two 6 GHz-capable clients connected while the router had no 6 GHz radio.',
+  },
+  'help.wifi_6e_unserved_how': {
+    cs: 'Server ji počítá z každého hlášení: žádné rádio nevysílá na 6 GHz a aspoň dva připojení klienti uvádějí provozní třídu 6 GHz (131–137). Když to nejde rozhodnout, protože část klientů podporu neuvedla, hlášení se nezapočítá.',
+    en: 'The server computes it from every report: no radio is on 6 GHz and at least two connected clients list a 6 GHz operating class (131–137). When that cannot be decided because some clients did not state their support, the report is not counted.',
+  },
+  'help.wifi_5g_capable_what': {
+    cs: 'Kolik klientů na 2.4 GHz uvádí podporu 5 GHz.',
+    en: 'How many 2.4 GHz clients list 5 GHz support.',
+  },
+  'help.wifi_5g_capable_how': {
+    cs: 'hostapd_cli all_sta: klienti na 2.4 GHz, kteří v seznamu provozních tříd (supp_op_classes) uvádějí třídu pásma 5 GHz (115–130). Potřebuje balíček hostapd-utils.',
+    en: 'hostapd_cli all_sta: 2.4 GHz clients whose list of operating classes (supp_op_classes) contains a 5 GHz class (115–130). Needs the hostapd-utils package.',
+  },
+  'help.step_caveat': {
+    cs: 'Po restartu routeru nebo změně portu se přírůstek nepočítá, takže jde o dolní odhad. V delším období graf ukazuje součet, ne průměr.',
+    en: 'After a router restart or a change of the port the growth is not counted, so this is a lower bound. Over a longer period the chart shows the sum, not the average.',
+  },
+  'help.cpu_core_max_what': {
+    cs: 'Vytížení nejvytíženějšího jádra procesoru za poslední minutu.',
+    en: 'Load of the busiest CPU core over the last minute.',
+  },
+  'help.cpu_core_max_how': {
+    cs: 'Z /proc/stat, řádky cpu0, cpu1, …: rozdíl čítačů mezi dvěma hlášeními pro každé jádro zvlášť; ukazuje se to nejvytíženější.',
+    en: 'From /proc/stat, the cpu0, cpu1, … lines: the counter difference between two reports for each core separately; the busiest one is shown.',
+  },
+  'help.cpu_core_max_caveat': {
+    cs: 'Průměr přes všechna jádra může být poloviční, protože přeposílání paketů často zatíží jediné jádro. Po startu routeru zůstane prázdné.',
+    en: 'The all-core average can be half of this, because packet forwarding often loads a single core. It stays empty right after the router starts.',
+  },
+  'help.cpu_core_max_softirq_what': {
+    cs: 'Jakou část času strávilo nejvytíženější jádro zpracováním paketů a přerušení (irq + softirq).',
+    en: 'Share of time the busiest core spent processing packets and interrupts (irq + softirq).',
+  },
+  'help.cpu_core_max_softirq_how': {
+    cs: 'Z /proc/stat: přírůstek sloupců irq a softirq téhož jádra, dělený přírůstkem všech sloupců.',
+    en: "From /proc/stat: growth of that core's irq and softirq columns divided by the growth of all columns.",
+  },
+  'help.cpu_core_max_softirq_caveat': {
+    cs: 'Část síťové práce (vlákna NAPI, ovladač Wi-Fi) jádro účtuje jako system, ne softirq, takže skutečný podíl sítě může být vyšší.',
+    en: 'The kernel books part of the network work (NAPI threads, the Wi-Fi driver) as system, not softirq, so the real network share can be higher.',
+  },
+  'help.wan_rx_mbps_what': {
+    cs: 'Rychlost stahování na rozhraní WAN, průměr za minutu.',
+    en: 'Download rate on the WAN interface, averaged over the minute.',
+  },
+  'help.wan_tx_mbps_what': {
+    cs: 'Rychlost odesílání na rozhraní WAN, průměr za minutu.',
+    en: 'Upload rate on the WAN interface, averaged over the minute.',
+  },
+  'help.wan_rate_how': {
+    cs: 'Přírůstek počítadel rx_bytes a tx_bytes rozhraní WAN mezi dvěma hlášeními, dělený časem podle uptime routeru.',
+    en: "Growth of the WAN interface's rx_bytes and tx_bytes counters between two reports, divided by the time from the router's uptime.",
+  },
+  'help.wan_rate_caveat': {
+    cs: 'Minutový průměr, krátká špička se v něm rozpustí. Po startu routeru nebo změně rozhraní WAN zůstane prázdné.',
+    en: 'A one-minute average, so a short burst is diluted. It stays empty after a router restart or a change of the WAN interface.',
+  },
+  'help.wan_errors_what': {
+    cs: 'Nové chyby příjmu a odesílání na fyzickém portu WAN od předchozího hlášení.',
+    en: 'New receive and transmit errors on the physical WAN port since the previous report.',
+  },
+  'help.wan_errors_how': {
+    cs: 'Počítadla rx_errors a tx_errors portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.',
+    en: "The WAN port's rx_errors and tx_errors counters in /sys/class/net; the server stores the growth between two reports.",
+  },
+  'help.wan_errors_caveat': {
+    cs: 'Rostoucí počet ukazuje na kabel, modul SFP nebo port, ne na zahlcení.',
+    en: 'A growing count points at the cable, the SFP module or the port, not at congestion.',
+  },
+  'help.wan_drops_what': {
+    cs: 'Nově zahozené pakety na portu WAN od předchozího hlášení (včetně neznámých protokolů).',
+    en: 'Packets newly dropped on the WAN port since the previous report (includes unhandled protocols).',
+  },
+  'help.wan_drops_how': {
+    cs: 'Počítadla rx_dropped a tx_dropped portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.',
+    en: "The WAN port's rx_dropped and tx_dropped counters in /sys/class/net; the server stores the growth between two reports.",
+  },
+  'help.wan_drops_caveat': {
+    cs: 'Většinou jde o neškodné rámce, které router nezpracovává (LLDP, cizí VLAN, PPPoE discovery), ne o přetížení. Žádné doporučení z této hodnoty nevychází.',
+    en: 'Mostly harmless frames the router does not handle (LLDP, foreign VLANs, PPPoE discovery), not overload. No recommendation is based on this value.',
+  },
+  'help.wan_ring_drops_what': {
+    cs: 'Pakety, které port WAN nestihl převzít z přijímací fronty (rx_discard + rx_overrun).',
+    en: 'Packets the WAN port could not take from its receive ring in time (rx_discard + rx_overrun).',
+  },
+  'help.wan_ring_drops_how': {
+    cs: 'ethtool -S <port WAN>, čte se jednou za hodinu; server ukládá přírůstek mezi dvěma čteními. Potřebuje balíček ethtool; bez něj zůstane prázdné.',
+    en: 'ethtool -S <WAN port>, read once an hour; the server stores the growth between two readings. Needs the ethtool package; without it the value stays empty.',
+  },
+  'help.conntrack_drops_what': {
+    cs: 'Pakety nově zahozené sledováním spojení od předchozího hlášení.',
+    en: 'Packets newly dropped by connection tracking since the previous report.',
+  },
+  'help.conntrack_drops_how': {
+    cs: 'Sloupec drop v /proc/net/stat/nf_conntrack, součet přes jádra; server ukládá přírůstek mezi dvěma hlášeními.',
+    en: 'The drop column of /proc/net/stat/nf_conntrack, summed over the cores; the server stores the growth between two reports.',
+  },
+  'help.conntrack_drops_caveat': {
+    cs: 'O odmítnutá spojení jde jen tehdy, když je zároveň plná tabulka spojení (Conntrack tabulka na 90 % a výš).',
+    en: 'These are refused connections only when the connection table is full at the same time (the conntrack table at 90 % or more).',
+  },
+  'help.wan_link_flaps_what': {
+    cs: 'Kolikrát od předchozího hlášení spadla linka na fyzickém portu WAN.',
+    en: 'How many times the link on the physical WAN port went down since the previous report.',
+  },
+  'help.wan_link_flaps_how': {
+    cs: 'Počítadlo carrier_down_count portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.',
+    en: "The WAN port's carrier_down_count counter in /sys/class/net; the server stores the growth between two reports.",
+  },
+  'help.agent_run_ms_what': {
+    cs: 'Jak dlouho agentovi na routeru trvalo jedno měření, od startu po sestavení hlášení.',
+    en: 'How long one run of the agent took on the router, from its start until the report was assembled.',
+  },
+  'help.agent_run_ms_how': {
+    cs: 'Rozdíl /proc/uptime na začátku běhu a při sestavení hlášení, v milisekundách.',
+    en: 'The difference of /proc/uptime between the start of the run and the assembly of the report, in milliseconds.',
+  },
+  'help.agent_run_ms_caveat': {
+    cs: 'Odeslání hlášení se do hodnoty nepočítá. Běh, který se blíží 60 sekundám, začne vynechávat minuty.',
+    en: 'Sending the report is not included. A run that nears 60 seconds starts to skip minutes.',
+  },
+  'help.clock_skew_s_what': {
+    cs: 'O kolik sekund se hodiny routeru liší od hodin serveru, bez ohledu na směr.',
+    en: "By how many seconds the router's clock differs from the server's, whichever way.",
+  },
+  'help.clock_skew_s_how': {
+    cs: 'Server odečte čas, který agent uvedl v hlášení (date +%s), od času, kdy hlášení přijal, a uloží absolutní hodnotu.',
+    en: 'The server subtracts the time the agent put in the report (date +%s) from the time it received the report and stores the absolute value.',
+  },
+  'help.clock_skew_s_caveat': {
+    cs: 'Zhruba 2 sekundy připadají na přenos hlášení. Při rozdílu nad 30 sekund router odmítá vzdálené akce.',
+    en: "About 2 seconds are the report's travel time. Beyond 30 seconds the router refuses remote actions.",
   },
   'help.wifi_clients_what': { cs: 'Počet zařízení připojených k Wi-Fi.', en: 'Number of devices connected to Wi-Fi.' },
   'help.wifi_clients_how': {
@@ -2590,6 +3162,17 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Monitoring is running, but some data is not being collected. Charts and statistics may be incomplete:',
   },
   'collection.since': { cs: 'od', en: 'since' },
+  // What stopped being collected. The server writes the sentence, the app
+  // names the kind - three of the eight are about a router's disks or its
+  // reports and read alike in a list of one-line messages.
+  'collection.kind_cpanel': { cs: 'Statistiky cPanel', en: 'cPanel stats' },
+  'collection.kind_agent_silent': { cs: 'Agent', en: 'Agent' },
+  'collection.kind_checks': { cs: 'Kontroly dostupnosti', en: 'Availability checks' },
+  'collection.kind_smart_probe': { cs: 'Čtení SMART', en: 'SMART read' },
+  'collection.kind_smart_read': { cs: 'SMART disku', en: 'Disk SMART' },
+  'collection.kind_details_dropped': { cs: 'Podrobnosti routeru', en: 'Router details' },
+  'collection.kind_ingest_dropped': { cs: 'Ukládání hlášení', en: 'Report ingest' },
+  'collection.kind_reports_missing': { cs: 'Minutová hlášení', en: 'Minute reports' },
 
   // Service Discovery
   'discovery.title': { cs: 'Objevené služby', en: 'Discovered Services' },
@@ -3116,14 +3699,85 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.last_reconnect': { cs: 'Poslední reconnect', en: 'Last reconnect' },
   'net.clients': { cs: 'klientů', en: 'clients' },
   'net.wifi6e_known': {
-    cs: 'Podpora Wi-Fi 6E: {capable} z {known} klientů, kteří ji uvedli',
-    en: 'Wi-Fi 6E support: {capable} of {known} clients that reported it',
+    cs: 'Podpora Wi-Fi 6E: {capable} z {known} klientů, u kterých ji router zná',
+    en: 'Wi-Fi 6E support: {capable} of {known} clients the router knows it for',
   },
   'net.wifi6e_unreported': { cs: ', u {count} neznámá', en: ', unknown for {count}' },
   'net.wifi6e_unknown': {
-    cs: 'Podpora Wi-Fi 6E: neznámá (router ji bez hostapd-utils nezjistí)',
-    en: 'Wi-Fi 6E support: unknown (the router cannot tell without hostapd-utils)',
+    cs: 'Podpora Wi-Fi 6E: neznámá (router nemá hostapd-utils ani hostapd přes ubus)',
+    en: 'Wi-Fi 6E support: unknown (the router has neither hostapd-utils nor hostapd over ubus)',
   },
+  'net.wifi_gen': { cs: 'Wi-Fi {n}', en: 'Wi-Fi {n}' },
+  'net.wifi_gen_6e': { cs: 'Wi-Fi 6E', en: 'Wi-Fi 6E' },
+  'net.wifi_gen_6plus': { cs: 'Wi-Fi 6 nebo novější', en: 'Wi-Fi 6 or newer' },
+  'net.wifi_gen_legacy': { cs: 'starší (802.11a/b/g)', en: 'legacy (802.11a/b/g)' },
+  'net.wifi_width': { cs: '{mhz} MHz', en: '{mhz} MHz' },
+  'net.wifi_card_supports': {
+    cs: 'Karta na tomto pásmu umí: {gen}, až {mhz} MHz',
+    en: 'On this band the card supports: {gen}, up to {mhz} MHz',
+  },
+  'net.enc_open': { cs: 'bez šifrování', en: 'open' },
+  'net.enc_owe': { cs: 'OWE (šifrovaná otevřená síť)', en: 'OWE (encrypted open network)' },
+  'net.enc_wep': { cs: 'WEP (prolomitelné)', en: 'WEP (breakable)' },
+  'net.enc_wpa': { cs: 'WPA (zastaralé)', en: 'WPA (obsolete)' },
+  'net.enc_wpa_wpa2': { cs: 'WPA/WPA2 (povoluje zastaralé WPA)', en: 'WPA/WPA2 (allows obsolete WPA)' },
+  'net.enc_wpa2': { cs: 'jen WPA2', en: 'WPA2 only' },
+  'net.enc_wpa2_wpa3': { cs: 'WPA2/WPA3', en: 'WPA2/WPA3' },
+  'net.enc_wpa3': { cs: 'WPA3', en: 'WPA3' },
+  'net.enc_enterprise': { cs: '{enc} Enterprise', en: '{enc} Enterprise' },
+  'net.enc_unknown': { cs: 'šifrování neznámé', en: 'encryption unknown' },
+  'net.wifi_gens': { cs: 'Klienti podle generace: {list}', en: 'Clients by generation: {list}' },
+  'net.wifi_gens_unknown': {
+    cs: 'Generace klientů: neznámá (router nemá hostapd-utils ani hostapd přes ubus)',
+    en: 'Client generations: unknown (neither hostapd-utils nor hostapd over ubus)',
+  },
+  'net.wifi_gens_ubus': {
+    cs: 'Wi-Fi 7 se bez hostapd-utils nerozliší',
+    en: 'Wi-Fi 7 cannot be told apart without hostapd-utils',
+  },
+  'net.wifi_akm': {
+    cs: 'Přihlášení klientů: {wpa3}× WPA3 · {wpa2}× WPA2',
+    en: 'Client sign-in: {wpa3}× WPA3 · {wpa2}× WPA2',
+  },
+  'net.wifi_akm_unknown': {
+    cs: 'Přihlášení klientů (WPA2/WPA3): neznámé bez hostapd-utils',
+    en: 'Client sign-in (WPA2/WPA3): unknown without hostapd-utils',
+  },
+  'net.wifi_no_clients': { cs: 'bez připojených klientů', en: 'no clients connected' },
+  'net.wifi_5g_capable': {
+    cs: 'Umí 5 GHz: {capable} z {known} klientů, kteří to uvedli',
+    en: '5 GHz capable: {capable} of {known} clients that reported it',
+  },
+  'net.wifi_5g_unknown': {
+    cs: 'Podpora 5 GHz: neznámá (router ji bez hostapd-utils nezjistí)',
+    en: '5 GHz support: unknown (the router cannot tell without hostapd-utils)',
+  },
+  'net.busy_not_installed': {
+    cs: 'Vytížení kanálu se neměří – chybí balíček iw',
+    en: 'Channel utilisation not measured – the iw package is missing',
+  },
+  'net.busy_unsupported': {
+    cs: 'Ovladač karty vytížení kanálu nehlásí',
+    en: 'The card driver does not report channel utilisation',
+  },
+  'net.busy_warming_up': {
+    cs: 'Vytížení kanálu přibude po dalším měření',
+    en: 'Channel utilisation arrives with the next sample',
+  },
+  'net.wifi_channel': { cs: 'kanál {channel}', en: 'channel {channel}' },
+  'net.wifi_radio_off': { cs: 'Rádio je vypnuté', en: 'Radio is off' },
+  'net.wifi_signal_median': {
+    cs: 'Typický signál klientů (jak je slyší router)',
+    en: 'Typical client signal (as the router hears it)',
+  },
+  'net.wifi_signal_min': { cs: 'Nejslabší klient', en: 'Weakest client' },
+  'net.wifi_weak_count': { cs: '{n} pod −75 dBm', en: '{n} below −75 dBm' },
+  'net.wifi_rate_avg': { cs: 'Průměrná rychlost spojení ke klientům', en: 'Average link rate to clients' },
+  'net.wifi_rate_caveat': {
+    cs: 'rychlost linky posledních rámců, ne propustnost internetu',
+    en: 'link rate of the last frames, not internet throughput',
+  },
+  'net.busy_other': { cs: 'z toho cizí provoz: {pct} %', en: 'of which foreign traffic: {pct} %' },
   'net.clients_short': { cs: 'kl.', en: 'cl.' },
   'net.lan_title': { cs: 'LAN & DHCP', en: 'LAN & DHCP' },
   'net.subnet': { cs: 'Subnet', en: 'Subnet' },
@@ -3154,6 +3808,24 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.oom_kills': { cs: 'OOM kills (od startu)', en: 'OOM kills (since boot)' },
   'net.boot_time': { cs: 'Systém běží od', en: 'System up since' },
   'net.usb_devices': { cs: 'USB zařízení', en: 'USB devices' },
+  // Rows of release 0.1.7 that are not mapped metrics: the router's own
+  // resolver (G41) and what the agent's minute run cost (G42).
+  'net.dns_engine': { cs: 'Resolver', en: 'Resolver' },
+  'net.dns_resolver': { cs: 'DNS resolver', en: 'DNS resolver' },
+  'net.dns_resolver_answers': { cs: 'Odpovídá', en: 'Answers' },
+  'net.dns_resolver_silent': { cs: 'Neodpovídá', en: 'Does not answer' },
+  'net.agent_run': { cs: 'Doba běhu agenta', en: 'Agent run time' },
+  'net.agent_run_ms_unit': { cs: '{ms} ms', en: '{ms} ms' },
+  'net.agent_run_s_unit': { cs: '{s} s', en: '{s} s' },
+  'net.agent_prev_total': { cs: 'předchozí běh i s odesláním {prev}', en: 'previous run incl. its upload {prev}' },
+  'net.agent_skipped': { cs: 'Vynechané běhy', en: 'Skipped runs' },
+  'net.agent_skipped_lock': { cs: '{n}× předchozí běh ještě běžel', en: '{n}× the previous run was still going' },
+  'net.agent_skipped_post': { cs: '{n}× se nepodařilo odeslat', en: '{n}× the upload failed' },
+  'net.agent_reports': { cs: 'Hlášení za 24 h', en: 'Reports in 24 h' },
+  'net.agent_reports_value': {
+    cs: '{received} z {expected} minut ({pct} %)',
+    en: '{received} of {expected} minutes ({pct} %)',
+  },
   'net.just_now': { cs: 'před chvílí', en: 'just now' },
   'infra.unreachable_title': {
     cs: 'Tento cíl není z hostingu dosažitelný',
@@ -3333,7 +4005,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'agent_install.cron_check_note': {
     cs: 'První řádek musí vypsat plánovací záznam. Do minuty pak monitor v aplikaci přestane hlásit, že agent mlčí.',
-    en: 'The first line must print the scheduled entry. Within a minute the monitor stops reporting a silent agent.',
+    en: 'The first line must print the schedule entry. Within a minute the monitor in the app stops reporting a silent agent.',
   },
   'agent_install.wifi6e': {
     cs: 'Volitelně: podpora Wi-Fi 6E u klientů',

@@ -468,7 +468,7 @@ foreach ($timeline as $ev) {
                             <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
                                 <div style="font-weight: 600; margin-bottom: 0.4rem; display: flex; align-items: center; justify-content: space-between;">
                                     <span><i class="fas fa-broadcast-tower" style="color: var(--color-green);"></i> <?php echo htmlspecialchars($radio['ssid'] ?? $radio['radio']); ?></span>
-                                    <span style="background: rgba(255,255,255,0.06); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.68rem; color: var(--color-blue, #58a6ff);"><?php echo htmlspecialchars($radio['band'] ?? '2.4GHz'); ?></span>
+                                    <span style="background: rgba(255,255,255,0.06); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.68rem; color: var(--color-blue, #58a6ff);"><?php echo htmlspecialchars($radio['band'] ?? '—'); ?></span>
                                 </div>
                                 <div style="font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.2rem;">
                                     <span><strong>Radio / Kanál:</strong> <?php echo htmlspecialchars($radio['radio']); ?> (Ch <?php echo htmlspecialchars($radio['channel'] ?? '0'); ?>)</span>
@@ -644,17 +644,21 @@ foreach ($timeline as $ev) {
             <?php endif; ?>
 
             <!-- DNS & RESOLVER SECTION -->
+            <?php // G24: agent 0.1.7 sends null when it recognised no resolver
+                  // (the normal case on a Turris whose kresd config it cannot
+                  // read). "Dnsmasq" / "UDP/53" were claims about a router
+                  // nobody had asked - an em dash says the truth. ?>
             <?php if (!empty($details['dns_engine']) || !empty($details['dns_servers'])): ?>
             <div class="ao-section">
                 <div class="ao-section-title"><i class="fas fa-server"></i> DNS Resolver &amp; Šifrování (DoT / DoH)</div>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.75rem;">
                     <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
                         <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">DNS Engine / Resolver</div>
-                        <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem; margin-top: 0.2rem;"><i class="fas fa-network-wired" style="color: var(--color-blue, #58a6ff);"></i> <?php echo htmlspecialchars($details['dns_engine'] ?? 'Dnsmasq'); ?></div>
+                        <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem; margin-top: 0.2rem;"><i class="fas fa-network-wired" style="color: var(--color-blue, #58a6ff);"></i> <?php echo htmlspecialchars($details['dns_engine'] ?? '—'); ?></div>
                     </div>
                     <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">
                         <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Protokol / Šifrování</div>
-                        <div style="font-weight: 700; color: <?php echo strpos(($details['dns_encryption'] ?? ''), 'DoT') !== false ? 'var(--color-green)' : 'var(--text-primary)'; ?>; font-size: 0.95rem; margin-top: 0.2rem;"><i class="fas fa-shield-alt"></i> <?php echo htmlspecialchars($details['dns_encryption'] ?? 'UDP/53'); ?></div>
+                        <div style="font-weight: 700; color: <?php echo strpos(($details['dns_encryption'] ?? ''), 'DoT') !== false ? 'var(--color-green)' : 'var(--text-primary)'; ?>; font-size: 0.95rem; margin-top: 0.2rem;"><i class="fas fa-shield-alt"></i> <?php echo htmlspecialchars($details['dns_encryption'] ?? '—'); ?></div>
                     </div>
                     <?php if (!empty($details['dns_servers'])): ?>
                     <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem;">

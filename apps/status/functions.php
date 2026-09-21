@@ -814,6 +814,79 @@ function bk_prune_process_samples(PDO $pdo, int $days, int $peak_after_days = 0,
     return $result;
 }
 
+/**
+ * Retention for the router health tables (schema 20260920).
+ *
+ * A function and not three inline DELETEs in cron.php, for the same reason
+ * `bk_prune_process_samples` is one: no suite ever executes `cron.php`, so
+ * inline SQL could only be checked by reading the file as text. Here the API
+ * suite can call it with boundary rows and see what really disappears.
+ *
+ * Two years of disk history, because the rules that read it (wear over a
+ * year, a disk replaced in the same slot) compare across seasons.
+ * Recommendation state is kept for 90 days after the item last fired - long
+ * enough that a rule which returns every few weeks is still "unchanged since
+ * last week" rather than new. A MUTED row is never pruned: the mute is the
+ * owner's decision and it goes only with the monitor (FK cascade).
+ *
+ * Returns the deleted row counts so cron.php can report what it did instead
+ * of claiming success.
+ */
+function bk_prune_router_health(PDO $pdo): array {
+    $result = ['disk_daily' => 0, 'disks' => 0, 'rec_state' => 0];
+
+    $stmt = $pdo->prepare("DELETE FROM storage_disk_daily WHERE day < DATE_SUB(CURDATE(), INTERVAL 730 DAY)");
+    $stmt->execute();
+    $result['disk_daily'] = $stmt->rowCount();
+
+    // The daily rows of a disk that has not been seen for two years go with
+    // it through the FK cascade; they are not counted here, because MySQL
+    // reports only the rows this statement deleted itself.
+    $stmt = $pdo->prepare("DELETE FROM storage_disks WHERE last_seen < DATE_SUB(NOW(), INTERVAL 730 DAY)");
+    $stmt->execute();
+    $result['disks'] = $stmt->rowCount();
+
+    $stmt = $pdo->prepare(
+        "DELETE FROM router_rec_state
+          WHERE muted_at IS NULL
+            AND (last_seen IS NULL OR last_seen < DATE_SUB(NOW(), INTERVAL 90 DAY))"
+    );
+    $stmt->execute();
+    $result['rec_state'] = $stmt->rowCount();
+
+    return $result;
+}
+
+/**
+ * Retention for the WAN measurements.
+ *
+ * Line speed is the one router metric worth comparing with last year's
+ * contract, so the rows live 400 days - a year plus the month it takes to
+ * notice. The `diagnostics` blob is the opposite: up to 2 kB per row that
+ * only answers "was the router itself the bottleneck during THIS test", a
+ * question nobody asks about a test from last quarter. It is nulled after 90
+ * days, while the measurement itself stays.
+ *
+ * Returns the affected row counts, like `bk_prune_router_health`.
+ */
+function bk_prune_wan_data(PDO $pdo): array {
+    $result = ['speedtests' => 0, 'diagnostics' => 0];
+
+    $stmt = $pdo->prepare("DELETE FROM speedtest_results WHERE measured_at < DATE_SUB(NOW(), INTERVAL 400 DAY)");
+    $stmt->execute();
+    $result['speedtests'] = $stmt->rowCount();
+
+    $stmt = $pdo->prepare(
+        "UPDATE speedtest_results SET diagnostics = NULL
+          WHERE diagnostics IS NOT NULL
+            AND measured_at < DATE_SUB(NOW(), INTERVAL 90 DAY)"
+    );
+    $stmt->execute();
+    $result['diagnostics'] = $stmt->rowCount();
+
+    return $result;
+}
+
 function bk_rollup_daily_metrics(PDO $pdo, int $days = 2): int {
     $days = max(1, min(400, $days));
     $written = 0;
@@ -941,6 +1014,26 @@ function bk_metric_column_map(): array {
     'wifi_6e_known_24g' => ['col' => 'wifi_6e_known_24g', 'unit' => '', 'label' => 'Klienti na 2.4 GHz se známou podporou pásem', 'only' => ['openwrt']],
     'wifi_6e_capable_5g' => ['col' => 'wifi_6e_capable_5g', 'unit' => '', 'label' => 'Klienti na 5 GHz s podporou Wi-Fi 6E', 'only' => ['openwrt']],
     'wifi_6e_known_5g' => ['col' => 'wifi_6e_known_5g', 'unit' => '', 'label' => 'Klienti na 5 GHz se známou podporou pásem', 'only' => ['openwrt']],
+    // Radio conditions per band (agent 0.1.7). Noise and channel load are a
+    // MAX over the AP radios of the band - two radios of one phy are one
+    // measurement - and `busy_other` belongs to the radio the maximum came
+    // from, so "the channel is full" and "of somebody else's traffic" always
+    // describe the same radio.
+    'wifi_noise_24g' => ['col' => 'wifi_noise_24g', 'unit' => 'dBm', 'label' => 'Šum Wi-Fi na 2.4 GHz', 'only' => ['openwrt']],
+    'wifi_noise_5g' => ['col' => 'wifi_noise_5g', 'unit' => 'dBm', 'label' => 'Šum Wi-Fi na 5 GHz', 'only' => ['openwrt']],
+    'wifi_noise_6g' => ['col' => 'wifi_noise_6g', 'unit' => 'dBm', 'label' => 'Šum Wi-Fi na 6 GHz', 'only' => ['openwrt']],
+    'wifi_busy_24g' => ['col' => 'wifi_busy_24g', 'unit' => '%', 'label' => 'Vytížení kanálu na 2.4 GHz', 'only' => ['openwrt']],
+    'wifi_busy_5g' => ['col' => 'wifi_busy_5g', 'unit' => '%', 'label' => 'Vytížení kanálu na 5 GHz', 'only' => ['openwrt']],
+    'wifi_busy_6g' => ['col' => 'wifi_busy_6g', 'unit' => '%', 'label' => 'Vytížení kanálu na 6 GHz', 'only' => ['openwrt']],
+    'wifi_busy_other_24g' => ['col' => 'wifi_busy_other_24g', 'unit' => '%', 'label' => 'Cizí provoz na kanálu 2.4 GHz', 'only' => ['openwrt']],
+    'wifi_busy_other_5g' => ['col' => 'wifi_busy_other_5g', 'unit' => '%', 'label' => 'Cizí provoz na kanálu 5 GHz', 'only' => ['openwrt']],
+    'wifi_busy_other_6g' => ['col' => 'wifi_busy_other_6g', 'unit' => '%', 'label' => 'Cizí provoz na kanálu 6 GHz', 'only' => ['openwrt']],
+    'wifi_weak_clients' => ['col' => 'wifi_weak_clients', 'unit' => '', 'label' => 'Wi-Fi klienti se slabým signálem', 'only' => ['openwrt']],
+    'wifi_wpa2_clients' => ['col' => 'wifi_wpa2_clients', 'unit' => '', 'label' => 'Wi-Fi klienti připojení přes WPA2', 'only' => ['openwrt']],
+    // Three-valued at the ingest (1/0/null), so its daily average is the share
+    // of the samples on which the answer was KNOWN - never a measured zero.
+    'wifi_6e_unserved' => ['col' => 'wifi_6e_unserved', 'unit' => '', 'label' => 'Klienti s 6 GHz bez 6GHz rádia (podíl času)', 'only' => ['openwrt']],
+    'wifi_5g_capable_24g' => ['col' => 'wifi_5g_capable_24g', 'unit' => '', 'label' => 'Klienti na 2.4 GHz s podporou 5 GHz', 'only' => ['openwrt']],
     'conntrack' => ['col' => 'conntrack_pct', 'unit' => '%', 'label' => 'Conntrack tabulka'],
     // Metrics added 08/2026: agents sent them every minute, but only the
     // last snapshot was stored, so no history survived.
@@ -980,6 +1073,30 @@ function bk_metric_column_map(): array {
     'oom_kills' => ['col' => 'oom_kills', 'unit' => '', 'label' => 'Zabito kvůli paměti', 'counter' => true],
     'sqm_dropped' => ['col' => 'sqm_dropped', 'unit' => '', 'label' => 'SQM zahozené pakety', 'counter' => true],
     'wan_reconnect_count' => ['col' => 'wan_reconnect_count', 'unit' => '', 'label' => 'Znovupřipojení WAN', 'counter' => true],
+    // WAN path and router runtime (agent 0.1.7). The rate and CPU series are
+    // ordinary averages; the five counters below are STEPS - the ingest already
+    // stored the difference against the previous report, so a bucket is their
+    // SUM, not their average. Without 'step' a day with 40 errors would be
+    // drawn as "0.03 errors" and nobody would ever see it.
+    //
+    // Why 'step' and not the existing 'counter': a counter series is the raw
+    // cumulative value and a lost report or a reboot breaks it (max - min);
+    // a step series loses nothing when a report is lost (the next step spans
+    // it) and the daily total is avg_val * samples.
+    'cpu_core_max' => ['col' => 'cpu_core_max', 'unit' => '%', 'label' => 'Nejvytíženější jádro CPU', 'only' => ['openwrt']],
+    'cpu_core_max_softirq' => ['col' => 'cpu_core_max_softirq', 'unit' => '%', 'label' => 'Obsluha přerušení na nejvytíženějším jádře', 'only' => ['openwrt']],
+    'wan_rx_mbps' => ['col' => 'wan_rx_mbps', 'unit' => 'Mbit/s', 'label' => 'Stahování na WAN', 'only' => ['openwrt']],
+    'wan_tx_mbps' => ['col' => 'wan_tx_mbps', 'unit' => 'Mbit/s', 'label' => 'Odesílání na WAN', 'only' => ['openwrt']],
+    'wan_errors' => ['col' => 'wan_errors', 'unit' => '', 'label' => 'Chyby na portu WAN', 'only' => ['openwrt'], 'step' => true],
+    // Evidence only, no rule reads it: sysfs counts unhandled protocols here too.
+    'wan_drops' => ['col' => 'wan_drops', 'unit' => '', 'label' => 'Zahozené pakety na WAN (i neznámé protokoly)', 'only' => ['openwrt'], 'step' => true],
+    'wan_ring_drops' => ['col' => 'wan_ring_drops', 'unit' => '', 'label' => 'Zahozeno ve frontě portu WAN', 'only' => ['openwrt'], 'step' => true],
+    'wan_link_flaps' => ['col' => 'wan_link_flaps', 'unit' => '', 'label' => 'Výpadky linky na portu WAN', 'only' => ['openwrt'], 'step' => true],
+    'conntrack_drops' => ['col' => 'conntrack_drops', 'unit' => '', 'label' => 'Odmítnutá spojení v conntracku', 'only' => ['openwrt'], 'step' => true],
+    'agent_run_ms' => ['col' => 'agent_run_ms', 'unit' => 'ms', 'label' => 'Doba běhu agenta', 'only' => ['openwrt']],
+    // Absolute value: a median of a signed column cannot be derived from a
+    // daily avg/min/max, a weighted mean of a non-negative one can.
+    'clock_skew_s' => ['col' => 'clock_skew_s', 'unit' => 's', 'label' => 'Odchylka hodin routeru', 'only' => ['openwrt']],
 ];
 }
 
@@ -1067,6 +1184,85 @@ function bk_counter_deltas(array $values): array {
         $prev = (float)$v;
     }
     return $out;
+}
+
+/**
+ * New events of a cumulative counter since the previous report.
+ *
+ * Null when either side is unknown, when the source changed (another WAN
+ * device, a reboot) and on a RESET: the value after a reboot is dominated by
+ * link bring-up, and booking it as one minute's step would fabricate a spike -
+ * the same convention as bk_counter_deltas() and the counter charts. What is
+ * lost is said as such: events between the last report and the reboot are not
+ * counted, so every step series is a lower bound.
+ */
+function bk_counter_step(?int $prev, ?int $cur, bool $same_source): ?int {
+    if ($prev === null || $cur === null || !$same_source || $cur < $prev) {
+        return null;
+    }
+    return $cur - $prev;
+}
+
+/**
+ * Step metrics of the WAN path for one report, and the state the next report
+ * is compared with (`last_details.wan_counters_prev`).
+ *
+ * The state is keyed by the WAN device and the router's uptime: totals of
+ * another netdev are not one minute's step, and a reboot after which the
+ * counter already outgrew the old value (`cur >= prev`) is only visible as an
+ * uptime that went backwards. A counter the agent could not read this minute
+ * keeps its previous value, so the next step spans the gap and the day's sum
+ * loses nothing.
+ *
+ * Ring drops come from `ethtool -S` once an hour: their step is written only
+ * on the report that carries a NEW `wan_path.checked_at`, null on every other.
+ *
+ * @param mixed $prev the stored state (anything but an array = first report)
+ * @param array<string, ?int> $cur cumulative values of this report
+ * @return array{steps: array<string, ?int>, state: ?array<string, mixed>}
+ */
+function bk_wan_counter_steps($prev, array $cur, ?string $dev, ?int $uptime, ?int $path_checked_at): array {
+    $minute_keys = ['wan_rx_errors', 'wan_tx_errors', 'wan_rx_dropped', 'wan_tx_dropped', 'conntrack_drop', 'wan_carrier_down_count'];
+    $prev = is_array($prev) ? $prev : [];
+    $prev_uptime = is_int($prev['uptime'] ?? null) ? $prev['uptime'] : null;
+    $same = $prev !== [] && ($prev['dev'] ?? null) === $dev
+        && $uptime !== null && $prev_uptime !== null && $uptime >= $prev_uptime;
+    $old = fn (string $key): ?int => is_int($prev[$key] ?? null) ? $prev[$key] : null;
+
+    $step = [];
+    $state = ['dev' => $dev, 'uptime' => $uptime];
+    foreach ($minute_keys as $key) {
+        $now = $cur[$key] ?? null;
+        $step[$key] = bk_counter_step($old($key), $now, $same);
+        $state[$key] = ($now === null && $same) ? $old($key) : $now;
+    }
+    // A sum of two directions is known only when both are.
+    $both = fn (?int $a, ?int $b): ?int => ($a === null || $b === null) ? null : $a + $b;
+
+    $ring = $cur['wan_rx_ring_drops'] ?? null;
+    $ring_step = null;
+    $state['wan_rx_ring_drops'] = $same ? $old('wan_rx_ring_drops') : null;
+    $state['ring_at'] = $same ? $old('ring_at') : null;
+    if ($path_checked_at !== null && $path_checked_at !== $state['ring_at']) {
+        $ring_step = bk_counter_step($state['wan_rx_ring_drops'], $ring, $same);
+        $state['wan_rx_ring_drops'] = $ring;
+        $state['ring_at'] = $path_checked_at;
+    }
+
+    $measured = array_filter($state, fn ($v, $k) => $v !== null && !in_array($k, ['dev', 'uptime', 'ring_at'], true), ARRAY_FILTER_USE_BOTH);
+    return [
+        'steps' => [
+            'wan_errors' => $both($step['wan_rx_errors'], $step['wan_tx_errors']),
+            'wan_drops' => $both($step['wan_rx_dropped'], $step['wan_tx_dropped']),
+            'wan_ring_drops' => $ring_step,
+            'wan_link_flaps' => $step['wan_carrier_down_count'],
+            // `drop` only: insert_failed also grows on harmless races and
+            // early_drop counts entries evicted to MAKE room - nothing refused.
+            'conntrack_drops' => $step['conntrack_drop'],
+        ],
+        // An agent that reads none of the counters (0.1.6, a VPS) keeps no state.
+        'state' => $measured === [] ? null : $state,
+    ];
 }
 
 /**
@@ -2290,13 +2486,34 @@ function bk_compute_baseline_anomaly(array $baseline_values, float $current, flo
  * red, so a recovered WAN and an expiring certificate looked like outages.
  */
 function bk_alert_color_class(string $status): string {
-    if (in_array($status, ['up', 'wan_restored', 'lte_backup_restored', 'latency_recovered'], true)) {
+    if (in_array($status, ['up', 'wan_restored', 'lte_backup_restored', 'latency_recovered', 'storage_recovered',
+        // Router recoveries of alert sheet 2.2 - a restored link, firewall or
+        // resolver is good news and must not arrive painted like an outage.
+        'wan_link_restored', 'firewall_restored', 'dns_resolver_restored'], true)) {
         return 'good';
     }
-    if (in_array($status, ['maintenance', 'vps_warning', 'latency_degraded', 'ssl_expiring', 'config_change'], true)) {
+    if (in_array($status, ['maintenance', 'vps_warning', 'latency_degraded', 'ssl_expiring', 'config_change', 'storage_warning',
+        // The router keeps working through all four: a slower WAN port, a full
+        // connection table, missing firewall rules and a silent local resolver
+        // are things to look at, not outages of the monitor itself.
+        'wan_link_degraded', 'conntrack_full', 'firewall_disabled', 'dns_resolver_failed'], true)) {
         return 'warn';
     }
     return 'bad';
+}
+
+/**
+ * PagerDuty pairs a resolve with its trigger by the dedup key, and folds two
+ * triggers under one key into ONE incident. Disks therefore need a key of
+ * their own: with the shared per-monitor key a WAN flap's `wan_restored` would
+ * resolve the page for a failing disk, and a disk page would swallow the
+ * outage that follows.
+ */
+function bk_pagerduty_dedup_key(int $monitor_id, string $status): string {
+    $base = 'bk-monitor-' . $monitor_id;
+    return in_array($status, ['storage_failing', 'storage_warning', 'storage_recovered'], true)
+        ? $base . '-storage'
+        : $base;
 }
 
 /**
@@ -2348,12 +2565,18 @@ function bk_down_is_confirmed(int $consecutive, int $required): bool {
 }
 
 function bk_pagerduty_action(string $status): ?string {
-    if (in_array($status, ['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'], true)) {
+    if (in_array($status, ['down', 'agent_offline', 'wan_lost', 'lte_backup_lost', 'storage_failing'], true)) {
         return 'trigger';
     }
     if (in_array($status, ['up', 'wan_restored', 'lte_backup_restored'], true)) {
         return 'resolve';
     }
+    // storage_recovered deliberately does NOT resolve, even under its own key:
+    // the status is shared by disk_temp_normal and fs_freed (warnings that
+    // never paged) and by the OTHER disks of the same router, so an automatic
+    // resolve could close the page of a disk that is still failing. Repeated
+    // storage_failing triggers fold into the one open incident; the on-call
+    // closes it once the disk is replaced.
     return null;
 }
 
@@ -2501,8 +2724,11 @@ function bk_get_network_insights($pdo, $monitor, $details) {
     // WiFi interference (noise floor)
     if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
         foreach ($details['wifi_radios'] as $radio) {
-            $noise = (int)($radio['noise'] ?? -95);
-            if ($noise < 0 && $noise > -70) {
+            // A radio that reports no noise floor (agent 0.1.7 sends null where
+            // iwinfo prints "unknown") used to be read as a measured -95 dBm,
+            // which is a clean band nobody measured. Skipped instead.
+            $noise = isset($radio['noise']) && is_numeric($radio['noise']) ? (int)$radio['noise'] : null;
+            if ($noise !== null && $noise < 0 && $noise > -70) {
                 $insights[] = [
                     'type' => 'network',
                     'icon' => 'fa-wifi',
@@ -2566,8 +2792,13 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     }
 
-    // OOM killer interventions (since system start)
-    if (isset($details['oom_kills']) && (int)$details['oom_kills'] > 0) {
+    // OOM killer interventions. G31: the counter only resets at the next
+    // reboot, so one incident kept this warning on the page for weeks and
+    // people learned to scroll past it. The `oom_kill` event's timestamp says
+    // when the counter last GREW; without one nothing recent is claimed.
+    $oom_at = bk_ranged_int($details['oom_kill_at'] ?? null, 1, 4102444800);
+    if (isset($details['oom_kills']) && (int)$details['oom_kills'] > 0
+        && $oom_at !== null && (time() - $oom_at) <= 86400) {
         $insights[] = [
             'type' => 'network',
             'icon' => 'fa-skull-crossbones',
@@ -2577,8 +2808,12 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         ];
     }
 
-    // Slow DNS answers (a measured query, collected since v1.5.4/1.7.2)
-    if (isset($details['dns_latency_ms']) && $details['dns_latency_ms'] !== null) {
+    // Slow DNS answers (a measured query, collected since v1.5.4/1.7.2).
+    // Not judged while the router's own speed test runs (X17): a lookup made
+    // on a saturated line is slow because of the test, and the value is stored
+    // and charted either way - it is only not turned into advice.
+    if (isset($details['dns_latency_ms']) && $details['dns_latency_ms'] !== null
+        && ($details['speedtest_active'] ?? null) !== true) {
         $dl = (float)$details['dns_latency_ms'];
         if ($dl >= 150) {
             $insights[] = [
@@ -2740,6 +2975,16 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     ");
     $stmt_last->execute([$monitor_id]);
     $latest = $stmt_last->fetch();
+
+    // X17 / WAN 3.3: while the router's own speed test runs, the newest
+    // minute is the test. Comparing it with a 30-day baseline would report
+    // the measurement itself as an anomaly, so only the CURRENT-sample half
+    // is skipped - the baseline query is untouched (two minutes a week cannot
+    // move a mean) and the chart still shows what happened.
+    $anom_details = json_decode((string)($monitor['last_details'] ?? '{}'), true);
+    if (is_array($anom_details) && ($anom_details['speedtest_active'] ?? null) === true) {
+        $latest = false;
+    }
 
     if ($latest) {
         $to_float = fn($v) => ($v === null || $v === '') ? null : (float)$v;
@@ -5855,8 +6100,20 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // wan_lost/restored: the router's primary link stopped carrying traffic
     // (interface down, or up but no echo gets out) - reported through the LTE
     // backup, which is why it needs its own alert at all.
-    $is_agent_event = in_array($new_status, ['agent_offline', 'vps_warning', 'lte_backup_lost', 'lte_backup_restored', 'wan_lost', 'wan_restored'], true);
-    if (in_array($new_status, ['vps_warning', 'lte_backup_lost', 'lte_backup_restored', 'wan_lost', 'wan_restored'], true)
+    // storage_*: the SMART and filesystem alerts of a router's disks. They
+    // come from the agent like the threshold ones, so they follow the same
+    // admin-only default and the same switch.
+    // wan_link_degraded/restored, conntrack_full, firewall_disabled/restored,
+    // dns_resolver_failed/restored: the router rules of alert sheet 2.2. They
+    // are measured by the agent like the ones above, so they follow the same
+    // admin-only default and the same switch. None of them pages (X14):
+    // bk_pagerduty_action() is null for all seven.
+    $bk_agent_statuses = ['vps_warning', 'lte_backup_lost', 'lte_backup_restored', 'wan_lost', 'wan_restored',
+        'storage_failing', 'storage_warning', 'storage_recovered',
+        'wan_link_degraded', 'wan_link_restored', 'conntrack_full',
+        'firewall_disabled', 'firewall_restored', 'dns_resolver_failed', 'dns_resolver_restored'];
+    $is_agent_event = $new_status === 'agent_offline' || in_array($new_status, $bk_agent_statuses, true);
+    if (in_array($new_status, $bk_agent_statuses, true)
         && get_setting('agent_notifications_enabled', '1') !== '1') {
         return;
     }
@@ -5893,6 +6150,36 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $emoji = '🔌';
     } elseif ($new_status === 'wan_restored') {
         $status_text = 'PRIMÁRNÍ PŘIPOJENÍ (WAN) OBNOVENO';
+        $emoji = '🟢';
+    } elseif ($new_status === 'storage_failing') {
+        $status_text = 'DISK SELHÁVÁ';
+        $emoji = '💽';
+    } elseif ($new_status === 'storage_warning') {
+        $status_text = 'VAROVÁNÍ ÚLOŽIŠTĚ';
+        $emoji = '⚠️';
+    } elseif ($new_status === 'storage_recovered') {
+        $status_text = 'ÚLOŽIŠTĚ V POŘÁDKU';
+        $emoji = '🟢';
+    } elseif ($new_status === 'wan_link_degraded') {
+        $status_text = 'PORT WAN SPOJEN POMALEJI';
+        $emoji = '⚠️';
+    } elseif ($new_status === 'wan_link_restored') {
+        $status_text = 'PORT WAN OPĚT NA PLNÉ RYCHLOSTI';
+        $emoji = '🟢';
+    } elseif ($new_status === 'conntrack_full') {
+        $status_text = 'TABULKA SPOJENÍ JE PLNÁ';
+        $emoji = '⚠️';
+    } elseif ($new_status === 'firewall_disabled') {
+        $status_text = 'PRAVIDLA FIREWALLU NEJSOU NAČTENÁ';
+        $emoji = '🛡️';
+    } elseif ($new_status === 'firewall_restored') {
+        $status_text = 'PRAVIDLA FIREWALLU OPĚT NAČTENÁ';
+        $emoji = '🟢';
+    } elseif ($new_status === 'dns_resolver_failed') {
+        $status_text = 'DNS RESOLVER ROUTERU NEODPOVÍDÁ';
+        $emoji = '⚠️';
+    } elseif ($new_status === 'dns_resolver_restored') {
+        $status_text = 'DNS RESOLVER ROUTERU OPĚT ODPOVÍDÁ';
         $emoji = '🟢';
     } elseif ($new_status === 'ssl_expiring') {
         // A certificate about to expire is a warning about the future, not an
@@ -5964,6 +6251,16 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         'latency_degraded' => 'alert_status_latency_degraded',
         'latency_recovered' => 'alert_status_latency_recovered',
         'ssl_expiring' => 'alert_status_ssl_expiring',
+        'storage_failing' => 'alert_status_storage_failing',
+        'storage_warning' => 'alert_status_storage_warning',
+        'storage_recovered' => 'alert_status_storage_recovered',
+        'wan_link_degraded' => 'alert_status_wan_link_degraded',
+        'wan_link_restored' => 'alert_status_wan_link_restored',
+        'conntrack_full' => 'alert_status_conntrack_full',
+        'firewall_disabled' => 'alert_status_firewall_disabled',
+        'firewall_restored' => 'alert_status_firewall_restored',
+        'dns_resolver_failed' => 'alert_status_dns_resolver_failed',
+        'dns_resolver_restored' => 'alert_status_dns_resolver_restored',
     ];
     $alert_status_key = $alert_status_keys[$new_status] ?? 'alert_status_down';
 
@@ -6173,9 +6470,11 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $pd_action = bk_pagerduty_action($new_status);
         if ($pd_action !== null) {
             // One key per monitor: the agent-silence page and the outage page
-            // are the same incident, and the recovery closes it.
+            // are the same incident, and the recovery closes it. Disks get
+            // their own key (bk_pagerduty_dedup_key), so neither side can
+            // close the other's incident.
             $pd_ok = send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg",
-                'Blood Kings Monitoring', 'bk-monitor-' . (int)($monitor['id'] ?? 0));
+                'Blood Kings Monitoring', bk_pagerduty_dedup_key((int)($monitor['id'] ?? 0), $new_status));
             bk_log_notification(
                 $pdo,
                 (int)($monitor['id'] ?? 0),
@@ -6429,16 +6728,14 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
 }
 
 /**
- * A client count an agent sent: a non-negative whole number, or null.
+ * A client count an agent sent: a whole number from 0 to 4096, or null.
+ * More stations than any access point holds is a parser error, not a crowd.
  */
 function bk_wifi_count($value): ?int {
-    if (is_int($value)) {
-        return $value >= 0 ? $value : null;
-    }
     if (is_string($value) && preg_match('/^\d{1,6}$/', $value)) {
-        return (int)$value;
+        $value = (int)$value;
     }
-    return null;
+    return (is_int($value) && $value >= 0 && $value <= 4096) ? $value : null;
 }
 
 /**
@@ -6454,17 +6751,40 @@ function bk_wifi_count($value): ?int {
  * unknown, not zero - and a radio claiming more capable than known is ignored.
  * On 6 GHz itself every client supports it, so there is nothing to count.
  *
- * @return array<string, ?int> keyed by the vps_metrics column
+ * Agent 0.1.7 adds the air itself, over ACCESS-POINT radios only (a client or
+ * mesh uplink measures someone else's network): per band the WORST noise and
+ * the busiest channel with the foreign share of THAT radio - an average of a
+ * quiet and a jammed radio would describe neither; two VAPs of one radio
+ * report the same reading and a maximum counts it once by itself. Sums start
+ * at the first radio that reported a value: all-null stays null, never 0.
+ *
+ * `wifi_6e_unserved` answers "are at least two 6 GHz-capable clients here
+ * while no 6 GHz network is?" and is three-valued. A station that did not say
+ * what it supports is UNKNOWN, so the answer is 0 only when even all unknown
+ * stations together could not reach two - otherwise null, never a measured 0.
+ *
+ * @return array<string, int|float|null> keyed by the vps_metrics column
  */
 function bk_wifi_band_totals($radios): array {
     $out = [
         'wifi_clients_24g' => null, 'wifi_clients_5g' => null, 'wifi_clients_6g' => null,
         'wifi_6e_capable_24g' => null, 'wifi_6e_known_24g' => null,
         'wifi_6e_capable_5g' => null, 'wifi_6e_known_5g' => null,
+        'wifi_noise_24g' => null, 'wifi_noise_5g' => null, 'wifi_noise_6g' => null,
+        'wifi_busy_24g' => null, 'wifi_busy_5g' => null, 'wifi_busy_6g' => null,
+        'wifi_busy_other_24g' => null, 'wifi_busy_other_5g' => null, 'wifi_busy_other_6g' => null,
+        'wifi_weak_clients' => null, 'wifi_wpa2_clients' => null,
+        'wifi_6e_unserved' => null, 'wifi_5g_capable_24g' => null,
     ];
     if (!is_array($radios)) {
         return $out;
     }
+    // Inputs of wifi_6e_unserved, over the 2.4 and 5 GHz access points.
+    $ap_on_6g = false;
+    $caps_reported = false;
+    $capable_sum = 0;
+    $unknown_sum = 0;
+    $unknown_bounded = true;
     $suffix = ['2.4GHz' => '24g', '5GHz' => '5g', '6GHz' => '6g'];
     foreach ($radios as $radio) {
         if (!is_array($radio) || !is_string($radio['band'] ?? null) || !isset($suffix[$radio['band']])) {
@@ -6480,18 +6800,2344 @@ function bk_wifi_band_totals($radios): array {
         if ($clients !== null) {
             $add("wifi_clients_{$band}", $clients);
         }
-        if ($band === '6g') {
-            continue;
-        }
         $known = bk_wifi_count($radio['clients_caps_known'] ?? null);
         $capable = bk_wifi_count($radio['clients_6ghz_capable'] ?? null);
+        // A radio claiming more capable than known stations is ignored.
         if ($known === null || $capable === null || $capable > $known) {
+            $known_ok = null;
+            $capable = null;
+        } else {
+            $known_ok = $known;
+        }
+        if ($band !== '6g' && $known_ok !== null && $capable !== null) {
+            $add("wifi_6e_known_{$band}", $known_ok);
+            $add("wifi_6e_capable_{$band}", $capable);
+        }
+
+        // `mode` is absent from agents up to 0.1.6, which report access points only.
+        if (($radio['mode'] ?? 'ap') !== 'ap') {
             continue;
         }
-        $add("wifi_6e_known_{$band}", $known);
-        $add("wifi_6e_capable_{$band}", $capable);
+        $noise = bk_ranged_num($radio['noise'] ?? null, -120.0, -20.0);
+        if ($noise !== null && ($out["wifi_noise_{$band}"] === null || $noise > $out["wifi_noise_{$band}"])) {
+            $out["wifi_noise_{$band}"] = $noise;
+        }
+        $busy = bk_ranged_num($radio['busy_pct'] ?? null, 0.0, 100.0);
+        $busy_other = bk_ranged_num($radio['busy_other_pct'] ?? null, 0.0, 100.0);
+        $busiest = $out["wifi_busy_{$band}"];
+        // On a tie (two VAPs of one radio) the one that knows the foreign share wins.
+        if ($busy !== null && ($busiest === null || $busy > $busiest || ($busy === $busiest && $out["wifi_busy_other_{$band}"] === null))) {
+            $out["wifi_busy_{$band}"] = $busy;
+            $out["wifi_busy_other_{$band}"] = $busy_other;
+        }
+        $weak = bk_wifi_count($radio['clients_weak'] ?? null);
+        if ($weak !== null) {
+            $add('wifi_weak_clients', $weak);
+        }
+        $wpa2 = bk_wifi_count($radio['clients_wpa2'] ?? null);
+        if ($wpa2 !== null && bk_wifi_count($radio['clients_akm_known'] ?? null) !== null) {
+            $add('wifi_wpa2_clients', $wpa2);
+        }
+        $on_5g = bk_wifi_count($radio['clients_5ghz_capable'] ?? null);
+        if ($band === '24g' && $on_5g !== null && bk_wifi_count($radio['clients_opclass_known'] ?? null) !== null) {
+            $add('wifi_5g_capable_24g', $on_5g);
+        }
+
+        if ($band === '6g') {
+            $ap_on_6g = true;
+            continue;
+        }
+        $caps_reported = $caps_reported || $known !== null;
+        if ($capable !== null) {
+            $capable_sum += $capable;
+        }
+        if ($known_ok !== null && $clients !== null) {
+            $unknown_sum += max(0, $clients - $known_ok);
+        } else {
+            // Nothing bounds how many more capable clients this radio may hold.
+            $unknown_bounded = false;
+        }
+    }
+    if ($caps_reported) {
+        if ($ap_on_6g) {
+            $out['wifi_6e_unserved'] = 0;
+        } elseif ($capable_sum >= 2) {
+            // Unknown stations can only add to it.
+            $out['wifi_6e_unserved'] = 1;
+        } elseif ($unknown_bounded && $capable_sum + $unknown_sum < 2) {
+            $out['wifi_6e_unserved'] = 0;
+        }
     }
     return $out;
+}
+
+/**
+ * A number an agent sent, inside [min, max] - or null.
+ *
+ * Out of range becomes NULL, never the bound: a noise floor of 0 dBm pulled
+ * to -20 would be an invented measurement that a chart then draws as real.
+ */
+function bk_ranged_num($value, float $min, float $max): ?float {
+    if (is_bool($value) || is_array($value) || $value === null || $value === '' || !is_numeric($value)) {
+        return null;
+    }
+    $num = (float)$value;
+    return ($num >= $min && $num <= $max) ? $num : null;
+}
+
+/**
+ * Whole-number variant of bk_ranged_num(): 3.5 is not a count and is null too.
+ * Compared as integers - lifetime byte counters run past 2^53, where a float
+ * would silently round them.
+ */
+function bk_ranged_int($value, int $min, int $max): ?int {
+    if (is_string($value) && preg_match('/^-?\d{1,18}$/', $value)) {
+        $value = (int)$value;
+    } elseif (is_float($value) && floor($value) === $value && abs($value) < 9.0e15) {
+        $value = (int)$value;
+    }
+    return (is_int($value) && $value >= $min && $value <= $max) ? $value : null;
+}
+
+/**
+ * Wi-Fi generation and channel width of a radio, read from its HT mode.
+ *
+ * The server derives them so that the rules, the digest and the app all read
+ * the same numbers; the app only formats them. `supported_*` is what the card
+ * can do ON THIS BAND: iwinfo lists the modes of the whole phy, and a 2.4 GHz
+ * radio that lists VHT80 must never be told "your card can do Wi-Fi 5 at
+ * 80 MHz" - 2.4 GHz has no VHT and no channel wider than 40 MHz.
+ *
+ * @param array<string, mixed> $r a sanitized radio (htmode, htmodes_supported, band)
+ * @return array{generation: ?int, width_mhz: ?int, supported_generation: ?int, supported_width_mhz: ?int}
+ */
+function bk_wifi_radio_profile(array $r): array {
+    $gen_of = ['HT' => 4, 'VHT' => 5, 'HE' => 6, 'EHT' => 7];
+    // [generation, width] of one mode string, or null when it is not a mode.
+    $parse = function ($mode) use ($gen_of): ?array {
+        if ($mode === 'NOHT') {
+            return [0, 20];
+        }
+        if (!is_string($mode) || !preg_match('/^(HT|VHT|HE|EHT)(\d{2,3})(\+80)?$/', $mode, $m)) {
+            return null;
+        }
+        // VHT80+80 is two 80 MHz segments: 160 MHz of air.
+        return [$gen_of[$m[1]], isset($m[3]) ? 160 : (int)$m[2]];
+    };
+    $out = ['generation' => null, 'width_mhz' => null, 'supported_generation' => null, 'supported_width_mhz' => null];
+    $current = $parse($r['htmode'] ?? null);
+    if ($current !== null) {
+        [$out['generation'], $out['width_mhz']] = $current;
+    }
+    // Without a band nothing can be said about what the card could do on it.
+    $limits = ['2.4GHz' => [[0, 4, 6, 7], 40], '5GHz' => [[0, 4, 5, 6, 7], 160], '6GHz' => [[6, 7], 320]];
+    $band = $r['band'] ?? null;
+    if (!is_string($band) || !isset($limits[$band]) || !is_array($r['htmodes_supported'] ?? null)) {
+        return $out;
+    }
+    [$allowed_gens, $max_width] = $limits[$band];
+    foreach ($r['htmodes_supported'] as $mode) {
+        $parsed = $parse($mode);
+        if ($parsed === null || !in_array($parsed[0], $allowed_gens, true)) {
+            continue;
+        }
+        $out['supported_generation'] = max($out['supported_generation'] ?? 0, $parsed[0]);
+        $out['supported_width_mhz'] = max($out['supported_width_mhz'] ?? 0, min($parsed[1], $max_width));
+    }
+    return $out;
+}
+
+/**
+ * The `wifi_radios` list of an OpenWrt agent, validated before it is stored.
+ *
+ * It used to go into last_details exactly as sent. Rules now read it, so:
+ *  - only the keys of the contract survive (a BSSID or a MAC an agent might
+ *    send one day never reaches the database);
+ *  - a value out of range is NULL, not the bound (see bk_ranged_num());
+ *  - only keys the agent SENT are copied. The app tells "an older agent" (no
+ *    key, no line) from "the router could not tell" (key = null, a hint to
+ *    install hostapd-utils) by the presence of the key, so filling absent
+ *    keys with null would show that hint on every 0.1.6 router;
+ *  - the band follows the frequency. Agents up to 0.1.6 defaulted a disabled
+ *    radio to "2.4GHz"; without a frequency their word counts only together
+ *    with a channel.
+ *
+ * @return ?array<int, array<string, mixed>> null when the agent sent no list
+ */
+function bk_sanitize_wifi_radios($raw): ?array {
+    if (!is_array($raw)) {
+        return null;
+    }
+    $htmode_re = '/^(NOHT|(HT|VHT|HE|EHT)\d{2,3}(\+80)?)$/';
+    $enums = [
+        'mode' => ['ap', 'client', 'mesh', 'other'],
+        'encryption' => ['open', 'owe', 'wep', 'wpa', 'wpa_wpa2', 'wpa2', 'wpa2_wpa3', 'wpa3'],
+        'busy_state' => ['measured', 'warming_up', 'unsupported', 'not_installed'],
+    ];
+    // key => [min, max]; whole numbers unless listed in $decimals.
+    $ranges = [
+        'channel' => [1, 233], 'tx_power' => [0, 40], 'noise' => [-120, -20],
+        'signal_median' => [-120, -1], 'signal_min' => [-120, -1], 'snr_min' => [0, 100],
+        'bitrate_tx_avg_mbps' => [0, 50000], 'busy_pct' => [0, 100], 'busy_other_pct' => [0, 100],
+    ];
+    $decimals = ['bitrate_tx_avg_mbps', 'busy_pct', 'busy_other_pct'];
+    $counts = ['clients', 'clients_weak', 'clients_caps_known', 'clients_6ghz_capable', 'clients_opclass_known',
+        'clients_5ghz_capable', 'clients_akm_known', 'clients_wpa2', 'clients_wpa3', 'clients_8021x'];
+
+    $out = [];
+    foreach ($raw as $item) {
+        if (count($out) >= 16) {
+            break;
+        }
+        if (!is_array($item) || !is_string($item['radio'] ?? null) || !preg_match('/^[A-Za-z0-9._-]{1,32}$/', $item['radio'])) {
+            continue;
+        }
+        $r = ['radio' => $item['radio']];
+        foreach ($ranges as $key => [$min, $max]) {
+            if (array_key_exists($key, $item)) {
+                $r[$key] = in_array($key, $decimals, true)
+                    ? bk_ranged_num($item[$key], (float)$min, (float)$max)
+                    : bk_ranged_int($item[$key], $min, $max);
+            }
+        }
+        foreach ($counts as $key) {
+            if (array_key_exists($key, $item)) {
+                $r[$key] = bk_wifi_count($item[$key]);
+            }
+        }
+        foreach ($enums as $key => $allowed) {
+            if (array_key_exists($key, $item)) {
+                $r[$key] = in_array($item[$key], $allowed, true) ? $item[$key] : null;
+            }
+        }
+        foreach (['phy_has_6ghz', 'encryption_enterprise'] as $key) {
+            if (array_key_exists($key, $item)) {
+                $r[$key] = is_bool($item[$key]) ? $item[$key] : null;
+            }
+        }
+        if (array_key_exists('ssid', $item)) {
+            $ssid = is_string($item['ssid']) ? (string)preg_replace('/[\x00-\x1F\x7F]/', '', $item['ssid']) : '';
+            $r['ssid'] = $ssid !== '' ? mb_substr($ssid, 0, 64) : null;
+        }
+        if (array_key_exists('phy', $item)) {
+            $r['phy'] = (is_string($item['phy']) && preg_match('/^phy\d{1,2}$/', $item['phy'])) ? $item['phy'] : null;
+        }
+        if (array_key_exists('htmode', $item)) {
+            $r['htmode'] = (is_string($item['htmode']) && preg_match($htmode_re, $item['htmode'])) ? $item['htmode'] : null;
+        }
+        if (array_key_exists('htmodes_supported', $item)) {
+            $modes = is_array($item['htmodes_supported'])
+                ? array_filter($item['htmodes_supported'], fn($m) => is_string($m) && preg_match($htmode_re, $m))
+                : null;
+            $r['htmodes_supported'] = $modes === null ? null : array_slice(array_values(array_unique($modes)), 0, 24);
+        }
+        if (array_key_exists('weakest_gen', $item)) {
+            $r['weakest_gen'] = in_array($item['weakest_gen'], [0, 4, 5, 6, 7], true) ? $item['weakest_gen'] : null;
+        }
+        // (0, 50000]: a mean TX rate of exactly 0 Mbit/s is not a measurement.
+        if (($r['bitrate_tx_avg_mbps'] ?? null) === 0.0) {
+            $r['bitrate_tx_avg_mbps'] = null;
+        }
+        // Foreign traffic is a part of the busy time; more than the whole, or a
+        // part of an unknown whole, is not a reading.
+        if (isset($r['busy_other_pct']) && (!isset($r['busy_pct']) || $r['busy_other_pct'] > $r['busy_pct'])) {
+            $r['busy_other_pct'] = null;
+        }
+
+        $frequency = array_key_exists('frequency_mhz', $item) ? bk_ranged_int($item['frequency_mhz'], 2400, 7125) : null;
+        if (array_key_exists('frequency_mhz', $item)) {
+            $r['frequency_mhz'] = $frequency;
+        }
+        $r['band'] = bk_wifi_band_of($frequency, $item['band'] ?? null, $r['channel'] ?? null);
+
+        if (array_key_exists('clients_gen', $item)) {
+            $gen = $item['clients_gen'];
+            $r['clients_gen'] = null;
+            if (is_array($gen) && in_array($gen['source'] ?? null, ['hostapd_cli', 'ubus'], true)) {
+                $r['clients_gen'] = ['source' => $gen['source']];
+                foreach (['legacy', 'wifi4', 'wifi5', 'wifi6', 'wifi7'] as $key) {
+                    $r['clients_gen'][$key] = bk_wifi_count($gen[$key] ?? null);
+                }
+                // Over ubus an EHT station cannot be told from an HE one:
+                // "wifi6" means "6 or newer" and a wifi7 count would be invented.
+                if ($gen['source'] === 'ubus') {
+                    $r['clients_gen']['wifi7'] = null;
+                }
+            }
+        }
+        // A part larger than its whole discredits both numbers.
+        foreach ([['clients_6ghz_capable', 'clients_caps_known'], ['clients_5ghz_capable', 'clients_opclass_known']] as [$part, $whole]) {
+            if (isset($r[$part]) && (!isset($r[$whole]) || $r[$part] > $r[$whole])) {
+                $r[$part] = null;
+                if (array_key_exists($whole, $r)) {
+                    $r[$whole] = null;
+                }
+            }
+        }
+        $akm_parts = ['clients_wpa2', 'clients_wpa3', 'clients_8021x'];
+        $akm_sum = array_sum(array_map(fn($k) => $r[$k] ?? 0, $akm_parts));
+        if ($akm_sum > 0 && (!isset($r['clients_akm_known']) || $akm_sum > $r['clients_akm_known'])) {
+            foreach (array_merge($akm_parts, ['clients_akm_known']) as $key) {
+                if (array_key_exists($key, $r)) {
+                    $r[$key] = null;
+                }
+            }
+        }
+        $out[] = array_merge($r, bk_wifi_radio_profile($r));
+    }
+    return $out;
+}
+
+/**
+ * Band of a radio: from the frequency only (2400-2499 / 5150-5924 / 5925-7125
+ * MHz). Without a valid frequency the agent's own word is kept only when it
+ * names a known band AND the radio has a channel - a disabled radio of an
+ * agent up to 0.1.6 claimed "2.4GHz" by default.
+ */
+function bk_wifi_band_of(?int $frequency_mhz, $agent_band, ?int $channel): ?string {
+    if ($frequency_mhz !== null) {
+        if ($frequency_mhz >= 2400 && $frequency_mhz < 2500) {
+            return '2.4GHz';
+        }
+        if ($frequency_mhz >= 5150 && $frequency_mhz < 5925) {
+            return '5GHz';
+        }
+        return ($frequency_mhz >= 5925 && $frequency_mhz <= 7125) ? '6GHz' : null;
+    }
+    $known = in_array($agent_band, ['2.4GHz', '5GHz', '6GHz'], true);
+    return ($known && $channel !== null) ? $agent_band : null;
+}
+
+/**
+ * Identity of a physical disk on one router: transport, port, the 16-character
+ * sysfs model and the size. NEVER a serial number or a WWN - neither may leave
+ * the router. The fuller model smartctl reads is display only and not part of
+ * the key, so the key is the same before and after the first SMART reading.
+ *
+ * @param array<string, mixed> $disk a sanitized disk
+ */
+function bk_disk_key(array $disk): string {
+    return substr(sha1(implode('|', [
+        (string)($disk['transport'] ?? ''), (string)($disk['port'] ?? ''),
+        (string)($disk['model'] ?? ''), (string)($disk['size_bytes'] ?? ''),
+    ])), 0, 16);
+}
+
+/**
+ * The `storage_disks` list of an OpenWrt agent (0.1.7+), validated.
+ *
+ * An allow-list on every level: anything else is dropped, and a key whose
+ * name smells of an identifier (serial, WWN, EUI, GUID, CID) is dropped even
+ * if someone later puts it on the list. Out of range = null (bk_ranged_int);
+ * only counts and lengths are capped.
+ *
+ * @return ?array<int, array<string, mixed>> null when the agent sent no list
+ */
+function bk_sanitize_storage_disks($raw, int $now): ?array {
+    if (!is_array($raw)) {
+        return null;
+    }
+    $never = '/serial|wwn|eui|guid|cid/i';
+    $text = function ($value): ?string {
+        if (!is_string($value)) {
+            return null;
+        }
+        $clean = trim(mb_substr((string)preg_replace('~[^A-Za-z0-9 ._()+/-]~', '', $value), 0, 64));
+        return $clean !== '' ? $clean : null;
+    };
+    $bool = fn ($value): ?bool => is_bool($value) ? $value : null;
+    $smart_ints = [
+        'exit_bits' => [0, 255], 'rotation_rpm' => [0, 30000],
+        // 0 °C and below is a sensor that answers nothing, not a cold disk.
+        'temperature_c' => [1, 125],
+        'power_on_hours' => [0, 1000000], 'power_cycles' => [0, 10000000], 'unsafe_shutdowns' => [0, 10000000],
+        'reallocated_sectors' => [0, 1000000000], 'pending_sectors' => [0, 1000000000],
+        'offline_uncorrectable' => [0, 1000000000], 'reported_uncorrect' => [0, 1000000000],
+        'crc_errors' => [0, 1000000000], 'runtime_bad_blocks' => [0, 1000000000],
+        'media_errors' => [0, 2 ** 53], 'critical_warning' => [0, 255], 'available_spare_pct' => [0, 100],
+        'wear_pct' => [0, 255], 'written_bytes' => [0, 2 ** 60],
+        'error_log_count' => [0, 65535], 'selftest_count' => [0, 65535],
+    ];
+    $smart_enums = [
+        'protocol' => ['ATA', 'NVMe', 'SCSI'],
+        'wear_source' => ['devstat', 'attr231', 'attr169', 'attr202', 'attr233', 'attr177', 'nvme'],
+        'written_source' => ['devstat', 'nvme', 'attr241'],
+    ];
+    $states = ['ok', 'failing', 'standby', 'idle_skipped', 'pending', 'not_installed', 'unsupported', 'error', 'stuck', 'not_applicable'];
+
+    $out = [];
+    foreach ($raw as $item) {
+        if (count($out) >= 8) {
+            break;
+        }
+        if (!is_array($item) || !is_string($item['name'] ?? null)
+            || !preg_match('/^(sd[a-z]{1,2}|hd[a-z]|vd[a-z]|nvme\d{1,2}n\d{1,2}|mmcblk\d{1,2})$/', $item['name'])) {
+            continue;
+        }
+        $transport = $item['transport'] ?? null;
+        $port = $item['port'] ?? null;
+        $disk = [
+            'name' => $item['name'],
+            'transport' => in_array($transport, ['sata', 'usb', 'nvme', 'emmc', 'sd', 'virtio', 'other'], true) ? $transport : 'other',
+            'port' => (is_string($port) && preg_match('/^[A-Za-z0-9.:-]{1,32}$/', $port)) ? $port : null,
+            'model' => $text($item['model'] ?? null),
+            'size_bytes' => bk_ranged_int($item['size_bytes'] ?? null, 1, 2 ** 50),
+            'rotational' => $bool($item['rotational'] ?? null),
+            'removable' => $bool($item['removable'] ?? null),
+            'partitions' => [],
+            'emmc' => null,
+        ];
+        foreach (is_array($item['partitions'] ?? null) ? $item['partitions'] : [] as $part) {
+            if (count($disk['partitions']) >= 16) {
+                break;
+            }
+            if (!is_array($part) || !is_string($part['name'] ?? null) || !preg_match('/^[a-z0-9]{1,24}$/', $part['name'])) {
+                continue;
+            }
+            $mount = $part['mount'] ?? null;
+            $fstype = $part['fstype'] ?? null;
+            $disk['partitions'][] = [
+                'name' => $part['name'],
+                'size_bytes' => bk_ranged_int($part['size_bytes'] ?? null, 1, 2 ** 50),
+                'mount' => (is_string($mount) && $mount !== '' && $mount[0] === '/' && strlen($mount) <= 128 && !preg_match('/[\x00-\x1F\x7F]/', $mount)) ? $mount : null,
+                'fstype' => (is_string($fstype) && preg_match('/^[a-z0-9_.-]{1,16}$/', $fstype)) ? $fstype : null,
+                'used_pct' => bk_ranged_num($part['used_pct'] ?? null, 0.0, 100.0),
+            ];
+        }
+        if (is_array($item['emmc'] ?? null)) {
+            $disk['emmc'] = [
+                'life_a' => bk_ranged_int($item['emmc']['life_a'] ?? null, 1, 11),
+                'life_b' => bk_ranged_int($item['emmc']['life_b'] ?? null, 1, 11),
+                'pre_eol' => bk_ranged_int($item['emmc']['pre_eol'] ?? null, 1, 3),
+            ];
+        }
+        $raw_smart = is_array($item['smart'] ?? null) ? $item['smart'] : [];
+        $smart = [
+            // A state the server does not know is a failed reading, not a healthy one.
+            'state' => in_array($raw_smart['state'] ?? null, $states, true) ? $raw_smart['state'] : 'error',
+            'checked_at' => bk_ranged_int($raw_smart['checked_at'] ?? null, $now - 400 * 86400, $now + 86400),
+            'passed' => $bool($raw_smart['passed'] ?? null),
+            'in_drivedb' => $bool($raw_smart['in_drivedb'] ?? null),
+            'model' => $text($raw_smart['model'] ?? null),
+        ];
+        foreach ($smart_ints as $key => [$min, $max]) {
+            $smart[$key] = bk_ranged_int($raw_smart[$key] ?? null, $min, $max);
+        }
+        foreach ($smart_enums as $key => $allowed) {
+            $smart[$key] = in_array($raw_smart[$key] ?? null, $allowed, true) ? $raw_smart[$key] : null;
+        }
+        $disk['smart'] = $smart;
+        // Belt and braces: the lists above name no identifier today, and this
+        // keeps it so for whoever extends them.
+        foreach (['smart', 'emmc'] as $nested) {
+            if (is_array($disk[$nested])) {
+                $disk[$nested] = array_filter($disk[$nested], fn ($k) => !preg_match($never, (string)$k), ARRAY_FILTER_USE_KEY);
+            }
+        }
+        $disk = array_filter($disk, fn ($k) => !preg_match($never, (string)$k), ARRAY_FILTER_USE_KEY);
+        $disk['key'] = bk_disk_key($disk);
+        $out[] = $disk;
+    }
+    return $out;
+}
+
+/**
+ * The `agent_tools` object: which optional programs the router has. Strict
+ * booleans - "1" or "yes" is not an answer a rule may act on.
+ *
+ * @return ?array<string, mixed> null when the agent sent no object
+ */
+function bk_sanitize_agent_tools($raw): ?array {
+    if (!is_array($raw)) {
+        return null;
+    }
+    $out = [];
+    foreach (['smartctl', 'smart_drivedb', 'hostapd_cli', 'iw', 'librespeed_cli', 'ethtool', 'tc'] as $key) {
+        $out[$key] = is_bool($raw[$key] ?? null) ? $raw[$key] : null;
+    }
+    $out['pkg_manager'] = in_array($raw['pkg_manager'] ?? null, ['opkg', 'apk'], true) ? $raw['pkg_manager'] : null;
+    foreach (['smart_probe_age_s', 'smart_probe_running_s'] as $key) {
+        $out[$key] = bk_ranged_int($raw[$key] ?? null, 0, 10000000);
+    }
+    return $out;
+}
+
+/**
+ * Temperature limit of a disk's class: 60 °C spinning, 80 °C NVMe, 70 °C
+ * everything else. Mirrors `lib/disk-health.ts:tempClassLimit` - the card and
+ * the alert must never disagree about what "too hot" means.
+ */
+function bk_disk_temp_limit(array $disk): int {
+    $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+    $rpm = $smart['rotation_rpm'] ?? null;
+    // The rotation speed wins over sysfs; never guessed from the model.
+    $spinning = $rpm !== null ? ($rpm > 0) : (is_bool($disk['rotational'] ?? null) ? $disk['rotational'] : null);
+    if ($spinning === true) {
+        return 60;
+    }
+    if (($disk['transport'] ?? null) === 'nvme' || ($smart['protocol'] ?? null) === 'NVMe') {
+        return 80;
+    }
+    return 70;
+}
+
+/** The alert latches of one disk, with every field present. */
+function bk_storage_alert_state($raw): array {
+    $raw = is_array($raw) ? $raw : [];
+    $base = is_array($raw['base'] ?? null) ? $raw['base'] : [];
+    $int_or_null = function ($v): ?int {
+        return is_int($v) ? $v : (is_float($v) && $v == (int)$v ? (int)$v : null);
+    };
+    // A counter of readings, not a measurement: "no consecutive reading yet"
+    // really is zero. Written without `?? 0` so the honesty lint, which reads
+    // "temp" as a measured quantity, does not have to carry an exception.
+    $counted = fn ($v): int => is_int($v) && $v > 0 ? $v : 0;
+    $state = [
+        'failed' => !empty($raw['failed']),
+        'failed_sent_at' => $int_or_null($raw['failed_sent_at'] ?? null),
+        'ok_streak' => $counted($raw['ok_streak'] ?? null),
+        'base' => [],
+        'sectors_sent_at' => $int_or_null($raw['sectors_sent_at'] ?? null),
+        'wear_step' => $counted($raw['wear_step'] ?? null),
+        'temp_hot' => !empty($raw['temp_hot']),
+        'temp_streak' => $counted($raw['temp_streak'] ?? null),
+        'eol' => $int_or_null($raw['eol'] ?? null),
+        // Power-on hours of the last evaluated reading. A drop of more than
+        // 48 h is another drive in the same slot (3.4 step 3), and its
+        // history must not be measured against the old one's baselines.
+        'hours' => $int_or_null($raw['hours'] ?? null),
+    ];
+    foreach (bk_disk_error_counters() as $short => $ignored) {
+        // null = never seen. 0 would claim "the disk reported zero errors",
+        // which is what makes a first sight alert instead of storing a baseline.
+        $state['base'][$short] = $int_or_null($base[$short] ?? null);
+    }
+    return $state;
+}
+
+/** The six SMART error counters that `disk_errors_growing` watches: short name => [smart key, Czech name]. */
+function bk_disk_error_counters(): array {
+    return [
+        'realloc' => ['reallocated_sectors', 'přemapované sektory'],
+        'pending' => ['pending_sectors', 'čekající sektory'],
+        'offline' => ['offline_uncorrectable', 'neopravitelné sektory'],
+        'reported' => ['reported_uncorrect', 'neopravitelné chyby'],
+        'badblk' => ['runtime_bad_blocks', 'vadné bloky'],
+        'media' => ['media_errors', 'chyby média'],
+    ];
+}
+
+/** `Kingston SUV500 (sda)`, or just `(sda)` when the router never read a model. */
+function bk_disk_label(array $disk): string {
+    $model = $disk['smart']['model'] ?? ($disk['model'] ?? null);
+    $name = (string)($disk['name'] ?? '?');
+    return is_string($model) && $model !== '' ? $model . ' (' . $name . ')' : '(' . $name . ')';
+}
+
+/**
+ * The disk alert rules of CORE 3.5. Pure: it is handed the FRESH readings
+ * (3.4 step 5 - a reading whose guarded UPDATE changed a row, so the same
+ * SMART reading can never be evaluated twice) and the stored latches, and it
+ * answers the new latches plus the events to send.
+ *
+ * Hysteresis everywhere, because a disk sits at its limit for months: a
+ * temperature alerts on the second reading and clears five degrees lower, a
+ * SMART failure alerts at most once a day and needs three clean readings to
+ * clear, and a counter's baseline rises only when an alert really went out.
+ *
+ * @param list<array<string, mixed>> $fresh_disks sanitized disks, each with `key`
+ * @param array<string, mixed> $states disk key => stored alert_state
+ * @return array{states: array<string, array<string, mixed>>, events: list<array<string, string>>}
+ */
+function bk_storage_alert_eval(array $fresh_disks, array $states, int $now): array {
+    $out_states = [];
+    $events = [];
+    foreach ($fresh_disks as $disk) {
+        if (!is_array($disk) || !is_string($disk['key'] ?? null) || $disk['key'] === '') {
+            continue;
+        }
+        $key = $disk['key'];
+        $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+        $st = bk_storage_alert_state($states[$key] ?? null);
+        $label = bk_disk_label($disk);
+        $name = (string)($disk['name'] ?? '?');
+
+        // Another drive in the same slot: the power-on hours went backwards by
+        // more than the 48 h a clock or a firmware rounding can explain. Its
+        // baselines and latches describe a disk that is no longer here.
+        $hours = $smart['power_on_hours'] ?? null;
+        if ($hours !== null && $st['hours'] !== null && $hours < $st['hours'] - 48) {
+            $st = bk_storage_alert_state(null);
+        }
+        if ($hours !== null) {
+            $st['hours'] = $hours;
+        }
+
+        $cw = $smart['critical_warning'] ?? null;
+        $bits = $smart['exit_bits'] ?? null;
+        // Bit 3 = the disk failed in the past, bit 4 = it is failing now.
+        $bits_bad = $bits !== null && ($bits & 0x18) !== 0;
+        $cw_bad = $cw !== null && ($cw & 0x3D) !== 0;
+        $failing = ($smart['state'] ?? null) === 'failing' || $bits_bad || $cw_bad;
+        $clean = !$failing && ($smart['passed'] ?? null) === true;
+
+        if ($failing) {
+            $st['ok_streak'] = 0;
+            // At most one page a day per disk: a prefail attribute that
+            // crosses its threshold back and forth on a warm disk would
+            // otherwise send an hourly failing/recovered pair.
+            if ($st['failed_sent_at'] === null || ($now - $st['failed_sent_at']) >= 86400) {
+                $events[] = bk_storage_alert_event($key, 'disk_smart_failed', 'storage_failing',
+                    sprintf('Disk %s hlásí selhání SMART. Zálohujte data a disk vyměňte.', $label));
+                $st['failed_sent_at'] = $now;
+            }
+            $st['failed'] = true;
+        } elseif ($clean) {
+            if ($st['failed']) {
+                $st['ok_streak']++;
+                // Three consecutive clean readings: one is a re-read of the
+                // same attribute set, and the disk must prove itself.
+                if ($st['ok_streak'] >= 3) {
+                    $events[] = bk_storage_alert_event($key, 'disk_smart_ok', 'storage_recovered',
+                        sprintf('Disk %s je podle SMART opět v pořádku.', $label));
+                    $st['failed'] = false;
+                    $st['failed_sent_at'] = null;
+                    $st['ok_streak'] = 0;
+                }
+            }
+        } else {
+            // Neither a failure nor a pass (standby, unreadable): the streak
+            // of CONSECUTIVE clean readings is broken, nothing is claimed.
+            $st['ok_streak'] = 0;
+        }
+
+        [$st, $counter_events] = bk_disk_counter_rules($st, $disk, $smart, $label, $key, $now);
+        $events = array_merge($events, $counter_events);
+        [$st, $wear_events] = bk_disk_wear_rules($st, $disk, $smart, $label, $name, $key);
+        $events = array_merge($events, $wear_events);
+
+        $temp = $smart['temperature_c'] ?? null;
+        if ($temp !== null) {
+            $limit = bk_disk_temp_limit($disk);
+            if ($temp >= $limit) {
+                $st['temp_streak']++;
+                if (!$st['temp_hot'] && $st['temp_streak'] >= 2) {
+                    $events[] = bk_storage_alert_event($key, 'disk_temp_critical', 'storage_warning',
+                        sprintf('Disk %s má %d °C (limit %d °C).', $label, $temp, $limit));
+                    $st['temp_hot'] = true;
+                }
+            } elseif ($temp <= $limit - 5) {
+                $st['temp_streak'] = 0;
+                if ($st['temp_hot']) {
+                    $events[] = bk_storage_alert_event($key, 'disk_temp_normal', 'storage_recovered',
+                        sprintf('Disk %s zchladl na %d °C.', $label, $temp));
+                    $st['temp_hot'] = false;
+                }
+            } else {
+                // Inside the five-degree band: the alert neither fires nor
+                // clears, or a disk idling one degree under its limit would
+                // notify every hour.
+                $st['temp_streak'] = 0;
+            }
+        }
+
+        $out_states[$key] = $st;
+    }
+    return ['states' => $out_states, 'events' => $events];
+}
+
+/** One event of the disk rules. The message is operator Czech and fits monitor_events.description. */
+function bk_storage_alert_event(string $disk_key, string $type, string $status, string $message): array {
+    return [
+        'disk' => $disk_key,
+        'type' => $type,
+        'status' => $status,
+        'message' => mb_substr($message, 0, 255),
+    ];
+}
+
+/**
+ * Rule `disk_errors_growing` (CORE 3.5) for one disk.
+ *
+ * The baselines live in `$st['base']`: null = never seen, so a disk that has
+ * carried three bad blocks since the day it was bought stays quiet, while a
+ * counter that is ALREADY non-zero at first sight and means data loss
+ * (pending or offline uncorrectable sectors) pages at once.
+ *
+ * A baseline rises only together with the alert that reported it. Without
+ * that, growth during the 24 h cooldown would be swallowed: the counter would
+ * be "not above the baseline" by the time the disk is allowed to alert again.
+ *
+ * @return array{0: array<string, mixed>, 1: list<array<string, string>>}
+ */
+function bk_disk_counter_rules(array $st, array $disk, array $smart, string $label, string $key, int $now): array {
+    // Sectors that can no longer be read are lost data; a remapped sector or a
+    // bad block is the drive doing its job. That is the whole split.
+    $severe = ['pending', 'offline', 'reported', 'media'];
+    $grown = [];
+    $bad = false;
+    $first_sight_bad = [];
+    foreach (bk_disk_error_counters() as $short => [$smart_key, $cs_name]) {
+        $cur = $smart[$smart_key] ?? null;
+        if ($cur === null) {
+            continue; // not read this time - the baseline keeps what it knows
+        }
+        $base = $st['base'][$short];
+        if ($base === null) {
+            $st['base'][$short] = $cur;
+            if ($cur > 0 && in_array($short, ['pending', 'offline'], true)) {
+                $first_sight_bad[] = sprintf('%s %d', $cs_name, $cur);
+            }
+            continue;
+        }
+        if ($cur < $base) {
+            // A counter that falls is a firmware reset or a new drive database;
+            // claiming an improvement would be as dishonest as claiming growth.
+            $st['base'][$short] = $cur;
+            continue;
+        }
+        if ($cur > $base) {
+            $grown[] = sprintf('%s %d → %d', $cs_name, $base, $cur);
+            $bad = $bad || in_array($short, $severe, true);
+        }
+    }
+
+    $events = [];
+    if ($first_sight_bad !== []) {
+        // Not growth but a state: the disk already has unreadable sectors.
+        $events[] = bk_storage_alert_event($key, 'disk_errors_growing', 'storage_failing',
+            sprintf('Disk %s: %s.', $label, implode(', ', $first_sight_bad)));
+        $st['sectors_sent_at'] = $now;
+        return [$st, $events];
+    }
+    if ($grown === []) {
+        return [$st, $events];
+    }
+    if ($st['sectors_sent_at'] !== null && ($now - $st['sectors_sent_at']) < 86400) {
+        // Still in the cooldown: the baselines stay where they are, so the
+        // growth is reported in full by the first alert after it.
+        return [$st, $events];
+    }
+    $events[] = bk_storage_alert_event($key, 'disk_errors_growing',
+        $bad ? 'storage_failing' : 'storage_warning',
+        sprintf('Disk %s: %s.', $label, implode(', ', $grown)));
+    $st['sectors_sent_at'] = $now;
+    foreach (bk_disk_error_counters() as $short => [$smart_key, $ignored]) {
+        $cur = $smart[$smart_key] ?? null;
+        if ($cur !== null) {
+            $st['base'][$short] = $cur;
+        }
+    }
+    return [$st, $events];
+}
+
+/**
+ * Rules `disk_wear_high` and `disk_emmc_eol` (CORE 3.5) for one disk.
+ *
+ * `wear_step` is the coarse ten-percent step the last warning went out at, so
+ * a drive that ages from 90 % to 95 % over a year does not warn again; it warns
+ * once more when it reaches 100 %. eMMC has no wear percentage, only the JEDEC
+ * life registers (one step = 10 % consumed) and pre-EOL.
+ *
+ * @return array{0: array<string, mixed>, 1: list<array<string, string>>}
+ */
+function bk_disk_wear_rules(array $st, array $disk, array $smart, string $label, string $name, string $key): array {
+    $events = [];
+    $emmc = is_array($disk['emmc'] ?? null) ? $disk['emmc'] : [];
+    $lives = array_filter([$emmc['life_a'] ?? null, $emmc['life_b'] ?? null], fn ($v) => $v !== null);
+    $life = $lives === [] ? null : max($lives);
+    $pre_eol = $emmc['pre_eol'] ?? null;
+
+    $step = 0;
+    $message = null;
+    $wear = $smart['wear_pct'] ?? null;
+    if ($wear !== null && $wear >= 90) {
+        $step = min(100, intdiv($wear, 10) * 10);
+        $message = sprintf('Opotřebení disku %s dosáhlo %d %%.', $label, $wear);
+    } elseif ($life !== null && $life >= 10) {
+        // life 10 = 90-100 % of the rated write cycles are gone, 11 = over it.
+        $step = min(100, ($life - 1) * 10);
+        $message = sprintf('Opotřebení disku %s dosáhlo %d %%.', $label, $step);
+    } elseif ($pre_eol === 2) {
+        // JEDEC: pre-EOL 2 means 80 % of the reserve blocks are consumed.
+        $step = 80;
+        $message = sprintf('eMMC %s: rezervní bloky z 80 %% spotřebované.', $name);
+    }
+    if ($message !== null && $step > $st['wear_step']) {
+        $events[] = bk_storage_alert_event($key, 'disk_wear_high', 'storage_warning', $message);
+        $st['wear_step'] = $step;
+    }
+
+    if ($pre_eol === 3) {
+        if ($st['eol'] !== 3) {
+            $events[] = bk_storage_alert_event($key, 'disk_emmc_eol', 'storage_failing',
+                sprintf('eMMC %s: rezervní bloky jsou téměř vyčerpané.', $name));
+            $st['eol'] = 3;
+        }
+    } elseif ($pre_eol === 1) {
+        // Back to normal only on the value the JEDEC register uses for it,
+        // which in practice means the card was swapped. There is no
+        // "eMMC recovered" event: a chip does not heal, so an automatic
+        // all-clear would be a claim nobody measured.
+        $st['eol'] = null;
+    }
+    return [$st, $events];
+}
+
+/**
+ * Rule `fs_full` / `fs_freed` (CORE 3.5) over the agent's `filesystems[]`.
+ *
+ * Pure. The state lives in `last_details.fs_alerts[mount]` and is protected
+ * from the 60 kB cap, because losing it would re-send every alert.
+ *
+ * The root and the read-only OpenWrt images are left out: `/` already has the
+ * legacy `hdd` alert and a squashfs is 100 % full by construction, which is
+ * what it is FOR. A tiny partition (`/boot`) crosses any percentage on one
+ * kernel image, so it is left out by size rather than by a guessed name.
+ *
+ * `$now` is not in CORE 3.5's signature; without it the "unseen for 7 days"
+ * rule cannot be applied and the state would grow with every mount a USB disk
+ * ever had. Defaults to the wall clock, so the contract's call still works.
+ *
+ * @param array<string, mixed> $fs_state previous `fs_alerts`
+ * @return array{state: array<string, array<string, mixed>>, events: list<array<string, string>>}
+ */
+function bk_fs_alert_eval($filesystems, $fs_state, float $threshold, ?int $now = null): array {
+    $now = $now ?? time();
+    $fs_state = is_array($fs_state) ? $fs_state : [];
+    $state = [];
+    $events = [];
+    $skip_mounts = ['/', '/overlay', '/rom'];
+    $skip_fstypes = ['squashfs', 'iso9660', 'erofs', 'romfs', 'cramfs'];
+
+    foreach (is_array($filesystems) ? $filesystems : [] as $fs) {
+        if (count($state) >= 32) {
+            break;
+        }
+        if (!is_array($fs) || !is_string($fs['mount'] ?? null) || $fs['mount'] === '') {
+            continue;
+        }
+        $mount = $fs['mount'];
+        if (in_array($mount, $skip_mounts, true) || in_array($fs['fstype'] ?? null, $skip_fstypes, true)) {
+            continue;
+        }
+        $total_kb = $fs['total_kb'] ?? null;
+        if (!is_int($total_kb) && !is_float($total_kb)) {
+            continue;
+        }
+        if ($total_kb < 65536) {
+            continue;
+        }
+        $used = $fs['used_pct'] ?? null;
+        if (!is_int($used) && !is_float($used)) {
+            continue;
+        }
+        $used = (float)$used;
+
+        $prev = is_array($fs_state[$mount] ?? null) ? $fs_state[$mount] : [];
+        $streak = max(0, (int)($prev['streak'] ?? 0));
+        $sent = !empty($prev['sent']);
+        // The admin lowering the limit must be able to alert again, and raising
+        // it must not leave a stale "full" latch behind - the same reset the
+        // hdd alert does at agent_api.php:458.
+        if (isset($prev['threshold']) && (float)$prev['threshold'] !== $threshold) {
+            $streak = 0;
+            $sent = false;
+        }
+
+        if ($used >= $threshold) {
+            $streak++;
+            if (!$sent && $streak >= 2) {
+                $events[] = [
+                    'mount' => $mount,
+                    'type' => 'fs_full',
+                    'status' => 'storage_warning',
+                    'message' => mb_substr(sprintf('Oddíl %s je zaplněný z %d %% (limit %d %%).',
+                        $mount, (int)round($used), (int)round($threshold)), 0, 255),
+                ];
+                $sent = true;
+            }
+        } elseif ($used <= $threshold - 5) {
+            $streak = 0;
+            if ($sent) {
+                $events[] = [
+                    'mount' => $mount,
+                    'type' => 'fs_freed',
+                    'status' => 'storage_recovered',
+                    'message' => mb_substr(sprintf('Na oddílu %s je zase místo, zaplněný je z %d %%.',
+                        $mount, (int)round($used)), 0, 255),
+                ];
+                $sent = false;
+            }
+        } else {
+            // Inside the five-point band: neither fires nor clears, or a
+            // partition sitting one point under the limit would flap daily.
+            $streak = 0;
+        }
+
+        $state[$mount] = ['streak' => $streak, 'sent' => $sent, 'threshold' => $threshold, 'seen' => $now];
+    }
+
+    // A mount that disappeared (an unplugged USB disk) keeps its latch for a
+    // week, so re-plugging it does not re-send the alert; after that it goes,
+    // or every mount point the router ever had would stay in the blob.
+    foreach ($fs_state as $mount => $prev) {
+        if (isset($state[$mount]) || !is_array($prev)) {
+            continue;
+        }
+        $seen = is_int($prev['seen'] ?? null) ? $prev['seen'] : $now;
+        if (($now - $seen) <= 7 * 86400 && count($state) < 32) {
+            $prev['seen'] = $seen;
+            $state[$mount] = $prev;
+        }
+    }
+
+    return ['state' => $state, 'events' => $events];
+}
+
+/**
+ * The cheap pre-filter of CORE 3.4 step 1. It never decides freshness - that
+ * is the guarded UPDATE in `bk_storage_record` - it only keeps the disk tables
+ * from being touched every minute.
+ *
+ * (a) The scalar throttle: at most one DB pass per 55 minutes. It is a SCALAR
+ *     in `last_details`, so the 60 kB cap can never drop it.
+ * (b) A new SMART reading or a disk that was not in the previous list.
+ *
+ * A MISSING old list is deliberately not read as "every disk is unknown": that
+ * is exactly the `storage_list_dropped` case, and it would mean one upsert per
+ * disk per minute for a router whose details do not fit.
+ *
+ * @param list<array<string, mixed>> $disks sanitized disks, each with `key`
+ */
+function bk_storage_gate_open(?int $sample_at, array $disks, $old_disks, int $now): bool {
+    if ($sample_at === null || ($now - $sample_at) >= 55 * 60) {
+        return true;
+    }
+    if (!is_array($old_disks)) {
+        return false;
+    }
+    $seen = [];
+    foreach ($old_disks as $old) {
+        if (is_array($old) && is_string($old['key'] ?? null)) {
+            $seen[$old['key']] = $old['smart']['checked_at'] ?? null;
+        }
+    }
+    foreach ($disks as $disk) {
+        if (!is_array($disk) || !is_string($disk['key'] ?? null)) {
+            continue;
+        }
+        if (!array_key_exists($disk['key'], $seen) || ($disk['smart']['checked_at'] ?? null) !== $seen[$disk['key']]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Writes one report's disks into `storage_disks` / `storage_disk_daily`
+ * (CORE 3.4) and answers what the alert rules of 3.5 may look at.
+ *
+ * Called inside the report transaction in its own try/catch, like the metrics
+ * INSERT: a router must still get a valid response when the disk tables are
+ * missing from an older database.
+ *
+ * FRESH IS DECIDED BY THE DATABASE. The guarded `UPDATE ... WHERE
+ * last_checked_at IS NULL OR last_checked_at < ?` either changes one row - a
+ * SMART reading nobody folded in yet - or none. Only the first kind reaches
+ * 3.5, so "two consecutive readings" can never be satisfied by one reading
+ * that was reported twice, whatever happened to `last_details`.
+ *
+ * `$last_sample_at` is not in CORE 3.4's signature; the scalar throttle needs
+ * it and the function has no other way to see `last_details`.
+ *
+ * @param list<array<string, mixed>> $disks sanitized disks, each with `key`
+ * @return array{fresh: list<array<string, mixed>>, states: array<string, array<string, mixed>>,
+ *               ids: array<string, int>, events: list<array<string, string>>, sampled: bool}
+ */
+function bk_storage_record(PDO $pdo, int $monitor_id, array $disks, $disk_devices, ?int $uptime, int $now, $old_disks, ?int $last_sample_at = null): array {
+    $out = ['fresh' => [], 'states' => [], 'ids' => [], 'events' => [], 'sampled' => false];
+    if ($disks === [] || !bk_storage_gate_open($last_sample_at, $disks, $old_disks, $now)) {
+        return $out;
+    }
+    $out['sampled'] = true;
+
+    $writes = [];
+    foreach (is_array($disk_devices) ? $disk_devices : [] as $dev) {
+        if (is_array($dev) && is_string($dev['device'] ?? null)) {
+            $writes[$dev['device']] = bk_ranged_int($dev['write_sectors_total'] ?? null, 0, 2 ** 53);
+        }
+    }
+
+    // UNIX_TIMESTAMP, not the DATETIME string: `last_sample_at` is written
+    // with MySQL's NOW() and read for an elapsed time in PHP. On a host whose
+    // PHP timezone differs from the database's, strtotime() on that string is
+    // off by the whole offset, and the reboot rule below would read every
+    // report as a reboot.
+    $sel = $pdo->prepare('SELECT *, UNIX_TIMESTAMP(last_sample_at) AS last_sample_ts FROM storage_disks WHERE monitor_id = ?');
+    $sel->execute([$monitor_id]);
+    $rows = [];
+    foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $rows[(string)$row['disk_key']] = $row;
+    }
+
+    $ins = $pdo->prepare(
+        'INSERT INTO storage_disks (monitor_id, disk_key, name, transport, port, model, smart_model, size_bytes, rotational, first_seen, last_seen)'
+        . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+        . ' ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), name = VALUES(name), port = VALUES(port),'
+        . ' smart_model = COALESCE(VALUES(smart_model), smart_model), rotational = VALUES(rotational), last_seen = NOW()'
+    );
+    $fold = $pdo->prepare(
+        'UPDATE storage_disks SET last_checked_at = ?, last_power_on_hours = ? WHERE id = ? AND (last_checked_at IS NULL OR last_checked_at < ?)'
+    );
+    // COALESCE, not a plain assignment: a report without `disk_devices` (the
+    // agent could not read /proc/diskstats) must not erase the counter the
+    // next delta is measured against.
+    $sample = $pdo->prepare(
+        'UPDATE storage_disks SET last_sample_at = NOW(), last_write_sectors = COALESCE(?, last_write_sectors),'
+        . ' last_uptime = COALESCE(?, last_uptime) WHERE id = ?'
+    );
+    $replace = $pdo->prepare(
+        'UPDATE storage_disks SET replaced_at = NOW(), alert_state = NULL, last_checked_at = NULL,'
+        . ' last_power_on_hours = NULL, last_write_sectors = NULL WHERE id = ?'
+    );
+
+    foreach ($disks as $disk) {
+        if (!is_array($disk) || !is_string($disk['key'] ?? null) || $disk['key'] === '') {
+            continue;
+        }
+        $key = $disk['key'];
+        $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+        $ins->execute([
+            $monitor_id, $key, (string)$disk['name'], (string)$disk['transport'], $disk['port'],
+            $disk['model'], $smart['model'] ?? null, $disk['size_bytes'],
+            $disk['rotational'] === null ? null : (int)$disk['rotational'],
+        ]);
+        $disk_id = (int)$pdo->lastInsertId();
+        $out['ids'][$key] = $disk_id;
+        $row = $rows[$key] ?? null;
+
+        // Another drive in the same slot: the identity is a hash of transport,
+        // port, model and size, so an identical replacement model lands on the
+        // same row. Its history must not be measured against the old one.
+        $hours = $smart['power_on_hours'] ?? null;
+        $prev_hours = ($row !== null && $row['last_power_on_hours'] !== null) ? (int)$row['last_power_on_hours'] : null;
+        if ($hours !== null && $prev_hours !== null && $hours < $prev_hours - 48) {
+            $replace->execute([$disk_id]);
+            $row = null;
+            $out['events'][] = bk_storage_alert_event($key, 'disk_replaced', 'storage_recovered',
+                sprintf('Disk %s byl vyměněn, historie a základny upozornění začínají znovu.', bk_disk_label($disk)));
+        }
+        $out['states'][$key] = bk_storage_alert_state($row !== null ? json_decode((string)($row['alert_state'] ?? ''), true) : null);
+
+        [$delta, $partial] = bk_disk_host_write_delta($row, $writes[$disk['name']] ?? null, $uptime, $now);
+
+        $checked = $smart['checked_at'] ?? null;
+        $fresh = false;
+        if ($checked !== null) {
+            $fold->execute([$checked, $hours, $disk_id, $checked]);
+            $fresh = $fold->rowCount() === 1;
+        }
+        $sample->execute([$writes[$disk['name']] ?? null, $uptime, $disk_id]);
+        if ($fresh) {
+            $out['fresh'][] = $disk;
+        }
+        if ($fresh || $delta !== null || $partial === 1 || is_array($disk['emmc'] ?? null)) {
+            bk_storage_day_upsert($pdo, $disk_id, $disk, $fresh, $delta, $partial, $now);
+        }
+    }
+    return $out;
+}
+
+/**
+ * Host writes of one disk since the last DB pass (CORE 3.4 step 4).
+ *
+ * The kernel counter in /proc/diskstats is 32-bit on the Omnia and restarts at
+ * every boot, so three cases are distinguished and NONE of them invents a
+ * number: a reboot counts the counter from zero and marks the day partial, a
+ * counter that fell without a reboot is a wrap and adds nothing, and the first
+ * sample of a disk adds nothing at all (the whole lifetime counter is not what
+ * was written today).
+ *
+ * @param ?array<string, mixed> $row the stored storage_disks row (with `last_sample_ts`), null the first time
+ * @return array{0: ?int, 1: int} delta in bytes (null = unknown) and the partial flag
+ */
+function bk_disk_host_write_delta($row, ?int $cur, ?int $uptime, int $now): array {
+    if ($cur === null || $row === null || $row['last_write_sectors'] === null) {
+        return [null, 0];
+    }
+    $last = (int)$row['last_write_sectors'];
+    $last_uptime = $row['last_uptime'] !== null ? (int)$row['last_uptime'] : null;
+    $last_sample = isset($row['last_sample_ts']) ? (int)$row['last_sample_ts'] : null;
+    $elapsed = $last_sample !== null ? max(0, $now - $last_sample) : null;
+
+    // The wall clock advanced but the uptime did not: the router rebooted
+    // between the two samples. boot_time is not used - NTP moves it.
+    $rebooted = $uptime !== null && $last_uptime !== null && $elapsed !== null
+        && $uptime < $last_uptime + $elapsed - 120;
+    if ($rebooted) {
+        return [$cur * 512, 1];
+    }
+    if ($cur < $last) {
+        return [null, 1];
+    }
+    $delta = ($cur - $last) * 512;
+    // 2 GiB/s sustained is not a router writing to a disk, it is a counter that
+    // wrapped or was replaced. The day is marked incomplete, never padded.
+    if ($elapsed !== null && $delta > ($elapsed + 60) * 2147483648) {
+        return [null, 1];
+    }
+    return [$delta, 0];
+}
+
+/**
+ * The daily row of one disk (CORE 3.4 step 6). A counter the drive does not
+ * report stays NULL for the whole day and is never folded into a zero, or the
+ * storage card would show a measured zero where nothing was measured.
+ *
+ * `samples` counts SMART readings only. eMMC and any disk without SMART still
+ * get a row, because their host writes and life registers are real data.
+ */
+function bk_storage_day_upsert(PDO $pdo, int $disk_id, array $disk, bool $fresh, ?int $delta, int $partial, int $now): void {
+    $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+    $emmc = is_array($disk['emmc'] ?? null) ? $disk['emmc'] : [];
+    $lives = array_filter([$emmc['life_a'] ?? null, $emmc['life_b'] ?? null], fn ($v) => $v !== null);
+    // Only on a fresh reading: a replayed report must not count as a sample.
+    $s = fn (string $key) => $fresh ? ($smart[$key] ?? null) : null;
+    $temp = $s('temperature_c');
+    $passed = $s('passed');
+
+    $row = [
+        'disk_id' => $disk_id,
+        'day' => date('Y-m-d', $now),
+        'samples' => $fresh ? 1 : 0,
+        'smart_passed' => $passed === null ? null : (int)$passed,
+        'temp_min' => $temp,
+        'temp_max' => $temp,
+        'temp_sum' => $temp,
+        'temp_n' => $temp === null ? null : 1,
+        'power_on_hours' => $s('power_on_hours'),
+        'power_cycles' => $s('power_cycles'),
+        'unsafe_shutdowns' => $s('unsafe_shutdowns'),
+        'reallocated_sectors' => $s('reallocated_sectors'),
+        'pending_sectors' => $s('pending_sectors'),
+        'offline_uncorrectable' => $s('offline_uncorrectable'),
+        'reported_uncorrect' => $s('reported_uncorrect'),
+        'crc_errors' => $s('crc_errors'),
+        'runtime_bad_blocks' => $s('runtime_bad_blocks'),
+        'media_errors' => $s('media_errors'),
+        'error_log_count' => $s('error_log_count'),
+        'wear_pct' => $s('wear_pct'),
+        // sysfs, not SMART: it is current on every report, fresh or not.
+        'emmc_life' => $lives === [] ? null : max($lives),
+        'written_bytes' => $s('written_bytes'),
+        'host_written_bytes' => $delta,
+        'host_written_partial' => $partial,
+    ];
+    $latest = ['power_on_hours', 'power_cycles', 'unsafe_shutdowns', 'reallocated_sectors', 'pending_sectors',
+        'offline_uncorrectable', 'reported_uncorrect', 'crc_errors', 'runtime_bad_blocks', 'media_errors',
+        'error_log_count', 'wear_pct', 'emmc_life', 'written_bytes'];
+
+    $updates = [
+        'samples = samples + VALUES(samples)',
+        // A single failed reading makes the whole day failed; an unknown one changes nothing.
+        'smart_passed = CASE WHEN smart_passed = 0 OR VALUES(smart_passed) = 0 THEN 0 ELSE COALESCE(VALUES(smart_passed), smart_passed) END',
+        'temp_min = CASE WHEN VALUES(temp_min) IS NULL THEN temp_min WHEN temp_min IS NULL THEN VALUES(temp_min) ELSE LEAST(temp_min, VALUES(temp_min)) END',
+        'temp_max = CASE WHEN VALUES(temp_max) IS NULL THEN temp_max WHEN temp_max IS NULL THEN VALUES(temp_max) ELSE GREATEST(temp_max, VALUES(temp_max)) END',
+        'temp_sum = CASE WHEN VALUES(temp_sum) IS NULL THEN temp_sum WHEN temp_sum IS NULL THEN VALUES(temp_sum) ELSE temp_sum + VALUES(temp_sum) END',
+        'temp_n = CASE WHEN VALUES(temp_n) IS NULL THEN temp_n WHEN temp_n IS NULL THEN VALUES(temp_n) ELSE temp_n + VALUES(temp_n) END',
+        'host_written_bytes = CASE WHEN VALUES(host_written_bytes) IS NULL THEN host_written_bytes WHEN host_written_bytes IS NULL THEN VALUES(host_written_bytes) ELSE host_written_bytes + VALUES(host_written_bytes) END',
+        'host_written_partial = GREATEST(host_written_partial, VALUES(host_written_partial))',
+    ];
+    foreach ($latest as $col) {
+        $updates[] = "{$col} = COALESCE(VALUES({$col}), {$col})";
+    }
+
+    $cols = array_keys($row);
+    $sql = 'INSERT INTO storage_disk_daily (' . implode(', ', $cols) . ') VALUES ('
+        . implode(', ', array_fill(0, count($cols), '?')) . ') ON DUPLICATE KEY UPDATE ' . implode(', ', $updates);
+    $pdo->prepare($sql)->execute(array_values($row));
+}
+
+/** Writes the alert latches of 3.5 back to their disk rows. */
+function bk_storage_state_save(PDO $pdo, array $ids, array $states): void {
+    $upd = $pdo->prepare('UPDATE storage_disks SET alert_state = ? WHERE id = ?');
+    foreach ($states as $key => $state) {
+        if (!isset($ids[$key])) {
+            continue;
+        }
+        $upd->execute([json_encode($state, JSON_UNESCAPED_UNICODE), (int)$ids[$key]]);
+    }
+}
+
+/**
+ * The hourly `wan_path` object of an OpenWrt agent (0.1.7+), validated.
+ *
+ * Same rules as the other sanitizers: an allow-list, strict booleans, out of
+ * range = null. Two nulls carry meaning and must survive as they are:
+ * `sqm: null` = "could not check" while `sqm: []` = "checked, no queue on the
+ * WAN device", and a shaper rate of 0 is "this direction is not shaped" - so
+ * null, never "0 kbit/s".
+ *
+ * @return ?array<string, mixed> null when the agent sent no object
+ */
+function bk_sanitize_wan_path($raw): ?array {
+    if (!is_array($raw)) {
+        return null;
+    }
+    $netdev = fn ($v): ?string => (is_string($v) && preg_match('/^[A-Za-z0-9._@-]{1,32}$/', $v)) ? $v : null;
+    // Until 2100: a plain epoch, not tied to the server's clock (the router's may be off).
+    $out = ['checked_at' => bk_ranged_int($raw['checked_at'] ?? null, 1, 4102444800)];
+    foreach (['flow_offloading', 'flow_offloading_hw', 'flowtable_active', 'packet_steering_active', 'wan_threaded_napi'] as $key) {
+        $out[$key] = is_bool($raw[$key] ?? null) ? $raw[$key] : null;
+    }
+    // The raw uci value, a label only: what "unset" means depends on the release.
+    $out['packet_steering'] = in_array($raw['packet_steering'] ?? null, ['0', '1', '2', 'unset'], true) ? $raw['packet_steering'] : null;
+    $mask = $raw['wan_rps_mask'] ?? null;
+    $out['wan_rps_mask'] = (is_string($mask) && preg_match('/^[0-9a-fA-F,]{1,64}$/', $mask)) ? $mask : null;
+    $out['wan_rx_ring_drops'] = bk_ranged_int($raw['wan_rx_ring_drops'] ?? null, 0, 2 ** 53);
+
+    $out['sqm'] = null;
+    if (is_array($raw['sqm'] ?? null)) {
+        $out['sqm'] = [];
+        foreach (array_slice($raw['sqm'], 0, 8) as $queue) {
+            if (!is_array($queue) || $netdev($queue['iface'] ?? null) === null) {
+                continue;
+            }
+            $out['sqm'][] = [
+                'iface' => $netdev($queue['iface']),
+                'download_kbps' => bk_ranged_int($queue['download_kbps'] ?? null, 1, 100000000),
+                'upload_kbps' => bk_ranged_int($queue['upload_kbps'] ?? null, 1, 100000000),
+                'egress_dropped' => bk_ranged_int($queue['egress_dropped'] ?? null, 0, 2 ** 53),
+                'ingress_dropped' => bk_ranged_int($queue['ingress_dropped'] ?? null, 0, 2 ** 53),
+            ];
+        }
+    }
+    // Current link state of the LAN ports vs what they COULD do: never derive one from the other.
+    $out['lan_port_max_mbit'] = bk_ranged_int($raw['lan_port_max_mbit'] ?? null, 1, 1000000);
+    $out['lan_port_cap_mbit'] = bk_ranged_int($raw['lan_port_cap_mbit'] ?? null, 1, 1000000);
+    $out['lan_conduits'] = null;
+    if (is_array($raw['lan_conduits'] ?? null)) {
+        $out['lan_conduits'] = [];
+        foreach (array_slice($raw['lan_conduits'], 0, 8) as $conduit) {
+            if (is_array($conduit) && $netdev($conduit['dev'] ?? null) !== null) {
+                $out['lan_conduits'][] = ['dev' => $netdev($conduit['dev']), 'mbit' => bk_ranged_int($conduit['mbit'] ?? null, 1, 1000000)];
+            }
+        }
+    }
+    return $out;
+}
+
+/**
+ * Fits the details of a monitor into the `last_details` TEXT column.
+ *
+ * The largest lists go first, then the largest strings; the scalars the UI
+ * lives on always fit. It used to happen silently (error_log only), so a
+ * router whose disk list was shed looked exactly like a router without disks.
+ * The shed keys are returned AND written into the blob as `details_dropped`:
+ * that list is reset by every report that fits, so the collection issue ends
+ * by itself. `$protected` keys are never shed - they are small, and they are
+ * what makes the loss visible.
+ *
+ * `$carried` is what a report that is NOT evidence of loss hands over: a
+ * light "reduced" run sheds nothing of its own, and clearing the list would
+ * hide what the last full report really lost.
+ *
+ * @param array<string, mixed> $details
+ * @param string[] $protected
+ * @param string[] $carried
+ * @return array{json: string, dropped: string[]}
+ */
+function bk_details_fit(array $details, int $limit, array $protected, array $carried = []): array {
+    $details['details_dropped'] = $carried;
+    $protected[] = 'details_dropped';
+    $json = (string)json_encode($details, JSON_UNESCAPED_UNICODE);
+    if (strlen($json) <= $limit) {
+        return ['json' => $json, 'dropped' => $carried];
+    }
+    $dropped = $carried;
+    foreach (['is_array', 'is_string'] as $is_kind) {
+        $sizes = [];
+        foreach ($details as $key => $value) {
+            if ($is_kind($value) && !in_array($key, $protected, true)) {
+                $sizes[$key] = strlen((string)json_encode($value, JSON_UNESCAPED_UNICODE));
+            }
+        }
+        arsort($sizes);
+        foreach (array_keys($sizes) as $key) {
+            unset($details[$key]);
+            $dropped[] = (string)$key;
+            $details['details_dropped'] = $dropped;
+            $json = (string)json_encode($details, JSON_UNESCAPED_UNICODE);
+            if (strlen($json) <= $limit) {
+                return ['json' => $json, 'dropped' => $dropped];
+            }
+        }
+    }
+    return ['json' => $json, 'dropped' => $dropped];
+}
+
+/**
+ * Adds one entry to `ingest_issues`: data the server received and did not
+ * store. At most 5 entries - the list says THAT something is being lost and
+ * where to look, it is not a log.
+ *
+ * @param array<int, array{type: string, key: ?string, bytes: ?int}> $issues
+ * @return array<int, array{type: string, key: ?string, bytes: ?int}>
+ */
+function bk_ingest_issue_add(array $issues, string $type, ?string $key = null, ?int $bytes = null): array {
+    if (count($issues) < 5) {
+        $issues[] = ['type' => $type, 'key' => $key === null ? null : mb_substr($key, 0, 64), 'bytes' => $bytes];
+    }
+    return $issues;
+}
+
+/**
+ * Whitelist of the `diagnostics` object of a speedtest item (WAN 3.2).
+ *
+ * Re-encoded from named keys only: the object comes from the router's own
+ * analyzer, goes into a TEXT column and is read back by the classifier, so an
+ * unknown key would be stored unchecked and a large one would push the row
+ * past its budget. Everything is nullable; a key that is not a number, bool
+ * or object of the shape below is simply not copied.
+ *
+ * @return array{diagnostics: ?array<string, mixed>, dropped: bool}
+ */
+function bk_speedtest_diagnostics($raw): array {
+    if (!is_array($raw) || $raw === []) {
+        return ['diagnostics' => null, 'dropped' => false];
+    }
+    // Everything in this object is a rate, a share or a duration: never negative.
+    $num = fn ($v, float $max): ?float => bk_ranged_num($v, 0.0, $max);
+    $count = fn ($v): ?int => bk_ranged_int($v, 0, 2 ** 53);
+    $out = [];
+    $out['v'] = bk_ranged_int($raw['v'] ?? null, 1, 99);
+    foreach (['cpu_measured', 'path_verified'] as $flag) {
+        $out[$flag] = is_bool($raw[$flag] ?? null) ? $raw[$flag] : null;
+    }
+    $out['background_dl_mbps'] = $num($raw['background_dl_mbps'] ?? null, 1000000.0);
+    $out['background_ul_mbps'] = $num($raw['background_ul_mbps'] ?? null, 1000000.0);
+    foreach (['samples', 'gaps', 'bad_lines'] as $counter) {
+        $out[$counter] = $count($raw[$counter] ?? null);
+    }
+    foreach (['dl', 'ul'] as $phase) {
+        $out[$phase] = null;
+        if (!is_array($raw[$phase] ?? null)) {
+            continue;
+        }
+        $src = $raw[$phase];
+        $out[$phase] = [
+            'secs' => $num($src['secs'] ?? null, 86400.0),
+            'wan_mbps' => $num($src['wan_mbps'] ?? null, 1000000.0),
+            'core' => bk_ranged_int($src['core'] ?? null, 0, 255),
+            'core_busy_pct' => $num($src['core_busy_pct'] ?? null, 100.0),
+            'core_user_pct' => $num($src['core_user_pct'] ?? null, 100.0),
+            'core_system_pct' => $num($src['core_system_pct'] ?? null, 100.0),
+            'core_irq_softirq_pct' => $num($src['core_irq_softirq_pct'] ?? null, 100.0),
+            'hot_share' => $num($src['hot_share'] ?? null, 1.0),
+            'all_cores_avg_pct' => $num($src['all_cores_avg_pct'] ?? null, 100.0),
+            'softnet_time_squeeze' => $count($src['softnet_time_squeeze'] ?? null),
+            'softnet_dropped' => $count($src['softnet_dropped'] ?? null),
+            'rx_packets' => $count($src['rx_packets'] ?? null),
+            'retrans_pct' => $num($src['retrans_pct'] ?? null, 100.0),
+        ];
+    }
+    $out['run'] = null;
+    if (is_array($raw['run'] ?? null)) {
+        $out['run'] = [];
+        foreach (['wan_rx_dropped', 'wan_rx_ring_drops', 'wan_rx_errors', 'conntrack_drop'] as $key) {
+            $out['run'][$key] = $count($raw['run'][$key] ?? null);
+        }
+    }
+    $out['path'] = null;
+    if (is_array($raw['path'] ?? null)) {
+        $out['path'] = [
+            'flow_offloading' => is_bool($raw['path']['flow_offloading'] ?? null) ? $raw['path']['flow_offloading'] : null,
+            'packet_steering_active' => is_bool($raw['path']['packet_steering_active'] ?? null) ? $raw['path']['packet_steering_active'] : null,
+            'sqm_dl_kbps' => bk_ranged_int($raw['path']['sqm_dl_kbps'] ?? null, 1, 100000000),
+            'sqm_ul_kbps' => bk_ranged_int($raw['path']['sqm_ul_kbps'] ?? null, 1, 100000000),
+        ];
+    }
+    // Only what the router really sent: an object of nothing but nulls would
+    // claim the analyzer ran when it did not.
+    $kept = array_filter($out, fn ($v) => $v !== null);
+    if ($kept === []) {
+        return ['diagnostics' => null, 'dropped' => $raw !== []];
+    }
+    // The column budget of WAN 3.3. The result is the server's own encoding,
+    // so this is the size that will really be stored.
+    if (strlen((string)json_encode($out, JSON_UNESCAPED_UNICODE)) > 2048) {
+        return ['diagnostics' => null, 'dropped' => true];
+    }
+    return ['diagnostics' => $out, 'dropped' => false];
+}
+
+/**
+ * The tool-internal unit check of WAN 3.4 ("unit or parser bugs, the W01 class").
+ *
+ * librespeed reports `total bytes / elapsed / 125000`, and the default run is
+ * 15 s per direction, so `mbps * 15 * 125000` must match `bytes` within 10 %.
+ * The check needs no knowledge of the line: only a unit or parser error can
+ * break the identity (bytes/s instead of Mbit/s is a factor of eight).
+ *
+ * null = not decidable (one of the two is missing, or the tool ran with a
+ * different duration, which 0.1.7 never does).
+ */
+function bk_speedtest_unit_ok(?float $mbps, ?int $bytes, int $secs = 15): ?bool {
+    if ($mbps === null || $bytes === null || $mbps <= 0 || $bytes <= 0) {
+        return null;
+    }
+    $expected = $mbps * $secs * 125000;
+    return abs($bytes - $expected) <= 0.1 * $expected;
+}
+
+/**
+ * One item of `speedtests[]`, sanitized into the columns of
+ * `speedtest_results` (WAN 3.1.7, 3.3).
+ *
+ * Returns null for an item that carries no measurement time: there is no
+ * saying when it applied and substituting "now" would lie. Such an item is
+ * still ACKED by the caller and named in `ingest_issues` - re-sending it
+ * forever would repair nothing.
+ *
+ * W01 repair at ingest: an item WITHOUT its byte counter comes from an agent
+ * older than 0.1.7, whose "> 1000 means bytes" heuristic divided real speeds
+ * by 125000. A value below 0.1 Mbit/s is that artefact, not a line nobody can
+ * measure, so it is stored as NULL - unmeasured, never a fabricated 0.01.
+ *
+ * @return array{ts: int, raw_ts: string, row: array<string, mixed>, issues: list<array{0: string, 1: ?string}>}|null
+ */
+function bk_speedtest_item($raw): ?array {
+    if (!is_array($raw)) {
+        return null;
+    }
+    $raw_ts = trim((string)($raw['timestamp'] ?? ''));
+    $ts = $raw_ts !== '' ? strtotime($raw_ts) : false;
+    if ($ts === false) {
+        return null;
+    }
+    $issues = [];
+    $bytes_rx = bk_ranged_int($raw['bytes_received'] ?? null, 0, 2 ** 60);
+    $bytes_tx = bk_ranged_int($raw['bytes_sent'] ?? null, 0, 2 ** 60);
+    $rate = function ($value, ?int $bytes): ?float {
+        $mbps = bk_ranged_num($value, 0.0, 1000000.0);
+        return ($mbps !== null && $mbps < 0.1 && $bytes === null) ? null : $mbps;
+    };
+    $download = $rate($raw['download_mbps'] ?? null, $bytes_rx);
+    $upload = $rate($raw['upload_mbps'] ?? null, $bytes_tx);
+
+    $diag = bk_speedtest_diagnostics($raw['diagnostics'] ?? null);
+    if ($diag['dropped']) {
+        $issues[] = ['speedtest_diagnostics_dropped', $raw_ts];
+    }
+    // The unit check is the tool's own identity, so it also judges results
+    // that carry no phase rates (a Turris file). A mismatch is stored with the
+    // result - the classifier must not average a number of unknown unit.
+    $unit = bk_speedtest_unit_ok($download, $bytes_rx) === false
+        || bk_speedtest_unit_ok($upload, $bytes_tx) === false;
+    if ($unit) {
+        $issues[] = ['unit_mismatch', $raw_ts];
+        $diag['diagnostics'] = ($diag['diagnostics'] ?? []) + ['unit_mismatch' => true];
+    }
+
+    $server = trim((string)($raw['server'] ?? ''));
+    $iface = $raw['iface'] ?? null;
+    $tool = $raw['tool'] ?? null;
+    $row = [
+        'measured_at' => date('Y-m-d H:i:s', $ts),
+        'download_mbps' => $download,
+        'upload_mbps' => $upload,
+        'ping_ms' => bk_ranged_num($raw['ping_ms'] ?? null, 0.0, 600000.0),
+        'jitter_ms' => bk_ranged_num($raw['jitter_ms'] ?? null, 0.0, 600000.0),
+        'server_name' => $server !== '' ? mb_substr($server, 0, 120) : null,
+        // `started_by` has no column of its own (WAN 3.3): it is written into
+        // the existing `source`, whose 'librespeed' constant the migration
+        // rewrote to 'turris'. Anything the agent did not call a probe is a
+        // file the router's own nightly test left behind.
+        'source' => ($raw['started_by'] ?? null) === 'agent' ? 'agent' : 'turris',
+        'iface' => (is_string($iface) && preg_match('/^[A-Za-z0-9._@-]{1,32}$/', $iface)) ? $iface : null,
+        'tool' => (is_string($tool) && preg_match('/^[A-Za-z0-9._+-]{1,24}$/', $tool)) ? $tool : null,
+        'link_mbit' => bk_ranged_int($raw['link_mbit'] ?? null, 1, 1000000),
+        'bytes_received' => $bytes_rx,
+        'bytes_sent' => $bytes_tx,
+        'diagnostics' => $diag['diagnostics'] === null ? null : (string)json_encode($diag['diagnostics'], JSON_UNESCAPED_UNICODE),
+    ];
+    return ['ts' => (int)$ts, 'raw_ts' => $raw_ts, 'row' => $row, 'issues' => $issues];
+}
+
+/**
+ * The `speedtests_acked` of the response (WAN 3.1.6, "A bare 200 is not a receipt").
+ *
+ * The agent deletes its probe files and advances `last_sent` up to this
+ * timestamp and never on a bare 200, so the answer must be the newest item
+ * that is dealt with AND has nothing unfinished before it: the largest
+ * handled timestamp older than every failed one. A batch that fails in the
+ * middle therefore acks its prefix, and the rest stays on the router.
+ *
+ * @param list<array{ts: int, raw_ts: string}> $handled stored, already present, or rejected for good
+ * @param list<array{ts: int, raw_ts: string}> $failed  the INSERT threw - the data is not here
+ */
+function bk_speedtest_ack(array $handled, array $failed): ?string {
+    $limit = null;
+    foreach ($failed as $item) {
+        $limit = $limit === null ? $item['ts'] : min($limit, $item['ts']);
+    }
+    $ack = null;
+    foreach ($handled as $item) {
+        if ($limit !== null && $item['ts'] >= $limit) {
+            continue;
+        }
+        if ($ack === null || $item['ts'] > $ack['ts']) {
+            $ack = $item;
+        }
+    }
+    return $ack === null ? null : $ack['raw_ts'];
+}
+
+/**
+ * Whether the report carries a speed test that overlapped its own measuring
+ * interval (X17, WAN 3.3 "Alert hygiene").
+ *
+ * `speedtest_active` is the agent's own interval flag; this is the server's
+ * belt and braces: a result travels in the same report as the CPU minute it
+ * polluted, so the ingest can see it before it judges anything. The window is
+ * symmetric because the router's clock may be off by a minute, and one
+ * skipped threshold evaluation is cheaper than an invented CPU alert.
+ */
+function bk_speedtest_in_report($speedtests, int $now, int $window = 120): bool {
+    if (!is_array($speedtests)) {
+        return false;
+    }
+    foreach ($speedtests as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $raw_ts = trim((string)($item['timestamp'] ?? ''));
+        $ts = $raw_ts !== '' ? strtotime($raw_ts) : false;
+        if ($ts !== false && abs($now - (int)$ts) <= $window) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * The inputs of ONE direction of ONE speedtest, as WAN 3.4's table names them.
+ *
+ * `S` is the higher of the tool's own figure and 0.95 x the rate the agent
+ * measured on the WAN device during that phase: the tool averages over the
+ * whole 15 s including ramp-up, the phase rate does not, so taking the better
+ * of the two keeps a slow start from being read as a slow line.
+ *
+ * Everything is nullable and null means "not measured" - never a stand-in.
+ * `cap` is deliberately null without a plan: a 300 Mbit plan on a gigabit port
+ * is the normal state, not a bottleneck, so without `P` nothing may be called
+ * below anything.
+ *
+ * @param array<string, mixed> $test one speedtest_results row
+ * @param array<string, mixed> $diag its decoded diagnostics (may be empty)
+ * @param array<string, mixed> $ctx  ['plan_down', 'plan_up', 'plan_ok_pct', 'threaded_napi']
+ * @return array<string, mixed>
+ */
+function bk_wan_dir_inputs(array $test, array $diag, string $dir, array $ctx): array {
+    $num = function ($v): ?float {
+        return is_numeric($v) ? (float)$v : null;
+    };
+    $tool = $num($test[$dir === 'dl' ? 'download_mbps' : 'upload_mbps'] ?? null);
+    $phase = is_array($diag[$dir] ?? null) ? $diag[$dir] : [];
+    $wan = $num($phase['wan_mbps'] ?? null);
+    $candidates = [];
+    if ($tool !== null && $tool > 0) {
+        $candidates[] = $tool;
+    }
+    if ($wan !== null && $wan > 0) {
+        $candidates[] = 0.95 * $wan;
+    }
+    $s = $candidates === [] ? null : max($candidates);
+
+    $link = $num($test['link_mbit'] ?? null);
+    $plan = $num($ctx[$dir === 'dl' ? 'plan_down' : 'plan_up'] ?? null);
+    $ok_pct = $num($ctx['plan_ok_pct'] ?? null);
+    // WAN 3.4: an empty field is 0.85, not "the whole advertised rate".
+    $k = ($ok_pct !== null && $ok_pct >= 30 && $ok_pct <= 100) ? $ok_pct / 100 : 0.85;
+
+    $path = is_array($diag['path'] ?? null) ? $diag['path'] : [];
+    $sqm_kbps = $num($path[$dir === 'dl' ? 'sqm_dl_kbps' : 'sqm_ul_kbps'] ?? null);
+    $q = ($sqm_kbps !== null && $sqm_kbps > 0) ? $sqm_kbps / 1000 : null;
+
+    $cap = null;
+    if ($plan !== null && $plan > 0) {
+        $cap = ($q !== null && $q < $plan) ? $q : $plan;
+    }
+    $run = is_array($diag['run'] ?? null) ? $diag['run'] : [];
+
+    return [
+        's' => $s,
+        'tool_mbps' => $tool,
+        'phase_mbps' => $wan,
+        'l' => ($link !== null && $link > 0) ? $link : null,
+        'g' => ($link !== null && $link > 0) ? 0.93 * $link : null,
+        'p' => ($plan !== null && $plan > 0) ? $plan : null,
+        'k' => $k,
+        'q' => $q,
+        'cap' => $cap,
+        'secs' => $num($phase['secs'] ?? null),
+        'core' => isset($phase['core']) && is_numeric($phase['core']) ? (int)$phase['core'] : null,
+        'core_busy_pct' => $num($phase['core_busy_pct'] ?? null),
+        'core_user_pct' => $num($phase['core_user_pct'] ?? null),
+        'core_system_pct' => $num($phase['core_system_pct'] ?? null),
+        'core_irq_softirq_pct' => $num($phase['core_irq_softirq_pct'] ?? null),
+        'hot_share' => $num($phase['hot_share'] ?? null),
+        'all_cores_avg_pct' => $num($phase['all_cores_avg_pct'] ?? null),
+        'squeeze' => $num($phase['softnet_time_squeeze'] ?? null),
+        'softnet_dropped' => $num($phase['softnet_dropped'] ?? null),
+        'rx_packets' => $num($phase['rx_packets'] ?? null),
+        'retrans_pct' => $num($phase['retrans_pct'] ?? null),
+        'ring_drops' => $num($run['wan_rx_ring_drops'] ?? null),
+        'background' => $num($diag[$dir === 'dl' ? 'background_dl_mbps' : 'background_ul_mbps'] ?? null),
+        // X27 counts a full-weight minute run that overlapped this phase. The
+        // probe that produces it is wave 2; the key is read here so the gate
+        // works the day it arrives instead of being retro-fitted.
+        'minute_overlap_secs' => $num($phase['minute_overlap_secs'] ?? null),
+        'cpu_measured' => is_bool($diag['cpu_measured'] ?? null) ? $diag['cpu_measured'] : null,
+        'path_verified' => is_bool($diag['path_verified'] ?? null) ? $diag['path_verified'] : null,
+        'threaded_napi' => is_bool($ctx['threaded_napi'] ?? null) ? $ctx['threaded_napi'] : null,
+    ];
+}
+
+/**
+ * Does the busiest core of this phase look pinned (WAN 3.4 rules 4 and 5)?
+ *
+ * Only the busiest core is read. A four-core router whose one RX core sits at
+ * 98 % shows an average of 52 %, and an average is exactly how this kind of
+ * limit stays invisible for years.
+ */
+function bk_wan_core_pinned(array $in): bool {
+    $busy = $in['core_busy_pct'];
+    $hot = $in['hot_share'];
+    return ($busy !== null && $busy >= 90.0) || ($hot !== null && $hot >= 0.5);
+}
+
+/**
+ * Share of the pinned core spent in the kernel network path (WAN 3.4 rule 4).
+ *
+ * `system` counts only with threaded NAPI, where the softirq work is done by
+ * kernel threads and shows up as system time instead of softirq time.
+ */
+function bk_wan_core_net_share(array $in): ?float {
+    $irq = $in['core_irq_softirq_pct'];
+    if ($irq === null) {
+        return null;
+    }
+    $sys = $in['core_system_pct'];
+    if ($in['threaded_napi'] === true && $sys !== null) {
+        return $irq + $sys;
+    }
+    return $irq;
+}
+
+/**
+ * The verdict of ONE speedtest in ONE direction (WAN 3.4).
+ *
+ * The rules are tried in their documented order and the FIRST match is the
+ * verdict; every other match is kept in `numbers.also`, because "the plan was
+ * reached AND a core was pinned" is a different situation from "the plan was
+ * reached" and the card has to be able to say so.
+ *
+ * A gated direction may still be confirmed fast (rules 1-3: a lower bound that
+ * reaches a cap has reached it) but can never be declared slow - without CPU
+ * data the router can be neither blamed nor cleared.
+ *
+ * @param array<string, mixed> $in the output of bk_wan_dir_inputs()
+ * @param list<int|string> $basis ids of the tests this verdict stands on
+ * @return array<string, mixed>
+ */
+function bk_wan_dir_verdict(array $in, ?string $started_by, array $basis): array {
+    $numbers = [
+        's_mbps' => $in['s'] === null ? null : round($in['s'], 2),
+        'plan_mbit' => $in['p'],
+        'ok_pct' => (int)round($in['k'] * 100),
+        'cap_mbit' => $in['cap'] === null ? null : round($in['cap'], 2),
+        'link_mbit' => $in['l'],
+        'goodput_ceiling_mbit' => $in['g'] === null ? null : round($in['g'], 1),
+        'sqm_mbit' => $in['q'] === null ? null : round($in['q'], 2),
+        'core' => $in['core'],
+        'core_busy_pct' => $in['core_busy_pct'],
+        'core_net_pct' => bk_wan_core_net_share($in),
+        'core_user_pct' => $in['core_user_pct'],
+        'hot_share' => $in['hot_share'],
+        'all_cores_avg_pct' => $in['all_cores_avg_pct'],
+        'squeeze' => $in['squeeze'],
+        'softnet_dropped' => $in['softnet_dropped'],
+        'ring_drops' => $in['ring_drops'],
+        'retrans_pct' => $in['retrans_pct'],
+        'background_mbps' => $in['background'],
+        'phase_secs' => $in['secs'],
+        'also' => [],
+    ];
+    $verdict = function (string $class, ?string $reason) use (&$numbers, $basis): array {
+        return ['class' => $class, 'reason' => $reason,
+            // Per test there is nothing to be confident ABOUT: confidence is
+            // how many of the last probes agreed, and that is the aggregate's
+            // business. `line_limited` is pinned low by WAN 3.4 itself.
+            'confidence' => $class === 'line_limited' ? 'low' : null,
+            'basis' => $basis, 'numbers' => $numbers];
+    };
+
+    // Gates. The first two say nothing can be judged at all; the other three
+    // leave rules 1-3 open.
+    $gate = null;
+    $restricted = false;
+    if ($in['s'] === null) {
+        $gate = 'no_result';
+    } elseif ($in['path_verified'] === false) {
+        $gate = 'path_unverified';
+    } elseif ($in['background'] !== null && $in['background'] > max(20.0, 0.05 * $in['s'])) {
+        $gate = 'background_traffic';
+        $restricted = true;
+    } elseif ($in['minute_overlap_secs'] !== null && $in['minute_overlap_secs'] > 0) {
+        $gate = 'minute_run_overlap';
+        $restricted = true;
+    } elseif ($started_by === 'turris' || $in['cpu_measured'] !== true
+        || $in['secs'] === null || $in['secs'] < 10.0) {
+        $gate = 'cpu_not_measured';
+        $restricted = true;
+    }
+    if ($gate !== null && !$restricted) {
+        return $verdict('inconclusive', $gate);
+    }
+
+    $s = $in['s'];
+    $matches = [];
+    if ($in['p'] !== null && $s >= $in['k'] * $in['p']) {
+        $matches[] = ['none', 'plan_reached'];
+    }
+    if ($in['q'] !== null && $s >= 0.85 * $in['q']) {
+        $matches[] = ['link_limited', 'sqm_shaper'];
+    }
+    if ($in['g'] !== null && $s >= 0.90 * $in['g']) {
+        $matches[] = ['link_limited', 'wan_port'];
+    }
+    $pinned = bk_wan_core_pinned($in);
+    $net_share = bk_wan_core_net_share($in);
+    if (!$restricted) {
+        if ($pinned && $net_share !== null && $net_share >= 50.0) {
+            $matches[] = ['cpu_limited', 'packet_path'];
+        } elseif ($pinned) {
+            $user = $in['core_user_pct'];
+            $matches[] = ['cpu_limited', ($user !== null && $user >= 50.0) ? 'test_client' : 'mixed'];
+        }
+        $busy = $in['core_busy_pct'];
+        $hot = $in['hot_share'];
+        $no_drops = ($in['softnet_dropped'] !== null && $in['softnet_dropped'] <= 0.0);
+        if ($no_drops && $in['ring_drops'] !== null && $in['ring_drops'] > 0.0) {
+            $no_drops = false; // a full ring is the router's own loss, not the line's
+        }
+        if ($in['cap'] !== null && $s < $in['k'] * $in['cap']
+            && $busy !== null && $busy < 80.0 && ($hot === null || $hot < 0.2) && $no_drops) {
+            $retrans = $in['retrans_pct'];
+            $matches[] = ['line_limited', ($retrans !== null && $retrans >= 1.0) ? 'upstream_loss' : 'below_plan'];
+        }
+    }
+
+    foreach (array_slice($matches, 1) as $extra) {
+        $numbers['also'][] = $extra[1];
+    }
+    if ($matches !== []) {
+        // Rule 1 with a pinned core: within the plan today, nothing to spare.
+        if ($matches[0][1] === 'plan_reached' && $pinned) {
+            $numbers['no_cpu_headroom'] = true;
+        }
+        return $verdict($matches[0][0], $matches[0][1]);
+    }
+    if ($restricted) {
+        return $verdict('inconclusive', (string)$gate);
+    }
+    $busy = $in['core_busy_pct'];
+    if ($busy !== null && $busy >= 80.0 && $busy < 90.0) {
+        return $verdict('inconclusive', 'cpu_borderline');
+    }
+    if ($in['p'] === null) {
+        return $verdict('inconclusive', 'no_plan_known');
+    }
+    // Everything else: the plan is known and was not reached, but a rule that
+    // could NAME the limit did not fire (drops with an idle core, for
+    // instance). WAN 3.4 gives this branch no reason, and inventing one would
+    // be a claim; the numbers say what was measured.
+    return $verdict('inconclusive', null);
+}
+
+/**
+ * Both directions of one stored speedtest (WAN 3.4).
+ *
+ * @param array<string, mixed> $test a speedtest_results row; `diagnostics` may
+ *        already be decoded or still be the stored JSON string
+ * @param array<string, mixed> $ctx  ['plan_down', 'plan_up', 'plan_ok_pct', 'threaded_napi']
+ * @return array{dl: array<string, mixed>, ul: array<string, mixed>}
+ */
+function bk_wan_test_verdict(array $test, array $ctx): array {
+    $diag = $test['diagnostics'] ?? null;
+    if (is_string($diag)) {
+        $diag = json_decode($diag, true);
+    }
+    if (!is_array($diag)) {
+        $diag = [];
+    }
+    $started_by = isset($test['source']) && is_string($test['source']) ? $test['source'] : null;
+    $id = $test['id'] ?? ($test['measured_at'] ?? null);
+    $basis = $id === null ? [] : [is_numeric($id) ? (int)$id : (string)$id];
+    $out = [];
+    foreach (['dl', 'ul'] as $dir) {
+        $out[$dir] = bk_wan_dir_verdict(bk_wan_dir_inputs($test, $diag, $dir, $ctx), $started_by, $basis);
+    }
+    return $out;
+}
+
+/**
+ * Is this speedtest one the aggregate may stand on (WAN 3.4, "Aggregation")?
+ *
+ * Turris-started files never enter it: they carry no phases, so they can only
+ * ever show rules 1-3 and would drag the agreement count with results nobody
+ * could classify. A result whose units did not check out is excluded too - the
+ * classifier must not average a number of unknown unit.
+ */
+function bk_wan_test_countable(array $test, array $diag, array $in, int $now, int $days = 21): bool {
+    if (($test['source'] ?? null) !== 'agent') {
+        return false;
+    }
+    if (!empty($diag['unit_mismatch'])) {
+        return false;
+    }
+    $ts = isset($test['measured_at']) ? strtotime((string)$test['measured_at']) : false;
+    if ($ts === false || $ts < $now - $days * 86400) {
+        return false;
+    }
+    // The three gates that say the probe itself was not clean. X27's overlap
+    // is the one WAN names explicitly: such a test "does not count towards
+    // the 3 valid probes".
+    return $in['s'] !== null && $in['path_verified'] !== false
+        && !($in['minute_overlap_secs'] !== null && $in['minute_overlap_secs'] > 0);
+}
+
+/**
+ * The verdict of a ROUTER, per direction, over its last probes (WAN 3.4).
+ *
+ * One test can be wrong in a dozen ways, so nothing is declared from one: the
+ * last three valid agent probes of 21 days have to agree, and a `line_limited`
+ * verdict - the only one that blames somebody else's equipment - has to pass
+ * four more guards before it is said out loud. Everything it cannot prove
+ * comes back as `inconclusive` with the reason, never as a softer claim.
+ *
+ * @param list<array<string, mixed>> $tests speedtest_results rows, any order
+ * @param array<string, mixed> $ctx ['plan_down', 'plan_up', 'plan_ok_pct', 'threaded_napi',
+ *        'now', 'server_max' => [server => ['dl' => ?float, 'ul' => ?float]]]
+ * @return array{dl: array<string, mixed>, ul: array<string, mixed>}
+ */
+function bk_wan_bottleneck(array $tests, array $ctx): array {
+    $now = (int)($ctx['now'] ?? time());
+    $out = [];
+    foreach (['dl', 'ul'] as $dir) {
+        $valid = [];
+        foreach ($tests as $test) {
+            if (!is_array($test)) {
+                continue;
+            }
+            $diag = $test['diagnostics'] ?? null;
+            if (is_string($diag)) {
+                $diag = json_decode($diag, true);
+            }
+            if (!is_array($diag)) {
+                $diag = [];
+            }
+            $in = bk_wan_dir_inputs($test, $diag, $dir, $ctx);
+            if (!bk_wan_test_countable($test, $diag, $in, $now)) {
+                continue;
+            }
+            $valid[] = ['test' => $test, 'in' => $in, 'ts' => (int)strtotime((string)$test['measured_at']),
+                'verdict' => bk_wan_dir_verdict($in, 'agent', [])];
+        }
+        usort($valid, fn (array $a, array $b): int => $b['ts'] <=> $a['ts']);
+        $valid = array_slice($valid, 0, 3);
+        $out[$dir] = bk_wan_aggregate($valid, $dir, $ctx);
+    }
+    return $out;
+}
+
+/**
+ * Agreement, confidence and the four `line_limited` guards (WAN 3.4).
+ *
+ * @param list<array<string, mixed>> $valid newest first, at most three
+ * @return array<string, mixed>
+ */
+function bk_wan_aggregate(array $valid, string $dir, array $ctx): array {
+    $n = count($valid);
+    $basis = [];
+    foreach ($valid as $v) {
+        $id = $v['test']['id'] ?? ($v['test']['measured_at'] ?? null);
+        if ($id !== null) {
+            $basis[] = is_numeric($id) ? (int)$id : (string)$id;
+        }
+    }
+    $verdict = function (string $class, ?string $reason, ?string $conf, array $numbers) use ($basis): array {
+        return ['class' => $class, 'reason' => $reason, 'confidence' => $conf,
+            'basis' => $basis, 'numbers' => $numbers + ['tests' => count($basis)]];
+    };
+    if ($n < 2) {
+        return $verdict('inconclusive', 'not_enough_tests', null, ['have' => $n, 'needed' => 2 - $n]);
+    }
+
+    // The modal class+reason. A tie between two pairs is a disagreement.
+    $groups = [];
+    foreach ($valid as $i => $v) {
+        $key = (string)$v['verdict']['class'] . '/' . (string)($v['verdict']['reason'] ?? '');
+        $groups[$key][] = $i;
+    }
+    uasort($groups, fn (array $a, array $b): int => count($b) <=> count($a));
+    $top = array_key_first($groups);
+    $members = $groups[$top];
+    $counts = array_map('count', $groups);
+    sort($counts);
+    if (count($members) < 2 || (count($counts) > 1 && $counts[count($counts) - 1] === $counts[count($counts) - 2])) {
+        return $verdict('inconclusive', 'tests_disagree', null, ['agree' => count($members)]);
+    }
+    [$class, $reason] = array_pad(explode('/', $top, 2), 2, '');
+    $conf = (count($members) === $n && $n >= 3) ? 'high' : 'medium';
+
+    $agreeing = array_map(fn (int $i): array => $valid[$i], $members);
+    $numbers = bk_wan_agree_numbers($agreeing, $conf);
+    if ($class !== 'line_limited') {
+        return $verdict($class, $reason === '' ? null : $reason, $conf, $numbers);
+    }
+    return bk_wan_line_guards($agreeing, $dir, $ctx, $reason, $conf, $numbers, $verdict);
+}
+
+/** The figures the agreeing tests share: rate, span, servers. */
+function bk_wan_agree_numbers(array $agreeing, string $conf): array {
+    $rates = $days = $servers = [];
+    foreach ($agreeing as $v) {
+        if ($v['in']['s'] !== null) {
+            $rates[] = $v['in']['s'];
+        }
+        $days[date('Y-m-d', $v['ts'])] = true;
+        $name = $v['test']['server_name'] ?? null;
+        if (is_string($name) && $name !== '') {
+            $servers[$name] = true;
+        }
+    }
+    // The CPU figures of the NEWEST agreeing test, not an average of three:
+    // the weekly rule quotes one measurement and has to be able to say which.
+    $newest = $agreeing[0]['in'];
+    return [
+        's_mbps' => $rates === [] ? null : round(min($rates), 2),
+        's_max_mbps' => $rates === [] ? null : round(max($rates), 2),
+        'agree' => count($agreeing),
+        'confidence_from' => $conf,
+        'span_days' => count($days),
+        'servers' => count($servers),
+        'last_at' => date('Y-m-d H:i:s', (int)$agreeing[0]['ts']),
+        'server' => is_string($agreeing[0]['test']['server_name'] ?? null)
+            ? $agreeing[0]['test']['server_name'] : null,
+        'core' => $newest['core'],
+        'core_busy_pct' => $newest['core_busy_pct'],
+        'net_share_pct' => bk_wan_core_net_share($newest),
+        'all_cores_avg_pct' => $newest['all_cores_avg_pct'],
+        'link_mbit' => $newest['l'],
+    ];
+}
+
+/**
+ * The four guards a `line_limited` verdict has to pass (WAN 3.4).
+ *
+ * Agreement alone does not prove the LINE is the limit: two test servers can
+ * hit the same ceiling that is not the line. LibreSpeed servers commonly sit
+ * on gigabit ports, so on a 2000 Mbit plan two of them would agree on about
+ * 940 Mbit/s with an idle router and the owner would be told to call the ISP
+ * about their own test infrastructure.
+ *
+ * Each guard answers `inconclusive` with its own reason and the numbers that
+ * say why, so the card never has to guess what was missing.
+ *
+ * @param list<array<string, mixed>> $agreeing
+ * @param callable(string, ?string, ?string, array): array $verdict
+ * @return array<string, mixed>
+ */
+function bk_wan_line_guards(array $agreeing, string $dir, array $ctx, string $reason, string $conf, array $numbers, callable $verdict): array {
+    // 1. One evening is not a week: the same congested hour twice is one
+    // observation, and WAN asks for a span of at least two days.
+    if (($numbers['span_days'] ?? 0) < 2) {
+        return $verdict('inconclusive', 'not_enough_tests', null,
+            $numbers + ['have' => count($agreeing), 'needed' => 1]);
+    }
+    if (($numbers['servers'] ?? 0) < 2) {
+        return $verdict('inconclusive', 'single_server', null, $numbers);
+    }
+    $min = $numbers['s_mbps'];
+    $max = $numbers['s_max_mbps'];
+    // 2. Servers that differ by more than 15 % measured two different things;
+    // the faster one is then the line's lower bound, and that is all.
+    if ($min !== null && $max !== null && $min > 0 && ($max - $min) > 0.15 * $max) {
+        return $verdict('inconclusive', 'server_limited', null,
+            $numbers + ['s_lower_bound_mbps' => $max]);
+    }
+
+    $cap = $agreeing[0]['in']['cap'];
+    $plan = $agreeing[0]['in']['p'];
+    // 3. Server capacity is never assumed - the Turris list publishes none.
+    // It counts as proven when one of the agreeing servers has really
+    // delivered 0.85 x cap in this direction within 90 days, to any router.
+    $proven = false;
+    $server_max = is_array($ctx['server_max'] ?? null) ? $ctx['server_max'] : [];
+    foreach ($agreeing as $v) {
+        $name = (string)($v['test']['server_name'] ?? '');
+        $seen = $server_max[$name][$dir] ?? null;
+        if ($cap !== null && is_numeric($seen) && (float)$seen >= 0.85 * $cap) {
+            $proven = true;
+            break;
+        }
+    }
+    if (!$proven) {
+        return $verdict('inconclusive', 'server_capacity_unproven', null,
+            $numbers + ['cap_mbit' => $cap === null ? null : round($cap, 2)]);
+    }
+
+    // 4. A goodput plateau of a 1 G or 2.5 G port BELOW the plan: something
+    // with a slower port is in the path and the data cannot say whose.
+    if ($plan !== null && $min !== null && $max !== null && $max < $plan) {
+        foreach ([[880.0, 950.0], [2200.0, 2380.0]] as [$lo, $hi]) {
+            if ($min >= $lo && $max <= $hi) {
+                return $verdict('inconclusive', 'port_plateau', null,
+                    $numbers + ['plateau_mbit' => [$lo, $hi]]);
+            }
+        }
+    }
+    return $verdict('line_limited', $reason === '' ? null : $reason, $conf, $numbers);
+}
+
+/** One event of the router rules. `status` null = timeline only, no notification (X14). */
+function bk_router_alert_event(string $type, ?string $status, string $message): array {
+    return ['type' => $type, 'status' => $status, 'message' => mb_substr($message, 0, 255)];
+}
+
+/**
+ * Link rate of the WAN port against its baseline (W14, alert sheet 2.2).
+ *
+ * The baseline is the highest rate ever seen, `{mbit, since}`. A reseated SFP
+ * or a bad module that halves the line is invisible otherwise: the interface
+ * stays up and every other signal looks healthy.
+ *
+ * It is re-learned DOWNWARDS after seven days at the lower rate, because an
+ * ISP that really moved the customer to a slower port must not produce an
+ * alert every week for ever; from then on the weekly rule `wan_link_below_plan`
+ * carries it. That re-learn clears the latch SILENTLY - a `wan_link_restored`
+ * would claim the port came back, which is the opposite of what happened.
+ *
+ * @param array<string, mixed> $st
+ * @return array{0: array<string, mixed>, 1: list<array<string, mixed>>}
+ */
+function bk_wan_link_baseline_rules(array $st, ?float $mbit, ?string $dev, int $now): array {
+    $events = [];
+    if ($mbit === null || $mbit <= 0) {
+        return [$st, $events]; // no reading, no verdict - the latch carries over
+    }
+    $where = $dev !== null ? ' (' . $dev . ')' : '';
+    $base = is_array($st['wan_link_baseline'] ?? null) ? $st['wan_link_baseline'] : null;
+    $base_mbit = bk_ranged_num($base['mbit'] ?? null, 0.1, 10000000.0);
+    if ($base_mbit === null) {
+        $st['wan_link_baseline'] = ['mbit' => $mbit, 'since' => $now];
+        $st['wan_link_low_since'] = null;
+        $st['wan_link_bad_streak'] = 0;
+        return [$st, $events];
+    }
+    if ($mbit >= $base_mbit) {
+        if ($mbit > $base_mbit) {
+            $st['wan_link_baseline'] = ['mbit' => $mbit, 'since' => $now];
+        }
+        $st['wan_link_low_since'] = null;
+        $st['wan_link_bad_streak'] = 0;
+        if (!empty($st['wan_link_alert_sent'])) {
+            $events[] = bk_router_alert_event('wan_link_restored', 'wan_link_restored',
+                sprintf('Port WAN%s je opět spojený rychlostí %d Mbit/s.', $where, (int)round($mbit)));
+            $st['wan_link_alert_sent'] = false;
+        }
+        return [$st, $events];
+    }
+
+    $low_since = bk_ranged_int($st['wan_link_low_since'] ?? null, 1, 4102444800) ?? $now;
+    $st['wan_link_low_since'] = $low_since;
+    if ($now - $low_since >= 7 * 86400) {
+        $st['wan_link_baseline'] = ['mbit' => $mbit, 'since' => $now];
+        $st['wan_link_low_since'] = null;
+        $st['wan_link_bad_streak'] = 0;
+        $st['wan_link_alert_sent'] = false;
+        return [$st, $events];
+    }
+    $st['wan_link_bad_streak'] = (int)($st['wan_link_bad_streak'] ?? 0) + 1;
+    if (!empty($st['wan_link_alert_sent']) || $st['wan_link_bad_streak'] < 3) {
+        return [$st, $events];
+    }
+    // Three reports in a row: not a renegotiation, a link that stayed slower.
+    $events[] = bk_router_alert_event('wan_link_degraded', 'wan_link_degraded',
+        sprintf('Port WAN%s je spojený rychlostí %d Mbit/s, dosud %d Mbit/s.', $where, (int)round($mbit), (int)round($base_mbit)));
+    $st['wan_link_alert_sent'] = true;
+    return [$st, $events];
+}
+
+/**
+ * The router latches and events of X14 / alert sheet 2.2, in one pass.
+ *
+ * All of them follow the debounce the WAN and LTE alerts already use: a
+ * streak before the alert, a latch so it is sent once, and a recovery that
+ * clears it. A signal the report does not carry (null) leaves its latch and
+ * streak exactly as they were - "we do not know" is not "it is fine".
+ *
+ * `$state` is the subset of last_details these rules own; the returned state
+ * is written back key by key as explicit `$new_data` entries.
+ *
+ * @param array<string, mixed> $cur   the sanitized reading of this report
+ * @param array<string, mixed> $state last_details
+ * @return array{events: list<array<string, mixed>>, state: array<string, mixed>}
+ */
+function bk_router_alert_eval(array $cur, array $state, int $now): array {
+    $st = [
+        'wan_link_baseline' => is_array($state['wan_link_baseline'] ?? null) ? $state['wan_link_baseline'] : null,
+        'wan_link_low_since' => bk_ranged_int($state['wan_link_low_since'] ?? null, 1, 4102444800),
+        'wan_link_bad_streak' => max(0, (int)($state['wan_link_bad_streak'] ?? 0)),
+        'wan_link_alert_sent' => !empty($state['wan_link_alert_sent']),
+        'conntrack_bad_streak' => max(0, (int)($state['conntrack_bad_streak'] ?? 0)),
+        'conntrack_full_sent' => !empty($state['conntrack_full_sent']),
+        'firewall_bad_streak' => max(0, (int)($state['firewall_bad_streak'] ?? 0)),
+        'firewall_alert_sent' => !empty($state['firewall_alert_sent']),
+        'firewall_off_since' => bk_ranged_int($state['firewall_off_since'] ?? null, 1, 4102444800),
+        'dns_resolver_bad_streak' => max(0, (int)($state['dns_resolver_bad_streak'] ?? 0)),
+        'dns_resolver_alert_sent' => !empty($state['dns_resolver_alert_sent']),
+        'oom_kill_at' => bk_ranged_int($state['oom_kill_at'] ?? null, 1, 4102444800),
+    ];
+    $events = [];
+
+    [$st, $link_events] = bk_wan_link_baseline_rules($st, bk_ranged_num($cur['wan_link_mbit'] ?? null, 0.0, 10000000.0),
+        is_string($cur['wan_link_dev'] ?? null) ? $cur['wan_link_dev'] : null, $now);
+    $events = array_merge($events, $link_events);
+
+    // Connection table (W09). Two readings at 90 %, or a refused connection
+    // measured in the same minute as a table that full: `conntrack_drop`
+    // counts genuine clashes too, so below 90 % it is not evidence of a full
+    // table (WAN 3.1.4). Clears five points lower, like every other threshold.
+    $ct_pct = bk_ranged_num($cur['conntrack_pct'] ?? null, 0.0, 100.0);
+    $ct_drops = bk_ranged_int($cur['conntrack_drops'] ?? null, 0, 2 ** 53);
+    if ($ct_pct !== null) {
+        if ($ct_pct >= 90.0) {
+            $st['conntrack_bad_streak']++;
+            $ct_refused = $ct_drops !== null && $ct_drops > 0;
+            if (!$st['conntrack_full_sent'] && ($st['conntrack_bad_streak'] >= 2 || $ct_refused)) {
+                $events[] = bk_router_alert_event('conntrack_full', 'conntrack_full',
+                    sprintf('Tabulka spojení routeru je zaplněná z %d %% a nová spojení odmítá.', (int)round($ct_pct)));
+                $st['conntrack_full_sent'] = true;
+            }
+        } elseif ($ct_pct < 85.0) {
+            $st['conntrack_bad_streak'] = 0;
+            if ($st['conntrack_full_sent']) {
+                // Timeline only (X14): the table emptying is not news anybody
+                // needs at night, but the page must show when it ended.
+                $events[] = bk_router_alert_event('conntrack_normal', null,
+                    sprintf('Tabulka spojení routeru klesla na %d %%.', (int)round($ct_pct)));
+                $st['conntrack_full_sent'] = false;
+            }
+        } else {
+            $st['conntrack_bad_streak'] = 0;
+        }
+    }
+
+    // Firewall rules (G20). Only for a device with a WAN role: on a dumb AP a
+    // disabled firewall is the recommended setup, and `wan_up` is exactly the
+    // signal that distinguishes the two (the agent leaves it null without a
+    // netifd `wan`). Three reports in a row, because a firewall restart is a
+    // stop followed by a start.
+    $fw = $cur['firewall_enabled'] ?? null;
+    $has_wan_role = ($cur['wan_up'] ?? null) !== null;
+    if (is_bool($fw) && $has_wan_role) {
+        if ($fw === false) {
+            $st['firewall_bad_streak']++;
+            if ($st['firewall_off_since'] === null) {
+                $st['firewall_off_since'] = $now;
+            }
+            if (!$st['firewall_alert_sent'] && $st['firewall_bad_streak'] >= 3) {
+                $events[] = bk_router_alert_event('firewall_disabled', 'firewall_disabled',
+                    'Router nemá načtená pravidla firewallu (3 hlášení po sobě).');
+                $st['firewall_alert_sent'] = true;
+            }
+        } else {
+            $st['firewall_bad_streak'] = 0;
+            $st['firewall_off_since'] = null;
+            if ($st['firewall_alert_sent']) {
+                $events[] = bk_router_alert_event('firewall_restored', 'firewall_restored',
+                    'Pravidla firewallu routeru jsou opět načtená.');
+                $st['firewall_alert_sent'] = false;
+            }
+        }
+    }
+
+    // Local DNS resolver (G41). Judged only while the line itself works: with
+    // the WAN down the `wan_lost` alert already speaks, and a resolver that
+    // cannot reach the root servers is not a broken resolver. `wan_internet`
+    // null = the agent could not measure it, so nothing is decided.
+    $dns_ok = $cur['dns_resolver_ok'] ?? null;
+    if (is_bool($dns_ok) && ($cur['wan_internet'] ?? null) === true) {
+        if ($dns_ok === false) {
+            $st['dns_resolver_bad_streak']++;
+            if (!$st['dns_resolver_alert_sent'] && $st['dns_resolver_bad_streak'] >= 2) {
+                $events[] = bk_router_alert_event('dns_resolver_failed', 'dns_resolver_failed',
+                    'DNS resolver routeru neodpovídá (připojení k internetu funguje).');
+                $st['dns_resolver_alert_sent'] = true;
+            }
+        } else {
+            $st['dns_resolver_bad_streak'] = 0;
+            if ($st['dns_resolver_alert_sent']) {
+                $events[] = bk_router_alert_event('dns_resolver_restored', 'dns_resolver_restored',
+                    'DNS resolver routeru znovu odpovídá.');
+                $st['dns_resolver_alert_sent'] = false;
+            }
+        }
+    }
+
+    // Restart (G21). The cause is never claimed: the router records none.
+    // Timeline only - the weekly rule `router_restarts` is what reaches the
+    // e-mail, and a router that loses power every few days would otherwise
+    // send an alert every few days.
+    $uptime = bk_ranged_int($cur['uptime'] ?? null, 0, 2 ** 40);
+    $prev_uptime = bk_ranged_int($state['uptime'] ?? null, 0, 2 ** 40);
+    $rebooted = $uptime !== null && $prev_uptime !== null && $uptime < $prev_uptime;
+    if ($rebooted) {
+        $events[] = bk_router_alert_event('router_rebooted', null,
+            sprintf('Router se restartoval (předchozí běh %s, nyní %s). Příčinu router nezaznamenává.',
+                bk_format_duration_secs($prev_uptime), bk_format_duration_secs($uptime)));
+    }
+
+    // Out-of-memory kills (G31). The counter is cumulative since boot, so only
+    // its GROWTH is an event; after a reboot it starts from zero and a lower
+    // value says nothing. The timestamp is what limits the insight to 24 h.
+    $oom = bk_ranged_int($cur['oom_kills'] ?? null, 0, 2 ** 40);
+    $prev_oom = bk_ranged_int($state['oom_kills'] ?? null, 0, 2 ** 40);
+    if ($oom !== null && $prev_oom !== null && !$rebooted && $oom > $prev_oom) {
+        $events[] = bk_router_alert_event('oom_kill', null,
+            sprintf('Jádro ukončilo %d proces(y) pro nedostatek paměti.', $oom - $prev_oom));
+        $st['oom_kill_at'] = $now;
+    }
+
+    return ['events' => $events, 'state' => $st];
+}
+
+/**
+ * G26: how many WireGuard peers the router really reported.
+ *
+ * The metric column has existed for a long time and was always NULL: the
+ * payload key is a LIST of peers and `bk_agent_num()` of a list is null, so
+ * the chart stayed empty and nothing said why. The count is what the column
+ * means ("WireGuard protejsky" in the metric map). An agent that already
+ * sends a number keeps working; anything that is neither is not measured.
+ */
+function bk_wireguard_peer_count($raw): ?int {
+    if (is_array($raw)) {
+        $peers = 0;
+        foreach ($raw as $peer) {
+            // A peer is an object (public_key, handshake, bytes) or, on an
+            // older agent, the key itself. An empty slot is not a peer.
+            if ((is_array($peer) && $peer !== []) || (is_string($peer) && trim($peer) !== '')) {
+                $peers++;
+            }
+        }
+        return $peers;
+    }
+    return bk_ranged_int($raw, 0, 4096);
+}
+
+/**
+ * G42: how many minute reports a router COULD have sent in the last 24 h.
+ *
+ * The window starts at the later of "24 h ago" and the router's boot time: a
+ * router that was powered off did not lose reports, it was off, and that is
+ * G21's event, not a collection failure. Maintenance is excluded for the same
+ * reason - nothing is expected while the monitor is knowingly silent.
+ *
+ * @param array<string, mixed> $monitor_row id, status, maintenance window
+ * @return array{from: int, expected: int}
+ */
+function bk_reports_24h_expected(array $monitor_row, ?int $boot_time, int $now): array {
+    $from = $now - 86400;
+    if ($boot_time !== null && $boot_time > $from && $boot_time <= $now) {
+        $from = $boot_time;
+    }
+    $minutes = max(0, intdiv($now - $from, 60));
+    if (in_array(strtolower((string)($monitor_row['status'] ?? '')), ['paused', 'maintenance'], true)) {
+        // Silent on purpose right now: nothing is expected, so nothing is missing.
+        return ['from' => $from, 'expected' => 0];
+    }
+    if (!empty($monitor_row['maintenance'])) {
+        $m_start = !empty($monitor_row['maintenance_start']) ? strtotime((string)$monitor_row['maintenance_start']) : false;
+        $m_end = !empty($monitor_row['maintenance_end']) ? strtotime((string)$monitor_row['maintenance_end']) : false;
+        if ($m_start !== false && $m_end !== false && $m_end > $from && $m_start < $now) {
+            $overlap = min($now, $m_end) - max($from, $m_start);
+            $minutes = max(0, $minutes - intdiv(max(0, $overlap), 60));
+        }
+    }
+    return ['from' => $from, 'expected' => $minutes];
+}
+
+/**
+ * The hourly `reports_24h` pass of cron (G42).
+ *
+ * One indexed COUNT per agent monitor per hour, no more: the banner has to be
+ * able to say "142 of 1440 minutes are missing", and the pure
+ * bk_get_collection_issues() has no $pdo to count with. The result goes into
+ * last_details on a FRESH read, because an agent report lands in the same
+ * column every minute and only this one key is this pass's to change.
+ *
+ * @return int how many monitors were recounted
+ */
+function bk_update_reports_24h(PDO $pdo, ?int $now = null): int {
+    $now = $now ?? time();
+    $updated = 0;
+    try {
+        $stmt = $pdo->query("SELECT id, status, maintenance, maintenance_start, maintenance_end, last_details
+            FROM monitors WHERE agent_key IS NOT NULL AND archived_at IS NULL");
+        $rows = $stmt !== false ? $stmt->fetchAll() : [];
+    } catch (PDOException $e) {
+        error_log('[cron] reports_24h: seznam monitorů selhal: ' . $e->getMessage());
+        return 0;
+    }
+    $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = ? AND checked_at >= FROM_UNIXTIME(?)");
+    $stmt_fresh = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
+    $stmt_save = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
+    foreach ($rows as $row) {
+        $details = json_decode((string)($row['last_details'] ?? '{}'), true);
+        if (!is_array($details)) {
+            $details = [];
+        }
+        // Only routers and servers that really report: a monitor whose agent
+        // never sent anything has no agent_last_seen and nothing to compare.
+        if (empty($details['agent_last_seen'])) {
+            continue;
+        }
+        $last = $details['reports_24h']['checked_at'] ?? null;
+        if (is_int($last) && ($now - $last) < 3600) {
+            continue;
+        }
+        $window = bk_reports_24h_expected($row, bk_ranged_int($details['boot_time'] ?? null, 1, 4102444800), $now);
+        try {
+            $stmt_count->execute([(int)$row['id'], $window['from']]);
+            $received = (int)$stmt_count->fetchColumn();
+            $stmt_fresh->execute([(int)$row['id']]);
+            $fresh = json_decode((string)($stmt_fresh->fetchColumn() ?: '{}'), true);
+            if (!is_array($fresh)) {
+                $fresh = [];
+            }
+            $fresh['reports_24h'] = ['expected' => $window['expected'], 'received' => $received, 'checked_at' => $now];
+            $stmt_save->execute([json_encode($fresh, JSON_UNESCAPED_UNICODE), (int)$row['id']]);
+            $updated++;
+        } catch (PDOException $e) {
+            error_log('[cron] reports_24h selhalo pro monitor ' . $row['id'] . ': ' . $e->getMessage());
+        }
+    }
+    return $updated;
 }
 
 /**
@@ -6504,7 +9150,17 @@ function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
         'load_avg_1', 'load_avg_5', 'load_avg_15', 'cpu_steal', 'swap_usage',
         'disk_io_read_kbps', 'disk_io_write_kbps', 'net_errors',
         'iowait_pct', 'inode_usage_pct', 'zombie_count', 'fork_rate', 'temperature_c',
-        'wifi_clients_total', 'conntrack_pct', 'net_ipv4_kbps', 'net_ipv6_kbps'
+        'wifi_clients_total', 'conntrack_pct', 'net_ipv4_kbps', 'net_ipv6_kbps',
+        // Router metrics of agent 0.1.7. The five STEP columns (wan_errors,
+        // wan_drops, wan_ring_drops, wan_link_flaps, conntrack_drops) are
+        // deliberately absent: this context is a 24h average of a level, and
+        // the average of a per-minute step says nothing a reader could use.
+        'wifi_noise_24g', 'wifi_noise_5g', 'wifi_noise_6g',
+        'wifi_busy_24g', 'wifi_busy_5g', 'wifi_busy_6g',
+        'wifi_busy_other_24g', 'wifi_busy_other_5g', 'wifi_busy_other_6g',
+        'wifi_weak_clients', 'wifi_wpa2_clients', 'wifi_6e_unserved', 'wifi_5g_capable_24g',
+        'cpu_core_max', 'cpu_core_max_softirq', 'wan_rx_mbps', 'wan_tx_mbps',
+        'agent_run_ms', 'clock_skew_s'
     ];
     if (!in_array($metric_column, $allowed_cols, true)) {
         return $ctx;
@@ -6614,6 +9270,238 @@ function bk_get_type_card_profile($type) {
         ],
     ];
     return $profiles[$type] ?? $profiles['vps'];
+}
+
+/**
+ * The Routers section of the weekly digest, as language-neutral data.
+ *
+ * Its own function, not twenty lines inside `build_digest_data`, because it
+ * is the one part of the digest that can be tested against a database on its
+ * own: what the engine found, which items are new this week and what the
+ * snapshot did to `router_rec_state`.
+ *
+ * Returns ['routers' => [...], 'more' => int, 'critical' => [...]].
+ */
+/**
+ * Which items the e-mail prints in full, and which are one title in the
+ * "unchanged since last week" line.
+ *
+ * Full when the item is critical, when it has never been mailed, when it was
+ * first mailed THIS week (so a retry between 08:00 and 12:00 renders the same
+ * e-mail) or when its severity rose. Everything else is old news and the
+ * reader has seen it; it is still listed, by title, so nothing silently
+ * disappears.
+ *
+ * `$state` is the state as it was BEFORE this build saved anything, which is
+ * why the rise is computed here and not read from `raised_digest_week`.
+ */
+function bk_digest_router_new_split(array $items, array $state, string $iso_week): array {
+    $rank = bk_router_rec_thresholds()['severity'];
+    $full = [];
+    $open = [];
+    foreach ($items as $item) {
+        $prev = $state[(string)($item['key'] ?? '')] ?? null;
+        $prev_sev = is_array($prev) ? (string)($prev['severity'] ?? '') : '';
+        $rose = $prev_sev !== '' && ($rank[(string)$item['severity']] ?? 9) < ($rank[$prev_sev] ?? 9);
+        $first_week = is_array($prev) ? ($prev['first_digest_week'] ?? null) : null;
+        if (($item['severity'] ?? '') === 'critical' || $first_week === null || $first_week === $iso_week
+            || (is_array($prev) && ($prev['raised_digest_week'] ?? null) === $iso_week) || $rose) {
+            $full[] = $item;
+        } else {
+            $open[] = $item;
+        }
+    }
+    return ['full' => $full, 'open' => $open];
+}
+
+function bk_digest_routers(PDO $pdo, bool $save_snapshot = true): array {
+    // Language-neutral: the e-mail is rendered once per recipient language,
+    // so a sentence built here would carry the language of whoever happened
+    // to trigger cron.
+    //
+    // The build is repeated - `send_digest_report_inner` builds the data
+    // before it even looks for recipients, and cron retries every minute from
+    // 08:00 to 12:00 until one send succeeds - so it is bounded by design:
+    // ids and names first (no `last_details`, up to 60 kB each), then chunks
+    // of 50 with one details query and one inputs batch, and `facts` only for
+    // the routers that are really rendered.
+    $routers = [];
+    $router_critical = [];
+    $routers_more = 0;
+    $rt_start = microtime(true);
+    $iso_week = date('o-\WW');
+    $end_day = date('Y-m-d');
+    $rt_sev = bk_router_rec_thresholds()['severity'];
+    $rt_list = $pdo->query("SELECT id, name FROM monitors WHERE type = 'openwrt' AND archived_at IS NULL ORDER BY id")
+        ->fetchAll(PDO::FETCH_ASSOC);
+    foreach (array_chunk($rt_list, 50) as $rt_chunk) {
+        $rt_ids = array_map(fn ($r) => (int)$r['id'], $rt_chunk);
+        $rt_in = implode(',', array_fill(0, count($rt_ids), '?'));
+        $stmt_rt = $pdo->prepare("SELECT id, name, type, hdd_threshold, last_details FROM monitors WHERE id IN ($rt_in)");
+        $stmt_rt->execute($rt_ids);
+        $rt_rows = [];
+        foreach ($stmt_rt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $rt_rows[(int)$row['id']] = $row;
+        }
+        $rt_inputs = bk_router_rec_inputs_batch($pdo, $rt_ids, $end_day);
+        foreach ($rt_ids as $rid) {
+            $row = $rt_rows[$rid] ?? null;
+            if ($row === null) {
+                continue;
+            }
+            $details = json_decode((string)($row['last_details'] ?? ''), true);
+            $in = $rt_inputs[$rid] ?? ['window' => bk_router_rec_window($end_day), 'disks' => [], 'state' => []];
+            $in['monitor'] = $row;
+            $in['details'] = is_array($details) ? $details : [];
+            $in['now'] = time();
+            $res = bk_router_rec_evaluate($in);
+            $state = $in['state'];
+            // The snapshot is written BEFORE the split, from every item the
+            // rules produced: a muted item is still open, and a page-only
+            // item still has to keep its state (X12).
+            if ($save_snapshot) {
+                bk_router_rec_state_save($pdo, $rid, $res['items'], $iso_week, $res['not_evaluated'], $state);
+            }
+            $split = bk_router_rec_split($res['items'], $state);
+            $visible = [];
+            foreach ($split['items'] as $item) {
+                if (empty($item['page_only'])) {
+                    $visible[] = $item;
+                }
+            }
+            // New / unchanged is decided against the state as it was BEFORE
+            // this build wrote anything, so a retry in the same week and a
+            // manual send render exactly the same split.
+            ['full' => $full, 'open' => $open] = bk_digest_router_new_split($visible, $state, $iso_week);
+            $worst = 9;
+            foreach ($visible as $item) {
+                $worst = min($worst, $rt_sev[(string)$item['severity']] ?? 9);
+            }
+            foreach ($full as $item) {
+                if ($item['severity'] === 'critical' && count($router_critical) < 5) {
+                    $router_critical[] = $item + ['monitor_id' => $rid, 'name' => (string)$row['name']];
+                }
+            }
+            // Only what the section prints survives the loop; the details
+            // blob and the inputs of this router are released with it.
+            $routers[] = [
+                'id' => $rid,
+                'name' => (string)$row['name'],
+                'applicable' => (bool)$res['applicable'],
+                'reason' => $res['reason'],
+                'reason_params' => $res['params'] ?? [],
+                'days_with_data' => (int)$res['days_with_data'],
+                'worst' => $worst,
+                'facts' => [],
+                'items_full' => array_slice($full, 0, 6),
+                'items_open' => $open,
+                'more' => max(0, count($full) - 6),
+            ];
+        }
+    }
+    // Worst severity first, then name - the router that needs reading is
+    // at the top of the section, not the one with the lowest id.
+    usort($routers, fn ($a, $b) => $a['worst'] <=> $b['worst'] ?: strcasecmp($a['name'], $b['name']));
+    if (count($routers) > 10) {
+        $routers_more = count($routers) - 10;
+        $routers = array_slice($routers, 0, 10);
+    }
+    $routers = bk_digest_router_facts($pdo, $routers);
+    $rt_ms = (int)round((microtime(true) - $rt_start) * 1000);
+    // One line so a regression of last_cron_duration_ms is attributable.
+    error_log(sprintf('[digest] Doporučení routerů: %d routerů, %d ms.', count($rt_list), $rt_ms));
+
+    return ['routers' => $routers, 'more' => $routers_more, 'critical' => $router_critical];
+}
+
+/**
+ * The facts line of the routers the digest really prints.
+ *
+ * It runs AFTER the sort and only for the at most ten routers that are
+ * rendered: the radios and the disks come from their `last_details`, the
+ * week's noise and airtime from one more inputs batch of the same ten ids.
+ * Building facts for every router would mean keeping every `last_details`
+ * (up to 60 kB each) alive for the whole build.
+ *
+ * Unknown values stay null; the renderer omits them instead of printing a
+ * zero nobody measured.
+ */
+function bk_digest_router_facts(PDO $pdo, array $routers): array {
+    $ids = [];
+    foreach ($routers as $r) {
+        if (!empty($r['applicable'])) {
+            $ids[] = (int)$r['id'];
+        }
+    }
+    if (!$ids) {
+        return $routers;
+    }
+    $in_list = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $pdo->prepare("SELECT id, last_details FROM monitors WHERE id IN ($in_list)");
+    $stmt->execute($ids);
+    $details = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $d = json_decode((string)$row['last_details'], true);
+        $details[(int)$row['id']] = is_array($d) ? $d : [];
+    }
+    $inputs = bk_router_rec_inputs_batch($pdo, $ids, date('Y-m-d'));
+    $band_key = ['2.4GHz' => '24g', '5GHz' => '5g', '6GHz' => '6g'];
+
+    foreach ($routers as $i => $r) {
+        $id = (int)$r['id'];
+        if (!isset($details[$id])) {
+            continue;
+        }
+        $d = $details[$id];
+        $window = $inputs[$id]['window'] ?? ['metrics' => []];
+        $radios = [];
+        foreach (is_array($d['wifi_radios'] ?? null) ? $d['wifi_radios'] : [] as $radio) {
+            if (!is_array($radio)) {
+                continue;
+            }
+            $band = is_string($radio['band'] ?? null) ? $radio['band'] : null;
+            $suffix = $band_key[$band] ?? null;
+            $noise = $suffix !== null ? bk_rec_week_stat($window['metrics'] ?? [], 'wifi_noise_' . $suffix) : null;
+            $busy = $suffix !== null ? bk_rec_week_stat($window['metrics'] ?? [], 'wifi_busy_' . $suffix) : null;
+            // The agent sends `htmode`, not a generation: HE80 is Wi-Fi 6 on
+            // 80 MHz. One helper decides that for the card, the rules and here.
+            $profile = bk_wifi_radio_profile($radio);
+            $radios[] = [
+                'band' => $band,
+                'channel' => isset($radio['channel']) && is_numeric($radio['channel']) ? (int)$radio['channel'] : null,
+                'generation' => $profile['generation'],
+                'width_mhz' => $profile['width_mhz'],
+                'encryption' => $radio['encryption'] ?? null,
+                'clients' => isset($radio['clients']) && is_numeric($radio['clients']) ? (int)$radio['clients'] : null,
+                'clients_gen' => is_array($radio['clients_gen'] ?? null) ? $radio['clients_gen'] : null,
+                'noise_week' => $noise['value'] ?? null,
+                'busy_week' => $busy['value'] ?? null,
+            ];
+        }
+        $disks = [];
+        foreach (is_array($d['storage_disks'] ?? null) ? $d['storage_disks'] : [] as $disk) {
+            if (!is_array($disk)) {
+                continue;
+            }
+            $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+            $disks[] = [
+                'name' => $disk['name'] ?? null,
+                'model' => $smart['model'] ?? ($disk['model'] ?? null),
+                'transport' => $disk['transport'] ?? null,
+                'rotational' => $disk['rotational'] ?? null,
+                'size_bytes' => isset($disk['size_bytes']) && is_numeric($disk['size_bytes']) ? (int)$disk['size_bytes'] : null,
+                'smart_state' => $smart['state'] ?? null,
+                'smart_passed' => $smart['passed'] ?? null,
+                'temperature_c' => isset($smart['temperature_c']) && is_numeric($smart['temperature_c']) ? (int)$smart['temperature_c'] : null,
+                'wear_pct' => isset($smart['wear_pct']) && is_numeric($smart['wear_pct']) ? (float)$smart['wear_pct'] : null,
+                'written_bytes' => isset($smart['written_bytes']) && is_numeric($smart['written_bytes']) ? (int)$smart['written_bytes'] : null,
+                'runtime_bad_blocks' => isset($smart['runtime_bad_blocks']) && is_numeric($smart['runtime_bad_blocks']) ? (int)$smart['runtime_bad_blocks'] : null,
+                'reallocated_sectors' => isset($smart['reallocated_sectors']) && is_numeric($smart['reallocated_sectors']) ? (int)$smart['reallocated_sectors'] : null,
+            ];
+        }
+        $routers[$i]['facts'] = ['radios' => $radios, 'disks' => $disks];
+    }
+    return $routers;
 }
 
 /**
@@ -6831,6 +9719,28 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             'lte_backup_restored' => 'digest_event_lte_backup_restored',
             'wan_lost' => 'digest_event_wan_lost',
             'wan_restored' => 'digest_event_wan_restored',
+            // Disk events of a router. Same reason as above for translating
+            // the label instead of the stored description: the description
+            // names the model and the counter values in operator Czech.
+            'disk_smart_failed' => 'digest_event_disk_smart_failed',
+            'disk_errors_growing' => 'digest_event_disk_errors_growing',
+            'disk_wear_high' => 'digest_event_disk_wear_high',
+            'disk_emmc_eol' => 'digest_event_disk_emmc_eol',
+            'disk_temp_critical' => 'digest_event_disk_temp_critical',
+            'fs_full' => 'digest_event_fs_full',
+            'disk_replaced' => 'digest_event_disk_replaced',
+            // The seven NOTIFYING router events of alert sheet 2.2. The
+            // timeline-only ones (conntrack_normal, router_rebooted, oom_kill)
+            // stay out on purpose: restarts reach the e-mail through the rule
+            // `router_restarts`, and a router that loses power every few days
+            // would bury the whole section.
+            'wan_link_degraded' => 'digest_event_wan_link_degraded',
+            'wan_link_restored' => 'digest_event_wan_link_restored',
+            'conntrack_full' => 'digest_event_conntrack_full',
+            'firewall_disabled' => 'digest_event_firewall_disabled',
+            'firewall_restored' => 'digest_event_firewall_restored',
+            'dns_resolver_failed' => 'digest_event_dns_resolver_failed',
+            'dns_resolver_restored' => 'digest_event_dns_resolver_restored',
         ];
         if ($ev['event_type'] === 'monitor_added') {
             // monitor_id still exists here (the monitor was just added) - the link works.
@@ -6972,7 +9882,21 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     if ($perf_worst !== null && $perf_worst['avg_latency'] !== null && $perf_worst['avg_latency'] > 200) {
         $recommendations[] = sprintf(t('digest_high_latency'), $perf_worst['name'], $perf_worst['avg_latency']);
     }
-    $warning_count = count($recommendations);
+    // --- Routers: the weekly recommendations (CORE 3.8) -------------------
+    // Weekly only: the section asks what a WEEK of measurements says.
+    $routers = [];
+    $routers_more = 0;
+    $router_critical = [];
+    if ($period === 'weekly') {
+        $rt = bk_digest_routers($pdo, (bool)$save_snapshot);
+        $routers = $rt['routers'];
+        $routers_more = $rt['more'];
+        $router_critical = $rt['critical'];
+    }
+
+    // Router items that page are warnings of the week too - the stat box must
+    // not say "0 warnings" above a critical disk.
+    $warning_count = count($recommendations) + count($router_critical);
 
     // --- Executive Summary (rule-generated sentences, not AI) ---
     $executive_summary = [];
@@ -6997,6 +9921,12 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
     if (!empty($recommendations)) {
         $executive_summary[] = sprintf(t('digest_summary_recommended_action'), $recommendations[0]);
+    } elseif (!empty($router_critical)) {
+        // `$recommendations` is a list of STRINGS everywhere it is consumed, so
+        // a router item cannot be pushed into it. The summary line carries the
+        // neutral item instead and render_digest_html turns it into a sentence
+        // in the recipient's language.
+        $executive_summary[] = ['key' => 'digest_summary_recommended_action', 'rec' => $router_critical[0]];
     } else {
         $executive_summary[] = t('digest_summary_no_critical_action');
     }
@@ -7035,6 +9965,9 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         'removed_servers' => $removed_servers,
         'config_change_examples' => array_slice($config_change_examples, 0, 6),
         'recommendations' => array_slice($recommendations, 0, 8),
+        'routers' => $routers,
+        'routers_more' => $routers_more,
+        'router_critical' => $router_critical,
         'executive_summary' => $executive_summary,
     ];
 
@@ -7258,6 +10191,100 @@ function bk_email_kv($label, $value_html) {
 }
 
 /**
+ * The grey facts line under a router's name: what the week's radios and disks
+ * ARE, next to what the rules say about them.
+ *
+ * Every unknown value is omitted, never printed as a zero or a dash soup: the
+ * line exists so the reader can see that 3 stable bad blocks or 67 C are known
+ * and deliberately not an alert.
+ */
+function bk_digest_router_facts_lines(array $facts): array {
+    $lines = [];
+    $gen_label = [4 => 'Wi-Fi 4', 5 => 'Wi-Fi 5', 6 => 'Wi-Fi 6', 7 => 'Wi-Fi 7'];
+    foreach ($facts['radios'] ?? [] as $radio) {
+        $parts = [];
+        $parts[] = bk_rec_band_label($radio['band'] ?? null);
+        if (isset($gen_label[(int)($radio['generation'] ?? 0)])) {
+            $parts[] = $gen_label[(int)$radio['generation']];
+        }
+        if (!empty($radio['width_mhz'])) {
+            $parts[] = bk_rec_num($radio['width_mhz']) . ' MHz';
+        }
+        if (($radio['channel'] ?? null) !== null) {
+            $parts[] = sprintf(t('rr_channel'), bk_rec_num($radio['channel']));
+        }
+        if (is_string($radio['encryption'] ?? null) && $radio['encryption'] !== '') {
+            $parts[] = strtoupper(str_replace('_', '/', $radio['encryption']));
+        }
+        if (($radio['clients'] ?? null) !== null) {
+            $clients = (int)$radio['clients'];
+            $key = $clients === 1 ? 'digest_fact_clients_1' : ($clients < 5 ? 'digest_fact_clients_few' : 'digest_fact_clients_many');
+            $gens = [];
+            foreach (['wifi7' => 7, 'wifi6' => 6, 'wifi5' => 5, 'wifi4' => 4] as $gk => $gn) {
+                $n = $radio['clients_gen'][$gk] ?? null;
+                if (is_numeric($n) && (int)$n > 0) {
+                    $gens[] = $gen_label[$gn] . ': ' . bk_rec_num((int)$n);
+                }
+            }
+            $parts[] = sprintf(t($key), bk_rec_num($clients)) . ($gens ? ' (' . implode(', ', $gens) . ')' : '');
+        }
+        if (($radio['noise_week'] ?? null) !== null) {
+            $parts[] = sprintf(t('digest_fact_noise'), bk_rec_num($radio['noise_week']));
+        }
+        if (($radio['busy_week'] ?? null) !== null) {
+            $parts[] = sprintf(t('digest_fact_busy'), bk_rec_num($radio['busy_week'], 1));
+        }
+        $lines[] = implode(' · ', $parts);
+    }
+    foreach ($facts['disks'] ?? [] as $disk) {
+        $parts = [];
+        if (is_string($disk['name'] ?? null) && $disk['name'] !== '') {
+            $parts[] = $disk['name'];
+        }
+        if (is_string($disk['model'] ?? null) && $disk['model'] !== '') {
+            $parts[] = $disk['model'];
+        }
+        $kind = [];
+        if (is_string($disk['transport'] ?? null) && $disk['transport'] !== '') {
+            $kind[] = strtoupper($disk['transport']);
+        }
+        if (($disk['rotational'] ?? null) === false) {
+            $kind[] = 'SSD';
+        } elseif (($disk['rotational'] ?? null) === true) {
+            $kind[] = 'HDD';
+        }
+        if (($disk['size_bytes'] ?? null) !== null) {
+            $kind[] = bk_format_bytes_cz((float)$disk['size_bytes']);
+        }
+        if ($kind) {
+            $parts[] = implode(' ', $kind);
+        }
+        if (($disk['smart_state'] ?? null) === 'ok' && ($disk['smart_passed'] ?? null) !== false) {
+            $parts[] = t('digest_fact_smart_ok');
+        } elseif (($disk['smart_passed'] ?? null) === false || ($disk['smart_state'] ?? null) === 'failing') {
+            $parts[] = t('digest_fact_smart_failing');
+        }
+        if (($disk['temperature_c'] ?? null) !== null) {
+            $parts[] = bk_rec_num($disk['temperature_c']) . ' °C';
+        }
+        if (($disk['wear_pct'] ?? null) !== null) {
+            $parts[] = sprintf(t('digest_fact_wear'), bk_rec_num($disk['wear_pct']));
+        }
+        if (($disk['written_bytes'] ?? null) !== null) {
+            $parts[] = sprintf(t('digest_fact_written'), bk_format_bytes_cz((float)$disk['written_bytes']));
+        }
+        if (!empty($disk['runtime_bad_blocks'])) {
+            $parts[] = sprintf(t('digest_fact_bad_blocks'), bk_rec_num($disk['runtime_bad_blocks']));
+        }
+        if (!empty($disk['reallocated_sectors'])) {
+            $parts[] = sprintf(t('digest_fact_realloc'), bk_rec_num($disk['reallocated_sectors']));
+        }
+        $lines[] = implode(' · ', $parts);
+    }
+    return array_values(array_filter($lines, fn (string $l): bool => $l !== ''));
+}
+
+/**
  * Renders the complete infrastructure report (weekly and monthly) into an HTML
  * e-mail. The structure matches 4 blocks: Executive Summary / Operational Overview /
  * Technical Insights / Recommendations.
@@ -7287,6 +10314,13 @@ function render_digest_html($data) {
     // --- Executive Summary ---
     $exec_html = '';
     foreach ($data['executive_summary'] as $line) {
+        // One line can be a neutral router item instead of a string: its
+        // sentence is built here, in the recipient's language (CORE 3.8).
+        if (is_array($line)) {
+            $rec = is_array($line['rec'] ?? null) ? $line['rec'] : [];
+            $line = sprintf(t((string)$line['key']),
+                (string)($rec['name'] ?? '') . ': ' . bk_router_rec_render($rec)['title']);
+        }
         $exec_html .= '<p style="margin:5px 0; font-size:14px;">' . htmlspecialchars($line) . '</p>';
     }
     $body .= '<div style="background-color:#12121a; border-radius:6px; padding:16px 18px; margin-bottom:26px;">' . $exec_html . '</div>';
@@ -7488,10 +10522,89 @@ function render_digest_html($data) {
         }
     }
 
+    // --- Routers (CORE 3.8) ---
+    // Weekly only, and only when there is an openwrt monitor at all: an empty
+    // section would suggest the router data is missing rather than absent.
+    if (!empty($data['routers'])) {
+        $rt_color = ['critical' => '#ef233c', 'warning' => '#f39c12', 'info' => '#888896'];
+        // The new/removed section above defines $site_url only when it renders.
+        $rt_base = rtrim((string)get_setting('site_url', ''), '/');
+        $rt_html = '';
+        foreach ($data['routers'] as $router) {
+            $link = $rt_base . '/index.php?expand=' . (int)$router['id'];
+            $rt_html .= '<div style="padding:10px 0; border-bottom:1px solid #22222c;">'
+                . '<div style="font-size:14px; font-weight:bold;"><a href="' . htmlspecialchars($link)
+                . '" style="color:#e1e1e6; text-decoration:none;">' . htmlspecialchars((string)$router['name']) . '</a></div>';
+            if (empty($router['applicable'])) {
+                $params = is_array($router['reason_params'] ?? null) ? $router['reason_params'] : [];
+                $why = '';
+                if ($router['reason'] === 'agent_old') {
+                    $why = sprintf(t('digest_router_agent_old'), (string)($params['version'] ?? '?'));
+                } elseif ($router['reason'] === 'silent' && isset($params['days'])) {
+                    $why = sprintf(t('digest_router_silent'), (int)$params['days']);
+                }
+                if ($why !== '') {
+                    $rt_html .= '<div style="font-size:12px; color:#888896; padding-top:3px;">' . htmlspecialchars($why) . '</div>';
+                }
+                $rt_html .= '</div>';
+                continue;
+            }
+            foreach (bk_digest_router_facts_lines(is_array($router['facts'] ?? null) ? $router['facts'] : []) as $fact) {
+                $rt_html .= '<div style="font-size:12px; color:#888896; padding-top:3px;">' . htmlspecialchars($fact) . '</div>';
+            }
+            if ((int)$router['days_with_data'] < 4) {
+                $rt_html .= '<div style="font-size:12px; color:#888896; padding-top:3px;">'
+                    . htmlspecialchars(sprintf(t('digest_router_few_days'), (int)$router['days_with_data'])) . '</div>';
+            }
+            foreach ($router['items_full'] as $item) {
+                $text = bk_router_rec_render($item);
+                $color = $rt_color[(string)$item['severity']] ?? '#888896';
+                $rt_html .= '<div style="padding:5px 0 5px 10px; border-left:3px solid ' . $color . '; margin-top:6px;">'
+                    . '<div style="font-size:13px; color:#e1e1e6; font-weight:bold;">' . htmlspecialchars($text['title']) . '</div>'
+                    . '<div style="font-size:13px; color:#e1e1e6;">' . htmlspecialchars($text['measured']) . '</div>'
+                    . '<div style="font-size:12px; color:#a0a0ab;">&rarr; ' . htmlspecialchars($text['action']) . '</div>'
+                    . '</div>';
+            }
+            if (!empty($router['more'])) {
+                $rt_html .= '<div style="font-size:12px; color:#888896; padding-top:4px;">'
+                    . htmlspecialchars(sprintf(t('digest_router_more_items'), (int)$router['more'])) . '</div>';
+            }
+            // An item that has been open since an earlier week is a title only:
+            // the e-mail says what is new, the app says everything.
+            if (!empty($router['items_open'])) {
+                $titles = [];
+                foreach ($router['items_open'] as $item) {
+                    $titles[] = bk_router_rec_render($item)['title'];
+                }
+                $rt_html .= '<div style="font-size:12px; color:#888896; padding-top:4px;">'
+                    . htmlspecialchars(sprintf(t('digest_router_unchanged'), count($titles), implode(', ', $titles))) . '</div>';
+            }
+            if (empty($router['items_full']) && empty($router['items_open']) && (int)$router['days_with_data'] >= 4) {
+                $rt_html .= '<div style="font-size:12px; color:#1ec773; padding-top:3px;">'
+                    . htmlspecialchars(t('digest_router_ok')) . '</div>';
+            }
+            $rt_html .= '</div>';
+        }
+        if (!empty($data['routers_more'])) {
+            $rt_html .= '<div style="font-size:12px; color:#888896; padding-top:6px;">'
+                . htmlspecialchars(sprintf(t('digest_routers_more'), (int)$data['routers_more'])) . '</div>';
+        }
+        $body .= bk_email_section(t('digest_section_routers'), $rt_html);
+    }
+
     // --- Recommendations ---
     $rec_html = '';
+    // A critical router item is the most urgent thing in the whole e-mail, so
+    // it goes above the existing sentences - as a bullet like the rest, never
+    // pushed into `$data['recommendations']`, which is a list of strings.
+    foreach ($data['router_critical'] ?? [] as $rec) {
+        $rec_html .= '<div style="font-size:13px; padding:4px 0; color:#e1e1e6;">&bull; '
+            . htmlspecialchars((string)($rec['name'] ?? '') . ': ' . bk_router_rec_render($rec)['title']) . '</div>';
+    }
     if (empty($data['recommendations'])) {
-        $rec_html = '<div style="font-size:13px; color:#1ec773;">' . htmlspecialchars(t('digest_no_recommendations')) . '</div>';
+        if ($rec_html === '') {
+            $rec_html = '<div style="font-size:13px; color:#1ec773;">' . htmlspecialchars(t('digest_no_recommendations')) . '</div>';
+        }
     } else {
         foreach ($data['recommendations'] as $r) {
             $rec_html .= '<div style="font-size:13px; padding:4px 0; color:#e1e1e6;">&bull; ' . htmlspecialchars($r) . '</div>';
@@ -8868,6 +11981,2443 @@ function bk_validate_import_target(string $target): ?string {
  * for any monitor (e.g. TeamSpeak, Minecraft, Web), even when the user never set an asset_id manually.
  */
 /**
+ * Thresholds and rule order of the weekly router recommendations.
+ *
+ * ONE place for every number a rule compares against, and the explicit rule
+ * order. The order is NOT alphabetical: sorting by key would put
+ * `disk_selftest_never` (an optional hygiene item) above
+ * `disk_unclean_shutdowns` (a router losing power), which is the opposite of
+ * what the week's reader needs first.
+ *
+ * `enter` / `hold`: a rule starts at `enter`, and while the last SAVED
+ * evaluation had it active it continues down to `hold`. Without the pair an
+ * item that sits on its boundary (the owner's weakest client is exactly on
+ * -75 dBm) would vanish and come back as NEW every other week.
+ */
+function bk_router_rec_thresholds(): array {
+    return [
+        // Order = severity, area, THIS rank, key. Areas themselves are ordered
+        // storage, wifi, wan, security, system, packages (release contract X10).
+        'rank' => [
+            // storage
+            'disk_smart_failing', 'disk_errors_growing', 'disk_wear_high', 'disk_wear_fast',
+            'disk_heavy_writes', 'disk_temp_warm', 'disk_unclean_shutdowns', 'disk_selftest_never',
+            'fs_nearly_full', 'disk_smart_unreadable',
+            // wifi
+            'wifi_6ghz_unserved', 'wifi_channel_busy', 'wifi_noise_high', 'wifi_week_degraded',
+            'wifi_weak_encryption', 'wifi_wpa2_only', 'wifi_wpa3_ready', 'wifi_mode_below_card',
+            'wifi_channel_narrow', 'wifi_24_wide_channel', 'wifi_weak_client', 'wifi_5ghz_clients_on_24',
+            // wan
+            'wan_link_below_plan', 'wan_port_errors', 'wan_link_flaps', 'wan_line_below_plan',
+            'wan_port_limited', 'wan_cpu_packet_path', 'wan_forwarding_core_saturated',
+            'wan_sqm_limited', 'conntrack_drops', 'lan_wired_ceiling',
+            // security
+            'firewall_off',
+            // system
+            'router_restarts', 'dns_resolver_failing', 'clock_skew',
+            // packages, always last
+            'pkg_smartmontools', 'pkg_smart_drivedb', 'pkg_hostapd_utils', 'pkg_iw', 'pkg_librespeed_cli',
+        ],
+        'area' => [
+            'storage' => 0, 'wifi' => 1, 'wan' => 2, 'security' => 3, 'system' => 4, 'packages' => 5,
+        ],
+        'severity' => ['critical' => 0, 'warning' => 1, 'info' => 2],
+        // A weekly rule needs this many days with data, otherwise it is not
+        // evaluated at all (a router switched off over a holiday must not
+        // clear an item and mail it again as new when it comes back).
+        'min_days' => 4,
+        // A day counts as "with data" from this many samples (a quarter of the
+        // minutes of a day).
+        'day_samples' => 360,
+        'wifi_6ghz_unserved' => ['enter' => 0.50, 'hold' => 0.25],
+        'wifi_weak_client' => ['enter' => 0.5, 'hold' => 0.25],
+        'wifi_noise_high' => ['enter' => -85.0, 'hold' => -87.0, 'enter_warn' => -80.0, 'hold_warn' => -82.0],
+        'wifi_channel_busy_other' => ['enter' => 35.0, 'hold' => 30.0, 'enter_warn' => 55.0, 'hold_warn' => 50.0],
+        'wifi_channel_busy_total' => ['enter' => 50.0, 'hold' => 45.0, 'enter_warn' => 70.0, 'hold_warn' => 65.0],
+        // Offsets from the class limit L of the disk (3.5): mean >= L-10 fires,
+        // >= L-5 is a warning; a saved item holds two degrees longer.
+        'disk_temp_warm' => ['enter' => -10, 'hold' => -12, 'enter_warn' => -5, 'hold_warn' => -7],
+        'wifi_5ghz_clients_on_24' => ['enter' => 1.0, 'hold' => 0.75],
+        'wifi_week_degraded' => ['noise_rise' => 6.0, 'noise_above' => -88.0, 'busy_rise' => 15.0, 'busy_above' => 30.0],
+        'disk_wear_high' => ['warn' => 80.0, 'crit' => 90.0, 'emmc_warn' => 9, 'emmc_crit' => 10],
+        'disk_wear_fast' => ['min_days' => 14, 'min_delta' => 1.0, 'days_left' => 730],
+        'disk_heavy_writes' => ['min_days' => 3, 'flash_gib' => 1.0, 'flash_share' => 0.10,
+            'ssd_gib' => 10.0, 'ssd_share' => 0.30],
+        'disk_unclean_shutdowns' => ['min' => 10, 'share' => 0.5],
+        'disk_selftest_never' => ['min_hours' => 168],
+        'fs_nearly_full' => ['crit' => 98.0],
+        'wifi_channel_narrow' => ['busy_below' => 40.0],
+        'wifi_wpa3_ready' => ['day_samples' => 1296],
+        // The WAN and gap rules of the release contract's rule sheet 2.1.
+        'wan_link_below_plan' => ['enter' => 6, 'hold' => 5],
+        'wan_port_errors' => ['enter' => 100.0, 'enter_days' => 3, 'hold' => 50.0, 'hold_days' => 2,
+            'ring_enter' => 0.1, 'ring_enter_days' => 2, 'ring_hold' => 0.05, 'ring_hold_days' => 1],
+        'wan_link_flaps' => ['enter' => 3, 'hold' => 2],
+        'wan_forwarding_core_saturated' => ['enter' => 10, 'hold' => 5,
+            'core_pct' => 95.0, 'softirq_pct' => 85.0, 'wan_mbps' => 300.0],
+        'conntrack_drops' => ['enter' => 2, 'hold' => 1, 'full_pct' => 90.0],
+        'router_restarts' => ['enter' => 3, 'hold' => 2],
+        'dns_resolver_failing' => ['enter' => 3, 'hold' => 2],
+        'clock_skew' => ['enter' => 20.0, 'hold' => 15.0],
+        'lan_wired_ceiling' => ['cap_at_most' => 1000],
+        'wan_sqm_limited' => ['below_plan' => 0.8],
+    ];
+}
+
+
+/**
+ * One weekly value of one metric out of the daily rows of the window.
+ *
+ * `value` = SUM(avg_val * samples) / SUM(samples) - the weighted mean, not the
+ * mean of daily means, so a day with four samples cannot outweigh a full one.
+ * `sum` is that same total and IS the week's value of a step metric.
+ * `days` counts only days with enough samples; a rule that compares a weekly
+ * value needs `days >= min_days`, everything else is "not evaluated".
+ *
+ * @param array $days  ['Y-m-d' => ['min'=>?float,'avg'=>?float,'max'=>?float,'samples'=>int], ...]
+ */
+function bk_rec_week_stat(array $window, string $key): array {
+    $th = bk_router_rec_thresholds();
+    $days = $window[$key] ?? [];
+    $sum = 0.0;
+    $samples = 0;
+    $full_days = 0;
+    $max = null;
+    $min = null;
+    $daily = [];
+    foreach ($days as $day => $row) {
+        $n = (int)($row['samples'] ?? 0);
+        $avg = isset($row['avg']) && is_numeric($row['avg']) ? (float)$row['avg'] : null;
+        if ($n <= 0 || $avg === null) {
+            continue;
+        }
+        $sum += $avg * $n;
+        $samples += $n;
+        $daily[$day] = ['sum' => $avg * $n, 'avg' => $avg, 'samples' => $n,
+            'max' => isset($row['max']) && is_numeric($row['max']) ? (float)$row['max'] : null,
+            'min' => isset($row['min']) && is_numeric($row['min']) ? (float)$row['min'] : null];
+        if ($n >= $th['day_samples']) {
+            $full_days++;
+        }
+        if (isset($row['max']) && is_numeric($row['max'])) {
+            $max = $max === null ? (float)$row['max'] : max($max, (float)$row['max']);
+        }
+        if (isset($row['min']) && is_numeric($row['min'])) {
+            $min = $min === null ? (float)$row['min'] : min($min, (float)$row['min']);
+        }
+    }
+    return [
+        'value' => $samples > 0 ? $sum / $samples : null,
+        'sum' => $samples > 0 ? $sum : null,
+        'days' => $full_days,
+        'samples' => $samples,
+        'max' => $max,
+        'min' => $min,
+        'daily' => $daily,
+    ];
+}
+
+/**
+ * Is this weekly value over its threshold right now?
+ *
+ * `$active` is the state of the last SAVED evaluation, so the pair works at
+ * the weekly granularity the digest has. A null value never fires a rule.
+ */
+function bk_rec_over(?float $value, float $enter, float $hold, bool $active): bool {
+    if ($value === null) {
+        return false;
+    }
+    return $active ? $value >= $hold : $value >= $enter;
+}
+
+/** The same for a threshold that fires when the value is ABOVE it (noise, dBm). */
+function bk_rec_above(?float $value, float $enter, float $hold, bool $active): bool {
+    if ($value === null) {
+        return false;
+    }
+    return $active ? $value > $hold : $value > $enter;
+}
+
+/** Was this key active in the last saved evaluation? */
+function bk_rec_state_active(array $state, string $key): bool {
+    return !empty($state[$key]['active']);
+}
+
+/** The severity the last saved evaluation stored for this key (null = none). */
+function bk_rec_state_severity(array $state, string $key): ?string {
+    $sev = $state[$key]['severity'] ?? null;
+    return is_string($sev) && $sev !== '' ? $sev : null;
+}
+
+/**
+ * A number for a rule text: decimal comma in Czech, an em dash when the value
+ * was never measured (a rule that renders "0" for an unknown quantity is the
+ * invented zero this project keeps hunting).
+ */
+function bk_rec_num($value, int $decimals = 0): string {
+    if ($value === null || !is_numeric($value)) {
+        return '—';
+    }
+    $out = number_format((float)$value, $decimals, '.', '');
+    if (($GLOBALS['BK_LANG'] ?? 'cs') !== 'en') {
+        $out = str_replace('.', ',', $out);
+    }
+    return $out;
+}
+
+/** cs "stahování" / en "download" - a direction is never shown as `dl`. */
+function bk_rec_dir_label(?string $dir): string {
+    return t($dir === 'ul' ? 'rr_dir_ul' : 'rr_dir_dl');
+}
+
+/** cs "2,4 GHz" / en "2.4 GHz" - never a raw enum value in a sentence. */
+function bk_rec_band_label(?string $band): string {
+    switch ($band) {
+        case '2.4GHz': return t('rr_band_24g');
+        case '5GHz': return t('rr_band_5g');
+        case '6GHz': return t('rr_band_6g');
+    }
+    return t('rr_band_unknown');
+}
+
+/** cs "5 GHz, kanál 36" / en "5 GHz, channel 36". Never the SSID (CORE 3.7). */
+function bk_rec_radio_label(?string $band, $channel): string {
+    $label = bk_rec_band_label($band);
+    if ($channel === null || !is_numeric($channel)) {
+        return $label;
+    }
+    return $label . ', ' . sprintf(t('rr_channel'), (string)(int)$channel);
+}
+
+/** "{smart model or model} ({name})" - the disk as the owner sees it on the card. */
+function bk_rec_disk_label(array $disk): string {
+    return bk_disk_label($disk);
+}
+
+/**
+ * The install command for a `pkg_*` rule, in the package manager the router
+ * really has. Unknown manager -> a sentence, never a command that would fail.
+ */
+function bk_rec_install_cmd(?string $pkg_manager, string $pkg): string {
+    if ($pkg_manager === 'opkg') {
+        return 'opkg update && opkg install ' . $pkg;
+    }
+    if ($pkg_manager === 'apk') {
+        return 'apk add ' . $pkg;
+    }
+    return sprintf(t('rr_cmd_manual'), $pkg);
+}
+
+/**
+ * One language-neutral item. `params` carries the numbers the text will need,
+ * `subject` says what the item is about (a disk, a radio, a band, a mount, a
+ * direction of the WAN), so the app can group them without parsing texts.
+ */
+function bk_rec_item(string $id, string $key, string $area, string $severity, array $subject, array $params = [], bool $page_only = false): array {
+    $item = [
+        'id' => $id,
+        'key' => $key,
+        'area' => $area,
+        'severity' => $severity,
+        'subject' => $subject,
+        'params' => $params,
+    ];
+    if ($page_only) {
+        // X12: dropped by the digest before the new/unchanged split, still saved.
+        $item['page_only'] = true;
+    }
+    return $item;
+}
+
+
+/**
+ * The copyable command an action names, if it names one (CORE 3.9).
+ *
+ * The sentence itself carries the command in prose so the e-mail reads
+ * naturally; the page renders it a second time in a code block, and this is
+ * where that block gets its text. It is built from the item, not parsed out of
+ * the translated sentence - a Czech and an English text would otherwise have
+ * to keep an identical command substring for ever.
+ */
+function bk_rec_command(array $item): ?string {
+    $id = (string)($item['id'] ?? '');
+    $p = is_array($item['params'] ?? null) ? $item['params'] : [];
+    $dev = (string)($p['name'] ?? '');
+    if ($dev === '' || !preg_match('/^[a-z0-9]{1,16}$/', $dev)) {
+        $dev = '';
+    }
+    switch ($id) {
+        case 'disk_errors_growing':
+            return $dev === '' ? null : 'smartctl -t long /dev/' . $dev;
+        case 'disk_selftest_never':
+            return $dev === '' ? null : 'smartctl -t short /dev/' . $dev;
+        case 'pkg_librespeed_cli':
+            return bk_rec_install_cmd(is_string($p['pkg_manager'] ?? null) ? $p['pkg_manager'] : null, 'librespeed-cli');
+        default:
+            return null;
+    }
+}
+
+/**
+ * Packages the router does NOT have, by the name you would install them under.
+ *
+ * `agent_tools` carries strict booleans (X4), so false really means "looked and
+ * did not find it" - a tool the agent could not test at all is absent from the
+ * object and absent from this list.
+ *
+ * @return list<string>
+ */
+function bk_rec_missing_packages($agent_tools): array {
+    if (!is_array($agent_tools)) {
+        return [];
+    }
+    $pkgs = [
+        'smartctl' => 'smartmontools',
+        'smart_drivedb' => 'smartmontools-drivedb',
+        'hostapd_cli' => 'hostapd-utils',
+        'iw' => 'iw',
+        'librespeed_cli' => 'librespeed-cli',
+        'ethtool' => 'ethtool',
+        'tc' => 'tc-tiny',
+    ];
+    $out = [];
+    foreach ($pkgs as $flag => $pkg) {
+        if (($agent_tools[$flag] ?? null) === false) {
+            $out[] = $pkg;
+        }
+    }
+    return $out;
+}
+
+/**
+ * One recommendation as the app receives it (CORE 3.9).
+ *
+ * `$render` is false for a muted key that no longer fires: there is no item to
+ * render any more, only the mute itself, and the three texts are null so the
+ * app shows the stored reason and an "unmute" button instead of a sentence
+ * that is no longer true.
+ *
+ * @param array<string, mixed> $item
+ * @param array<string, mixed>|null $state_row the router_rec_state row, for the mute
+ * @return array<string, mixed>
+ */
+function bk_rec_item_json(array $item, $state_row = null, bool $render = true): array {
+    $subject = is_array($item['subject'] ?? null) ? $item['subject'] : ['kind' => 'router'];
+    // The wire is camelCase (CORE 3.9); inside the engine the subject is
+    // snake_case like everything else the rules build.
+    $subject_json = [];
+    foreach ($subject as $k => $v) {
+        $subject_json[$k === 'disk_key' ? 'diskKey' : (string)$k] = $v;
+    }
+    $params = is_array($item['params'] ?? null) ? $item['params'] : [];
+    $texts = $render ? bk_router_rec_render($item) : ['title' => null, 'measured' => null, 'action' => null];
+    $out = [
+        'key' => (string)($item['key'] ?? ''),
+        'id' => (string)($item['id'] ?? ''),
+        'area' => (string)($item['area'] ?? ''),
+        'severity' => (string)($item['severity'] ?? 'info'),
+        'title' => $texts['title'],
+        'measured' => $texts['measured'],
+        'action' => $texts['action'],
+        'subject' => $subject_json,
+        'params' => $params,
+        'command' => $render ? bk_rec_command($item) : null,
+        'openSince' => $item['openSince'] ?? null,
+    ];
+    if (!empty($item['page_only'])) {
+        $out['pageOnly'] = true;
+    }
+    if (!empty($params['was_muted'])) {
+        $out['wasMuted'] = true;
+    }
+    if (!$render) {
+        $out['active'] = false;
+    }
+    if (is_array($state_row) && !empty($state_row['muted_at'])) {
+        $out['mute'] = [
+            'at' => $state_row['muted_at'],
+            'by' => (string)($state_row['muted_by'] ?? ''),
+            'reason' => ($state_row['mute_reason'] ?? null) !== '' ? ($state_row['mute_reason'] ?? null) : null,
+            'severity' => (string)($state_row['muted_severity'] ?? 'info'),
+        ];
+    }
+    return $out;
+}
+
+/**
+ * The last (or first) non-null value of one column over a list of days.
+ *
+ * A disk counter is read hourly, so a day with no SMART reading has no row at
+ * all - "the last value in the window" is the newest day that really has one,
+ * never a zero standing in for a missing day.
+ *
+ * @param array $daily ['Y-m-d' => row, ...]
+ * @param array $days  the window, oldest first
+ */
+function bk_rec_daily_value(array $daily, array $days, string $col, bool $first = false) {
+    $order = $first ? $days : array_reverse($days);
+    foreach ($order as $day) {
+        $v = $daily[$day][$col] ?? null;
+        if ($v !== null && is_numeric($v)) {
+            return $v + 0;
+        }
+    }
+    return null;
+}
+
+/**
+ * Disk health rules of CORE 3.7: what SMART and eMMC say about the drive
+ * itself. One item per disk, key `<rule>:d:<disk_key>`.
+ *
+ * Every rule reads what the week really recorded: a counter that is high but
+ * STABLE (the owner's three runtime bad blocks) says nothing new and must stay
+ * silent, a counter that GREW is what precedes a failure.
+ */
+function bk_rec_rules_disk_health(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $not_evaluated = [];
+    $days = $in['window']['days'] ?? [];
+    $days30 = $in['window']['days30'] ?? $days;
+    $disks = is_array($in['details']['storage_disks'] ?? null) ? $in['details']['storage_disks'] : [];
+
+    foreach ($disks as $disk) {
+        if (!is_array($disk) || !is_string($disk['key'] ?? null)) {
+            continue;
+        }
+        $dk = $disk['key'];
+        $daily = is_array($in['disks'][$dk]['daily'] ?? null) ? $in['disks'][$dk]['daily'] : [];
+        $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+        $emmc = is_array($disk['emmc'] ?? null) ? $disk['emmc'] : [];
+        $subject = ['kind' => 'disk', 'disk_key' => $dk, 'name' => (string)($disk['name'] ?? '?')];
+        $label = bk_rec_disk_label($disk);
+        $sfx = ':d:' . $dk;
+
+        // --- disk_smart_failing (critical): the drive itself says it is going.
+        $cw = $smart['critical_warning'] ?? null;
+        $pre_eol = $emmc['pre_eol'] ?? null;
+        $reason = null;
+        if (is_int($cw) && ($cw & 0x3D) !== 0) {
+            $reason = 'nvme';
+        } elseif ($pre_eol === 3) {
+            $reason = 'emmc';
+        } elseif (($smart['state'] ?? null) === 'failing') {
+            $reason = ($smart['passed'] ?? null) === false ? 'verdict' : 'attribute';
+        }
+        if ($reason !== null) {
+            $items[] = bk_rec_item('disk_smart_failing', 'disk_smart_failing' . $sfx, 'storage', 'critical',
+                $subject, ['disk' => $label, 'name' => $subject['name'], 'reason' => $reason,
+                    'critical_warning' => is_int($cw) ? $cw : null]);
+        }
+
+        // --- disk_errors_growing: growth inside the week, or a pending sector now.
+        $changes = [];
+        $severe = false;
+        foreach (bk_disk_error_counters() as $def) {
+            $col = $def[0];
+            $before = bk_rec_daily_value($daily, $in['window']['prev_days'] ?? [], $col);
+            $last = bk_rec_daily_value($daily, $days, $col);
+            if ($last === null) {
+                continue;
+            }
+            $from = $before !== null ? $before : bk_rec_daily_value($daily, $days, $col, true);
+            if ($from === null || $last <= $from) {
+                continue;
+            }
+            $changes[] = ['counter' => $col, 'from' => $from + 0, 'to' => $last + 0];
+            if (in_array($col, ['pending_sectors', 'offline_uncorrectable', 'reported_uncorrect', 'media_errors'], true)) {
+                $severe = true;
+            }
+        }
+        $pending_now = $smart['pending_sectors'] ?? null;
+        $offline_now = $smart['offline_uncorrectable'] ?? null;
+        if ((is_int($pending_now) && $pending_now > 0) || (is_int($offline_now) && $offline_now > 0)) {
+            $severe = true;
+            $changes[] = ['counter' => 'pending_now',
+                'to' => (is_int($pending_now) && $pending_now > 0) ? $pending_now : $offline_now];
+        }
+        if ($changes !== []) {
+            $items[] = bk_rec_item('disk_errors_growing', 'disk_errors_growing' . $sfx, 'storage',
+                $severe ? 'critical' : 'warning', $subject,
+                ['disk' => $label, 'name' => $subject['name'], 'changes' => $changes]);
+        }
+
+        // --- disk_wear_high: the drive's own wear estimate, SMART or eMMC.
+        $wear = $smart['wear_pct'] ?? null;
+        $life = null;
+        foreach (['life_a', 'life_b'] as $lk) {
+            $v = $emmc[$lk] ?? null;
+            if (is_int($v) && $v >= 1 && $v <= 11) {
+                $life = $life === null ? $v : max($life, $v);
+            }
+        }
+        $wear_sev = null;
+        $wear_params = ['disk' => $label, 'name' => $subject['name'], 'variant' => 'attr'];
+        if (is_numeric($wear) && (float)$wear >= $th['disk_wear_high']['warn']) {
+            $wear_sev = (float)$wear >= $th['disk_wear_high']['crit'] ? 'critical' : 'warning';
+            $wear_params['wear'] = (float)$wear;
+            $wear_params['source'] = $smart['wear_source'] ?? null;
+        } elseif ($life !== null && $life >= $th['disk_wear_high']['emmc_warn']) {
+            $wear_sev = $life >= $th['disk_wear_high']['emmc_crit'] ? 'critical' : 'warning';
+            $wear_params['variant'] = 'emmc';
+            $wear_params['life'] = $life;
+            $wear_params['pre_eol'] = is_int($pre_eol) ? $pre_eol : null;
+        } elseif ($pre_eol === 2) {
+            $wear_sev = 'warning';
+            $wear_params['variant'] = 'emmc';
+            $wear_params['life'] = $life;
+            $wear_params['pre_eol'] = 2;
+        }
+        if ($wear_sev !== null) {
+            $items[] = bk_rec_item('disk_wear_high', 'disk_wear_high' . $sfx, 'storage', $wear_sev, $subject, $wear_params);
+        }
+
+        // --- disk_wear_fast: the PACE of the wear, over 30 days, not the level.
+        $w0 = null;
+        $w1 = null;
+        $d0 = null;
+        $d1 = null;
+        foreach ($days30 as $day) {
+            $row = $daily[$day] ?? null;
+            if (!is_array($row)) {
+                continue;
+            }
+            $v = null;
+            if (isset($row['wear_pct']) && is_numeric($row['wear_pct'])) {
+                $v = (float)$row['wear_pct'];
+            } elseif (isset($row['emmc_life']) && is_numeric($row['emmc_life'])) {
+                $v = (float)$row['emmc_life'] * 10.0;
+            }
+            if ($v === null) {
+                continue;
+            }
+            if ($w0 === null) {
+                $w0 = $v;
+                $d0 = $day;
+            }
+            $w1 = $v;
+            $d1 = $day;
+        }
+        if ($w0 !== null && $w1 !== null && $d0 !== null && $d1 !== null) {
+            $span = (int)round((strtotime($d1) - strtotime($d0)) / 86400);
+            $delta = $w1 - $w0;
+            if ($span >= $th['disk_wear_fast']['min_days'] && $delta >= $th['disk_wear_fast']['min_delta'] && $w1 < 100.0) {
+                $left = (int)floor((100.0 - $w1) / ($delta / $span));
+                if ($left < $th['disk_wear_fast']['days_left']) {
+                    $items[] = bk_rec_item('disk_wear_fast', 'disk_wear_fast' . $sfx, 'storage', 'warning', $subject,
+                        ['disk' => $label, 'name' => $subject['name'], 'days' => $span,
+                            'w0' => $w0, 'w1' => $w1, 'left' => $left]);
+                }
+            }
+        }
+    }
+
+    return ['items' => $items, 'not_evaluated' => $not_evaluated];
+}
+
+
+/**
+ * The disk rules that read the WEEK, not one SMART reading: how warm the disk
+ * ran, how much was written to it, how it is being powered off, and whether it
+ * was ever tested. `disk_smart_unreadable` sits here too - it is about the
+ * collection, not about the drive.
+ */
+function bk_rec_rules_disk_week(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $not_evaluated = [];
+    $days = $in['window']['days'] ?? [];
+    $now = (int)($in['now'] ?? time());
+    $disks = is_array($in['details']['storage_disks'] ?? null) ? $in['details']['storage_disks'] : [];
+
+    foreach ($disks as $disk) {
+        if (!is_array($disk) || !is_string($disk['key'] ?? null)) {
+            continue;
+        }
+        $dk = $disk['key'];
+        $daily = is_array($in['disks'][$dk]['daily'] ?? null) ? $in['disks'][$dk]['daily'] : [];
+        $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+        $subject = ['kind' => 'disk', 'disk_key' => $dk, 'name' => (string)($disk['name'] ?? '?')];
+        $label = bk_rec_disk_label($disk);
+        $sfx = ':d:' . $dk;
+
+        // --- disk_heavy_writes: only flash can be worn out by writing.
+        $rot = $disk['rotational'] ?? null;
+        $rpm = $smart['rotation_rpm'] ?? null;
+        $spinning = $rpm !== null ? ($rpm > 0) : (is_bool($rot) ? $rot : null);
+        $wb_sum = 0.0;
+        $wb_days = 0;
+        foreach ($days as $day) {
+            $row = $daily[$day] ?? null;
+            if (!is_array($row) || !empty($row['host_written_partial'])) {
+                continue;
+            }
+            $v = $row['host_written_bytes'] ?? null;
+            if ($v === null || !is_numeric($v)) {
+                continue;
+            }
+            $wb_sum += (float)$v;
+            $wb_days++;
+        }
+        $size = $disk['size_bytes'] ?? null;
+        if ($spinning === false && $wb_days >= $th['disk_heavy_writes']['min_days']) {
+            $per_day = $wb_sum / $wb_days;
+            $transport = $disk['transport'] ?? null;
+            $flash = in_array($transport, ['emmc', 'sd', 'usb'], true);
+            $gib = $flash ? $th['disk_heavy_writes']['flash_gib'] : $th['disk_heavy_writes']['ssd_gib'];
+            $share = $flash ? $th['disk_heavy_writes']['flash_share'] : $th['disk_heavy_writes']['ssd_share'];
+            $limit = $gib * 1073741824.0;
+            if (is_numeric($size) && (float)$size > 0) {
+                $limit = max($limit, (float)$size * $share);
+            }
+            if ($per_day >= $limit) {
+                $items[] = bk_rec_item('disk_heavy_writes', 'disk_heavy_writes' . $sfx, 'storage',
+                    $flash ? 'warning' : 'info', $subject,
+                    ['disk' => $label, 'name' => $subject['name'], 'gb' => $per_day / 1000000000.0,
+                        'pct' => is_numeric($size) && (float)$size > 0 ? $per_day / (float)$size * 100.0 : null]);
+            }
+        }
+
+        // --- disk_temp_warm: the WEEKLY answer to a disk that is always warm.
+        // The notification of 3.5 only fires when the limit itself is crossed.
+        $temp_sum = 0.0;
+        $temp_n = 0;
+        $temp_max = null;
+        $temp_days = 0;
+        foreach ($days as $day) {
+            $row = $daily[$day] ?? null;
+            // Both halves of the day's mean have to be there: a day that
+            // counted readings but stored no sum would otherwise pull the
+            // week's mean towards a temperature nobody measured.
+            if (!is_array($row) || !is_numeric($row['temp_n'] ?? null) || (int)$row['temp_n'] <= 0
+                || !is_numeric($row['temp_sum'] ?? null)) {
+                continue;
+            }
+            $temp_sum += (float)$row['temp_sum'];
+            $temp_n += (int)$row['temp_n'];
+            $temp_days++;
+            if (isset($row['temp_max']) && is_numeric($row['temp_max'])) {
+                $temp_max = $temp_max === null ? (float)$row['temp_max'] : max($temp_max, (float)$row['temp_max']);
+            }
+        }
+        $temp_key = 'disk_temp_warm' . $sfx;
+        if ($temp_days < $th['min_days'] || $temp_n <= 0) {
+            $not_evaluated[$temp_key] = 'disk_temp_warm';
+        } else {
+            $mean = $temp_sum / $temp_n;
+            $limit = bk_disk_temp_limit($disk);
+            $active = bk_rec_state_active($state, $temp_key);
+            $tt = $th['disk_temp_warm'];
+            if (bk_rec_over($mean, $limit + $tt['enter'], $limit + $tt['hold'], $active)) {
+                $was_warn = bk_rec_state_severity($state, $temp_key) === 'warning';
+                $sev = bk_rec_over($mean, $limit + $tt['enter_warn'], $limit + $tt['hold_warn'], $active && $was_warn)
+                    ? 'warning' : 'info';
+                $items[] = bk_rec_item('disk_temp_warm', $temp_key, 'storage', $sev, $subject,
+                    ['disk' => $label, 'name' => $subject['name'], 'avg_c' => $mean,
+                        'max_c' => $temp_max, 'limit_c' => $limit]);
+            }
+        }
+
+        // --- disk_unclean_shutdowns: the router loses power instead of being shut down.
+        $unsafe = $smart['unsafe_shutdowns'] ?? null;
+        $cycles = $smart['power_cycles'] ?? null;
+        if (is_numeric($unsafe) && is_numeric($cycles) && (float)$cycles > 0
+            && (float)$unsafe >= $th['disk_unclean_shutdowns']['min']
+            && (float)$unsafe / (float)$cycles >= $th['disk_unclean_shutdowns']['share']) {
+            $first = bk_rec_daily_value($daily, $days, 'unsafe_shutdowns', true);
+            $last = bk_rec_daily_value($daily, $days, 'unsafe_shutdowns');
+            $grew = ($first !== null && $last !== null && $last > $first) ? (int)($last - $first) : null;
+            $items[] = bk_rec_item('disk_unclean_shutdowns', 'disk_unclean_shutdowns' . $sfx, 'storage',
+                $grew !== null ? 'warning' : 'info', $subject,
+                ['disk' => $label, 'name' => $subject['name'], 'unsafe' => (int)$unsafe,
+                    'cycles' => (int)$cycles, 'grew' => $grew]);
+        }
+
+        // --- disk_selftest_never (info): optional hygiene, the drive is healthy.
+        $hours = $smart['power_on_hours'] ?? null;
+        if (($smart['state'] ?? null) === 'ok' && ($smart['protocol'] ?? null) === 'ATA'
+            && ($smart['selftest_count'] ?? null) === 0
+            && is_numeric($hours) && (float)$hours >= $th['disk_selftest_never']['min_hours']) {
+            $items[] = bk_rec_item('disk_selftest_never', 'disk_selftest_never' . $sfx, 'storage', 'info', $subject,
+                ['disk' => $label, 'name' => $subject['name'], 'hours' => (int)$hours]);
+        }
+
+        // --- disk_smart_unreadable: the collection is failing, not the disk.
+        $st = $smart['state'] ?? null;
+        $checked = $smart['checked_at'] ?? null;
+        $why = null;
+        if ($st === 'unsupported') {
+            $why = 'unsupported';
+        } elseif ($st === 'stuck') {
+            $why = 'stuck';
+        } elseif ($st === 'error' && (!is_numeric($checked) || ($now - (int)$checked) > 86400)) {
+            $why = 'error';
+        }
+        if ($why !== null) {
+            $items[] = bk_rec_item('disk_smart_unreadable', 'disk_smart_unreadable' . $sfx, 'storage',
+                $why === 'unsupported' ? 'info' : 'warning', $subject,
+                ['disk' => $label, 'name' => $subject['name'], 'why' => $why]);
+        }
+    }
+
+    return ['items' => $items, 'not_evaluated' => $not_evaluated];
+}
+
+/**
+ * `fs_nearly_full`, per mount, from the CURRENT `filesystems` list.
+ *
+ * A configuration rule: it reads this minute, not the week, because a full
+ * partition stops services now. `/` and `/overlay` ARE included here (unlike
+ * the notification of 3.5, which would page for a full read-only root).
+ */
+function bk_rec_rules_filesystems(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $threshold = $in['monitor']['hdd_threshold'] ?? null;
+    $threshold = is_numeric($threshold) ? (float)$threshold : 90.0;
+    $skip_fstypes = ['squashfs', 'iso9660', 'erofs', 'romfs', 'cramfs'];
+    $list = is_array($in['details']['filesystems'] ?? null) ? $in['details']['filesystems'] : [];
+
+    foreach ($list as $fs) {
+        if (!is_array($fs) || !is_string($fs['mount'] ?? null) || $fs['mount'] === '') {
+            continue;
+        }
+        $mount = $fs['mount'];
+        if ($mount === '/rom' || in_array($fs['fstype'] ?? null, $skip_fstypes, true)) {
+            continue;
+        }
+        $total_kb = $fs['total_kb'] ?? null;
+        $used = $fs['used_pct'] ?? null;
+        if (!is_numeric($total_kb) || (float)$total_kb < 65536 || !is_numeric($used)) {
+            continue;
+        }
+        $used = (float)$used;
+        if ($used < $threshold) {
+            continue;
+        }
+        $avail = $fs['avail_kb'] ?? null;
+        $items[] = bk_rec_item('fs_nearly_full', 'fs_nearly_full:m:' . substr(sha1($mount), 0, 12), 'storage',
+            $used >= $th['fs_nearly_full']['crit'] ? 'critical' : 'warning',
+            ['kind' => 'mount', 'mount' => $mount],
+            ['mount' => $mount, 'pct' => $used,
+                'free' => is_numeric($avail) ? (float)$avail * 1024.0 : null,
+                // Turris keeps btrfs snapshots of the root: the action can name
+                // the tool that frees the space instead of a generic sentence.
+                'schnapps' => ($mount === '/' && ($fs['fstype'] ?? null) === 'btrfs')]);
+    }
+
+    return ['items' => $items, 'not_evaluated' => []];
+}
+
+
+/**
+ * The band suffix the weekly Wi-Fi metrics are stored under: `wifi_noise_5g`,
+ * `wifi_busy_other_24g`. Null for a radio whose band is unknown - such a radio
+ * has no weekly values at all and every band rule skips it.
+ */
+function bk_rec_band_suffix(?string $band): ?string {
+    $map = ['2.4GHz' => '24g', '5GHz' => '5g', '6GHz' => '6g'];
+    return $band !== null && isset($map[$band]) ? $map[$band] : null;
+}
+
+/**
+ * The stable identity of one radio inside a `rec_key`.
+ *
+ * NEVER the interface name: on this hardware the same USB radio was
+ * `phy3-ap0` one day and `phy1-ap0` the next (REAL_FACTS, "Cron and unstable
+ * radio names"), so a mute keyed on the name would be silently lost at the
+ * next reboot and the item the owner silenced would come back. Band plus SSID
+ * survives a rename; the interface name stays a display label in `subject`.
+ */
+function bk_rec_radio_key(array $radio): string {
+    $band = is_string($radio['band'] ?? null) ? $radio['band'] : '?';
+    $ssid = is_string($radio['ssid'] ?? null) ? $radio['ssid'] : '';
+    return substr(sha1($band . '|' . $ssid), 0, 12);
+}
+
+/**
+ * The daily rows of ONE window slice ('days' = W, 'prev_days' = P).
+ *
+ * `bk_rec_week_stat` sums every day it is handed and the inputs batch loads
+ * thirty of them for the wear trend, so a weekly rule that read the whole map
+ * would answer for a month. `wifi_week_degraded` needs W and P to be two
+ * different things, which is the same reason.
+ */
+function bk_rec_metrics_of(array $window, string $which = 'days'): array {
+    $wanted = array_flip(is_array($window[$which] ?? null) ? $window[$which] : []);
+    $out = [];
+    foreach (is_array($window['metrics'] ?? null) ? $window['metrics'] : [] as $key => $rows) {
+        $out[$key] = [];
+        foreach (is_array($rows) ? $rows : [] as $day => $row) {
+            if (isset($wanted[$day])) {
+                $out[$key][(string)$day] = $row;
+            }
+        }
+    }
+    return $out;
+}
+
+/** cs / en "Wi-Fi 6"; generation 0 is a device older than Wi-Fi 4, not "Wi-Fi 0". */
+function bk_rec_wifi_gen_label(?int $gen): string {
+    if ($gen === null) {
+        return t('rr_wifi_gen_unknown');
+    }
+    return $gen <= 0 ? t('rr_wifi_gen_legacy') : sprintf(t('rr_wifi_gen'), (string)$gen);
+}
+
+/**
+ * The `htmode` value a suggestion names, built from a generation and a width.
+ *
+ * The suggestion is always "the best prefix the card supports at the width it
+ * runs now" (CORE 3.7); a rule that widens the channel passes the width it
+ * wants. Never 160 MHz, and on 2.4 GHz never more than 20.
+ */
+function bk_rec_htmode(?int $gen, ?int $width): ?string {
+    $prefix = [4 => 'HT', 5 => 'VHT', 6 => 'HE', 7 => 'EHT'];
+    if ($gen === null || !isset($prefix[$gen]) || $width === null || $width <= 0) {
+        return null;
+    }
+    return $prefix[$gen] . (string)(int)$width;
+}
+
+/**
+ * The Wi-Fi rules of CORE 3.7 - AP-mode radios only.
+ *
+ * Three shapes of key live here, and the difference is what a mute survives:
+ *   - per band   `<rule>:<24g|5g|6g>` - noise and airtime belong to the band,
+ *     and the weekly metrics are per band as well;
+ *   - per radio  `<rule>:r:<sha1(band|ssid)[0..12]>` - the configuration of
+ *     one network, keyed on something a reboot cannot rename;
+ *   - router-wide `<rule>` - what no single radio can answer.
+ *
+ * What was not measured stays silent and says so: a driver that reports no
+ * noise and no survey (the owner's USB radio) leaves those metrics null, so
+ * the noise and airtime rules are NOT EVALUATED for that band - they do not
+ * quietly "pass", and `bk_router_rec_state_save` leaves their rows alone.
+ *
+ * @return array{items: list<array<string, mixed>>, not_evaluated: array<string, string>}
+ */
+function bk_rec_rules_wifi(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $skip = [];
+    $details = is_array($in['details'] ?? null) ? $in['details'] : [];
+    $window = is_array($in['window'] ?? null) ? $in['window'] : ['days' => [], 'prev_days' => [], 'metrics' => []];
+    $w = bk_rec_metrics_of($window, 'days');
+    $p = bk_rec_metrics_of($window, 'prev_days');
+
+    // AP radios only: a client, mesh or disabled interface has no channel of
+    // the owner's to recommend and no network of his to secure.
+    $radios = [];
+    foreach (is_array($details['wifi_radios'] ?? null) ? $details['wifi_radios'] : [] as $radio) {
+        if (is_array($radio) && ($radio['mode'] ?? null) === 'ap') {
+            $radios[] = $radio;
+        }
+    }
+
+    // --- Per band. Two radios of the same band share one item: the channel
+    //     and its noise are a property of the air, not of an interface.
+    $bands = [];
+    foreach ($radios as $radio) {
+        $sfx = bk_rec_band_suffix(is_string($radio['band'] ?? null) ? $radio['band'] : null);
+        if ($sfx === null) {
+            continue;
+        }
+        if (!isset($bands[$sfx])) {
+            $bands[$sfx] = ['band' => (string)$radio['band'], 'channel' => null];
+        }
+        if ($bands[$sfx]['channel'] === null && isset($radio['channel']) && is_numeric($radio['channel'])) {
+            $bands[$sfx]['channel'] = (int)$radio['channel'];
+        }
+    }
+
+    foreach ($bands as $sfx => $band_info) {
+        $band = $band_info['band'];
+        // The band travels as its ENUM, never as a rendered label: an item is
+        // evaluated once (the Monday digest) and rendered per recipient, so a
+        // Czech "2,4 GHz" baked in here would end up in an English e-mail.
+        $subject = ['kind' => 'band', 'band' => $band];
+        $noise = bk_rec_week_stat($w, 'wifi_noise_' . $sfx);
+        $busy = bk_rec_week_stat($w, 'wifi_busy_' . $sfx);
+        $other = bk_rec_week_stat($w, 'wifi_busy_other_' . $sfx);
+
+        // --- wifi_channel_busy. The foreign-traffic share is the honest
+        //     number and it wins whenever the driver gives it; the total
+        //     includes the owner's own downloads, which a channel change
+        //     cannot help, so it carries its own (higher) threshold and says
+        //     in the text that the driver cannot separate the two.
+        $key = 'wifi_channel_busy:' . $sfx;
+        $variant = null;
+        if ($other['days'] >= $th['min_days'] && $other['value'] !== null) {
+            $variant = 'other';
+            $value = $other['value'];
+        } elseif ($busy['days'] >= $th['min_days'] && $busy['value'] !== null) {
+            $variant = 'total';
+            $value = $busy['value'];
+        } else {
+            $skip[$key] = 'wifi_channel_busy';
+        }
+        if ($variant !== null) {
+            $active = bk_rec_state_active($state, $key);
+            $t = $th['wifi_channel_busy_' . $variant];
+            if (bk_rec_over($value, (float)$t['enter'], (float)$t['hold'], $active)) {
+                $was_warn = bk_rec_state_severity($state, $key) === 'warning';
+                $sev = bk_rec_over($value, (float)$t['enter_warn'], (float)$t['hold_warn'], $active && $was_warn)
+                    ? 'warning' : 'info';
+                $items[] = bk_rec_item('wifi_channel_busy', $key, 'wifi', $sev, $subject,
+                    ['band_id' => $band, 'variant' => $variant,
+                        'ch' => $band_info['channel'], 'other' => $other['value'], 'busy' => $busy['value']]);
+            }
+        }
+
+        // --- wifi_noise_high. The bounds are the app's "fair" / "poor" ones
+        //     (lib/signal-quality.ts), so the weekly sentence and the live
+        //     signal bar cannot disagree about the same dBm.
+        $key = 'wifi_noise_high:' . $sfx;
+        if ($noise['days'] < $th['min_days'] || $noise['value'] === null) {
+            $skip[$key] = 'wifi_noise_high';
+        } else {
+            $active = bk_rec_state_active($state, $key);
+            $t = $th['wifi_noise_high'];
+            if (bk_rec_above($noise['value'], (float)$t['enter'], (float)$t['hold'], $active)) {
+                $was_warn = bk_rec_state_severity($state, $key) === 'warning';
+                $sev = bk_rec_above($noise['value'], (float)$t['enter_warn'], (float)$t['hold_warn'],
+                    $active && $was_warn) ? 'warning' : 'info';
+                $items[] = bk_rec_item('wifi_noise_high', $key, 'wifi', $sev, $subject,
+                    ['band_id' => $band, 'noise' => $noise['value']]);
+            }
+        }
+
+        // --- wifi_week_degraded. Only the two ENVIRONMENT metrics: client
+        //     counts and link rates depend on who happened to be at home this
+        //     week, and a rule built on them would call a holiday a fault.
+        $key = 'wifi_week_degraded:' . $sfx;
+        $noise_p = bk_rec_week_stat($p, 'wifi_noise_' . $sfx);
+        $other_p = bk_rec_week_stat($p, 'wifi_busy_other_' . $sfx);
+        $noise_ok = $noise['days'] >= $th['min_days'] && $noise_p['days'] >= $th['min_days']
+            && $noise['value'] !== null && $noise_p['value'] !== null;
+        $other_ok = $other['days'] >= $th['min_days'] && $other_p['days'] >= $th['min_days']
+            && $other['value'] !== null && $other_p['value'] !== null;
+        if (!$noise_ok && !$other_ok) {
+            $skip[$key] = 'wifi_week_degraded';
+        } else {
+            $t = $th['wifi_week_degraded'];
+            $changes = [];
+            if ($noise_ok && ($noise['value'] - $noise_p['value']) >= $t['noise_rise']
+                && $noise['value'] > $t['noise_above']) {
+                $changes[] = ['what' => 'noise', 'from' => $noise_p['value'], 'to' => $noise['value']];
+            }
+            if ($other_ok && ($other['value'] - $other_p['value']) >= $t['busy_rise']
+                && $other['value'] >= $t['busy_above']) {
+                $changes[] = ['what' => 'busy_other', 'from' => $other_p['value'], 'to' => $other['value']];
+            }
+            if ($changes !== []) {
+                $items[] = bk_rec_item('wifi_week_degraded', $key, 'wifi',
+                    count($changes) > 1 ? 'warning' : 'info', $subject,
+                    ['band_id' => $band, 'changes' => $changes]);
+            }
+        }
+    }
+
+    // --- Per radio: what is configured on this one network.
+    foreach ($radios as $radio) {
+        $band = is_string($radio['band'] ?? null) ? $radio['band'] : null;
+        $sfx = bk_rec_band_suffix($band);
+        $rk = ':r:' . bk_rec_radio_key($radio);
+        $ch = isset($radio['channel']) && is_numeric($radio['channel']) ? (int)$radio['channel'] : null;
+        // The interface name travels as a LABEL only (the app shows it next to
+        // the item); nothing is ever keyed on it.
+        $subject = ['kind' => 'radio', 'radio' => is_string($radio['radio'] ?? null) ? $radio['radio'] : null,
+            'band' => $band];
+        $profile = bk_wifi_radio_profile($radio);
+        $enc = is_string($radio['encryption'] ?? null) ? $radio['encryption'] : null;
+
+        // --- wifi_weak_encryption. `wpa_wpa2` is a warning of its own: a
+        //     WPA2 client is not affected, but the network still accepts
+        //     WPA version 1 with TKIP and must never read as "WPA2 only".
+        //     `owe` is unencrypted by design and is never called weak here.
+        $what = null;
+        $sev = 'warning';
+        if ($enc === 'wep' || $enc === 'wpa') {
+            $what = 'legacy';
+            $sev = 'critical';
+        } elseif ($enc === 'open') {
+            $what = 'open';
+        } elseif ($enc === 'wpa_wpa2') {
+            $what = 'mixed';
+        }
+        if ($what !== null) {
+            $items[] = bk_rec_item('wifi_weak_encryption', 'wifi_weak_encryption' . $rk, 'wifi', $sev, $subject,
+                ['band_id' => $band, 'ch' => $ch, 'what' => $what,
+                    'enc' => $enc === 'wep' ? 'WEP' : 'WPA']);
+        }
+
+        // --- wifi_wpa2_only. Strict: `wpa_wpa2` belongs to the rule above,
+        //     never here, and an enterprise network has no PSK to migrate.
+        if ($enc === 'wpa2' && empty($radio['encryption_enterprise'])) {
+            $items[] = bk_rec_item('wifi_wpa2_only', 'wifi_wpa2_only' . $rk, 'wifi', 'info', $subject,
+                ['band_id' => $band, 'ch' => $ch]);
+        }
+
+        // --- wifi_mode_below_card. `bk_wifi_radio_profile` answers what the
+        //     card can do ON THIS BAND, which is why the owner's 2.4 GHz
+        //     adapter stays silent: its HW modes list `ac`, but VHT does not
+        //     exist on 2.4 GHz, so HT really is the maximum there.
+        if ($band !== null && $profile['generation'] !== null && $profile['supported_generation'] !== null
+            && $profile['generation'] < $profile['supported_generation']) {
+            $suggested = bk_rec_htmode($profile['supported_generation'], $profile['width_mhz']);
+            if ($suggested !== null) {
+                $items[] = bk_rec_item('wifi_mode_below_card', 'wifi_mode_below_card' . $rk, 'wifi',
+                    $band === '2.4GHz' ? 'info' : 'warning', $subject,
+                    ['band_id' => $band, 'ch' => $ch, 'cur' => $profile['generation'],
+                        'best' => $profile['supported_generation'],
+                        'htmode' => is_string($radio['htmode'] ?? null) ? $radio['htmode'] : null,
+                        'suggested' => $suggested]);
+            }
+        }
+
+        // --- wifi_channel_narrow. 5 and 6 GHz only, and only while the
+        //     channel is not busy: on a crowded channel a wider one is worse
+        //     advice than a narrow one. An unknown airtime does not block it
+        //     (the owner's 5 GHz radio measures it, most do).
+        if (($band === '5GHz' || $band === '6GHz') && $profile['width_mhz'] !== null
+            && $profile['width_mhz'] < 80 && ($profile['supported_width_mhz'] ?? 0) >= 80) {
+            $busy_band = $sfx !== null ? bk_rec_week_stat($w, 'wifi_busy_' . $sfx) : ['value' => null, 'days' => 0];
+            $busy_val = $busy_band['days'] >= $th['min_days'] ? $busy_band['value'] : null;
+            $suggested = bk_rec_htmode($profile['generation'], 80);
+            if ($suggested !== null && ($busy_val === null || $busy_val < $th['wifi_channel_narrow']['busy_below'])) {
+                $items[] = bk_rec_item('wifi_channel_narrow', 'wifi_channel_narrow' . $rk, 'wifi', 'info', $subject,
+                    ['band_id' => $band, 'ch' => $ch, 'w' => $profile['width_mhz'], 'suggested' => $suggested]);
+            }
+        }
+
+        // --- wifi_24_wide_channel. The opposite advice, and only on 2.4 GHz,
+        //     where 40 MHz overlaps most of the neighbourhood.
+        if ($band === '2.4GHz' && $profile['width_mhz'] !== null && $profile['width_mhz'] >= 40) {
+            $suggested = bk_rec_htmode($profile['generation'], 20);
+            if ($suggested !== null) {
+                $items[] = bk_rec_item('wifi_24_wide_channel', 'wifi_24_wide_channel' . $rk, 'wifi', 'info', $subject,
+                    ['band_id' => $band, 'ch' => $ch, 'w' => $profile['width_mhz'], 'suggested' => $suggested]);
+            }
+        }
+    }
+
+    // --- Router-wide: the questions no single radio can answer.
+    $has_6g = false;
+    $has_24g = false;
+    $has_5g = false;
+    $phy_6g = false;
+    $capable = null;
+    $known = null;
+    $best = null;
+    $mixed = [];
+    $weak_radio = null;
+    foreach ($radios as $radio) {
+        $band = is_string($radio['band'] ?? null) ? $radio['band'] : null;
+        $has_6g = $has_6g || $band === '6GHz';
+        $has_24g = $has_24g || $band === '2.4GHz';
+        $has_5g = $has_5g || $band === '5GHz';
+        $phy_6g = $phy_6g || ($radio['phy_has_6ghz'] ?? null) === true;
+        // A radio claiming more capable than known stations is ignored whole,
+        // exactly as `bk_wifi_band_totals` does with the same pair.
+        $c = $radio['clients_6ghz_capable'] ?? null;
+        $k = $radio['clients_caps_known'] ?? null;
+        if (is_numeric($c) && is_numeric($k) && (int)$c <= (int)$k) {
+            $capable = ($capable ?? 0) + (int)$c;
+            $known = ($known ?? 0) + (int)$k;
+        }
+        $rate = $radio['bitrate_tx_avg_mbps'] ?? null;
+        if (is_numeric($rate) && (float)$rate > 0 && ($best === null || (float)$rate > $best['rate'])) {
+            $best = ['rate' => (float)$rate, 'band' => $band, 'sfx' => bk_rec_band_suffix($band)];
+        }
+        if (($radio['encryption'] ?? null) === 'wpa2_wpa3' && empty($radio['encryption_enterprise'])) {
+            $mixed[] = ['band' => $band,
+                'ch' => isset($radio['channel']) && is_numeric($radio['channel']) ? (int)$radio['channel'] : null];
+        }
+        // The radio a weak client sits on RIGHT NOW: the weekly metric says
+        // how long one was there, this says where and how weak.
+        $cw = $radio['clients_weak'] ?? null;
+        $sig = $radio['signal_min'] ?? null;
+        if (is_numeric($cw) && (int)$cw > 0 && is_numeric($sig)
+            && ($weak_radio === null || (float)$sig < $weak_radio['signal'])) {
+            $weak_radio = ['signal' => (float)$sig, 'band' => $band, 'sfx' => bk_rec_band_suffix($band),
+                'ch' => isset($radio['channel']) && is_numeric($radio['channel']) ? (int)$radio['channel'] : null,
+                'snr' => is_numeric($radio['snr_min'] ?? null) ? (int)$radio['snr_min'] : null,
+                'gen' => is_numeric($radio['weakest_gen'] ?? null) ? (int)$radio['weakest_gen'] : null];
+        }
+    }
+
+    // --- wifi_6ghz_unserved. Counts only clients associated with THIS
+    //     router, so when they move to another AP the share falls and the
+    //     item ends by itself; a 6 GHz radio of the router's own ends it at
+    //     once (the share is then 0 by construction) - which is why this is
+    //     an evaluated "does not fire" and not a skip.
+    $key = 'wifi_6ghz_unserved';
+    $share = bk_rec_week_stat($w, 'wifi_6e_unserved');
+    if ($share['days'] < $th['min_days'] || $share['value'] === null) {
+        $skip[$key] = $key;
+    } elseif (!$has_6g && bk_rec_over($share['value'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+            bk_rec_state_active($state, $key))) {
+        $busy_best = $best !== null && $best['sfx'] !== null
+            ? bk_rec_week_stat($w, 'wifi_busy_' . $best['sfx']) : ['value' => null, 'days' => 0];
+        $wan = $details['wan_link_mbit'] ?? null;
+        $wan = is_numeric($wan) ? (float)$wan : null;
+        // The WAN sentence is allowed in exactly two shapes. Between them the
+        // router knows nothing: denying a gain it cannot measure is the same
+        // fault as promising one (REAL_FACTS).
+        $wan_variant = null;
+        if ($wan !== null && $wan >= 2500.0) {
+            $wan_variant = 'fast';
+        } elseif ($wan !== null && $best !== null && $wan <= 0.5 * $best['rate']) {
+            $wan_variant = 'slow';
+        }
+        $items[] = bk_rec_item($key, $key, 'wifi', 'info', ['kind' => 'router'],
+            ['hw' => $phy_6g ? 'present' : 'none',
+                'capable' => $capable, 'known' => $known, 'share' => $share['value'] * 100.0,
+                'band_id' => $best !== null ? $best['band'] : null,
+                'rate' => $best !== null ? $best['rate'] : null,
+                'busy' => $busy_best['days'] >= $th['min_days'] ? $busy_best['value'] : null,
+                'wan_variant' => $wan_variant, 'wan_mbit' => $wan]);
+    }
+
+    // --- wifi_wpa3_ready. The strictest rule of the set on purpose: it
+    //     invites the owner to lock out every WPA2 device he owns, so one
+    //     day with a gap in the data is enough NOT to evaluate it. Six clean
+    //     days do not make a clean week.
+    $key = 'wifi_wpa3_ready';
+    if ($mixed !== []) {
+        $wpa2_days = $w['wifi_wpa2_clients'] ?? [];
+        $complete = true;
+        $clean = true;
+        foreach ($window['days'] ?? [] as $day) {
+            $row = $wpa2_days[$day] ?? null;
+            if (!is_array($row) || (int)($row['samples'] ?? 0) < $th[$key]['day_samples']
+                || !isset($row['max']) || !is_numeric($row['max'])) {
+                $complete = false;
+                break;
+            }
+            if ((float)$row['max'] > 0.0) {
+                $clean = false;
+            }
+        }
+        $clients = bk_rec_week_stat($w, 'wifi_clients');
+        if (!$complete || $clients['max'] === null) {
+            $skip[$key] = $key;
+        } elseif ($clean && $clients['max'] >= 1.0) {
+            $days = $window['days'] ?? [];
+            $items[] = bk_rec_item($key, $key, 'wifi', 'info', ['kind' => 'router'],
+                ['radios' => $mixed,
+                    'from' => $days === [] ? null : (string)reset($days),
+                    'to' => $days === [] ? null : (string)end($days)]);
+        }
+    }
+
+    // --- wifi_weak_client. Information, not a fault, and only when the band
+    //     is quiet: with noise above the bar the noise rule speaks instead,
+    //     so the two can never alternate from week to week. The hold at 0.25
+    //     is what keeps a client sitting exactly ON the -75 dBm boundary from
+    //     appearing and disappearing every Monday (REAL_FACTS).
+    $key = 'wifi_weak_client';
+    $weak = bk_rec_week_stat($w, 'wifi_weak_clients');
+    if ($weak['days'] < $th['min_days'] || $weak['value'] === null) {
+        $skip[$key] = $key;
+    } elseif (bk_rec_over($weak['value'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+            bk_rec_state_active($state, $key)) && $weak_radio !== null && $weak_radio['sfx'] !== null) {
+        $band_noise = bk_rec_week_stat($w, 'wifi_noise_' . $weak_radio['sfx']);
+        $noisy = false;
+        foreach ($items as $item) {
+            if ((string)$item['key'] === 'wifi_noise_high:' . $weak_radio['sfx']) {
+                $noisy = true;
+            }
+        }
+        // A band whose noise was never measured gets no verdict: the whole
+        // point of the sentence is "the air is fine, it is the distance".
+        if (!$noisy && $band_noise['days'] >= $th['min_days'] && $band_noise['value'] !== null) {
+            $items[] = bk_rec_item($key, $key, 'wifi', 'info',
+                ['kind' => 'radio', 'band' => $weak_radio['band']],
+                ['band_id' => $weak_radio['band'], 'ch' => $weak_radio['ch'], 'signal' => $weak_radio['signal'],
+                    'snr' => $weak_radio['snr'], 'noise' => $band_noise['value'],
+                    // Only 0, 4 and 5 have a sentence; a Wi-Fi 6 device at the
+                    // edge of the house is not held back by its generation.
+                    'gen' => in_array($weak_radio['gen'], [0, 4, 5], true) ? $weak_radio['gen'] : null]);
+        }
+    }
+
+    // --- wifi_5ghz_clients_on_24. Only when both bands really run: there is
+    //     no "enable 5 GHz" variant, because this card cannot serve two bands
+    //     at once and the advice would be impossible to follow.
+    $key = 'wifi_5ghz_clients_on_24';
+    if ($has_24g && $has_5g) {
+        $cap24 = bk_rec_week_stat($w, 'wifi_5g_capable_24g');
+        if ($cap24['days'] < $th['min_days'] || $cap24['value'] === null) {
+            $skip[$key] = $key;
+        } elseif (bk_rec_over($cap24['value'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+                bk_rec_state_active($state, $key))) {
+            $items[] = bk_rec_item($key, $key, 'wifi', 'info', ['kind' => 'router'],
+                ['n' => $cap24['value']]);
+        }
+    }
+
+    return ['items' => $items, 'not_evaluated' => $skip];
+}
+
+
+/**
+ * The WAN rules that read the WEEK (rule sheet 2.1, WAN 3.4 "static and
+ * passive rules").
+ *
+ * Every one of them compares a weekly value with an enter / hold pair, so a
+ * line that sits on the threshold does not appear and disappear from the
+ * Monday e-mail. A week the router did not report is `not_evaluated`, never
+ * "nothing found": `bk_router_rec_state_save` then leaves the row alone
+ * instead of clearing it and mailing it again as new.
+ *
+ * @return array{items: list<array<string, mixed>>, not_evaluated: array<string, string>}
+ */
+function bk_rec_rules_wan_week(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $skip = [];
+    $window = is_array($in['window'] ?? null) ? $in['window'] : ['days' => [], 'metrics' => []];
+    $details = is_array($in['details'] ?? null) ? $in['details'] : [];
+    $monitor = is_array($in['monitor'] ?? null) ? $in['monitor'] : [];
+    $enough = bk_rec_days_with_data($window) >= $th['min_days'];
+    $dev = is_string($details['wan_link_dev'] ?? null) ? $details['wan_link_dev'] : null;
+    $plan_down = isset($monitor['wan_plan_down_mbit']) && is_numeric($monitor['wan_plan_down_mbit'])
+        ? (float)$monitor['wan_plan_down_mbit'] : null;
+
+    // R-W6. A day counts when even its BEST minute was below the plan: the
+    // daily rollup has no share of samples, and X13 keeps the raw scans for
+    // two other rules.
+    $key = 'wan_link_below_plan';
+    if (!$enough || $plan_down === null) {
+        $skip[$key] = $key;
+    } else {
+        $below = 0;
+        $seen = 0;
+        $worst = null;
+        foreach ($window['days'] as $day) {
+            $row = $window['metrics']['wan_link_mbit'][$day] ?? null;
+            if (!is_array($row) || !isset($row['max']) || !is_numeric($row['max'])) {
+                continue;
+            }
+            $seen++;
+            if ((float)$row['max'] < $plan_down) {
+                $below++;
+                $worst = $worst === null ? (float)$row['max'] : min($worst, (float)$row['max']);
+            }
+        }
+        if ($seen === 0) {
+            $skip[$key] = $key;
+        } elseif (bk_rec_over((float)$below, (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+                bk_rec_state_active($state, $key))) {
+            $items[] = bk_rec_item($key, $key, 'wan', 'warning', ['kind' => 'wan'],
+                ['name' => $dev, 'mbit' => $worst, 'plan' => $plan_down, 'days' => $below]);
+        }
+    }
+
+    // R-W9. Two independent branches: receive errors, and a receive queue that
+    // overflowed. The sysfs drop counter is evidence only - on mvneta it
+    // counts junk frames of protocols nobody asked for (WAN 3.1.3).
+    $key = 'wan_port_errors';
+    if (!$enough) {
+        $skip[$key] = $key;
+    } else {
+        $errors = bk_rec_week_stat($window['metrics'] ?? [], 'wan_errors');
+        $drops = bk_rec_week_stat($window['metrics'] ?? [], 'wan_drops');
+        $ring = bk_rec_week_stat($window['metrics'] ?? [], 'wan_ring_drops');
+        $active = bk_rec_state_active($state, $key);
+        $err_days = bk_rec_days_over($errors, 0.0);
+        $err_hit = $errors['sum'] !== null && ($active
+            ? ($errors['sum'] >= $th[$key]['hold'] && $err_days >= $th[$key]['hold_days'])
+            : ($errors['sum'] >= $th[$key]['enter'] && $err_days >= $th[$key]['enter_days']));
+        // The share needs the week's received packets; without them the ring
+        // branch cannot fire (a count without a denominator is not a share).
+        $rx = 0.0;
+        foreach (is_array($in['rx_packets'] ?? null) ? $in['rx_packets'] : [] as $n) {
+            $rx += is_numeric($n) ? (float)$n : 0.0;
+        }
+        $ring_days = bk_rec_days_over($ring, 0.0);
+        $ring_share = ($ring['sum'] !== null && $rx > 0.0) ? $ring['sum'] / $rx * 100.0 : null;
+        $ring_hit = $ring_share !== null && ($active
+            ? ($ring_share >= $th[$key]['ring_hold'] && $ring_days >= $th[$key]['ring_hold_days'])
+            : ($ring_share >= $th[$key]['ring_enter'] && $ring_days >= $th[$key]['ring_enter_days']));
+        if ($errors['sum'] === null && $ring['sum'] === null) {
+            $skip[$key] = $key;
+        } elseif ($err_hit || $ring_hit) {
+            $items[] = bk_rec_item($key, $key, 'wan', 'warning', ['kind' => 'wan'],
+                ['name' => $dev, 'errors' => $errors['sum'], 'drops' => $drops['sum'],
+                    'days' => max($err_days, $ring_days),
+                    // Only a ring counter that really grew may claim "could not
+                    // keep up"; null is not zero and gets no sentence at all.
+                    'ring' => ($ring['sum'] !== null && $ring['sum'] > 0.0) ? $ring['sum'] : null]);
+        }
+    }
+
+    // R-W10. The step is null across a reboot and across a device change
+    // (`bk_counter_step`), which IS the condition "while the router did not
+    // restart" - no separate uptime test is needed here.
+    $key = 'wan_link_flaps';
+    $flaps = bk_rec_week_stat($window['metrics'] ?? [], 'wan_link_flaps');
+    if (!$enough || $flaps['sum'] === null) {
+        $skip[$key] = $key;
+    } elseif (bk_rec_over($flaps['sum'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+            bk_rec_state_active($state, $key))) {
+        $items[] = bk_rec_item($key, $key, 'wan', 'warning', ['kind' => 'wan'],
+            ['name' => $dev, 'flaps' => $flaps['sum']]);
+    }
+
+    return ['items' => $items, 'not_evaluated' => $skip];
+}
+
+
+/**
+ * The WAN rules that read the aggregate verdict, the raw-minute scans and the
+ * router's own configuration (rule sheet 2.1, WAN 3.4-3.5).
+ *
+ * The four aggregate rules do NOT get an enter / hold pair: the aggregate is
+ * flap-safe by construction ("2 of 3 agree", WAN 3.4), and a second threshold
+ * on top of it would only hide a verdict that already survived four guards.
+ *
+ * @return array{items: list<array<string, mixed>>, not_evaluated: array<string, string>}
+ */
+function bk_rec_rules_wan_tests(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $skip = [];
+    $details = is_array($in['details'] ?? null) ? $in['details'] : [];
+    $monitor = is_array($in['monitor'] ?? null) ? $in['monitor'] : [];
+    $path = is_array($details['wan_path'] ?? null) ? $details['wan_path'] : [];
+    $window = is_array($in['window'] ?? null) ? $in['window'] : ['days' => [], 'metrics' => []];
+    $enough = bk_rec_days_with_data($window) >= $th['min_days'];
+    $dev = is_string($details['wan_link_dev'] ?? null) ? $details['wan_link_dev'] : null;
+    $num = fn ($v): ?float => is_numeric($v) ? (float)$v : null;
+    $plan_down = $num($monitor['wan_plan_down_mbit'] ?? null);
+
+    $ctx = [
+        'plan_down' => $plan_down === null ? null : (int)$plan_down,
+        'plan_up' => ($v = $num($monitor['wan_plan_up_mbit'] ?? null)) === null ? null : (int)$v,
+        'plan_ok_pct' => ($v = $num($monitor['wan_plan_ok_pct'] ?? null)) === null ? null : (int)$v,
+        'threaded_napi' => is_bool($path['wan_threaded_napi'] ?? null) ? $path['wan_threaded_napi'] : null,
+        'server_max' => is_array($in['server_max'] ?? null) ? $in['server_max'] : [],
+        'now' => (int)($in['now'] ?? time()),
+    ];
+    $tests = is_array($in['speedtests'] ?? null) ? $in['speedtests'] : [];
+    $verdict = bk_wan_bottleneck($tests, $ctx);
+
+    // R-W7 first: it is the passive evidence that turns R-W1 from a page note
+    // into a digest warning (WAN 3.4 "what packet_path does not mean").
+    $key = 'wan_forwarding_core_saturated';
+    $minutes = $in['forwarding_minutes'] ?? null;
+    if (!$enough) {
+        $skip[$key] = $key;
+    } else {
+        // A router the pre-filter skipped never had a minute at 95 %, so zero
+        // is measured here, not assumed (X13).
+        $minutes = $minutes === null ? 0 : (int)$minutes;
+        if (bk_rec_over((float)$minutes, (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+                bk_rec_state_active($state, $key))) {
+            $items[] = bk_rec_item($key, $key, 'wan', 'warning', ['kind' => 'wan'],
+                ['minutes' => $minutes, 'softirq' => $th[$key]['softirq_pct'], 'mbps' => $th[$key]['wan_mbps'],
+                    'steering_off' => ($path['packet_steering_active'] ?? null) === false,
+                    // The offloading sentence belongs to THIS rule only: it does
+                    // nothing for a test the router terminates itself.
+                    'offloading_off' => ($path['flow_offloading'] ?? null) === false]);
+        }
+    }
+    $forwarding_now = false;
+    foreach ($items as $item) {
+        $forwarding_now = $forwarding_now || $item['id'] === 'wan_forwarding_core_saturated';
+    }
+    // "the same or the previous week": the saved row still stands from the
+    // last digest, so an active state counts as the previous week's match.
+    $forwarding_seen = $forwarding_now || bk_rec_state_active($state, 'wan_forwarding_core_saturated');
+
+    foreach (['dl', 'ul'] as $dir) {
+        $v = is_array($verdict[$dir] ?? null) ? $verdict[$dir] : [];
+        $class = (string)($v['class'] ?? 'inconclusive');
+        $reason = (string)($v['reason'] ?? '');
+        $n = is_array($v['numbers'] ?? null) ? $v['numbers'] : [];
+        $common = ['dir' => $dir, 'mbps' => $n['s_mbps'] ?? null, 'agree' => $n['agree'] ?? null,
+            'span_days' => $n['span_days'] ?? null, 'servers' => $n['servers'] ?? null,
+            'name' => $dev, 'link' => $num($details['wan_link_mbit'] ?? null)];
+        if ($class === 'line_limited' && $reason !== '') {
+            $plan = $dir === 'dl' ? $ctx['plan_down'] : $ctx['plan_up'];
+            $items[] = bk_rec_item('wan_line_below_plan', 'wan_line_below_plan:' . $dir, 'wan', 'warning',
+                ['kind' => 'wan', 'direction' => $dir],
+                $common + ['plan' => $plan, 'core' => $n['core_busy_pct'] ?? null,
+                    'ok_pct' => $ctx['plan_ok_pct'] ?? 85]);
+        } elseif ($class === 'link_limited' && $reason === 'wan_port') {
+            $items[] = bk_rec_item('wan_port_limited', 'wan_port_limited:' . $dir, 'wan', 'warning',
+                ['kind' => 'wan', 'direction' => $dir], $common);
+        } elseif ($class === 'link_limited' && $reason === 'sqm_shaper') {
+            // Only a shaper set WELL below the plan is worth a sentence: one at
+            // 95 % of the plan is the shaper doing its job.
+            $sqm = null;
+            foreach (is_array($path['sqm'] ?? null) ? $path['sqm'] : [] as $queue) {
+                $kbps = $queue[$dir === 'dl' ? 'download_kbps' : 'upload_kbps'] ?? null;
+                if (is_numeric($kbps) && (float)$kbps > 0) {
+                    $sqm = $sqm === null ? (float)$kbps / 1000.0 : min($sqm, (float)$kbps / 1000.0);
+                }
+            }
+            $plan = $dir === 'dl' ? $ctx['plan_down'] : $ctx['plan_up'];
+            if ($sqm !== null && $plan !== null && $sqm < $th['wan_sqm_limited']['below_plan'] * $plan) {
+                $items[] = bk_rec_item('wan_sqm_limited', 'wan_sqm_limited:' . $dir, 'wan', 'info',
+                    ['kind' => 'wan', 'direction' => $dir], $common + ['sqm' => $sqm, 'plan' => $plan]);
+            }
+        } elseif ($class === 'cpu_limited' && $reason === 'packet_path') {
+            // X12: info and page-only on its own; a warning that reaches the
+            // digest only when ordinary forwarded traffic saturated the same
+            // core this week or last.
+            $items[] = bk_rec_item('wan_cpu_packet_path', 'wan_cpu_packet_path:' . $dir, 'wan',
+                $forwarding_seen ? 'warning' : 'info', ['kind' => 'wan', 'direction' => $dir],
+                $common + ['core' => $n['core'] ?? null, 'core_busy' => $n['core_busy_pct'] ?? null,
+                    'net_share' => $n['net_share_pct'] ?? null, 'all_cores' => $n['all_cores_avg_pct'] ?? null,
+                    'tests' => $n['tests'] ?? null, 'server' => $n['server'] ?? null,
+                    'with_forwarding' => $forwarding_seen,
+                    'steering_off' => ($path['packet_steering_active'] ?? null) === false],
+                !$forwarding_seen);
+        }
+    }
+
+    // R-W11. Only drops measured in a minute whose own table was >= 90 % full
+    // reach the rule - a clash race in a half-empty table is not a refusal.
+    $key = 'conntrack_drops';
+    $days = $in['conntrack_days'] ?? null;
+    if (!$enough) {
+        $skip[$key] = $key;
+    } else {
+        $days = is_array($days) ? $days : [];
+        $sum = 0.0;
+        $pct = null;
+        foreach ($days as $row) {
+            $sum += (float)($row['drops'] ?? 0);
+            $pct = $pct === null ? (float)($row['pct'] ?? 0) : max($pct, (float)($row['pct'] ?? 0));
+        }
+        if (bk_rec_over((float)count($days), (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+                bk_rec_state_active($state, $key))) {
+            // WAN 3.4's evidence row. `early_drop` counts entries the kernel
+            // successfully evicted to make room - nothing was refused - so it
+            // never enters the count above, only the sentence under it. It is
+            // cumulative since boot (its label says so), and null when the
+            // router did not report it: an unmeasured counter prints no line
+            // rather than a zero that would read as "nothing was evicted".
+            $items[] = bk_rec_item($key, $key, 'wan', 'warning', ['kind' => 'wan'],
+                ['drops' => $sum, 'pct' => $pct, 'days' => count($days),
+                    'evicted' => $num($details['conntrack_early_drop'] ?? null)]);
+        }
+    }
+
+    // R-W8. A configuration statement, not a measurement: it needs the port
+    // CAPABILITY, never the rate the ports happen to be linked at today.
+    $cap = $path['lan_port_cap_mbit'] ?? null;
+    $best = null;
+    foreach (['dl', 'ul'] as $dir) {
+        $s = $verdict[$dir]['numbers']['s_max_mbps'] ?? null;
+        if (is_numeric($s)) {
+            $best = $best === null ? (float)$s : max($best, (float)$s);
+        }
+    }
+    if (is_numeric($cap) && (float)$cap <= $th['lan_wired_ceiling']['cap_at_most']
+        && (($plan_down !== null && $plan_down > 1000.0) || ($best !== null && $best > 1000.0))) {
+        $items[] = bk_rec_item('lan_wired_ceiling', 'lan_wired_ceiling', 'wan', 'info', ['kind' => 'wan'],
+            ['plan' => $plan_down, 'cap' => (float)$cap]);
+    }
+
+    return ['items' => $items, 'not_evaluated' => $skip];
+}
+
+
+/**
+ * Security, system and package rules (rule sheet 2.1, WAN 4.1 B).
+ *
+ * Three of them are CONFIGURATION rules: they read what the router reports
+ * right now, not a weekly average, so they still fire on a router with three
+ * days of history (CORE 7.4 V11). The two event rules and the clock read the
+ * week and follow the same enter / hold discipline as every other rule.
+ *
+ * @return array{items: list<array<string, mixed>>, not_evaluated: array<string, string>}
+ */
+function bk_rec_rules_gap(array $in, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $items = [];
+    $skip = [];
+    $details = is_array($in['details'] ?? null) ? $in['details'] : [];
+    $monitor = is_array($in['monitor'] ?? null) ? $in['monitor'] : [];
+    $window = is_array($in['window'] ?? null) ? $in['window'] : ['days' => [], 'metrics' => []];
+    $events = is_array($in['events'] ?? null) ? $in['events'] : [];
+    $enough = bk_rec_days_with_data($window) >= $th['min_days'];
+    $tools = is_array($details['agent_tools'] ?? null) ? $details['agent_tools'] : null;
+
+    // R-F1. Never for a device without a WAN role: a dumb AP has no firewall
+    // to load and would carry a critical item for ever (G20).
+    $since = $details['firewall_off_since'] ?? null;
+    if (is_numeric($since) && (int)$since > 0 && ($details['wan_up'] ?? null) !== null) {
+        $items[] = bk_rec_item('firewall_off', 'firewall_off', 'security', 'critical', ['kind' => 'router'],
+            ['since' => (int)$since]);
+    }
+
+    // R-S1. The cause is not claimed anywhere: the router does not record it.
+    $key = 'router_restarts';
+    $reboots = $events['router_rebooted'] ?? [];
+    $count = 0;
+    $last = null;
+    foreach ($reboots as $row) {
+        $count += (int)($row['n'] ?? 0);
+        $at = $row['last_at'] ?? null;
+        $last = ($last === null || (is_string($at) && $at > $last)) ? $at : $last;
+    }
+    if (!$enough) {
+        $skip[$key] = $key;
+    } elseif (bk_rec_over((float)$count, (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+            bk_rec_state_active($state, $key))) {
+        // The disk sentence is appended only when CORE's unclean-power-off item
+        // really stands for this router and is not muted - a router without a
+        // disk must not be pointed at a recommendation that does not exist.
+        $unclean = false;
+        foreach ($state as $skey => $srow) {
+            if (str_starts_with((string)$skey, 'disk_unclean_shutdowns:') && !empty($srow['active'])
+                && empty($srow['muted_at'])) {
+                $unclean = true;
+            }
+        }
+        $items[] = bk_rec_item($key, $key, 'system', 'warning', ['kind' => 'router'],
+            ['count' => $count, 'last_at' => $last, 'unclean' => $unclean]);
+    }
+
+    // R-D1. Distinct DAYS, and the second number is the count of outages, not
+    // minutes: minutes would need failed/restored pairs and a pair cut by the
+    // week boundary would invent a number (2.1 decision 5).
+    $key = 'dns_resolver_failing';
+    $dns = $events['dns_resolver_failed'] ?? [];
+    $dns_days = count($dns);
+    $dns_count = 0;
+    foreach ($dns as $row) {
+        $dns_count += (int)($row['n'] ?? 0);
+    }
+    if (!$enough) {
+        $skip[$key] = $key;
+    } elseif (bk_rec_over((float)$dns_days, (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+            bk_rec_state_active($state, $key))) {
+        $items[] = bk_rec_item($key, $key, 'system', 'warning', ['kind' => 'router'],
+            ['days' => $dns_days, 'count' => $dns_count]);
+    }
+
+    // R-S2. The column stores the ABSOLUTE skew (2.1 decision 3), so a
+    // weighted mean of it is a real average distance, not a signed one that
+    // would cancel itself out over a week.
+    $key = 'clock_skew';
+    $skew = bk_rec_week_stat($window['metrics'] ?? [], 'clock_skew_s');
+    if (!$enough || $skew['value'] === null) {
+        $skip[$key] = $key;
+    } elseif (bk_rec_above($skew['value'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
+            bk_rec_state_active($state, $key))) {
+        $items[] = bk_rec_item($key, $key, 'system', 'warning', ['kind' => 'router'],
+            ['secs' => $skew['value']]);
+    }
+
+    // Packages. `agent_tools` carries strict booleans (X4), so `false` means
+    // "looked and did not find it"; a tool the agent could not test at all is
+    // absent from the object and no rule fires.
+    $pkg_manager = is_string($details['pkg_manager'] ?? null) ? $details['pkg_manager'] : null;
+    $pkg_rules = [
+        'pkg_smartmontools' => ['smartctl', 'smartmontools'],
+        'pkg_smart_drivedb' => ['smart_drivedb', 'smartmontools-drivedb'],
+        'pkg_hostapd_utils' => ['hostapd_cli', 'hostapd-utils'],
+        'pkg_iw' => ['iw', 'iw'],
+    ];
+    foreach ($pkg_rules as $id => [$flag, $pkg]) {
+        if ($tools !== null && ($tools[$flag] ?? null) === false) {
+            $items[] = bk_rec_item($id, $id, 'packages', 'info', ['kind' => 'router'],
+                ['pkg' => $pkg, 'pkg_manager' => $pkg_manager]);
+        }
+    }
+    // X4: the librespeed client is only missing for a router whose owner asked
+    // for the probe. On every other router it is simply not installed.
+    if ($tools !== null && ($tools['librespeed_cli'] ?? null) === false
+        && !empty($monitor['wan_probe_enabled'])) {
+        $items[] = bk_rec_item('pkg_librespeed_cli', 'pkg_librespeed_cli', 'packages', 'info',
+            ['kind' => 'router'], ['pkg' => 'librespeed-cli', 'pkg_manager' => $pkg_manager]);
+    }
+
+    return ['items' => $items, 'not_evaluated' => $skip];
+}
+
+/** On how many days of the week did this metric's daily total exceed `$over`? */
+function bk_rec_days_over(array $stat, float $over): int {
+    $days = 0;
+    foreach ($stat['daily'] ?? [] as $row) {
+        if (isset($row['sum']) && (float)$row['sum'] > $over) {
+            $days++;
+        }
+    }
+    return $days;
+}
+
+/**
+ * The two windows of a weekly evaluation.
+ *
+ * W = the 7 complete days BEFORE `$end_day` (the digest and the live page both
+ * pass today, so the page shows exactly what the last e-mail said), P = the 7
+ * days before W, and a 30-day list for the rules that measure a trend (disk
+ * wear). Days are 'Y-m-d', oldest first.
+ */
+function bk_router_rec_window(string $end_day): array {
+    $end = strtotime($end_day . ' 00:00:00');
+    if ($end === false) {
+        $end = strtotime(date('Y-m-d') . ' 00:00:00');
+    }
+    $day = fn (int $back): string => date('Y-m-d', $end - $back * 86400);
+    $days = $prev = $days30 = [];
+    for ($i = 7; $i >= 1; $i--) {
+        $days[] = $day($i);
+    }
+    for ($i = 14; $i >= 8; $i--) {
+        $prev[] = $day($i);
+    }
+    for ($i = 30; $i >= 1; $i--) {
+        $days30[] = $day($i);
+    }
+    return ['days' => $days, 'prev_days' => $prev, 'days30' => $days30, 'metrics' => []];
+}
+
+/**
+ * Everything the rules of one WEEK need, for many routers at once.
+ *
+ * Three indexed queries for the whole chunk instead of three per router: the
+ * digest evaluates every router it has (sorting by worst severity and the
+ * state save need all of them), and `send_digest_report_inner` builds the data
+ * again on every cron run between 08:00 and 12:00 until one send succeeds. At
+ * 1,000 routers the per-router shape would be 3,000 queries every minute of
+ * that window.
+ *
+ * The result is keyed by monitor id and holds, per router:
+ *   'window' => ['days','prev_days','days30','metrics' => [key => [day => row]]]
+ *   'disks'  => [disk_key => ['row' => storage_disks row, 'daily' => [day => row]]]
+ *   'state'  => [rec_key => router_rec_state row]
+ * `details`, `monitor` and `now` are added by the caller, which already holds
+ * them (the digest reads `last_details` in its own chunked query).
+ */
+function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_day): array {
+    $ids = [];
+    foreach ($monitor_ids as $id) {
+        $id = (int)$id;
+        if ($id > 0) {
+            $ids[$id] = $id;
+        }
+    }
+    if (!$ids) {
+        return [];
+    }
+    $window = bk_router_rec_window($end_day);
+    $out = [];
+    foreach ($ids as $id) {
+        $out[$id] = ['window' => $window, 'disks' => [], 'state' => [], 'speedtests' => [],
+            'events' => [], 'rx_packets' => [], 'forwarding_minutes' => null, 'conntrack_days' => null, 'server_max' => []];
+    }
+    $in_list = implode(',', array_fill(0, count($ids), '?'));
+    $id_list = array_values($ids);
+
+    // 1. Daily metrics. The window is 30 days because the wear trend reads
+    //    that far back; W and P are slices of the same rows.
+    $stmt = $pdo->prepare(
+        "SELECT monitor_id, metric_key, DATE_FORMAT(day, '%Y-%m-%d') AS day, min_val, avg_val, max_val, samples
+           FROM metrics_daily
+          WHERE monitor_id IN ($in_list) AND day BETWEEN ? AND ?"
+    );
+    $stmt->execute(array_merge($id_list, [$window['days30'][0], end($window['days30'])]));
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $mid = (int)$row['monitor_id'];
+        $out[$mid]['window']['metrics'][$row['metric_key']][$row['day']] = [
+            'min' => $row['min_val'] === null ? null : (float)$row['min_val'],
+            'avg' => $row['avg_val'] === null ? null : (float)$row['avg_val'],
+            'max' => $row['max_val'] === null ? null : (float)$row['max_val'],
+            'samples' => (int)$row['samples'],
+        ];
+    }
+
+    // 2. Disks and their daily rows in ONE join: a disk with no daily row in
+    //    the window still has to be known (a newly plugged drive), so the join
+    //    is a LEFT one and the identity row survives an empty history.
+    $stmt = $pdo->prepare(
+        "SELECT s.monitor_id, s.disk_key, s.id AS disk_id, s.name, s.transport, s.model, s.smart_model,
+                s.size_bytes, s.rotational, s.replaced_at, s.first_seen, s.last_seen,
+                DATE_FORMAT(d.day, '%Y-%m-%d') AS day, d.samples, d.smart_passed, d.temp_min, d.temp_max,
+                d.temp_sum, d.temp_n, d.power_on_hours, d.power_cycles, d.unsafe_shutdowns,
+                d.reallocated_sectors, d.pending_sectors, d.offline_uncorrectable, d.reported_uncorrect,
+                d.crc_errors, d.runtime_bad_blocks, d.media_errors, d.error_log_count, d.wear_pct,
+                d.emmc_life, d.written_bytes, d.host_written_bytes, d.host_written_partial
+           FROM storage_disks s
+           LEFT JOIN storage_disk_daily d ON d.disk_id = s.id AND d.day BETWEEN ? AND ?
+          WHERE s.monitor_id IN ($in_list)"
+    );
+    $stmt->execute(array_merge([$window['days30'][0], end($window['days30'])], $id_list));
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $mid = (int)$row['monitor_id'];
+        $dk = (string)$row['disk_key'];
+        if (!isset($out[$mid]['disks'][$dk])) {
+            $out[$mid]['disks'][$dk] = ['row' => [
+                'id' => (int)$row['disk_id'], 'key' => $dk, 'name' => $row['name'],
+                'transport' => $row['transport'], 'model' => $row['model'], 'smart_model' => $row['smart_model'],
+                'size_bytes' => $row['size_bytes'] === null ? null : (int)$row['size_bytes'],
+                'rotational' => $row['rotational'] === null ? null : (bool)$row['rotational'],
+                'replaced_at' => $row['replaced_at'], 'first_seen' => $row['first_seen'], 'last_seen' => $row['last_seen'],
+            ], 'daily' => []];
+        }
+        if ($row['day'] === null) {
+            continue;
+        }
+        $day = ['samples' => (int)$row['samples'], 'host_written_partial' => (int)$row['host_written_partial']];
+        foreach (['smart_passed', 'temp_min', 'temp_max', 'temp_sum', 'temp_n', 'power_on_hours', 'power_cycles',
+                  'unsafe_shutdowns', 'reallocated_sectors', 'pending_sectors', 'offline_uncorrectable',
+                  'reported_uncorrect', 'crc_errors', 'runtime_bad_blocks', 'media_errors', 'error_log_count',
+                  'wear_pct', 'emmc_life', 'written_bytes', 'host_written_bytes'] as $col) {
+            // A missing reading stays null: a zero here would be a measurement
+            // nobody took, and these columns feed "did the counter grow".
+            $day[$col] = $row[$col] === null ? null : $row[$col] + 0;
+        }
+        $out[$mid]['disks'][$dk]['daily'][(string)$row['day']] = $day;
+    }
+
+    // 3. The saved evaluation: hysteresis, mutes and the two digest weeks.
+    $stmt = $pdo->prepare("SELECT * FROM router_rec_state WHERE monitor_id IN ($in_list)");
+    $stmt->execute($id_list);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $mid = (int)$row['monitor_id'];
+        $row['active'] = (int)$row['active'];
+        $out[$mid]['state'][(string)$row['rec_key']] = $row;
+    }
+
+    // 4. The agent's own speed tests of the last 21 days - the input of the
+    //    four aggregate rules. Turris-started rows travel too: the classifier
+    //    itself decides they may only ever confirm a reached plan (WAN 3.4).
+    $stmt = $pdo->prepare(
+        "SELECT id, monitor_id, measured_at, download_mbps, upload_mbps, link_mbit, source,
+                server_name, diagnostics
+           FROM speedtest_results
+          WHERE monitor_id IN ($in_list) AND measured_at >= (NOW() - INTERVAL 21 DAY)
+          ORDER BY measured_at DESC"
+    );
+    $stmt->execute($id_list);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $out[(int)$row['monitor_id']]['speedtests'][] = $row;
+    }
+
+    // 4b. What those test servers have ever delivered, to ANY router, in 90
+    //     days. Server capability is observed, never assumed (WAN 3.4): only
+    //     the maximum leaves the query, no other account's router and no
+    //     other account's value.
+    $names = [];
+    foreach ($ids as $id) {
+        foreach ($out[$id]['speedtests'] as $row) {
+            if (($row['server_name'] ?? '') !== '') {
+                $names[(string)$row['server_name']] = true;
+            }
+        }
+    }
+    if ($names !== []) {
+        $name_list = implode(',', array_fill(0, count($names), '?'));
+        $stmt = $pdo->prepare(
+            "SELECT server_name, MAX(download_mbps) AS dl, MAX(upload_mbps) AS ul
+               FROM speedtest_results
+              WHERE server_name IN ($name_list) AND measured_at >= (NOW() - INTERVAL 90 DAY)
+              GROUP BY server_name"
+        );
+        $stmt->execute(array_keys($names));
+        $server_max = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $server_max[(string)$row['server_name']] = [
+                'dl' => $row['dl'] === null ? null : (float)$row['dl'],
+                'ul' => $row['ul'] === null ? null : (float)$row['ul'],
+            ];
+        }
+        foreach ($ids as $id) {
+            $out[$id]['server_max'] = $server_max;
+        }
+    }
+
+    // 5. The week's events, counted per type and day in ONE grouped query
+    //    (2.1 decision 6): `router_restarts` needs the count, and
+    //    `dns_resolver_failing` the number of DISTINCT days - minutes would
+    //    need failed/restored pairs and a pair cut by the week boundary would
+    //    invent a number.
+    $stmt = $pdo->prepare(
+        "SELECT monitor_id, event_type, DATE(occurred_at) AS day, COUNT(*) AS n,
+                MAX(occurred_at) AS last_at
+           FROM monitor_events
+          WHERE monitor_id IN ($in_list)
+            AND event_type IN ('router_rebooted', 'dns_resolver_failed')
+            AND occurred_at >= ? AND occurred_at < (? + INTERVAL 1 DAY)
+          GROUP BY monitor_id, event_type, DATE(occurred_at)"
+    );
+    $stmt->execute(array_merge($id_list, [$window['days'][0] . ' 00:00:00', end($window['days'])]));
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $out[(int)$row['monitor_id']]['events'][(string)$row['event_type']][(string)$row['day']] =
+            ['n' => (int)$row['n'], 'last_at' => $row['last_at']];
+    }
+
+    // 6. Received packets of the week, per day - the denominator of the ring
+    //    branch of `wan_port_errors`. Summed over every interface: the WAN
+    //    device name of a week ago is not knowable here, and a share of the
+    //    router's whole traffic is the conservative direction (it can only
+    //    make the share smaller, never raise a false alarm).
+    $stmt = $pdo->prepare(
+        "SELECT monitor_id, DATE_FORMAT(date, '%Y-%m-%d') AS day, SUM(rx_packets_total) AS rx
+           FROM monitor_interface_traffic
+          WHERE monitor_id IN ($in_list) AND date BETWEEN ? AND ?
+          GROUP BY monitor_id, date"
+    );
+    $stmt->execute(array_merge($id_list, [$window['days'][0], end($window['days'])]));
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $out[(int)$row['monitor_id']]['rx_packets'][(string)$row['day']] =
+            $row['rx'] === null ? null : (float)$row['rx'];
+    }
+
+    // 7. The two raw-minute scans of X13, and ONLY for a router whose loaded
+    //    daily week already shows the peak they look for. A chunk of fifty
+    //    quiet routers issues neither query; a router that never saturated a
+    //    core cannot have ten such minutes, so the pre-filter cannot hide a
+    //    rule that would have fired.
+    $th = bk_router_rec_thresholds();
+    $w_from = $window['days'][0] . ' 00:00:00';
+    $w_to = end($window['days']) . ' 23:59:59';
+    foreach ($ids as $id) {
+        $metrics = $out[$id]['window']['metrics'];
+        $peak = function (string $key) use ($metrics): ?float {
+            $max = null;
+            foreach ($metrics[$key] ?? [] as $row) {
+                if (isset($row['max']) && is_numeric($row['max'])) {
+                    $max = $max === null ? (float)$row['max'] : max($max, (float)$row['max']);
+                }
+            }
+            return $max;
+        };
+        $core_peak = $peak('cpu_core_max');
+        if ($core_peak !== null && $core_peak >= $th['wan_forwarding_core_saturated']['core_pct']) {
+            $stmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM vps_metrics
+                  WHERE monitor_id = ? AND created_at BETWEEN ? AND ?
+                    AND cpu_core_max >= ? AND cpu_core_max_softirq >= ?
+                    AND (COALESCE(wan_rx_mbps, 0) + COALESCE(wan_tx_mbps, 0)) >= ?"
+            );
+            $stmt->execute([$id, $w_from, $w_to, $th['wan_forwarding_core_saturated']['core_pct'],
+                $th['wan_forwarding_core_saturated']['softirq_pct'],
+                $th['wan_forwarding_core_saturated']['wan_mbps']]);
+            $out[$id]['forwarding_minutes'] = (int)$stmt->fetchColumn();
+        }
+        $ct_peak = $peak('conntrack_pct');
+        if ($ct_peak !== null && $ct_peak >= $th['conntrack_drops']['full_pct']) {
+            $stmt = $pdo->prepare(
+                "SELECT DATE(created_at) AS day, SUM(conntrack_drops) AS drops, MAX(conntrack_pct) AS pct
+                   FROM vps_metrics
+                  WHERE monitor_id = ? AND created_at BETWEEN ? AND ?
+                    AND conntrack_pct >= ? AND conntrack_drops > 0
+                  GROUP BY DATE(created_at)"
+            );
+            $stmt->execute([$id, $w_from, $w_to, $th['conntrack_drops']['full_pct']]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $out[$id]['conntrack_days'][(string)$row['day']] =
+                    ['drops' => (float)$row['drops'], 'pct' => (float)$row['pct']];
+            }
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * The same inputs for ONE router - the live page's entry point.
+ *
+ * It calls the batch with a single id on purpose: the page and the weekly
+ * e-mail then read the same SQL and cannot drift apart.
+ */
+function bk_router_rec_inputs(PDO $pdo, array $monitor, array $details, string $end_day): array {
+    $id = (int)($monitor['id'] ?? 0);
+    $batch = bk_router_rec_inputs_batch($pdo, [$id], $end_day);
+    $in = $batch[$id] ?? ['window' => bk_router_rec_window($end_day), 'disks' => [], 'state' => []];
+    $in['monitor'] = $monitor;
+    $in['details'] = $details;
+    $in['now'] = time();
+    return $in;
+}
+
+/**
+ * How many of the week's days the router really reported.
+ *
+ * A day counts from `day_samples` samples of any metric - the rules that read
+ * `metrics_daily` use the same bar, and the digest prints this number when it
+ * is below four ("not enough data for a weekly assessment").
+ */
+function bk_rec_days_with_data(array $window): int {
+    $th = bk_router_rec_thresholds();
+    $per_day = [];
+    foreach ($window['metrics'] ?? [] as $days) {
+        foreach ($days as $day => $row) {
+            $n = (int)($row['samples'] ?? 0);
+            $per_day[$day] = max($per_day[$day] ?? 0, $n);
+        }
+    }
+    $count = 0;
+    foreach ($window['days'] ?? [] as $day) {
+        if (($per_day[$day] ?? 0) >= $th['day_samples']) {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+/**
+ * The weekly evaluation of one router. PURE - everything it reads is in `$in`.
+ *
+ * Returns the language-neutral items, sorted the way both the e-mail and the
+ * page show them (severity, area, the rule's own rank, key), plus the keys
+ * that could NOT be evaluated this week. Those two lists are what the state
+ * save needs: an item that stopped firing clears its row, an item that was
+ * never evaluated (the router was off) must leave its row alone, or the
+ * digest would mail it as new when the data comes back.
+ */
+function bk_router_rec_evaluate(array $in): array {
+    $monitor = is_array($in['monitor'] ?? null) ? $in['monitor'] : [];
+    $details = is_array($in['details'] ?? null) ? $in['details'] : [];
+    $state = is_array($in['state'] ?? null) ? $in['state'] : [];
+    $now = (int)($in['now'] ?? time());
+    $window = is_array($in['window'] ?? null) ? $in['window'] : ['days' => [], 'metrics' => []];
+    $days_with_data = bk_rec_days_with_data($window);
+    $out = ['applicable' => false, 'reason' => null, 'days_with_data' => $days_with_data,
+        'items' => [], 'not_evaluated' => []];
+
+    if ((string)($monitor['type'] ?? '') !== 'openwrt') {
+        $out['reason'] = 'not_router';
+        return $out;
+    }
+    // The router rules read fields only 0.1.7 sends. An older agent is not a
+    // healthy router with nothing to report, and saying so is the difference
+    // between "nothing found" and "nothing measured".
+    $version = $details['agent_version'] ?? ($monitor['agent_version'] ?? null);
+    if (bk_version_is_older(is_string($version) ? $version : null, '0.1.7')) {
+        $out['reason'] = 'agent_old';
+        $out['params'] = ['version' => (string)$version];
+        return $out;
+    }
+    // `agent_last_seen` is a unix timestamp inside last_details (agent_api.php
+    // writes it there); a monitors column of the same name does not exist.
+    $last_seen = $details['agent_last_seen'] ?? ($monitor['agent_last_seen'] ?? null);
+    $last_ts = is_numeric($last_seen) ? (int)$last_seen : (is_string($last_seen) && $last_seen !== '' ? strtotime($last_seen) : false);
+    if ($last_ts !== false && $last_ts > 0 && $now - $last_ts > 7 * 86400) {
+        $out['reason'] = 'silent';
+        $out['params'] = ['days' => (int)floor(($now - $last_ts) / 86400)];
+        return $out;
+    }
+
+    $out['applicable'] = true;
+    // Every rule group answers the same shape ['items', 'not_evaluated'], so
+    // a group joins this list as it lands and nothing below has to change.
+    // The calls are written out rather than dispatched through a variable so
+    // that find_dead_code.php can see them.
+    $groups = [
+        bk_rec_rules_disk_health($in, $state),
+        bk_rec_rules_disk_week($in, $state),
+        bk_rec_rules_filesystems($in, $state),
+        bk_rec_rules_wifi($in, $state),
+        bk_rec_rules_wan_week($in, $state),
+        bk_rec_rules_wan_tests($in, $state),
+        bk_rec_rules_gap($in, $state),
+    ];
+    foreach ($groups as $res) {
+        foreach ($res['items'] ?? [] as $item) {
+            $out['items'][] = $item;
+        }
+        // The rules answer a map <rec_key> => <rule id>; the state save only
+        // needs the keys it must leave alone.
+        foreach (array_keys($res['not_evaluated'] ?? []) as $key) {
+            $out['not_evaluated'][] = (string)$key;
+        }
+    }
+
+    $out['items'] = bk_rec_sort_items($out['items']);
+    $out['not_evaluated'] = array_values(array_unique($out['not_evaluated']));
+    return $out;
+}
+
+/**
+ * Severity, then area, then the rule's own rank, then key.
+ *
+ * The rank is explicit (`bk_router_rec_thresholds()['rank']`) because a plain
+ * sort by key would put `disk_selftest_never` - an optional hygiene item -
+ * above `disk_unclean_shutdowns`, a router losing power.
+ */
+function bk_rec_sort_items(array $items): array {
+    $th = bk_router_rec_thresholds();
+    $rank = array_flip($th['rank']);
+    usort($items, function (array $a, array $b) use ($th, $rank): int {
+        $sev = ($th['severity'][$a['severity']] ?? 9) <=> ($th['severity'][$b['severity']] ?? 9);
+        if ($sev !== 0) {
+            return $sev;
+        }
+        $area = ($th['area'][$a['area']] ?? 9) <=> ($th['area'][$b['area']] ?? 9);
+        if ($area !== 0) {
+            return $area;
+        }
+        $r = ($rank[$a['id']] ?? 999) <=> ($rank[$b['id']] ?? 999);
+        return $r !== 0 ? $r : strcmp((string)$a['key'], (string)$b['key']);
+    });
+    return $items;
+}
+
+/**
+ * The area of a rule id, for a row that has no item any more.
+ *
+ * A muted key whose rule stopped firing is still listed (so it can be
+ * unmuted), and the list needs its area for grouping - but there is no item
+ * left to read it from. The mapping is the one the rank list of
+ * `bk_router_rec_thresholds()` is written in; a test walks that list and fails
+ * on any id this function cannot place.
+ */
+function bk_rec_area_of(string $id): string {
+    if (str_starts_with($id, 'pkg_')) {
+        return 'packages';
+    }
+    if (str_starts_with($id, 'disk_') || str_starts_with($id, 'fs_')) {
+        return 'storage';
+    }
+    if (str_starts_with($id, 'wifi_')) {
+        return 'wifi';
+    }
+    if (str_starts_with($id, 'wan_') || $id === 'conntrack_drops' || $id === 'lan_wired_ceiling') {
+        return 'wan';
+    }
+    if ($id === 'firewall_off') {
+        return 'security';
+    }
+    if (in_array($id, ['router_restarts', 'dns_resolver_failing', 'clock_skew'], true)) {
+        return 'system';
+    }
+    return 'system';
+}
+
+/**
+ * Mutes: what the owner asked not to see again, and what rose above it.
+ *
+ * A mute is per router and per key and remembers the severity it was made at.
+ * An item that is now WORSE than that comes back - a mute is "I know about
+ * this", not "never tell me about this disk again" - and it is marked
+ * `params.was_muted` so the app and the e-mail can say why it is back.
+ * `openSince` is the moment the item first fired, for the page's "open since".
+ */
+function bk_router_rec_split(array $items, array $state): array {
+    $th = bk_router_rec_thresholds();
+    $out = ['items' => [], 'muted' => []];
+    foreach ($items as $item) {
+        $key = (string)($item['key'] ?? '');
+        $row = $state[$key] ?? null;
+        $item['openSince'] = is_array($row) && !empty($row['first_seen']) ? $row['first_seen'] : null;
+        if (is_array($row) && !empty($row['muted_at'])) {
+            $muted_rank = $th['severity'][(string)($row['muted_severity'] ?? '')] ?? 9;
+            $now_rank = $th['severity'][(string)($item['severity'] ?? '')] ?? 9;
+            $item['mutedAt'] = $row['muted_at'];
+            $item['muteReason'] = $row['mute_reason'] ?? null;
+            if ($now_rank >= $muted_rank) {
+                $out['muted'][] = $item;
+                continue;
+            }
+            $item['params']['was_muted'] = true;
+        }
+        $out['items'][] = $item;
+    }
+    return $out;
+}
+
+/**
+ * The human sentences of one item, in the language that is active RIGHT NOW.
+ *
+ * Rendering is deliberately separate from evaluating: the same stored item is
+ * mailed in the recipient's language and shown in the request's language, so
+ * `t()` must run at call time and never at build time. `params` carries the
+ * numbers, this function decides which text and which variant they go into.
+ *
+ * Returns ['title', 'measured', 'action']; an item whose rule has no texts yet
+ * renders its id, never an empty box.
+ */
+function bk_router_rec_render(array $item): array {
+    $id = (string)($item['id'] ?? '');
+    $p = is_array($item['params'] ?? null) ? $item['params'] : [];
+    $name = (string)($p['name'] ?? '');
+    $disk = (string)($p['disk'] ?? '');
+    // The Wi-Fi items carry the band as an enum and the channel as a number,
+    // so both labels are built HERE, in the recipient's language. cs writes
+    // "2,4 GHz", en "2.4 GHz" - the same item, two e-mails.
+    $band_id = is_string($p['band_id'] ?? null) ? $p['band_id'] : null;
+    $band = $band_id !== null ? bk_rec_band_label($band_id) : '';
+    $radio = $band_id !== null ? bk_rec_radio_label($band_id, $p['ch'] ?? null) : '';
+    $title = sprintf(t('rr_' . $id . '_title'), $name);
+    $action = t('rr_' . $id . '_action');
+    $measured = '';
+
+    switch ($id) {
+        case 'disk_smart_failing':
+            $reason = (string)($p['reason'] ?? 'verdict');
+            $reason_text = $reason === 'nvme'
+                ? sprintf(t('rr_disk_smart_failing_reason_nvme'), bk_rec_num($p['critical_warning'] ?? null))
+                : t('rr_disk_smart_failing_reason_' . $reason);
+            $measured = sprintf(t('rr_disk_smart_failing_measured'), $disk, $reason_text);
+            break;
+        case 'disk_errors_growing':
+            $frags = [];
+            foreach (is_array($p['changes'] ?? null) ? $p['changes'] : [] as $ch) {
+                $counter = (string)($ch['counter'] ?? '');
+                $frags[] = $counter === 'pending_now'
+                    ? sprintf(t('rr_disk_errors_growing_pending_now'), bk_rec_num($ch['to'] ?? null))
+                    : sprintf(t('rr_disk_errors_growing_' . $counter), bk_rec_num($ch['from'] ?? null), bk_rec_num($ch['to'] ?? null));
+            }
+            $measured = sprintf(t('rr_disk_errors_growing_measured'), $disk, implode(', ', $frags));
+            $action = sprintf(t('rr_disk_errors_growing_action'), $name);
+            break;
+        case 'disk_wear_high':
+            if (($p['variant'] ?? 'attr') === 'emmc') {
+                $life = $p['life'] ?? null;
+                $range = $life === null ? t('rr_wear_range_unknown')
+                    : ($life >= 11 ? t('rr_wear_range_over')
+                        : sprintf(t('rr_wear_range'), bk_rec_num(((int)$life - 1) * 10), bk_rec_num((int)$life * 10)));
+                $eol = t('rr_emmc_eol_' . (string)(int)($p['pre_eol'] ?? 1));
+                $measured = sprintf(t('rr_disk_wear_high_measured_emmc'), $name, $range, $eol);
+            } else {
+                // Any `attr*` source is a vendor attribute read, not a
+                // standardised wear field, and the sentence has to say so.
+                $src = str_starts_with((string)($p['source'] ?? ''), 'attr') ? t('rr_wear_src_attr') : '';
+                $measured = sprintf(t('rr_disk_wear_high_measured'), $disk, bk_rec_num($p['wear'] ?? null), $src);
+            }
+            break;
+        case 'disk_wear_fast':
+            $measured = sprintf(t('rr_disk_wear_fast_measured'), $disk, bk_rec_num($p['days'] ?? null),
+                bk_rec_num($p['w0'] ?? null), bk_rec_num($p['w1'] ?? null), bk_rec_num($p['left'] ?? null));
+            break;
+        case 'disk_heavy_writes':
+            $measured = sprintf(t('rr_disk_heavy_writes_measured'), $disk, bk_rec_num($p['gb'] ?? null, 1),
+                bk_rec_num($p['pct'] ?? null, 1));
+            break;
+        case 'disk_temp_warm':
+            $measured = sprintf(t('rr_disk_temp_warm_measured'), $disk, bk_rec_num($p['avg_c'] ?? null),
+                bk_rec_num($p['max_c'] ?? null), bk_rec_num($p['limit_c'] ?? null));
+            $action = sprintf(t('rr_disk_temp_warm_action'), bk_rec_num($p['limit_c'] ?? null));
+            break;
+        case 'disk_unclean_shutdowns':
+            $grew = !empty($p['grew']) ? sprintf(t('rr_disk_unclean_shutdowns_grew'), bk_rec_num($p['grew'])) : '';
+            $measured = sprintf(t('rr_disk_unclean_shutdowns_measured'), $disk, bk_rec_num($p['unsafe'] ?? null),
+                bk_rec_num($p['cycles'] ?? null), $grew);
+            $title = t('rr_disk_unclean_shutdowns_title');
+            break;
+        case 'disk_selftest_never':
+            $measured = sprintf(t('rr_disk_selftest_never_measured'), $disk, bk_rec_num($p['hours'] ?? null));
+            $action = sprintf(t('rr_disk_selftest_never_action'), $name, $name);
+            break;
+        case 'disk_smart_unreadable':
+            $measured = sprintf(t('rr_disk_smart_unreadable_measured'), $disk,
+                t('rr_disk_smart_unreadable_why_' . (string)($p['why'] ?? 'error')));
+            break;
+        case 'fs_nearly_full':
+            $mount = (string)($p['mount'] ?? '');
+            $title = sprintf(t('rr_fs_nearly_full_title'), $mount);
+            $measured = sprintf(t('rr_fs_nearly_full_measured'), $mount, bk_rec_num($p['pct'] ?? null),
+                isset($p['free']) && $p['free'] !== null ? bk_format_bytes_cz((float)$p['free']) : '—');
+            $action = sprintf(t('rr_fs_nearly_full_action'), !empty($p['schnapps']) ? t('rr_fs_nearly_full_schnapps') : '');
+            break;
+        case 'wifi_6ghz_unserved':
+            // Three fragments, each allowed to be empty: the hardware
+            // sentence, the honest-gain sentence (only with a measured link
+            // rate AND a measured airtime) and the WAN sentence of X-none.
+            $measured = sprintf(t('rr_wifi_6ghz_unserved_measured'), bk_rec_num($p['capable'] ?? null),
+                bk_rec_num($p['known'] ?? null), bk_rec_num($p['share'] ?? null),
+                t('rr_wifi_6ghz_unserved_hw_' . (($p['hw'] ?? 'none') === 'present' ? 'present' : 'none')));
+            $wan_frag = in_array($p['wan_variant'] ?? null, ['fast', 'slow'], true)
+                ? sprintf(t('rr_wifi_6ghz_unserved_wan_' . $p['wan_variant']), bk_rec_num($p['wan_mbit'] ?? null)) . ' '
+                : '';
+            if (($p['hw'] ?? 'none') === 'present') {
+                $action = sprintf(t('rr_wifi_6ghz_unserved_action_present'), $wan_frag);
+            } else {
+                $gain = $band_id !== null && ($p['rate'] ?? null) !== null && ($p['busy'] ?? null) !== null
+                    ? sprintf(t('rr_wifi_6ghz_unserved_gain'), $band, bk_rec_num($p['rate'], 1),
+                        bk_rec_num($p['busy'], 1)) . ' '
+                    : '';
+                $action = sprintf(t('rr_wifi_6ghz_unserved_action_none'), $gain, $wan_frag);
+            }
+            break;
+        case 'wifi_channel_busy':
+            $variant = ($p['variant'] ?? 'other') === 'total' ? 'total' : 'other';
+            $title = sprintf(t('rr_wifi_channel_busy_title'), $band);
+            $measured = sprintf(t('rr_wifi_channel_busy_measured_' . $variant), bk_rec_num($p['ch'] ?? null),
+                $band, bk_rec_num($variant === 'other' ? ($p['other'] ?? null) : ($p['busy'] ?? null), 1),
+                bk_rec_num($p['busy'] ?? null, 1));
+            $action = t('rr_wifi_channel_busy_action_' . $variant);
+            break;
+        case 'wifi_noise_high':
+            $title = sprintf(t('rr_wifi_noise_high_title'), $band);
+            $measured = sprintf(t('rr_wifi_noise_high_measured'), $band, bk_rec_num($p['noise'] ?? null));
+            break;
+        case 'wifi_week_degraded':
+            $frags = [];
+            foreach (is_array($p['changes'] ?? null) ? $p['changes'] : [] as $ch) {
+                $what = (string)($ch['what'] ?? '');
+                $frags[] = sprintf(t('rr_wifi_week_degraded_' . ($what === 'noise' ? 'noise' : 'busy_other')),
+                    bk_rec_num($ch['from'] ?? null, $what === 'noise' ? 0 : 1),
+                    bk_rec_num($ch['to'] ?? null, $what === 'noise' ? 0 : 1));
+            }
+            $title = sprintf(t('rr_wifi_week_degraded_title'), $band);
+            $measured = sprintf(t('rr_wifi_week_degraded_measured'), $band, implode(', ', $frags));
+            break;
+        case 'wifi_weak_encryption':
+            $what = (string)($p['what'] ?? 'mixed');
+            $what_text = $what === 'legacy'
+                ? sprintf(t('rr_wifi_weak_encryption_what_legacy'), (string)($p['enc'] ?? 'WPA'))
+                : t('rr_wifi_weak_encryption_what_' . ($what === 'open' ? 'open' : 'mixed'));
+            $title = sprintf(t('rr_wifi_weak_encryption_title'), $radio);
+            $measured = sprintf(t('rr_wifi_weak_encryption_measured'), $radio, $what_text);
+            break;
+        case 'wifi_wpa2_only':
+            $title = sprintf(t('rr_wifi_wpa2_only_title'), $radio);
+            $measured = sprintf(t('rr_wifi_wpa2_only_measured'), $radio);
+            break;
+        case 'wifi_wpa3_ready':
+            $radios = [];
+            foreach (is_array($p['radios'] ?? null) ? $p['radios'] : [] as $one) {
+                $radios[] = bk_rec_radio_label(is_string($one['band'] ?? null) ? $one['band'] : null, $one['ch'] ?? null);
+            }
+            $measured = sprintf(t('rr_wifi_wpa3_ready_measured'), implode(', ', $radios),
+                (string)($p['from'] ?? '—'), (string)($p['to'] ?? '—'));
+            break;
+        case 'wifi_mode_below_card':
+            $title = sprintf(t('rr_wifi_mode_below_card_title'), $radio);
+            $measured = sprintf(t('rr_wifi_mode_below_card_measured'), $radio,
+                bk_rec_wifi_gen_label(isset($p['cur']) ? (int)$p['cur'] : null),
+                (string)($p['htmode'] ?? '—'),
+                bk_rec_wifi_gen_label(isset($p['best']) ? (int)$p['best'] : null));
+            $action = sprintf(t('rr_wifi_mode_below_card_action'), (string)($p['suggested'] ?? ''),
+                (string)($p['suggested'] ?? ''));
+            break;
+        case 'wifi_channel_narrow':
+            $title = sprintf(t('rr_wifi_channel_narrow_title'), $radio);
+            $measured = sprintf(t('rr_wifi_channel_narrow_measured'), $radio, bk_rec_num($p['w'] ?? null));
+            $action = sprintf(t('rr_wifi_channel_narrow_action'), (string)($p['suggested'] ?? ''));
+            break;
+        case 'wifi_24_wide_channel':
+            $measured = sprintf(t('rr_wifi_24_wide_channel_measured'), $radio, bk_rec_num($p['w'] ?? null));
+            $action = sprintf(t('rr_wifi_24_wide_channel_action'), (string)($p['suggested'] ?? ''));
+            break;
+        case 'wifi_weak_client':
+            // The SNR and the generation clauses are dropped when unknown:
+            // "0 dB above the noise" or "Wi-Fi 0" would both be invented.
+            $snr = isset($p['snr']) && $p['snr'] !== null
+                ? sprintf(t('rr_wifi_weak_client_snr'), bk_rec_num($p['snr'])) : '';
+            $gen = '';
+            if (isset($p['gen']) && $p['gen'] !== null) {
+                $gen = (int)$p['gen'] <= 0 ? t('rr_wifi_weak_client_gen_legacy')
+                    : sprintf(t('rr_wifi_weak_client_gen'), bk_rec_num((int)$p['gen']));
+            }
+            $measured = sprintf(t('rr_wifi_weak_client_measured'), $radio,
+                bk_rec_num($p['signal'] ?? null), $snr, $gen, bk_rec_num($p['noise'] ?? null));
+            break;
+        case 'wifi_5ghz_clients_on_24':
+            $measured = sprintf(t('rr_wifi_5ghz_clients_on_24_measured'), bk_rec_num($p['n'] ?? null, 1));
+            break;
+        case 'wan_link_below_plan':
+            $measured = sprintf(t('rr_wan_link_below_plan_measured'), $name === '' ? '—' : $name,
+                bk_rec_num($p['mbit'] ?? null), bk_rec_num($p['plan'] ?? null));
+            break;
+        case 'wan_port_errors':
+            // The "could not keep up" sentence needs the HARDWARE counters:
+            // sysfs drops count unhandled-protocol junk on mvneta and would
+            // blame the router for frames it was right to throw away.
+            $ring = isset($p['ring']) && $p['ring'] !== null
+                ? ' ' . sprintf(t('rr_wan_port_errors_ring'), bk_rec_num($p['ring'])) : '';
+            $measured = sprintf(t('rr_wan_port_errors_measured'), $name === '' ? '—' : $name,
+                bk_rec_num($p['errors'] ?? null), bk_rec_num($p['drops'] ?? null),
+                (int)($p['days'] ?? 0)) . $ring;
+            break;
+        case 'wan_link_flaps':
+            $measured = sprintf(t('rr_wan_link_flaps_measured'), $name === '' ? '—' : $name,
+                (int)($p['flaps'] ?? 0));
+            break;
+        case 'wan_line_below_plan':
+            $measured = sprintf(t('rr_wan_line_below_plan_measured'), bk_rec_dir_label($p['dir'] ?? null),
+                bk_rec_num($p['mbps'] ?? null), bk_rec_num($p['plan'] ?? null),
+                bk_rec_num($p['core'] ?? null), bk_rec_num($p['link'] ?? null),
+                (int)($p['agree'] ?? 0), (int)($p['span_days'] ?? 0), (int)($p['servers'] ?? 0));
+            $action = sprintf(t('rr_wan_line_below_plan_action'), bk_rec_num($p['ok_pct'] ?? 85));
+            break;
+        case 'wan_port_limited':
+            $measured = sprintf(t('rr_wan_port_limited_measured'), bk_rec_dir_label($p['dir'] ?? null),
+                bk_rec_num($p['mbps'] ?? null), $name === '' ? '—' : $name, bk_rec_num($p['link'] ?? null));
+            break;
+        case 'wan_sqm_limited':
+            $measured = sprintf(t('rr_wan_sqm_limited_measured'), bk_rec_dir_label($p['dir'] ?? null),
+                bk_rec_num($p['mbps'] ?? null), bk_rec_num($p['sqm'] ?? null), bk_rec_num($p['plan'] ?? null));
+            break;
+        case 'wan_cpu_packet_path':
+            $measured = sprintf(t('rr_wan_cpu_packet_path_measured'), bk_rec_dir_label($p['dir'] ?? null),
+                bk_rec_num($p['mbps'] ?? null), bk_rec_num($p['core_busy'] ?? null),
+                bk_rec_num($p['net_share'] ?? null), bk_rec_num($p['all_cores'] ?? null),
+                (int)($p['agree'] ?? 0), (int)($p['tests'] ?? 0));
+            $action = sprintf(t('rr_wan_cpu_packet_path_action'), bk_rec_num($p['mbps'] ?? null),
+                bk_rec_num($p['link'] ?? null))
+                . (!empty($p['with_forwarding']) ? ' ' . t('rr_wan_cpu_packet_path_with_forwarding') : '')
+                . (!empty($p['steering_off']) ? ' ' . t('rr_packet_steering_off') : '');
+            break;
+        case 'wan_forwarding_core_saturated':
+            $measured = sprintf(t('rr_wan_forwarding_core_saturated_measured'), (int)($p['minutes'] ?? 0),
+                bk_rec_num($p['softirq'] ?? null), bk_rec_num($p['mbps'] ?? null));
+            $action = t('rr_wan_forwarding_core_saturated_action')
+                . (!empty($p['steering_off']) ? ' ' . t('rr_packet_steering_off') : '')
+                . (!empty($p['offloading_off']) ? ' ' . t('rr_flow_offloading_off') : '');
+            break;
+        case 'conntrack_drops':
+            $measured = sprintf(t('rr_conntrack_drops_measured'), bk_rec_num($p['drops'] ?? null),
+                bk_rec_num($p['pct'] ?? null));
+            // The evidence row: evicted is something else than refused, so it
+            // gets its own sentence instead of being added to the count.
+            if (($p['evicted'] ?? null) !== null) {
+                $measured .= ' ' . sprintf(t('rr_conntrack_drops_evicted'), bk_rec_num($p['evicted']));
+            }
+            break;
+        case 'lan_wired_ceiling':
+            $measured = sprintf(t('rr_lan_wired_ceiling_measured'), bk_rec_num($p['plan'] ?? null),
+                bk_rec_num($p['cap'] ?? null));
+            break;
+        case 'firewall_off':
+            $measured = sprintf(t('rr_firewall_off_measured'),
+                isset($p['since']) ? date('Y-m-d H:i', (int)$p['since']) : '—');
+            break;
+        case 'router_restarts':
+            $measured = sprintf(t('rr_router_restarts_measured'), (int)($p['count'] ?? 0),
+                is_string($p['last_at'] ?? null) ? $p['last_at'] : '—');
+            $action = t('rr_router_restarts_action')
+                . (!empty($p['unclean']) ? ' ' . t('rr_router_restarts_unclean') : '');
+            break;
+        case 'dns_resolver_failing':
+            $measured = sprintf(t('rr_dns_resolver_failing_measured'), (int)($p['days'] ?? 0),
+                (int)($p['count'] ?? 0));
+            break;
+        case 'clock_skew':
+            $measured = sprintf(t('rr_clock_skew_measured'), bk_rec_num($p['secs'] ?? null, 1));
+            break;
+        case 'pkg_smartmontools':
+        case 'pkg_smart_drivedb':
+        case 'pkg_hostapd_utils':
+        case 'pkg_iw':
+        case 'pkg_librespeed_cli':
+            $cmd = bk_rec_install_cmd(is_string($p['pkg_manager'] ?? null) ? $p['pkg_manager'] : null,
+                (string)($p['pkg'] ?? ''));
+            $measured = t('rr_' . $id . '_measured');
+            $action = sprintf(t('rr_' . $id . '_action'), $cmd);
+            break;
+        default:
+            // A rule whose texts have not landed yet still shows WHAT fired.
+            $title = $id;
+            break;
+    }
+
+    return ['title' => $title, 'measured' => $measured, 'action' => $action];
+}
+
+/**
+ * The weekly snapshot of one router's recommendations.
+ *
+ * Called ONLY by the weekly digest build (`save_snapshot = true`), because
+ * "new this week" has to mean the same thing for everybody who reads the
+ * e-mail; a page view must never move that line.
+ *
+ * Three groups of keys, and the difference between them is the whole point:
+ *   - firing keys get `active = 1`, their severity, a `first_digest_week` if
+ *     they had none and a `raised_digest_week` when the severity ROSE;
+ *   - keys that were evaluated and no longer fire are cleared, so the next
+ *     time they appear they are new again;
+ *   - keys that could NOT be evaluated (fewer than four days of data) are left
+ *     exactly as they are - not cleared, not refreshed. A router switched off
+ *     over a holiday must not mail its whole list again as new.
+ *
+ * The write is skipped entirely when it would change nothing (every firing key
+ * already stands with the same severity and was last seen in THIS ISO week,
+ * and nothing evaluated is still active): the digest is rebuilt on every cron
+ * run from 08:00 to 12:00 until a send succeeds, and only the first build of a
+ * week has anything to say.
+ */
+function bk_router_rec_state_save(PDO $pdo, int $monitor_id, array $items, string $iso_week, array $not_evaluated = [], array $state = []): void {
+    $th = bk_router_rec_thresholds();
+    $firing = [];
+    foreach ($items as $item) {
+        $key = (string)($item['key'] ?? '');
+        if ($key !== '') {
+            $firing[$key] = $item;
+        }
+    }
+    $skip_clear = [];
+    foreach ($not_evaluated as $key) {
+        $skip_clear[(string)$key] = true;
+    }
+
+    // Would this write change anything? The rows are already in the inputs, so
+    // the question costs no query.
+    $changes = false;
+    foreach ($firing as $key => $item) {
+        $row = $state[$key] ?? null;
+        $seen_week = is_array($row) && !empty($row['last_seen']) ? date('o-\WW', (int)strtotime((string)$row['last_seen'])) : null;
+        if (!is_array($row) || (int)($row['active'] ?? 0) !== 1
+            || (string)($row['severity'] ?? '') !== (string)($item['severity'] ?? '')
+            || $seen_week !== $iso_week) {
+            $changes = true;
+            break;
+        }
+    }
+    if (!$changes) {
+        foreach ($state as $key => $row) {
+            if ((int)($row['active'] ?? 0) === 1 && !isset($firing[$key]) && !isset($skip_clear[$key])) {
+                $changes = true;
+                break;
+            }
+        }
+    }
+    if (!$changes) {
+        return;
+    }
+
+    $upsert = $pdo->prepare(
+        "INSERT INTO router_rec_state
+             (monitor_id, rec_key, rule_id, active, severity, first_seen, last_seen, first_digest_week)
+         VALUES (?, ?, ?, 1, ?, NOW(), NOW(), ?)
+         ON DUPLICATE KEY UPDATE
+             rule_id = VALUES(rule_id),
+             active = 1,
+             -- A severity that ROSE is what makes an old item full again in the
+             -- e-mail, so the week it rose is recorded before severity is
+             -- overwritten. FIELD() ranks critical < warning < info.
+             raised_digest_week = IF(severity IS NOT NULL
+                 AND FIELD(VALUES(severity), 'critical', 'warning', 'info')
+                   < FIELD(severity, 'critical', 'warning', 'info'),
+                 ?, raised_digest_week),
+             severity = VALUES(severity),
+             first_seen = COALESCE(first_seen, VALUES(first_seen)),
+             last_seen = VALUES(last_seen),
+             first_digest_week = COALESCE(first_digest_week, VALUES(first_digest_week))"
+    );
+    foreach ($firing as $key => $item) {
+        $upsert->execute([$monitor_id, $key, (string)($item['id'] ?? ''), (string)($item['severity'] ?? ''), $iso_week, $iso_week]);
+    }
+
+    // Everything that was evaluated and did not fire stops being open. The
+    // row itself stays (a mute lives in it, and `last_seen` dates the 90-day
+    // retention), only the "is open" half is cleared.
+    $clear = $pdo->prepare(
+        "UPDATE router_rec_state SET active = 0, severity = NULL, first_digest_week = NULL, raised_digest_week = NULL
+          WHERE monitor_id = ? AND rec_key = ? AND active = 1"
+    );
+    foreach ($state as $key => $row) {
+        $key = (string)$key;
+        if (isset($firing[$key]) || isset($skip_clear[$key]) || (int)($row['active'] ?? 0) !== 1) {
+            continue;
+        }
+        $clear->execute([$monitor_id, $key]);
+    }
+}
+
+/**
  * Detection of data COLLECTION outages for one monitor - not outages of the service.
  * The principle (2026-08-05, after two weeks of invisibly dead cpanel collection):
  * when data stops being collected, the frontend must scream, not silently show nothing.
@@ -8909,6 +14459,92 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
                 'type' => 'checks_stalled',
                 'message' => sprintf(t('collection_issue_checks_stalled'), round((time() - $last_checked_ts) / 60)),
                 'since' => date('c', $last_checked_ts),
+            ];
+        }
+    }
+
+    // 4. The router's SMART probe is wedged (CORE 3.6). smartctl on a USB
+    //    bridge that stopped answering blocks for minutes; the disk card would
+    //    otherwise keep showing yesterday's values as if they were current.
+    $agent_tools = is_array($details['agent_tools'] ?? null) ? $details['agent_tools'] : [];
+    $probe_running = $agent_tools['smart_probe_running_s'] ?? null;
+    if (is_int($probe_running) && $probe_running > 900) {
+        $issues[] = [
+            'type' => 'smart_probe_stuck',
+            'message' => sprintf(t('collection_issue_smart_probe_stuck'), intdiv($probe_running, 60)),
+            'since' => date('c', time() - $probe_running),
+        ];
+    }
+
+    // 5. A disk whose SMART could not be read for a day. The values in the
+    //    card are the last successful reading, so without this the disk looks
+    //    healthy exactly while nobody knows anything about it.
+    foreach (is_array($details['storage_disks'] ?? null) ? $details['storage_disks'] : [] as $ci_disk) {
+        if (!is_array($ci_disk) || ($ci_disk['smart']['state'] ?? null) !== 'error') {
+            continue;
+        }
+        $ci_checked = $ci_disk['smart']['checked_at'] ?? null;
+        if (is_int($ci_checked) && (time() - $ci_checked) <= 86400) {
+            continue;
+        }
+        $issues[] = [
+            'type' => 'smart_read_failing',
+            'message' => sprintf(t('collection_issue_smart_read_failing'), bk_disk_label($ci_disk),
+                is_int($ci_checked) ? date('j. n. Y', $ci_checked) : t('collection_issue_smart_read_never')),
+            'since' => is_int($ci_checked) ? date('c', $ci_checked) : null,
+        ];
+    }
+
+    // 6. X15: the two records of lost data. `details_dropped` is the 60 kB cap
+    //    of last_details, `ingest_issues` everything else the ingest refused.
+    //    Both are reset by the next report that fits, so the issue ends by itself.
+    $dropped = array_values(array_filter((array)($details['details_dropped'] ?? []), 'is_string'));
+    if ($dropped !== []) {
+        $issues[] = [
+            'type' => 'storage_list_dropped',
+            'message' => sprintf(t('collection_issue_storage_list_dropped'), implode(', ', array_slice($dropped, 0, 8))),
+            'since' => null,
+        ];
+    }
+    // 7. G42: minute reports that never arrived. The counting is cron's (the
+    //    pure function has no $pdo), this only reads what it stored. Below 120
+    //    expected minutes nothing is claimed - a router that booted twenty
+    //    minutes ago has not missed anything yet.
+    $reports = is_array($details['reports_24h'] ?? null) ? $details['reports_24h'] : [];
+    $expected = bk_ranged_int($reports['expected'] ?? null, 0, 1440);
+    $received = bk_ranged_int($reports['received'] ?? null, 0, 100000);
+    if ($expected !== null && $received !== null && $expected >= 120 && $received < 0.9 * $expected) {
+        $skipped_lock = bk_ranged_int($details['runs_skipped_lock'] ?? null, 0, 100000) ?? 0;
+        $skipped_post = bk_ranged_int($details['runs_skipped_post'] ?? null, 0, 100000) ?? 0;
+        $message = sprintf(t('collection_issue_reports_missing'), $expected - $received, $expected);
+        if ($skipped_lock > 0 || $skipped_post > 0) {
+            // The agent's own counters: the difference between "the server
+            // lost them" and "the previous run was still going".
+            $message .= ' ' . sprintf(t('collection_issue_reports_missing_skips'), $skipped_lock, $skipped_post);
+        }
+        $issues[] = [
+            'type' => 'reports_missing',
+            'message' => $message,
+            'since' => isset($reports['checked_at']) && is_int($reports['checked_at']) ? date('c', $reports['checked_at']) : null,
+        ];
+    }
+
+    $ingest = is_array($details['ingest_issues'] ?? null) ? $details['ingest_issues'] : [];
+    if ($ingest !== []) {
+        $ci_names = [];
+        foreach (array_slice($ingest, 0, 5) as $ci_item) {
+            if (!is_array($ci_item) || !is_string($ci_item['type'] ?? null)) {
+                continue;
+            }
+            $ci_names[] = is_string($ci_item['key'] ?? null)
+                ? $ci_item['type'] . ' (' . $ci_item['key'] . ')'
+                : $ci_item['type'];
+        }
+        if ($ci_names !== []) {
+            $issues[] = [
+                'type' => 'ingest_dropped',
+                'message' => sprintf(t('collection_issue_ingest_dropped'), implode(', ', $ci_names)),
+                'since' => null,
             ];
         }
     }

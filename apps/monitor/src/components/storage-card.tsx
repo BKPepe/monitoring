@@ -1,5 +1,8 @@
+import * as React from 'react';
 import { Card } from '@/components/ui/card';
 import { HardDrive, ArrowDownToLine, ArrowUpFromLine, Pencil, Info } from 'lucide-react';
+import { DiskHealthList } from '@/components/disk-health-list';
+import type { AgentTools, StorageDisk } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { cn } from '@/lib/utils';
@@ -54,8 +57,25 @@ function rate(kbps: number | null | undefined): string {
  * A single number per router used to be shown - the / or /overlay usage.
  * A plugged-in USB disk or a second partition was invisible.
  */
-export function StorageCard({ d }: { d: Record<string, unknown> }) {
+export function StorageCard({
+  d,
+  monitorId,
+  recommendations,
+}: {
+  d: Record<string, unknown>;
+  /** A router, so the disk history can be asked for; undefined for everything else. */
+  monitorId?: number;
+  /** The compact recommendations of the `storage` area, at the top of the card (X21). */
+  recommendations?: React.ReactNode;
+}) {
   const { t } = useLanguage();
+
+  // The three shapes of `storage_disks` mean three different things: an array
+  // is the list, null is "the router could not read it", absent is an agent
+  // that never looked. The list component says which.
+  const disks =
+    d.storage_disks === null ? null : Array.isArray(d.storage_disks) ? (d.storage_disks as StorageDisk[]) : undefined;
+  const hasDisks = 'storage_disks' in d;
 
   const filesystems = Array.isArray(d.filesystems) ? (d.filesystems as Filesystem[]) : [];
   const devices = Array.isArray(d.disk_devices) ? (d.disk_devices as DiskDevice[]) : [];
@@ -67,9 +87,18 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
   const ioAccounting = d.io_accounting;
   const ioUnsupported = ioAccounting === false;
 
-  if (filesystems.length === 0 && devices.length === 0 && writers.length === 0 && !ioUnsupported) {
+  if (!hasDisks && filesystems.length === 0 && devices.length === 0 && writers.length === 0 && !ioUnsupported) {
     return null;
   }
+
+  // Filesystems that sit on a listed disk are drawn under it, with the disk
+  // they wear out; the rest (tmpfs, an overlay, a network mount) stay here.
+  const diskPartitions = new Set(
+    (disks ?? []).flatMap((disk) => (disk.partitions ?? []).map((part) => part.mount)).filter(Boolean)
+  );
+  const otherFilesystems = filesystems.filter((fs) => !diskPartitions.has(fs.mount));
+  const writeRates: Record<string, number | null> = {};
+  for (const dev of devices) writeRates[dev.device] = dev.write_kbps;
 
   const barColor = (pct: number) => (pct >= 90 ? 'bg-down' : pct >= 75 ? 'bg-warning' : 'bg-primary');
 
@@ -81,10 +110,21 @@ export function StorageCard({ d }: { d: Record<string, unknown> }) {
         <MetricHelpIcon metric="hdd" />
       </div>
 
-      {filesystems.length > 0 && (
+      {recommendations}
+
+      {hasDisks && (
+        <DiskHealthList
+          disks={disks}
+          tools={(d.agent_tools as AgentTools | null | undefined) ?? null}
+          writeRates={writeRates}
+          monitorId={monitorId ?? null}
+        />
+      )}
+
+      {otherFilesystems.length > 0 && (
         <div className="space-y-2.5">
           <p className="text-muted-foreground text-xs font-medium">{t('storage.filesystems', 'Připojené oddíly')}</p>
-          {filesystems.map((fs) => (
+          {otherFilesystems.map((fs) => (
             <div key={fs.mount} className="space-y-1">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs">
                 <span className="font-mono font-semibold">{fs.mount}</span>

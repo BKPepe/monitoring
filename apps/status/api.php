@@ -87,6 +87,7 @@ $bk_post_only_actions = [
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
     'save_annotation', 'delete_annotation', 'save_user', 'delete_user',
+    'router_recommendation_mute', 'wan_settings_save',
     'delete_public_subscriber',
     // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
     'login', 'logout', 'setup', 'forgot_password', 'set_password',
@@ -4056,6 +4057,12 @@ if ($action === 'metric_series') {
             if ($is_counter) {
                 $label .= ' (přírůstek)';
             }
+            // A STEP metric is already the increment between two reports (the
+            // ingest subtracted them), so a raw point needs no arithmetic. What
+            // it does need is the right aggregation: the day of a step is the
+            // SUM of its minutes, and an average would draw a day with 40
+            // errors as "0.03 errors" - a chart nobody would ever look at twice.
+            $is_step = !empty($def['step']);
 
             if ($long_term_days > 0) {
                 // Raw data is pruned after 30 days, so a year cannot be built from
@@ -4079,6 +4086,12 @@ if ($action === 'metric_series') {
                             continue;
                         }
                         $points[] = [(int)$r['ts'], round((float)$r['max_val'] - (float)$r['min_val'], 2)];
+                        continue;
+                    }
+                    if ($is_step) {
+                        // The day's total, immune to the reset bug above: a lost
+                        // report loses nothing, the next step spans it.
+                        $points[] = [(int)$r['ts'], round((float)$r['avg_val'] * (int)$r['samples'], 2)];
                         continue;
                     }
                     $points[] = [(int)$r['ts'], round((float)$r['avg_val'], 2)];
@@ -4188,6 +4201,10 @@ if ($action === 'metric_heatmap') {
             if (!empty($def['counter'])) {
                 $cell_expr = "MAX({$col}) - MIN({$col})";
                 $label .= ' (přírůstek)';
+            } elseif (!empty($def['step'])) {
+                // Each row already holds one minute's increment: an hour of the
+                // heatmap is their SUM, never their average.
+                $cell_expr = "SUM({$col})";
             }
             $stmt = $pdo->prepare("
                 SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
@@ -4532,6 +4549,9 @@ if ($action === 'metric_detail') {
                 'label' => $def['label'],
                 'unit' => $def['unit'],
                 'counter' => !empty($def['counter']),
+                // A step series is already an increment per report: a bucket is
+                // the SUM of its minutes, so the app must not average it either.
+                'step' => !empty($def['step']),
             ],
             // `warning` is DERIVED (the band below the configured limit), not
             // something an admin ever typed. The frontend words the two
@@ -5317,7 +5337,8 @@ if ($action === 'speedtest_history') {
 
     try {
         $stmt = $pdo->prepare("
-            SELECT measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name
+            SELECT measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name,
+                   source, iface, tool, link_mbit
             FROM speedtest_results
             WHERE monitor_id = ?
             ORDER BY measured_at DESC
@@ -5336,6 +5357,13 @@ if ($action === 'speedtest_history') {
                 'pingMs' => $r['ping_ms'] !== null ? round((float)$r['ping_ms'], 1) : null,
                 'jitterMs' => $r['jitter_ms'] !== null ? round((float)$r['jitter_ms'], 1) : null,
                 'server' => $r['server_name'],
+                // Who ran it (WAN 3.3): the router's own nightly test or the
+                // agent's probe. The column is the old `source`, whose
+                // 'librespeed' constant the migration rewrote to 'turris'.
+                'startedBy' => in_array($r['source'] ?? null, ['turris', 'agent'], true) ? $r['source'] : null,
+                'iface' => $r['iface'] ?? null,
+                'tool' => $r['tool'] ?? null,
+                'linkMbit' => $r['link_mbit'] !== null ? (int)$r['link_mbit'] : null,
             ];
         }
 
@@ -5370,6 +5398,523 @@ if ($action === 'speedtest_history') {
         error_log('[api] speedtest_history selhal: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'Historii měření rychlosti se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/**
+ * What the week says about one router (CORE 3.9).
+ *
+ * The SAME engine the Monday e-mail runs, in the language of the request: the
+ * page and the e-mail must never tell the owner two different stories, so the
+ * texts are the server's and the app renders them as they arrive.
+ *
+ * Read-only on purpose. The digest owns the snapshot (`router_rec_state`) -
+ * if a page load wrote it, opening the router on Sunday evening would make
+ * Monday's e-mail call every open item "unchanged since last week".
+ */
+if ($action === 'router_recommendations') {
+    $rr_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    bk_require_monitor_view($pdo, $rr_monitor_id);
+    try {
+        $rr_stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
+        $rr_stmt->execute([$rr_monitor_id]);
+        $rr_monitor = $rr_stmt->fetch();
+        if (!$rr_monitor) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $rr_details = json_decode((string)($rr_monitor['last_details'] ?? ''), true);
+        if (!is_array($rr_details)) {
+            $rr_details = [];
+        }
+        $rr_in = bk_router_rec_inputs($pdo, $rr_monitor, $rr_details, date('Y-m-d'));
+        $rr_res = bk_router_rec_evaluate($rr_in);
+        $rr_state = is_array($rr_in['state'] ?? null) ? $rr_in['state'] : [];
+        $rr_split = bk_router_rec_split($rr_res['items'], $rr_state);
+
+        $rr_items = [];
+        foreach ($rr_split['items'] as $rr_item) {
+            $rr_items[] = bk_rec_item_json($rr_item, $rr_state[(string)$rr_item['key']] ?? null);
+        }
+        $rr_muted = [];
+        $rr_seen = [];
+        foreach ($rr_split['muted'] as $rr_item) {
+            $rr_key = (string)$rr_item['key'];
+            $rr_seen[$rr_key] = true;
+            $rr_muted[] = bk_rec_item_json($rr_item, $rr_state[$rr_key] ?? null);
+        }
+        // A mute whose rule no longer fires: listed with null texts and
+        // `active: false`, or the owner could never take the mute back.
+        foreach ($rr_state as $rr_key => $rr_row) {
+            if (empty($rr_row['muted_at']) || isset($rr_seen[(string)$rr_key])) {
+                continue;
+            }
+            $rr_id = (string)($rr_row['rule_id'] ?? '');
+            $rr_muted[] = bk_rec_item_json([
+                'id' => $rr_id,
+                'key' => (string)$rr_key,
+                'area' => bk_rec_area_of($rr_id),
+                'severity' => (string)($rr_row['muted_severity'] ?? 'info'),
+                'subject' => ['kind' => 'router'],
+                'params' => [],
+                'openSince' => $rr_row['first_seen'] ?? null,
+            ], $rr_row, false);
+        }
+
+        $rr_window = null;
+        if ($rr_res['applicable']) {
+            $rr_days = $rr_in['window']['days'] ?? [];
+            $rr_prev = $rr_in['window']['prev_days'] ?? [];
+            $rr_window = [
+                'from' => $rr_days[0] ?? null,
+                'to' => $rr_days === [] ? null : $rr_days[count($rr_days) - 1],
+                'previousFrom' => $rr_prev[0] ?? null,
+                'previousTo' => $rr_prev === [] ? null : $rr_prev[count($rr_prev) - 1],
+                'daysWithData' => (int)$rr_res['days_with_data'],
+            ];
+        }
+        echo json_encode([
+            'monitorId' => $rr_monitor_id,
+            'applicable' => (bool)$rr_res['applicable'],
+            'reason' => $rr_res['reason'],
+            'generatedAt' => date('c'),
+            'window' => $rr_window,
+            // Muting is an admin decision: it silences a finding for everybody
+            // who can see the router, not just for the person clicking.
+            'canMute' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'missingPackages' => bk_rec_missing_packages($rr_details['agent_tools'] ?? null),
+            'items' => $rr_items,
+            'muted' => $rr_muted,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] router_recommendations selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Doporučení pro router se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/**
+ * "I know about this one" - mute or unmute a single recommendation (CORE 3.9).
+ *
+ * A mute is per router and per key and remembers the severity it was made at,
+ * so it silences the finding as it is today and NOT a worse version of it: a
+ * disk muted at "warm" comes back the week it starts failing. That is why the
+ * engine is run here instead of trusting a severity from the request body -
+ * the client must not be able to decide how loud a finding has to get before
+ * it is heard again.
+ */
+if ($action === 'router_recommendation_mute') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $rm_input = json_decode((string)file_get_contents('php://input'), true);
+    if (!is_array($rm_input)) {
+        $rm_input = $_POST;
+    }
+    $rm_monitor_id = (int)($rm_input['monitor_id'] ?? 0);
+    $rm_key = trim((string)($rm_input['key'] ?? ''));
+    $rm_on = !empty($rm_input['muted']);
+    $rm_reason = mb_substr(trim((string)($rm_input['reason'] ?? '')), 0, 255);
+    bk_require_monitor_view($pdo, $rm_monitor_id);
+    bk_refuse_archived_write($pdo, $rm_monitor_id);
+
+    // The key is stored and later matched against what the engine produces, so
+    // it is validated the same way twice: shape, and a rule id that exists.
+    $rm_rule = explode(':', $rm_key, 2)[0];
+    if (!preg_match('/^[a-z0-9_]{3,40}(:[A-Za-z0-9._:-]{1,39})?$/', $rm_key)
+        || !in_array($rm_rule, bk_router_rec_thresholds()['rank'], true)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Neznámý klíč doporučení.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $rm_stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
+        $rm_stmt->execute([$rm_monitor_id]);
+        $rm_monitor = $rm_stmt->fetch();
+        if (!$rm_monitor) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $rm_mute = null;
+        if ($rm_on) {
+            $rm_details = json_decode((string)($rm_monitor['last_details'] ?? ''), true);
+            $rm_in = bk_router_rec_inputs($pdo, $rm_monitor, is_array($rm_details) ? $rm_details : [], date('Y-m-d'));
+            $rm_res = bk_router_rec_evaluate($rm_in);
+            // Not firing right now = `info` (CORE 3.9): the mute then hides
+            // nothing worse than the mildest degree, and anything above it
+            // comes straight back.
+            $rm_severity = 'info';
+            foreach ($rm_res['items'] as $rm_item) {
+                if ((string)$rm_item['key'] === $rm_key) {
+                    $rm_severity = (string)$rm_item['severity'];
+                    break;
+                }
+            }
+            $rm_by = (string)($_SESSION['admin_username'] ?? '');
+            $rm_now = date('Y-m-d H:i:s');
+            $pdo->prepare("
+                INSERT INTO router_rec_state
+                    (monitor_id, rec_key, rule_id, active, severity, first_seen, last_seen,
+                     muted_at, muted_by, muted_severity, mute_reason)
+                VALUES (?, ?, ?, 0, NULL, NULL, NULL, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    muted_at = VALUES(muted_at), muted_by = VALUES(muted_by),
+                    muted_severity = VALUES(muted_severity), mute_reason = VALUES(mute_reason)
+            ")->execute([$rm_monitor_id, $rm_key, $rm_rule, $rm_now, $rm_by, $rm_severity,
+                $rm_reason !== '' ? $rm_reason : null]);
+            $rm_mute = ['at' => $rm_now, 'by' => $rm_by,
+                'reason' => $rm_reason !== '' ? $rm_reason : null, 'severity' => $rm_severity];
+        } else {
+            $pdo->prepare("
+                UPDATE router_rec_state
+                SET muted_at = NULL, muted_by = NULL, muted_severity = NULL, mute_reason = NULL
+                WHERE monitor_id = ? AND rec_key = ?
+            ")->execute([$rm_monitor_id, $rm_key]);
+        }
+        bk_audit_log($pdo, $rm_on ? 'router_rec_mute' : 'router_rec_unmute',
+            $rm_key . ($rm_reason !== '' ? ': ' . $rm_reason : ''), 'monitor', $rm_monitor_id);
+        echo json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
+            JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] router_recommendation_mute selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Změnu se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/**
+ * The daily SMART history of a router's disks (CORE 3.9).
+ *
+ * `last_details` carries only the newest reading and the next report
+ * overwrites it, so "did the bad blocks grow since spring" has no answer
+ * without this table. A day with no reading has no row and comes back as a
+ * gap - never as a zero, which would draw a disk that cooled to 0 °C.
+ *
+ * No serial number or WWN can appear here: the disk is identified by
+ * `disk_key`, a hash of transport, port, model and size, and the tables have
+ * no column to put an identifier in.
+ */
+if ($action === 'storage_history') {
+    $sh_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $sh_days = max(1, min(400, (int)($_GET['days'] ?? 90)));
+    bk_require_monitor_view($pdo, $sh_monitor_id);
+
+    try {
+        $sh_stmt = $pdo->prepare("
+            SELECT id, disk_key, name, transport, port, model, smart_model, size_bytes,
+                   rotational, first_seen, last_seen, replaced_at,
+                   (replaced_at IS NULL AND last_seen >= DATE_SUB(NOW(), INTERVAL 3 HOUR)) AS present
+            FROM storage_disks
+            WHERE monitor_id = ?
+            ORDER BY name
+        ");
+        $sh_stmt->execute([$sh_monitor_id]);
+        $sh_disks = $sh_stmt->fetchAll();
+
+        $sh_daily = [];
+        if ($sh_disks !== []) {
+            $sh_ids = array_map(fn (array $d): int => (int)$d['id'], $sh_disks);
+            $sh_in = implode(',', array_fill(0, count($sh_ids), '?'));
+            $sh_rows = $pdo->prepare("
+                SELECT * FROM storage_disk_daily
+                WHERE disk_id IN ({$sh_in}) AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                ORDER BY day
+            ");
+            $sh_rows->execute(array_merge($sh_ids, [$sh_days]));
+            foreach ($sh_rows->fetchAll() as $sh_row) {
+                $sh_daily[(int)$sh_row['disk_id']][] = $sh_row;
+            }
+        }
+
+        // NULL stays NULL through every conversion below: a counter the drive
+        // does not implement is not a counter at zero.
+        $sh_int = fn ($v): ?int => $v === null ? null : (int)$v;
+        $sh_out = [];
+        foreach ($sh_disks as $sh_disk) {
+            $sh_list = [];
+            foreach ($sh_daily[(int)$sh_disk['id']] ?? [] as $r) {
+                $sh_temp_n = $sh_int($r['temp_n']);
+                $sh_list[] = [
+                    'day' => $r['day'],
+                    'samples' => (int)$r['samples'],
+                    'smartPassed' => $r['smart_passed'] === null ? null : (bool)$r['smart_passed'],
+                    'tempMin' => $sh_int($r['temp_min']),
+                    'tempAvg' => ($sh_temp_n !== null && $sh_temp_n > 0 && $r['temp_sum'] !== null)
+                        ? round((float)$r['temp_sum'] / $sh_temp_n, 1) : null,
+                    'tempMax' => $sh_int($r['temp_max']),
+                    'powerOnHours' => $sh_int($r['power_on_hours']),
+                    'powerCycles' => $sh_int($r['power_cycles']),
+                    'unsafeShutdowns' => $sh_int($r['unsafe_shutdowns']),
+                    'reallocated' => $sh_int($r['reallocated_sectors']),
+                    'pending' => $sh_int($r['pending_sectors']),
+                    'offlineUncorrectable' => $sh_int($r['offline_uncorrectable']),
+                    'reportedUncorrect' => $sh_int($r['reported_uncorrect']),
+                    'crcErrors' => $sh_int($r['crc_errors']),
+                    'runtimeBadBlocks' => $sh_int($r['runtime_bad_blocks']),
+                    'mediaErrors' => $sh_int($r['media_errors']),
+                    'errorLogCount' => $sh_int($r['error_log_count']),
+                    'wearPct' => $sh_int($r['wear_pct']),
+                    'emmcLife' => $sh_int($r['emmc_life']),
+                    'writtenBytes' => $sh_int($r['written_bytes']),
+                    'hostWrittenBytes' => $sh_int($r['host_written_bytes']),
+                    'hostWrittenPartial' => (bool)$r['host_written_partial'],
+                ];
+            }
+            $sh_out[] = [
+                'key' => $sh_disk['disk_key'],
+                'name' => $sh_disk['name'],
+                'transport' => $sh_disk['transport'],
+                'port' => $sh_disk['port'],
+                'model' => $sh_disk['model'],
+                'smartModel' => $sh_disk['smart_model'],
+                'sizeBytes' => $sh_int($sh_disk['size_bytes']),
+                'rotational' => $sh_disk['rotational'] === null ? null : (bool)$sh_disk['rotational'],
+                'firstSeen' => $sh_disk['first_seen'],
+                'lastSeen' => $sh_disk['last_seen'],
+                'replacedAt' => $sh_disk['replaced_at'],
+                'present' => (bool)$sh_disk['present'],
+                'daily' => $sh_list,
+            ];
+        }
+        echo json_encode(['monitorId' => $sh_monitor_id, 'days' => $sh_days, 'disks' => $sh_out],
+            JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] storage_history selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Historii disků se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/**
+ * Where the WAN line is limited, as the server classified it (WAN 3.4, 3.6).
+ *
+ * The classifier is PHP and only PHP: the card renders the class and the
+ * reason it was given and never re-derives one, so the page and the weekly
+ * e-mail cannot drift apart. Everything it cannot prove comes back as
+ * `inconclusive` with the reason - never as a softer claim.
+ */
+if ($action === 'wan_bottleneck') {
+    $wb_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    bk_require_monitor_view($pdo, $wb_monitor_id);
+
+    try {
+        $wb_stmt = $pdo->prepare("
+            SELECT id, last_details, wan_plan_down_mbit, wan_plan_up_mbit, wan_plan_ok_pct, wan_probe_enabled
+            FROM monitors WHERE id = ?
+        ");
+        $wb_stmt->execute([$wb_monitor_id]);
+        $wb_monitor = $wb_stmt->fetch();
+        if (!$wb_monitor) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $wb_details = json_decode((string)($wb_monitor['last_details'] ?? ''), true);
+        if (!is_array($wb_details)) {
+            $wb_details = [];
+        }
+        $wb_path = is_array($wb_details['wan_path'] ?? null) ? $wb_details['wan_path'] : null;
+        $wb_tools = is_array($wb_details['agent_tools'] ?? null) ? $wb_details['agent_tools'] : [];
+        $wb_int = fn ($v): ?int => $v === null ? null : (int)$v;
+
+        // More than the three shown: a probe that was gated (background
+        // traffic, an unverified path) does not count towards the three the
+        // aggregate stands on, so the classifier has to be able to look past it.
+        $wb_agent = $pdo->prepare("
+            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics
+            FROM speedtest_results
+            WHERE monitor_id = ? AND source = 'agent' AND measured_at >= DATE_SUB(NOW(), INTERVAL 21 DAY)
+            ORDER BY measured_at DESC LIMIT 10
+        ");
+        $wb_agent->execute([$wb_monitor_id]);
+        $wb_agent_rows = $wb_agent->fetchAll();
+
+        $wb_turris = $pdo->prepare("
+            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics
+            FROM speedtest_results
+            WHERE monitor_id = ? AND (source IS NULL OR source <> 'agent')
+            ORDER BY measured_at DESC LIMIT 1
+        ");
+        $wb_turris->execute([$wb_monitor_id]);
+        $wb_turris_rows = $wb_turris->fetchAll();
+
+        // Server capability is observed, never assumed (WAN 3.4): the Turris
+        // list publishes no capacity. Only the maximum this server has ever
+        // delivered leaves the query - no other account's router and no other
+        // account's value.
+        $wb_server_max = [];
+        $wb_names = [];
+        foreach ($wb_agent_rows as $r) {
+            if (($r['server_name'] ?? '') !== '') {
+                $wb_names[(string)$r['server_name']] = true;
+            }
+        }
+        if ($wb_names !== []) {
+            $wb_in = implode(',', array_fill(0, count($wb_names), '?'));
+            $wb_cap = $pdo->prepare("
+                SELECT server_name, MAX(download_mbps) AS dl, MAX(upload_mbps) AS ul
+                FROM speedtest_results
+                WHERE server_name IN ({$wb_in}) AND measured_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+                GROUP BY server_name
+            ");
+            $wb_cap->execute(array_keys($wb_names));
+            foreach ($wb_cap->fetchAll() as $r) {
+                $wb_server_max[(string)$r['server_name']] = [
+                    'dl' => $r['dl'] === null ? null : (float)$r['dl'],
+                    'ul' => $r['ul'] === null ? null : (float)$r['ul'],
+                ];
+            }
+        }
+
+        $wb_ctx = [
+            'plan_down' => $wb_int($wb_monitor['wan_plan_down_mbit']),
+            'plan_up' => $wb_int($wb_monitor['wan_plan_up_mbit']),
+            'plan_ok_pct' => $wb_int($wb_monitor['wan_plan_ok_pct']),
+            'threaded_napi' => is_bool($wb_path['wan_threaded_napi'] ?? null) ? $wb_path['wan_threaded_napi'] : null,
+            'server_max' => $wb_server_max,
+            'now' => time(),
+        ];
+
+        $wb_tests = [];
+        foreach (array_merge(array_slice($wb_agent_rows, 0, 3), $wb_turris_rows) as $r) {
+            $wb_diag = json_decode((string)($r['diagnostics'] ?? ''), true);
+            $wb_tests[] = [
+                'measuredAt' => $r['measured_at'],
+                'startedBy' => in_array($r['source'] ?? null, ['turris', 'agent'], true) ? $r['source'] : null,
+                'server' => $r['server_name'],
+                'downloadMbps' => $r['download_mbps'] === null ? null : round((float)$r['download_mbps'], 2),
+                'uploadMbps' => $r['upload_mbps'] === null ? null : round((float)$r['upload_mbps'], 2),
+                'linkMbit' => $wb_int($r['link_mbit']),
+                'verdict' => bk_wan_test_verdict($r, $wb_ctx),
+                'diagnostics' => is_array($wb_diag) ? $wb_diag : null,
+            ];
+        }
+
+        echo json_encode([
+            'monitorId' => $wb_monitor_id,
+            'generatedAt' => date('c'),
+            'canEdit' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'plan' => [
+                'downMbit' => $wb_ctx['plan_down'],
+                'upMbit' => $wb_ctx['plan_up'],
+                'okPct' => $wb_ctx['plan_ok_pct'],
+            ],
+            // The router's own probe is not built in this release (wave 2).
+            // The keys travel so the card has one shape to render and the
+            // agent one shape to meet; `enabledServer` is the stored consent.
+            'probe' => [
+                'enabledServer' => (bool)$wb_monitor['wan_probe_enabled'],
+                'state' => is_array($wb_details['wan_probe_state'] ?? null) ? $wb_details['wan_probe_state'] : null,
+                'waitSince' => $wb_details['wan_probe_wait_since'] ?? null,
+                'budgetSpent' => false,
+            ],
+            'verdict' => bk_wan_bottleneck($wb_agent_rows, $wb_ctx),
+            'tests' => $wb_tests,
+            'wanPath' => $wb_path,
+            'linkDev' => $wb_details['wan_link_dev'] ?? null,
+            'linkMbit' => $wb_int($wb_details['wan_link_mbit'] ?? null),
+            'tools' => [
+                'librespeedCli' => is_bool($wb_tools['librespeed_cli'] ?? null) ? $wb_tools['librespeed_cli'] : null,
+                'ethtool' => is_bool($wb_tools['ethtool'] ?? null) ? $wb_tools['ethtool'] : null,
+                'tc' => is_bool($wb_tools['tc'] ?? null) ? $wb_tools['tc'] : null,
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] wan_bottleneck selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Rozbor linky WAN se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+/**
+ * The router's tariff, and the consent for its own probe (WAN 3.6, INDEX 3.4).
+ *
+ * The plan is the one thing the classifier cannot measure: without it nothing
+ * is ever called "below plan" (WAN 3.0), so a rate is stored as null when it
+ * is not set and never as a zero that would read as "the line should do
+ * nothing". A value outside the range is a client error and is refused -
+ * clamping it would store a plan the owner never entered.
+ */
+if ($action === 'wan_settings_save') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $ws_input = json_decode((string)file_get_contents('php://input'), true);
+    if (!is_array($ws_input)) {
+        $ws_input = $_POST;
+    }
+    $ws_monitor_id = (int)($ws_input['monitor_id'] ?? 0);
+    bk_require_monitor_view($pdo, $ws_monitor_id);
+    bk_refuse_archived_write($pdo, $ws_monitor_id);
+
+    $ws_bad = [];
+    $ws_range = function ($value, int $min, int $max, string $name) use (&$ws_bad): ?int {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value) || (int)$value < $min || (int)$value > $max) {
+            $ws_bad[] = $name;
+            return null;
+        }
+        return (int)$value;
+    };
+    $ws_down = $ws_range($ws_input['plan_down_mbit'] ?? null, 1, 100000, 'plan_down_mbit');
+    $ws_up = $ws_range($ws_input['plan_up_mbit'] ?? null, 1, 100000, 'plan_up_mbit');
+    $ws_pct = $ws_range($ws_input['plan_ok_pct'] ?? null, 30, 100, 'plan_ok_pct');
+    if ($ws_bad !== []) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Neplatná hodnota: ' . implode(', ', $ws_bad)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        // This release has no probe toggle, so the app does not send the key.
+        // A missing key must leave the stored consent alone - reading it as
+        // `false` would silently withdraw a consent nobody took back.
+        if (array_key_exists('probe_enabled', $ws_input)) {
+            $ws_probe = !empty($ws_input['probe_enabled']) ? 1 : 0;
+            $pdo->prepare("
+                UPDATE monitors
+                SET wan_plan_down_mbit = ?, wan_plan_up_mbit = ?, wan_plan_ok_pct = ?, wan_probe_enabled = ?
+                WHERE id = ?
+            ")->execute([$ws_down, $ws_up, $ws_pct, $ws_probe, $ws_monitor_id]);
+        } else {
+            $pdo->prepare("
+                UPDATE monitors
+                SET wan_plan_down_mbit = ?, wan_plan_up_mbit = ?, wan_plan_ok_pct = ?
+                WHERE id = ?
+            ")->execute([$ws_down, $ws_up, $ws_pct, $ws_monitor_id]);
+        }
+        $ws_read = $pdo->prepare("SELECT wan_probe_enabled FROM monitors WHERE id = ?");
+        $ws_read->execute([$ws_monitor_id]);
+        $ws_enabled = (bool)$ws_read->fetchColumn();
+        bk_audit_log($pdo, 'wan_plan_saved',
+            sprintf('Tarif WAN: %s / %s Mbit/s, %s %%',
+                $ws_down === null ? '—' : (string)$ws_down,
+                $ws_up === null ? '—' : (string)$ws_up,
+                $ws_pct === null ? '85' : (string)$ws_pct),
+            'monitor', $ws_monitor_id);
+        echo json_encode([
+            'ok' => true,
+            'plan' => ['downMbit' => $ws_down, 'upMbit' => $ws_up, 'okPct' => $ws_pct],
+            'probe' => ['enabledServer' => $ws_enabled],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] wan_settings_save selhal: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Nastavení se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

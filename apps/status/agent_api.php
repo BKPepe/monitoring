@@ -205,7 +205,11 @@ $ow_wan_uptime = bk_agent_int($data, 'wan_uptime');
 $ow_btrfs_errors = bk_agent_int($data, 'btrfs_errors');
 
 // OpenWrt Deep Telemetry - WiFi, LAN/DHCP, DNS, Firewall, WireGuard (viz agent_openwrt.sh)
-$ow_wifi_radios = (isset($data['wifi_radios']) && is_array($data['wifi_radios'])) ? $data['wifi_radios'] : null;
+// Sanitized, never the raw list: the radios go straight into last_details and
+// from there onto the page, so an out-of-range value would be drawn as a real
+// measurement and a BSSID would end up stored. Out of range = null, never a
+// bound; unknown keys are dropped (see bk_sanitize_wifi_radios()).
+$ow_wifi_radios = bk_sanitize_wifi_radios($data['wifi_radios'] ?? null);
 $ow_lan_subnet = bk_agent_str($data, 'lan_subnet');
 $ow_dhcp_leases = bk_agent_int($data, 'dhcp_leases_count');
 $ow_dhcp_reservations = bk_agent_int($data, 'dhcp_reservations_count');
@@ -241,7 +245,11 @@ $heavy_op_interval_hours = bk_agent_int($data, 'heavy_op_interval_hours') ?? 24;
 // OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
 $ow_mwan3_policies = (isset($data['mwan3_policies']) && is_array($data['mwan3_policies'])) ? $data['mwan3_policies'] : null;
 $ow_mwan3_active_gw = bk_agent_str($data, 'mwan3_active_gw');
-$ow_sqm_enabled = (isset($data['sqm_enabled']) && $data['sqm_enabled'] === true) ? true : false;
+// G24: null stays null. Agent 0.1.7 answers null when there is no SQM
+// configuration at all ("not installed" is not "off"), and forcing that to
+// false told every such router it had switched a shaper off. Older agents
+// always send a boolean, so nothing they report changes.
+$ow_sqm_enabled = bk_agent_bool($data, 'sqm_enabled');
 $ow_sqm_download_kbps = bk_agent_int($data, 'sqm_download_kbps');
 $ow_sqm_upload_kbps = bk_agent_int($data, 'sqm_upload_kbps');
 $ow_sqm_dropped = bk_agent_int($data, 'sqm_dropped');
@@ -292,6 +300,51 @@ $ow_wan_last_reconnect = bk_agent_int($data, 'wan_last_reconnect');
 $ow_installed_packages = bk_agent_int($data, 'installed_packages');
 $ow_log_errors_24h = bk_agent_int($data, 'log_errors_24h');
 $ow_log_warnings_24h = bk_agent_int($data, 'log_warnings_24h');
+
+// --- Router release 0.1.7 ---------------------------------------------------
+// Everything below is sanitized BEFORE it reaches $new_data, so the raw
+// pass-through further down can never store an unchecked copy of it.
+$bk_now = time();
+// Only a report that CARRIES the key rewrites the disk list: an older agent
+// sends nothing and must not erase the disks the router reported yesterday.
+$ow_storage_sent = array_key_exists('storage_disks', $data);
+$ow_storage_disks = $ow_storage_sent ? bk_sanitize_storage_disks($data['storage_disks'], $bk_now) : null;
+$ow_agent_tools = bk_sanitize_agent_tools($data['agent_tools'] ?? null);
+$ow_wan_path = bk_sanitize_wan_path($data['wan_path'] ?? null);
+// Busiest core of the minute and how much of it was packet handling.
+$ow_cpu_core_max = bk_ranged_num($data['cpu_core_max_pct'] ?? null, 0.0, 100.0);
+$ow_cpu_core_max_softirq = bk_ranged_num($data['cpu_core_max_softirq_pct'] ?? null, 0.0, 100.0);
+$ow_cpu_core_max_index = bk_ranged_int($data['cpu_core_max_index'] ?? null, 0, 255);
+$ow_cpu_cores = bk_ranged_int($data['cpu_cores'] ?? null, 1, 256);
+// Per-direction WAN rate. 100 Gbit/s is beyond any router this agent runs on;
+// above it the reading is a counter that wrapped, not a measurement.
+$ow_wan_rx_mbps = bk_ranged_num($data['wan_rx_mbps'] ?? null, 0.0, 100000.0);
+$ow_wan_tx_mbps = bk_ranged_num($data['wan_tx_mbps'] ?? null, 0.0, 100000.0);
+$ow_wan_link_dev = bk_agent_str($data, 'wan_link_dev', 32);
+// The agent's own runtime, and the two counters of runs it had to skip.
+$ow_agent_run_ms = bk_ranged_int($data['agent_run_ms'] ?? null, 0, 600000);
+$ow_agent_prev_total_ms = bk_ranged_int($data['agent_prev_total_ms'] ?? null, 0, 600000);
+$ow_runs_skipped_lock = bk_ranged_int($data['runs_skipped_lock'] ?? null, 0, 100000);
+$ow_runs_skipped_post = bk_ranged_int($data['runs_skipped_post'] ?? null, 0, 100000);
+$ow_dns_resolver_ok = bk_agent_bool($data, 'dns_resolver_ok');
+$ow_speedtest_active = bk_agent_bool($data, 'speedtest_active');
+// Alert hygiene (X17, WAN 3.3): a 45 s test saturates the line and one core of
+// a two-core router, so the minute it overlapped says nothing about how the
+// router behaves. The agent's own interval flag is one half; the other is the
+// result travelling in this very report, which the agent cannot know about
+// when it sets the flag.
+$bk_speedtest_flagged = $ow_speedtest_active === true
+    || bk_speedtest_in_report($data['speedtests'] ?? null, $bk_now);
+// A light run that stepped aside for the router's own speed test. It measured
+// almost nothing on purpose, so it is not evidence that anything was lost.
+$ow_reduced = bk_agent_str($data, 'reduced', 32);
+$ow_report_reduced = $ow_reduced === 'wan_probe';
+// How far the router's clock is from ours. Stored as an ABSOLUTE value: a
+// median of a signed column cannot be derived from a daily avg/min/max.
+// The range starts at 0 on purpose: a router whose clock never synced reports
+// 1970, and that is exactly the case the clock_skew rule exists for.
+$ow_agent_time = bk_ranged_int($data['agent_time'] ?? null, 0, 4000000000);
+$ow_clock_skew_s = $ow_agent_time === null ? null : abs($bk_now - $ow_agent_time);
 
 // CPU, RAM and disk may be null: agents send null on their first run and after a
 // reboot, because a load needs two readings, and a host that cannot read one
@@ -416,7 +469,13 @@ try {
     if ($hdd_alert_sent && isset($old_details['hdd_alert_threshold']) && (float)$old_details['hdd_alert_threshold'] !== $hdd_threshold) {
         $hdd_alert_sent = false;
     }
-    if ($cpu !== null && $cpu >= $cpu_threshold) {
+    // X17: while the router's own speed test ran, the CPU of this minute is
+    // the test, not the router's work. The latch is left exactly as it was -
+    // neither set (no invented alert) nor cleared (an alert that was already
+    // sent must not silently end because a test happened to run).
+    if ($bk_speedtest_flagged) {
+        // nothing: the value is still stored and charted, only not judged
+    } elseif ($cpu !== null && $cpu >= $cpu_threshold) {
         if (!$cpu_alert_sent) {
             $bk_pending_notifications[] = ['vps_warning', "Vytížení CPU dosáhlo {$cpu}%."];
             log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], 'threshold_exceeded', "CPU dosáhlo {$cpu}% (limit {$cpu_threshold}%)");
@@ -506,6 +565,52 @@ try {
         $old_details = [];
     }
     
+    // Step metrics of the WAN port and of conntrack: what the counters grew by
+    // since the previous report. The state they are compared with lives in
+    // last_details, keyed by the WAN device and the router's uptime, so another
+    // netdev's totals or a reboot produce null instead of a fabricated spike.
+    $ow_wan_steps = bk_wan_counter_steps(
+        $old_details['wan_counters_prev'] ?? null,
+        [
+            'wan_rx_errors' => bk_ranged_int($data['wan_rx_errors'] ?? null, 0, 2 ** 53),
+            'wan_tx_errors' => bk_ranged_int($data['wan_tx_errors'] ?? null, 0, 2 ** 53),
+            'wan_rx_dropped' => bk_ranged_int($data['wan_rx_dropped'] ?? null, 0, 2 ** 53),
+            'wan_tx_dropped' => bk_ranged_int($data['wan_tx_dropped'] ?? null, 0, 2 ** 53),
+            'conntrack_drop' => bk_ranged_int($data['conntrack_drop'] ?? null, 0, 2 ** 53),
+            'wan_carrier_down_count' => bk_ranged_int($data['wan_carrier_down_count'] ?? null, 0, 2 ** 53),
+            'wan_rx_ring_drops' => $ow_wan_path['wan_rx_ring_drops'] ?? null,
+        ],
+        $ow_wan_link_dev,
+        bk_agent_int($data, 'uptime'),
+        $ow_wan_path['checked_at'] ?? null
+    );
+
+    // Latches and events of the router (X14, alert sheet 2.2): the link rate
+    // of the WAN port against its baseline, the connection table, the firewall
+    // rules, the local DNS resolver, restarts and OOM kills. Same debounce and
+    // latch pattern as the WAN and LTE alerts above - a signal this report does
+    // not carry leaves its latch untouched.
+    $bk_router_alerts = bk_router_alert_eval([
+        'wan_link_mbit' => bk_agent_num($data, 'wan_link_mbit'),
+        'wan_link_dev' => $ow_wan_link_dev,
+        'wan_up' => $ow_wan_up,
+        'wan_internet' => $ow_wan_internet,
+        'conntrack_pct' => $ow_conntrack_pct,
+        'conntrack_drops' => $ow_wan_steps['steps']['conntrack_drops'],
+        'firewall_enabled' => $ow_firewall_enabled,
+        'dns_resolver_ok' => $ow_dns_resolver_ok,
+        'uptime' => bk_agent_int($data, 'uptime'),
+        'oom_kills' => $ow_oom_kills,
+    ], $old_details, $bk_now);
+    foreach ($bk_router_alerts['events'] as $bk_ev) {
+        // status null = timeline only (X14): conntrack_normal, router_rebooted
+        // and oom_kill belong on the page, not in anyone's phone at night.
+        if ($bk_ev['status'] !== null) {
+            $bk_pending_notifications[] = [$bk_ev['status'], $bk_ev['message']];
+        }
+        log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], $bk_ev['type'], $bk_ev['message']);
+    }
+
     $bk_agent_type_str = bk_agent_str($data, 'agent_type', 32);
     $new_data = [
         'cpu' => $cpu,
@@ -563,6 +668,50 @@ try {
         'btrfs_errors' => $ow_btrfs_errors,
         // OpenWrt Deep Telemetry
         'wifi_radios' => $ow_wifi_radios,
+        // Router release 0.1.7. Explicit entries, all of them already
+        // sanitized above: the pass-through below never overwrites a key the
+        // server knows, so this is what makes an unchecked copy impossible.
+        'agent_tools' => $ow_agent_tools,
+        'wan_path' => $ow_wan_path,
+        'wan_link_dev' => $ow_wan_link_dev,
+        'cpu_cores' => $ow_cpu_cores,
+        'cpu_core_max_pct' => $ow_cpu_core_max,
+        'cpu_core_max_softirq_pct' => $ow_cpu_core_max_softirq,
+        'cpu_core_max_index' => $ow_cpu_core_max_index,
+        'wan_rx_mbps' => $ow_wan_rx_mbps,
+        'wan_tx_mbps' => $ow_wan_tx_mbps,
+        'agent_run_ms' => $ow_agent_run_ms,
+        'agent_prev_total_ms' => $ow_agent_prev_total_ms,
+        'runs_skipped_lock' => $ow_runs_skipped_lock,
+        'runs_skipped_post' => $ow_runs_skipped_post,
+        'dns_resolver_ok' => $ow_dns_resolver_ok,
+        'speedtest_active' => $ow_speedtest_active,
+        'reduced' => $ow_reduced,
+        'agent_time' => $ow_agent_time,
+        'clock_skew_s' => $ow_clock_skew_s,
+        // What the next report compares its counters with (about 240 B). A
+        // report that read no counter at all keeps the stored state instead of
+        // erasing it - the next step then spans the gap and the day's sum
+        // loses nothing, the same rule the function applies per counter.
+        'wan_counters_prev' => $ow_wan_steps['state'] ?? ($old_details['wan_counters_prev'] ?? null),
+        // Latches of the router rules (X14). All scalars but the baseline, so
+        // the 60 kB cap can never shed them; `wan_link_baseline` is the
+        // {mbit, since} pair WAN 3.3 names, and `firewall_off_since` is the
+        // time the rule `firewall_off` renders.
+        'wan_link_baseline' => $bk_router_alerts['state']['wan_link_baseline'],
+        'wan_link_low_since' => $bk_router_alerts['state']['wan_link_low_since'],
+        'wan_link_bad_streak' => $bk_router_alerts['state']['wan_link_bad_streak'],
+        'wan_link_alert_sent' => $bk_router_alerts['state']['wan_link_alert_sent'],
+        'conntrack_bad_streak' => $bk_router_alerts['state']['conntrack_bad_streak'],
+        'conntrack_full_sent' => $bk_router_alerts['state']['conntrack_full_sent'],
+        'firewall_bad_streak' => $bk_router_alerts['state']['firewall_bad_streak'],
+        'firewall_alert_sent' => $bk_router_alerts['state']['firewall_alert_sent'],
+        'firewall_off_since' => $bk_router_alerts['state']['firewall_off_since'],
+        'dns_resolver_bad_streak' => $bk_router_alerts['state']['dns_resolver_bad_streak'],
+        'dns_resolver_alert_sent' => $bk_router_alerts['state']['dns_resolver_alert_sent'],
+        // When the last OOM kill happened: the insight is limited to 24 h,
+        // because the counter itself only resets at the next reboot (G31).
+        'oom_kill_at' => $bk_router_alerts['state']['oom_kill_at'],
         'lan_subnet' => $ow_lan_subnet,
         'dhcp_leases_count' => $ow_dhcp_leases,
         'dhcp_reservations_count' => $ow_dhcp_reservations,
@@ -575,6 +724,18 @@ try {
         'fw_rejected' => $ow_fw_rejected,
         'wireguard_peers' => $ow_wireguard_peers,
         'conntrack_pct' => $ow_conntrack_pct,
+        // Columns 11 and 12 of /proc/net/stat/nf_conntrack, cumulative since
+        // boot. Neither is a step metric and neither may be summed into
+        // conntrack_drops (WAN 3.1.4): early_drop counts entries successfully
+        // EVICTED to make room, insert_failed unresolved clashes and dying
+        // entries - a busy router, not one refusing connections. early_drop is
+        // the evidence line of the rule conntrack_drops; insert_failed is kept
+        // for support (a clash bumps drop and insert_failed together, so the
+        // pair tells a race apart from a real refusal) and read by no rule.
+        // Typed here rather than left to the pass-through: a value a rule
+        // renders must not arrive as an arbitrary agent string.
+        'conntrack_insert_failed' => bk_ranged_int($data['conntrack_insert_failed'] ?? null, 0, 2 ** 53),
+        'conntrack_early_drop' => bk_ranged_int($data['conntrack_early_drop'] ?? null, 0, 2 ** 53),
         'swap_pct' => $ow_swap_pct,
         'entropy' => $ow_entropy,
         'upgradable_packages' => $ow_upgradable_packages,
@@ -642,6 +803,62 @@ try {
         'agent_last_seen' => time()
     ];
 
+    // The disk list is rewritten only by a report that carries the key: an
+    // 0.1.6 agent sends nothing and must not erase yesterday's disks. The
+    // timestamp says how old the list on the page is.
+    if ($ow_storage_sent) {
+        $new_data['storage_disks'] = $ow_storage_disks;
+        $new_data['storage_disks_at'] = $bk_now;
+    }
+
+    // Disk tables and their alerts (CORE 3.4, 3.5). Non-fatal, like the
+    // metrics INSERT below: an older database without the three router tables
+    // must still answer the agent, and a disk row is never worth a rollback
+    // that would re-fire every other alert of this report.
+    //
+    // `storage_sample_at` is a SCALAR on purpose: it is the throttle the 60 kB
+    // cap can never drop, so a router whose disk list does not fit still gets
+    // one hourly pass instead of one per minute.
+    $bk_storage = ['fresh' => [], 'states' => [], 'ids' => [], 'events' => [], 'sampled' => false];
+    if ($ow_storage_disks) {
+        try {
+            $bk_storage = bk_storage_record(
+                $pdo, $monitor_id, $ow_storage_disks, $data['disk_devices'] ?? null,
+                bk_agent_int($data, 'uptime'), $bk_now,
+                $old_details['storage_disks'] ?? null,
+                isset($old_details['storage_sample_at']) ? (int)$old_details['storage_sample_at'] : null
+            );
+            if ($bk_storage['sampled']) {
+                $new_data['storage_sample_at'] = $bk_now;
+                $bk_eval = bk_storage_alert_eval($bk_storage['fresh'], $bk_storage['states'], $bk_now);
+                // Only the disks that were really evaluated: a disk in standby
+                // keeps the latches it earned, it does not get them rewritten.
+                bk_storage_state_save($pdo, $bk_storage['ids'], $bk_eval['states']);
+                foreach (array_merge($bk_storage['events'], $bk_eval['events']) as $bk_ev) {
+                    $bk_pending_notifications[] = [$bk_ev['status'], $bk_ev['message']];
+                    log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], $bk_ev['type'], $bk_ev['message']);
+                }
+            }
+        } catch (PDOException $e) {
+            error_log("[agent_api] storage record failed for monitor {$monitor_id}: " . $e->getMessage());
+        }
+    }
+
+    // Filesystem alerts (CORE 3.5 `fs_full`). Evaluated on EVERY report, not
+    // only on the hourly disk pass: a partition fills up in minutes and the
+    // two-report streak is what keeps it from crying over a single spike.
+    $bk_fs = bk_fs_alert_eval($data['filesystems'] ?? null, $old_details['fs_alerts'] ?? [], $hdd_threshold, $bk_now);
+    $new_data['fs_alerts'] = $bk_fs['state'];
+    foreach ($bk_fs['events'] as $bk_ev) {
+        $bk_pending_notifications[] = [$bk_ev['status'], $bk_ev['message']];
+        log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], $bk_ev['type'], $bk_ev['message']);
+    }
+
+    // Data the server received and did NOT store. The list is rebuilt by every
+    // report, so it says what is being lost right now, and it is what makes
+    // the collection issue `ingest_dropped` end by itself.
+    $bk_ingest_issues = [];
+
     // --- Passing through unknown agent keys ---------------------------------
     //
     // Above is the explicit list of fields the server understands (type
@@ -658,6 +875,11 @@ try {
         'agent_key', 'api_key', 'token', 'secret', 'password',
         // Handled by their own paths (action round-trip, service checks).
         'action_result', 'service_check_results', 'pending_action',
+        // Stored as rows in speedtest_results (WAN 3.3). A batch of up to 50
+        // results is far too large for the details blob, and it would push
+        // the disk list out of it; it may be skipped here only BECAUSE the
+        // ingest below really stores it and says so when it cannot.
+        'speedtests',
     ];
     $bk_passthrough_added = 0;
     foreach ($data as $bk_key => $bk_val) {
@@ -675,6 +897,7 @@ try {
             // Strings get the same 8 KB cap as the lists below - the details
             // column is 64 KB for everything together.
             if (is_string($bk_val) && strlen($bk_val) > 8192) {
+                $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, 'passthrough_too_large', $bk_key, strlen($bk_val));
                 continue;
             }
             $new_data[$bk_key] = $bk_val;
@@ -686,10 +909,15 @@ try {
             if ($encoded !== false && strlen($encoded) <= 8192) {
                 $new_data[$bk_key] = $bk_val;
                 $bk_passthrough_added++;
+            } else {
+                $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, 'passthrough_too_large', $bk_key, $encoded === false ? null : strlen($encoded));
             }
         }
-        // Cap on the number of new keys - same reason.
+        // Cap on the number of new keys - same reason. The report is not
+        // rejected, but the keys past the cap are said to be lost instead of
+        // disappearing the way they did before the pass-through existed.
         if ($bk_passthrough_added >= 64) {
+            $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, 'passthrough_key_limit', $bk_key);
             break;
         }
     }
@@ -783,6 +1011,14 @@ try {
     // linger in last_details pretending to be current.
     unset($old_details['public_ip'], $old_details['asn'], $old_details['asn_name'], $old_details['asn_checked_at']);
 
+    // X15: a light "reduced" run (it stepped aside for the router's own speed
+    // test) measured almost nothing ON PURPOSE. It is no evidence that
+    // anything was lost, so it neither raises the two records of lost data nor
+    // clears what the last full report put there.
+    if (!$ow_report_reduced) {
+        $new_data['ingest_issues'] = $bk_ingest_issues;
+    }
+
     $merged_details_arr = array_merge($old_details, $new_data);
 
     // Uklid po starsich agentech: nez existoval json_val(), zapisovaly se
@@ -794,48 +1030,25 @@ try {
             $merged_details_arr[$mk] = null;
         }
     }
-    $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
 
     // last_details is a TEXT column (64 KB). A report pushing the blob past
     // that failed the UPDATE - and, because the next report merged onto the
-    // same oversized details, every report after it, until someone noticed
-    // the monitor had gone quiet. The largest lists go first; the scalars the
-    // UI lives on always fit.
+    // same oversized details, every report after it, until someone noticed the
+    // monitor had gone quiet. The largest lists go first; the scalars the UI
+    // lives on always fit. What was shed is NAMED in the blob itself
+    // (`details_dropped`), because a router whose disk list was dropped used to
+    // look exactly like a router without disks.
     $bk_details_limit = 60000;
-    if (strlen((string)$details) > $bk_details_limit) {
-        $bk_list_sizes = [];
-        foreach ($merged_details_arr as $bk_dk => $bk_dv) {
-            if (is_array($bk_dv)) {
-                $bk_list_sizes[$bk_dk] = strlen((string)json_encode($bk_dv, JSON_UNESCAPED_UNICODE));
-            }
-        }
-        arsort($bk_list_sizes);
-        foreach ($bk_list_sizes as $bk_dk => $bk_size) {
-            unset($merged_details_arr[$bk_dk]);
-            error_log("[agent_api] last_details over {$bk_details_limit} B for monitor {$monitor_id}: dropped '{$bk_dk}' ({$bk_size} B)");
-            $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
-            if (strlen((string)$details) <= $bk_details_limit) {
-                break;
-            }
-        }
-        // Still over: the largest strings go too, so this always converges.
-        if (strlen((string)$details) > $bk_details_limit) {
-            $bk_str_sizes = [];
-            foreach ($merged_details_arr as $bk_dk => $bk_dv) {
-                if (is_string($bk_dv)) {
-                    $bk_str_sizes[$bk_dk] = strlen($bk_dv);
-                }
-            }
-            arsort($bk_str_sizes);
-            foreach ($bk_str_sizes as $bk_dk => $bk_size) {
-                unset($merged_details_arr[$bk_dk]);
-                error_log("[agent_api] last_details over {$bk_details_limit} B for monitor {$monitor_id}: dropped string '{$bk_dk}' ({$bk_size} B)");
-                $details = json_encode($merged_details_arr, JSON_UNESCAPED_UNICODE);
-                if (strlen((string)$details) <= $bk_details_limit) {
-                    break;
-                }
-            }
-        }
+    // Small keys that must survive: they are what makes a loss visible, plus
+    // the 240 B of counter state the next step is computed from.
+    $bk_details_protected = ['fs_alerts', 'ingest_issues', 'wan_counters_prev'];
+    $bk_details_carried = $ow_report_reduced
+        ? array_values(array_filter((array)($old_details['details_dropped'] ?? []), 'is_string'))
+        : [];
+    $bk_fit = bk_details_fit($merged_details_arr, $bk_details_limit, $bk_details_protected, $bk_details_carried);
+    $details = $bk_fit['json'];
+    foreach ($bk_fit['dropped'] as $bk_dk) {
+        error_log("[agent_api] last_details over {$bk_details_limit} B for monitor {$monitor_id}: dropped '{$bk_dk}'");
     }
 
     // Write the metrics to the database - including TeamSpeak clients/process when
@@ -883,6 +1096,23 @@ try {
             'wifi_6e_known_24g' => $ow_wifi_bands['wifi_6e_known_24g'],
             'wifi_6e_capable_5g' => $ow_wifi_bands['wifi_6e_capable_5g'],
             'wifi_6e_known_5g' => $ow_wifi_bands['wifi_6e_known_5g'],
+            // Radio conditions per band: a MAX over the AP radios of the band,
+            // null when no radio of that band reported one (see
+            // bk_wifi_band_totals()). wifi_6e_unserved is three-valued -
+            // 1, 0, or null when the clients did not say.
+            'wifi_noise_24g' => $ow_wifi_bands['wifi_noise_24g'],
+            'wifi_noise_5g' => $ow_wifi_bands['wifi_noise_5g'],
+            'wifi_noise_6g' => $ow_wifi_bands['wifi_noise_6g'],
+            'wifi_busy_24g' => $ow_wifi_bands['wifi_busy_24g'],
+            'wifi_busy_5g' => $ow_wifi_bands['wifi_busy_5g'],
+            'wifi_busy_6g' => $ow_wifi_bands['wifi_busy_6g'],
+            'wifi_busy_other_24g' => $ow_wifi_bands['wifi_busy_other_24g'],
+            'wifi_busy_other_5g' => $ow_wifi_bands['wifi_busy_other_5g'],
+            'wifi_busy_other_6g' => $ow_wifi_bands['wifi_busy_other_6g'],
+            'wifi_weak_clients' => $ow_wifi_bands['wifi_weak_clients'],
+            'wifi_wpa2_clients' => $ow_wifi_bands['wifi_wpa2_clients'],
+            'wifi_6e_unserved' => $ow_wifi_bands['wifi_6e_unserved'],
+            'wifi_5g_capable_24g' => $ow_wifi_bands['wifi_5g_capable_24g'],
             'conntrack_pct' => $ow_conntrack_pct,
             'net_ipv4_kbps' => $ow_net_ipv4_kbps,
             'net_ipv6_kbps' => $ow_net_ipv6_kbps,
@@ -903,7 +1133,9 @@ try {
             'dhcp_leases_count' => bk_agent_num($data, 'dhcp_leases_count'),
             'dhcp_reservations_count' => bk_agent_num($data, 'dhcp_reservations_count'),
             'tailscale_peers' => bk_agent_num($data, 'tailscale_peers'),
-            'wireguard_peers' => bk_agent_num($data, 'wireguard_peers'),
+            // G26: a LIST of peers, so bk_agent_num() wrote NULL here every
+            // minute since the column exists. The count is the metric.
+            'wireguard_peers' => bk_wireguard_peer_count($ow_wireguard_peers),
             'openvpn_tunnels' => bk_agent_num($data, 'openvpn_tunnels'),
             'ram_used_mb' => bk_agent_num($data, 'ram_used_mb'),
             'ram_free_mb' => bk_agent_num($data, 'ram_free_mb'),
@@ -926,6 +1158,23 @@ try {
             'oom_kills' => bk_agent_int($data, 'oom_kills'),
             'sqm_dropped' => bk_agent_int($data, 'sqm_dropped'),
             'wan_reconnect_count' => bk_agent_int($data, 'wan_reconnect_count'),
+
+            // Router release 0.1.7. The five counters are STEPS - what grew
+            // since the previous report - and they are null on a reboot or a
+            // device change, where the raw total says nothing about this
+            // minute. clock_skew_s is the absolute distance between the
+            // router's clock and ours.
+            'cpu_core_max' => $ow_cpu_core_max,
+            'cpu_core_max_softirq' => $ow_cpu_core_max_softirq,
+            'wan_rx_mbps' => $ow_wan_rx_mbps,
+            'wan_tx_mbps' => $ow_wan_tx_mbps,
+            'wan_errors' => $ow_wan_steps['steps']['wan_errors'],
+            'wan_drops' => $ow_wan_steps['steps']['wan_drops'],
+            'wan_ring_drops' => $ow_wan_steps['steps']['wan_ring_drops'],
+            'wan_link_flaps' => $ow_wan_steps['steps']['wan_link_flaps'],
+            'conntrack_drops' => $ow_wan_steps['steps']['conntrack_drops'],
+            'agent_run_ms' => $ow_agent_run_ms,
+            'clock_skew_s' => $ow_clock_skew_s,
         ];
 
         // Column names come from the code above, not from agent input.
@@ -938,6 +1187,112 @@ try {
     } catch (PDOException $e) {
         $metrics_error = $e->getMessage();
         error_log('[agent_api] Metrics INSERT failed (monitor ' . $monitor_id . '): ' . $metrics_error);
+        // A minute of measurements that reached the server and is not in the
+        // database. Said out loud in last_details (issue `ingest_dropped`),
+        // because an empty chart looks exactly like a router that sent nothing.
+        if (!$ow_report_reduced) {
+            $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, 'metrics_insert_failed');
+            $merged_details_arr['ingest_issues'] = $bk_ingest_issues;
+            $bk_fit = bk_details_fit($merged_details_arr, $bk_details_limit, $bk_details_protected, $bk_details_carried);
+            $details = $bk_fit['json'];
+        }
+    }
+
+    /**
+     * Link speed test results (librespeed-cli on the router).
+     *
+     * The router parks them in /tmp, which is a ramdisk on OpenWrt - gone
+     * after a reboot. The agent therefore sends them here and this table is
+     * the durable storage; the unique key on (monitor, measurement time)
+     * makes re-sending the same file a no-op.
+     *
+     * A bare 200 is not a receipt (WAN 3.1.6). The response says how far the
+     * batch was really dealt with (`speedtests_acked`) and the agent deletes
+     * its files only up to that item: before this, a failing INSERT was
+     * logged, the agent got its 200 and threw away results nobody stored.
+     * The ingest therefore runs BEFORE last_details is written, so what it
+     * lost travels in the same blob as everything else (X15).
+     */
+    $bk_speedtests_acked = null;
+    if (isset($data['speedtests']) && is_array($data['speedtests'])) {
+        // Cap on the batch: the agent sends its history on the first run (it
+        // re-sends everything once, so pre-0.1.7 rows can be repaired), but
+        // the report must not grow without bound.
+        $speed_batch = array_slice($data['speedtests'], 0, 50);
+        $bk_speed_handled = [];
+        $bk_speed_failed = [];
+        $stmt_speed = null;
+        try {
+            $stmt_speed = $pdo->prepare("
+                INSERT INTO speedtest_results
+                    (monitor_id, measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name, source,
+                     iface, tool, link_mbit, bytes_received, bytes_sent, diagnostics)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    download_mbps = IF(VALUES(download_mbps) IS NOT NULL
+                            AND (download_mbps IS NULL OR (download_mbps < 0.1 AND VALUES(download_mbps) > download_mbps)),
+                        VALUES(download_mbps), download_mbps),
+                    upload_mbps = IF(VALUES(upload_mbps) IS NOT NULL
+                            AND (upload_mbps IS NULL OR (upload_mbps < 0.1 AND VALUES(upload_mbps) > upload_mbps)),
+                        VALUES(upload_mbps), upload_mbps),
+                    ping_ms = COALESCE(ping_ms, VALUES(ping_ms)),
+                    jitter_ms = COALESCE(jitter_ms, VALUES(jitter_ms)),
+                    server_name = COALESCE(server_name, VALUES(server_name)),
+                    iface = COALESCE(iface, VALUES(iface)),
+                    tool = COALESCE(tool, VALUES(tool)),
+                    link_mbit = COALESCE(link_mbit, VALUES(link_mbit)),
+                    bytes_received = COALESCE(bytes_received, VALUES(bytes_received)),
+                    bytes_sent = COALESCE(bytes_sent, VALUES(bytes_sent)),
+                    diagnostics = COALESCE(diagnostics, VALUES(diagnostics))
+            ");
+        } catch (PDOException $e) {
+            // An old database without the six columns of this release. Nothing
+            // is stored and nothing is acked, so the router keeps its files.
+            error_log('[agent_api] speedtest INSERT prepare failed (monitor ' . $monitor_id . '): ' . $e->getMessage());
+        }
+
+        foreach ($speed_batch as $st) {
+            $bk_item = bk_speedtest_item($st);
+            if ($bk_item === null) {
+                // No measurement time: there is no saying when it applied and
+                // "now" would be a lie. Re-sending repairs nothing, so it is
+                // NOT a reason to hold the ack back - it is said out loud instead.
+                $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, 'speedtest_rejected',
+                    is_array($st) && isset($st['timestamp']) && is_scalar($st['timestamp']) ? (string)$st['timestamp'] : null);
+                continue;
+            }
+            foreach ($bk_item['issues'] as [$bk_issue_type, $bk_issue_key]) {
+                $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, $bk_issue_type, $bk_issue_key);
+            }
+            if ($stmt_speed === null) {
+                $bk_speed_failed[] = $bk_item;
+                continue;
+            }
+            try {
+                $stmt_speed->execute(array_merge([$monitor_id], array_values($bk_item['row'])));
+                $bk_speed_handled[] = $bk_item;
+            } catch (PDOException $e) {
+                // Speed measurements are an extra - failing to store them must
+                // not bring down telemetry ingestion. The ack stops here, so
+                // the data stays on the router and comes back next minute.
+                error_log('[agent_api] Uložení speedtestu selhalo: ' . $e->getMessage());
+                $bk_speed_failed[] = $bk_item;
+                break;
+            }
+        }
+        if ($bk_speed_failed !== []) {
+            $bk_ingest_issues = bk_ingest_issue_add($bk_ingest_issues, 'speedtest_store_failed', $bk_speed_failed[0]['raw_ts']);
+        }
+        $bk_speedtests_acked = bk_speedtest_ack($bk_speed_handled, $bk_speed_failed);
+    }
+
+    // What the speedtest ingest lost goes into the SAME blob as the rest
+    // (X15): the details are built above, so they are refitted here exactly
+    // like the metrics INSERT does when it fails.
+    if (!$ow_report_reduced && $bk_ingest_issues !== ($merged_details_arr['ingest_issues'] ?? [])) {
+        $merged_details_arr['ingest_issues'] = $bk_ingest_issues;
+        $bk_fit = bk_details_fit($merged_details_arr, $bk_details_limit, $bk_details_protected, $bk_details_carried);
+        $details = $bk_fit['json'];
     }
 
     // Process history - who was eating CPU and memory this minute.
@@ -1109,56 +1464,6 @@ try {
         $stmt_update->execute([$details, $monitor_id]);
     }
     
-    /**
-     * Link speed test results (librespeed-cli on the router).
-     *
-     * The router parks them in /tmp, which is a ramdisk on OpenWrt - gone
-     * after a reboot. The agent therefore sends them here and this table is
-     * the durable storage; the unique key on (monitor, measurement time)
-     * makes re-sending the same file a no-op.
-     */
-    if (isset($data['speedtests']) && is_array($data['speedtests'])) {
-        // Cap on the batch: the agent sends its history on the first run, but the
-        // report must not grow without bound.
-        $speed_batch = array_slice($data['speedtests'], 0, 50);
-
-        try {
-            $stmt_speed = $pdo->prepare("
-                INSERT IGNORE INTO speedtest_results
-                    (monitor_id, measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-
-            foreach ($speed_batch as $st) {
-                if (!is_array($st)) {
-                    continue;
-                }
-                $ts_raw = trim((string)($st['timestamp'] ?? ''));
-                $ts = $ts_raw !== '' ? strtotime($ts_raw) : false;
-                if ($ts === false) {
-                    // Without a measurement time there is no saying when it applied -
-                    // such a record is useless and substituting "now" would lie.
-                    continue;
-                }
-
-                $stmt_speed->execute([
-                    $monitor_id,
-                    date('Y-m-d H:i:s', $ts),
-                    bk_agent_num($st, 'download_mbps'),
-                    bk_agent_num($st, 'upload_mbps'),
-                    bk_agent_num($st, 'ping_ms'),
-                    bk_agent_num($st, 'jitter_ms'),
-                    ($st['server'] ?? '') !== '' ? mb_substr((string)$st['server'], 0, 120) : null,
-                    'librespeed',
-                ]);
-            }
-        } catch (PDOException $e) {
-            // Speed measurements are an extra - failing to store them must not
-            // bring down telemetry ingestion.
-            error_log('[agent_api] Uložení speedtestu selhalo: ' . $e->getMessage());
-        }
-    }
-
     if (isset($data['action_result']) && is_array($data['action_result'])) {
         $act_res = $data['action_result'];
         $act_id = intval($act_res['action_id'] ?? 0);
@@ -1181,7 +1486,15 @@ try {
     }
 
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
-    
+
+    // How far the batch of speed tests was dealt with (WAN 3.1.6). The agent
+    // deletes its probe files and advances `last_sent` only up to this
+    // timestamp and never on a bare 200; null means nothing was, so
+    // everything is re-sent (the unique key makes that idempotent).
+    if (isset($data['speedtests']) && is_array($data['speedtests'])) {
+        $response_payload['speedtests_acked'] = $bk_speedtests_acked;
+    }
+
     // If the metrics INSERT failed, tell the agent (visible in its log)
     if (!empty($metrics_error)) {
         $response_payload['schema_warning'] = 'DB schema out of date - metrics not saved. Please update database schema.';

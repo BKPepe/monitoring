@@ -101,6 +101,11 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `allowed_actions` VARCHAR(255) DEFAULT NULL, -- Čárkou oddělený seznam povolených akcí (podmnožina restart_wan,restart_wireguard,reboot_router,renew_dhcp,restart_service,reconnect_pppoe)
   `asset_id` INT DEFAULT NULL, -- Fyzické/logické zařízení, ke kterému monitor patří (viz `assets`) - NULL = zatím nepřiřazeno
   `archived_at` DATETIME DEFAULT NULL, -- set when archived: history kept, no checks, alerts, lists or agent reports
+  -- Line plan entered by the owner (routers). NULL = not entered, so nothing is ever called "below the plan".
+  `wan_plan_down_mbit` INT DEFAULT NULL, -- 1-100000
+  `wan_plan_up_mbit` INT DEFAULT NULL, -- 1-100000
+  `wan_plan_ok_pct` TINYINT UNSIGNED DEFAULT NULL, -- 30-100: share of the plan still counted as "as promised"; NULL = 85
+  `wan_probe_enabled` TINYINT NOT NULL DEFAULT 0, -- consent to a speed test started by the agent; OFF by default, it moves gigabytes over the line
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`),
   FOREIGN KEY (`asset_id`) REFERENCES `assets`(`id`) ON DELETE SET NULL
@@ -171,6 +176,21 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `wifi_6e_known_24g` INT DEFAULT NULL, -- clients on 2.4 GHz whose operating classes are known at all
   `wifi_6e_capable_5g` INT DEFAULT NULL, -- clients on 5 GHz that list a 6 GHz operating class
   `wifi_6e_known_5g` INT DEFAULT NULL, -- clients on 5 GHz whose operating classes are known at all
+  -- Wi-Fi profile per band, from the AP-mode radios of wifi_radios[]. NULL = no
+  -- AP radio of that band measured it (never 0).
+  `wifi_noise_24g` FLOAT DEFAULT NULL, -- dBm, worst (highest) AP radio of the band
+  `wifi_noise_5g` FLOAT DEFAULT NULL,
+  `wifi_noise_6g` FLOAT DEFAULT NULL,
+  `wifi_busy_24g` FLOAT DEFAULT NULL, -- %, busiest AP radio of the band
+  `wifi_busy_5g` FLOAT DEFAULT NULL,
+  `wifi_busy_6g` FLOAT DEFAULT NULL,
+  `wifi_busy_other_24g` FLOAT DEFAULT NULL, -- %, airtime of that radio that was not this network
+  `wifi_busy_other_5g` FLOAT DEFAULT NULL,
+  `wifi_busy_other_6g` FLOAT DEFAULT NULL,
+  `wifi_weak_clients` SMALLINT DEFAULT NULL, -- stations heard at -75 dBm or weaker
+  `wifi_wpa2_clients` SMALLINT DEFAULT NULL, -- stations that negotiated a PSK (WPA2) AKM
+  `wifi_6e_unserved` TINYINT DEFAULT NULL, -- 1 = two or more 6 GHz-capable clients here and no 6 GHz AP radio
+  `wifi_5g_capable_24g` SMALLINT DEFAULT NULL, -- clients on 2.4 GHz that list a 5 GHz operating class
   `conntrack_pct` FLOAT DEFAULT NULL, -- Využití conntrack tabulky v % (OpenWrt/firewall)
   `net_ipv4_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv4 provozu v KB/s
   `net_ipv6_kbps` FLOAT DEFAULT NULL, -- Rychlost IPv6 provozu v KB/s
@@ -214,6 +234,20 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `oom_kills` BIGINT DEFAULT NULL, -- kumulativní počítadlo; graf kreslí přírůstek, viz metric_series
   `sqm_dropped` BIGINT DEFAULT NULL, -- kumulativní počítadlo; graf kreslí přírůstek, viz metric_series
   `wan_reconnect_count` BIGINT DEFAULT NULL, -- kumulativní počítadlo; graf kreslí přírůstek, viz metric_series
+  -- WAN path (OpenWrt). The five counters below are STEPS: new events since the
+  -- previous report, NULL across a reboot or a change of the WAN device. A day
+  -- is their sum (avg_val x samples in metrics_daily), never an average.
+  `cpu_core_max` FLOAT DEFAULT NULL, -- %, busiest CPU core over the minute
+  `cpu_core_max_softirq` FLOAT DEFAULT NULL, -- %, irq+softirq share of that core
+  `wan_rx_mbps` FLOAT DEFAULT NULL, -- Mbit/s, download on the WAN device
+  `wan_tx_mbps` FLOAT DEFAULT NULL, -- Mbit/s, upload on the WAN device
+  `wan_errors` INT DEFAULT NULL, -- step: rx+tx errors of the physical WAN port
+  `wan_drops` INT DEFAULT NULL, -- step: rx+tx drops (includes unhandled protocols - evidence, no rule reads it)
+  `wan_ring_drops` INT DEFAULT NULL, -- step: rx_discard+rx_overrun, written only when the hourly path check ran
+  `wan_link_flaps` INT DEFAULT NULL, -- step of carrier_down_count: how often the WAN port lost its link
+  `conntrack_drops` INT DEFAULT NULL, -- step of the conntrack `drop` counter only
+  `agent_run_ms` INT DEFAULT NULL, -- wall time of the previous agent run
+  `clock_skew_s` INT DEFAULT NULL, -- abs(receive time - agent_time); absolute so that a weekly mean cannot cancel out
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
@@ -461,6 +495,9 @@ CREATE TABLE IF NOT EXISTS `process_samples` (
 -- Router si je odkládá do /tmp, tedy do ramdisku - po restartu jsou pryč.
 -- Trvalé úložiště je proto tady; unikátní klíč na (monitor, čas měření)
 -- zajistí, že opakované odeslání téhož souboru nic nezduplikuje.
+-- Retention: rows 400 days, `diagnostics` set to NULL after 90 days
+-- (bk_prune_wan_data). At most one Turris result a day plus a weekly agent
+-- test per router, so about 425 rows per router per year.
 CREATE TABLE IF NOT EXISTS `speedtest_results` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `monitor_id` INT NOT NULL,
@@ -470,11 +507,113 @@ CREATE TABLE IF NOT EXISTS `speedtest_results` (
   `ping_ms` FLOAT DEFAULT NULL,
   `jitter_ms` FLOAT DEFAULT NULL,
   `server_name` VARCHAR(120) DEFAULT NULL,
-  `source` VARCHAR(30) DEFAULT NULL,
+  `source` VARCHAR(30) DEFAULT NULL, -- who started the test: 'turris' (the scheduler of Turris OS) or 'agent'
+  `iface` VARCHAR(32) DEFAULT NULL, -- device the test was bound to; NULL for a Turris-started test
+  `tool` VARCHAR(24) DEFAULT NULL, -- client build, e.g. go-1.0.12 (never the librespeed `client` block)
+  `link_mbit` INT DEFAULT NULL, -- WAN port link speed at the time of the test
+  `bytes_received` BIGINT DEFAULT NULL, -- NULL = written by an agent before 0.1.7
+  `bytes_sent` BIGINT DEFAULT NULL,
+  `diagnostics` TEXT DEFAULT NULL, -- whitelisted JSON, at most 2048 B: what the CPU and the WAN port of the router did during the test
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   UNIQUE KEY `uniq_speedtest_measurement` (`monitor_id`, `measured_at`),
   KEY `idx_speedtest_measured` (`measured_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Physical disks of a router: one row per drive, found again by disk_key.
+-- The key is a hash of transport, port, sysfs model and size. A serial number
+-- or a WWN never leaves the router, so neither can be the identity.
+-- Retention: 730 days after last_seen (bk_prune_router_health); the daily rows
+-- go with the disk through the foreign key.
+CREATE TABLE IF NOT EXISTS `storage_disks` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `monitor_id` INT NOT NULL,
+  `disk_key` CHAR(16) NOT NULL, -- sha1(transport|port|sysfs model|size_bytes)[0..16]
+  `name` VARCHAR(16) NOT NULL, -- last kernel name (sda); it can change between boots, the key does not
+  `transport` VARCHAR(8) NOT NULL, -- sata, usb, nvme, emmc, sd, virtio, other
+  `port` VARCHAR(32) DEFAULT NULL,
+  `model` VARCHAR(64) DEFAULT NULL, -- sysfs model, cut to 16 characters by the kernel
+  `smart_model` VARCHAR(64) DEFAULT NULL, -- full model name from SMART
+  `size_bytes` BIGINT UNSIGNED DEFAULT NULL,
+  `rotational` TINYINT(1) DEFAULT NULL, -- SMART rotation_rpm > 0 wins over sysfs
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  `replaced_at` DATETIME DEFAULT NULL, -- power-on hours fell by more than 48 h: another drive in the same slot
+  `last_sample_at` DATETIME DEFAULT NULL, -- hourly throttle of the daily upsert
+  `last_checked_at` INT UNSIGNED DEFAULT NULL, -- smart.checked_at already folded in (dedupes a replayed report)
+  `last_power_on_hours` INT UNSIGNED DEFAULT NULL,
+  `last_write_sectors` BIGINT UNSIGNED DEFAULT NULL,
+  `last_uptime` INT UNSIGNED DEFAULT NULL,
+  `alert_state` TEXT DEFAULT NULL, -- JSON latches and baselines of the disk alerts (small, outside the last_details cap)
+  UNIQUE KEY `uniq_storage_disk` (`monitor_id`, `disk_key`),
+  KEY `idx_storage_disks_seen` (`last_seen`),
+  CONSTRAINT `fk_storage_disks_monitor` FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The day of a disk. last_details holds only the latest SMART reading and the
+-- next report overwrites it, so without this table "did the bad blocks grow
+-- since spring" has no answer. At most one upsert per disk per hour.
+-- Retention: 730 days (bk_prune_router_health). 1,000 routers with two disks
+-- are about 730,000 rows a year.
+CREATE TABLE IF NOT EXISTS `storage_disk_daily` (
+  `disk_id` INT NOT NULL,
+  `day` DATE NOT NULL,
+  `samples` SMALLINT UNSIGNED NOT NULL DEFAULT 0, -- SMART readings folded in
+  `smart_passed` TINYINT(1) DEFAULT NULL, -- worst of the day (0 wins)
+  `temp_min` SMALLINT DEFAULT NULL,
+  `temp_max` SMALLINT DEFAULT NULL,
+  `temp_sum` INT DEFAULT NULL,
+  `temp_n` SMALLINT UNSIGNED DEFAULT NULL,
+  `power_on_hours` INT UNSIGNED DEFAULT NULL,
+  `power_cycles` INT UNSIGNED DEFAULT NULL,
+  `unsafe_shutdowns` INT UNSIGNED DEFAULT NULL,
+  `reallocated_sectors` BIGINT UNSIGNED DEFAULT NULL,
+  `pending_sectors` BIGINT UNSIGNED DEFAULT NULL,
+  `offline_uncorrectable` BIGINT UNSIGNED DEFAULT NULL,
+  `reported_uncorrect` BIGINT UNSIGNED DEFAULT NULL,
+  `crc_errors` BIGINT UNSIGNED DEFAULT NULL,
+  `runtime_bad_blocks` BIGINT UNSIGNED DEFAULT NULL,
+  `media_errors` BIGINT UNSIGNED DEFAULT NULL,
+  `error_log_count` INT UNSIGNED DEFAULT NULL,
+  `wear_pct` SMALLINT UNSIGNED DEFAULT NULL,
+  `emmc_life` TINYINT UNSIGNED DEFAULT NULL, -- max(life_a, life_b)
+  `written_bytes` BIGINT UNSIGNED DEFAULT NULL, -- SMART lifetime counter, latest of the day
+  `host_written_bytes` BIGINT UNSIGNED DEFAULT NULL, -- kernel counter deltas summed (covers eMMC, which has no SMART)
+  `host_written_partial` TINYINT(1) NOT NULL DEFAULT 0, -- a reboot or a 32-bit counter wrap lost part of the day
+  PRIMARY KEY (`disk_id`, `day`),
+  KEY `idx_sdd_day` (`day`),
+  CONSTRAINT `fk_sdd_disk` FOREIGN KEY (`disk_id`) REFERENCES `storage_disks`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Memory of the router recommendation engine between two evaluations: the
+-- hysteresis state of an item, the digest week it first went out in, and the
+-- mutes. The items themselves are computed on read and never stored.
+-- Retention: an unmuted row 90 days after last_seen (bk_prune_router_health).
+-- A mute is a decision of the owner and goes only with the monitor.
+CREATE TABLE IF NOT EXISTS `router_rec_state` (
+  `monitor_id` INT NOT NULL,
+  -- "<rule_id>" | "<rule_id>:<24g|5g|6g>" | "<rule_id>:r:<sha1(band|ssid)[0..12]>" | "<rule_id>:d:<disk_key>" | "<rule_id>:m:<sha1(mount)[0..12]>" | "<rule_id>:<dl|ul>"
+  -- A per-radio key must NOT contain the interface name: on this hardware the
+  -- same USB radio was phy3-ap0 one day and phy1-ap0 the next (REAL_FACTS,
+  -- "Cron and unstable radio names"), so a mute keyed on the name would be
+  -- silently lost at the next reboot and the item would come back. Band plus
+  -- SSID survives a rename; the interface name stays a display label in
+  -- `subject.radio`.
+  `rec_key` VARCHAR(80) NOT NULL,
+  `rule_id` VARCHAR(40) NOT NULL,
+  `active` TINYINT(1) NOT NULL DEFAULT 0, -- held at the last saved evaluation (hysteresis memory)
+  `severity` VARCHAR(10) DEFAULT NULL,
+  `first_seen` DATETIME DEFAULT NULL,
+  `last_seen` DATETIME DEFAULT NULL,
+  `first_digest_week` CHAR(8) DEFAULT NULL, -- "2026-W39": week the item first went out; NULL again once it stops
+  `raised_digest_week` CHAR(8) DEFAULT NULL, -- week its severity last rose
+  `muted_at` DATETIME DEFAULT NULL,
+  `muted_by` VARCHAR(50) DEFAULT NULL,
+  `muted_severity` VARCHAR(10) DEFAULT NULL, -- a mute hides the item only up to this severity
+  `mute_reason` VARCHAR(255) DEFAULT NULL,
+  PRIMARY KEY (`monitor_id`, `rec_key`),
+  KEY `idx_rec_state_seen` (`last_seen`),
+  CONSTRAINT `fk_rec_state_monitor` FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Profily metrik (presety) - sdílené nastavení, které jde přiřadit víc monitorům.

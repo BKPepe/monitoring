@@ -386,13 +386,16 @@ answers 409.
 
 | Endpoint | Access | Description |
 |---|---|---|
-| `action=metric_series&monitor_id=&metric=&period=` | assigned monitor | One metric over time |
+| `action=metric_series&monitor_id=&metric=&period=` | assigned monitor | One metric over time. A metric flagged `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`) already holds the increment between two reports: a raw point is that minute's step and the 90-day view is the day's TOTAL (`avg_val * samples`), never the average of it |
 | `action=metric_series_batch&monitor_id=&period=` | assigned monitor | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero |
 | `action=metric_detail&monitor_id=&metric=` | assigned monitor | Context for the metric detail page |
 | `action=metric_correlations&monitor_id=&metric=&period=` (optionally `&all=1` for every compared metric, not just the strongest 8) | assigned monitor | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | assigned monitor | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
 | `action=link_traffic&monitor_id=&days=` | assigned monitor | A router's traffic by link role: primary (`wan_l3_device`) vs. LTE backup (`lte_device`) for today / 7 / 30 days from the daily per-interface totals, plus the primary-link outages (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) paired from `wan_lost`/`wan_restored` events - whether traffic really went over the backup during them is what the backup device's byte counts say, not these periods (an open period runs until now; an outage that began before the window and has not ended is looked up separately and counted from the start of the window, or a router that has been on the backup for weeks would report "never"). Roles come only from what the agent reports - without `wan_l3_device` (agent < 0.1.3) the primary side is `null`, never a guess from the name |
 | `action=process_history&monitor_id=&kind=&at=&radius=` | assigned monitor | Which processes were running around a point in time |
+| `action=router_recommendations&monitor_id=` | assigned monitor | What the weekly router engine finds on this router right now, read-only (the GET never writes a state row). See "Router health" below |
+| `action=storage_history&monitor_id=&days=` | assigned monitor | Per-disk daily history (temperature, error counters, host writes, wear). `days` is clamped to 1-400; a day nobody measured is `null`, never `0`. See "Router health" below |
+| `action=wan_bottleneck&monitor_id=` | assigned monitor | What limits the internet line of a router, per direction, from its last speed tests. See "Router health" below |
 | `action=metrics_history&monitor_id=&period=` | assigned monitor | Agent metric history |
 | `action=daily_uptime&days=` | public status / assigned | Daily availability from `uptime_daily` |
 | `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one pass; an unmeasured window is `null`, never 100 |
@@ -446,7 +449,7 @@ monitor has, which related metrics it reports at all and what happened around it
     "checkedFrom": "Praha, CZ",
     "assetId": 6
   },
-  "metric": { "key": "cpu", "label": "CPU usage", "unit": "%", "counter": false },
+  "metric": { "key": "cpu", "label": "CPU usage", "unit": "%", "counter": false, "step": false },
   "thresholds": { "warning": 75, "critical": 90 },
   "thresholdsDerived": { "warning": true, "critical": false },
   "related": [{ "key": "ram", "label": "Memory usage", "unit": "%", "latest": 41.2 }],
@@ -496,6 +499,102 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 
 ---
 
+### Router health: storage, Wi-Fi profile and weekly recommendations
+
+Three read-only endpoints share one engine. It runs over the **seven complete
+days** before today and needs at least **four days with data** (360 samples a
+day) before a weekly rule is evaluated at all; a router with less answers
+`applicable: false` and says so instead of reporting "nothing found". A value
+that was not measured is `null` everywhere below and never a zero.
+
+`action=router_recommendations&monitor_id=` answers
+
+```json
+{
+  "monitorId": 6,
+  "applicable": true,
+  "reason": null,
+  "generatedAt": "2026-09-21T10:00:00+02:00",
+  "window": { "from": "2026-09-14", "to": "2026-09-20",
+              "previousFrom": "2026-09-07", "previousTo": "2026-09-13",
+              "daysWithData": 7 },
+  "canMute": true,
+  "missingPackages": ["smartmontools-drivedb"],
+  "items": [{
+    "id": "disk_temp_warm",
+    "key": "disk_temp_warm:d:1f0c…",
+    "area": "storage",
+    "severity": "warning",
+    "title": "The disk runs warm",
+    "measured": "on average 67 °C (at most 68 °C) over the last week",
+    "action": "Check the airflow …",
+    "subject": { "kind": "disk", "label": "sda" },
+    "openSince": "2026-09-01 04:12:00",
+    "muted": false
+  }],
+  "muted": []
+}
+```
+
+- `applicable: false` carries a `reason`: `not_router` (not an OpenWrt monitor),
+  `agent_old` (the rules read fields only agent 0.1.7 sends, and an old agent is
+  not a healthy router with nothing to report) or `silent` (nothing reported for
+  more than seven days).
+- `severity` is `critical` (act now), `warning` (act this month) or `info`
+  (worth knowing). The order of `items` is severity, then area, then the rule's
+  own rank - never the alphabet of the keys.
+- Every weekly rule has an **enter** and a **hold** threshold. A finding that is
+  already open stays open down to the hold value, so a metric sitting on the
+  line does not flap in and out of the Monday e-mail.
+- A rule that could not be evaluated is not reported as "fine": it is left out
+  of `items` and its stored row is not touched.
+- **Muting** is an admin decision and applies to everyone who can see the
+  router. A muted finding moves to `muted` with `mutedReason`, `mutedBy` and
+  `mutedAt`, and it is left out of the weekly e-mail. It comes back - marked
+  `wasMuted` - as soon as the same finding becomes **more severe** than it was
+  when it was muted. A mute whose rule no longer fires is still listed, with
+  null texts and `active: false`, so it can be taken back.
+- No SSID, MAC address, BSSID, disk serial or WWN ever appears in a text; disks
+  are named by their `/dev` name and identified by a server-side hash.
+
+`action=storage_history&monitor_id=&days=` answers `{monitorId, days, disks: []}`,
+one entry per disk with its identity (`key`, `label`, `model`, `size`) and a
+`days: []` list of `{day, tempMin, tempMean, tempMax, samples, reallocated,
+pending, offline, runtimeBadBlocks, unsafeShutdowns, powerCycles, hostWritten,
+hostWrittenPartial, wearPct}`. `samples` counts the fresh SMART readings of that
+day; `hostWrittenPartial: true` says the day's byte count is incomplete (the
+router rebooted or the counter wrapped) and the figure is a lower bound.
+
+`action=wan_bottleneck&monitor_id=` answers the verdict per direction
+(`verdict.dl`, `verdict.ul`), the tests it is based on, the WAN path and the
+plan:
+
+```json
+{ "class": "line_limited", "reason": "below_plan", "confidence": "high",
+  "basis": [41, 38, 35],
+  "numbers": { "s_mbps": 700.0, "s_max_mbps": 710.0, "agree": 3,
+               "span_days": 3, "servers": 2, "tests": 3 } }
+```
+
+- `class` is `none`, `link_limited`, `cpu_limited`, `line_limited` or
+  `inconclusive`; `reason` says which rule decided (`plan_reached`,
+  `sqm_shaper`, `wan_port`, `packet_path`, `test_client`, `below_plan`, …).
+- `line_limited` - the only verdict that blames somebody else's equipment -
+  needs three tests that agree, a span of at least two days, **two different
+  servers** within 15 % of each other, proof that one of those servers has ever
+  delivered the plan, and results outside the 1 G / 2.5 G goodput plateaus.
+  Whatever it cannot prove comes back as `inconclusive` with the reason
+  (`not_enough_tests`, `single_server`, `server_limited`,
+  `server_capacity_unproven`, `port_plateau`, `tests_disagree`).
+- Without a stored plan nothing is ever called "below plan": the answer is
+  `inconclusive / no_plan_known` and the card asks for the tariff. A test the
+  router did not start itself can only ever confirm a reached plan, never
+  declare the line slow.
+- `basis` lists the ids of the `speedtest_results` rows the verdict rests on, so
+  the card can show exactly what was measured.
+
+---
+
 ## Incidents and reports
 
 | Endpoint | Access | Description |
@@ -530,6 +629,8 @@ the covering index narrows it to 60 rows. No page queries the table on load.
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: switches maintenance on or off for one or more monitors. Off also clears the window, so the next maintenance does not expire the moment it starts |
 | `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: erases the monitor's measurements, logs and daily aggregates and returns it to "unknown". Irreversible, so it asks for the exact monitor name back |
 | `action=redetect_location` | admin | Forces a fresh geolocation lookup for the server and stores it in `ip_loc_local` |
+| `action=router_recommendation_mute` | admin | POST `{monitor_id, key, muted, reason?}`: silences one router recommendation (or takes the mute back). The severity is re-evaluated on the server, never taken from the body, so a mute silences the finding as it is today and not a worse version of it. An unknown rule id is 400, an archived monitor is refused, and every change writes an `audit_log` row |
+| `action=wan_settings_save` | admin | POST `{monitor_id, plan_down_mbit?, plan_up_mbit?, plan_ok_pct?}`: the router's tariff. `null` or an empty string clears a value; a number outside 1-100000 (30-100 for the percentage) is a 400 and is never clamped, because a clamped plan is a plan the owner did not enter. An absent `probe_enabled` key leaves the stored consent alone |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | public read, admin write | Metric profiles |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | list public, hidden pages and writes admin | Public status pages |
 | `action=dashboard_layout` | logged in | Tile order and visibility |
@@ -578,6 +679,36 @@ identifier, an array is capped at 8 KB and at most 64 new keys are added at once
 `action_result` arrives as a separate lightweight POST - the confirmation of a
 performed Remote Action. It carries no telemetry fields, so it is handled before
 their validation.
+
+**Agent 0.1.7 (OpenWrt) adds** `wifi_radios[]` (one object per wireless netdev,
+at most 16: band derived from the frequency, generation and width, client
+counts by capability and encryption, noise and channel busy), `storage_disks[]`
+(at most 8 physical disks with 16 partitions each, SMART state, temperature,
+error counters, wear, host-written bytes), `agent_tools` (seven strict booleans
+saying which optional programs the router really has), `wan_path` (packet
+steering, flow offloading, SQM, ring drops) and the WAN counters. Rules the
+server applies to all of them:
+
+- **Out of range becomes `null`, never a bound.** A busy figure of 101 % or a
+  temperature of 0 °C is not clamped to 100 or to a minimum: it is dropped,
+  because a clamped value reads like a measurement.
+- **An absent `storage_disks` keeps the last list.** Agent 0.1.6 does not send
+  the key and a 0.1.7 report that had to shrink may drop it; reading that as
+  "no disks" would erase a working disk list. A key that IS sent replaces it.
+- Five WAN counters are stored as the **step** between two reports, and the step
+  is `null` across a reboot or a change of WAN device - never the value since
+  boot.
+- **Privacy:** no MAC address, BSSID, neighbour SSID, disk serial or WWN leaves
+  the router; disk identity is a server-side hash of transport, port, model and
+  size.
+
+Alerts raised from these fields use three statuses - `storage_failing` (pages),
+`storage_warning` and `storage_recovered` (neither pages) - and all of them are
+subject to the `agent_notifications_enabled` switch; the event is written to the
+timeline either way. Disk temperature needs two consecutive fresh readings over
+the limit and clears 5 °C below it, a growing error counter is silent on first
+sight and repeats at most once a day, and a filesystem alert needs two reports
+over the limit and clears five points lower.
 
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 

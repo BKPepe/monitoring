@@ -1,4 +1,12 @@
 import { STATUS_API } from './http-source';
+import type {
+  RouterRecommendationMuteResponse,
+  RouterRecommendationsResponse,
+  StorageHistoryResponse,
+  WanBottleneckResponse,
+  WanSettingsSaveRequest,
+  WanSettingsSaveResponse,
+} from './types';
 
 /**
  * Client of the authenticated API (`apps/status/app_api.php`).
@@ -286,6 +294,43 @@ export const appApi = {
     mutate<{ success: true; id: number }>('save_annotation', note),
 
   deleteAnnotation: (id: number) => mutate<{ success: true }>('delete_annotation', { id }),
+
+  /**
+   * The router's recommendations, in the viewer's language: the texts are the
+   * server's, the same ones the Monday e-mail carries. A failed request
+   * rejects - the card must say "could not load", never "nothing to do".
+   */
+  getRouterRecommendations: (monitorId: number, lang: string) =>
+    request<RouterRecommendationsResponse>(
+      'router_recommendations' + `&monitor_id=${monitorId}&lang=${encodeURIComponent(lang)}`
+    ),
+
+  /** Mute or unmute one recommendation of one router (admin only). An empty reason is stored as none. */
+  muteRouterRecommendation: (monitorId: number, key: string, muted: boolean, reason = '') =>
+    mutate<RouterRecommendationMuteResponse>('router_recommendation_mute', {
+      monitor_id: monitorId,
+      key,
+      muted,
+      reason: reason.trim().slice(0, 255),
+    }),
+
+  /** Daily SMART history of the router's disks; a missing value is null, never 0. */
+  getStorageHistory: (monitorId: number, days = 90) =>
+    request<StorageHistoryResponse>('storage_history' + `&monitor_id=${monitorId}&days=${days}`),
+
+  /**
+   * Where the WAN line is limited, as the server classified it. The verdicts
+   * are computed on the server only - a second implementation here would
+   * drift from the one the weekly e-mail uses.
+   */
+  getWanBottleneck: (monitorId: number) =>
+    request<WanBottleneckResponse>('wan_bottleneck' + `&monitor_id=${monitorId}`),
+
+  /**
+   * The router's tariff. `null` for a rate means "not set" and makes the
+   * classifier stay silent about the line, so it is sent as null, never as 0.
+   */
+  saveWanSettings: (body: WanSettingsSaveRequest) => mutate<WanSettingsSaveResponse>('wan_settings_save', body),
 };
 
 /** What `action=agent_install_info` returns: the key and the addresses on this server. */

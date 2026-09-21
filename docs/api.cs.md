@@ -380,13 +380,16 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=metric_series&monitor_id=&metric=&period=` | přiřazený monitor | Jedna metrika v čase |
+| `action=metric_series&monitor_id=&metric=&period=` | přiřazený monitor | Jedna metrika v čase. Metrika označená `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`) už nese přírůstek mezi dvěma hlášeními: syrový bod je krok té minuty a devadesátidenní pohled je SOUČET dne (`avg_val * samples`), nikdy jeho průměr |
 | `action=metric_series_batch&monitor_id=&period=` | přiřazený monitor | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu |
 | `action=metric_detail&monitor_id=&metric=` | přiřazený monitor | Kontext stránky detailu metriky |
 | `action=metric_correlations&monitor_id=&metric=&period=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | přiřazený monitor | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | přiřazený monitor | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0` |
 | `action=link_traffic&monitor_id=&days=` | přiřazený monitor | Provoz routeru podle role linky: primární (`wan_l3_device`) vs. LTE záloha (`lte_device`) za dnes / 7 / 30 dní z denních součtů per rozhraní, plus období výpadku primární linky (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) spárovaná z událostí `wan_lost`/`wan_restored` - jestli v té době provoz opravdu šel po záloze, říkají bajty na záložním zařízení, ne tato období (otevřené období běží do teď; výpadek, který začal před oknem a dosud neskončil, se dohledá zvlášť a započítá od začátku okna, jinak by router běžící na záloze celé týdny hlásil „nikdy"). Role bere jen z toho, co agent hlásí - bez `wan_l3_device` (agent < 0.1.3) je primární strana `null`, ne odhad podle jména |
 | `action=process_history&monitor_id=&kind=&at=&radius=` | přiřazený monitor | Které procesy běžely kolem daného okamžiku |
+| `action=router_recommendations&monitor_id=` | přiřazený monitor | Co na tomhle routeru právě teď najde týdenní stroj doporučení, jen pro čtení (GET nikdy nezapíše řádek stavu). Viz „Zdraví routeru" níž |
+| `action=storage_history&monitor_id=&days=` | přiřazený monitor | Denní historie jednotlivých disků (teplota, čítače chyb, zápisy hostitele, opotřebení). `days` se ořízne na 1-400; den, který nikdo nezměřil, je `null`, nikdy `0`. Viz „Zdraví routeru" níž |
+| `action=wan_bottleneck&monitor_id=` | přiřazený monitor | Co omezuje internetovou linku routeru, zvlášť pro každý směr, z jeho posledních měření rychlosti. Viz „Zdraví routeru" níž |
 | `action=metrics_history&monitor_id=&period=` | přiřazený monitor | Historie metrik agenta |
 | `action=daily_uptime&days=` | veřejný stav / přiřazené | Denní dostupnost z `uptime_daily` |
 | `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d jedním průchodem; nezměřené okno je `null`, nikdy 100 |
@@ -439,7 +442,7 @@ prahy, které příbuzné metriky vůbec hlásí a co se v okolí dělo:
     "checkedFrom": "Praha, CZ",
     "assetId": 6
   },
-  "metric": { "key": "cpu", "label": "Využití CPU", "unit": "%", "counter": false },
+  "metric": { "key": "cpu", "label": "Využití CPU", "unit": "%", "counter": false, "step": false },
   "thresholds": { "warning": 75, "critical": 90 },
   "thresholdsDerived": { "warning": true, "critical": false },
   "related": [{ "key": "ram", "label": "Využití paměti", "unit": "%", "latest": 41.2 }],
@@ -489,6 +492,101 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 
 ---
 
+### Zdraví routeru: úložiště, profil Wi-Fi a týdenní doporučení
+
+Tři endpointy jen pro čtení sdílejí jeden stroj. Počítá přes **sedm celých dní**
+před dneškem a týdenní pravidlo vyhodnotí, až když jsou k dispozici aspoň
+**čtyři dny s daty** (360 vzorků na den); router s kratší historií dostane
+`applicable: false` a řekne proč, místo aby hlásil „nic jsme nenašli".
+Nezměřená hodnota je všude níž `null`, nikdy nula.
+
+`action=router_recommendations&monitor_id=` odpovídá
+
+```json
+{
+  "monitorId": 6,
+  "applicable": true,
+  "reason": null,
+  "generatedAt": "2026-09-21T10:00:00+02:00",
+  "window": { "from": "2026-09-14", "to": "2026-09-20",
+              "previousFrom": "2026-09-07", "previousTo": "2026-09-13",
+              "daysWithData": 7 },
+  "canMute": true,
+  "missingPackages": ["smartmontools-drivedb"],
+  "items": [{
+    "id": "disk_temp_warm",
+    "key": "disk_temp_warm:d:1f0c…",
+    "area": "storage",
+    "severity": "warning",
+    "title": "Disk běží teplý",
+    "measured": "za poslední týden průměrně 67 °C (nejvýše 68 °C)",
+    "action": "Zkontrolujte proudění vzduchu …",
+    "subject": { "kind": "disk", "label": "sda" },
+    "openSince": "2026-09-01 04:12:00",
+    "muted": false
+  }],
+  "muted": []
+}
+```
+
+- `applicable: false` nese `reason`: `not_router` (není to monitor OpenWrtu),
+  `agent_old` (pravidla čtou pole, která posílá teprve agent 0.1.7, a starý
+  agent není zdravý router, který nemá co hlásit) nebo `silent` (víc než sedm
+  dní bez hlášení).
+- `severity` je `critical` (jednat hned), `warning` (jednat tento měsíc) nebo
+  `info` (dobré vědět). Pořadí `items` je závažnost, pak oblast, pak vlastní
+  pořadí pravidla – nikdy abeceda klíčů.
+- Každé týdenní pravidlo má hranici pro **spuštění** a hranici pro **držení**.
+  Nález, který už je otevřený, zůstane otevřený až k hranici držení, takže
+  metrika na hraně neblikne každé pondělí v e-mailu.
+- Pravidlo, které nešlo vyhodnotit, se nehlásí jako „v pořádku": v `items`
+  není a jeho uložený řádek se nezmění.
+- **Ztlumení** je rozhodnutí administrátora a platí pro všechny, kdo na router
+  vidí. Ztlumený nález se přesune do `muted` s `mutedReason`, `mutedBy` a
+  `mutedAt` a do týdenního e-mailu nejde. Vrátí se – označený `wasMuted` –
+  jakmile je stejný nález **závažnější**, než byl v okamžiku ztlumení.
+  Ztlumení pravidla, které už neplatí, se pořád vypisuje, s prázdnými texty a
+  `active: false`, aby šlo vzít zpět.
+- V žádném textu se neobjeví SSID, MAC adresa, BSSID, sériové číslo disku ani
+  WWN; disky se pojmenovávají svým `/dev` jménem a rozlišují serverovým otiskem.
+
+`action=storage_history&monitor_id=&days=` odpovídá `{monitorId, days, disks: []}`,
+jedna položka na disk s jeho identitou (`key`, `label`, `model`, `size`) a se
+seznamem `days: []` po `{day, tempMin, tempMean, tempMax, samples, reallocated,
+pending, offline, runtimeBadBlocks, unsafeShutdowns, powerCycles, hostWritten,
+hostWrittenPartial, wearPct}`. `samples` počítá čerstvá čtení SMART toho dne;
+`hostWrittenPartial: true` říká, že denní počet bajtů je neúplný (router se
+restartoval nebo čítač přetekl) a hodnota je dolní odhad.
+
+`action=wan_bottleneck&monitor_id=` odpovídá verdiktem pro každý směr
+(`verdict.dl`, `verdict.ul`), testy, o které se opírá, cestou WAN a tarifem:
+
+```json
+{ "class": "line_limited", "reason": "below_plan", "confidence": "high",
+  "basis": [41, 38, 35],
+  "numbers": { "s_mbps": 700.0, "s_max_mbps": 710.0, "agree": 3,
+               "span_days": 3, "servers": 2, "tests": 3 } }
+```
+
+- `class` je `none`, `link_limited`, `cpu_limited`, `line_limited` nebo
+  `inconclusive`; `reason` říká, které pravidlo rozhodlo (`plan_reached`,
+  `sqm_shaper`, `wan_port`, `packet_path`, `test_client`, `below_plan`, …).
+- `line_limited` – jediný verdikt, který obviní cizí techniku – potřebuje tři
+  shodné testy, rozpětí aspoň dvou dnů, **dva různé servery** do 15 % od sebe,
+  důkaz, že aspoň jeden z nich někdy tarif opravdu dodal, a výsledky mimo
+  náhorní plošiny gigabitového a 2,5gigabitového portu. Co nedokáže, vrací jako
+  `inconclusive` s důvodem (`not_enough_tests`, `single_server`,
+  `server_limited`, `server_capacity_unproven`, `port_plateau`,
+  `tests_disagree`).
+- Bez uloženého tarifu se nic nikdy nenazve „pod tarifem": odpovědí je
+  `inconclusive / no_plan_known` a karta si o tarif řekne. Test, který router
+  nespustil sám, umí jen potvrdit dosažený tarif, nikdy prohlásit linku za
+  pomalou.
+- `basis` vypisuje id řádků `speedtest_results`, o které se verdikt opírá, aby
+  karta mohla ukázat přesně to, co se měřilo.
+
+---
+
 ## Incidenty a reporty
 
 | Endpoint | Přístup | Popis |
@@ -523,6 +621,8 @@ index zúží na 60 řádků. Žádná stránka do té tabulky při načtení ne
 | `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: zapne nebo vypne údržbu pro jeden i více monitorů. Vypnutí maže i okno, aby další údržba nevypršela hned po zapnutí |
 | `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: smaže měření, logy i denní agregace monitoru a vrátí ho do stavu „neznámý“. Nevratné, proto chce zpátky přesný název monitoru |
 | `action=redetect_location` | admin | Vynutí nový dotaz na geolokaci serveru a uloží ji do `ip_loc_local` |
+| `action=router_recommendation_mute` | admin | POST `{monitor_id, key, muted, reason?}`: ztlumí jedno doporučení routeru (nebo ztlumení vezme zpět). Závažnost se vyhodnotí na serveru, nikdy se nebere z těla požadavku – ztlumení tak umlčí nález v dnešní podobě, ne jeho horší verzi. Neznámé id pravidla je 400, archivovaný monitor se odmítne a každá změna zapíše řádek do `audit_log` |
+| `action=wan_settings_save` | admin | POST `{monitor_id, plan_down_mbit?, plan_up_mbit?, plan_ok_pct?}`: tarif routeru. `null` nebo prázdný řetězec hodnotu smaže; číslo mimo 1-100000 (30-100 u procent) je 400 a nikdy se neořízne, protože oříznutý tarif je tarif, který majitel nezadal. Chybějící klíč `probe_enabled` nechá uložený souhlas být |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | veřejné čtení, admin zápis | Profily metrik |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | seznam veřejný, skryté stránky a zápis admin | Veřejné status stránky |
 | `action=dashboard_layout` | přihlášený | Pořadí a viditelnost dlaždic |
@@ -569,6 +669,36 @@ pole má strop 8 KB a najednou přibude nejvýš 64 nových klíčů.
 
 Odděleným lehkým POSTem chodí `action_result` - potvrzení provedené Remote
 Action. Nemá telemetrická pole, proto se zpracovává dřív než jejich validace.
+
+**Agent 0.1.7 (OpenWrt) přidává** `wifi_radios[]` (jeden objekt na bezdrátové
+síťové zařízení, nejvýš 16: pásmo odvozené z frekvence, generace a šířka, počty
+klientů podle schopností a šifrování, šum a vytížení kanálu), `storage_disks[]`
+(nejvýš 8 fyzických disků po 16 oddílech, stav SMART, teplota, čítače chyb,
+opotřebení, zapsané bajty), `agent_tools` (sedm přísných booleanů, které říkají,
+které volitelné programy router opravdu má), `wan_path` (packet steering, flow
+offloading, SQM, zahozené rámce v kruhu) a čítače WAN. Pravidla, která na ně
+server uplatňuje:
+
+- **Hodnota mimo rozsah je `null`, nikdy okraj rozsahu.** Vytížení 101 % nebo
+  teplota 0 °C se neořízne na 100 ani na minimum: zahodí se, protože oříznutá
+  hodnota vypadá jako měření.
+- **Chybějící `storage_disks` nechá poslední seznam být.** Agent 0.1.6 klíč
+  neposílá a hlášení 0.1.7, které se muselo zmenšit, o něj může přijít; číst to
+  jako „žádné disky" by smazalo funkční seznam. Klíč, který poslaný JE, seznam
+  nahradí.
+- Pět čítačů WAN se ukládá jako **krok** mezi dvěma hlášeními a krok je `null`
+  přes restart nebo při změně zařízení WAN – nikdy hodnota od startu.
+- **Soukromí:** router neopustí žádná MAC adresa, BSSID, SSID sousedů, sériové
+  číslo disku ani WWN; identita disku je serverový otisk z přenosu, portu,
+  modelu a velikosti.
+
+Upozornění z těchto polí používají tři stavy – `storage_failing` (pageuje),
+`storage_warning` a `storage_recovered` (nepageují ani jeden) – a všechna
+podléhají přepínači `agent_notifications_enabled`; do časové osy se událost
+zapíše tak jako tak. Teplota disku potřebuje dvě čerstvá čtení nad limitem po
+sobě a končí 5 °C pod ním, rostoucí čítač chyb je při prvním pohledu tichý
+a opakuje se nejvýš jednou za den a upozornění na zaplněný souborový systém
+potřebuje dvě hlášení nad limitem a končí o pět bodů níž.
 
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 

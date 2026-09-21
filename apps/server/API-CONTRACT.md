@@ -98,6 +98,18 @@ server vrací příkaz (`restart_wan`, `restart_wireguard`, `reboot_router`,
 ověřuje. Go implementace musí použít **identický payload i pořadí polí**, jinak
 podpisy nesednou a Remote Actions přestanou fungovat.
 
+**Potvrzení dávky měření rychlosti (agent 0.1.7).** Nese-li payload
+`speedtests[]`, odpověď obsahuje klíč `speedtests_acked`: časovou značku
+nejnovější položky, která je opravdu vyřízená (uložená, už uložená dřív, nebo
+natrvalo odmítnutá jako neplatná), a jen takovou, před kterou nic neselhalo.
+Agent podle ní maže soubory na routeru a posouvá `last_sent` — na holou 200
+nemaže nic, protože zápis do `speedtest_results` běží ve vlastním try/catch a
+telemetrii neshazuje. Když zápis selže, vrací se `null` nebo značka poslední
+vyřízené položky a `last_details.ingest_issues` nese `speedtest_store_failed`;
+odmítnutá položka se hlásí jako `speedtest_rejected`, neshoda jednotek jako
+`unit_mismatch`. Go implementace musí ack počítat stejně, jinak agenti buď
+smažou neuložená měření, nebo budou donekonečna posílat ta neplatná.
+
 Nasazení dnes běží pěti implementacemi: `agent.sh`, `agent.py`, `agent.ps1`,
 `agent_openwrt.sh`, `node_client.php`. Přepínat je nelze najednou → nový
 backend musí umět starý protokol i po přepnutí.

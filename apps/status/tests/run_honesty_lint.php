@@ -91,6 +91,10 @@ $data_string_fields = [
     'hostname', 'public_ip', 'wan_ipv4', 'wan_ipv6', 'provider', 'datacenter',
     'virtualserver_name', 'os', 'kernel', 'model', 'board', 'firmware',
     'agent_version', 'version',
+    // The Wi-Fi band of a radio. Agent 0.1.7 derives it from the frequency, so
+    // a disabled radio has none - `?? '2.4GHz'` would print the very band the
+    // agent stopped inventing (monitor.php:471 did exactly that).
+    'band',
 ];
 
 /** Values that are honest placeholders, not invented data. */

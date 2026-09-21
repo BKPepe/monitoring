@@ -1,9 +1,12 @@
 import * as React from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Globe, Shield, Wifi, Lock, Gauge, Network } from 'lucide-react';
+import { Globe, Shield, Wifi, Lock, Gauge, HardDrive, Network } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { formatUptime } from '@/lib/utils';
+import type { StorageDisk } from '@/api/types';
+import { verdictSentence, worstDisk, type HealthTone } from '@/lib/disk-health';
+import { radioProfileLabel } from '@/lib/wifi-profile';
 import { lteBackupState, type LteBackupReason } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
 
@@ -37,8 +40,18 @@ function formatCount(value: unknown): string {
   return Number.isFinite(n) ? n.toLocaleString('cs-CZ') : String(value);
 }
 
+/** The tile states, for the four tones a disk verdict can carry. */
+const TONE_STATE: Record<HealthTone, 'good' | 'warn' | 'bad' | 'unknown'> = {
+  up: 'good',
+  warning: 'warn',
+  down: 'bad',
+  muted: 'unknown',
+};
+
 export function RouterServices({ d }: { d: Record<string, any> }) {
   const { t } = useLanguage();
+  // Read once, so every "x ago" on this card is measured from the same moment.
+  const [nowSecs] = React.useState(() => Math.floor(Date.now() / 1000));
 
   const tiles: React.ReactNode[] = [];
 
@@ -202,7 +215,12 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
   }
 
   // --- DNS -------------------------------------------------------------
-  if (d.dns_encryption || d.dns_servers || d.dns_latency_ms != null) {
+  // G41: a resolver that answers nothing used to be charted as an excellent
+  // latency, so the tile could read "fine" while the router resolved nothing.
+  // Its verdict now outranks the encryption text - and it is also the reason
+  // the tile renders at all when every other DNS value is null.
+  const dnsDead = d.dns_resolver_ok === false;
+  if (d.dns_encryption || d.dns_servers || d.dns_latency_ms != null || d.dns_resolver_ok != null) {
     const enc = String(d.dns_encryption ?? '');
     const verified = enc.includes('ověřeno') || enc.toLowerCase().includes('verified');
     tiles.push(
@@ -210,8 +228,8 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
         key="dns"
         icon={<Lock className="size-4" />}
         title={t('rsvc.dns', 'DNS resolver')}
-        state={verified ? 'good' : enc ? 'warn' : 'unknown'}
-        stateText={enc || t('rsvc.unknown', 'Neznámý stav')}
+        state={dnsDead ? 'bad' : verified ? 'good' : enc ? 'warn' : 'unknown'}
+        stateText={dnsDead ? t('net.dns_resolver_silent', 'Neodpovídá') : enc || t('rsvc.unknown', 'Neznámý stav')}
         lines={[
           // The OpenWrt agent sends the resolver list as a comma-joined string;
           // an array is accepted too.
@@ -291,13 +309,41 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
         stateText={t('rsvc.radios', { count: d.wifi_radios.length }, `${d.wifi_radios.length} rádia`)}
         lines={[
           anyClientData ? `${t('rsvc.clients', 'Připojení klienti')}: ${totalClients}` : null,
+          // What the radio actually runs, not where it runs it: the channel
+          // says nothing without the width, and the width is what the new
+          // Wi-Fi card is about.
           ...d.wifi_radios.slice(0, 3).map((r: any) => {
-            const parts = [r.ssid, r.channel != null ? `kanál ${r.channel}` : null].filter(Boolean);
+            const parts = [r.band, radioProfileLabel(r, t)].filter(Boolean);
             return parts.length > 0 ? parts.join(' · ') : null;
           }),
         ]}
       />
     );
+  }
+
+  // --- Disks ------------------------------------------------------------
+  // One line for the disk the router should worry about first. The sentence
+  // is the same one the Storage card shows, so the tile can never say "fine"
+  // about a disk the card calls failing.
+  if (Array.isArray(d.storage_disks) && d.storage_disks.length > 0) {
+    const disks = d.storage_disks as StorageDisk[];
+    const worst = worstDisk(disks);
+    if (worst) {
+      const { verdict, text } = verdictSentence(worst, d.agent_tools?.pkg_manager ?? null, nowSecs, t);
+      tiles.push(
+        <Tile
+          key="disks"
+          icon={<HardDrive className="size-4" />}
+          title={t('storage.disks', 'Disky')}
+          state={TONE_STATE[verdict.tone]}
+          stateText={text}
+          lines={disks.slice(0, 3).map((disk) => {
+            const temp = typeof disk.smart?.temperature_c === 'number' ? `${disk.smart.temperature_c} °C` : null;
+            return [disk.name, temp].filter(Boolean).join(' · ');
+          })}
+        />
+      );
+    }
   }
 
   // --- VPN -------------------------------------------------------------
@@ -322,14 +368,23 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
   }
 
   // --- SQM -------------------------------------------------------------
-  if (d.sqm_enabled != null) {
+  // Before 0.1.7 `sqm_enabled` was false whenever the router could not tell
+  // (G24), so a shaped line was reported as unshaped. Now the unknown case is
+  // null and the tile says so instead of claiming the queue is off.
+  if (d.sqm_enabled != null || d.sqm_download_kbps != null || d.sqm_upload_kbps != null) {
     tiles.push(
       <Tile
         key="sqm"
         icon={<Gauge className="size-4" />}
         title={t('rsvc.sqm', 'SQM (řízení fronty)')}
-        state={d.sqm_enabled ? 'good' : 'muted'}
-        stateText={d.sqm_enabled ? t('rsvc.active', 'Aktivní') : t('rsvc.inactive', 'Vypnutý')}
+        state={d.sqm_enabled == null ? 'unknown' : d.sqm_enabled ? 'good' : 'muted'}
+        stateText={
+          d.sqm_enabled == null
+            ? t('rsvc.unknown', 'Neznámý stav')
+            : d.sqm_enabled
+              ? t('rsvc.active', 'Aktivní')
+              : t('rsvc.inactive', 'Vypnutý')
+        }
         lines={[
           d.sqm_download_kbps ? `↓ ${Math.round(d.sqm_download_kbps / 1000)} Mb/s` : null,
           d.sqm_upload_kbps ? `↑ ${Math.round(d.sqm_upload_kbps / 1000)} Mb/s` : null,
