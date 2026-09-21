@@ -311,6 +311,11 @@ $ow_storage_sent = array_key_exists('storage_disks', $data);
 $ow_storage_disks = $ow_storage_sent ? bk_sanitize_storage_disks($data['storage_disks'], $bk_now) : null;
 $ow_agent_tools = bk_sanitize_agent_tools($data['agent_tools'] ?? null);
 $ow_wan_path = bk_sanitize_wan_path($data['wan_path'] ?? null);
+// The wired switch, every run (0.1.8). No carry-over of an older section on
+// purpose, unlike storage_disks: which cable is plugged in is live state, and
+// a picture kept from a report that did not carry it would be a lie by the
+// next minute. An agent that does not send it has no switch picture.
+$ow_lan_ports = bk_sanitize_lan_ports($data['lan_ports'] ?? null);
 // Busiest core of the minute and how much of it was packet handling.
 $ow_cpu_core_max = bk_ranged_num($data['cpu_core_max_pct'] ?? null, 0.0, 100.0);
 $ow_cpu_core_max_softirq = bk_ranged_num($data['cpu_core_max_softirq_pct'] ?? null, 0.0, 100.0);
@@ -673,6 +678,7 @@ try {
         // server knows, so this is what makes an unchecked copy impossible.
         'agent_tools' => $ow_agent_tools,
         'wan_path' => $ow_wan_path,
+        'lan_ports' => $ow_lan_ports,
         'wan_link_dev' => $ow_wan_link_dev,
         'cpu_cores' => $ow_cpu_cores,
         'cpu_core_max_pct' => $ow_cpu_core_max,

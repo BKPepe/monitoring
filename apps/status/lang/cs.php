@@ -923,6 +923,7 @@ return [
 
     'rr_lan_wired_ceiling_title' => 'Porty LAN jsou pomalejší než tarif',
     'rr_lan_wired_ceiling_measured' => 'Tarif je %1$s Mbit/s, ale porty LAN routeru jsou gigabitové (%2$s Mbit/s).',
+    'rr_lan_wired_ceiling_shared' => 'Kabelem je připojeno %1$d zařízení a všechna sdílejí jedno vedení do routeru o rychlosti %2$s Mbit/s.',
     'rr_lan_wired_ceiling_action' => 'Jedno zařízení na kabelu nedostane víc než asi 940 Mbit/s. Není to závada linky ani routeru. Vyšší rychlost se rozdělí mezi více zařízení. Doporučení můžete ztlumit.',
 
     'rr_firewall_off_title' => 'Pravidla firewallu nejsou načtená',

@@ -54,6 +54,7 @@ import { SpeedtestCard } from '@/components/speedtest-card';
 import { WanBottleneckCard } from '@/components/wan-bottleneck-card';
 import { LoadingState } from '@/components/ui/states';
 import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
+import { LanPortMap } from '@/components/lan-port-map';
 import { WifiRadioList } from '@/components/wifi-radio-list';
 import { timelineSeverity, timelineTitle } from '@/lib/timeline-events';
 import { monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
@@ -1678,6 +1679,11 @@ function NetworkTab({
       {recommendations?.('wan')}
       {wanBottleneck}
       {speedtest}
+      {/* The wiring of the household itself. Only the OpenWrt agent reports a
+          switch, so nothing else gets a card that could only say "no data". */}
+      {d.agent_type === 'openwrt' && (
+        <LanPortMap lanPorts={d.lan_ports} agentVersion={typeof d.version === 'string' ? d.version : null} />
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         {(d.wan_proto != null || d.wan_up != null || d.wan_internet != null) && (

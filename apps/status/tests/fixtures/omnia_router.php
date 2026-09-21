@@ -127,6 +127,33 @@ $payload = [
         'lan_port_max_mbit' => 1000, 'lan_port_cap_mbit' => 1000,
         'lan_conduits' => [['dev' => 'eth1', 'mbit' => 1000]],
     ],
+    // --- The wired switch, port by port (agent 0.1.8) ------------------------
+    // From the same ubus dump: five DSA ports on one conduit. lan2 and lan3
+    // have no carrier, so they print no "speed" line at all - rate, duplex and
+    // link partner are null, never 0. lan1 linked at 100F because its partner
+    // advertises no 1000baseT; the port itself still supports 1000.
+    // `clients` was NOT captured as a number: the owner's FDB was recorded only
+    // as "rows on lan0, lan4 and the radio", so the two ports that HAD rows
+    // stay null (= not measured) while a port with no row and a port with no
+    // cable are a measured 0. clients_total is unknown for the same reason -
+    // a sum over unknown parts is not a number.
+    'lan_ports' => [
+        'bridge' => 'br-lan',
+        'ports' => [
+            ['name' => 'lan0', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full',
+                'max_mbit' => 1000, 'partner_max_mbit' => 1000, 'clients' => null],
+            ['name' => 'lan1', 'link' => true, 'speed_mbit' => 100, 'duplex' => 'full',
+                'max_mbit' => 1000, 'partner_max_mbit' => 100, 'clients' => 0],
+            ['name' => 'lan2', 'link' => false, 'speed_mbit' => null, 'duplex' => null,
+                'max_mbit' => 1000, 'partner_max_mbit' => null, 'clients' => 0],
+            ['name' => 'lan3', 'link' => false, 'speed_mbit' => null, 'duplex' => null,
+                'max_mbit' => 1000, 'partner_max_mbit' => null, 'clients' => 0],
+            ['name' => 'lan4', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full',
+                'max_mbit' => 1000, 'partner_max_mbit' => 1000, 'clients' => null],
+        ],
+        'conduits' => [['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']],
+        'clients_total' => null,
+    ],
     // librespeed autostart is on, its data_dir is EMPTY: no result to classify.
     'speedtests' => [],
     'speedtest_active' => false,

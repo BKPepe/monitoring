@@ -743,6 +743,33 @@ the limit and clears 5 °C below it, a growing error counter is silent on first
 sight and repeats at most once a day, and a filesystem alert needs two reports
 over the limit and clears five points lower.
 
+**Agent 0.1.8 (OpenWrt) adds** `lan_ports` - the wired switch, port by port,
+sent with every report because a cable changes by the minute. Per port: `name`,
+`link`, `speed_mbit`, `duplex`, `max_mbit` (what the port supports),
+`partner_max_mbit` (what the other end advertises) and `clients`; next to them
+`bridge`, `conduits[]` (the DSA link to the CPU that every wired client shares)
+and `clients_total`. The server stores it in `last_details`, which is how it
+reaches the app in the `details` object of `action=monitors` - there is no
+endpoint of its own. Its rules:
+
+- **A port with no carrier has no rate.** `speed_mbit`, `duplex` and
+  `partner_max_mbit` are `null` whenever `link` is `false`, and a value that
+  cannot be read is `null` too - never 0 and never a plausible guess. A port
+  with `clients: 0` is different: that is a measurement, "nothing has spoken
+  behind this socket".
+- **`lan_ports: null` means the router could not look** (no ubus, no `bridge`,
+  a switch that is not DSA). A report that does not carry the section erases
+  the stored one instead of keeping it: unlike the disk list, a cable picture
+  from an earlier report would be a lie within a minute.
+- **Privacy:** only counts leave the router. No MAC address, no hostname and no
+  lease is sent or stored, and the section is never part of the public view.
+- It is **not** a time series and has no metric column. The count comes from
+  the bridge forwarding database, which forgets a device after a few quiet
+  minutes, so a chart of it would show devices unplugging themselves.
+- The only recommendation it feeds is `lan_wired_ceiling`, which still fires on
+  the port **capability**; the switch merely adds the household's own numbers -
+  how many wired devices share which conduit - and only when both were measured.
+
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Interface for remote measurement nodes. Authorised by a shared `cron_key`

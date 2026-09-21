@@ -150,7 +150,14 @@ $not_metrics = [
     // parsed from (X5): what KIND of port it is, which conduit it hangs on and
     // what the link negotiated. They describe the wiring, which does not change
     // from minute to minute and has nothing to plot.
-    'devtype', 'conduit', 'speed',
+    'devtype', 'conduit', 'speed', 'carrier',
+    // `lan_ports`: the wired switch, port by port (agent 0.1.8). One object
+    // in last_details, like wan_path. `clients` IS a number, but it is a
+    // per-port count that belongs to the picture of the switch, not a series
+    // of its own; `ports`/`conduits` are lists and the rest are labels and
+    // capabilities of the wiring.
+    'lan_ports', 'ports', 'conduits', 'link', 'speed_mbit', 'duplex',
+    'max_mbit', 'partner_max_mbit', 'clients', 'clients_total',
     // Nested in `wan_probe_state` (and in the response's `wan_probe_seed`).
     'enabled', 'due', 'window', 'valid_count', 'attempts', 'bootstrap',
     'last_invalid_reason', 'last_at', 'skipped', 'first_grant_at',

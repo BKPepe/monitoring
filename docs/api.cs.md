@@ -732,6 +732,34 @@ sobě a končí 5 °C pod ním, rostoucí čítač chyb je při prvním pohledu 
 a opakuje se nejvýš jednou za den a upozornění na zaplněný souborový systém
 potřebuje dvě hlášení nad limitem a končí o pět bodů níž.
 
+**Agent 0.1.8 (OpenWrt) přidává** `lan_ports` – drátěný přepínač port po portu,
+posílaný s každým hlášením, protože kabel se mění každou minutou. Na port:
+`name`, `link`, `speed_mbit`, `duplex`, `max_mbit` (co port umí),
+`partner_max_mbit` (co nabízí protistrana) a `clients`; vedle toho `bridge`,
+`conduits[]` (vedení DSA k procesoru, které sdílejí všichni drátoví klienti)
+a `clients_total`. Server to ukládá do `last_details`, a tím to přichází do
+aplikace v objektu `details` u `action=monitors` – vlastní endpoint to nemá.
+Pravidla:
+
+- **Port bez linku nemá rychlost.** `speed_mbit`, `duplex` i `partner_max_mbit`
+  jsou `null`, kdykoli je `link` `false`, a nečitelná hodnota je `null` také –
+  nikdy 0 a nikdy věrohodný dohad. Port s `clients: 0` je něco jiného: to je
+  měření, „za touhle zásuvkou nikdo nepromluvil".
+- **`lan_ports: null` znamená, že se router nemohl podívat** (není ubus, není
+  `bridge`, přepínač není DSA). Hlášení, které sekci nenese, uloženou sekci
+  smaže, místo aby si ji nechalo: na rozdíl od seznamu disků by obrázek
+  zapojených kabelů ze staršího hlášení byl do minuty lež.
+- **Soukromí:** router opouštějí jen počty. Žádná MAC adresa, žádné jméno
+  stanice ani zápůjčka se neposílá ani neukládá a sekce nikdy není součástí
+  veřejného pohledu.
+- **Není** to časová řada a nemá sloupec v metrikách. Počet pochází z
+  přeposílací tabulky mostu, která na zařízení po pár tichých minutách zapomene,
+  takže graf by ukazoval, jak se zařízení sama odpojují.
+- Jediné doporučení, které z toho čerpá, je `lan_wired_ceiling`. To se pořád
+  spouští podle **schopnosti** portů; přepínač k němu jen přidává vlastní čísla
+  domácnosti – kolik drátových zařízení sdílí které vedení – a jen když se
+  obojí opravdu změřilo.
+
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Rozhraní pro vzdálené měřicí uzly. Autorizace sdíleným `cron_key`

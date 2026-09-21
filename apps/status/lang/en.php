@@ -919,6 +919,7 @@ return [
 
     'rr_lan_wired_ceiling_title' => 'LAN ports are slower than the plan',
     'rr_lan_wired_ceiling_measured' => 'The plan is %1$s Mbit/s but the router\'s LAN ports are gigabit (%2$s Mbit/s).',
+    'rr_lan_wired_ceiling_shared' => '%1$d wired devices are connected and all of them share one %2$s Mbit/s line to the router.',
     'rr_lan_wired_ceiling_action' => 'A single wired device cannot get more than about 940 Mbit/s. That is not a fault of the line or the router. The higher rate is shared between several devices. You can mute this recommendation.',
 
     'rr_firewall_off_title' => 'Firewall rules are not loaded',

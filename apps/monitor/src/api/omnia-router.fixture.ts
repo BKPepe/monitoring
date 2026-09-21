@@ -5,6 +5,7 @@ import type {
   StorageDisk,
   StorageHistoryResponse,
   WanBottleneckResponse,
+  LanPorts,
   WanPath,
   WifiRadio,
 } from './types';
@@ -154,6 +155,52 @@ const wanPath: WanPath = {
   lan_port_max_mbit: 1000,
   lan_port_cap_mbit: 1000,
   lan_conduits: [{ dev: 'eth1', mbit: 1000 }],
+};
+
+/**
+ * `lan_ports` of the same router, exactly as the server fixture
+ * (apps/status/tests/fixtures/omnia_router.php) stores it: five DSA ports on
+ * one gigabit conduit, two of them without a cable, and a run in which the
+ * bridge table could not be read - so two ports keep an unknown device count
+ * instead of a zero.
+ */
+const lanPorts: LanPorts = {
+  bridge: 'br-lan',
+  ports: [
+    {
+      name: 'lan0',
+      link: true,
+      speed_mbit: 1000,
+      duplex: 'full',
+      max_mbit: 1000,
+      partner_max_mbit: 1000,
+      clients: null,
+    },
+    // 100 because the other end offered no more; the port itself does gigabit.
+    { name: 'lan1', link: true, speed_mbit: 100, duplex: 'full', max_mbit: 1000, partner_max_mbit: 100, clients: 0 },
+    { name: 'lan2', link: false, speed_mbit: null, duplex: null, max_mbit: 1000, partner_max_mbit: null, clients: 0 },
+    { name: 'lan3', link: false, speed_mbit: null, duplex: null, max_mbit: 1000, partner_max_mbit: null, clients: 0 },
+    {
+      name: 'lan4',
+      link: true,
+      speed_mbit: 1000,
+      duplex: 'full',
+      max_mbit: 1000,
+      partner_max_mbit: 1000,
+      clients: null,
+    },
+  ],
+  conduits: [{ dev: 'eth1', link: true, speed_mbit: 1000, duplex: 'full' }],
+  clients_total: null,
+};
+
+/** The same switch on a run where the bridge table WAS read: four devices, two sockets. */
+const lanPortsCounted: LanPorts = {
+  ...lanPorts,
+  ports: lanPorts.ports.map((port) =>
+    port.name === 'lan0' ? { ...port, clients: 3 } : port.name === 'lan4' ? { ...port, clients: 1 } : port
+  ),
+  clients_total: 4,
 };
 
 /** `last_details` of the router, the keys of agent 0.1.7 only. */
@@ -395,6 +442,8 @@ export default {
   diskSdaPending,
   agentTools,
   wanPath,
+  lanPorts,
+  lanPortsCounted,
   details,
   recommendations,
   storageHistory,

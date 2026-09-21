@@ -8763,6 +8763,87 @@ function bk_sanitize_wan_path($raw): ?array {
 }
 
 /**
+ * The wired switch of an OpenWrt agent (0.1.8+), port by port, validated.
+ *
+ * The agent sends this every run: which cable carries a link, at what rate,
+ * what the port and the other end can do, and how many devices the bridge has
+ * learnt behind it. The conduit comes with it - on a DSA switch every wired
+ * client shares that one link to the CPU, and it is the real ceiling.
+ *
+ * Two nulls carry meaning and are kept apart: the whole section is null when
+ * the router could not look (no ubus, no `bridge`, no DSA switch), while a
+ * port's `speed_mbit` is null when there is nothing plugged in. A count of 0
+ * is a MEASUREMENT - "this port is quiet" - and must not become null.
+ *
+ * A port that reports no carrier cannot have negotiated a rate, a duplex or a
+ * link partner: those three are forced to null rather than stored, because a
+ * rate next to a dead port reads as a measurement of a live one.
+ *
+ * @return ?array<string, mixed> null when the router could not answer
+ */
+function bk_sanitize_lan_ports($raw): ?array {
+    if (!is_array($raw) || !is_array($raw['ports'] ?? null)) {
+        return null;
+    }
+    $netdev = fn ($v): ?string => (is_string($v) && preg_match('/^[A-Za-z0-9._@-]{1,32}$/', $v)) ? $v : null;
+    $bool = fn ($v): ?bool => is_bool($v) ? $v : null;
+    // 1 Mbit/s to 1 Tbit/s: below it no switch port negotiates, above it the
+    // value is a parse mistake and not a rate.
+    $rate = fn ($v): ?int => bk_ranged_int($v, 1, 1000000);
+    $duplex = fn ($v): ?string => in_array($v, ['full', 'half'], true) ? $v : null;
+
+    $ports = [];
+    // A home switch has at most a handful of ports; 16 is well past any board
+    // this agent runs on and stops a malformed list from filling the blob.
+    foreach (array_slice($raw['ports'], 0, 16) as $port) {
+        if (!is_array($port) || ($name = $netdev($port['name'] ?? null)) === null) {
+            continue;
+        }
+        $link = $bool($port['link'] ?? null);
+        $ports[] = [
+            'name' => $name,
+            'link' => $link,
+            'speed_mbit' => $link === false ? null : $rate($port['speed_mbit'] ?? null),
+            'duplex' => $link === false ? null : $duplex($port['duplex'] ?? null),
+            // What the port itself supports. A capability, not today's state:
+            // it stays 1000 on a port linked at 100.
+            'max_mbit' => $rate($port['max_mbit'] ?? null),
+            'partner_max_mbit' => $link === false ? null : $rate($port['partner_max_mbit'] ?? null),
+            // 0 is "nothing has spoken behind this port", which is a result.
+            // 4096 is more addresses than a household switch can learn.
+            'clients' => bk_ranged_int($port['clients'] ?? null, 0, 4096),
+        ];
+    }
+    if (!$ports) {
+        return null;
+    }
+
+    $conduits = [];
+    foreach (array_slice(is_array($raw['conduits'] ?? null) ? $raw['conduits'] : [], 0, 4) as $conduit) {
+        if (!is_array($conduit) || ($dev = $netdev($conduit['dev'] ?? null)) === null) {
+            continue;
+        }
+        $clink = $bool($conduit['link'] ?? null);
+        $conduits[] = [
+            'dev' => $dev,
+            'link' => $clink,
+            'speed_mbit' => $clink === false ? null : $rate($conduit['speed_mbit'] ?? null),
+            'duplex' => $clink === false ? null : $duplex($conduit['duplex'] ?? null),
+        ];
+    }
+
+    return [
+        'bridge' => $netdev($raw['bridge'] ?? null),
+        'ports' => $ports,
+        'conduits' => $conduits,
+        // The agent's own sum over the ports it kept. Out of range it is null,
+        // never the sum of the list above - that would turn a dropped port
+        // into a smaller, believable-looking total.
+        'clients_total' => bk_ranged_int($raw['clients_total'] ?? null, 0, 65535),
+    ];
+}
+
+/**
  * Fits the details of a monitor into the `last_details` TEXT column.
  *
  * The largest lists go first, then the largest strings; the scalars the UI
@@ -14156,10 +14237,26 @@ function bk_rec_rules_wan_tests(array $in, array $state): array {
             $best = $best === null ? (float)$s : max($best, (float)$s);
         }
     }
+    // The evidence, when the switch reported it (agent 0.1.8): the conduit the
+    // wired ports really share and how many devices are behind it. It does not
+    // decide whether the rule fires - it only turns "your ports are gigabit"
+    // into the household's own numbers. The SLOWEST linked conduit is the
+    // ceiling; an unlinked one carries nothing and is left out.
+    $lan = is_array($details['lan_ports'] ?? null) ? $details['lan_ports'] : [];
+    $conduit = null;
+    foreach (is_array($lan['conduits'] ?? null) ? $lan['conduits'] : [] as $c) {
+        $rate = is_array($c) && is_numeric($c['speed_mbit'] ?? null) ? (float)$c['speed_mbit'] : null;
+        if ($rate !== null && ($c['link'] ?? null) === true) {
+            $conduit = $conduit === null ? $rate : min($conduit, $rate);
+        }
+    }
+    // One device does not share anything, so the sentence is only true from
+    // two upwards - and a count the agent could not take stays out entirely.
+    $wired = bk_ranged_int($lan['clients_total'] ?? null, 2, 65535);
     if (is_numeric($cap) && (float)$cap <= $th['lan_wired_ceiling']['cap_at_most']
         && (($plan_down !== null && $plan_down > 1000.0) || ($best !== null && $best > 1000.0))) {
         $items[] = bk_rec_item('lan_wired_ceiling', 'lan_wired_ceiling', 'wan', 'info', ['kind' => 'wan'],
-            ['plan' => $plan_down, 'cap' => (float)$cap]);
+            ['plan' => $plan_down, 'cap' => (float)$cap, 'conduit' => $conduit, 'clients' => $wired]);
     }
 
     return ['items' => $items, 'not_evaluated' => $skip];
@@ -15018,6 +15115,13 @@ function bk_router_rec_render(array $item): array {
         case 'lan_wired_ceiling':
             $measured = sprintf(t('rr_lan_wired_ceiling_measured'), bk_rec_num($p['plan'] ?? null),
                 bk_rec_num($p['cap'] ?? null));
+            // The household's own evidence, only when the switch measured BOTH
+            // numbers: how many wired devices share which conduit. Half of it
+            // would be a sentence with a dash in it, so it stays unsaid.
+            if (($p['conduit'] ?? null) !== null && ($p['clients'] ?? null) !== null) {
+                $measured .= ' ' . sprintf(t('rr_lan_wired_ceiling_shared'), (int)$p['clients'],
+                    bk_rec_num($p['conduit']));
+            }
             break;
         case 'firewall_off':
             $measured = sprintf(t('rr_firewall_off_measured'),

@@ -3288,6 +3288,61 @@ check('Omnia: cesta WAN si nese conduit a strop portů LAN', [
     $omd['wan_path']['lan_port_cap_mbit'] ?? null, $omd['wan_path']['lan_conduits'][0]['dev'] ?? null,
     $omd['wan_path']['lan_conduits'][0]['mbit'] ?? null, $omnia_at($omd['wan_path'] ?? null, 'wan_rx_ring_drops'),
 ], [1000, 'eth1', 1000, null]);
+// The wired switch (0.1.8). Five ports, two without a cable: their rate and
+// duplex must arrive as null - a dead socket showing "1000 Mbit/s" would be
+// read as a working one. lan1 at 100 is the partner's limit, not a fault.
+$omd_lan = is_array($omd['lan_ports'] ?? null) ? $omd['lan_ports'] : [];
+check('Omnia: přepínač dorazí port po portu, bez kabelu bez rychlosti', [
+    array_column($omd_lan['ports'] ?? [], 'name'), array_column($omd_lan['ports'] ?? [], 'link'),
+    array_column($omd_lan['ports'] ?? [], 'speed_mbit'),
+], [['lan0', 'lan1', 'lan2', 'lan3', 'lan4'], [true, true, false, false, true], [1000, 100, null, null, 1000]]);
+check('Omnia: 100 Mbit na lan1 je strop protistrany, port sám umí 1000', [
+    $omd_lan['ports'][1]['partner_max_mbit'] ?? null, $omd_lan['ports'][1]['max_mbit'] ?? null,
+    $omnia_at($omd_lan['ports'][2] ?? null, 'partner_max_mbit'),
+], [100, 1000, null]);
+check('Omnia: jedno gigabitové vedení ke CPU a nezměřené počty zůstanou null', [
+    $omd_lan['conduits'] ?? null, $omd_lan['bridge'] ?? null,
+    $omnia_at($omd_lan, 'clients_total'), $omnia_at($omd_lan['ports'][0] ?? null, 'clients'),
+    $omd_lan['ports'][3]['clients'] ?? 'chybí',
+], [[['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']], 'br-lan', null, null, 0]);
+// A router that could not look must say so, and the section must not be kept
+// from an older report - the cable picture goes stale within a minute.
+check('Omnia: router, který se nemohl podívat, hlásí null místo starého obrázku', [
+    $post_agent(array_merge($omnia_pl, ['agent_time' => time(), 'lan_ports' => null])),
+    $omnia_at($omnia_details(), 'lan_ports'),
+], [200, null]);
+$omnia_lan_dirty = array_merge($omnia_pl, ['agent_time' => time()]);
+$omnia_lan_dirty['lan_ports']['ports'][0]['mac'] = 'aa:bb:cc:dd:ee:ff';
+$omnia_lan_dirty['lan_ports']['ports'][0]['clients'] = -3;
+$omnia_lan_dirty['lan_ports']['hostnames'] = ['notebook'];
+check('Omnia: hlášení s MAC a jménem stanice u portu agent přijme', $post_agent($omnia_lan_dirty), 200);
+$omd_lan2 = $omnia_details()['lan_ports'] ?? [];
+check('MAC, jména stanic ani záporný počet se k portu nedostanou', [
+    array_keys($omd_lan2['ports'][0] ?? []), array_key_exists('hostnames', $omd_lan2),
+    $omnia_at($omd_lan2['ports'][0] ?? null, 'clients'),
+], [['name', 'link', 'speed_mbit', 'duplex', 'max_mbit', 'partner_max_mbit', 'clients'], false, null]);
+check_false('a ani hodnota té MAC nikde v details není',
+    str_contains((string)json_encode($omnia_details()), 'aa:bb:cc'));
+// It reaches the app on the router detail path that already exists - the
+// `details` object of action=monitors - so there is no new endpoint to guard.
+// The public view is an allow-list, and the household's wiring is not on it.
+check('Omnia: čisté hlášení se uloží zpět', $post_agent(array_merge($omnia_pl, ['agent_time' => time()])), 200);
+[, $lan_app] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$lan_app_router = null;
+foreach ($lan_app['monitors'] ?? [] as $m) {
+    if ((int)$m['id'] === 2) { $lan_app_router = $m; }
+}
+check('aplikace dostane přepínač stávající cestou detailu routeru, bez nového endpointu', [
+    array_column($lan_app_router['details']['lan_ports']['ports'] ?? [], 'name'),
+    $lan_app_router['details']['lan_ports']['conduits'][0]['speed_mbit'] ?? null,
+], [['lan0', 'lan1', 'lan2', 'lan3', 'lan4'], 1000]);
+[, $lan_anon, $lan_anon_raw] = api_get($base, 'action=monitors');
+$lan_anon_router = null;
+foreach ($lan_anon['monitors'] ?? [] as $m) {
+    if ((int)$m['id'] === 2) { $lan_anon_router = $m; }
+}
+check_false('anonym zapojení kabelů v domácnosti nevidí',
+    array_key_exists('lan_ports', $lan_anon_router['details'] ?? []) || str_contains($lan_anon_raw, 'lan_ports'));
 check('Omnia: seznam disků se uloží i s časem odběru a klíčem', [
     count($omd['storage_disks'] ?? []), strlen((string)($omd['storage_disks'][0]['key'] ?? '')),
     isset($omd['storage_disks_at']), $omnia_at($omd['storage_disks'][0] ?? null, 'emmc'),

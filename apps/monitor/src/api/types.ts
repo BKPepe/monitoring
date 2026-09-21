@@ -585,6 +585,53 @@ export interface WanPath {
   lan_conduits?: { dev?: string | null; mbit?: number | null }[] | null;
 }
 
+/**
+ * One socket of the router's own switch (`lan_ports.ports[]`, agent 0.1.8).
+ *
+ * `link` false means no cable is plugged in or the other end is off; the
+ * server then forces the three negotiated values to null, because a dead port
+ * cannot have a rate. A port that is linked and has learnt nothing is a
+ * different thing entirely and carries `clients: 0`.
+ */
+export interface LanPort {
+  name: string;
+  /** null = the router could not tell whether a cable is in. */
+  link: boolean | null;
+  /** What the two ends agreed on; null without a link or without a reading. */
+  speed_mbit: number | null;
+  duplex: 'full' | 'half' | null;
+  /** What this socket itself can do - a capability, unchanged by today's link. */
+  max_mbit: number | null;
+  /** What the device at the other end offered. It is why a port runs at 100. */
+  partner_max_mbit: number | null;
+  /** Addresses learnt behind the port. 0 is a measurement, null is not. */
+  clients: number | null;
+}
+
+/** The single line a DSA switch shares between all its ports and the CPU. */
+export interface LanConduit {
+  dev: string;
+  link: boolean | null;
+  speed_mbit: number | null;
+  duplex: 'full' | 'half' | null;
+}
+
+/**
+ * `lan_ports`: the household's own wiring, read every run on OpenWrt.
+ *
+ * null = the router reports no ports at all (no DSA switch, or the `bridge`
+ * binary is missing); absent = the agent has not reported since the update.
+ * The section is never carried over from an older report - a cable picture
+ * kept from a report that did not carry it would be a lie a minute later.
+ */
+export interface LanPorts {
+  bridge: string | null;
+  ports: LanPort[];
+  conduits: LanConduit[];
+  /** The agent's own sum over the ports it kept; null when it could not count. */
+  clients_total: number | null;
+}
+
 /*
  * Router recommendations (`api.php?action=router_recommendations`).
  * The texts are rendered by the server in the request language; the app has

@@ -66,6 +66,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_counter_step',
     'bk_wan_counter_steps',
     'bk_sanitize_wan_path',
+    'bk_sanitize_lan_ports',
     'bk_details_fit',
     'bk_ingest_issue_add',
     'bk_pagerduty_dedup_key',
@@ -201,14 +202,17 @@ if (function_exists('bk_public_monitor_details')) {
         // Router release 0.1.7: new explicit keys of last_details. The disk
         // list names models and partitions, the radios name the SSID, and
         // wan_path describes the household's line - none of it is public.
-        'storage_disks', 'agent_tools', 'fs_alerts', 'wifi_radios', 'wan_path', 'wan_counters_prev',
+        // lan_ports draws the household's own wiring: which socket carries a
+        // cable and how many devices sit behind it. Never in the public view.
+        'storage_disks', 'agent_tools', 'fs_alerts', 'wifi_radios', 'wan_path', 'wan_counters_prev', 'lan_ports',
         'version', 'motd', 'players_online', 'players_max', 'clients_online', 'clients_max',
         'presence_count', 'members', 'voice_channels', 'model', 'os', 'cpanel_stats'], 1);
     $public_keys = array_keys(bk_public_monitor_details($sample));
     foreach (['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint', 'device_mac',
               'board_serial', 'hostname', 'agent_key', 'api_token', 'top_ram_processes', 'wan_l3_device',
               'mwan3_active_gw', 'net', 'filesystems', 'some_future_agent_key',
-              'storage_disks', 'agent_tools', 'fs_alerts', 'wifi_radios', 'wan_path', 'wan_counters_prev'] as $private_key) {
+              'storage_disks', 'agent_tools', 'fs_alerts', 'wifi_radios', 'wan_path', 'wan_counters_prev',
+              'lan_ports'] as $private_key) {
         check_false("anonym neuvidí {$private_key}", in_array($private_key, $public_keys, true));
     }
     foreach (['version', 'motd', 'players_online', 'players_max', 'clients_online', 'clients_max',
@@ -1068,6 +1072,44 @@ if (function_exists('bk_sanitize_wan_path')) {
     check('starší agent cestu WAN neposílá', bk_sanitize_wan_path(null), null);
 }
 
+// --- bk_sanitize_lan_ports -----------------------------------------------------
+if (function_exists('bk_sanitize_lan_ports')) {
+    $lp = bk_sanitize_lan_ports(['bridge' => 'br-lan', 'clients_total' => 6, 'mac' => 'x',
+        'ports' => [
+            ['name' => 'lan0', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full', 'max_mbit' => 1000, 'partner_max_mbit' => 1000, 'clients' => 3, 'mac' => 'x'],
+            ['name' => 'lan1', 'link' => true, 'speed_mbit' => 100, 'duplex' => 'full', 'max_mbit' => 1000, 'partner_max_mbit' => 100, 'clients' => 0],
+            // A port with no carrier that still carries a rate: the agent does
+            // not send this, a broken one might - and a rate on a dead port
+            // reads like a measurement of a live one.
+            ['name' => 'lan2', 'link' => false, 'speed_mbit' => 1000, 'duplex' => 'full', 'max_mbit' => 1000, 'partner_max_mbit' => 1000, 'clients' => 0],
+            ['name' => 'lan3', 'link' => null, 'speed_mbit' => 'fast', 'duplex' => 'plný', 'max_mbit' => 0, 'partner_max_mbit' => 2000000, 'clients' => 9999],
+            ['name' => 'lan4; reboot', 'link' => true],
+            ['link' => true],
+            'lan5',
+        ],
+        'conduits' => [['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full'], ['dev' => null], 'x']]);
+    check('LAN porty: jen známé klíče, jméno musí vypadat jako síťové zařízení',
+        [array_column($lp['ports'], 'name'), array_key_exists('mac', $lp), array_key_exists('mac', $lp['ports'][0])],
+        [['lan0', 'lan1', 'lan2', 'lan3'], false, false]);
+    check('LAN port bez linku nemá vyjednanou rychlost, duplex ani protistranu',
+        [$lp['ports'][2]['speed_mbit'], $lp['ports'][2]['duplex'], $lp['ports'][2]['partner_max_mbit']], [null, null, null]);
+    check('LAN port: nečitelná hodnota je null, ne dohad; nula klientů je měření',
+        [$lp['ports'][3]['speed_mbit'], $lp['ports'][3]['duplex'], $lp['ports'][3]['max_mbit'],
+            $lp['ports'][3]['partner_max_mbit'], $lp['ports'][3]['clients'], $lp['ports'][1]['clients']],
+        [null, null, null, null, null, 0]);
+    check('LAN porty: vedení ke CPU nese jen zařízení, link, rychlost a duplex',
+        [$lp['conduits'], $lp['bridge'], $lp['clients_total']],
+        [[['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']], 'br-lan', 6]);
+    check('starší agent přepínač neposílá a router, který se nemohl podívat, hlásí null',
+        [bk_sanitize_lan_ports(null), bk_sanitize_lan_ports(['bridge' => 'br-lan', 'ports' => []]),
+            bk_sanitize_lan_ports(['bridge' => 'br-lan', 'conduits' => [], 'clients_total' => 0])],
+        [null, null, null]);
+    // 16 ports is past any board the agent runs on; a longer list is malformed.
+    $lp_many = bk_sanitize_lan_ports(['ports' => array_map(fn ($i) => ['name' => "lan{$i}", 'link' => false, 'clients' => 0], range(0, 39))]);
+    check('LAN porty: seznam má strop a přepočítaný součet se nepodsouvá',
+        [count($lp_many['ports']), $lp_many['clients_total'], $lp_many['bridge'], $lp_many['conduits']], [16, null, null, []]);
+}
+
 // --- bk_details_fit / bk_ingest_issue_add: nothing is dropped silently ----------
 if (function_exists('bk_details_fit')) {
     $fit_small = bk_details_fit(['cpu' => 12.5, 'wifi_radios' => [['radio' => 'phy0-ap0']], 'details_dropped' => ['storage_disks']], 60000, ['fs_alerts']);
@@ -1176,6 +1218,19 @@ if (function_exists('bk_metric_column_map')) {
     check('Omnia: bez ethtool a tc jsou zahozené rámce neznámé, ne nula', [$omnia_p['wan_path']['wan_rx_ring_drops'], $omnia_p['agent_tools']['ethtool'], $omnia_p['agent_tools']['tc']], [null, false, false]);
     check('Omnia: stav portu je z fyzického eth2, 174 zahozených rámců VLAN mu nepatří', [$omnia_p['wan_link_dev'], $omnia_p['wan_link_mbit'], $omnia_p['wan_rx_dropped']], ['eth2', 2500, 0]);
     check('Omnia: LAN porty sdílejí jedno gigabitové vedení eth1', [$omnia_p['wan_path']['lan_port_cap_mbit'], $omnia_p['wan_path']['lan_conduits']], [1000, [['dev' => 'eth1', 'mbit' => 1000]]]);
+    $omnia_lan = bk_sanitize_lan_ports($omnia_p['lan_ports']);
+    check('Omnia: přepínač má pět portů, dva bez kabelu, a ty nehlásí rychlost ani duplex',
+        [array_column($omnia_lan['ports'], 'name'), array_column($omnia_lan['ports'], 'link'),
+            array_column($omnia_lan['ports'], 'speed_mbit')],
+        [['lan0', 'lan1', 'lan2', 'lan3', 'lan4'], [true, true, false, false, true], [1000, 100, null, null, 1000]]);
+    check('Omnia: lan1 jede 100 kvůli protistraně, ne kvůli závadě - port sám umí 1000',
+        [$omnia_lan['ports'][1]['partner_max_mbit'], $omnia_lan['ports'][1]['max_mbit'], $omnia_lan['ports'][0]['partner_max_mbit']],
+        [100, 1000, 1000]);
+    check('Omnia: všech pět portů visí na jednom gigabitovém vedení eth1',
+        [$omnia_lan['conduits'], $omnia_lan['bridge']],
+        [[['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']], 'br-lan']);
+    check('Omnia: nesečtené počty zařízení zůstávají neznámé, ne nula',
+        [$omnia_lan['ports'][0]['clients'], $omnia_lan['clients_total'], $omnia_lan['ports'][2]['clients']], [null, null, 0]);
     check('Omnia: vypnutá sekce SQM není fronta a měření rychlosti žádné není', [$omnia_p['wan_path']['sqm'], $omnia_p['speedtests']], [[], []]);
     check('Omnia: co router nezměřil, je neznámé (špička jádra, zaplnění conntrack, délka běhu)', [$omnia_p['cpu_core_max_pct'], $omnia_p['conntrack_pct'], $omnia_p['agent_run_ms']], [null, null, null]);
     check_false('Omnia: tarif není součástí hlášení, zadává ho až majitel', array_key_exists('wan_plan_down_mbit', $omnia_p));
@@ -2226,6 +2281,45 @@ if (function_exists('bk_rec_rules_wan_tests')) {
         in_array('lan_wired_ceiling', $rt_ids(bk_rec_rules_wan_tests($rt_lan(1000, 1000), [])), true));
     check_true('neznámá schopnost portů LAN mlčí, i když jsou spojené na gigabitu',
         !in_array('lan_wired_ceiling', $rt_ids(bk_rec_rules_wan_tests($rt_lan(null, 1000), [])), true));
+
+    // The evidence the switch adds (0.1.8): the conduit that is really shared
+    // and how many devices share it. It is evidence, never a second rule.
+    $rt_lanp = function (?array $lan) use ($rt_in): array {
+        $in = $rt_in([]);
+        $in['details'] = ['wan_link_dev' => 'eth2', 'wan_link_mbit' => 2500,
+            'wan_path' => ['lan_port_cap_mbit' => 1000, 'lan_port_max_mbit' => 1000]];
+        if ($lan !== null) {
+            $in['details']['lan_ports'] = $lan;
+        }
+        return $in;
+    };
+    $rt_lan_item = function (?array $lan) use ($rt_lanp): array {
+        foreach (bk_rec_rules_wan_tests($rt_lanp($lan), [])['items'] as $it) {
+            if (($it['id'] ?? '') === 'lan_wired_ceiling') {
+                return $it;
+            }
+        }
+        return [];
+    };
+    // Two linked conduits: the SLOWER one is what every wired client shares.
+    $rt_lan_two = ['clients_total' => 6, 'ports' => [['name' => 'lan0']], 'conduits' => [
+        ['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000],
+        ['dev' => 'eth0', 'link' => true, 'speed_mbit' => 2500],
+        ['dev' => 'eth5', 'link' => false, 'speed_mbit' => 100]]];
+    check('sdílené vedení je to nejpomalejší spojené, nespojené se nepočítá',
+        [$rt_lan_item($rt_lan_two)['params']['conduit'], $rt_lan_item($rt_lan_two)['params']['clients']], [1000.0, 6]);
+    check('bez údajů z přepínače zůstanou čísla domácnosti neznámá',
+        [$rt_lan_item(null)['params']['conduit'], $rt_lan_item(null)['params']['clients']], [null, null]);
+    check('jedno zařízení nic nesdílí, proto se nepočítá',
+        $rt_lan_item(['clients_total' => 1, 'conduits' => [['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000]]])['params']['clients'], null);
+    $rt_lan_text = fn (string $lang, ?array $lan): string => bk_with_email_lang($lang, fn (): string =>
+        (string)bk_router_rec_render($rt_lan_item($lan))['measured']);
+    check_true('věta o sdíleném vedení je v obou jazycích a nese obě čísla',
+        str_contains($rt_lan_text('cs', $rt_lan_two), 'Kabelem je připojeno 6 zařízení a všechna sdílejí jedno vedení do routeru o rychlosti 1000 Mbit/s.')
+        && str_contains($rt_lan_text('en', $rt_lan_two), '6 wired devices are connected and all of them share one 1000 Mbit/s line to the router.'));
+    check_true('chybí-li jedno z čísel, věta se nevykreslí vůbec',
+        !str_contains($rt_lan_text('cs', null), 'sdílejí')
+        && !str_contains($rt_lan_text('en', ['clients_total' => 6, 'conduits' => []]), 'share one'));
 }
 
 

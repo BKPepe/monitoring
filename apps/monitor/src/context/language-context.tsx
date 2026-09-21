@@ -3780,6 +3780,41 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.busy_other': { cs: 'z toho cizí provoz: {pct} %', en: 'of which foreign traffic: {pct} %' },
   'net.clients_short': { cs: 'kl.', en: 'cl.' },
   'net.lan_title': { cs: 'LAN & DHCP', en: 'LAN & DHCP' },
+
+  // The switch drawn port by port (components/lan-port-map.tsx, agent 0.1.8).
+  'lan.title': { cs: 'LAN porty', en: 'LAN ports' },
+  'lan.wired_total': { cs: '{n} na kabelu', en: '{n} wired' },
+  'lan.clients': { cs: 'zařízení', en: 'devices' },
+  'lan.clients_unknown': { cs: 'nespočítáno', en: 'not counted' },
+  // A cable is in and nothing behind it has spoken - not the same as an empty socket.
+  'lan.port_idle': { cs: 'nic se neozvalo', en: 'nothing talking' },
+  'lan.port_free': { cs: 'volný', en: 'free' },
+  'lan.port_unknown': { cs: 'neznámý', en: 'unknown' },
+  'lan.slower_partner': {
+    cs: '{port} jede {speed} – tolik nabídlo zařízení na druhém konci. Port sám umí {cap}.',
+    en: '{port} runs at {speed} – that is what the device at the other end offered. The port itself can do {cap}.',
+  },
+  'lan.slower_unknown': {
+    cs: '{port} jede {speed}, i když port sám umí {cap}.',
+    en: '{port} runs at {speed} although the port itself can do {cap}.',
+  },
+  'lan.conduit_rate': {
+    cs: 'Všechny porty vedou do procesoru routeru jedním spojem ({dev}, {rate}) a kabelová zařízení si ho dělí – dohromady tudy víc neprojde.',
+    en: 'All ports reach the router CPU over a single link ({dev}, {rate}) and the wired devices share it – together they cannot exceed it.',
+  },
+  'lan.conduit_plain': {
+    cs: 'Všechny porty vedou do procesoru routeru jedním spojem ({dev}) a kabelová zařízení si ho dělí.',
+    en: 'All ports reach the router CPU over a single link ({dev}) and the wired devices share it.',
+  },
+  'lan.agent_outdated': {
+    cs: 'Přehled portů posílá agent 0.1.8 a novější (router hlásí {version}).',
+    en: 'The port overview comes from agent 0.1.8 and newer (the router reports {version}).',
+  },
+  'lan.no_switch': { cs: 'Router nehlásí žádné porty.', en: 'The router reports no ports.' },
+  'lan.no_switch_why': {
+    cs: 'Buď nemá řízený přepínač, nebo na něm chybí balíček bridge. Wi-Fi klienti se tu nepočítají.',
+    en: 'Either it has no managed switch or the bridge package is missing. Wi-Fi clients are not counted here.',
+  },
   'net.subnet': { cs: 'Subnet', en: 'Subnet' },
   'net.dhcp_leases': { cs: 'Aktivní DHCP lease', en: 'Active DHCP leases' },
   'net.dhcp_reservations': { cs: 'Rezervace', en: 'Reservations' },
