@@ -37,6 +37,14 @@ $db_pass = getenv('BK_TEST_DB_PASS') ?: '';
 $port = (int)(getenv('BK_TEST_PORT') ?: 8123);
 $root = realpath(__DIR__ . '/..');
 
+// The suite writes fixture rows that the application then reads, so it has to
+// keep the application's time: config.php below defines TIMEZONE =
+// 'Europe/Prague' and db.php puts the application's SESSION into that offset.
+// Without the same two settings here the fixtures would be written with the
+// database server's zone (UTC in the container) and every "three minutes ago"
+// row would land two hours away from where the application looks for it.
+date_default_timezone_set('Europe/Prague');
+
 // --- 1. Database ----------------------------------------------------------
 try {
     $pdo = new PDO("mysql:host={$db_host};port={$db_port};charset=utf8mb4", $db_user, $db_pass, [
@@ -51,6 +59,8 @@ try {
     fwrite(STDERR, "Spusť databázi (kontejner bk-test-mysql) nebo oprav BK_TEST_DB_* a zkus to znovu.\n");
     exit(1);
 }
+$pdo_tz = $pdo->prepare("SET time_zone = ?");
+$pdo_tz->execute([date('P')]);
 
 $pdo->exec("DROP DATABASE IF EXISTS `{$db_name}`");
 $pdo->exec("CREATE DATABASE `{$db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -3063,6 +3073,49 @@ $force_schema_bump();
 api_get($base, 'action=public_status');
 check('bez jediného admina migrace účtu 1 roli admin vrátí', $role_of(1), 'admin');
 $pdo->prepare("UPDATE users SET role = ? WHERE id = 1")->execute([$role1_before ?? 'admin']);
+
+// --- Časová zóna databázové relace (oprava mimo release) ------------------
+// db.php nastavuje zónu RELACE na aktuální posun PHP. Bez toho každé
+// porovnání SQL NOW() / CURDATE() s časem naformátovaným v PHP mlčky závisí
+// na tom, že databáze běží ve stejné zóně jako PHP: kontejner v UTC a
+// TIMEZONE = 'Europe/Prague' hlásily u KAŽDÉHO monitoru „kontroly neběžely
+// 120 minut", posun o dvě hodiny a nikde ani chyba. Sonda se pouští jako
+// samostatný proces, protože se měří právě to, co udělá db.php při připojení
+// (suita si otevírá vlastní PDO, které db.php nevidí).
+$tz_probe_file = sys_get_temp_dir() . '/bk_tz_probe_' . getmypid() . '.php';
+file_put_contents($tz_probe_file, <<<'PROBE'
+<?php
+require getenv('BK_TZ_DB');
+$fixed = $pdo->query("SELECT @@session.time_zone AS tz, NOW() AS now")->fetch();
+// Druhé spojení BEZ opravy: ukazuje, o kolik se obě strany rozcházely.
+$raw_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
+$raw = new PDO("mysql:host=" . DB_HOST . ";port={$raw_port};dbname=" . DB_NAME . ";charset=utf8mb4",
+    DB_USER, DB_PASS, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+$plain = $raw->query("SELECT NOW() AS now, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS srv_offset")->fetch();
+echo '<<TZ>>' . json_encode([
+    'tz'            => $fixed['tz'],
+    'offset'        => date('P'),
+    'php_offset'    => (int)date('Z'),
+    'skew'          => strtotime($fixed['now']) - time(),
+    'raw_skew'      => strtotime($plain['now']) - time(),
+    'server_offset' => (int)$plain['srv_offset'],
+]);
+PROBE
+);
+$tz_out = (string)shell_exec('BK_TZ_DB=' . escapeshellarg($root . '/db.php')
+    . ' php ' . escapeshellarg($tz_probe_file) . ' 2>&1');
+@unlink($tz_probe_file);
+$tz = preg_match('/<<TZ>>(\{.*\})/s', $tz_out, $tz_m) ? (json_decode($tz_m[1], true) ?: []) : [];
+
+check('relace běží v aktuálním posunu PHP',
+    $tz['tz'] ?? trim($tz_out), $tz['offset'] ?? 'sonda neodpověděla');
+check_true('NOW() z databáze je stejný okamžik jako time() v PHP',
+    isset($tz['skew']) && abs($tz['skew']) <= 2);
+// Identita, která platí všude a pojmenuje chybu: neopravené spojení se míjí
+// přesně o rozdíl zón databáze a PHP (v UTC kontejneru s Prahou o -7200 s).
+check_true('bez nastavení zóny se NOW() míjí přesně o rozdíl zón',
+    isset($tz['raw_skew'], $tz['server_offset'], $tz['php_offset'])
+        && abs($tz['raw_skew'] - ($tz['server_offset'] - $tz['php_offset'])) <= 2);
 
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {

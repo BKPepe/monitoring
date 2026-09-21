@@ -59,5 +59,8 @@ define('DB_PASS', 'heslo_databaze');
 // --- OTHER SETTINGS ---
 // Default admin credentials after schema.sql import: admin / BloodKingsAdmin123!
 // Change your password immediately after first login (Admin -> Profile -> Change Password).
+// This zone is PHP's AND the database session's: db.php sends its current UTC
+// offset to MySQL after connecting, so SQL NOW() and PHP's date() mean the same
+// instant even when the database server itself runs in another zone.
 define('TIMEZONE', 'Europe/Prague');
 date_default_timezone_set(TIMEZONE);

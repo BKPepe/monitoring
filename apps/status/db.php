@@ -45,6 +45,35 @@ try {
     ];
     $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
 
+    // The session runs in PHP's time zone, because the application constantly
+    // compares the two sides: SQL NOW() / CURDATE() against timestamps
+    // formatted in PHP (last_checked, checked_at, the day of a daily row).
+    // Without this every such comparison silently depends on the database
+    // server happening to run in the same zone as PHP - a fresh checkout
+    // pointed at the local MySQL container (UTC) with TIMEZONE = 'Europe/Prague'
+    // reported "checks have not run for 120 minutes" for EVERY monitor: a
+    // two-hour shift and not one error anywhere.
+    //
+    // Sent as the CURRENT UTC offset (date('P'), e.g. "+02:00"), not as the
+    // zone name: the MySQL time-zone tables are usually not loaded on shared
+    // hosting and 'Europe/Prague' would be refused there. date('P') follows
+    // DST and a connection lives for a single request, so the offset cannot go
+    // stale. Where both sides already agree - the production case - this
+    // changes nothing.
+    //
+    // MySQL only: Postgres reads a bare offset with the opposite sign, and
+    // everything below is MySQL syntax anyway. A refused statement is logged
+    // and the request continues - a clock read an hour wrong is bad, being
+    // unable to open the site at all is worse.
+    if ($db_driver !== 'pgsql' && $db_driver !== 'postgres') {
+        try {
+            $stmt_tz = $pdo->prepare("SET time_zone = ?");
+            $stmt_tz->execute([date('P')]);
+        } catch (PDOException $e) {
+            error_log('[db] the database refused the session time zone ' . date('P') . ': ' . $e->getMessage());
+        }
+    }
+
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
     define('BK_SCHEMA_VERSION', '20260916');
