@@ -119,11 +119,14 @@ jobs:
           # server odpovi az za desitky sekund - v 60 s se to nestihlo.
           timeout: 300000
           retry: 3
+          # tests/ never belonged on the server: the suites ran for anyone who
+          # opened them. .htaccess keeps any copy already deployed out of reach.
           exclude: |
             **/.git*
             **/.git*/**
             **/node_modules/**
             .github/**
+            tests/**
 
       # Agenti se nahravaji vzdy, nezavisle na sync stavu FTP akce.
       #

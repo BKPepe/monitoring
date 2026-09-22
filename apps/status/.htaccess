@@ -58,3 +58,34 @@ ErrorDocument 500 /status/error.php?code=500
         Deny from all
     </IfModule>
 </FilesMatch>
+
+# Files that ship with the code but are not pages. schema.sql is a map of the
+# database, the deploy sync state lists every deployed file with its hash, and
+# README.md is internal documentation - all three were served to anyone.
+# Nothing reads them over HTTP: schema.sql is imported by hand on a fresh install
+# and the sync state is read by the deploy over FTP.
+<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Whole directories of code that is included, never requested: the test suites
+# (which ran for anyone who opened them - run_api_tests.php drops and recreates
+# databases), the vendored mailer and the language arrays. 404 rather than 403,
+# so a probe does not learn they exist. Uploaded files stay reachable one by one;
+# only the directory itself stops listing its contents.
+#
+# Deliberately NOT "Options -Indexes": on a host whose AllowOverride lacks
+# Options, that single line turns every request under /status into a 500 -
+# agent_api.php, heartbeat.php and cron.php included. Only the constructs this
+# file already relies on are used here.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(tests|lib|lang)(/|$) - [R=404,L]
+    RewriteRule ^uploads/?$ - [R=404,L]
+</IfModule>
