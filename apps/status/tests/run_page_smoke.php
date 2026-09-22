@@ -69,6 +69,18 @@ $pages = [
     '/heartbeat.php' => ['heartbeat bez tokenu', [404]],
     '/metrics.php' => ['Prometheus exportér', [200, 401, 403]],
     '/admin.php' => ['admin (nepřihlášený)', [200, 302, 403]],
+    // Code and deploy files that were served to anyone until 09/2026: the test
+    // suites ran on an anonymous GET, and schema.sql plus the deploy sync state
+    // mapped the database and every file. They must stay closed; a change that
+    // reopens them fails the deploy here instead of going unnoticed.
+    '/tests/' => ['testy nejsou veřejné', [404]],
+    '/tests/run_tests.php' => ['testovací sada se nespustí', [404]],
+    '/tests/fixtures/omnia_router.php' => ['fixtury nejsou veřejné', [404]],
+    '/lib/' => ['knihovny nejsou veřejné', [404]],
+    '/schema.sql' => ['schéma databáze není veřejné', [403]],
+    '/README.md' => ['interní dokumentace není veřejná', [403]],
+    '/.ftp-deploy-sync-state.json' => ['seznam nasazených souborů není veřejný', [403]],
+    '/uploads/' => ['adresář nahraných souborů se nevypisuje', [404]],
 ];
 
 /** Strings that mean a broken page even with a 200 status. */
