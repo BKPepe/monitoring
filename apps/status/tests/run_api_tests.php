@@ -5028,6 +5028,27 @@ try {
     $pdo->prepare("DELETE FROM incidents WHERE id = ?")->execute([$g3_inc]);
 }
 
+// The default overview (api.php with no action) feeds the game portal and
+// answers anyone, so it covers the public set as well. It used to take the
+// first monitor whose type or name said TeamSpeak, hidden ones included, and
+// hand its name, state and client count to every anonymous caller.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_details)
+            VALUES (180, 'Interní TeamSpeak', 'teamspeak', 'ts.example.com', 'up', 'Hry', 0, '{\"clients_online\":3,\"clients_max\":32}')");
+try {
+    [$ov_code, $ov, $ov_raw] = api_get($base, '');
+    check('výchozí přehled vrací 200', $ov_code, 200);
+    check_false('výchozí přehled skrytý TeamSpeak nejmenuje', str_contains($ov_raw, 'Interní TeamSpeak'));
+    check_true('a nepřevezme jeho stav ani počet klientů (dostal ' . json_encode($ov['teamspeak'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        ($ov['teamspeak']['online'] ?? null) !== true && array_key_exists('clients_online', $ov['teamspeak'] ?? []) && $ov['teamspeak']['clients_online'] === null);
+    $pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 180");
+    [, $ov_pub] = api_get($base, '');
+    check('veřejný TeamSpeak přehled ukáže i s počtem klientů',
+        [$ov_pub['teamspeak']['name'] ?? null, $ov_pub['teamspeak']['online'] ?? null, $ov_pub['teamspeak']['clients_online'] ?? null],
+        ['Interní TeamSpeak', true, 3]);
+} finally {
+    $pdo->exec("DELETE FROM monitors WHERE id = 180");
+}
+
 // =======================================================================
 // One overall verdict for public_status and the fleet badge (W1-B4).
 //

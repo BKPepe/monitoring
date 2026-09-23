@@ -6913,8 +6913,13 @@ $response = [
 ];
 
 try {
-    $stmt = $pdo->prepare("SELECT status, last_details, name FROM monitors WHERE archived_at IS NULL AND (LOWER(type) LIKE '%teamspeak%' OR LOWER(type) LIKE '%ts3%' OR LOWER(name) LIKE '%teamspeak%') LIMIT 1");
-    $stmt->execute();
+    // Only the public set, whoever asks: the one consumer is the game portal,
+    // anonymous by nature, and a monitor the owner took off the public page
+    // (W1-G3) must not reappear here by name and state. ORDER BY id: with
+    // several matches the answer must not depend on the storage order.
+    [$ov_scope, $ov_scope_params] = bk_monitor_scope_sql(bk_public_monitor_ids($pdo), 'id');
+    $stmt = $pdo->prepare("SELECT status, last_details, name FROM monitors WHERE archived_at IS NULL AND {$ov_scope} AND (LOWER(type) LIKE '%teamspeak%' OR LOWER(type) LIKE '%ts3%' OR LOWER(name) LIKE '%teamspeak%') ORDER BY id LIMIT 1");
+    $stmt->execute($ov_scope_params);
     $ts = $stmt->fetch();
     if ($ts) {
         $response['teamspeak']['online'] = ($ts['status'] === 'up');
@@ -6927,8 +6932,8 @@ try {
         }
     }
 
-    $stmt = $pdo->prepare("SELECT status, last_details, name FROM monitors WHERE archived_at IS NULL AND (LOWER(type) LIKE '%minecraft%' OR LOWER(type) LIKE '%mc%' OR LOWER(name) LIKE '%minecraft%') LIMIT 1");
-    $stmt->execute();
+    $stmt = $pdo->prepare("SELECT status, last_details, name FROM monitors WHERE archived_at IS NULL AND {$ov_scope} AND (LOWER(type) LIKE '%minecraft%' OR LOWER(type) LIKE '%mc%' OR LOWER(name) LIKE '%minecraft%') ORDER BY id LIMIT 1");
+    $stmt->execute($ov_scope_params);
     $mc = $stmt->fetch();
     if ($mc) {
         $response['minecraft']['online'] = ($mc['status'] === 'up');
