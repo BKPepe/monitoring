@@ -2202,23 +2202,50 @@ if ($action === 'events') {
                 }
             }
         }
-        $events = [];
 
-        // Compute the outage duration: for down rows find the nearest up row after them
-        foreach ($rows as $i => $r) {
+        // When each failed check's outage ended: the first 'up' check of the
+        // same monitor recorded after it, read from monitor_logs. Not from the
+        // list above - for the older failures merged in, the nearest newer 'up'
+        // there is the oldest row of the recent window, so a 30-second blip from
+        // last week read as a six-day outage that ended half an hour ago.
+        // No 'up' since = still open: end and duration stay null.
+        //
+        // Oldest first per monitor: a failure before the found 'up' shares it
+        // with every failure between, and none after a failure means none after
+        // the later ones either - one indexed lookup per outage, not per row.
+        $down_rows = array_values(array_filter($rows, fn ($r) => $r['status'] === 'down'));
+        usort($down_rows, fn ($a, $b) => [(int)$a['monitor_id'], (string)$a['checked_at'], (int)$a['id']]
+            <=> [(int)$b['monitor_id'], (string)$b['checked_at'], (int)$b['id']]);
+        $stmt_next_up = $pdo->prepare("
+            SELECT checked_at FROM monitor_logs
+            WHERE monitor_id = ? AND status = 'up' AND checked_at >= ? AND (checked_at > ? OR id > ?)
+            ORDER BY checked_at ASC
+            LIMIT 1
+        ");
+        $outage_end_ts = [];
+        $last_lookup = null;
+        foreach ($down_rows as $d) {
+            $d_mid = (int)$d['monitor_id'];
+            $d_ts = (int)strtotime((string)$d['checked_at']);
+            if ($last_lookup !== null && $last_lookup[0] === $d_mid && ($last_lookup[1] === null || $d_ts < $last_lookup[1])) {
+                $outage_end_ts[(int)$d['id']] = $last_lookup[1];
+                continue;
+            }
+            $stmt_next_up->execute([$d_mid, $d['checked_at'], $d['checked_at'], (int)$d['id']]);
+            $next_up = $stmt_next_up->fetchColumn();
+            $end_ts = ($next_up !== false && $next_up !== null) ? (int)strtotime((string)$next_up) : null;
+            $outage_end_ts[(int)$d['id']] = $end_ts;
+            $last_lookup = [$d_mid, $end_ts];
+        }
+
+        $events = [];
+        foreach ($rows as $r) {
             $outage_duration = null;
             $outage_end = null;
-            if ($r['status'] === 'down') {
-                // Search older records (lower index = newer) for the nearest up
-                for ($j = $i - 1; $j >= 0; $j--) {
-                    if ($rows[$j]['monitor_id'] == $r['monitor_id'] && $rows[$j]['status'] === 'up') {
-                        $start = strtotime($r['checked_at']);
-                        $end = strtotime($rows[$j]['checked_at']);
-                        $outage_duration = $end - $start;
-                        $outage_end = date('d.m.Y H:i:s', $end);
-                        break;
-                    }
-                }
+            $end_ts = $outage_end_ts[(int)$r['id']] ?? null;
+            if ($end_ts !== null) {
+                $outage_duration = $end_ts - (int)strtotime((string)$r['checked_at']);
+                $outage_end = date('d.m.Y H:i:s', $end_ts);
             }
 
             $events[] = [

@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { pluralForm } from '@/lib/plural';
 import { syncPublicCanonical } from '@/lib/public-head';
+import { outageDurationText, outageResolution, type OutageFacts } from '@/lib/public-events';
 
 interface Region {
   location: string;
@@ -24,16 +25,15 @@ interface Region {
   avgResponseMs: number | null;
 }
 
-interface PublicEvent {
+interface PublicEvent extends OutageFacts {
   time: string;
+  monitorId: number;
   monitorName: string;
-  isDown: boolean;
   rawStatus: string;
   errorMsg: string | null;
   location: string | null;
   type: string | null;
   responseTime: number | null;
-  outageDurationSec: number | null;
 }
 
 interface IncidentUpdate {
@@ -311,26 +311,24 @@ export function PublicStatusPage() {
     [events]
   );
   const publicTimeline = React.useMemo<TimelineEvent[]>(() => {
+    // The monitor's status right now, for failures whose end is not recorded.
+    // The whole public list, not the page's filtered view: an event names
+    // its monitor whichever page shows it.
+    const statusById = new Map((monitors ?? []).map((m) => [m.id, m.status]));
     return allFailureEvents.slice(0, eventsShown).map((e, i) => ({
       id: i,
       title: e.monitorName,
       detail:
         (e.errorMsg || (e.isDown ? t('public.event_down', 'Výpadek') : t('public.event_warn', 'Zhoršení'))) +
-        (e.outageDurationSec
-          ? t(
-              'public.event_duration',
-              { min: Math.round(e.outageDurationSec / 60) },
-              ` (trvání ${Math.round(e.outageDurationSec / 60)} min)`
-            )
-          : ''),
+        outageDurationText(e, t),
       at: e.time,
       severity: e.isDown ? ('down' as const) : ('warning' as const),
-      resolution: e.isDown ? ('Open' as const) : ('Info' as const),
+      resolution: outageResolution(e, statusById.get(e.monitorId) ?? null),
       location: e.location ?? undefined,
       method: e.type ?? undefined,
       responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
     }));
-  }, [allFailureEvents, eventsShown, t]);
+  }, [allFailureEvents, eventsShown, monitors, t]);
 
   // null = not known yet or the request failed. `?? 0` here once turned "the
   // API did not answer" into "nothing is down".

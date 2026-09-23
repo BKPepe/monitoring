@@ -1,0 +1,161 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { LanguageProvider } from '@/context/language-context';
+import { PublicStatusPage } from './public-status';
+
+/**
+ * What the public page prints from the data it gets: whether an outage is
+ * over and how long it lasted.
+ *
+ * usePublicStatus shares answers for ten seconds at module level, so every
+ * test moves the clock an hour on.
+ */
+const json = (body: unknown, status = 200) =>
+  ({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }) as Response;
+
+const monitor = (id: number, name: string, status: string) => ({
+  id,
+  name,
+  type: 'web',
+  status,
+  category: 'Weby',
+  responseMs: 120,
+  lastCheck: '2026-09-23T10:00:00+02:00',
+  lastStatusChange: null,
+  details: null,
+  assetId: id,
+  cpu: null,
+  ram: null,
+  hdd: null,
+});
+
+/** One failed check as `action=events` sends it. */
+const failure = (
+  monitorId: number,
+  monitorName: string,
+  errorMsg: string,
+  outageEnd: string | null,
+  outageDurationSec: number | null
+) => ({
+  id: monitorId * 1000 + (outageDurationSec ?? 0),
+  time: '20.09.2026 03:14:00',
+  timeIso: '2026-09-20T03:14:00+02:00',
+  monitorId,
+  monitorName,
+  type: 'HTTP',
+  location: null,
+  rawStatus: 'down',
+  isDown: true,
+  isRecovery: false,
+  errorMsg,
+  responseTime: null,
+  outageEnd,
+  outageDurationSec,
+});
+
+function answering(monitors: unknown[], events: unknown[]) {
+  return (url: string): Response => {
+    if (url.includes('action=monitors')) return json({ monitors });
+    if (url.includes('action=public_status'))
+      return json({
+        totalMonitors: monitors.length,
+        downMonitors: (monitors as { status: string }[]).filter((m) => m.status === 'down').length,
+        uptimePercent: 99.9,
+        avgLatencyMs: 100,
+        lastUpdated: null,
+        nodes: [],
+      });
+    if (url.includes('action=events')) return json({ events });
+    if (url.includes('action=incidents')) return json({ incidents: [], manualIncidents: [] });
+    if (url.includes('action=regions')) return json({ regions: [] });
+    return json({});
+  };
+}
+
+let clock = Date.UTC(2026, 8, 23, 8, 0, 0);
+beforeEach(() => {
+  clock += 60 * 60_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => clock);
+  vi.stubGlobal('__APP_VERSION__', '0.0.0-test');
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
+  );
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function renderPage(path = '/public') {
+  return render(
+    <LanguageProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <PublicStatusPage />
+      </MemoryRouter>
+    </LanguageProvider>
+  );
+}
+
+/** The timeline row whose detail line starts with `errorMsg`. */
+function eventRow(errorMsg: string): HTMLElement {
+  const row = screen.getByText(new RegExp(`^${errorMsg}`)).closest('li');
+  if (!row) throw new Error(`no timeline row for ${errorMsg}`);
+  return row;
+}
+
+describe('Poslední události: probíhá jen výpadek, který opravdu trvá (extra-app-1)', () => {
+  it('skončený výpadek není „Open“, konec neznámý bez vymyšlené délky, krátký výpadek není „0 min“', async () => {
+    const api = answering(
+      [monitor(1, 'E-shop', 'up'), monitor(2, 'Wiki', 'down')],
+      [
+        // Ended 20 s later: over, and not rounded down to nothing.
+        failure(1, 'E-shop', 'Časový limit vypršel', '20.09.2026 03:14:20', 20),
+        // No end recorded, but the monitor is up now: over, length unknown.
+        failure(1, 'E-shop', 'Spojení odmítnuto', null, null),
+        // No end recorded and the monitor is down now: still running.
+        failure(2, 'Wiki', 'Cílový server neodpovídá.', null, null),
+      ]
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage();
+
+    await screen.findByText('Poslední události');
+    await waitFor(() => expect(within(eventRow('Cílový server neodpovídá.')).queryByText('Open')).toBeTruthy());
+
+    const short = eventRow('Časový limit vypršel');
+    expect(within(short).queryByText('Open')).toBeNull();
+    expect(within(short).getByText('Resolved')).toBeTruthy();
+    expect(short.textContent).toContain('Časový limit vypršel (trvání < 1 min)');
+    expect(short.textContent).not.toContain('0 min');
+
+    const unknownEnd = eventRow('Spojení odmítnuto');
+    expect(within(unknownEnd).queryByText('Open')).toBeNull();
+    expect(within(unknownEnd).getByText('Resolved')).toBeTruthy();
+    expect(unknownEnd.textContent).not.toContain('trvání');
+
+    // Exactly one outage is running, and the page says so once.
+    expect(screen.getAllByText('Open')).toHaveLength(1);
+  });
+
+  it('bez známého stavu služby a bez konce stránka nic netvrdí', async () => {
+    const api = answering([monitor(1, 'E-shop', 'up')], [failure(9, 'Stará služba', 'Chyba DNS', null, null)]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage();
+
+    await screen.findByText('Poslední události');
+    const row = await waitFor(() => eventRow('Chyba DNS'));
+    expect(within(row).queryByText('Open')).toBeNull();
+    expect(within(row).queryByText('Resolved')).toBeNull();
+  });
+});

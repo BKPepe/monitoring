@@ -5099,6 +5099,58 @@ try {
     $pdo->exec("DELETE FROM monitors WHERE id IN (181, 182)");
 }
 
+// An old failure's outage ends at the first 'up' check that really follows it.
+// The events list is the newest checks plus the newest failures of any age,
+// and the pairing used to take the nearest newer 'up' in that list: for a
+// 30-second blip three days ago that was the oldest recent check, so the
+// public page showed a three-day outage that ended ten minutes ago.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (183, 'Web s dávným výpadkem', 'web', 'https://example.com/a', 'up', 'Test'),
+            (184, 'Web v otevřeném výpadku', 'web', 'https://example.com/b', 'down', 'Test')");
+$op_now = time();
+$op_blip = $op_now - 3 * 86400;
+$op_long = $op_now - 2 * 86400;
+$op_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (?, ?, 100, ?)");
+$op_at = fn (int $ts): string => date('Y-m-d H:i:s', $ts);
+try {
+    foreach ([[$op_blip, 'down'], [$op_blip + 30, 'up'], [$op_long, 'down'], [$op_long + 60, 'down'], [$op_long + 180, 'up']] as [$ts, $st]) {
+        $op_ins->execute([183, $st, $op_at($ts)]);
+    }
+    for ($i = 20; $i >= 1; $i--) {
+        $op_ins->execute([183, 'up', $op_at($op_now - $i * 60)]);
+    }
+    foreach ([[$op_now - 7200, 'up'], [$op_now - 3600, 'down'], [$op_now - 3540, 'down']] as [$ts, $st]) {
+        $op_ins->execute([184, $st, $op_at($ts)]);
+    }
+    $op_by_time = function (array $events): array {
+        $out = [];
+        foreach ($events as $e) {
+            if (($e['rawStatus'] ?? '') === 'down') {
+                // array_key_exists, not ??: a missing key must not pass for null.
+                $out[(string)$e['timeIso']] = [
+                    array_key_exists('outageDurationSec', $e) ? $e['outageDurationSec'] : 'chybí',
+                    array_key_exists('outageEnd', $e) ? $e['outageEnd'] : 'chybí',
+                ];
+            }
+        }
+        return $out;
+    };
+    [$op_code, $op_ev] = api_get($base, 'action=events&monitor_id=183&limit=10&scope=public');
+    check('events veřejně vrací 200', $op_code, 200);
+    $op_183 = $op_by_time($op_ev['events'] ?? []);
+    check('výpadek před třemi dny trval 30 s a skončil tehdy, ne před deseti minutami',
+        $op_183[date('c', $op_blip)] ?? null, [30, date('d.m.Y H:i:s', $op_blip + 30)]);
+    check('dva selhané řádky za sebou končí stejnou OK kontrolou',
+        [$op_183[date('c', $op_long)] ?? null, $op_183[date('c', $op_long + 60)] ?? null],
+        [[180, date('d.m.Y H:i:s', $op_long + 180)], [120, date('d.m.Y H:i:s', $op_long + 180)]]);
+    [, $op_open] = api_get($base, 'action=events&monitor_id=184&limit=10&scope=public');
+    check('výpadek bez následné OK kontroly je otevřený: konec i délka null',
+        array_values($op_by_time($op_open['events'] ?? [])), [[null, null], [null, null]]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (183, 184)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (183, 184)");
+}
+
 // The public headline "30 days" figure is the mean of the monitors' figures.
 // One second of outage in 29 days is 99.999 for that monitor; with three
 // perfect ones the mean is 99.99975, which rounded at three decimals printed
