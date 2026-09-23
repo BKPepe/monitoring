@@ -7,7 +7,7 @@ import { PublicStatusPage } from './public-status';
 
 /**
  * What the public page prints from the data it gets: whether an outage is
- * over and how long it lasted.
+ * over, how long it lasted, and when the page was last updated.
  *
  * usePublicStatus shares answers for ten seconds at module level, so every
  * test moves the clock an hour on.
@@ -55,7 +55,7 @@ const failure = (
   outageDurationSec,
 });
 
-function answering(monitors: unknown[], events: unknown[]) {
+function answering(monitors: unknown[], events: unknown[], lastUpdated: string | null = null) {
   return (url: string): Response => {
     if (url.includes('action=monitors')) return json({ monitors });
     if (url.includes('action=public_status'))
@@ -64,7 +64,7 @@ function answering(monitors: unknown[], events: unknown[]) {
         downMonitors: (monitors as { status: string }[]).filter((m) => m.status === 'down').length,
         uptimePercent: 99.9,
         avgLatencyMs: 100,
-        lastUpdated: null,
+        lastUpdated,
         nodes: [],
       });
     if (url.includes('action=events')) return json({ events });
@@ -157,5 +157,54 @@ describe('Poslední události: probíhá jen výpadek, který opravdu trvá (ext
     const row = await waitFor(() => eventRow('Chyba DNS'));
     expect(within(row).queryByText('Open')).toBeNull();
     expect(within(row).queryByText('Resolved')).toBeNull();
+  });
+});
+
+describe('Čas aktualizace v jazyce stránky (extra-app-4)', () => {
+  it('česky i anglicky jako datum a čas, nikdy syrové ISO 8601', async () => {
+    const api = answering([monitor(1, 'E-shop', 'up')], [], '2026-09-23T14:12:05+02:00');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage();
+
+    // 12:12 UTC: 23 September from UTC-12 to UTC+11, whatever zone runs the test.
+    const cs = await screen.findByText(/^Aktualizováno /);
+    expect(cs.textContent).toMatch(/^Aktualizováno 23\.\s9\.\s2026\s\d{1,2}:\d{2} · /);
+    expect(cs.textContent).not.toContain('2026-09-23T');
+    cleanup();
+
+    renderPage('/public?lang=en');
+    const en = await screen.findByText(/^Updated /);
+    expect(en.textContent).toMatch(/^Updated 23\sSept?\s2026,\s\d{2}:\d{2} · /);
+    expect(en.textContent).not.toContain('+02:00');
+  });
+});
+
+describe('Počty služeb v nadpisu v českých tvarech (extra-app-3)', () => {
+  it('1 služba, 2–4 služby, 5 a více služeb; anglicky 1 service / 2 services', async () => {
+    const fleet = (n: number, status: string) =>
+      Array.from({ length: n }, (_, i) => monitor(i + 1, `Web ${i + 1}`, status));
+    const show = async (monitors: unknown[], text: string, path = '/public') => {
+      const api = answering(monitors, []);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+      );
+      renderPage(path);
+      expect(await screen.findByText(text)).toBeTruthy();
+      cleanup();
+      clock += 60 * 60_000;
+    };
+
+    await show(fleet(5, 'down'), '5 služeb mimo provoz');
+    await show(fleet(3, 'down'), '3 služby mimo provoz');
+    await show([...fleet(1, 'warning'), monitor(9, 'E-shop', 'up')], '1 služba hlásí zhoršení nebo neznámý stav');
+    await show(fleet(5, 'warning'), '5 služeb hlásí zhoršení nebo neznámý stav');
+    await show([...fleet(1, 'maintenance'), monitor(9, 'E-shop', 'up')], '1 služba v plánované údržbě');
+    await show(fleet(2, 'maintenance'), '2 služby v plánované údržbě');
+    await show(fleet(1, 'down'), '1 service down', '/public?lang=en');
+    await show(fleet(2, 'down'), '2 services down', '/public?lang=en');
   });
 });

@@ -380,6 +380,36 @@ export function PublicStatusPage() {
       : '';
   const docTitle = `${outagePrefix}${pageName} | Blood Kings`;
 
+  // The count with its noun in the form the count takes, as in the tab title
+  // above: one form for every count printed "1 služeb mimo provoz".
+  const services = (n: number) =>
+    ({
+      one: t('public.services_one', { count: n }, `${n} služba`),
+      few: t('public.services_few', { count: n }, `${n} služby`),
+      other: t('public.services_other', { count: n }, `${n} služeb`),
+    })[pluralForm(lang, n)];
+  const downText = t('public.degraded', { services: services(down ?? 0) }, `${services(down ?? 0)} mimo provoz`);
+  const partialText = t(
+    'public.partial_desc',
+    { services: services(partial) },
+    `${services(partial)} hlásí zhoršení nebo neznámý stav`
+  );
+  const maintenanceText = t(
+    'public.in_maintenance',
+    { services: services(inMaintenance) },
+    `${services(inMaintenance)} v plánované údržbě`
+  );
+
+  // The API sends ISO 8601, right for machines; a visitor reads it in the page
+  // language and in their own time zone. An unparseable value is shown as
+  // sent rather than as "Invalid Date".
+  const lastUpdated = status?.lastUpdated ?? null;
+  const updatedDate = lastUpdated ? new Date(lastUpdated) : null;
+  const updatedAt =
+    lastUpdated && updatedDate && !Number.isNaN(updatedDate.getTime())
+      ? updatedDate.toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+      : lastUpdated;
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
       <title>{docTitle}</title>
@@ -395,9 +425,9 @@ export function PublicStatusPage() {
             <h1 className="truncate text-2xl font-bold tracking-tight">
               {pageMeta?.title || branding?.siteTitle || t('public.title', 'Stav služeb')}
             </h1>
-            {status?.lastUpdated && (
+            {updatedAt && (
               <p className="text-muted-foreground text-xs">
-                {t('public.updated', { at: status.lastUpdated }, `Aktualizováno ${status.lastUpdated}`)}
+                {t('public.updated', { at: updatedAt }, `Aktualizováno ${updatedAt}`)}
                 {' · '}
                 {t('public.auto_refresh', 'obnovuje se každou minutu')}
               </p>
@@ -474,22 +504,14 @@ export function PublicStatusPage() {
               : verdict === 'loading'
                 ? t('public.loading', 'Zjišťuji stav…')
                 : verdict === 'down'
-                  ? t('public.degraded', { count: down ?? 0 }, `${down} služeb mimo provoz`)
+                  ? downText
                   : verdict === 'partial'
                     ? t('public.partial', 'Provoz je částečně omezen')
                     : verdict === 'maintenance'
-                      ? t(
-                          'public.in_maintenance',
-                          { count: inMaintenance },
-                          `${inMaintenance} služeb v plánované údržbě`
-                        )
+                      ? maintenanceText
                       : t('public.all_ok', 'Všechny systémy jsou online')}
           </p>
-          {verdict === 'partial' && (
-            <p className="text-muted-foreground text-xs">
-              {t('public.partial_desc', { count: partial }, `${partial} služeb hlásí zhoršení nebo neznámý stav`)}
-            </p>
-          )}
+          {verdict === 'partial' && <p className="text-muted-foreground text-xs">{partialText}</p>}
           {verdict === 'error' && (
             <p className="text-muted-foreground text-xs">
               {monitors !== null

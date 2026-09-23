@@ -142,7 +142,7 @@ describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', (
     renderPage();
 
     expect(await screen.findByText('Provoz je částečně omezen')).toBeTruthy();
-    expect(screen.getByText('2 služeb hlásí zhoršení nebo neznámý stav')).toBeTruthy();
+    expect(screen.getByText('2 služby hlásí zhoršení nebo neznámý stav')).toBeTruthy();
     expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
   });
 
@@ -154,7 +154,7 @@ describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', (
     );
     renderPage();
 
-    expect(await screen.findByText('1 služeb mimo provoz')).toBeTruthy();
+    expect(await screen.findByText('1 služba mimo provoz')).toBeTruthy();
     expect(screen.queryByText('Provoz je částečně omezen')).toBeNull();
   });
 

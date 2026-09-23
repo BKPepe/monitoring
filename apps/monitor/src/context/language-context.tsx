@@ -702,7 +702,12 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.updated': { cs: 'Aktualizováno {at}', en: 'Updated {at}' },
   'public.loading': { cs: 'Zjišťuji stav…', en: 'Checking status…' },
   'public.all_ok': { cs: 'Všechny systémy jsou online', en: 'All systems are online' },
-  'public.degraded': { cs: '{count} služeb mimo provoz', en: '{count} services are down' },
+  // The count with its noun in the form the count takes (1 služba, 2 služby,
+  // 5 služeb); one form for every count printed "1 služeb mimo provoz".
+  'public.services_one': { cs: '{count} služba', en: '{count} service' },
+  'public.services_few': { cs: '{count} služby', en: '{count} services' },
+  'public.services_other': { cs: '{count} služeb', en: '{count} services' },
+  'public.degraded': { cs: '{services} mimo provoz', en: '{services} down' },
   'public.load_error': { cs: 'Data se nepodařilo načíst.', en: 'Could not load the data.' },
   // W1-A1: a failed request is its own verdict, never "all online".
   'public.state_unknown': { cs: 'Stav se nepodařilo zjistit', en: 'Could not determine the status' },
@@ -712,8 +717,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'public.partial': { cs: 'Provoz je částečně omezen', en: 'Service is partially degraded' },
   'public.partial_desc': {
-    cs: '{count} služeb hlásí zhoršení nebo neznámý stav',
-    en: '{count} services report degradation or an unknown state',
+    cs: '{services} hlásí zhoršení nebo neznámý stav',
+    en: '{services} degraded or in an unknown state',
   },
   'public.services_failed': { cs: 'Seznam služeb se nepodařilo načíst.', en: 'Could not load the list of services.' },
   'public.stat_online': { cs: 'Online', en: 'Online' },
@@ -733,7 +738,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.incidents': { cs: 'Incidenty', en: 'Incidents' },
   'public.incident_open': { cs: 'Probíhá', en: 'Ongoing' },
   'public.incident_resolved': { cs: 'Vyřešeno', en: 'Resolved' },
-  'public.in_maintenance': { cs: '{count} služeb v plánované údržbě', en: '{count} services in planned maintenance' },
+  'public.in_maintenance': { cs: '{services} v plánované údržbě', en: '{services} in planned maintenance' },
   'public.maintenance_until': { cs: '(do {until})', en: '(until {until})' },
   'public.stat_regions': { cs: 'Míst měření', en: 'Vantage points' },
   'public.auto_refresh': { cs: 'obnovuje se každou minutu', en: 'refreshes every minute' },

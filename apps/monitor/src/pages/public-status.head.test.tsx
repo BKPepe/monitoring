@@ -93,7 +93,7 @@ describe('Hlavička veřejné stránky pro vyhledávače (W1-G4)', () => {
     );
     renderPage();
 
-    await screen.findByText('2 služeb mimo provoz');
+    await screen.findByText('2 služby mimo provoz');
     await waitFor(() => expect(document.title).toBe('(2) výpadky · Stav služeb | Blood Kings'));
   });
 
