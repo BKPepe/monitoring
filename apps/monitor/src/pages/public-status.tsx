@@ -14,6 +14,8 @@ import { useTheme } from '@/lib/use-theme';
 import { versionCommitUrl } from '@/lib/version';
 import { cn } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
+import { pluralForm } from '@/lib/plural';
+import { syncPublicCanonical } from '@/lib/public-head';
 
 interface Region {
   location: string;
@@ -105,6 +107,11 @@ export function PublicStatusPage() {
     };
   } | null>(null);
   const [pageError, setPageError] = React.useState(false);
+  // The indexed head (public.html) names the main page; a custom page is its
+  // own canonical address (W1-G4).
+  React.useEffect(() => {
+    syncPublicCanonical(document, pageSlug);
+  }, [pageSlug]);
   React.useEffect(() => {
     if (!pageSlug) {
       setPageMeta(null);
@@ -360,9 +367,27 @@ export function PublicStatusPage() {
             ? 'maintenance'
             : 'ok';
 
+  // The tab and search-result title: a running outage comes first, so a tab
+  // left open says so without being looked at (W1-G4). Only a verdict built
+  // from a fresh answer counts - a failed load never claims or denies one.
+  const pageName = pageMeta?.title || t('public.title', 'Stav služeb');
+  const outageCount = verdict === 'down' && down !== null ? down : 0;
+  const outagePrefix =
+    outageCount > 0
+      ? {
+          one: t('public.doc_title_down_one', { count: outageCount }, `(${outageCount}) výpadek`),
+          few: t('public.doc_title_down_few', { count: outageCount }, `(${outageCount}) výpadky`),
+          other: t('public.doc_title_down_other', { count: outageCount }, `(${outageCount}) výpadků`),
+        }[pluralForm(lang, outageCount)] + ' · '
+      : '';
+  const docTitle = `${outagePrefix}${pageName} | Blood Kings`;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
+      <title>{docTitle}</title>
+      {/* A custom page that does not exist (or is not public) must not be
+          indexed as an empty status page; it answers 200 like every route. */}
+      {pageError && <meta name="robots" content="noindex" />}
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {branding?.customLogoUrl && (

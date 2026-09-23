@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   isProbeMonitor,
+  isPublicByDefault,
   isTeamSpeakMonitor,
   monitorTypeLabel,
   monitorTypeProfile,
@@ -164,3 +165,22 @@ describe('isTeamSpeakMonitor (W1-D2)', () => {
   });
 });
 
+describe('isPublicByDefault (W1-G3)', () => {
+  it('servery, router a služby pod agentem jsou bez volby vlastníka skryté, weby a herní služby veřejné', () => {
+    for (const type of ['vps', 'openwrt', 'agent_service', 'OpenWrt ']) expect(isPublicByDefault(type)).toBe(false);
+    for (const type of ['web', 'teamspeak', 'minecraft', 'discord', 'port', 'heartbeat', null]) {
+      expect(isPublicByDefault(type)).toBe(true);
+    }
+  });
+
+  it('seznam skrytých typů je stejný jako BK_PRIVATE_BY_DEFAULT_TYPES na serveru', () => {
+    const php = readFileSync(join(__dirname, '../../../status/functions.php'), 'utf8');
+    const m = php.match(/const BK_PRIVATE_BY_DEFAULT_TYPES = \[([^\]]*)\];/);
+    expect(m).not.toBeNull();
+    const server = [...m![1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
+    const hidden = ['vps', 'openwrt', 'agent_service', 'web', 'teamspeak', 'minecraft', 'port', 'heartbeat', 'discord']
+      .filter((type) => !isPublicByDefault(type))
+      .sort();
+    expect(hidden).toEqual(server);
+  });
+});

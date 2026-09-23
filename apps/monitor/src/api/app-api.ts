@@ -108,6 +108,11 @@ export interface ApiMonitor {
   remoteActionsEnabled?: boolean;
   /** The router's masked log lines are collected and stored (W1-C3); admin view only, absent on an older server. */
   logLinesEnabled?: boolean;
+  /**
+   * On the public status page (W1-G3): the owner's choice, or the type's
+   * default when nobody chose. Admin view only, absent on an older server.
+   */
+  isPublic?: boolean;
   allowedActions?: string[];
 }
 

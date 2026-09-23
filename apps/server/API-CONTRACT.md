@@ -77,6 +77,11 @@ Pozor na detaily, které se snadno ztratí:
   Stejný verdikt tiskne odznak flotily i stará stránka `/status/`.
   `lastUpdated` je `null`, když se nic neměřilo (žádné `date('c')`), `nodes`
   jen z typů agent/vps/openwrt/teamspeak/node/router.
+- **Veřejná sada** (`monitors.is_public`, `NULL` = výchozí typu): `vps`,
+  `openwrt` a `agent_service` jsou skryté, ostatní veřejné. Anonymní
+  `public_status`, `monitors`, `events`, `incidents`, `daily_uptime`,
+  `uptime_windows`, `regions`, odznak flotily, `rss.php`, `widget.php` a
+  `/status/` vidí jen ji; skrytý monitor tam odpovídá jako neexistující (404).
 - **Okna nad 30 dní čtou `uptime_daily`**: `uptime_windows` nese u řádku
   `since` a nahoře `windowStart {d7,d30,d90}`, `sla_report` nese `days`,
   `windowStart`, `since`, `percentileDays`; `response_time` na 90d/180d/1y je

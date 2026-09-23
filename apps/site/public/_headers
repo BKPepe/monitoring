@@ -24,6 +24,9 @@ https://:project.pages.dev/*
 https://:version.:project.pages.dev/*
   X-Robots-Tag: noindex
 
+# RFC 9116: text/plain with charset utf-8 (src/pages/.well-known/security.txt.ts).
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
 
 # Astro hashuje názvy buildovaných assetů, takže je lze cachovat natrvalo.
 /_astro/*

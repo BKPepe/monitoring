@@ -67,9 +67,26 @@ the same as one that does not exist, so ids cannot be probed. Rows marked
 monitors.
 
 `scope=public` asks `public_status`, `monitors`, `daily_uptime`, `uptime_windows`, `regions`,
-`events` and `incidents` for the public status view. It covers every monitor, is
-the same for everyone and carries no targets, hostnames, processes or interface
-names. An anonymous caller always gets this view.
+`events` and `incidents` for the public status view. It covers the public set
+(below), is the same for everyone - a signed-in administrator included - and
+carries no targets, hostnames, processes or interface names. An anonymous
+caller always gets this view.
+
+### Which monitors are public
+
+The public status page is indexed by search engines, so it shows a curated
+set: websites and game services. Servers (`vps`), the home router (`openwrt`)
+and the services an agent watches (`agent_service`) stay off it unless the
+owner turns them on. The switch is `monitors.is_public`: `1`/`0` is the owner's
+choice, `NULL` (never chosen) follows the type, so every monitor created by the
+app, an import or an agent's first report gets the same default.
+
+Everything anonymous covers only this set: the public view of the actions
+above, the fleet `badge`, `rss.php`, the legacy `/status/` page and
+`widget.php`. A monitor outside it answers like a missing one there - the
+`badge` with its `monitor_id` is 404 unless the caller is signed in and may see
+it - because the badge and the widget print its name. Incidents tied to no
+monitor stay public.
 
 ### What an anonymous visitor sees
 
@@ -269,7 +286,9 @@ would stay green long after the backup stopped running.
 ### `GET rss.php[?page=slug]`
 
 **Public.** An RSS 2.0 feed of outages and their resolutions. Without a
-parameter it covers all monitors; with `page`, only those on that status page.
+parameter it covers the public set (see "Which monitors are public"); with
+`page`, only those of that status page that are in the public set. Incidents
+tied to no monitor are on every feed.
 
 A hidden page returns **404** just like a nonexistent slug - RSS cannot be used
 to bypass the visibility a page has on the web.
@@ -378,8 +397,13 @@ real email of the logged-in user - it used to return a hardcoded
 state, response time and agent metrics, without archived monitors unless `archived=1`
 asks for only those. A `user` account gets its assigned
 monitors and an administrator all of them. An anonymous caller, or any caller
-with `scope=public`, gets every monitor with `target`, `port`, `hostname` and
-`agentLastSeen` set to `null` and only the allowlisted `details` keys.
+with `scope=public`, gets the public set (see "Which monitors are public") with
+`target`, `port`, `hostname` and `agentLastSeen` set to `null` and only the
+allowlisted `details` keys.
+
+An administrator's list also carries `isPublic` (the effective answer: the
+owner's choice, or the type's default when never chosen) and `logLinesEnabled`
+(whether a router may send its masked log lines, see `agent_api.php`).
 
 Response time comes from `monitor_logs`, the CPU/RAM/HDD values from
 `vps_metrics` - they are not columns of the `monitors` table. A missing value is
@@ -404,6 +428,8 @@ Selected parameters:
 | `preset_id` | all | `null` = the monitor keeps its own metric selection |
 | `enabled_metrics` | all | Array of keys; empty = recommended defaults |
 | `allowed_actions` | `openwrt` | Only with `remote_actions_enabled` |
+| `is_public` | all | On the public status page: `true`/`false` (or `1`/`0`); `null` hands the choice back to the type's default. Left out = unchanged. Anything else is `400 {"error": "invalid_switch", "invalidKeys": ["is_public"]}` |
+| `log_lines_enabled` | `openwrt` | Whether the router may send its masked log lines (default on). Left out = unchanged; not a boolean = `400 invalid_switch` |
 
 Passwords (`sq_password`, `rcon_password`) are only overwritten when a new value
 is supplied - an empty field does not erase a stored password. The heartbeat
@@ -455,9 +481,9 @@ answers 409.
 | `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in time; `d1` is the last 24 hours, the others are calendar days with today included. An unmeasured window is `null`, never 100. Each row carries `since`, the first day with data in the 90-day window, and the answer carries `windowStart` (`d7`, `d30`, `d90`: each window's first day); both are server-local `Y-m-d`, so "90 days" over six weeks of history can say where its data starts |
 | `action=check_stages&monitor_id=` | assigned monitor | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | public status / assigned | Availability by measurement location (`checked_from`) |
-| `action=public_status` | public status / assigned | Summary for the public page (counts, average availability). Inside the app a `user` account gets totals over its assigned monitors |
-| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it summarises the fleet, an unknown monitor is 404 |
-| `action=websites_overview` | assigned monitor | Sites with certificates and availability in the window |
+| `action=public_status` | public status / assigned | Summary for the public page: `status` is the overall verdict (see "One overall verdict"), with `totalMonitors`, `downMonitors`, `warningMonitors`, `unknownMonitors`, `unmeasuredMonitors`, `maintenanceMonitors` and the average availability. `lastUpdated` is the newest real check, `null` when nothing was measured. `nodes` are the agent and host monitors only (`online`, `warning`, `offline`, `maintenance`, `unknown`). Inside the app a `user` account gets totals over its assigned monitors |
+| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it prints the overall verdict of the public set. An unknown monitor, or one off the public page for a caller who may not see it, is 404 |
+| `action=websites_overview` | assigned monitor | Sites with certificates and availability in the window (`sla7` / `sla30` / `sla365` in time, calendar days with today included; `null` = nothing measured). `sslAlertDays` is the limit cron alerts at (`ssl_alert_days`) |
 | `action=monitor_insights&monitor_id=` | assigned monitor | Derived observations for one monitor |
 | `action=dashboard_insights&limit=&offset=&lang=` | assigned monitor | The same across monitors: forecasts, anomalies and network notes, worded in the request's language. Paged - `limit` 1-200 (default 4), `offset`, and `total` says how many there are; the list is no longer cut at eight. Cached for 5 minutes per language (`cachedAt` when the answer came from it) |
 | `action=ui_config` | public | Appearance settings for the frontend (logo, names) |

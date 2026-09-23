@@ -49,6 +49,24 @@ $stmt_monitors = $pdo->query("
 ");
 $monitors = $stmt_monitors->fetchAll();
 
+// An anonymous visitor sees the public set (W1-G3, owner decision 5.3): the
+// page is indexed, and it listed every server and the home router by name.
+// A signed-in account keeps the whole page. The header counts follow the list.
+$bk_public_ids = empty($_SESSION['admin_logged_in']) ? bk_public_monitor_ids($pdo) : null;
+if ($bk_public_ids !== null) {
+    $monitors = array_values(array_filter($monitors, fn($m) => in_array((int)$m['id'], $bk_public_ids, true)));
+    $total_monitors = count($monitors);
+    $up_monitors = count(array_filter($monitors, fn($m) => ($m['status'] ?? '') === 'up'));
+    $down_monitors = count(array_filter($monitors, fn($m) => ($m['status'] ?? '') === 'down'));
+    $maintenance_monitors_count = count(array_filter($monitors, fn($m) => ($m['status'] ?? '') === 'maintenance'));
+    $last_checked_global = null;
+    foreach ($monitors as $m) {
+        if (!empty($m['last_checked']) && ($last_checked_global === null || strcmp((string)$m['last_checked'], (string)$last_checked_global) > 0)) {
+            $last_checked_global = $m['last_checked'];
+        }
+    }
+}
+
 // --- Vlastní status stránka (?page=slug) ---------------------------------
 //
 // Stránka se svým výběrem monitorů; prázdný výběr znamená "všechny".
@@ -266,6 +284,13 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     $regions = $bk_agg['regions'];
 }
 
+// The cache holds the whole fleet; an anonymous visitor gets the public set
+// out of it (see $bk_public_ids above) - the outage list names its monitors.
+if ($bk_public_ids !== null) {
+    $incidents = array_values(array_filter($incidents, fn($row) => in_array((int)($row['monitor_id'] ?? 0), $bk_public_ids, true)));
+    $uptime_pct = array_intersect_key($uptime_pct, array_flip($bk_public_ids));
+}
+
 // Celková průměrná 30denní dostupnost napříč všemi monitory. Prázdné
 // $uptime_pct znamená, že žádný monitor zatím nemá kontrolu za posledních
 // 30 dní (nová instalace nebo mrtvý cron) - fabrikovat "100 %" by to
@@ -378,6 +403,12 @@ $portal_url = trim(get_setting('portal_url'));
         try {
             $stmt_inc = $pdo->query("SELECT * FROM incidents WHERE status != 'resolved' ORDER BY created_at DESC");
             $active_incidents = $stmt_inc->fetchAll();
+            // An anonymous visitor gets the public set's incidents and those
+            // tied to no monitor; a hidden server's title names it (W1-G3).
+            if ($bk_public_ids !== null) {
+                $active_incidents = array_values(array_filter($active_incidents, fn($inc) => $inc['monitor_id'] === null
+                    || in_array((int)$inc['monitor_id'], $bk_public_ids, true)));
+            }
             foreach ($active_incidents as $inc):
                 $stmt_updates = $pdo->prepare("SELECT * FROM incident_updates WHERE incident_id = ? ORDER BY created_at DESC");
                 $stmt_updates->execute([$inc['id']]);
@@ -516,7 +547,17 @@ $portal_url = trim(get_setting('portal_url'));
         // Recent Events - napříč celou flotilou monitorů (Level 1 Dashboard).
         // Čte se přímo z monitor_events, ne přes plný Insights výpočet pro každý
         // monitor - to by na hlavní stránce znamenalo N+1 dotazů navíc.
-        $stmt_fleet_events = $pdo->query("SELECT me.monitor_id, COALESCE(m.name, me.monitor_name) AS monitor_name, me.monitor_type, me.event_type, me.description, me.occurred_at FROM monitor_events me LEFT JOIN monitors m ON m.id = me.monitor_id WHERE m.id IS NULL OR m.archived_at IS NULL ORDER BY me.occurred_at DESC LIMIT 8");
+        // An anonymous visitor gets the public set's events only (W1-G3): each
+        // row names its monitor, and a deleted monitor's events stay out too,
+        // since nobody can tell any more whether it was public. The filter
+        // sits in SQL so the eight rows are eight public ones.
+        if ($bk_public_ids !== null) {
+            $fleet_ids = $bk_public_ids !== [] ? $bk_public_ids : [0];
+            $stmt_fleet_events = $pdo->prepare("SELECT me.monitor_id, m.name AS monitor_name, me.monitor_type, me.event_type, me.description, me.occurred_at FROM monitor_events me JOIN monitors m ON m.id = me.monitor_id WHERE m.archived_at IS NULL AND me.monitor_id IN (" . implode(',', array_fill(0, count($fleet_ids), '?')) . ") ORDER BY me.occurred_at DESC LIMIT 8");
+            $stmt_fleet_events->execute($fleet_ids);
+        } else {
+            $stmt_fleet_events = $pdo->query("SELECT me.monitor_id, COALESCE(m.name, me.monitor_name) AS monitor_name, me.monitor_type, me.event_type, me.description, me.occurred_at FROM monitor_events me LEFT JOIN monitors m ON m.id = me.monitor_id WHERE m.id IS NULL OR m.archived_at IS NULL ORDER BY me.occurred_at DESC LIMIT 8");
+        }
         $fleet_events = $stmt_fleet_events->fetchAll();
         ?>
         <?php if (!empty($fleet_events)): ?>

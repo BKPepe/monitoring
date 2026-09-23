@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { filterAssets, orderByStatusChange, parseStatusFilter } from '@/lib/asset-filter';
+import { isPublicByDefault } from '@/lib/monitor-type';
 import {
   Boxes,
   ChevronDown,
@@ -146,6 +147,14 @@ export function InfrastructurePage() {
    * is then left out of the save and the stored value stays as it is.
    */
   const [logLinesEnabled, setLogLinesEnabled] = React.useState<boolean | null>(null);
+  /**
+   * On the public status page (W1-G3, owner decision 5.3). `readPublic` is what
+   * the server answered for this monitor (its own choice or its type's
+   * default), `publicChoice` is set only by a click. Only a click is saved, so
+   * a monitor nobody chose for keeps following its type's default.
+   */
+  const [readPublic, setReadPublic] = React.useState<boolean | null>(null);
+  const [publicChoice, setPublicChoice] = React.useState<boolean | null>(null);
   const [allowedActions, setAllowedActions] = React.useState<string[]>([
     'restart_wan',
     'restart_wireguard',
@@ -362,9 +371,13 @@ export function InfrastructurePage() {
       setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
       setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
       setLogLinesEnabled(typeof mon.logLinesEnabled === 'boolean' ? mon.logLinesEnabled : null);
+      setReadPublic(typeof mon.isPublic === 'boolean' ? mon.isPublic : null);
+      setPublicChoice(null);
       setAllowedActions(mon.allowedActions ?? []);
       setEnabledMetrics(mon.enabledMetrics ?? []);
     } else if (selectedAssetRef.current) {
+      setReadPublic(null);
+      setPublicChoice(null);
       setMonitorName(selectedAssetRef.current.name);
       const k = (selectedAssetRef.current.kind || '').toLowerCase();
       if (k.includes('discord')) setMonitorType('discord');
@@ -520,6 +533,7 @@ export function InfrastructurePage() {
           ...(monitorType === 'openwrt' && logLinesEnabled !== null
             ? { log_lines_enabled: logLinesEnabled ? 1 : 0 }
             : {}),
+          ...(publicChoice !== null ? { is_public: publicChoice ? 1 : 0 } : {}),
           allowed_actions: allowedActions,
           enabled_metrics: enabledMetrics,
           // Per-monitor channel overrides. Empty clears the override and the
@@ -646,6 +660,8 @@ export function InfrastructurePage() {
                 setHddThreshold('90');
                 setRemoteActionsEnabled(false);
                 setLogLinesEnabled(null);
+                setReadPublic(null);
+                setPublicChoice(null);
                 setAllowedActions([
                   'restart_wan',
                   'restart_wireguard',
@@ -923,6 +939,26 @@ export function InfrastructurePage() {
                         </div>
                       </div>
                     )}
+
+                    {/* On the public status page (W1-G3): the page is indexed, so servers, the
+                        home router and agent services stay off it unless the owner turns them on. */}
+                    <div className="space-y-1.5 rounded-xl border border-border bg-secondary/40 p-4 text-xs">
+                      <label className="flex cursor-pointer items-center gap-2 font-semibold text-foreground">
+                        <input
+                          type="checkbox"
+                          checked={publicChoice ?? readPublic ?? isPublicByDefault(monitorType)}
+                          onChange={(e) => setPublicChoice(e.target.checked)}
+                          className="rounded border-border"
+                        />
+                        {t('infra.public_label', 'Zobrazit na veřejné stavové stránce')}
+                      </label>
+                      <p className="text-2xs leading-relaxed text-muted-foreground">
+                        {t(
+                          'infra.public_hint',
+                          'Veřejnou stránku /app/public vidí kdokoli a indexují ji vyhledávače. Servery, domácí router a služby pod agentem jsou na ní ve výchozím stavu skryté.'
+                        )}
+                      </p>
+                    </div>
                   </div>
                 )}
 

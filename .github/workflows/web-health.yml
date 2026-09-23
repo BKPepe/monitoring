@@ -1,0 +1,38 @@
+name: Web health (security.txt, robots, 404s)
+
+# The files served at the two hosts' roots, checked from outside once a week.
+# security.txt carries an Expires date (RFC 9116); it is renewed by every
+# deploy, and this run fails 30 days before a copy lapses, so a quiet month
+# without deploys cannot let it expire unnoticed. The fix is to re-run
+# deploy-root.yml (bloodkings.eu) or deploy.yml (monitoring.bloodkings.eu).
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Live root files on both hosts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # Every check runs, so one red run lists everything that is wrong.
+      - name: security.txt na obou hostech (Expires aspoň 30 dní dopředu)
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-security
+
+      - name: bloodkings.eu - robots.txt, sitemap.xml, chybové stránky
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-root
+
+      - name: monitoring.bloodkings.eu - chybějící stránka je 404
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-site

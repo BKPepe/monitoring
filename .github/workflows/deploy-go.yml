@@ -190,3 +190,19 @@ jobs:
             exit 1
           fi
           echo "Chybejici asset: 404 OK."
+
+          # The public status page is the one indexable page of the app
+          # (W1-G4): its own head with the canonical and no noindex, while
+          # everything else served from index.html keeps X-Robots-Tag.
+          curl -s -D /tmp/public.h -o /tmp/public.html "https://bloodkings.eu/app/public?v=$GITHUB_SHA"
+          if ! grep -q '<link rel="canonical" href="https://bloodkings.eu/app/public"' /tmp/public.html \
+            || grep -qi 'name="robots"' /tmp/public.html || grep -qi '^x-robots-tag' /tmp/public.h; then
+            echo "/app/public neni indexovatelna (chybi canonical, nebo nese noindex) - servira .htaccess public.html?"
+            cat /tmp/public.h
+            exit 1
+          fi
+          if ! curl -sI "https://bloodkings.eu/app/?v=$GITHUB_SHA" | grep -qi '^x-robots-tag: noindex'; then
+            echo "/app/ nema X-Robots-Tag noindex - soukroma cast aplikace by se mohla indexovat."
+            exit 1
+          fi
+          echo "Indexace: /app/public ano, /app/ noindex - OK."

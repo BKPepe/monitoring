@@ -1,0 +1,20 @@
+# BEGIN bloodkings-monitoring
+# Managed from the BKPepe/monitoring repository (root/htaccess.block) by the
+# deploy-root workflow, which replaces only the lines between these markers.
+# Edit the block in the repository; a change made here on the server is
+# overwritten by the next deploy. /status/ and /app/ keep their own
+# ErrorDocument lines, these pages cover every other path of the host.
+ErrorDocument 403 /errors/403.html
+ErrorDocument 404 /errors/404.html
+ErrorDocument 410 /errors/410.html
+ErrorDocument 500 /errors/500.html
+ErrorDocument 503 /errors/503.html
+# RFC 9116 wants security.txt as text/plain with charset utf-8. The same
+# IfModule + Files + Header construct already runs in /app/.htaccess here;
+# without mod_headers the server still sends .txt as text/plain.
+<IfModule mod_headers.c>
+    <Files "security.txt">
+        Header set Content-Type "text/plain; charset=utf-8"
+    </Files>
+</IfModule>
+# END bloodkings-monitoring

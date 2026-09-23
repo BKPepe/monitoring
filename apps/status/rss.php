@@ -7,7 +7,7 @@
  * should avoid. An RSS subscription flips it: the reader asks by itself.
  *
  * Invocation:
- *   rss.php                 all monitors
+ *   rss.php                 every monitor on the public page
  *   rss.php?page=herni      only the monitors of the chosen status page
  *
  * A hidden page behaves like in index.php - an anonymous visitor gets a 404
@@ -80,14 +80,18 @@ if ($slug !== '') {
 $items = [];
 
 try {
-    $params = [];
-    $where = '';
+    // The feed is public, so it covers the public set (W1-G3): an incident of
+    // a server or the home router stays out, its title names the monitor
+    // ("Výpadek: <name>"). A status page narrows that set further, never widens it.
+    $public_ids = bk_public_monitor_ids($pdo);
+    $monitor_ids = empty($monitor_ids) ? $public_ids : array_values(array_intersect($monitor_ids, $public_ids));
+    // Incidents without a monitor (manual, global) belong on every feed: they
+    // typically concern the whole infrastructure.
+    $params = $monitor_ids;
+    $where = 'WHERE i.monitor_id IS NULL';
     if (!empty($monitor_ids)) {
-        // Incidents without a monitor (manual, global) belong on a filtered page
-        // too: they typically concern the whole infrastructure.
         $ph = implode(',', array_fill(0, count($monitor_ids), '?'));
         $where = "WHERE (i.monitor_id IS NULL OR i.monitor_id IN ({$ph}))";
-        $params = $monitor_ids;
     }
 
     $stmt = $pdo->prepare("

@@ -3353,6 +3353,49 @@ if (!defined('BK_DEFAULT_THRESHOLDS')
 }
 
 
+// --- Veřejná stránka ukazuje vybranou sadu (W1-G3) -------------------------------
+// Indexovaná veřejná stránka jmenovala každý server i domácí router. Servery,
+// router a služby pod agentem jsou teď mimo ni, dokud je vlastník nezapne;
+// weby a herní služby na ní zůstávají. NULL = nikdy nevybráno, rozhoduje typ.
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_monitor_is_public', 'bk_overall_verdict']);
+if (!defined('BK_PRIVATE_BY_DEFAULT_TYPES')
+    && preg_match('/\nconst BK_PRIVATE_BY_DEFAULT_TYPES = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $pub_const)) {
+    eval(trim($pub_const[0]));
+}
+{
+    check_true('web bez volby je veřejný', bk_monitor_is_public(null, 'web'));
+    check_true('herní server bez volby je veřejný', bk_monitor_is_public(null, 'minecraft'));
+    check_false('server (vps) bez volby veřejný není', bk_monitor_is_public(null, 'vps'));
+    check_false('domácí router bez volby veřejný není', bk_monitor_is_public(null, 'openwrt'));
+    check_false('služba pod agentem bez volby veřejná není', bk_monitor_is_public(null, 'agent_service'));
+    check_false('typ se čte bez ohledu na velikost písmen', bk_monitor_is_public(null, 'OpenWrt'));
+    check_true('vlastník může router na stránku dát', bk_monitor_is_public(1, 'openwrt'));
+    check_false('a web z ní sundat', bk_monitor_is_public('0', 'web'));
+    check_true('prázdná hodnota = nikdy nevybráno, rozhodne typ', bk_monitor_is_public('', 'discord'));
+}
+
+// --- Jeden celkový verdikt (W1-B4) ------------------------------------------------
+// public_status i odznak říkaly „v pořádku", dokud nic nebylo dole: zhoršený
+// monitor, neznámý stav i zastavený sběr dat se tvářily jako vše v pořádku.
+{
+    $vd = fn (string $status, ?string $checked = '2026-09-23 10:00:00', int $maint = 0): array
+        => ['status' => $status, 'last_checked' => $checked, 'maintenance' => $maint];
+    check('vše běží a sběr je čerstvý: v pořádku', bk_overall_verdict([$vd('up'), $vd('up')], true)['verdict'], 'healthy');
+    check('jeden zhoršený monitor: zhoršeno', bk_overall_verdict([$vd('up'), $vd('warning')], true)['verdict'], 'degraded');
+    check('výpadek přebije zhoršení', bk_overall_verdict([$vd('warning'), $vd('down')], true)['verdict'], 'down');
+    check('neznámý stav změřeného monitoru: zhoršeno, ne v pořádku', bk_overall_verdict([$vd('up'), $vd('unknown')], true)['verdict'], 'degraded');
+    check('údržba: údržba, ne v pořádku', bk_overall_verdict([$vd('up'), $vd('up', null, 1)], true)['verdict'], 'maintenance');
+    check('zastavený sběr: neznámý, ne v pořádku', bk_overall_verdict([$vd('up')], false)['verdict'], 'unknown');
+    check('zastavený sběr výpadek neschová', bk_overall_verdict([$vd('down')], false)['verdict'], 'down');
+    check('prázdná sada: neznámý', bk_overall_verdict([], true)['verdict'], 'unknown');
+    check('nový monitor bez první kontroly verdikt nekazí', bk_overall_verdict([$vd('up'), $vd('unknown', null)], true)['verdict'], 'healthy');
+    check('sada jen z nezměřených monitorů: neznámý', bk_overall_verdict([$vd('unknown', null)], true)['verdict'], 'unknown');
+    check('počty podle stavů',
+        bk_overall_verdict([$vd('up'), $vd('down'), $vd('warning'), $vd('unknown'), $vd('unknown', null), $vd('maintenance')], true)['counts'],
+        ['up' => 1, 'down' => 1, 'warning' => 1, 'maintenance' => 1, 'unknown' => 1, 'unmeasured' => 1]);
+}
+
+
 // --- Řádky chyb z logu routeru (W1-C3) --------------------------------------------
 // Agent 0.1.8 posílá posledních pět chybových řádků, zamaskovaných už na
 // routeru. Server masky opakuje (starší nebo cizí agent), drží nejvýš pět

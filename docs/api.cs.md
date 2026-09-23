@@ -67,9 +67,25 @@ stejně jako neexistující, takže id nejde osahávat. Řádky označené **př
 monitor** se řídí tímto pravidlem a seznamy vracejí jen viditelné monitory.
 
 `scope=public` si u `public_status`, `monitors`, `daily_uptime`, `uptime_windows`, `regions`,
-`events` a `incidents` řekne o pohled veřejné status stránky. Zahrnuje všechny
-monitory, je stejný pro každého a nenese cíle, hostname, procesy ani názvy
-rozhraní. Nepřihlášený volající dostane vždy tento pohled.
+`events` a `incidents` řekne o pohled veřejné status stránky. Zahrnuje
+veřejnou sadu (níž), je stejný pro každého - i pro přihlášeného
+administrátora - a nenese cíle, hostname, procesy ani názvy rozhraní.
+Nepřihlášený volající dostane vždy tento pohled.
+
+### Které monitory jsou veřejné
+
+Veřejnou status stránku indexují vyhledávače, takže ukazuje vybranou sadu:
+weby a herní služby. Servery (`vps`), domácí router (`openwrt`) a služby
+hlídané agentem (`agent_service`) na ní nejsou, dokud je tam vlastník nedá.
+Přepínač je `monitors.is_public`: `1`/`0` je volba vlastníka, `NULL` (nikdy
+nezvoleno) se řídí typem, takže každý monitor založený aplikací, importem nebo
+prvním hlášením agenta dostane stejné výchozí nastavení.
+
+Všechno anonymní pokrývá jen tuto sadu: veřejný pohled akcí výš, odznak
+flotily (`badge`), `rss.php`, starou stránku `/status/` i `widget.php`. Monitor
+mimo ni tam odpoví jako neexistující - `badge` s jeho `monitor_id` je 404,
+pokud volající není přihlášený a nesmí ho vidět - protože odznak i widget
+tisknou jeho jméno. Incidenty nenavázané na žádný monitor zůstávají veřejné.
 
 ### Co vidí nepřihlášený návštěvník
 
@@ -266,7 +282,9 @@ záloha dávno neběží.
 ### `GET rss.php[?page=slug]`
 
 **Veřejné.** RSS 2.0 kanál s výpadky a jejich vyřešením. Bez parametru pokrývá
-všechny monitory, s `page` jen ty, které jsou na dané status stránce.
+veřejnou sadu (viz „Které monitory jsou veřejné"), s `page` jen ty monitory
+dané status stránky, které jsou ve veřejné sadě. Incidenty nenavázané na žádný
+monitor jsou v každém kanálu.
 
 Skrytá stránka vrací **404** stejně jako neexistující slug - přes RSS nelze
 obejít viditelnost, kterou má stránka na webu.
@@ -372,9 +390,14 @@ bez ohledu na to, kdo je přihlášený.
 **Přiřazené monitory, nebo veřejný pohled.** Seznam monitorů s posledním stavem,
 odezvou a metrikami agenta, bez archivovaných, pokud si `archived=1` neřekne
 právě o ně. Účet `user` dostane přiřazené monitory, administrátor
-všechny. Nepřihlášený volající nebo kdokoli se `scope=public` dostane všechny
-monitory s `target`, `port`, `hostname` a `agentLastSeen` nastavenými na `null`
-a jen s povolenými klíči `details`.
+všechny. Nepřihlášený volající nebo kdokoli se `scope=public` dostane
+veřejnou sadu (viz „Které monitory jsou veřejné") s `target`, `port`,
+`hostname` a `agentLastSeen` nastavenými na `null` a jen s povolenými klíči
+`details`.
+
+Seznam pro administrátora nese navíc `isPublic` (platná odpověď: volba
+vlastníka, nebo výchozí hodnota typu, když nikdy nezvolil) a `logLinesEnabled`
+(jestli router smí posílat své maskované řádky logu, viz `agent_api.php`).
 
 Odezva pochází z `monitor_logs`, hodnoty CPU/RAM/HDD z `vps_metrics` - nejsou
 to sloupce tabulky `monitors`. Chybějící hodnota je `null`.
@@ -398,6 +421,8 @@ Vybrané parametry:
 | `preset_id` | vše | `null` = monitor si drží vlastní nastavení metrik |
 | `enabled_metrics` | vše | Pole klíčů; prázdné = doporučené výchozí |
 | `allowed_actions` | `openwrt` | Jen s `remote_actions_enabled` |
+| `is_public` | vše | Na veřejné status stránce: `true`/`false` (nebo `1`/`0`); `null` vrátí volbu výchozí hodnotě typu. Vynechaný = beze změny. Cokoli jiného je `400 {"error": "invalid_switch", "invalidKeys": ["is_public"]}` |
+| `log_lines_enabled` | `openwrt` | Jestli router smí posílat své maskované řádky logu (výchozí zapnuto). Vynechaný = beze změny; ne-boolean = `400 invalid_switch` |
 
 Hesla (`sq_password`, `rcon_password`) se přepíší jen při zadání nové hodnoty -
 prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
@@ -447,9 +472,9 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 | `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d v čase; `d1` je posledních 24 hodin, ostatní jsou kalendářní dny včetně dneška. Nezměřené okno je `null`, nikdy 100. Každý řádek nese `since`, první den s daty v 90denním okně, a odpověď nese `windowStart` (`d7`, `d30`, `d90`: první den každého okna); obojí je místní `Y-m-d` serveru, takže „90 dní" nad šesti týdny historie řekne, odkud jeho data jsou |
 | `action=check_stages&monitor_id=` | přiřazený monitor | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | veřejný stav / přiřazené | Dostupnost podle místa měření (`checked_from`) |
-| `action=public_status` | veřejný stav / přiřazené | Souhrn pro veřejnou stránku (počty, průměrná dostupnost). V aplikaci dostane účet `user` součty jen za přiřazené monitory |
-| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` shrnuje celou flotilu, neznámý monitor je 404 |
-| `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně |
+| `action=public_status` | veřejný stav / přiřazené | Souhrn pro veřejnou stránku: `status` je celkový verdikt (viz „Jeden celkový verdikt"), s `totalMonitors`, `downMonitors`, `warningMonitors`, `unknownMonitors`, `unmeasuredMonitors`, `maintenanceMonitors` a průměrnou dostupností. `lastUpdated` je nejnovější skutečná kontrola, `null`, když se nic neměřilo. `nodes` jsou jen monitory agentů a hostitelů (`online`, `warning`, `offline`, `maintenance`, `unknown`). V aplikaci dostane účet `user` součty jen za přiřazené monitory |
+| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` tiskne celkový verdikt veřejné sady. Neznámý monitor, nebo monitor mimo veřejnou stránku pro volajícího, který ho nesmí vidět, je 404 |
+| `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně (`sla7` / `sla30` / `sla365` v čase, kalendářní dny včetně dneška; `null` = nic nenaměřeno). `sslAlertDays` je hranice, u které cron upozorňuje (`ssl_alert_days`) |
 | `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru |
 | `action=dashboard_insights&limit=&offset=&lang=` | přiřazený monitor | Totéž napříč monitory: předpovědi, anomálie a poznámky k síti, formulované v jazyce požadavku. Stránkované - `limit` 1-200 (výchozí 4), `offset`, a `total` říká, kolik jich je; seznam se už neuřezává na osm. V cache 5 minut pro každý jazyk zvlášť (`cachedAt`, když odpověď přišla z ní) |
 | `action=ui_config` | veřejné | Nastavení vzhledu pro frontend (logo, názvy) |

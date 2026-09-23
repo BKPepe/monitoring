@@ -137,7 +137,10 @@ export function StatusPagesPage() {
         <div className="min-w-0">
           <p className="text-sm font-semibold">{t('sp.main_page', 'Hlavní veřejná stránka')}</p>
           <p className="text-muted-foreground text-xs">
-            {t('sp.main_page_desc', 'Všechny služby, bez filtru - to, co uvidí návštěvník.')}
+            {t(
+              'sp.main_page_desc',
+              'Služby, které mají v nastavení monitoru zapnuté „Zobrazit na veřejné stavové stránce“ - to, co uvidí návštěvník.'
+            )}
           </p>
         </div>
         <a

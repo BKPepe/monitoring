@@ -443,7 +443,9 @@ check('badge neexistujícího monitoru je 404', $code, 404);
 [$code, , $bdg_up] = api_get($base, 'action=badge&monitor_id=1&type=uptime');
 check('uptime badge vrací HTTP 200', $code, 200);
 check_true('uptime badge nese procenta', (bool)preg_match('/\d+\.\d{2} %/', $bdg_up));
-[, , $bdg_nodata] = api_get($base, 'action=badge&monitor_id=2&type=uptime');
+// Monitor 2 is the home router, off the public page (W1-G3): the badge is
+// asked for with the admin's session, the anonymous 404 is checked later.
+[, , $bdg_nodata] = api_get_auth($base, 'action=badge&monitor_id=2&type=uptime', $cookie_jar);
 check_true('bez měření říká "bez dat"', str_contains($bdg_nodata, 'bez dat'));
 
 // badge.php is a deprecated alias - old README embeds must keep working
@@ -463,7 +465,10 @@ check_true('alias míří na action=badge s parametry', str_contains($alias_loc,
 [$code, $data] = api_get($base, 'action=public_status');
 check('public_status vrací HTTP 200', $code, 200);
 check_true('public_status zná počet monitorů', isset($data['totalMonitors']));
-check('public_status počítá oba monitory', (int)($data['totalMonitors'] ?? 0), 2);
+// The web is on the public page, the home router is not (W1-G3).
+check('veřejný public_status počítá jen web, router ne', (int)($data['totalMonitors'] ?? 0), 1);
+[, $data_admin] = api_get_auth($base, 'action=public_status', $cookie_jar);
+check('v aplikaci admin počítá oba monitory', (int)($data_admin['totalMonitors'] ?? 0), 2);
 
 // =======================================================================
 // 3. dashboard_layout - the tile catalogue (new feature, previously untested)
@@ -731,10 +736,17 @@ check_true('admin vidí víc monitorů než jeden', count($ma_all_ids) > 1);
 check('uživatel dostane seznam', $ma_user_code, 200);
 check('uživatel vidí jen přiřazený monitor', array_map(fn($m) => (int)$m['id'], $ma_user['monitors'] ?? []), [1]);
 
+// The public view is the public set (W1-G3). The router is put on it for the
+// checks below, so the public projection is still verified on a router's
+// details: an owner may publish one, and it must not leak then either.
+$pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 2");
+[, $ma_admin_pub] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$ma_public_ids = array_map(fn($m) => (int)$m['id'], array_values(array_filter($ma_admin_pub['monitors'] ?? [], fn($m) => ($m['isPublic'] ?? null) === true)));
+check_true('veřejná sada má web i zveřejněný router', in_array(1, $ma_public_ids, true) && in_array(2, $ma_public_ids, true));
 [, $ma_user_public] = api_get_auth($base, 'action=monitors&scope=public', $jar3);
-check('veřejný pohled ukáže uživateli všechny monitory', count($ma_user_public['monitors'] ?? []), count($ma_all_ids));
+check('veřejný pohled ukáže uživateli celou veřejnou sadu', count($ma_user_public['monitors'] ?? []), count($ma_public_ids));
 [, $ma_anon, $ma_anon_raw] = api_get($base, 'action=monitors');
-check('anonym dostane veřejný pohled na všechny monitory', count($ma_anon['monitors'] ?? []), count($ma_all_ids));
+check('anonym dostane veřejný pohled na veřejnou sadu', count($ma_anon['monitors'] ?? []), count($ma_public_ids));
 check_false('veřejný pohled neukáže názvy procesů', str_contains($ma_anon_raw, 'tajny-proces'));
 check_false('veřejný pohled neukáže názvy rozhraní', str_contains($ma_anon_raw, 'pppoe-wan'));
 $ma_anon_router = null;
@@ -922,10 +934,12 @@ $pdo->prepare("DELETE FROM monitor_logs WHERE id = ?")->execute([$pr_log]);
 check('souhrn v aplikaci počítá jen přiřazené monitory', $ps_user['totalMonitors'] ?? null, 1);
 check_false('uzly v aplikaci uživatele nenesou cizí monitor', in_array('Router bez metrik', array_column($ps_user['nodes'] ?? [], 'name'), true));
 [, $ps_user_pub] = api_get_auth($base, 'action=public_status&scope=public', $jar3);
-check('veřejný souhrn počítá celou flotilu', $ps_user_pub['totalMonitors'] ?? null, count($ma_all_ids));
+check('veřejný souhrn počítá veřejnou sadu', $ps_user_pub['totalMonitors'] ?? null, count($ma_public_ids));
 [, $ps_anon] = api_get($base, 'action=public_status');
-check('anonym dostane souhrn celé flotily', $ps_anon['totalMonitors'] ?? null, count($ma_all_ids));
-check_true('a v uzlech i router', in_array('Router bez metrik', array_column($ps_anon['nodes'] ?? [], 'name'), true));
+check('anonym dostane souhrn veřejné sady', $ps_anon['totalMonitors'] ?? null, count($ma_public_ids));
+check_true('a v uzlech i zveřejněný router', in_array('Router bez metrik', array_column($ps_anon['nodes'] ?? [], 'name'), true));
+// Back to the type's default: the router is off the public page again.
+$pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
 
 // Admin-only diagnostics checked only for a login.
 [$hl_user_code] = $page_get('/health.php?format=json', $jar3);
@@ -1297,9 +1311,16 @@ $pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, create
             VALUES (902, 'Výpadek: Router bez metrik', 'critical', 'investigating', 2,
                     DATE_SUB(NOW(), INTERVAL 20 MINUTE))");
 
+// The feed covers the public set (W1-G3); the router is put on it for the
+// item checks below and taken off again for the one that says it drops out.
+$pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 2");
 $rss_ch = curl_init($base . '/rss.php');
 curl_setopt_array($rss_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_HEADER => true]);
 $rss_raw = (string)curl_exec($rss_ch);
+$pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
+[, , $rss_hidden_body] = bk_raw_request($base . '/rss.php');
+check_false('incident routeru mimo veřejnou stránku v kanálu není', str_contains($rss_hidden_body, 'incident-902-opened'));
+check_true('incident webu v kanálu zůstává', str_contains($rss_hidden_body, 'incident-901-opened'));
 $rss_code = (int)curl_getinfo($rss_ch, CURLINFO_RESPONSE_CODE);
 $rss_ctype = (string)curl_getinfo($rss_ch, CURLINFO_CONTENT_TYPE);
 $rss_body = substr($rss_raw, curl_getinfo($rss_ch, CURLINFO_HEADER_SIZE));
@@ -4880,6 +4901,165 @@ try {
 }
 
 // =======================================================================
+// The public page shows a curated set (W1-G3, owner decision 5.3).
+//
+// It is indexed by search engines and listed every server and the home
+// router by name. Servers, the router and agent services now stay off it
+// unless the owner puts them on; websites and game services stay.
+// =======================================================================
+$g3_ids = fn (?array $list): array => array_map(fn ($m) => (int)$m['id'], $list['monitors'] ?? []);
+[, $g3_anon] = api_get($base, 'action=monitors&scope=public');
+check_true('veřejný seznam ukáže web', in_array(1, $g3_ids($g3_anon), true));
+check_false('veřejný seznam neukáže domácí router', in_array(2, $g3_ids($g3_anon), true));
+check('ani žádný server, router či službu pod agentem',
+    array_values(array_filter($g3_anon['monitors'] ?? [], fn ($m) => in_array($m['type'], ['vps', 'openwrt', 'agent_service'], true))), []);
+[, $g3_admin_pub] = api_get_auth($base, 'action=monitors&scope=public', $cookie_jar);
+check('přihlášený admin na veřejné stránce vidí totéž co návštěvník', $g3_ids($g3_admin_pub), $g3_ids($g3_anon));
+[, $g3_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$g3_row = fn (int $id): array => array_values(array_filter($g3_admin['monitors'] ?? [], fn ($m) => (int)$m['id'] === $id))[0] ?? [];
+check('admin vidí u webu, že je veřejný', $g3_row(1)['isPublic'] ?? null, true);
+check('a u routeru, že veřejný není', $g3_row(2)['isPublic'] ?? null, false);
+check('řádky logu jsou u routeru zapnuté', $g3_row(2)['logLinesEnabled'] ?? null, true);
+
+[, $g3_ps] = api_get($base, 'action=public_status');
+check('veřejný souhrn počítá jen veřejnou sadu', $g3_ps['totalMonitors'] ?? null, count($g3_ids($g3_anon)));
+check_false('router není mezi veřejnými uzly', in_array('Router bez metrik', array_column($g3_ps['nodes'] ?? [], 'name'), true));
+
+// The switch: a new server is hidden, the owner can put it on and hand the
+// choice back to the type's default; "false" as text is refused, not read as on.
+$g3_payload = ['name' => 'G3 veřejný server', 'type' => 'vps', 'target' => '', 'category' => 'Test'];
+[$g3_code, $g3_created] = api_post($base, 'action=save_monitor', $g3_payload, $cookie_jar);
+$g3_id = (int)($g3_created['id'] ?? 0);
+check('nový server se uloží', $g3_code, 200);
+[, $g3_l1] = api_get($base, 'action=monitors&scope=public');
+check_false('nový server na veřejné stránce není', in_array($g3_id, $g3_ids($g3_l1), true));
+api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id, 'is_public' => true], $cookie_jar);
+[, $g3_l2] = api_get($base, 'action=monitors&scope=public');
+check_true('vlastník ho na stránku dá', in_array($g3_id, $g3_ids($g3_l2), true));
+api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id], $cookie_jar);
+[, $g3_l3] = api_get($base, 'action=monitors&scope=public');
+check_true('uložení bez přepínače volbu nezmění', in_array($g3_id, $g3_ids($g3_l3), true));
+api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id, 'is_public' => null], $cookie_jar);
+[, $g3_l4] = api_get($base, 'action=monitors&scope=public');
+check_false('null vrátí rozhodnutí typu (server zase skrytý)', in_array($g3_id, $g3_ids($g3_l4), true));
+[$g3_bad_code, $g3_bad] = api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id, 'is_public' => 'false'], $cookie_jar);
+check('"false" jako text se odmítne', [$g3_bad_code, $g3_bad['error'] ?? null, $g3_bad['invalidKeys'] ?? null], [400, 'invalid_switch', ['is_public']]);
+$pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$g3_id]);
+
+// Every other public read covers the same set.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (2, 'down', 'Agent routeru neodpovídá', NOW())");
+$g3_log = (int)$pdo->lastInsertId();
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Router bez metrik', 'major', 'investigating', 2)");
+$g3_inc = (int)$pdo->lastInsertId();
+try {
+    [, $g3_ev] = api_get($base, 'action=events&monitor_id=2&limit=50');
+    check('veřejné události skrytého routeru jsou prázdné', $g3_ev['events'] ?? null, []);
+    [, $g3_ev_admin] = api_get_auth($base, 'action=events&monitor_id=2&limit=50', $cookie_jar);
+    check_true('admin je vidí', count($g3_ev_admin['events'] ?? []) > 0);
+    [, $g3_du] = api_get($base, 'action=daily_uptime&days=7&scope=public');
+    check_false('veřejné denní pásy router nemají', isset($g3_du['series']['2']) || isset($g3_du['series'][2]));
+    $g3_inc_mids = fn (?array $p): array => array_map(fn ($r) => (int)($r['monitor_id'] ?? $r['monitorId'] ?? 0), array_merge($p['incidents'] ?? [], $p['manualIncidents'] ?? []));
+    [, $g3_inc_anon] = api_get($base, 'action=incidents&scope=public');
+    check_false('veřejné incidenty skrytý router nejmenují', in_array(2, $g3_inc_mids($g3_inc_anon), true));
+    [, $g3_inc_admin] = api_get_auth($base, 'action=incidents', $cookie_jar);
+    check_true('admin incident routeru vidí', in_array(2, $g3_inc_mids($g3_inc_admin), true));
+    [$g3_bdg] = api_get($base, 'action=badge&monitor_id=2');
+    check('odznak skrytého routeru je pro návštěvníka 404', $g3_bdg, 404);
+    [$g3_bdg_admin] = api_get_auth($base, 'action=badge&monitor_id=2', $cookie_jar);
+    check('přihlášenému adminovi se ukáže', $g3_bdg_admin, 200);
+    [, , $g3_widget] = bk_raw_request($base . '/widget.php?id=2');
+    check_true('widget skrytého routeru: monitor nenalezen', str_contains($g3_widget, 'Monitor nenalezen'));
+    [, , $g3_rss] = bk_raw_request($base . '/rss.php');
+    check_false('RSS skrytý router nejmenuje', str_contains($g3_rss, 'Router bez metrik'));
+    @unlink($root . '/cache/dashboard_agg.json');
+    [$g3_idx_code, , $g3_idx] = bk_raw_request($base . '/index.php');
+    check('stará veřejná stránka odpoví', $g3_idx_code, 200);
+    check_false('stará veřejná stránka router nejmenuje', str_contains($g3_idx, 'Router bez metrik'));
+    check_true('web na ní zůstává', str_contains($g3_idx, 'Testovací web'));
+} finally {
+    $pdo->prepare("DELETE FROM monitor_logs WHERE id = ?")->execute([$g3_log]);
+    $pdo->prepare("DELETE FROM incidents WHERE id = ?")->execute([$g3_inc]);
+}
+
+// =======================================================================
+// One overall verdict for public_status and the fleet badge (W1-B4).
+//
+// Both said "healthy" / "vše online" unless something was down: a degraded
+// monitor, an unknown one and a stopped collector read as all-clear, and
+// lastUpdated fell back to "now" when nothing had been measured.
+// =======================================================================
+$b4_saved = $pdo->query("SELECT id, status, last_checked, maintenance FROM monitors")->fetchAll();
+$b4_cron = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'last_cron_run'")->fetchColumn();
+$b4_set_cron = function (int $ago) use ($pdo): void {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_cron_run', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([date('Y-m-d H:i:s', time() - $ago)]);
+};
+$b4_badge = function () use ($base): string {
+    [, , $svg] = api_get($base, 'action=badge');
+    return $svg;
+};
+try {
+    $pdo->exec("UPDATE monitors SET status = 'up', maintenance = 0, last_checked = NOW()");
+    $b4_set_cron(60);
+    [, $b4_ok] = api_get($base, 'action=public_status');
+    check('vše běží a sběr je čerstvý: healthy', $b4_ok['status'] ?? null, 'healthy');
+    check_true('odznak flotily: vše online', str_contains($b4_badge(), 'vše online'));
+    check_true('lastUpdated je skutečná poslední kontrola', is_string($b4_ok['lastUpdated'] ?? null));
+    // The legacy /status/ page is indexed as well, and its headline said
+    // "Všechny systémy jsou online" over a warning or a stopped collector.
+    [, , $b4_idx_ok] = bk_raw_request($base . '/index.php');
+    check_true('stará stránka: vše běží, říká online', str_contains($b4_idx_ok, 'Všechny systémy jsou online'));
+
+    $pdo->exec("UPDATE monitors SET status = 'warning' WHERE id = 1");
+    [, $b4_warn] = api_get($base, 'action=public_status');
+    check('jeden zhoršený monitor: degraded', $b4_warn['status'] ?? null, 'degraded');
+    check('a souhrn ho počítá', $b4_warn['warningMonitors'] ?? null, 1);
+    $b4_warn_svg = $b4_badge();
+    check_false('odznak flotily s varováním netvrdí „vše online“', str_contains($b4_warn_svg, 'vše online'));
+    check_true('ale „zhoršeno“', str_contains($b4_warn_svg, 'zhoršeno'));
+    [, , $b4_idx_warn] = bk_raw_request($base . '/index.php');
+    check_false('stará stránka s varováním netvrdí „online“', str_contains($b4_idx_warn, 'Všechny systémy jsou online'));
+    check_true('ale že jsou služby omezené', str_contains($b4_idx_warn, 'Některé služby jsou omezené'));
+
+    $pdo->exec("UPDATE monitors SET status = 'up' WHERE id = 1");
+    $b4_set_cron(7200);
+    [, $b4_stale] = api_get($base, 'action=public_status');
+    check('zastavený sběr: unknown, ne healthy', $b4_stale['status'] ?? null, 'unknown');
+    check_true('odznak flotily: neznámý', str_contains($b4_badge(), 'neznámý'));
+    [, , $b4_idx_stale] = bk_raw_request($base . '/index.php');
+    check_true('stará stránka při zastaveném sběru: stav nezjištěn', str_contains($b4_idx_stale, 'Stav se nepodařilo zjistit')
+        && !str_contains($b4_idx_stale, 'Všechny systémy jsou online'));
+
+    $b4_set_cron(60);
+    $pdo->exec("UPDATE monitors SET status = 'maintenance' WHERE id = 1");
+    [, $b4_maint] = api_get($base, 'action=public_status');
+    check('údržba: maintenance', $b4_maint['status'] ?? null, 'maintenance');
+
+    $pdo->exec("UPDATE monitors SET status = 'unknown', last_checked = NULL");
+    [, $b4_none] = api_get($base, 'action=public_status');
+    check('nic nezměřeno: lastUpdated null, ne „teď“', array_key_exists('lastUpdated', $b4_none ?? []) ? $b4_none['lastUpdated'] : 'chybí', null);
+    check('a verdikt unknown', $b4_none['status'] ?? null, 'unknown');
+
+    // Nodes: unknown and maintenance keep their own words (were "offline").
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES (171, 'B4 uzel', 'vps', '', 'maintenance', 'Test', 1, NOW())");
+    [, $b4_nodes] = api_get($base, 'action=public_status');
+    $b4_node = array_values(array_filter($b4_nodes['nodes'] ?? [], fn ($n) => $n['name'] === 'B4 uzel'))[0] ?? [];
+    check('uzel v údržbě je maintenance, ne offline', $b4_node['status'] ?? null, 'maintenance');
+    check_false('web mezi uzly není (dřív tam byl kvůli last_details)', in_array('Testovací web', array_column($b4_nodes['nodes'] ?? [], 'name'), true));
+} finally {
+    $pdo->exec("DELETE FROM monitors WHERE id = 171");
+    $b4_restore = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = ?, maintenance = ? WHERE id = ?");
+    foreach ($b4_saved as $b4_row) {
+        $b4_restore->execute([$b4_row['status'], $b4_row['last_checked'], $b4_row['maintenance'], $b4_row['id']]);
+    }
+    if ($b4_cron === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'last_cron_run'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'last_cron_run'")->execute([$b4_cron]);
+    }
+}
+
+// =======================================================================
 // Windows longer than 30 days read the daily rollup (W1-B2).
 //
 // The raw logs are kept for 30 days: "Rok" counted a month of rows under a
@@ -4963,6 +5143,51 @@ try {
     check('přehled webů nese mez upozornění na certifikát', $b6_wo['sslAlertDays'] ?? null, 14);
 } finally {
     $pdo->exec("DELETE FROM settings WHERE key_name IN ('dashboard_insights_cache_cs', 'dashboard_insights_cache_en')");
+}
+
+// =======================================================================
+// The router's last error lines (W1-C3, owner decision 5.7).
+//
+// Agent 0.1.8 sends up to five masked lines. The server masks them again,
+// keeps them in last_details only, and a monitor switched off keeps none and
+// tells the agent so with an unspaced "log_lines":false it matches literally.
+// =======================================================================
+$c3_post = function (array $extra) use ($base, $agent_payload): array {
+    [$code, , $body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'],
+        (string)json_encode(array_merge($agent_payload, $extra), JSON_UNESCAPED_UNICODE));
+    return [$code, $body];
+};
+$c3_details = fn (): array => json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$c3_lines = [
+    'log_errors_recent' => [
+        ['ts' => 1758600000, 'prog' => 'netifd', 'msg' => 'Interface wan (10.20.30.40) is down', 'count' => 3],
+        ['ts' => 1758590000, 'prog' => 'kernel', 'msg' => 'eth1: link down aa:bb:cc:dd:ee:ff', 'count' => 1],
+    ],
+    'log_window_secs' => 5400,
+    'log_lines_state' => 'on',
+];
+try {
+    [$c3_code, $c3_body] = $c3_post($c3_lines);
+    check('hlášení s řádky logu agent přijme', $c3_code, 200);
+    check_true('odpověď řekne "log_lines":true', str_contains($c3_body, '"log_lines":true'));
+    $c3_d = $c3_details();
+    check('řádky se uloží, adresy zamaskované i u starého agenta', array_column($c3_d['log_errors_recent'] ?? [], 'msg'),
+        ['Interface wan (<ipv4>) is down', 'eth1: link down <mac>']);
+    check('okno logu se uloží', $c3_d['log_window_secs'] ?? null, 5400);
+    check('stav se uloží', $c3_d['log_lines_state'] ?? null, 'on');
+    check_false('syrová adresa v details není', str_contains((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), '10.20.30.40'));
+
+    $pdo->exec("UPDATE monitors SET log_lines_enabled = 0 WHERE id = 2");
+    [, $c3_off_body] = $c3_post($c3_lines);
+    check_true('vypnuto u monitoru: odpověď "log_lines":false', str_contains($c3_off_body, '"log_lines":false'));
+    $c3_off = $c3_details();
+    check('vypnuto: žádný řádek se neuloží', array_key_exists('log_errors_recent', $c3_off) ? $c3_off['log_errors_recent'] : 'chybí', null);
+    check('vypnuto: stav řekne, že u monitoru', $c3_off['log_lines_state'] ?? null, 'off_monitor');
+    [, $c3_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $c3_row = array_values(array_filter($c3_admin['monitors'] ?? [], fn ($m) => (int)$m['id'] === 2))[0] ?? [];
+    check('admin vidí přepínač vypnutý', $c3_row['logLinesEnabled'] ?? null, false);
+} finally {
+    $pdo->exec("UPDATE monitors SET log_lines_enabled = 1 WHERE id = 2");
 }
 
 // =======================================================================

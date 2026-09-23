@@ -29,6 +29,18 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(appVersion),
   },
   plugins: [react(), tailwindcss()],
+  build: {
+    rolldownOptions: {
+      // Two pages over the same app: public.html carries the indexable head of
+      // the public status page (title, description, canonical, no noindex),
+      // index.html the noindex for everything behind the login (W1-G4).
+      // .htaccess serves public.html for /app/public only.
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        public: fileURLToPath(new URL('./public.html', import.meta.url)),
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

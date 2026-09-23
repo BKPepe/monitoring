@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="cs" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      The public status page is the one address of the app that search engines
+      should index (owner decision 2026-09-22, W1-G4), so it gets its own head:
+      no robots meta, a real title and description, and the canonical URL.
+      Every other route is served index.html, which keeps its noindex.
+      The page itself refines the title (outages first) and the canonical of a
+      custom status page (?page=slug) once it runs.
+    -->
+    <title>Stav služeb | Blood Kings</title>
+    <meta
+      name="description"
+      content="Aktuální stav webů a herních služeb Blood Kings: co běží, výpadky, plánovaná údržba a dostupnost za posledních 90 dní."
+    />
+    <link rel="canonical" href="https://bloodkings.eu/app/public" />
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      title="Blood Kings – události a výpadky"
+      href="https://bloodkings.eu/status/rss.php"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Blood Kings" />
+    <meta property="og:title" content="Stav služeb | Blood Kings" />
+    <meta
+      property="og:description"
+      content="Aktuální stav webů a herních služeb Blood Kings: co běží, výpadky a plánovaná údržba."
+    />
+    <meta property="og:url" content="https://bloodkings.eu/app/public" />
+    <meta property="og:image" content="https://monitoring.bloodkings.eu/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

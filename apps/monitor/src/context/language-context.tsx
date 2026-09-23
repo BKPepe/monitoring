@@ -695,6 +695,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'search.dialog_title': { cs: 'Vyhledávání', en: 'Search' },
   // Verejna status stranka (nahrazuje legacy index.php).
   'public.title': { cs: 'Stav služeb', en: 'Service status' },
+  // Tab / search-result title prefix while something is down (W1-G4).
+  'public.doc_title_down_one': { cs: '({count}) výpadek', en: '({count}) outage' },
+  'public.doc_title_down_few': { cs: '({count}) výpadky', en: '({count}) outages' },
+  'public.doc_title_down_other': { cs: '({count}) výpadků', en: '({count}) outages' },
   'public.updated': { cs: 'Aktualizováno {at}', en: 'Updated {at}' },
   'public.loading': { cs: 'Zjišťuji stav…', en: 'Checking status…' },
   'public.all_ok': { cs: 'Všechny systémy jsou online', en: 'All systems are online' },
@@ -888,8 +892,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'sp.field_display': { cs: 'Zobrazené sekce', en: 'Visible sections' },
   'sp.main_page': { cs: 'Hlavní veřejná stránka', en: 'Main public page' },
   'sp.main_page_desc': {
-    cs: 'Všechny služby, bez filtru - to, co uvidí návštěvník.',
-    en: 'All services, unfiltered - what a visitor sees.',
+    cs: 'Služby, které mají v nastavení monitoru zapnuté „Zobrazit na veřejné stavové stránce“ - to, co uvidí návštěvník.',
+    en: 'The services whose monitor has "Show on the public status page" on - what a visitor sees.',
   },
   'sp.opt_regions': { cs: 'Místa měření', en: 'Measurement locations' },
   'sp.opt_events': { cs: 'Poslední události', en: 'Recent events' },
@@ -1207,6 +1211,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'infra.remote_actions_desc': {
     cs: 'Potvrzovací příkazy (reboot routeru, restart WAN, WireGuard) chráněné HMAC-SHA256',
     en: 'Confirmation commands (router reboot, WAN restart, WireGuard) protected by HMAC-SHA256',
+  },
+  'infra.public_label': { cs: 'Zobrazit na veřejné stavové stránce', en: 'Show on the public status page' },
+  'infra.public_hint': {
+    cs: 'Veřejnou stránku /app/public vidí kdokoli a indexují ji vyhledávače. Servery, domácí router a služby pod agentem jsou na ní ve výchozím stavu skryté.',
+    en: 'Anyone can open the public page /app/public, and search engines index it. Servers, the home router and agent services are hidden from it by default.',
   },
   'infra.log_lines_label': { cs: 'Posílat chybové řádky z logu routeru', en: "Send error lines from the router's log" },
   'infra.log_lines_hint': {

@@ -302,7 +302,6 @@ if ($action === 'monitors') {
     // assigned to them, but those whole; an admin sees every monitor.
     $public_view = ($_GET['scope'] ?? '') === 'public' || !$viewer['logged_in'];
     $is_admin = $viewer['is_admin'] && !$public_view;
-    [$mon_scope_sql, $mon_scope_params] = bk_monitor_scope_sql($public_view ? null : bk_visible_monitor_ids($pdo), 'm.id');
     // The archive is its own list: the live list leaves archived monitors out and
     // archived=1 shows only them - to the app, never to the public view.
     $mon_archived = !$public_view && ($_GET['archived'] ?? '') === '1';
@@ -318,6 +317,10 @@ if ($action === 'monitors') {
     // (exactly that happened in production: one query for 20+ columns at once,
     // one schema mismatch = the whole monitor list gone, and the app with it).
     try {
+        // The public view lists the public set only (W1-G3): servers, the
+        // home router and agent services stay off it unless the owner puts
+        // them on. Read inside the try: a failed read is a 500, not a list.
+        [$mon_scope_sql, $mon_scope_params] = bk_monitor_scope_sql($public_view ? bk_public_monitor_ids($pdo) : bk_visible_monitor_ids($pdo), 'm.id');
         $stmt = $pdo->prepare("
             SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
                    m.last_checked, m.last_status_change, m.last_details,
@@ -519,6 +522,20 @@ if ($action === 'monitors') {
         } catch (Throwable $t) {
             error_log('[api.php action=monitors] Extended fields query failed: ' . $t->getMessage());
         }
+        // Two switches of the monitor dialog, in a query of their own so a
+        // pending migration costs these two fields and nothing else.
+        // isPublic is the effective answer (the owner's choice, or the type's
+        // default when never chosen), so the switch shows what the public page does.
+        try {
+            foreach ($pdo->query("SELECT id, type, is_public, log_lines_enabled FROM monitors")->fetchAll() as $r) {
+                $mid = (int)$r['id'];
+                if (!isset($monitors[$mid])) continue;
+                $monitors[$mid]['isPublic'] = bk_monitor_is_public($r['is_public'], (string)$r['type']);
+                $monitors[$mid]['logLinesEnabled'] = (int)$r['log_lines_enabled'] === 1;
+            }
+        } catch (Throwable $t) {
+            error_log('[api.php action=monitors] public/log-lines switches not read: ' . $t->getMessage());
+        }
     }
 
     echo json_encode(['monitors' => array_values($monitors)], JSON_UNESCAPED_UNICODE);
@@ -635,6 +652,41 @@ if ($action === 'save_monitor') {
         exit;
     }
 
+    // Two switches of the dialog: on the public status page (W1-G3) and the
+    // router's masked log lines (W1-C3). A key the request leaves out keeps
+    // what is stored, so an older form cannot flip either of them by omission.
+    // is_public = null hands the choice back to the type's default.
+    $mon_switches = [];
+    foreach (['is_public' => true, 'log_lines_enabled' => false] as $sw_key => $sw_nullable) {
+        if (!array_key_exists($sw_key, $input)) {
+            continue;
+        }
+        $sw_val = $input[$sw_key];
+        if ($sw_val === null && $sw_nullable) {
+            $mon_switches[$sw_key] = null;
+        } elseif ($sw_val === true || $sw_val === 1 || $sw_val === '1') {
+            $mon_switches[$sw_key] = 1;
+        } elseif ($sw_val === false || $sw_val === 0 || $sw_val === '0') {
+            $mon_switches[$sw_key] = 0;
+        } else {
+            // "false" or "" would read as on through a truthiness test; a
+            // switch that decides what the public sees is refused instead.
+            http_response_code(400);
+            echo json_encode([
+                'error' => 'invalid_switch',
+                'invalidKeys' => [$sw_key],
+                'message' => 'Přepínač musí být true/false (1/0).',
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+    $mon_save_switches = function (int $monitor_id) use ($pdo, $mon_switches): void {
+        foreach ($mon_switches as $sw_key => $sw_val) {
+            $column = $sw_key === 'is_public' ? 'is_public' : 'log_lines_enabled';
+            $pdo->prepare("UPDATE monitors SET {$column} = ? WHERE id = ?")->execute([$sw_val, $monitor_id]);
+        }
+    };
+
     try {
         if ($id > 0) {
             // Passwords (ServerQuery, RCON) are overwritten only when the administrator
@@ -647,6 +699,7 @@ if ($action === 'save_monitor') {
             // Token se pri editaci zamerne neprepisuje: uloha uz ho ma zadraty
             // v curl prikazu na svem stroji a zmena by ji tise odstrihla.
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat, $id]);
+            $mon_save_switches($id);
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
             $agent_key = bin2hex(random_bytes(16));
@@ -664,6 +717,7 @@ if ($action === 'save_monitor') {
             $heartbeat_token = $type === 'heartbeat' ? bk_heartbeat_generate_token() : null;
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $heartbeat_token, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat]);
             $new_id = (int)$pdo->lastInsertId();
+            $mon_save_switches($new_id);
             echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
     } catch (Throwable $e) {
@@ -2078,15 +2132,15 @@ if ($action === 'events') {
     try {
         $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
-        // Public view (scope=public, or no login): the status of every monitor,
-        // the same for everyone, with reasons that name no process and no target.
-        // App view: only the monitors this viewer may see.
+        // Public view (scope=public, or no login): the status of the public
+        // set, the same for everyone, with reasons that name no process and no
+        // target. App view: only the monitors this viewer may see.
         $ev_public = bk_public_view();
         if (!$ev_public && $monitor_id > 0) {
             bk_require_monitor_view($pdo, $monitor_id);
         }
         // A monitor's own event log stays readable after archiving; the fleet-wide log leaves it out.
-        $ev_visible = $ev_public ? null : bk_visible_monitor_ids($pdo);
+        $ev_visible = bk_request_monitor_ids($pdo);
         [$ev_scope, $ev_scope_params] = $monitor_id > 0
             ? bk_monitor_scope_sql($ev_visible, 'l.monitor_id')
             : bk_list_scope_sql($pdo, $ev_visible, 'l.monitor_id');
@@ -2441,8 +2495,8 @@ if ($action === 'daily_uptime') {
     try {
         $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
 
-        // Public view: every monitor. App view: the monitors this viewer may see.
-        [$du_scope, $du_scope_params] = bk_list_scope_sql($pdo, bk_public_view() ? null : bk_visible_monitor_ids($pdo), 'id');
+        // Public view: the public set. App view: the monitors this viewer may see.
+        [$du_scope, $du_scope_params] = bk_list_scope_sql($pdo, bk_request_monitor_ids($pdo), 'id');
         $stmt_mon = $pdo->prepare("SELECT id, name FROM monitors WHERE type NOT IN ('node', 'probe') AND {$du_scope} ORDER BY id ASC");
         $stmt_mon->execute($du_scope_params);
         $mon_rows = $stmt_mon->fetchAll();
@@ -2649,7 +2703,12 @@ if ($action === 'badge') {
             $stmt_bdg = $pdo->prepare("SELECT name, status FROM monitors WHERE id = ? AND archived_at IS NULL LIMIT 1");
             $stmt_bdg->execute([$bdg_mid]);
             $bdg_row = $stmt_bdg->fetch();
-            if (!$bdg_row) {
+            // A monitor off the public page (W1-G3) answers like a missing one
+            // to anyone who may not see it: the badge prints its name, and ids
+            // are easy to count through.
+            $bdg_allowed = in_array($bdg_mid, bk_public_monitor_ids($pdo), true)
+                || (!empty($_SESSION['admin_logged_in']) && bk_can_view_monitor($pdo, $bdg_mid));
+            if (!$bdg_row || !$bdg_allowed) {
                 http_response_code(404);
                 echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
                 exit;
@@ -2672,29 +2731,26 @@ if ($action === 'badge') {
                 $bdg_value = $bdg_words[$bdg_state];
             }
         } else {
-            // Summary: down > maintenance > all online. An empty fleet is not "online".
-            $stmt_bdg = $pdo->query("
-                SELECT COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_c,
-                       SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) AS maint_c
-                FROM monitors
-                WHERE archived_at IS NULL
-            ");
-            $bdg_sum = $stmt_bdg->fetch() ?: ['total' => 0, 'down_c' => 0, 'maint_c' => 0];
+            // Summary of the public set, with the verdict public_status gives
+            // (W1-B4). It said "vše online" unless something was down - a
+            // degraded or unknown monitor and a stopped collector included.
+            [$bdg_scope, $bdg_params] = bk_list_scope_sql($pdo, bk_public_monitor_ids($pdo), 'id');
+            $stmt_bdg = $pdo->prepare("SELECT status, maintenance, last_checked FROM monitors WHERE {$bdg_scope}");
+            $stmt_bdg->execute($bdg_params);
+            $bdg_verdict = bk_overall_verdict($stmt_bdg->fetchAll(), bk_collection_is_fresh());
             $bdg_label = trim((string)get_setting('site_title', 'status')) ?: 'status';
-            if ((int)$bdg_sum['total'] === 0) {
-                $bdg_state = 'unknown';
-                $bdg_value = $bdg_words['unknown'];
-            } elseif ((int)$bdg_sum['down_c'] > 0) {
-                $bdg_state = 'down';
-                $bdg_value = $bdg_words['fleet_down'] . ' (' . (int)$bdg_sum['down_c'] . ')';
-            } elseif ((int)$bdg_sum['maint_c'] > 0) {
-                $bdg_state = 'maintenance';
-                $bdg_value = $bdg_words['maintenance'];
-            } else {
-                $bdg_state = 'up';
-                $bdg_value = $bdg_words['fleet_ok'];
-            }
+            $bdg_state = [
+                'healthy' => 'up',
+                'down' => 'down',
+                'degraded' => 'warning',
+                'maintenance' => 'maintenance',
+            ][$bdg_verdict['verdict']] ?? 'unknown';
+            $bdg_value = [
+                'up' => $bdg_words['fleet_ok'],
+                'down' => $bdg_words['fleet_down'] . ' (' . $bdg_verdict['counts']['down'] . ')',
+                'warning' => $bdg_words['warning'],
+                'maintenance' => $bdg_words['maintenance'],
+            ][$bdg_state] ?? $bdg_words['unknown'];
         }
     } catch (Throwable $e) {
         http_response_code(500);
@@ -2756,7 +2812,9 @@ if ($action === 'incidents') {
         // targets, operator names or reasons that name a process. App view: the
         // monitors this viewer may see, plus incidents tied to no monitor.
         $inc_public = bk_public_view();
-        $inc_visible = $inc_public ? null : bk_visible_monitor_ids($pdo);
+        // The public view covers the public set: an outage of a hidden server is
+        // not announced to anonymous visitors under its name (W1-G3).
+        $inc_visible = bk_request_monitor_ids($pdo);
         [$inc_scope, $inc_scope_params] = bk_list_scope_sql($pdo, $inc_visible, 'm.id');
         [$inc_m_scope, $inc_m_params] = bk_monitor_scope_sql($inc_visible, 'monitor_id');
         $inc_manual_where = $inc_visible === null ? '1=1' : "(monitor_id IS NULL OR {$inc_m_scope})";
@@ -3804,7 +3862,10 @@ if ($action === 'regions') {
         // nothing more. A user's app view counts only their monitors and never
         // reads or writes the fleet-wide cache.
         $rg_public = bk_public_view();
-        $rg_visible = $rg_public ? null : bk_visible_monitor_ids($pdo);
+        $rg_visible = bk_request_monitor_ids($pdo);
+        // Two shared caches: the public set, the same for every visitor, and
+        // the whole fleet for administrators. A user's own scope is not cached.
+        $rg_cacheable = $rg_public || $rg_visible === null;
         [$rg_scope, $rg_scope_params] = bk_list_scope_sql($pdo, $rg_visible, 'monitor_id');
         $rg_project = function (array $payload) use ($rg_public): array {
             if ($rg_public) {
@@ -3824,8 +3885,8 @@ if ($action === 'regions') {
         // milionu radku. Mista mereni se pritom meni jen kdyz pribude sonda
         // nebo lokalita Cloudflare - 10 minut stara odpoved je porad pravdiva,
         // a `cachedAt` to odpovedi priznava.
-        $regions_cache_key = 'regions_cache_' . $days . 'd';
-        $cache_raw = $rg_visible === null ? get_setting($regions_cache_key, '') : '';
+        $regions_cache_key = 'regions_cache_' . $days . 'd' . ($rg_public ? '_public' : '');
+        $cache_raw = $rg_cacheable ? get_setting($regions_cache_key, '') : '';
         if ($cache_raw !== '') {
             $cached = json_decode($cache_raw, true);
             if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
@@ -3873,7 +3934,7 @@ if ($action === 'regions') {
         $regions_payload = ['days' => $days, 'regions' => $regions, 'cachedAt' => date('c')];
         try {
             $stmt_c = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            if ($rg_visible === null) $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
+            if ($rg_cacheable) $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
         } catch (Throwable $e) {
             // Cache je optimalizace - kdyz se nezapise, odpoved stejne odejde.
             error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
@@ -5571,9 +5632,9 @@ if ($action === 'collection_health') {
 
 if ($action === 'public_status') {
     try {
-        // The status page counts the whole fleet for everyone. Inside the app a
-        // user's dashboard counts only the monitors assigned to that user.
-        $ps_visible = bk_public_view() ? null : bk_visible_monitor_ids($pdo);
+        // The public view covers the public set (W1-G3), the same for everyone.
+        // Inside the app a user's dashboard counts only the monitors assigned to them.
+        $ps_visible = bk_request_monitor_ids($pdo);
         [$ps_scope, $ps_params] = bk_list_scope_sql($pdo, $ps_visible, 'id');
         [$ps_log_scope, $ps_log_params] = bk_list_scope_sql($pdo, $ps_visible, 'monitor_id');
         [$ps_m_scope, $ps_m_params] = bk_list_scope_sql($pdo, $ps_visible, 'm.id');

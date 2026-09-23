@@ -14,6 +14,12 @@ if ($mid > 0) {
     $monitor = $stmt->fetch();
 }
 
+// Only a monitor on the public page (W1-G3): the widget is anonymous and prints
+// the name, so a server or the home router answers like a missing id.
+if ($monitor && !in_array($mid, bk_public_monitor_ids($pdo), true)) {
+    $monitor = null;
+}
+
 if (!$monitor) {
     echo '<div style="color:#fff;background:#0b0c10;padding:1rem;font-family:sans-serif;">Monitor nenalezen.</div>';
     exit;

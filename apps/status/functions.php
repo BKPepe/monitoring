@@ -16388,6 +16388,71 @@ function bk_public_view(): bool {
 }
 
 /**
+ * Monitor types the public status page leaves out unless the owner turns them
+ * on (owner decision 5.3, W1-G3): servers, the home router and the services an
+ * agent watches on them. The page is indexed by search engines, and it used to
+ * list every machine by name - the home router included - to anyone.
+ * Websites and game services, the things visitors come to check, stay on it.
+ */
+const BK_PRIVATE_BY_DEFAULT_TYPES = ['vps', 'openwrt', 'agent_service'];
+
+/**
+ * Whether a monitor is on the public status page. Pure.
+ *
+ * @param mixed $is_public The monitors.is_public column: 1/0 is the owner's
+ *                         own choice, NULL means "never chosen" and follows
+ *                         the type, so every way a monitor is created (the
+ *                         app, an import, an agent's first report) gets the
+ *                         same default without each of them knowing it.
+ */
+function bk_monitor_is_public($is_public, string $type): bool {
+    if ($is_public !== null && $is_public !== '') {
+        return (int)$is_public === 1;
+    }
+    return !in_array(strtolower($type), BK_PRIVATE_BY_DEFAULT_TYPES, true);
+}
+
+/**
+ * Ids of the monitors on the public status page, read once per request.
+ *
+ * Before the migration adds the column every monitor follows its type's
+ * default. A database that cannot answer at all throws: an empty list here
+ * would read as "no services, nothing down" on the public page.
+ *
+ * @return int[]
+ */
+function bk_public_monitor_ids(PDO $pdo, bool $refresh = false): array {
+    static $cache = null;
+    if ($cache !== null && !$refresh) {
+        return $cache;
+    }
+    try {
+        $rows = $pdo->query("SELECT id, type, is_public FROM monitors")->fetchAll();
+    } catch (PDOException $e) {
+        $rows = $pdo->query("SELECT id, type, NULL AS is_public FROM monitors")->fetchAll();
+    }
+    $ids = [];
+    foreach ($rows as $row) {
+        if (bk_monitor_is_public($row['is_public'], (string)$row['type'])) {
+            $ids[] = (int)$row['id'];
+        }
+    }
+    $cache = $ids;
+    return $ids;
+}
+
+/**
+ * The monitors a list or a summary covers for this request: the public set in
+ * the public view (scope=public or no login), the viewer's own otherwise
+ * (null = all, for an administrator).
+ *
+ * @return int[]|null
+ */
+function bk_request_monitor_ids(PDO $pdo): ?array {
+    return bk_public_view() ? bk_public_monitor_ids($pdo) : bk_visible_monitor_ids($pdo);
+}
+
+/**
  * Whether data collection (cron) has finished a run recently enough that the
  * stored states are current. The same rule as action=collection_health: no run
  * ever recorded is not fresh.

@@ -1,0 +1,125 @@
+name: Deploy bloodkings.eu root files
+
+# bloodkings.eu itself is the game portal and does not live in this repository.
+# Owner decision 5.4: the repository manages only these named files in its
+# public_html, each uploaded on its own - never a sync of the directory:
+#   errors/{403,404,410,500,503}.html, robots.txt, sitemap.xml,
+#   .well-known/security.txt and the marked block in .htaccess.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'root/**'
+      - '.github/workflows/deploy-root.yml'
+  # Also renews security.txt (Expires = deploy + 11 months) when web-health.yml
+  # says it is getting close.
+  workflow_dispatch:
+
+# Same group as deploy-status.yml and deploy-go.yml: the hosting allows only a
+# few FTP logins at a time, and a killed transfer leaves a half-written file.
+concurrency:
+  group: ftp-deploy-hosting
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Upload the named root files
+    runs-on: ubuntu-latest
+    env:
+      FTP_SERVER: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+      FTP_USERNAME: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+      FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Testy kořenových souborů
+        run: node --test root/*.test.mjs
+
+      - name: Sestavit soubory k nahrání
+        run: node root/deploy.mjs build "$RUNNER_TEMP/root"
+
+      # The live .htaccess belongs to the portal. It is read, our marked block
+      # is put in (root/lib.mjs mergeHtaccess), and every other byte stays.
+      # It is never created: a portal root without one is a surprise for the
+      # owner to look at, not something to fill in automatically.
+      - name: Stáhnout živý .htaccess a vložit spravovaný blok
+        id: htaccess
+        run: |
+          # The runner's bash starts with -e; curl's exit code is needed here.
+          set +e -u
+          curl --silent --show-error --ssl-reqd --ftp-pasv --connect-timeout 20 --max-time 120 \
+            --user "$FTP_USERNAME:$FTP_PASSWORD" \
+            -o "$RUNNER_TEMP/htaccess.live" "ftp://$FTP_SERVER/public_html/.htaccess"
+          rc=$?
+          if [ "$rc" -eq 78 ]; then
+            echo "::warning::public_html/.htaccess does not exist; not creating it, the error pages stay unwired"
+            echo "action=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::downloading public_html/.htaccess failed (curl $rc); nothing uploaded"
+            exit 1
+          fi
+          set -e
+          action=$(node root/deploy.mjs merge-htaccess "$RUNNER_TEMP/htaccess.live" "$RUNNER_TEMP/htaccess.new")
+          echo "root .htaccess: $action"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+
+      - name: Stav stránek před změnou
+        run: node root/deploy.mjs statuses "$RUNNER_TEMP/before.json"
+
+      # One curl, one FTP login, one file per -T. The error pages go up before
+      # the .htaccess lines that point at them.
+      - name: Nahrát pojmenované soubory
+        run: |
+          set -eu
+          B="$RUNNER_TEMP/root"
+          U="ftp://$FTP_SERVER/public_html"
+          curl --silent --show-error --ssl-reqd --ftp-pasv --ftp-create-dirs --connect-timeout 20 --max-time 300 \
+            --user "$FTP_USERNAME:$FTP_PASSWORD" \
+            -T "$B/errors/403.html" "$U/errors/403.html" \
+            -T "$B/errors/404.html" "$U/errors/404.html" \
+            -T "$B/errors/410.html" "$U/errors/410.html" \
+            -T "$B/errors/500.html" "$U/errors/500.html" \
+            -T "$B/errors/503.html" "$U/errors/503.html" \
+            -T "$B/robots.txt" "$U/robots.txt" \
+            -T "$B/sitemap.xml" "$U/sitemap.xml" \
+            -T "$B/.well-known/security.txt" "$U/.well-known/security.txt"
+          echo "nahráno: errors/{403,404,410,500,503}.html robots.txt sitemap.xml .well-known/security.txt"
+
+      # A line the server rejects turns the whole host into 500 - the portal,
+      # /app/ and /status/. So the pages probed above must answer the same
+      # afterwards; if they do not, the downloaded original goes straight back.
+      - name: Nahrát .htaccess (jen při změně bloku) a ověřit, že web běží dál
+        if: steps.htaccess.outputs.action == 'inserted' || steps.htaccess.outputs.action == 'updated'
+        env:
+          ACTION: ${{ steps.htaccess.outputs.action }}
+        run: |
+          set -u
+          put() {
+            curl --silent --show-error --ssl-reqd --ftp-pasv --connect-timeout 20 --max-time 120 \
+              --user "$FTP_USERNAME:$FTP_PASSWORD" -T "$1" "ftp://$FTP_SERVER/public_html/.htaccess"
+          }
+          restore() {
+            echo "::error::$1 - restoring the original public_html/.htaccess"
+            put "$RUNNER_TEMP/htaccess.live" || echo "::error::RESTORE FAILED - put the portal's .htaccess back by hand now"
+            exit 1
+          }
+          put "$RUNNER_TEMP/htaccess.new" || restore "uploading .htaccess failed"
+          sleep 5
+          node root/deploy.mjs same-statuses "$RUNNER_TEMP/before.json" || restore "the site answers differently after the .htaccess change"
+          echo "root .htaccess: $ACTION, pages answer as before"
+
+      - name: Ověřit živé soubory (robots, sitemap, chybové stránky, security.txt)
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          sleep 5
+          node root/deploy.mjs check-root "$TAG"

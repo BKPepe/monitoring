@@ -139,6 +139,20 @@ export function isProbeMonitor(type: string | null | undefined): boolean {
 }
 
 /**
+ * Types the public status page leaves out until the owner turns them on
+ * (W1-G3, owner decision 5.3): servers, the home router and the services an
+ * agent watches on them. The same list as BK_PRIVATE_BY_DEFAULT_TYPES in
+ * apps/status/functions.php, which decides; this only shows a new monitor's
+ * switch the way the server will treat it.
+ */
+const PRIVATE_BY_DEFAULT_TYPES = ['vps', 'openwrt', 'agent_service'];
+
+/** Whether a monitor of this type is on the public page when nobody chose. */
+export function isPublicByDefault(type: string | null | undefined): boolean {
+  return !PRIVATE_BY_DEFAULT_TYPES.includes(normalizeMonitorType(type));
+}
+
+/**
  * Whether the TeamSpeak tiles belong on this monitor: a teamspeak check, or
  * an agent that actually found a TeamSpeak server on its host. It used to be
  * decided by the monitor NAME as well ("donald", the owner's TS host), which
