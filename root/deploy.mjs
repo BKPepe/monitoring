@@ -14,10 +14,12 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  errorPageProblems,
   mergeHtaccess,
   MARK_BEGIN,
   MARK_END,
   publicStatusPageUrls,
+  ROOT_DIRS,
   robotsProblems,
   securityTxt,
   securityTxtProblems,
@@ -66,8 +68,7 @@ async function sitemapUrls() {
 }
 
 async function build(out) {
-  mkdirSync(join(out, 'errors'), { recursive: true });
-  mkdirSync(join(out, '.well-known'), { recursive: true });
+  for (const dir of ROOT_DIRS) mkdirSync(join(out, dir), { recursive: true });
   for (const code of ERROR_CODES) {
     copyFileSync(join(HERE, 'errors', `${code}.html`), join(out, 'errors', `${code}.html`));
   }
@@ -136,12 +137,11 @@ async function checkRoot(tag) {
   const cases = [
     { path: `/bk-root-check-${Date.now().toString(36)}-missing`, code: '404' },
     { path: '/.env', code: '403' },
+    // The bare directories the deploy creates must not list their files.
+    ...ROOT_DIRS.map((dir) => ({ path: `/${dir}/`, code: '404' })),
   ];
   for (const { path, code } of cases) {
-    const r = await get(`${ORIGIN}${path}`);
-    if (String(r.status) !== code) problems.push(`${path} answered HTTP ${r.status}, expected ${code}`);
-    if (!r.body.includes(`<p class="code">${code}</p>`)) problems.push(`${path} is not the branded ${code} page`);
-    if (/litespeed/i.test(r.body)) problems.push(`${path} names the server software`);
+    problems.push(...errorPageProblems(path, code, await get(bust(`${ORIGIN}${path}`, tag))));
   }
 
   if (tag) {

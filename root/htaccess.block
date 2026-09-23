@@ -17,4 +17,14 @@ ErrorDocument 503 /errors/503.html
         Header set Content-Type "text/plain; charset=utf-8"
     </Files>
 </IfModule>
+# The deploy creates /errors/ and /.well-known/, and this host lists any
+# directory without an index file ("Index of", with the server's name in the
+# footer). Only the bare directories answer 404 (the branded page): the files
+# in them, the ErrorDocument subrequests to /errors/*.html and the certificate
+# checks under /.well-known/<dir>/ never match. Options -Indexes would also
+# close the portal's own directories, which this block must not change.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(errors|\.well-known)/?$ - [R=404,L]
+</IfModule>
 # END bloodkings-monitoring

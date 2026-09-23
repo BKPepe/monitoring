@@ -6,6 +6,28 @@ export const SECURITY_CONTACT = 'mailto:security@bloodkings.eu';
 export const SECURITY_POLICY = 'https://github.com/BKPepe/monitoring/blob/main/SECURITY.md';
 export const MARK_BEGIN = '# BEGIN bloodkings-monitoring';
 export const MARK_END = '# END bloodkings-monitoring';
+// The directories the deploy creates in the portal root. The host lists a
+// directory without an index file, so each one must be closed by a rule in
+// root/htaccess.block; root/lib.test.mjs fails when one is not.
+export const ROOT_DIRS = ['errors', '.well-known'];
+
+/**
+ * What is wrong with the answer to a path that must get the branded error
+ * page `code` (root/errors/<code>.html): the wrong status, the server's own
+ * page, or a directory listing in its place.
+ * @param {string} path
+ * @param {string} code
+ * @param {{ status: number, body: string }} res
+ * @returns {string[]}
+ */
+export function errorPageProblems(path, code, { status, body }) {
+  const problems = [];
+  if (String(status) !== code) problems.push(`${path} answered HTTP ${status}, expected ${code}`);
+  if (!body.includes(`<p class="code">${code}</p>`)) problems.push(`${path} is not the branded ${code} page`);
+  if (/<title>\s*Index of\b/i.test(body)) problems.push(`${path} is a directory listing`);
+  if (/litespeed/i.test(body)) problems.push(`${path} names the server software`);
+  return problems;
+}
 
 /**
  * `now` plus `months` calendar months, in UTC. A day that does not exist in

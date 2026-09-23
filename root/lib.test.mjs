@@ -5,11 +5,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   addMonthsUtc,
+  errorPageProblems,
   mergeHtaccess,
   MARK_BEGIN,
   MARK_END,
   parseSecurityTxt,
   publicStatusPageUrls,
+  ROOT_DIRS,
   robotsProblems,
   securityTxt,
   securityTxtProblems,
@@ -169,6 +171,50 @@ test('mergeHtaccess: zdvojené, nepárové nebo prohozené značky shodí nasaze
   assert.throws(() => mergeHtaccess(`${PORTAL}${MARK_BEGIN}\nErrorDocument 404 /x\n`, BLOCK), /unbalanced/);
   assert.throws(() => mergeHtaccess(`${MARK_END}\n${PORTAL}${MARK_BEGIN}\n`, BLOCK), /END marker comes before/);
   assert.throws(() => mergeHtaccess(PORTAL, 'ErrorDocument 404 /x\n'), /must start with the BEGIN marker/);
+});
+
+// The RewriteRule lines of the block that answer 404, as JS regexps: the
+// patterns are plain PCRE that JS reads the same way.
+const closingRules = () =>
+  [...BLOCK.matchAll(/^\s*RewriteRule\s+(\S+)\s+-\s+\[R=404\b[^\]]*\]\s*$/gm)].map((m) => new RegExp(m[1]));
+const closed = (path) => closingRules().some((re) => re.test(path));
+
+test('htaccess.block: holé adresáře, které nasazení vytváří, nevypisují obsah (404)', () => {
+  assert.match(BLOCK, /<IfModule mod_rewrite\.c>\s*\n\s*RewriteEngine On\s*\n\s*RewriteRule /);
+  for (const dir of ROOT_DIRS) {
+    // mod_rewrite in .htaccess sees the path without the leading slash.
+    assert.ok(closed(`${dir}/`), `/${dir}/ zůstává otevřený výpis`);
+    assert.ok(closed(dir), `/${dir} zůstává otevřený výpis`);
+  }
+});
+
+test('htaccess.block: soubory v adresářích a ErrorDocument podpožadavky zůstanou dostupné', () => {
+  for (const path of [
+    'errors/404.html',
+    'errors/403.html',
+    '.well-known/security.txt',
+    '.well-known/acme-challenge/token',
+    '.well-known/pki-validation/',
+    'errorsx/',
+    'app/errors/',
+    '',
+  ]) {
+    assert.ok(!closed(path), `/${path} se nesmí zavřít`);
+  }
+});
+
+test('errorPageProblems: výpis adresáře se jménem serveru místo značkové 404 je chyba', () => {
+  const listing =
+    '<html><head><title>Index of /errors/</title></head><body><h1>Index of /errors/</h1>' +
+    '<address>Proudly Served by LiteSpeed Web Server</address></body></html>';
+  assert.deepEqual(errorPageProblems('/errors/', '404', { status: 200, body: listing }), [
+    '/errors/ answered HTTP 200, expected 404',
+    '/errors/ is not the branded 404 page',
+    '/errors/ is a directory listing',
+    '/errors/ names the server software',
+  ]);
+  const branded = readFileSync(new URL('./errors/404.html', import.meta.url), 'utf8');
+  assert.deepEqual(errorPageProblems('/errors/', '404', { status: 404, body: branded }), []);
 });
 
 const CF_MANAGED = `# As a condition of accessing this website, you agree to abide by the following
