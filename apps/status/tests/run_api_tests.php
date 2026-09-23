@@ -492,10 +492,14 @@ check_true('vrací mapu monitorů', isset($data['monitors']) && is_array($data['
 
 $sla = $data['monitors'][1] ?? $data['monitors']['1'] ?? null;
 check_true('web má spočítané SLA za 7 dní', $sla !== null && $sla['sla7'] !== null);
-// 10 up + 1 down = 90.909 %; if the 'down' got lost, it would come out 100 %.
+// In time, not in rows (W1-B1): the rows are one minute apart, so the 'down'
+// row 30 minutes ago stands for 2.5 minutes (the cap), the nine up minutes
+// after it for nine; the 18 minutes between them nobody measured. That is
+// 78-82 % depending on how long after the insert the request runs. The row
+// ratio (10 up / 11) was 90.9 % and a lost 'down' would be 100 %.
 check_true(
-    'SLA počítá i výpadky (není 100 %)',
-    $sla !== null && $sla['sla7'] < 100 && $sla['sla7'] > 85
+    'SLA počítá výpadek v čase, ne v řádcích (dostal ' . json_encode($sla['sla7'] ?? null) . ')',
+    $sla !== null && $sla['sla7'] !== null && $sla['sla7'] > 75 && $sla['sla7'] < 85
 );
 
 $sla_agent = $data['monitors'][2] ?? $data['monitors']['2'] ?? null;
@@ -4703,6 +4707,179 @@ function bk_raw_request(string $url, array $headers = [], ?string $post_body = n
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     $size = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
     return [$code, substr($raw, 0, $size), substr($raw, $size)];
+}
+
+// =======================================================================
+// Availability in time, through the real tables (W1-B1).
+//
+// run_tests.php pins the arithmetic without a database; this is the path the
+// numbers really take: the rows cron and the agents write, uptime_windows,
+// the cron rollup into uptime_daily and the 30-day strip. A router reported
+// every five minutes for twelve hours, cron wrote its one "not responding"
+// row, and it has been silent for almost eight hours since. By rows that was
+// 145 up of 146 (99.3 %); in time it is 12 h up of 20 h measured. A website
+// with the same rows and no silence row (cron stopped) keeps 100 %: the gap
+// says nothing about the site, so it is unmeasured, not an outage.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES
+            (160, 'Router, který zmlkl', 'openwrt', 'router-b1', 'down', 'Síť', DATE_SUB(NOW(), INTERVAL 3 DAY)),
+            (161, 'Web bez cronu', 'web', 'https://example.org', 'up', 'Weby', DATE_SUB(NOW(), INTERVAL 3 DAY))");
+$b1_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+                         VALUES (?, 'up', 20, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+for ($b1_min = 20 * 60; $b1_min >= 8 * 60; $b1_min -= 5) {
+    $b1_ins->execute([160, $b1_min]);
+    $b1_ins->execute([161, $b1_min]);
+}
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at)
+            VALUES (160, 'down', 'Agent routeru neodpovídá', DATE_SUB(NOW(), INTERVAL 475 MINUTE))");
+try {
+    [$b1_code, $b1_uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+    check('uptime_windows vrací 200', $b1_code, 200);
+    $b1_router = $b1_uw['windows']['160']['d1'] ?? null;
+    $b1_web = $b1_uw['windows']['161']['d1'] ?? null;
+    check_true('mlčící router: 24 h v čase kolem 60 %, ne 99,3 % z řádků (dostal ' . json_encode($b1_router) . ')', is_numeric($b1_router) && $b1_router > 55 && $b1_router < 62);
+    check_true('web bez cronu: mezera není výpadek, 100 % z naměřeného (dostal ' . json_encode($b1_web) . ')', is_numeric($b1_web) && (float)$b1_web === 100.0);
+
+    // The rollup cron runs every ten minutes, over the same rows.
+    check_true('časový souhrn dnů se zapsal', bk_rollup_daily_uptime_time($pdo, 2) > 0);
+    $b1_sum = fn (int $mid) => $pdo->query("SELECT COALESCE(SUM(secs_up), -1) AS up, COALESCE(SUM(secs_down), -1) AS down,
+                                                  COALESCE(SUM(secs_silent), -1) AS silent
+                                           FROM uptime_daily WHERE monitor_id = {$mid}")->fetch();
+    $b1_r = $b1_sum(160);
+    check_true('souhrn routeru: 12 h 5 min provozu (dostal ' . $b1_r['up'] . ' s)', abs((int)$b1_r['up'] - 43500) <= 5);
+    check('souhrn routeru: řádek „neodpovídá“ platí 2,5 intervalu', (int)$b1_r['down'], 750);
+    check_true('souhrn routeru: mlčení je výpadek, ~7 h 42 min (dostal ' . $b1_r['silent'] . ' s)', abs((int)$b1_r['silent'] - 27750) < 300);
+    $b1_w = $b1_sum(161);
+    check('souhrn webu: bez cronu žádný výpadek ani mlčení', (int)$b1_w['down'] + (int)$b1_w['silent'], 0);
+
+    // Today's strip day tells the silence apart from failed checks.
+    [$b1_du_code, $b1_du] = api_get_auth($base, 'action=daily_uptime&days=2', $cookie_jar);
+    check('daily_uptime vrací 200', $b1_du_code, 200);
+    $b1_today = null;
+    foreach ($b1_du['series']['160'] ?? [] as $b1_day) {
+        if (($b1_day['date'] ?? '') === date('j.n.')) {
+            $b1_today = $b1_day;
+        }
+    }
+    check('dnešní den mlčícího routeru je výpadek', $b1_today['status'] ?? null, 'down');
+    check_true('a popis říká, že agent mlčel (dostal ' . json_encode($b1_today['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')', str_contains((string)($b1_today['detail'] ?? ''), 'mlčel'));
+
+    // The monthly report (report.php) counts in time as well, and a month
+    // nobody measured says "bez dat" (W1-B3) - it used to say 100 % and
+    // "SLA splněno" for a month without a single check.
+    $b1_csv = function (int $year, int $month) use ($base, $cookie_jar): array {
+        $ch = curl_init($base . '/report.php?format=csv&year=' . $year . '&month=' . $month);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 15]);
+        $raw = (string)curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $rows = [];
+        foreach (array_slice(explode("\n", trim($raw)), 1) as $line) {
+            $cols = str_getcsv($line, ',', '"', '\\');
+            $rows[(string)$cols[0]] = $cols;
+        }
+        return [$code, $rows, $raw];
+    };
+    [$b1_old_code, $b1_old, $b1_old_raw] = $b1_csv(2001, 1);
+    check('CSV report za měsíc bez dat vrací 200', $b1_old_code, 200);
+    check_false('CSV report neobsahuje hlášky PHP', str_contains($b1_old_raw, 'Deprecated') || str_contains($b1_old_raw, 'Warning'));
+    check_true('CSV report za měsíc bez dat má řádky monitorů', count($b1_old) >= 2);
+    check('měsíc bez jediné kontroly: dostupnost i SLA „bez dat“, ne 100 % a ANO',
+        array_values(array_unique(array_map(fn ($r) => ($r[7] ?? '?') . '|' . ($r[9] ?? '?'), $b1_old))), ['bez dat|bez dat']);
+    [, $b1_now] = $b1_csv((int)date('Y'), (int)date('n'));
+    $b1_router_row = $b1_now['160'] ?? [];
+    check_true('report měsíce: mlčící router pod 100 % (dostal ' . json_encode($b1_router_row[7] ?? null) . ')', is_numeric($b1_router_row[7] ?? null) && (float)$b1_router_row[7] < 100);
+    check('report měsíce: SLA mlčícího routeru nesplněno', $b1_router_row[9] ?? null, 'NE');
+    check_true('report měsíce: výpadek v minutách je čas ticha, ne počet řádků (dostal ' . json_encode($b1_router_row[10] ?? null) . ')', is_numeric($b1_router_row[10] ?? null) && (int)$b1_router_row[10] > 1);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (160, 161)");
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (160, 161)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (160, 161)");
+}
+
+// =======================================================================
+// Windows longer than 30 days read the daily rollup (W1-B2).
+//
+// The raw logs are kept for 30 days: "Rok" counted a month of rows under a
+// one-year label, and response_time at 1y drew the last 24 hours. A monitor
+// with 21 rolled-up days 40-60 days ago and a few checks today.
+// =======================================================================
+$b2_day = fn (int $ago): string => date('Y-m-d', strtotime('-' . $ago . ' day', strtotime('today')));
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES (170, 'B2 dlouhé okno', 'web', 'https://example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 70 DAY))");
+$b2_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms,
+    secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured) VALUES (170, ?, 288, 276, 12, 0, ?, 82800, 3600, 0, 0, 0, 0)");
+for ($b2_ago = 40; $b2_ago <= 60; $b2_ago++) {
+    $b2_ins->execute([$b2_day($b2_ago), 100 + $b2_ago]);
+}
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+    (170, 'up', 90, DATE_SUB(NOW(), INTERVAL 10 MINUTE)), (170, 'up', 95, DATE_SUB(NOW(), INTERVAL 5 MINUTE)), (170, 'up', 99, NOW())");
+try {
+    [, $b2_uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+    $b2_row = $b2_uw['windows']['170'] ?? ($b2_uw['windows'][170] ?? []);
+    check('30 dní: jen dnešek, 100 %', $b2_row['d30'] ?? null, 100);
+    check_true('90 dní čte denní souhrny a liší se od 30 dní (dostal ' . json_encode($b2_row['d90'] ?? null) . ')', is_numeric($b2_row['d90'] ?? null) && $b2_row['d90'] < 99 && $b2_row['d90'] > 90);
+    check('okno 90 dní řekne, od kdy má data', $b2_row['since'] ?? null, $b2_day(60));
+    check('a kde okno začíná', $b2_uw['windowStart'] ?? null, ['d7' => $b2_day(6), 'd30' => $b2_day(29), 'd90' => $b2_day(89)]);
+
+    [, $b2_year] = api_get_auth($base, 'action=sla_report&days=365', $cookie_jar);
+    $b2_sla = array_values(array_filter($b2_year['monitors'] ?? [], fn ($m) => (int)$m['id'] === 170))[0] ?? [];
+    check('rok: okno začíná před 364 dny', $b2_year['windowStart'] ?? null, $b2_day(364));
+    check('rok: řádek řekne, od kdy má data', $b2_sla['since'] ?? null, $b2_day(60));
+    check_true('rok: souhrn nezačíná později než nejstarší řádek', is_string($b2_year['since'] ?? null) && $b2_year['since'] <= $b2_day(60));
+    check('rok: počet kontrol je z denních souhrnů, ne z měsíce logů', $b2_sla['totalChecks'] ?? null, 21 * 288 + 3);
+    check('rok: výpadky kontrol taky', $b2_sla['downChecks'] ?? null, 21 * 12);
+    check('percentily odezvy řeknou, že pokrývají 30 dní', $b2_year['percentileDays'] ?? null, 30);
+    [, $b2_month] = api_get_auth($base, 'action=sla_report&days=30', $cookie_jar);
+    $b2_sla30 = array_values(array_filter($b2_month['monitors'] ?? [], fn ($m) => (int)$m['id'] === 170))[0] ?? [];
+    check('30 dní: kontroly z logů jako dřív', $b2_sla30['totalChecks'] ?? null, 3);
+
+    [, $b2_rt] = api_get_auth($base, 'action=metric_series&monitor_id=170&metric=response_time&period=1y', $cookie_jar);
+    check('odezva za rok: denní rozlišení', $b2_rt['resolution'] ?? null, 'daily');
+    check('odezva za rok: 21 denních bodů, ne posledních 24 h', count($b2_rt['points'] ?? []), 21);
+    $b2_first = $b2_rt['points'][0] ?? [null, null];
+    check('první bod je nejstarší den se souhrnem', [$b2_first[0], (float)$b2_first[1]], [strtotime($b2_day(60) . ' 00:00:00'), 160.0]);
+    $b2_band = $b2_rt['dailyRange'][0] ?? [];
+    check('souhrn odezvy nemá min/max, pás se nevymýšlí',
+        [array_key_exists('min', $b2_band) ? $b2_band['min'] : 'chybí', array_key_exists('max', $b2_band) ? $b2_band['max'] : 'chybí'], [null, null]);
+    [, $b2_rt90] = api_get_auth($base, 'action=metric_series&monitor_id=170&metric=response_time&period=90d', $cookie_jar);
+    check('odezva za 90 dní: stejné dny', count($b2_rt90['points'] ?? []), 21);
+    [, $b2_prev] = api_get_auth($base, 'action=metric_series&monitor_id=170&metric=response_time&period=90d&previous=1', $cookie_jar);
+    check('předchozí okno 90 dní je o periodu zpět (prázdné)', $b2_prev['points'] ?? null, []);
+    [$b2_batch_code, $b2_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=170&period=1y', $cookie_jar);
+    check('dávka grafů rok odmítne místo 24 h', [$b2_batch_code, $b2_batch['error'] ?? null], [400, 'period_unsupported']);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 170");
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = 170");
+    $pdo->exec("DELETE FROM monitors WHERE id = 170");
+}
+
+// =======================================================================
+// Insights: paged, no cap of eight, one cache per language (W1-B6).
+//
+// The Insights page reads the server's findings. The list stopped at eight,
+// and one cache served whichever language filled it first to everybody.
+// =======================================================================
+$b6_items = fn (string $word): array => array_map(fn ($i) => ['monitorId' => 1, 'monitorName' => 'Testovací web',
+    'kind' => 'trend', 'text' => "{$word} {$i}", 'detail' => ''], range(1, 10));
+$b6_store = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+$b6_store->execute(['dashboard_insights_cache_cs', json_encode(['at' => time(), 'insights' => $b6_items('Česky')], JSON_UNESCAPED_UNICODE)]);
+$b6_store->execute(['dashboard_insights_cache_en', json_encode(['at' => time(), 'insights' => $b6_items('English')], JSON_UNESCAPED_UNICODE)]);
+try {
+    [, $b6_all] = api_get_auth($base, 'action=dashboard_insights&limit=100&lang=cs', $cookie_jar);
+    check('postřehy: všech deset, žádný strop osmi', count($b6_all['insights'] ?? []), 10);
+    check('a celkový počet', $b6_all['total'] ?? null, 10);
+    [, $b6_page] = api_get_auth($base, 'action=dashboard_insights&limit=3&offset=3&lang=cs', $cookie_jar);
+    check('druhá stránka po třech začíná čtvrtým', array_column($b6_page['insights'] ?? [], 'text'), ['Česky 4', 'Česky 5', 'Česky 6']);
+    check('a řekne svůj posun', $b6_page['offset'] ?? null, 3);
+    [, $b6_default] = api_get_auth($base, 'action=dashboard_insights&lang=cs', $cookie_jar);
+    check('přehled bez parametrů dostane čtyři jako dřív', count($b6_default['insights'] ?? []), 4);
+    [, $b6_en] = api_get_auth($base, 'action=dashboard_insights&limit=1&lang=en', $cookie_jar);
+    check('anglicky se čte anglická cache', $b6_en['insights'][0]['text'] ?? null, 'English 1');
+    [, $b6_cs] = api_get_auth($base, 'action=dashboard_insights&limit=1&lang=cs', $cookie_jar);
+    check('česky česká', $b6_cs['insights'][0]['text'] ?? null, 'Česky 1');
+    [, $b6_wo] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    check('přehled webů nese mez upozornění na certifikát', $b6_wo['sslAlertDays'] ?? null, 14);
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('dashboard_insights_cache_cs', 'dashboard_insights_cache_en')");
 }
 
 // =======================================================================

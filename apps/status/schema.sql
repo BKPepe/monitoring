@@ -417,6 +417,15 @@ CREATE TABLE IF NOT EXISTS `uptime_daily` (
   `checks_down` INT NOT NULL DEFAULT 0,
   `checks_warning` INT NOT NULL DEFAULT 0,
   `avg_response_ms` FLOAT DEFAULT NULL, -- NULL = za ten den se odezva nezměřila
+  -- Den v ČASE (W1-B1), ne v řádcích: sekundy podle stavu. silent = agent
+  -- mlčel (počítá se jako výpadek), unmeasured = nikdo neměřil (mimo procento).
+  -- NULL = den z doby před časovým souhrnem, zná jen počty kontrol.
+  `secs_up` INT DEFAULT NULL,
+  `secs_down` INT DEFAULT NULL,
+  `secs_warning` INT DEFAULT NULL,
+  `secs_silent` INT DEFAULT NULL,
+  `secs_maintenance` INT DEFAULT NULL,
+  `secs_unmeasured` INT DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`monitor_id`, `day`),
   KEY `idx_uptime_daily_day` (`day`)

@@ -106,7 +106,9 @@ $status_color = ['up' => 'var(--color-green)', 'down' => 'var(--color-red)', 'ma
 $status_bg = ['up' => 'rgba(30,199,115,0.12)', 'down' => 'rgba(193,18,31,0.12)', 'maintenance' => 'rgba(243,156,18,0.12)'][$monitor['status']] ?? 'rgba(148,163,184,0.1)';
 
 // Score ring color
-$ring_color = $health_score >= 80 ? 'var(--color-green)' : ($health_score >= 50 ? 'var(--color-yellow)' : 'var(--color-red)');
+// null = nothing measured (W1-B3): a grey, empty ring and no number, never 100.
+$ring_color = $health_score === null ? 'var(--text-muted)' : ($health_score >= 80 ? 'var(--color-green)' : ($health_score >= 50 ? 'var(--color-yellow)' : 'var(--color-red)'));
+$health_score_text = $health_score === null ? '—' : (string)$health_score;
 
 // Type icon
 $type_icons = ['web' => 'fa-globe', 'port' => 'fa-network-wired', 'vps' => 'fa-server', 'minecraft' => 'fa-cube', 'teamspeak' => 'fa-headset', 'discord' => 'fa-brands fa-discord', 'openwrt' => 'fa-wifi'];
@@ -245,7 +247,7 @@ foreach ($timeline as $ev) {
     <span style="color: rgba(255,255,255,0.15);">|</span>
     <span class="ao-name"><?php echo htmlspecialchars($monitor['name']); ?></span>
     <span class="ao-pill" style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>;"><?php echo htmlspecialchars($status_label); ?></span>
-    <span style="font-size: 0.75rem; color: var(--text-muted);"><?php echo $health_score; ?>/100</span>
+    <span style="font-size: 0.75rem; color: var(--text-muted);"><?php echo $health_score === null ? htmlspecialchars(t('ao_health_score_none')) : $health_score . '/100'; ?></span>
     <?php if ($last_seen_str): ?><span style="font-size: 0.72rem; color: var(--text-muted); margin-left: auto;"><?php echo htmlspecialchars(t('ao_last_seen')); ?>: <?php echo htmlspecialchars($last_seen_str); ?></span><?php endif; ?>
 </div>
 
@@ -302,7 +304,7 @@ foreach ($timeline as $ev) {
 
             <!-- Health Score Ring -->
             <div style="text-align: center;">
-                <div class="ao-score-ring" style="--ao-score: <?php echo $health_score; ?>; --ao-ring-color: <?php echo $ring_color; ?>;"><?php echo $health_score; ?></div>
+                <div class="ao-score-ring" style="--ao-score: <?php echo (int)$health_score; ?>; --ao-ring-color: <?php echo $ring_color; ?>;"<?php if ($health_score === null) echo ' title="' . htmlspecialchars(t('ao_health_score_none')) . '"'; ?>><?php echo $health_score_text; ?></div>
                 <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.4rem; text-transform: uppercase;"><?php echo htmlspecialchars(t('ao_health_score')); ?></div>
             </div>
         </div>

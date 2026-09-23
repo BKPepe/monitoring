@@ -39,6 +39,7 @@ import type {
 import { useLanguage } from '@/context/language-context';
 import { convertRate, formatRate, isRateMetric, suggestRateUnit, RATE_UNITS, type RateUnit } from '@/lib/rate-units';
 import { insertGaps, medianStep } from '@/lib/series-gaps';
+import { chartCoverageStart, formatCoverageDay } from '@/lib/window-coverage';
 import { percentile } from '@/lib/percentiles';
 import { metricHelp } from '@/lib/metric-help';
 import { betterDirection } from '@/lib/metric-direction';
@@ -292,6 +293,18 @@ export function MetricDetailPage() {
   }, [rawPoints, series]);
 
   const tone = toneFor(metric);
+  // A 90-day or one-year window over a shorter history (W1-B2): the daily
+  // rollup starts where the monitor's data starts, and the note says where
+  // instead of letting the axis quietly shrink to the measured weeks.
+  const dailyCoverage = React.useMemo(() => {
+    if (series?.resolution !== 'daily' || (range !== '90d' && range !== '1y')) return null;
+    const first = series.points.find(([, v]) => v != null)?.[0];
+    const from = chartCoverageStart(first, range === '90d' ? 90 : 365);
+    if (!from) return null;
+    const day = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`;
+    return formatCoverageDay(day, lang);
+  }, [series, range, lang]);
+
   const sourceUnit = detail?.metric.unit ?? series?.unit ?? '';
   const isRate = isRateMetric(sourceUnit);
 
@@ -893,6 +906,15 @@ export function MetricDetailPage() {
                 )}
               </p>
             )
+          )}
+          {series?.resolution === 'daily' && dailyCoverage && (
+            <p data-testid="metric-coverage">
+              {t(
+                'metric.daily_since',
+                { period: range, date: dailyCoverage },
+                `${range}: data od ${dailyCoverage}. Starší dny nejsou změřené, graf začíná až tam.`
+              )}
+            </p>
           )}
           {series?.resolution === 'daily' && (
             <p>

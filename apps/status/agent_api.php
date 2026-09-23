@@ -128,9 +128,10 @@ if (isset($data['action']) && $data['action'] === 'register') {
     
     $stmt = $pdo->prepare("
         INSERT INTO monitors (name, type, target, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold)
-        VALUES (?, ?, 'Local VPS Agent', 'unknown', ?, 90, 90, 95)
+        VALUES (?, ?, 'Local VPS Agent', 'unknown', ?, ?, ?, ?)
     ");
-    $stmt->execute([$name, $type, $agent_key]);
+    // RAM and disk were swapped here (90/95) against the alerts below.
+    $stmt->execute([$name, $type, $agent_key, BK_DEFAULT_THRESHOLDS['cpu'], BK_DEFAULT_THRESHOLDS['ram'], BK_DEFAULT_THRESHOLDS['hdd']]);
     $new_id = (int)$pdo->lastInsertId();
     
     log_monitor_event($pdo, $new_id, $name, $type, 'monitor_added', "Automatická registrace agenta ({$type})");
@@ -452,9 +453,9 @@ try {
     // the alerts here never read them - a preset saying "alert at 70 %"
     // silently alerted at the monitor's own value instead.
     $eff_thresholds = bk_monitor_thresholds($pdo, $monitor);
-    $cpu_threshold = floatval($eff_thresholds['cpu'] ?? 90.0);
-    $ram_threshold = floatval($eff_thresholds['ram'] ?? 95.0);
-    $hdd_threshold = floatval($eff_thresholds['hdd'] ?? 90.0);
+    $cpu_threshold = floatval($eff_thresholds['cpu'] ?? BK_DEFAULT_THRESHOLDS['cpu']);
+    $ram_threshold = floatval($eff_thresholds['ram'] ?? BK_DEFAULT_THRESHOLDS['ram']);
+    $hdd_threshold = floatval($eff_thresholds['hdd'] ?? BK_DEFAULT_THRESHOLDS['hdd']);
 
     // Hysteresis: an alert clears only five points below its threshold (or
     // below the threshold itself when it is that low). A value hovering

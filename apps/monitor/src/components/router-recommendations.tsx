@@ -308,6 +308,7 @@ export function RouterRecommendations({
   compact = false,
   agentVersion,
   onShowAll,
+  anchorId = 'router-recommendations',
 }: {
   monitorId: number;
   /** The page's single request (`useRouterRecommendations`), shared by every copy of the card. */
@@ -320,6 +321,8 @@ export function RouterRecommendations({
   agentVersion?: string | null;
   /** Compact only: takes the reader to the full card. */
   onShowAll?: () => void;
+  /** The card's element id. The Insights page lists several routers, and an id must stay unique on a page. */
+  anchorId?: string;
 }) {
   const { t, lang } = useLanguage();
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
@@ -386,7 +389,7 @@ export function RouterRecommendations({
   const canMute = data?.canMute === true;
 
   return (
-    <Card id="router-recommendations" className="space-y-4 p-6">
+    <Card id={anchorId} className="space-y-4 p-6">
       <div className="border-border flex items-start gap-3 border-b pb-3">
         <ClipboardList aria-hidden="true" className="text-primary mt-0.5 size-5 shrink-0" />
         <div>

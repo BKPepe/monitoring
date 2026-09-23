@@ -34,7 +34,7 @@ import { Sparkline } from '@/components/sparkline';
 import { lteBackupState } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
-import type { ChartData, LinkTrafficResponse, MetricSeries, RecommendationArea } from '@/api/types';
+import type { ChartData, LinkTrafficResponse, RecommendationArea } from '@/api/types';
 import { resolveSource } from '@/api/source';
 import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
@@ -56,6 +56,7 @@ import { ErrorState, LoadingState } from '@/components/ui/states';
 import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
 import { LanPortMap } from '@/components/lan-port-map';
 import { WifiRadioList } from '@/components/wifi-radio-list';
+import { seriesForTile } from '@/lib/tile-series';
 import { timelineSeverity, timelineTitle } from '@/lib/timeline-events';
 import { monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
 import { processUsage } from '@/lib/monitor-grouping';
@@ -1037,13 +1038,9 @@ function OverviewTab({
   const charts = useAssetCharts(asset.id, range);
 
   const healthWithTrends = React.useMemo<HealthMetric[]>(() => {
-    const byTone = new Map<string, MetricSeries>();
-    for (const chart of charts.data ?? []) {
-      const s = chart.series[0];
-      if (s && !byTone.has(s.tone)) byTone.set(s.tone, s);
-    }
     return asset.health.map((m) => {
-      const s = m.tone ? byTone.get(m.tone) : undefined;
+      // Its own metric only (W1-B5) - never the first chart of the same colour.
+      const s = seriesForTile(m.key, charts.data);
       if (!s) return m;
       // Nulls kept on purpose - an unmeasured point is a gap in the trace.
       const values = s.points.map((p) => p.v);

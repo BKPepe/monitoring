@@ -440,9 +440,9 @@ if ($action === 'monitors') {
                 $monitors[$mid]['maintenanceStart'] = $r['maintenance_start'];
                 $monitors[$mid]['maintenanceEnd'] = $r['maintenance_end'];
                 $monitors[$mid]['monitoredProcesses'] = $r['monitored_processes'];
-                $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? 90);
-                $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? 95);
-                $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? 90);
+                $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? BK_DEFAULT_THRESHOLDS['cpu']);
+                $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? BK_DEFAULT_THRESHOLDS['ram']);
+                $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? BK_DEFAULT_THRESHOLDS['hdd']);
                 // The limits that actually decide, preset first and null where
                 // nobody set one. The three fields above are the raw columns
                 // the edit form writes back, with a default filled in by ??,
@@ -572,9 +572,9 @@ if ($action === 'save_monitor') {
     $latency_threshold_mins = isset($input['latency_threshold_mins']) && $input['latency_threshold_mins'] !== ''
         ? max(1, min(1440, (int)$input['latency_threshold_mins']))
         : 5;
-    $cpu_threshold = !empty($input['cpu_threshold']) ? (int)$input['cpu_threshold'] : 90;
-    $ram_threshold = !empty($input['ram_threshold']) ? (int)$input['ram_threshold'] : 95;
-    $hdd_threshold = !empty($input['hdd_threshold']) ? (int)$input['hdd_threshold'] : 90;
+    $cpu_threshold = !empty($input['cpu_threshold']) ? (int)$input['cpu_threshold'] : BK_DEFAULT_THRESHOLDS['cpu'];
+    $ram_threshold = !empty($input['ram_threshold']) ? (int)$input['ram_threshold'] : BK_DEFAULT_THRESHOLDS['ram'];
+    $hdd_threshold = !empty($input['hdd_threshold']) ? (int)$input['hdd_threshold'] : BK_DEFAULT_THRESHOLDS['hdd'];
 
     $body_keyword = (!empty($input['body_keyword']) && $type === 'web') ? trim($input['body_keyword']) : null;
 
@@ -823,7 +823,7 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
         }
         $pdo->commit();
         // Summaries cached with the monitor in (or out) are stale now.
-        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache') OR key_name LIKE 'regions_cache_%'");
+        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en') OR key_name LIKE 'regions_cache_%'");
         log_monitor_event($pdo, $am_id, $am['name'], $am['type'], $am_archive ? 'monitor_archived' : 'monitor_restored', $am_archive ? 'Monitor archivován' : 'Monitor obnoven z archivu');
         bk_audit_log($pdo, $am_archive ? 'monitor_archived' : 'monitor_restored', (string)$am['name'], 'monitor', $am_id);
         echo json_encode(['success' => true, 'archived' => $am_archive, 'incidentsClosed' => $am_closed], JSON_UNESCAPED_UNICODE);
@@ -1112,9 +1112,11 @@ if ($action === 'import_discovered_service') {
         $agent_key = bin2hex(random_bytes(16));
         $stmt = $pdo->prepare("
             INSERT INTO monitors (name, type, target, port, category, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
-            VALUES (?, ?, ?, ?, ?, 'unknown', ?, 90, 90, 95, ?)
+            VALUES (?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?)
         ");
-        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $discovered_category, $agent_key, $discovered_asset_id]);
+        // RAM and disk were swapped here (90/95) against every other place.
+        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $discovered_category, $agent_key,
+            BK_DEFAULT_THRESHOLDS['cpu'], BK_DEFAULT_THRESHOLDS['ram'], BK_DEFAULT_THRESHOLDS['hdd'], $discovered_asset_id]);
         $new_id = (int)$pdo->lastInsertId();
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
         bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
@@ -2336,18 +2338,30 @@ if ($action === 'dashboard_insights') {
     $di_visible = bk_visible_monitor_ids($pdo);
     [$di_scope, $di_scope_params] = bk_list_scope_sql($pdo, $di_visible, 'id');
     try {
-        $limit = min(8, max(1, (int)($_GET['limit'] ?? 4)));
+        // Paged (W1-B6): the dashboard asks for its four, the Insights page
+        // pages through all of them. The list used to stop at eight, so the
+        // ninth finding existed nowhere in the app.
+        $limit = min(200, max(1, (int)($_GET['limit'] ?? 4)));
+        $offset = max(0, (int)($_GET['offset'] ?? 0));
 
         // The analyses run over every monitor's history (regression, baselines,
         // rolling windows) - single-digit seconds on shared hosting, and the
         // dashboard waited for it on every load. The result is therefore
         // cached for 5 minutes; the data changes on the scale of minutes anyway.
-        $cache_key = 'dashboard_insights_cache';
+        // One cache per language: the texts are worded in the request's
+        // language (t()), and a single key served whichever language filled it
+        // first to everybody for five minutes.
+        $cache_key = $GLOBALS['BK_LANG'] === 'en' ? 'dashboard_insights_cache_en' : 'dashboard_insights_cache_cs';
         $cached_raw = $di_visible === null ? get_setting($cache_key, '') : '';
         if ($cached_raw !== '') {
             $cached = json_decode($cached_raw, true);
-            if (is_array($cached) && (time() - (int)($cached['at'] ?? 0)) < 300 && isset($cached['insights'])) {
-                echo json_encode(['insights' => array_slice($cached['insights'], 0, $limit), 'cachedAt' => (int)$cached['at']], JSON_UNESCAPED_UNICODE);
+            if (is_array($cached) && (time() - (int)($cached['at'] ?? 0)) < 300 && isset($cached['insights']) && is_array($cached['insights'])) {
+                echo json_encode([
+                    'insights' => array_slice($cached['insights'], $offset, $limit),
+                    'total' => count($cached['insights']),
+                    'offset' => $offset,
+                    'cachedAt' => (int)$cached['at'],
+                ], JSON_UNESCAPED_UNICODE);
                 exit;
             }
         }
@@ -2378,12 +2392,18 @@ if ($action === 'dashboard_insights') {
         usort($items, fn($a, $b) => ($rank[$a['kind']] ?? 4) <=> ($rank[$b['kind']] ?? 4));
         try {
             $stmt_cache = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            if ($di_visible === null) $stmt_cache->execute([$cache_key, json_encode(['at' => time(), 'insights' => array_slice($items, 0, 8)], JSON_UNESCAPED_UNICODE)]);
-        } catch (Throwable $ce) { /* cache je volitelná */ }
-        echo json_encode(['insights' => array_slice($items, 0, $limit)], JSON_UNESCAPED_UNICODE);
+            if ($di_visible === null) $stmt_cache->execute([$cache_key, json_encode(['at' => time(), 'insights' => $items], JSON_UNESCAPED_UNICODE)]);
+        } catch (Throwable $ce) {
+            // cache je volitelná - the answer still goes out, the log says why it was not kept
+            error_log('[api.php action=' . $action . '] cache not stored: ' . $ce->getMessage());
+        }
+        echo json_encode([
+            'insights' => array_slice($items, $offset, $limit),
+            'total' => count($items),
+            'offset' => $offset,
+        ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Nepodařilo se sestavit postřehy.'], JSON_UNESCAPED_UNICODE);
+        bk_api_fail('dashboard_insights_unavailable', 500, $e, 'Nepodařilo se sestavit postřehy.');
     }
     exit;
 }
@@ -2419,6 +2439,27 @@ if ($action === 'daily_uptime') {
             $by_monitor[(int)$row['monitor_id']][$row['day']] = $row;
         }
 
+        // The day's availability in time (bk_uptime_segments), not in rows:
+        // a day a silent agent wrote no row at all was "no data" here, and
+        // the strip showed grey where the router was off. Today is computed
+        // live; finished days come from the uptime_daily rollup (cron, every
+        // ten minutes) - 30 days of raw logs per page load cost seconds.
+        $du_ids = array_map(fn ($m) => (int)$m['id'], $mon_rows);
+        $du_today = date('Y-m-d');
+        $du_time = [];
+        foreach (bk_uptime_segments_for($pdo, strtotime($du_today . ' 00:00:00'), time(), $du_ids) as $du_mid => $du_seg) {
+            $du_time[$du_mid][$du_today] = bk_uptime_summary($du_seg['segments'], $du_seg['from'], $du_seg['to']);
+        }
+        $stmt_ud = $pdo->prepare("
+            SELECT monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured
+            FROM uptime_daily
+            WHERE day >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND day < CURDATE() AND secs_up IS NOT NULL
+        ");
+        $stmt_ud->execute([$days]);
+        foreach ($stmt_ud->fetchAll() as $ud) {
+            $du_time[(int)$ud['monitor_id']][(string)$ud['day']] = bk_uptime_totals([bk_uptime_daily_part($ud)]);
+        }
+
         // Frontend (dashboard.tsx) expects `series` keyed by monitor id -> day
         // list, i.e. Record<number, DayRow[]>, not an array of
         // {monitorId, name, days} objects. A shape mismatch here means
@@ -2432,32 +2473,45 @@ if ($action === 'daily_uptime') {
                 $day_key = date('Y-m-d', strtotime("-$i day"));
                 $day_display = date('j.n.', strtotime($day_key));
                 $d = $by_monitor[$mid][$day_key] ?? null;
+                // A finished day the rollup has not reached yet (cron behind,
+                // the first minutes after a deploy) falls back to its check
+                // counts rather than to "no data".
+                $tm = $du_time[$mid][$day_key]
+                    ?? ($d ? bk_uptime_totals([bk_uptime_daily_part([
+                        'checks_up' => $d['up_count'], 'checks_down' => $d['down_count'],
+                        'checks_warning' => $d['warning_count'], 'checks_maintenance' => $d['maint_count'],
+                    ])]) : null);
 
                 // 'unknown' rows (types without an active check) are not measurements -
                 // they do not count into availability at all, otherwise a monitor
                 // nobody ever tested would show false outages.
-                $up = $d ? (int)$d['up_count'] : 0;
                 $down = $d ? (int)$d['down_count'] : 0;
                 $warn = $d ? (int)$d['warning_count'] : 0;
-                $maint = $d ? (int)$d['maint_count'] : 0;
-                $measured = $up + $down + $warn;
+                $measured = $d ? (int)$d['up_count'] + $down + $warn : 0;
+                $m_secs = $tm['measured'] ?? 0;
+                $maint_secs = $tm['maintenance'] ?? 0;
 
                 // The day's average response for the latency sparkline - null until
                 // something actually answered that day (0 would claim instant responses).
                 $avg_ms = ($d && $d['avg_rt'] !== null) ? (int)round((float)$d['avg_rt']) : null;
 
-                if ($measured === 0 && $maint === 0) {
-                    // A day without a single measured check has no 0% uptime - it has none.
+                if ($m_secs === 0 && $maint_secs === 0) {
+                    // A day without a single measured second has no 0% uptime - it has none.
                     $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => null, 'avgMs' => $avg_ms, 'detail' => t('day_no_data')];
                     continue;
                 }
 
-                $uptimePct = $measured > 0 ? round(($up / $measured) * 100, 1) : null;
+                $uptimePct = $tm['pct'] !== null ? round($tm['pct'], 1) : null;
 
-                if ($maint > 0 && $maint >= $measured) {
+                if ($maint_secs > 0 && $maint_secs >= $m_secs) {
                     $status = 'maintenance';
                     $detail = t('day_maintenance');
-                } elseif ($down > 0) {
+                } elseif (($tm['silent'] ?? 0) > 0) {
+                    // The agent wrote nothing, so there are no failed checks to
+                    // count - the outage is how long it was silent.
+                    $status = 'down';
+                    $detail = sprintf(t('day_silent_detail'), bk_format_duration_secs((int)$tm['outage']), $uptimePct);
+                } elseif (($tm['down'] ?? 0) > 0 || $down > 0) {
                     $status = 'down';
                     $detail = sprintf(t('day_down_detail'), $down, $measured, $uptimePct);
                 } elseif ($warn > 0) {
@@ -2494,38 +2548,56 @@ if ($action === 'daily_uptime') {
 // A window without a single measured check is null, not 100.
 if ($action === 'uptime_windows') {
     try {
-        $uw_selects = [];
-        foreach ([1, 7, 30, 90] as $w) {
-            $uw_selects[] = "SUM(CASE WHEN checked_at >= DATE_SUB(NOW(), INTERVAL {$w} DAY) AND status = 'up' THEN 1 ELSE 0 END) AS up{$w}";
-            $uw_selects[] = "SUM(CASE WHEN checked_at >= DATE_SUB(NOW(), INTERVAL {$w} DAY) AND status IN ('up','down','warning') THEN 1 ELSE 0 END) AS total{$w}";
-        }
-        $stmt_uw = $pdo->query("
-            SELECT monitor_id, " . implode(', ', $uw_selects) . "
-            FROM monitor_logs
-            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-            GROUP BY monitor_id
-        ");
-        $uw_out = [];
-        // Public view: every monitor. App view: the monitors this viewer may see.
-        $uw_visible = bk_public_view() ? null : bk_visible_monitor_ids($pdo);
+        // Public view: the public set. App view: the monitors this viewer may see.
+        $uw_visible = bk_request_monitor_ids($pdo);
         $uw_archived = bk_archived_monitor_ids($pdo);
-        foreach ($stmt_uw->fetchAll() as $r) {
-            if (in_array((int)$r['monitor_id'], $uw_archived, true)) {
+        $uw_ids = [];
+        foreach ($pdo->query("SELECT id FROM monitors WHERE type NOT IN ('node', 'probe')")->fetchAll(PDO::FETCH_COLUMN) as $uw_id) {
+            $uw_id = (int)$uw_id;
+            if (in_array($uw_id, $uw_archived, true)) {
                 continue;
             }
-            if ($uw_visible !== null && !in_array((int)$r['monitor_id'], $uw_visible, true)) {
+            if ($uw_visible !== null && !in_array($uw_id, $uw_visible, true)) {
                 continue;
             }
-            $row = [];
-            foreach ([1, 7, 30, 90] as $w) {
-                $total = (int)$r["total{$w}"];
-                $row["d{$w}"] = $total > 0 ? round(((int)$r["up{$w}"] / $total) * 100, 2) : null;
+            $uw_ids[] = $uw_id;
+        }
+        // In time, not in rows: the row count let a silent agent's blackout
+        // vanish (one 'down' row). d1 is the last 24 hours from the logs;
+        // 7/30/90 are calendar days, today live and the rest from the
+        // uptime_daily rollup, which outlives the 30-day log retention.
+        $uw_to = time();
+        $uw_out = [];
+        $uw_24h = bk_uptime_segments_for($pdo, $uw_to - 86400, $uw_to, $uw_ids);
+        $uw_days = bk_uptime_day_windows($pdo, $uw_ids, [7, 30, 90]);
+        foreach ($uw_ids as $uw_mid) {
+            $uw_seg = $uw_24h[$uw_mid] ?? null;
+            $row = ['d1' => $uw_seg !== null ? bk_uptime_summary($uw_seg['segments'], $uw_seg['from'], $uw_seg['to'])['pct'] : null];
+            foreach ([7, 30, 90] as $w) {
+                $row["d{$w}"] = $uw_days[$uw_mid][$w]['pct'] ?? null;
             }
-            $uw_out[(int)$r['monitor_id']] = $row;
+            // The first day with data in the 90-day window (W1-B2). Against
+            // windowStart below, 90 days over a monitor that exists for 40
+            // print "data od <since>" instead of passing for a quarter.
+            $row['since'] = $uw_days[$uw_mid][90]['since'] ?? null;
+            if ($row['d1'] === null && $row['d90'] === null) {
+                // Nothing measured at all: the monitor stays out, as before.
+                continue;
+            }
+            $uw_out[$uw_mid] = $row;
         }
         // (object): an empty result and sequential ids must both stay an object,
-        // the frontend indexes into it by monitor id.
-        echo json_encode(['windows' => (object)$uw_out], JSON_UNESCAPED_UNICODE);
+        // the frontend indexes into it by monitor id. windowStart is each
+        // window's first calendar day in the server's zone, so the client
+        // compares day strings and a browser elsewhere cannot shift the cut.
+        echo json_encode([
+            'windows' => (object)$uw_out,
+            'windowStart' => [
+                'd7' => date('Y-m-d', strtotime('-6 day', strtotime('today'))),
+                'd30' => date('Y-m-d', strtotime('-29 day', strtotime('today'))),
+                'd90' => date('Y-m-d', strtotime('-89 day', strtotime('today'))),
+            ],
+        ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_fail('uptime_windows_unavailable', 500, $e, 'Dostupnost se nepodařilo spočítat.');
     }
@@ -3799,6 +3871,10 @@ if ($action === 'websites_overview') {
         }
         // Archived sites leave the overview, also when the cache predates the archiving.
         $data['monitors'] = (object)array_diff_key($wo_monitors, array_flip(bk_archived_monitor_ids($pdo)));
+        // The limit cron alerts at (ssl_alert_days), read fresh rather than
+        // cached: the Insights page lists a certificate by the same rule the
+        // alert uses, not by a number of its own (W1-B6).
+        $data['sslAlertDays'] = max(1, (int)get_setting('ssl_alert_days', '14'));
         return $data;
     };
     try {
@@ -3811,31 +3887,20 @@ if ($action === 'websites_overview') {
             }
         }
 
-        // Short windows from raw logs (exact, the data is there), long windows
-        // from daily rollups - monitor_logs is pruned after 30 days, so the
-        // yearly value used to come out identical to the 30-day one and claimed
-        // a year of availability nobody measured.
+        // Which monitors have anything measured, and since when. The
+        // percentages themselves are computed in time below.
         $stmt = $pdo->query("
-            SELECT monitor_id,
-                   SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS up7,
-                   SUM(status IN ('up','down','warning') AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))   AS tot7,
-                   SUM(status = 'up' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))  AS up30,
-                   SUM(status IN ('up','down','warning') AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))  AS tot30,
-                   MIN(checked_at)                                                        AS measured_since
+            SELECT monitor_id, MIN(checked_at) AS measured_since
             FROM monitor_logs
             WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
               AND status IN ('up','down','warning')
             GROUP BY monitor_id
         ");
         $sla = [];
-        $pct = function ($up, $tot) {
-            // A window without a single measurement = null, not an invented 100 %.
-            return (int)$tot > 0 ? round((int)$up / (int)$tot * 100, 3) : null;
-        };
         while ($row = $stmt->fetch()) {
             $sla[(int)$row['monitor_id']] = [
-                'sla7' => $pct($row['up7'], $row['tot7']),
-                'sla30' => $pct($row['up30'], $row['tot30']),
+                'sla7' => null,
+                'sla30' => null,
                 'sla365' => null,
                 'measuredSince' => $row['measured_since'],
                 'longTermDays' => 0,
@@ -3847,8 +3912,6 @@ if ($action === 'websites_overview') {
         try {
             $stmt_long = $pdo->query("
                 SELECT monitor_id,
-                       SUM(checks_total) AS total,
-                       SUM(checks_up) AS up_count,
                        MIN(day) AS since,
                        DATEDIFF(CURDATE(), MIN(day)) + 1 AS days_covered
                 FROM uptime_daily
@@ -3860,7 +3923,6 @@ if ($action === 'websites_overview') {
                 if (!isset($sla[$mid])) {
                     $sla[$mid] = ['sla7' => null, 'sla30' => null, 'sla365' => null, 'measuredSince' => null, 'longTermDays' => 0];
                 }
-                $sla[$mid]['sla365'] = $pct($lrow['up_count'], $lrow['total']);
                 $sla[$mid]['longTermDays'] = (int)$lrow['days_covered'];
                 if (empty($sla[$mid]['measuredSince']) && !empty($lrow['since'])) {
                     $sla[$mid]['measuredSince'] = $lrow['since'];
@@ -3868,6 +3930,16 @@ if ($action === 'websites_overview') {
             }
         } catch (Throwable $e) {
             // Without the rollup table the long window stays null - visibly empty.
+            error_log('[api.php action=' . $action . '] long-term coverage unavailable: ' . $e->getMessage());
+        }
+
+        // Availability in time, not in rows (bk_uptime_day_windows): the
+        // same definition as the badge and the SLA report. A window without a
+        // single measured second = null, not an invented 100 %.
+        foreach (bk_uptime_day_windows($pdo, array_keys($sla), [7, 30, 365]) as $wo_mid => $wo_win) {
+            $sla[$wo_mid]['sla7'] = $wo_win[7]['pct'];
+            $sla[$wo_mid]['sla30'] = $wo_win[30]['pct'];
+            $sla[$wo_mid]['sla365'] = $wo_win[365]['pct'];
         }
 
         $data = [
@@ -3901,8 +3973,7 @@ if ($action === 'sla_report') {
             SELECT m.id, m.name, m.target, m.type, m.status as current_status, m.last_status_change,
                    COUNT(l.id) as total_checks,
                    SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_checks,
-                   SUM(CASE WHEN l.status = 'down' THEN 1 ELSE 0 END) as down_checks,
-                   SUM(CASE WHEN l.status IN ('up','down','warning') THEN 1 ELSE 0 END) as non_maint_checks
+                   SUM(CASE WHEN l.status = 'down' THEN 1 ELSE 0 END) as down_checks
             FROM monitors m
             LEFT JOIN monitor_logs l ON l.monitor_id = m.id AND l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
             WHERE m.type NOT IN ('node', 'probe') AND {$sla_scope}
@@ -3917,22 +3988,22 @@ if ($action === 'sla_report') {
         // queries before the loop; results live in maps keyed by monitor_id and
         // the values are bit-for-bit identical (pinned by integration tests).
         $sla_outage_by_mid = [];
-        try {
-            // The latest down row of every monitor + the nearest following up
-            // (the correlated subquery runs only for monitors that ever went down).
-            $stmt_out_all = $pdo->query("
-                SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
-                       (SELECT u.checked_at FROM monitor_logs u
-                        WHERE u.monitor_id = l.monitor_id AND u.status = 'up' AND u.id > l.id
-                        ORDER BY u.id ASC LIMIT 1) AS next_up_at
-                FROM monitor_logs l
-                JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
-                  ON ld.max_id = l.id
-            ");
-            foreach ($stmt_out_all->fetchAll() as $orow) {
-                $sla_outage_by_mid[(int)$orow['monitor_id']] = $orow;
-            }
-        } catch (Throwable $t) {}
+        // No catch of its own: a failed read here used to report "never down"
+        // (lastOutage null) for every monitor. It fails the report instead.
+        // The latest down row of every monitor + the nearest following up
+        // (the correlated subquery runs only for monitors that ever went down).
+        $stmt_out_all = $pdo->query("
+            SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
+                   (SELECT u.checked_at FROM monitor_logs u
+                    WHERE u.monitor_id = l.monitor_id AND u.status = 'up' AND u.id > l.id
+                    ORDER BY u.id ASC LIMIT 1) AS next_up_at
+            FROM monitor_logs l
+            JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
+              ON ld.max_id = l.id
+        ");
+        foreach ($stmt_out_all->fetchAll() as $orow) {
+            $sla_outage_by_mid[(int)$orow['monitor_id']] = $orow;
+        }
 
         $sla_pct_by_mid = [];
         try {
@@ -3965,17 +4036,75 @@ if ($action === 'sla_report') {
                     }
                 }
             }
-        } catch (Throwable $t) {}
+        } catch (Throwable $t) {
+            // The percentiles need window functions (MySQL 8 / MariaDB 10.2).
+            // Without them p50/p95/p99 stay null and the report prints "—";
+            // availability does not depend on them.
+            error_log('[api.php action=sla_report] percentiles unavailable: ' . $t->getMessage());
+        }
+
+        // Availability in time, not in rows (bk_uptime_segments): a silent
+        // agent's single 'down' row used to leave a three-day blackout at
+        // ~99.99 %, and outageMinutes was the number of down ROWS.
+        // Calendar days, today included: today live, the finished days from
+        // the uptime_daily rollup - which also reaches past the 30 days the
+        // raw logs are kept.
+        $sla_time = bk_uptime_day_windows($pdo, array_map(fn ($m) => (int)$m['id'], $monitors), [$days]);
+
+        // Check counts past the 30 days the raw logs are kept (W1-B2): "Rok"
+        // counted the last month of rows under a one-year label. The finished
+        // days come from the rollup, today from the logs - the same split the
+        // percentages use. Up to 30 days the logs hold everything.
+        $sla_checks = null;
+        if ($days > 30) {
+            $sla_checks = [];
+            $stmt_ck = $pdo->prepare("
+                SELECT monitor_id, SUM(checks_total) AS total, SUM(checks_up) AS up, SUM(checks_down) AS down
+                FROM uptime_daily
+                WHERE day >= ? AND day < CURDATE()
+                GROUP BY monitor_id
+            ");
+            $stmt_ck->execute([date('Y-m-d', strtotime('-' . ($days - 1) . ' day', strtotime('today')))]);
+            foreach ($stmt_ck->fetchAll() as $ck) {
+                $sla_checks[(int)$ck['monitor_id']] = ['total' => (int)$ck['total'], 'up' => (int)$ck['up'], 'down' => (int)$ck['down']];
+            }
+            $stmt_ck_today = $pdo->query("
+                SELECT monitor_id, COUNT(*) AS total, SUM(status = 'up') AS up, SUM(status = 'down') AS down
+                FROM monitor_logs
+                WHERE checked_at >= CURDATE() AND status IN ('up', 'down', 'warning')
+                GROUP BY monitor_id
+            ");
+            foreach ($stmt_ck_today->fetchAll() as $ck) {
+                $ck_mid = (int)$ck['monitor_id'];
+                $sla_checks[$ck_mid] = [
+                    'total' => ($sla_checks[$ck_mid]['total'] ?? 0) + (int)$ck['total'],
+                    'up' => ($sla_checks[$ck_mid]['up'] ?? 0) + (int)$ck['up'],
+                    'down' => ($sla_checks[$ck_mid]['down'] ?? 0) + (int)$ck['down'],
+                ];
+            }
+        }
+        // The first day with data across the report, against the window's
+        // first day (windowStart): a year over seven weeks of history says so.
+        $sla_since = null;
 
         $report = [];
         foreach ($monitors as $m) {
             $mid = (int)$m['id'];
-            $non_maint = (int)$m['non_maint_checks'];
+            if ($sla_checks !== null) {
+                $m['total_checks'] = $sla_checks[$mid]['total'] ?? 0;
+                $m['up_checks'] = $sla_checks[$mid]['up'] ?? 0;
+                $m['down_checks'] = $sla_checks[$mid]['down'] ?? 0;
+            }
             $up = (int)$m['up_checks'];
             $down = (int)$m['down_checks'];
-            // A monitor without a single measured check in the window has no SLA -
-            // null, not a perfect 100.0 in a report nobody measured.
-            $uptimePct = $non_maint > 0 ? round(($up / $non_maint) * 100, 3) : null;
+            $sla_sum = $sla_time[$mid][$days] ?? null;
+            // A monitor without a single measured second in the window has no
+            // SLA - null, not a perfect 100.0 in a report nobody measured.
+            $uptimePct = $sla_sum['pct'] ?? null;
+            $mon_since = $sla_sum['since'] ?? null;
+            if ($mon_since !== null && ($sla_since === null || strcmp($mon_since, $sla_since) < 0)) {
+                $sla_since = $mon_since;
+            }
 
             // The last outage from the batched map - the outage end is the nearest
             // following 'up' row, same as action=events.
@@ -3997,7 +4126,7 @@ if ($action === 'sla_report') {
                 ];
             }
 
-            $outageMinutes = $down;
+            $outageMinutes = $sla_sum !== null ? (int)round($sla_sum['outage'] / 60) : 0;
             $mttr = $last_outage['resolved'] ?? false ? $last_outage['durationSec'] : null;
 
             $p50 = $sla_pct_by_mid[$mid]['p50'] ?? null;
@@ -4016,6 +4145,12 @@ if ($action === 'sla_report') {
                 'upChecks' => $up,
                 'downChecks' => $down,
                 'outageMinutes' => $outageMinutes,
+                // Of which the agent was silent - the outage nobody wrote a row for.
+                'silentMinutes' => $sla_sum !== null ? (int)round($sla_sum['silent'] / 60) : 0,
+                // Time nothing measured (cron stopped, an agent-side check's
+                // agent went quiet): outside the percentage, and said so.
+                'unmeasuredMinutes' => $sla_sum !== null ? (int)round($sla_sum['unmeasured'] / 60) : null,
+                'since' => $mon_since,
                 'lastOutage' => $last_outage,
                 'mttrSec' => $mttr,
                 'p50Ms' => $p50,
@@ -4046,6 +4181,11 @@ if ($action === 'sla_report') {
 
         echo json_encode([
             'slaGoal' => $sla_goal,
+            'days' => $days,
+            'windowStart' => date('Y-m-d', strtotime('-' . ($days - 1) . ' day', strtotime('today'))),
+            'since' => $sla_since,
+            // Latency percentiles read raw logs, which are kept for 30 days.
+            'percentileDays' => min($days, 30),
             'overallUptime' => $overall_uptime,
             'totalOutageMinutes' => $total_outage,
             'overallMttrSec' => $overall_mttr,
@@ -4186,7 +4326,31 @@ if ($action === 'metric_series') {
         }
 
         $points = [];
-        if ($metric === 'response_time' || $metric === 'latency') {
+        if (($metric === 'response_time' || $metric === 'latency') && $long_term_days > 0) {
+            // 90 days and a year from the daily rollup (W1-B2). The period
+            // fell back to 1440 minutes here, so "1 rok" drew the last 24 hours.
+            // A point is the day's average answer; the rollup keeps no minimum
+            // or maximum for it, so the band stays empty rather than invented.
+            // ?previous=1 shifts the window by one period, as the raw path does.
+            $unit = 'ms';
+            $label = 'Doba odezvy (HTTP/Ping)';
+            $stmt = $pdo->prepare("
+                SELECT UNIX_TIMESTAMP(day) AS ts, avg_response_ms, checks_total
+                FROM uptime_daily
+                WHERE monitor_id = ? AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND day < DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                ORDER BY day ASC
+            ");
+            $stmt->execute($previous_window
+                ? [$real_id, 2 * $long_term_days - 1, $long_term_days - 1]
+                : [$real_id, $long_term_days - 1, -1]);
+            foreach ($stmt->fetchAll() as $r) {
+                if ($r['avg_response_ms'] === null) {
+                    continue;
+                }
+                $points[] = [(int)$r['ts'], round((float)$r['avg_response_ms'], 2)];
+                $daily_range[] = ['ts' => (int)$r['ts'], 'min' => null, 'max' => null, 'samples' => (int)$r['checks_total']];
+            }
+        } elseif ($metric === 'response_time' || $metric === 'latency') {
             $unit = 'ms';
             $label = 'Doba odezvy (HTTP/Ping)';
             $stmt = $pdo->prepare("
@@ -4825,7 +4989,17 @@ if ($action === 'process_history') {
 if ($action === 'metric_series_batch') {
     $monitor_id = (int)($_GET['monitor_id'] ?? $_GET['id'] ?? 1);
     $period = $_GET['period'] ?? '24h';
-    $minutes = bk_period_minutes($period) ?? 1440;
+    $minutes = bk_period_minutes($period);
+    if ($minutes === null) {
+        // 90d/180d/1y live in the daily rollups, which only action=metric_series
+        // reads. This answered them with the last 24 hours under the long label.
+        http_response_code(400);
+        echo json_encode([
+            'error' => 'period_unsupported',
+            'message' => 'Období delší než 30 dní čte action=metric_series (denní souhrny).',
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
     try {
         // Among the monitors this viewer may see: a user gets only their own;
@@ -5376,98 +5550,104 @@ if ($action === 'public_status') {
         [$ps_scope, $ps_params] = bk_list_scope_sql($pdo, $ps_visible, 'id');
         [$ps_log_scope, $ps_log_params] = bk_list_scope_sql($pdo, $ps_visible, 'monitor_id');
         [$ps_m_scope, $ps_m_params] = bk_list_scope_sql($pdo, $ps_visible, 'm.id');
-        $stmt_stats = $pdo->prepare("
-            SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-                SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
-                MAX(last_checked) as last_checked
-            FROM monitors
-            WHERE {$ps_scope}
-        ");
-        $stmt_stats->execute($ps_params);
-        $stats = $stmt_stats->fetch() ?: null;
-        $total_monitors = (int)($stats['total'] ?? 0);
-        $down_monitors = (int)($stats['down_count'] ?? 0);
+        $stmt_rows = $pdo->prepare("SELECT id, type, status, maintenance, last_checked FROM monitors WHERE {$ps_scope}");
+        $stmt_rows->execute($ps_params);
+        $ps_rows = $stmt_rows->fetchAll();
+        $total_monitors = count($ps_rows);
+
+        // One verdict, the same one the fleet badge prints (W1-B4). It used to
+        // be "healthy unless something is down": a degraded monitor, an
+        // unknown one and a stopped collector all read as all-clear.
+        $ps_verdict = bk_overall_verdict($ps_rows, bk_collection_is_fresh());
+        $ps_counts = $ps_verdict['counts'];
+
+        // The newest real check, or null. It fell back to date('c'), so a set
+        // nobody had measured looked checked a second ago.
+        $ps_last = null;
+        foreach ($ps_rows as $ps_row) {
+            if (!empty($ps_row['last_checked']) && ($ps_last === null || strcmp((string)$ps_row['last_checked'], $ps_last) > 0)) {
+                $ps_last = (string)$ps_row['last_checked'];
+            }
+        }
 
         // null (not 100.0) until real data says otherwise - a fresh install
         // or a dead cron with zero logged checks isn't "100% uptime", it's
         // unmeasured, and the frontend needs to tell those two apart.
         $avg_uptime = null;
-        try {
-            $stmt_upt = $pdo->prepare("
-                SELECT monitor_id,
-                       SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-                       SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
-                FROM monitor_logs
-                WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND {$ps_log_scope}
-                GROUP BY monitor_id
-            ");
-            $stmt_upt->execute($ps_log_params);
-            if ($stmt_upt) {
-                $uptime_values = [];
-                while ($row = $stmt_upt->fetch()) {
-                    if ($row && !empty($row['total_count'])) {
-                        $uptime_values[] = ($row['up_count'] / $row['total_count']) * 100;
-                    }
-                }
-                if (!empty($uptime_values)) {
-                    $avg_uptime = round(array_sum($uptime_values) / count($uptime_values), 3);
-                }
+        // No inner catches in this action any more: an empty node list or a
+        // null uptime after a failed read looked like a real answer. Any
+        // failure now reaches the outer catch and answers 500.
+        // In time, not in rows (bk_uptime_segments) - the same number the
+        // badge and the SLA report print for each monitor.
+        $uptime_values = [];
+        foreach (bk_uptime_day_windows($pdo, array_map(fn($r) => (int)$r['id'], $ps_rows), [30]) as $ps_win) {
+            if ($ps_win[30]['pct'] !== null) {
+                $uptime_values[] = $ps_win[30]['pct'];
             }
-        } catch (Throwable $t) {}
+        }
+        if (!empty($uptime_values)) {
+            $avg_uptime = round(array_sum($uptime_values) / count($uptime_values), 3);
+        }
 
+        // Nodes are the machines that report on their own (agents) and the
+        // servers probed as hosts - not every monitor that happens to carry
+        // details: websites and Discord were listed as "nodes" through that.
         // response_time is not a monitors column - the latest value comes from
         // monitor_logs. No name/outage fallback: with no real nodes an empty
         // list is returned, not a hardcoded "Donald"/"Router - Praha".
         $nodes = [];
-        try {
-            $stmt_nodes = $pdo->prepare("
-                SELECT m.name, m.status,
-                       (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
-                FROM monitors m
-                WHERE (LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router') OR m.last_details IS NOT NULL)
-                  AND {$ps_m_scope}
-            ");
-            $stmt_nodes->execute($ps_m_params);
-            while ($nd = $stmt_nodes->fetch()) {
-                $nodes[] = [
-                    'name' => $nd['name'],
-                    'status' => $nd['status'] === 'up' ? 'online' : ($nd['status'] === 'warning' ? 'warning' : 'offline'),
-                    'latencyMs' => $nd['response_time'] !== null ? (int)$nd['response_time'] : null,
-                ];
-            }
-        } catch (Throwable $t) {}
+        $stmt_nodes = $pdo->prepare("
+            SELECT m.name, m.status, m.maintenance,
+                   (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
+            FROM monitors m
+            WHERE LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router')
+              AND {$ps_m_scope}
+        ");
+        $stmt_nodes->execute($ps_m_params);
+        $ps_node_states = ['up' => 'online', 'warning' => 'warning', 'down' => 'offline', 'maintenance' => 'maintenance'];
+        while ($nd = $stmt_nodes->fetch()) {
+            $nd_status = !empty($nd['maintenance']) ? 'maintenance' : strtolower((string)$nd['status']);
+            $nodes[] = [
+                'name' => $nd['name'],
+                // Unknown and maintenance keep their own words: both used to
+                // become "offline", a red dot for a server nobody had checked yet.
+                'status' => $ps_node_states[$nd_status] ?? 'unknown',
+                'latencyMs' => $nd['response_time'] !== null ? (int)$nd['response_time'] : null,
+            ];
+        }
 
         // null until a real measurement exists - "10 ms" as a fabricated
         // default would misrepresent actual latency the same way the old
         // 100% uptime default misrepresented actual availability.
         $avg_latency = null;
-        try {
-            $stmt_latency = $pdo->prepare("
-                SELECT AVG(response_time) as avg_latency
-                FROM monitor_logs
-                WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND response_time > 0 AND {$ps_log_scope}
-            ");
-            $stmt_latency->execute($ps_log_params);
-            $lat_row = $stmt_latency->fetch() ?: null;
-            if ($lat_row && isset($lat_row['avg_latency']) && $lat_row['avg_latency'] !== null) {
-                $avg_latency = (int)round($lat_row['avg_latency']);
-            }
-        } catch (Throwable $t) {}
+        $stmt_latency = $pdo->prepare("
+            SELECT AVG(response_time) as avg_latency
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND response_time > 0 AND {$ps_log_scope}
+        ");
+        $stmt_latency->execute($ps_log_params);
+        $lat_row = $stmt_latency->fetch() ?: null;
+        if ($lat_row && isset($lat_row['avg_latency']) && $lat_row['avg_latency'] !== null) {
+            $avg_latency = (int)round($lat_row['avg_latency']);
+        }
 
         $agents_online = count(array_filter($nodes, fn($n) => $n['status'] === 'online'));
         $agents_total = count($nodes);
 
         echo json_encode([
-            'status' => $down_monitors > 0 ? 'degraded' : 'healthy',
+            // healthy | degraded | down | maintenance | unknown (bk_overall_verdict)
+            'status' => $ps_verdict['verdict'],
             'uptimePercent' => $avg_uptime,
             'totalMonitors' => $total_monitors,
-            'downMonitors' => $down_monitors,
+            'downMonitors' => $ps_counts['down'],
+            'warningMonitors' => $ps_counts['warning'],
+            'unknownMonitors' => $ps_counts['unknown'],
+            'unmeasuredMonitors' => $ps_counts['unmeasured'],
+            'maintenanceMonitors' => $ps_counts['maintenance'],
             'agentsOnline' => $agents_online,
             'agentsTotal' => $agents_total,
             'avgLatencyMs' => $avg_latency,
-            'lastUpdated' => (!empty($stats['last_checked'])) ? date('c', strtotime($stats['last_checked'])) : date('c'),
+            'lastUpdated' => $ps_last !== null ? date('c', (int)strtotime($ps_last)) : null,
             'nodes' => $nodes,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {

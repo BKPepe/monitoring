@@ -139,7 +139,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260921');
+    define('BK_SCHEMA_VERSION', '20260923b');
 
     $bk_current_schema = false;
     try {
@@ -1047,6 +1047,15 @@ try {
         // The admin page filters by kind and pages by id - without this the
         // "show me every failed invitation" query is a full table scan.
         "CREATE INDEX idx_notif_kind ON notification_log (kind, id)",
+        // Availability in TIME per day (W1-B1): the row counts let a silent
+        // agent's blackout vanish. NULL = a day rolled up before this existed;
+        // cron refills the retained 31 days once (uptime_daily_time_backfilled).
+        "ALTER TABLE uptime_daily ADD COLUMN secs_up INT DEFAULT NULL",
+        "ALTER TABLE uptime_daily ADD COLUMN secs_down INT DEFAULT NULL",
+        "ALTER TABLE uptime_daily ADD COLUMN secs_warning INT DEFAULT NULL",
+        "ALTER TABLE uptime_daily ADD COLUMN secs_silent INT DEFAULT NULL",
+        "ALTER TABLE uptime_daily ADD COLUMN secs_maintenance INT DEFAULT NULL",
+        "ALTER TABLE uptime_daily ADD COLUMN secs_unmeasured INT DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

@@ -260,6 +260,12 @@ header {
   background: var(--color-yellow);
 }
 
+/* Nobody knows the state (nothing measured, or the collector stopped): a
+   neutral bar, neither the all-clear green nor the outage red. */
+.overall-status.is-unknown::before {
+  background: var(--text-muted);
+}
+
 .overall-info .last-update-line {
   font-size: 0.75rem;
   color: var(--text-muted);

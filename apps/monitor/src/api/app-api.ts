@@ -1,6 +1,7 @@
 import { STATUS_API } from './http-source';
 import { requestSessionRecheck } from './session-recheck';
 import type {
+  DashboardInsightsResponse,
   OutgoingMessagePage,
   RouterRecommendationMuteResponse,
   RouterRecommendationsResponse,
@@ -8,6 +9,7 @@ import type {
   WanBottleneckResponse,
   WanSettingsSaveRequest,
   WanSettingsSaveResponse,
+  WebsitesOverviewResponse,
 } from './types';
 
 /**
@@ -316,6 +318,19 @@ export const appApi = {
     request<RouterRecommendationsResponse>(
       'router_recommendations' + `&monitor_id=${monitorId}&lang=${encodeURIComponent(lang)}`
     ),
+
+  /**
+   * The server's findings across every monitor this viewer sees, one page at
+   * a time and in the viewer's language (W1-B6). A failed request rejects:
+   * the Insights page must say "could not load", never "nothing found".
+   */
+  getDashboardInsights: (lang: string, limit: number, offset = 0) =>
+    request<DashboardInsightsResponse>(
+      'dashboard_insights' + `&limit=${limit}&offset=${offset}&lang=${encodeURIComponent(lang)}`
+    ),
+
+  /** The websites' SLA map and the server's certificate alert limit (`sslAlertDays`). */
+  getWebsitesOverview: () => request<WebsitesOverviewResponse>('websites_overview'),
 
   /** Mute or unmute one recommendation of one router (admin only). An empty reason is stored as none. */
   muteRouterRecommendation: (monitorId: number, key: string, muted: boolean, reason = '') =>

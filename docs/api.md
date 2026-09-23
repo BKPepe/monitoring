@@ -441,7 +441,7 @@ answers 409.
 | Endpoint | Access | Description |
 |---|---|---|
 | `action=metric_series&monitor_id=&metric=&period=` | assigned monitor | One metric over time. A metric flagged `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`) already holds the increment between two reports: a raw point is that minute's step and the 90-day view is the day's TOTAL (`avg_val * samples`), never the average of it |
-| `action=metric_series_batch&monitor_id=&period=` | assigned monitor | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero |
+| `action=metric_series_batch&monitor_id=&period=` | assigned monitor | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero. Periods up to `30d` only: `90d`, `180d` and `1y` answer `400 {"error": "period_unsupported"}` - they used to return the last 24 hours under the long label |
 | `action=metric_detail&monitor_id=&metric=` | assigned monitor | Context for the metric detail page |
 | `action=metric_correlations&monitor_id=&metric=&period=` (optionally `&all=1` for every compared metric, not just the strongest 8) | assigned monitor | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | assigned monitor | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0` |
@@ -451,15 +451,15 @@ answers 409.
 | `action=storage_history&monitor_id=&days=` | assigned monitor | Per-disk daily history (temperature, error counters, host writes, wear). `days` is clamped to 1-400; a day nobody measured is `null`, never `0`. See "Router health" below |
 | `action=wan_bottleneck&monitor_id=` | assigned monitor | What limits the internet line of a router, per direction, from its last speed tests. See "Router health" below |
 | `action=metrics_history&monitor_id=&period=` | assigned monitor | Agent metric history |
-| `action=daily_uptime&days=` | public status / assigned | Daily availability from `uptime_daily` |
-| `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one pass; an unmeasured window is `null`, never 100 |
+| `action=daily_uptime&days=` | public status / assigned | Daily availability in time (see "Availability is measured in time" below): today live, finished days from `uptime_daily`. A day an agent was silent is `down` and its `detail` says for how long |
+| `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in time; `d1` is the last 24 hours, the others are calendar days with today included. An unmeasured window is `null`, never 100. Each row carries `since`, the first day with data in the 90-day window, and the answer carries `windowStart` (`d7`, `d30`, `d90`: each window's first day); both are server-local `Y-m-d`, so "90 days" over six weeks of history can say where its data starts |
 | `action=check_stages&monitor_id=` | assigned monitor | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | public status / assigned | Availability by measurement location (`checked_from`) |
 | `action=public_status` | public status / assigned | Summary for the public page (counts, average availability). Inside the app a `user` account gets totals over its assigned monitors |
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it summarises the fleet, an unknown monitor is 404 |
 | `action=websites_overview` | assigned monitor | Sites with certificates and availability in the window |
 | `action=monitor_insights&monitor_id=` | assigned monitor | Derived observations for one monitor |
-| `action=dashboard_insights&limit=` | assigned monitor | The same across monitors, for the overview |
+| `action=dashboard_insights&limit=&offset=&lang=` | assigned monitor | The same across monitors: forecasts, anomalies and network notes, worded in the request's language. Paged - `limit` 1-200 (default 4), `offset`, and `total` says how many there are; the list is no longer cut at eight. Cached for 5 minutes per language (`cachedAt` when the answer came from it) |
 | `action=ui_config` | public | Appearance settings for the frontend (logo, names) |
 | `action=alerts_read_state` | logged in | Read-alert watermark (`readUpToId`) |
 | `action=convert_to_agent_check` | admin | Turns an agent-watched process into a monitor of its own |
@@ -467,7 +467,52 @@ answers 409.
 **A note on long-range data:** raw logs are purged after 30 days. A yearly SLA is
 therefore computed from the `uptime_daily` rollup, not from logs. Responses
 always state which period a value really covers - they never pass a thirty-day
-window off as a year.
+window off as a year: `uptime_windows` and `sla_report` say where the window
+starts (`windowStart`) and where its data starts (`since`).
+
+### One overall verdict
+
+`public_status` (`status`), the fleet `badge`, the headline of the legacy
+`/status/` page and, through the API, the public page and the marketing site
+print one verdict over the same set of monitors (`bk_overall_verdict()`):
+
+| Verdict | When |
+|---|---|
+| `down` | any monitor is down |
+| `degraded` | any is `warning`, or in a state nobody knows although it was checked before |
+| `unknown` | no monitor, only monitors never checked yet, or collection has not run within `collection_max_age_secs` (default 15 minutes) - the stored states are then nobody's current measurement |
+| `maintenance` | any is in maintenance |
+| `healthy` | everything else: all up, freshly checked |
+
+It used to be "healthy unless something is down", so a degraded monitor, an
+unknown one and a stopped collector all read as all-clear. A monitor that has
+not had its first check yet ("waiting for first data") is counted in
+`unmeasuredMonitors` but does not degrade the verdict.
+
+### Availability is measured in time
+
+Availability used to be "up rows / all rows". A silent agent gets one `down`
+row from cron and then nothing, so a three-day blackout was one row among
+thousands and still read ~99.99 %. Every availability number (`uptime_windows`,
+`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, the badge,
+the widget, the monthly `report.php` and the e-mail digest) is now computed in
+time:
+
+- each check row stands for the time until the next row, at most 2.5 check
+  intervals (the interval is read off the monitor's own rows, 60-1800 s);
+- time no row covers is an **outage** for an agent (`vps`, `openwrt`) that has
+  reported before - silence is the outage - and **unmeasured** for an active
+  check, where it means cron did not run;
+- `maintenance` and unmeasured time (also the `unknown` rows of an
+  agent-side service whose agent went quiet) stay outside the fraction;
+  `warning` is not up;
+- a window without a single measured second is `null`, never 100.
+
+Finished days come from `uptime_daily`, which cron rolls up in time every ten
+minutes (`secs_up`, `secs_down`, `secs_warning`, `secs_silent`,
+`secs_maintenance`, `secs_unmeasured`); today is computed live. A day from
+before the time rollup (its logs already pruned) knows only its check counts
+and is read as a whole measured day split by them.
 
 ### Values for `period`
 
@@ -475,9 +520,13 @@ window off as a year.
 |---|---|---|
 | `15m`, `1h`, `6h`, `12h`, `24h` | 15 minutes to a day | `vps_metrics` / `monitor_logs` |
 | `7d`, `30d` | week, month | the same |
-| `90d`, `180d`, `1y` | quarter to year | `metrics_daily` (daily average) |
+| `90d`, `180d`, `1y` | quarter to year | `metrics_daily` (daily average); `response_time` from `uptime_daily.avg_response_ms` |
 
-An unknown value falls back to a day. For long periods the response carries
+An unknown value falls back to a day. `response_time` at `90d` / `1y` used to
+fall back to that day too, so "1 year" drew the last 24 hours; it now reads
+the day's average answer from `uptime_daily`, whose `dailyRange` carries no
+minimum or maximum (`null` - the rollup does not keep them). A history shorter
+than the window simply starts later: the first point is the first day with data. For long periods the response carries
 `resolution: "daily"` - a point is a daily average, not an individual
 measurement, and the client has to admit that, or the user would read a
 precision out of the chart that the data does not have.
@@ -657,7 +706,7 @@ plan:
 | `action=create_incident` | logged in | Manual creation. Optional `monitorId` ties the incident to a monitor: 404 unknown, 409 archived, 409 when that monitor already has an open incident |
 | `action=incident_action` | logged in | `op`: acknowledge / resolve / postmortem. `resolve` answers `monitorStillDown: true` when the monitor is down even after the incident is closed |
 | `action=events&monitor_id=&limit=` | public status / assigned | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures |
-| `action=sla_report&days=` | assigned monitor | SLA overview |
+| `action=sla_report&days=` | assigned monitor | SLA overview in time: `uptimePct` (`null` without a measured second), `outageMinutes` = real minutes of outage including an agent's silence, `silentMinutes` = the part of it an agent was silent, `unmeasuredMinutes` = time nobody measured (outside the percentage). `upChecks` / `downChecks` stay row counts; past 30 days (`days` 90 / 365) they come from `uptime_daily` plus today's logs, not from the month of logs that is left. The answer carries `days`, `windowStart` (the window's first day), `since` (the first day with data, also per row) and `percentileDays` (latency percentiles read raw logs, at most 30 days) |
 | `action=audit_logs&limit=` | admin | Latest checks across monitors |
 
 > **Careful:** `audit_logs` and `sla_report` are currently unauthenticated and

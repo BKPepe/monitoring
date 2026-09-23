@@ -92,6 +92,11 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_format_duration_secs',
     'bk_reports_24h_expected',
     'bk_wireguard_peer_count',
+    'bk_uptime_interval',
+    'bk_uptime_segments',
+    'bk_uptime_summary',
+    'bk_uptime_totals',
+    'bk_uptime_by_day',
 ]);
 
 
@@ -3227,6 +3232,126 @@ if (function_exists('bk_router_rec_evaluate') && is_readable(__DIR__ . '/fixture
                 array_values($ac_res11['not_evaluated'])))],
         [[], ['wifi_6ghz_unserved', 'wifi_weak_client']]);
 }
+
+// --- Dostupnost v čase, ne v řádcích (W1-B1) ----------------------------------
+// Dostupnost bývala „řádky up / všechny řádky". Mlčící agent zapíše jediný
+// řádek 'down' a pak nic, takže třídenní výpadek byl jeden řádek z tisíců
+// a měsíc pořád ukazoval ~99,99 %. Teď každý řádek platí do dalšího (nejvýš
+// 2,5 intervalu) a nepokrytý čas je u agenta výpadek, u aktivní kontroly
+// neměřeno.
+{
+    $ut_now = 1_790_000_000;
+    $ut_from = $ut_now - 30 * 86400;
+    $ut_rows = [];
+    for ($t = $ut_from; $t <= $ut_now - 3 * 86400; $t += 300) {
+        $ut_rows[] = [$t, 'up'];
+    }
+    $ut_iv = bk_uptime_interval(array_column($ut_rows, 0));
+    check('interval se čte z vlastních řádků (medián mezer)', $ut_iv, 300);
+
+    $ut_agent = bk_uptime_summary(bk_uptime_segments($ut_rows, $ut_from, $ut_now, $ut_iv, true), $ut_from, $ut_now);
+    check_true('27 dní hlášení a 3 dny ticha u agenta: pod 91 %', $ut_agent['pct'] !== null && $ut_agent['pct'] < 91 && $ut_agent['pct'] > 89);
+    check_true('ticho agenta je výpadek, ne neměřeno', $ut_agent['silent'] > 3 * 86400 - 1000 && $ut_agent['unmeasured'] === 0);
+    check('výpadek v sekundách = ticho + řádky down', $ut_agent['outage'], $ut_agent['silent'] + $ut_agent['down']);
+
+    // cron.php zapíše po padesáti minutách ticha jeden řádek 'down' - v řádcích
+    // to byla 1 z 7 777 kontrol (99,99 %), v čase to na výsledku nic nemění.
+    $ut_rows_cron = $ut_rows;
+    $ut_rows_cron[] = [$ut_now - 3 * 86400 + 3000, 'down'];
+    $ut_rows_count = count(array_filter($ut_rows_cron, fn ($r) => $r[1] === 'up')) / count($ut_rows_cron) * 100;
+    check_true('starý výpočet po řádcích by ukázal přes 99,9 %', $ut_rows_count > 99.9);
+    $ut_cron = bk_uptime_summary(bk_uptime_segments($ut_rows_cron, $ut_from, $ut_now, $ut_iv, true), $ut_from, $ut_now);
+    check_true('s řádkem down z cronu pořád pod 91 %', $ut_cron['pct'] < 91);
+
+    $ut_active = bk_uptime_summary(bk_uptime_segments($ut_rows, $ut_from, $ut_now, $ut_iv, false), $ut_from, $ut_now);
+    check('aktivní kontrola: když cron neběží, nic se neměřilo - 100 % z naměřeného', $ut_active['pct'], 100.0);
+    check_true('a ty tři dny jsou neměřené, ne výpadek', $ut_active['unmeasured'] > 3 * 86400 - 1000 && $ut_active['outage'] === 0);
+
+    check('bez řádků není dostupnost 100, ale null', bk_uptime_summary(bk_uptime_segments([], $ut_from, $ut_now, 300, true), $ut_from, $ut_now)['pct'], null);
+    check('agent, o kterém nevíme, že kdy hlásil: ticho je neměřeno', bk_uptime_summary(bk_uptime_segments([], $ut_from, $ut_now, 300, true), $ut_from, $ut_now)['silent'], 0);
+    check('agent, který hlásil před oknem a celé okno mlčí: 0 %', bk_uptime_summary(bk_uptime_segments([], $ut_from, $ut_now, 300, true, true), $ut_from, $ut_now)['pct'], 0.0);
+    // Poslední řádek před oknem (stav, ve kterém okno začíná) se počítá jen do okna.
+    $ut_carry = bk_uptime_summary(bk_uptime_segments([[$ut_from - 100, 'down'], [$ut_from + 200, 'up']], $ut_from, $ut_from + 260, 60, false), $ut_from, $ut_from + 260);
+    check('řádek před oknem kryje jen začátek okna', [$ut_carry['down'], $ut_carry['up']], [50, 60]);
+
+    // Výpadek v minutách jsou skutečné minuty, ne počet řádků.
+    $ut_min = [];
+    for ($i = 0; $i < 60; $i++) {
+        $ut_min[] = [$ut_now - 3600 + $i * 60, ($i >= 20 && $i < 30) ? 'down' : 'up'];
+    }
+    $ut_min_sum = bk_uptime_summary(bk_uptime_segments($ut_min, $ut_now - 3600, $ut_now, 60, false), $ut_now - 3600, $ut_now);
+    check('deset minutových řádků down je 600 s výpadku', $ut_min_sum['outage'], 600);
+    check('a dostupnost 50 z 60 minut', $ut_min_sum['pct'], 83.333);
+
+    // agent_service, jehož agent zmlkl: cron zapíše 'unknown'. Ten čas je
+    // neměřený, ale monitor ze SLA nevypadne - naměřený den v něm zůstane.
+    $ut_svc = [];
+    for ($t = $ut_now - 2 * 86400; $t < $ut_now - 86400; $t += 60) {
+        $ut_svc[] = [$t, 'up'];
+    }
+    $ut_svc[] = [$ut_now - 86400, 'unknown'];
+    $ut_svc_sum = bk_uptime_summary(bk_uptime_segments($ut_svc, $ut_now - 2 * 86400, $ut_now, 60, false), $ut_now - 2 * 86400, $ut_now);
+    check('služba s neznámým stavem zůstane v SLA s naměřeným časem', $ut_svc_sum['pct'], 100.0);
+    check_true('a neznámý den je neměřený', $ut_svc_sum['unmeasured'] >= 86400 - 150);
+
+    // Údržba stojí mimo zlomek: nesnižuje ani nezvyšuje.
+    $ut_maint = bk_uptime_summary(bk_uptime_segments([[$ut_now - 600, 'up'], [$ut_now - 300, 'maintenance']], $ut_now - 600, $ut_now, 300, false), $ut_now - 600, $ut_now);
+    check('údržba se do dostupnosti nepočítá', [$ut_maint['pct'], $ut_maint['maintenance']], [100.0, 300]);
+    check('warning není „up" (stejně jako dřív)', bk_uptime_summary([[0, 60, 'up'], [60, 120, 'warning']], 0, 120)['pct'], 50.0);
+
+    check('jedna dlouhá mezera medián nepohne', bk_uptime_interval([0, 60, 120, 180, 180 + 3 * 86400, 180 + 3 * 86400 + 60]), 60);
+    check('málo řádků: výchozích 300 s', bk_uptime_interval([0, 60]), 300);
+    check('sondy z více míst nezkrátí interval pod minutu', bk_uptime_interval([0, 5, 10, 15, 20]), 60);
+
+    // Úsek přes půlnoc se rozdělí na dva dny a součet sedí.
+    $ut_mid = strtotime('2026-09-10 00:00:00');
+    $ut_days = bk_uptime_by_day([[$ut_mid - 600, $ut_mid + 1200, 'silent']], $ut_mid - 3600, $ut_mid + 3600);
+    check('úsek přes půlnoc: 600 s do prvního dne, 1 200 s do druhého', [$ut_days['2026-09-09']['silent'] ?? null, $ut_days['2026-09-10']['silent'] ?? null], [600, 1200]);
+}
+
+// --- Chybějící data nikdy nedají 100 % (W1-B3) ----------------------------------
+// Tři ze čtyř částí skóre zdraví dávaly za nic plný počet: web nemá cpu/ram/hdd
+// (prahy 100), monitor bez časového razítka byl „čerstvý" (100) a latence bez
+// měření měla v infra skóre 100. Neměřená část teď vypadne a váhy se přepočtou;
+// když se nenaměřilo nic, je výsledek null („nedostatek dat").
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_latency_score', 'bk_infra_score', 'bk_compute_asset_health_score',
+    'bk_monitor_thresholds', 'bk_effective_threshold',
+]);
+if (!defined('BK_DEFAULT_THRESHOLDS')
+    && preg_match('/\nconst BK_DEFAULT_THRESHOLDS = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $hs_const)) {
+    eval(trim($hs_const[0]));
+}
+{
+    check('latence bez měření: null, ne 100', bk_latency_score(null), null);
+    check('rychlá latence dál 100', bk_latency_score(80), 100.0);
+    check('infra skóre bez dostupnosti i latence: nedostatek dat', bk_infra_score(null, null, 0, 0, 0), null);
+    // 90 % dostupnosti bez latence: (90·0,55 + 100·0,15 + 100·0,10) / 0,80 = 93
+    check('infra skóre bez latence se přepočte, nepřičte 100 za latenci', bk_infra_score(90.0, null, 0, 0, 0), 93);
+    check('infra skóre se vším naměřeným beze změny', bk_infra_score(100.0, 100, 0, 0, 0), 100);
+
+    $hs_base = ['id' => 9, 'type' => 'web', 'status' => 'unknown', 'last_checked' => null,
+        'cpu_threshold' => null, 'ram_threshold' => null, 'hdd_threshold' => null, 'preset_id' => null];
+    check('monitor, který nic nenaměřil: nedostatek dat, ne skóre', bk_compute_asset_health_score(null, $hs_base, [], null), null);
+    check('stav „up" bez jediného časového razítka se nepočítá',
+        bk_compute_asset_health_score(null, ['status' => 'up'] + $hs_base, [], null), null);
+    // Web bez latence i heartbeatu, poslední kontrola před dvěma hodinami:
+    // připojení 100, čerstvost 30 → 65. Dřív prahy i čerstvost daly 100.
+    $hs_stale = bk_compute_asset_health_score(null, ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s', time() - 7200)] + $hs_base, [], null);
+    check('web bez latence a heartbeatu nedostane 100', $hs_stale, 65);
+
+    // Výchozí prahy jsou jedny (BK_DEFAULT_THRESHOLDS): RAM 95, disk 90.
+    check('výchozí prahy: cpu 90, ram 95, disk 90', BK_DEFAULT_THRESHOLDS, ['cpu' => 90, 'ram' => 95, 'hdd' => 90]);
+    $hs_vps = ['type' => 'vps', 'status' => 'up'] + $hs_base;
+    $hs_fresh = ['agent_last_seen' => time() - 60];
+    check('RAM 93 % je pod výchozím prahem 95 (dřív přehozeno na 90)',
+        bk_compute_asset_health_score(null, $hs_vps, $hs_fresh + ['ram' => 93], null), 100);
+    check('disk 93 % je nad výchozím prahem 90 (dřív přehozeno na 95)',
+        bk_compute_asset_health_score(null, $hs_vps, $hs_fresh + ['hdd' => 93], null), 86);
+    check('práh monitoru přebije výchozí',
+        bk_compute_asset_health_score(null, ['hdd_threshold' => 95] + $hs_vps, $hs_fresh + ['hdd' => 93], null), 100);
+}
+
 
 $failed = bk_test_report('čisté funkce');
 // Under the coverage runner the process does not exit - the report would never generate.

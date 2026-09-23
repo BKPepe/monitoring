@@ -870,6 +870,33 @@ if ($backfill_done !== '1') {
 }
 echo "Denní souhrny dostupnosti: {$rolled} zápisů (okno {$rollup_days} dní).\n";
 
+// The same days in time (W1-B1): what the percentage is computed from, now
+// that a silent agent's blackout counts. Every ten minutes, not every run -
+// it reads each log row of the window in PHP. The first run after the deploy
+// refills every day whose logs are still complete (29 days) with the new
+// definition. The 30th day back is already half pruned: recomputed, it would
+// trade its full-day check counts for a fragment, so it keeps the counts.
+try {
+    $time_backfilled = get_setting('uptime_daily_time_backfilled', '') === '1';
+    $last_time_rollup = get_setting('last_uptime_time_rollup', '');
+    if (!$time_backfilled || $last_time_rollup === '' || strtotime($last_time_rollup) < time() - 600) {
+        $time_days = $time_backfilled ? 5 : 29;
+        $time_rows = bk_rollup_daily_uptime_time($pdo, $time_days);
+        if ($time_rows >= 0) {
+            $stmt_tr = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+            $stmt_tr->execute(['last_uptime_time_rollup', date('Y-m-d H:i:s')]);
+            if (!$time_backfilled) {
+                $stmt_tr->execute(['uptime_daily_time_backfilled', '1']);
+            }
+            echo "Denní dostupnost v čase: {$time_rows} zápisů (okno {$time_days} dní).\n";
+        } else {
+            echo "Denní dostupnost v čase se nepřepočítala (viz error_log).\n";
+        }
+    }
+} catch (Throwable $e) {
+    error_log('[cron] Denní dostupnost v čase selhala: ' . $e->getMessage());
+}
+
 // Prune old logs (older than 30 days) to save DB space
 try {
     $pdo->exec("DELETE FROM monitor_logs WHERE checked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");

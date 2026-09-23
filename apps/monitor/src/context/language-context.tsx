@@ -15,7 +15,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'nav.websites': { cs: 'Weby & HTTP', en: 'Websites & HTTP' },
   'nav.status-pages': { cs: 'Status Stránky', en: 'Status Pages' },
   'nav.incidents': { cs: 'Incidenty', en: 'Incidents' },
-  'nav.insights': { cs: 'Zjištění AI', en: 'System Insights' },
+  'nav.insights': { cs: 'Zjištění', en: 'Findings' },
   'nav.reports': { cs: 'SLA Výkazy', en: 'Reports & SLA' },
   'nav.users': { cs: 'Uživatelé', en: 'Users' },
   'nav.api-agents': { cs: 'API & Agenti', en: 'API & Agents' },
@@ -31,7 +31,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'common.online': { cs: 'Online', en: 'Online' },
   'common.offline': { cs: 'Offline', en: 'Offline' },
   'common.warning': { cs: 'Varování', en: 'Warning' },
-  'common.healthy': { cs: 'V pořádku', en: 'Healthy' },
   'common.unknown': { cs: 'Neznámý', en: 'Unknown' },
   'common.actions': { cs: 'Akce', en: 'Actions' },
   'common.name': { cs: 'Název', en: 'Name' },
@@ -577,6 +576,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Jde o počítadlo - graf ukazuje přírůstek mezi měřeními, ne celkovou hodnotu. Po restartu zařízení se bod přeskočí, aby nevznikla špička, která se nestala.',
     en: 'This is a counter - the chart shows the increment between measurements, not the total. After a device restart the point is skipped so no spike appears that never happened.',
   },
+  'metric.daily_since': {
+    cs: '{period}: data od {date}. Starší dny nejsou změřené, graf začíná až tam.',
+    en: '{period}: data from {date}. Older days were not measured, the chart starts there.',
+  },
   'metric.daily_note': {
     cs: 'Pro období delší než 30 dní je jeden bod denní průměr - syrová měření se po 30 dnech mažou.',
     en: 'For periods longer than 30 days each point is a daily average - raw measurements are purged after 30 days.',
@@ -726,6 +729,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.win_24h': { cs: '24 h', en: '24 h' },
   'public.win_7d': { cs: '7 dní', en: '7 days' },
   'public.win_30d': { cs: '30 dní', en: '30 days' },
+  'public.win_since': {
+    cs: 'Data od {date}, delší okna pokrývají jen tuto dobu.',
+    en: 'Data from {date}; the longer windows cover only this time.',
+  },
   'public.win_90d': { cs: '90 dní', en: '90 days' },
   'public.latency_30d': { cs: 'Odezva 30 dní', en: 'Latency 30 days' },
   'public.latency_hint': {
@@ -1598,80 +1605,97 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.default_detail': { cs: 'Ručně nahlášený incident.', en: 'Manually reported incident.' },
   'incidents.scope_prefix': { cs: 'Rozsah', en: 'Scope' },
 
-  // Insights
-  'insights.loading': {
-    cs: 'Analytický engine vyhodnocuje metriky infrastruktury...',
-    en: 'Analytics engine is evaluating infrastructure metrics...',
-  },
-  'insights.title': { cs: 'AI & Inteligentní Analýza (Insights)', en: 'AI & Intelligent Analytics (Insights)' },
+  // Insights (W1-B6: only what the server measured or computed)
+  'insights.loading': { cs: 'Načítám zjištění…', en: 'Loading findings…' },
+  'insights.title': { cs: 'Zjištění', en: 'Findings' },
   'insights.subtitle': {
-    cs: 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.',
-    en: 'Disk usage prediction, anomaly detection, and HTTP service analytics.',
+    cs: 'Co vyplývá z naměřených dat: weby mimo provoz, končící certifikáty, trendy a odchylky a doporučení pro routery.',
+    en: 'What the measured data says: websites that are down, expiring certificates, trends and deviations, and router recommendations.',
   },
-  'insights.disk_pred': { cs: 'Predikce Disku (Servery & VPS)', en: 'Disk Usage Prediction (Servers & VPS)' },
-  'insights.disk_pred_desc': { cs: 'Lineární regrese (7 dnů)', en: 'Linear Regression (7 Days)' },
-  'insights.recommendations': {
-    cs: 'Automatické analýzy a doporučení pro servery a infrastrukturu',
-    en: 'Automated Analysis & Recommendations for Infrastructure',
+  'insights.load_failed': {
+    cs: 'Přehled se nepodařilo načíst. Stav serverů a webů teď není známý.',
+    en: 'Could not load the overview. The state of servers and websites is unknown right now.',
   },
-  'insights.disk_over_75': {
-    cs: 'Využití hlavního diskového oddílu na serveru {name} přesáhlo hranici 75 %. Doporučujeme zkontrolovat zaplnění logů.',
-    en: 'The main disk partition usage on server {name} has exceeded the 75% threshold. We recommend checking log file sizes.',
+  'insights.web_title': { cs: 'Weby a certifikáty', en: 'Websites and certificates' },
+  'insights.web_subtitle': {
+    cs: 'Weby mimo provoz a certifikáty, které vyprší do {days} (hranice upozornění v Nastavení).',
+    en: 'Websites that are down and certificates that expire within {days} (the alert limit in Settings).',
   },
-  'insights.disk_healthy': { cs: 'Diskový prostor v pořádku', en: 'Disk space healthy' },
-  'insights.disk_healthy_detail': {
-    cs: 'Všechny serverové agenty mají dostatek volného diskového prostoru (nejvyšší využití disku je {hdd} % u {name}).',
-    en: 'All server agents have sufficient free disk space (the highest disk usage is {hdd}% on {name}).',
+  'insights.web_subtitle_no_limit': {
+    cs: 'Hranici pro upozornění na certifikát se nepodařilo zjistit, uvedeny jsou jen certifikáty vypršelé nebo končící dnes.',
+    en: 'The certificate alert limit could not be read, so only certificates that expired or expire today are listed.',
   },
-  'insights.disk_healthy_no_agents': {
-    cs: 'Všechny sledované uzly mají diskový prostor v normě.',
-    en: 'All monitored nodes have normal disk space levels.',
+  'insights.web_none': { cs: 'Žádný web se zatím nesleduje.', en: 'No website is monitored yet.' },
+  'insights.web_no_findings': {
+    cs: 'Žádný sledovaný web není mimo provoz a žádný přečtený certifikát nevyprší do {days}.',
+    en: 'No monitored website is down, and no certificate read so far expires within {days}.',
   },
-  'insights.view_disk_detail': { cs: 'Detail disku', en: 'View Disk Detail' },
-  'insights.cpu_card_title': { cs: 'Výkon Procesoru & RAM', en: 'CPU & RAM Performance' },
-  'insights.cpu_card_subtitle': { cs: 'Stresové metriky agentů', en: 'Agent Stress Metrics' },
-  'insights.cpu_stable': {
-    cs: 'Spotřeba paměti a zátež procesoru u serveru {name} vykazuje stabilní hodnoty.',
-    en: 'Memory consumption and CPU load on server {name} show stable values.',
+  'insights.web_no_findings_no_limit': {
+    cs: 'Žádný sledovaný web není mimo provoz a žádný přečtený certifikát nevypršel.',
+    en: 'No monitored website is down, and no certificate read so far has expired.',
   },
-  'insights.cpu_all_optimal': {
-    cs: 'Zatížení CPU/RAM u všech serverů je v optimálním rozmezí.',
-    en: 'CPU/RAM load on all servers is within the optimal range.',
+  'insights.web_down': { cs: 'Web je mimo provoz.', en: 'The website is down.' },
+  'insights.web_down_for': { cs: 'Web je mimo provoz {time}.', en: 'The website has been down for {time}.' },
+  'insights.ssl_expired': {
+    cs: 'Certifikát vypršel. Prohlížeče web hlásí jako nebezpečný.',
+    en: 'The certificate has expired. Browsers flag the website as unsafe.',
   },
-  'insights.view_cpu_detail': { cs: 'Detail vytížení', en: 'View Load Detail' },
-  'insights.web_card_title': { cs: 'Sledované Webové Služby', en: 'Monitored Web Services' },
-  'insights.web_card_subtitle': { cs: 'SSL & Odezva HTTP', en: 'SSL & HTTP Latency' },
-  'insights.ssl_valid_badge': { cs: 'SSL Platný', en: 'SSL Valid' },
-  'insights.monitored_prefix': {
-    cs: 'Sledováno {count} webových domén/API',
-    en: 'Monitoring {count} web domains/APIs',
+  'insights.ssl_expired_on': {
+    cs: 'Certifikát vypršel {date}. Prohlížeče web hlásí jako nebezpečný.',
+    en: 'The certificate expired on {date}. Browsers flag the website as unsafe.',
   },
-  'insights.web_all_ok': {
-    cs: 'Všechny webové stránky a HTTP endpointy odpovídají v pořádku.',
-    en: 'All websites and HTTP endpoints are responding normally.',
+  'insights.ssl_expiring_today': { cs: 'Certifikát vyprší dnes.', en: 'The certificate expires today.' },
+  'insights.ssl_expiring_today_on': {
+    cs: 'Certifikát vyprší dnes ({date}).',
+    en: 'The certificate expires today ({date}).',
   },
-  'insights.go_to_websites': { cs: 'Přejít na Sledované weby', en: 'Go to Monitored Websites' },
-  'insights.no_agents': {
-    cs: 'Zatím nebyly připojeni žádní systémoví agenti. Pro diskovou analytiku nainstalujte agenta ze sekce API & Agenti.',
-    en: 'No system agents are connected yet. Install an agent from the API & Agents section for disk analytics.',
+  'insights.ssl_expiring': { cs: 'Certifikát vyprší za {days}.', en: 'The certificate expires in {days}.' },
+  'insights.ssl_expiring_on': {
+    cs: 'Certifikát vyprší za {days} ({date}).',
+    en: 'The certificate expires in {days} ({date}).',
   },
-  'insights.rec_high_disk': {
-    cs: 'Doporučujeme promazat staré logy v /var/log nebo rozšířit diskový oddíl (aktuálně zaplněno {hdd} %).',
-    en: 'We recommend clearing old logs in /var/log or expanding the disk partition (currently {hdd}% full).',
+  'insights.ssl_unread_one': {
+    cs: 'U {count} webu s HTTPS kontrola certifikát zatím nepřečetla, proto tu chybí.',
+    en: 'The checks have not read the certificate of {count} HTTPS website yet, so it is missing here.',
   },
-  'insights.rec_high_cpu': {
-    cs: 'Zaznamenáno vyšší vytížení procesoru ({cpu} %). Zkontrolujte spuštěné procesy.',
-    en: 'Higher CPU load detected ({cpu}%). Check running processes.',
+  'insights.ssl_unread_other': {
+    cs: 'U {count} webů s HTTPS kontrola certifikát zatím nepřečetla, proto tu chybí.',
+    en: 'The checks have not read the certificate of {count} HTTPS websites yet, so they are missing here.',
   },
-  'insights.rec_optimal': {
-    cs: 'Provoz zařízení je v optimálním stavu.{extra}',
-    en: 'Device operation is optimal.{extra}',
+  'insights.days_one': { cs: '{n} den', en: '{n} day' },
+  'insights.days_few': { cs: '{n} dny', en: '{n} days' },
+  'insights.days_other': { cs: '{n} dní', en: '{n} days' },
+  'insights.badge_down': { cs: 'Mimo provoz', en: 'Down' },
+  'insights.badge_ssl_expired': { cs: 'Certifikát vypršel', en: 'Certificate expired' },
+  'insights.badge_ssl_expiring': { cs: 'Certifikát končí', en: 'Certificate expiring' },
+  'insights.server_title': { cs: 'Trendy a odchylky', en: 'Trends and deviations' },
+  'insights.server_subtitle': {
+    cs: 'Co server spočítal z historie každého monitoru: kdy se zaplní disk nebo paměť, kdy se odezva vychýlila a co hlásí síť.',
+    en: "What the server computed from each monitor's history: when a disk or memory fills up, when latency deviated, and what the network reports.",
   },
-  'insights.part_latency': { cs: 'Odezva', en: 'Latency' },
-  'insights.open_link': { cs: 'Otevřít', en: 'Open' },
+  'insights.server_failed': {
+    cs: 'Zjištění serveru se nepodařilo načíst.',
+    en: "Could not load the server's findings.",
+  },
+  'insights.server_empty': {
+    cs: 'V naměřených datech server nic nenašel.',
+    en: 'The server found nothing in the measured data.',
+  },
+  'insights.kind_network': { cs: 'Síť', en: 'Network' },
+  'insights.kind_anomaly': { cs: 'Odchylka', en: 'Deviation' },
+  'insights.kind_forecast': { cs: 'Předpověď', en: 'Forecast' },
+  'insights.kind_trend': { cs: 'Trend', en: 'Trend' },
+  'insights.more': { cs: 'Načíst další (zobrazeno {shown} z {total})', en: 'Load more ({shown} of {total} shown)' },
+  'insights.more_loading': { cs: 'Načítám…', en: 'Loading…' },
+  'insights.more_failed': { cs: 'Další zjištění se nepodařilo načíst.', en: 'Could not load more findings.' },
+  'insights.router_section': { cs: 'Doporučení pro {name}', en: 'Recommendations for {name}' },
 
   // Reports & SLA
   'reports.loading': { cs: 'Načítám SLA metriky z databáze…', en: 'Loading SLA metrics from database…' },
+  'reports.coverage': {
+    cs: '{period} (data od {date}): starší dny v databázi nejsou, čísla níže pokrývají jen změřenou dobu.',
+    en: '{period} (data from {date}): older days are not in the database, the numbers below cover only the measured time.',
+  },
   'reports.title': { cs: 'SLA Výkazy & Statistika Dle Serverů', en: 'SLA Reports & Per-Server Statistics' },
   'reports.subtitle': {
     cs: 'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.',
@@ -2372,9 +2396,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'avail.d7': { cs: '7 dní', en: '7 days' },
   'avail.d30': { cs: '30 dní', en: '30 days' },
   'avail.d90': { cs: '90 dní', en: '90 days' },
+  'avail.since': { cs: '(data od {date})', en: '(data from {date})' },
   'avail.note': {
-    cs: 'Podíl kontrol, které dopadly dobře, v každém okně. Prázdné okno znamená, že se v něm neměřilo - ne stoprocentní dostupnost.',
-    en: 'The share of checks that passed in each window. An empty window means nothing was measured in it, not full availability.',
+    cs: 'Podíl času, kdy služba běžela, v každém okně. Čas, kdy se neměřilo, se do podílu nepočítá, mlčící agent se počítá jako výpadek. Prázdné okno znamená, že se v něm neměřilo - ne stoprocentní dostupnost.',
+    en: 'The share of time the service was up in each window. Time nobody measured is left out of the share; a silent agent counts as an outage. An empty window means nothing was measured in it, not full availability.',
   },
   'collector.never': {
     cs: 'Cron se nikdy nepřihlásil, takže žádná hodnota na téhle stránce není čerstvá.',

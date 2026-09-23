@@ -151,6 +151,8 @@ export function PublicStatusPage() {
     customNavLinks: { name: string; url: string }[];
   } | null>(null);
   const [windowsById, setWindowsById] = React.useState<Record<number, UptimeWindows>>({});
+  /** First day of the 90-day window, for the "data od" line of a younger monitor (W1-B2). */
+  const [windowStart90, setWindowStart90] = React.useState<string | null>(null);
   const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
 
   // Auto-refresh for everything the page shows, not just the headline stats:
@@ -210,6 +212,7 @@ export function PublicStatusPage() {
       .then((d) => {
         if (!active || d.windows == null || typeof d.windows !== 'object') return;
         setWindowsById(d.windows);
+        setWindowStart90(typeof d.windowStart?.d90 === 'string' ? d.windowStart.d90 : null);
       })
       .catch(() => {});
     // Branding from the admin settings - the same title and logo the legacy
@@ -578,6 +581,7 @@ export function PublicStatusPage() {
                   uptime={opts.showUptime ? (uptime[String(m.id)] ?? []) : []}
                   uptimePct={windowsById[m.id]?.d30 ?? null}
                   windows={windowsById[m.id] ?? null}
+                  windowStart90={windowStart90}
                   statusOnly={opts.detailLevel === 'status'}
                 />
               ))}

@@ -28,6 +28,7 @@ import {
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
 import { LoadingState, ErrorState } from '@/components/ui/states';
+import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
 
 const API_BASE = '/status/api.php';
 
@@ -70,7 +71,7 @@ function formatDuration(seconds: number): string {
 }
 
 export function ReportsPage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { isAdmin } = useSession();
   const [monitors, setMonitors] = useState<MonitorSLA[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,11 +89,20 @@ export function ReportsPage() {
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
   // Report period - month/quarter/year (user request for longer windows).
   const [days, setDays] = useState<30 | 90 | 365>(30);
+  /** The first day with data when it is later than the period's first day (W1-B2); null = the period is covered. */
+  const [coveredFrom, setCoveredFrom] = useState<string | null>(null);
+  const periodLabel =
+    days === 30
+      ? t('reports.period_30', '30 dní')
+      : days === 90
+        ? t('reports.period_90', 'Kvartál')
+        : t('reports.period_365', 'Rok');
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError(null);
+    setCoveredFrom(null);
 
     fetch(`${API_BASE}?action=sla_report&days=${days}`, { credentials: 'include' })
       .then((res) => res.json())
@@ -100,6 +110,7 @@ export function ReportsPage() {
         if (!active) return;
         if (data.monitors && data.monitors.length > 0) {
           setMonitors(data.monitors);
+          setCoveredFrom(coverageStart(data.since, data.windowStart));
           setSlaGoal(data.slaGoal ?? 99.95);
           setOverallUptime(data.overallUptime ?? null);
           setTotalOutage(data.totalOutageMinutes ?? 0);
@@ -281,6 +292,21 @@ export function ReportsPage() {
       />
 
       {error && <ErrorState tone="warning" message={error} />}
+
+      {/* A quarter or a year over a shorter history: the numbers below cover
+          only the days that were measured, and the period label must say so. */}
+      {!error && coveredFrom && (
+        <p className="text-muted-foreground text-xs" data-testid="reports-coverage">
+          {t(
+            'reports.coverage',
+            {
+              period: periodLabel,
+              date: formatCoverageDay(coveredFrom, lang),
+            },
+            `${periodLabel} (data od ${formatCoverageDay(coveredFrom, lang)}): starší dny v databázi nejsou, čísla níže pokrývají jen změřenou dobu.`
+          )}
+        </p>
+      )}
 
       {/* KPI cards */}
       <div className="grid gap-4 md:grid-cols-4">

@@ -361,6 +361,18 @@ check_true(
 );
 
 check_true(
+    'casovy souhrn dnu (W1-B1) bezi taky pred mazanim logu',
+    (function () {
+        $cron = file_get_contents(__DIR__ . '/../cron.php');
+        $time_pos = strpos($cron, 'bk_rollup_daily_uptime_time(');
+        $delete_pos = strpos($cron, 'DELETE FROM monitor_logs');
+        // Den, jehoz logy uz jsou smazane, se v case prepocitat neda - zustal
+        // by jen s pocty kontrol a mlceni agenta by v nem nebylo.
+        return $time_pos !== false && $delete_pos !== false && $time_pos < $delete_pos;
+    })()
+);
+
+check_true(
     'rollup ignoruje udrzbu a neznamy stav',
     str_contains($agg_src, "AND status IN ('up', 'down', 'warning')")
 );

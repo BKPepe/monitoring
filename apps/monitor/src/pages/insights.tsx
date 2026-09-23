@@ -1,336 +1,247 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
-import { Lightbulb, HardDrive, Cpu, ArrowRight, Server, Globe } from 'lucide-react';
-import { appApi } from '@/api/app-api';
+import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
+import { Globe, Router as RouterIcon } from 'lucide-react';
+import { appApi, type ApiMonitor } from '@/api/app-api';
+import { ServerInsights } from '@/components/server-insights';
+import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
 import { useLanguage } from '@/context/language-context';
+import { routerMonitors, websiteFindings, type WebsiteFinding } from '@/lib/insight-findings';
+import { pluralForm } from '@/lib/plural';
+import { formatUptime } from '@/lib/utils';
 
+/**
+ * Findings (W1-B6): everything on this page is measured or computed by the
+ * server. Websites that are down and certificates inside the alert window
+ * come from the monitor list, trends and anomalies from dashboard_insights,
+ * and each router's weekly recommendations from the engine the Monday e-mail
+ * uses. The page had three hand-written cards before, one of them a green
+ * certificate verdict that no check ever produced.
+ */
 export function InsightsPage() {
   const { t } = useLanguage();
-  const [monitors, setMonitors] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [monitors, setMonitors] = useState<ApiMonitor[] | null>(null);
+  // A failed load used to be swallowed: the page then drew its cards over an
+  // empty list, "all websites respond normally" included (W1-A common check).
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  /** undefined = still asking; null = the server did not say (or could not). */
+  const [alertDays, setAlertDays] = useState<number | null | undefined>(undefined);
+
+  const retry = useCallback(() => {
+    setFailed(false);
+    setMonitors(null);
+    setAttempt((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let active = true;
-
     appApi
       .getMonitors()
       .then((rows) => {
         if (!active) return;
-        const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
-        setMonitors(list);
+        if (!Array.isArray(rows)) throw new Error('bad shape');
+        setMonitors(rows);
       })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setLoading(false);
+      .catch(() => {
+        if (active) setFailed(true);
       });
-
+    appApi
+      .getWebsitesOverview()
+      .then((r) => {
+        if (active) setAlertDays(typeof r?.sslAlertDays === 'number' ? r.sslAlertDays : null);
+      })
+      .catch(() => {
+        if (active) setAlertDays(null);
+      });
     return () => {
       active = false;
     };
-  }, []);
-
-  const serverAgents = monitors.filter((m) => {
-    const type = (m.type || '').toLowerCase();
-    return (
-      type === 'agent' ||
-      type === 'vps' ||
-      type === 'openwrt' ||
-      type === 'router' ||
-      type === 'teamspeak' ||
-      type === 'minecraft' ||
-      Boolean(m.details?.agent_version) ||
-      Boolean(m.details?.cpanel_stats) ||
-      m.cpu != null ||
-      m.hdd != null
-    );
-  });
-
-  // Only machines that really report the metric enter the "highest" contest.
-  // null used to be cast to zero and silently competed with measured data.
-  const withDisk = serverAgents.filter((m) => typeof m.hdd === 'number');
-  const highDiskMonitor =
-    withDisk.length > 0
-      ? withDisk.reduce((prev, cur) => ((cur.hdd as number) > (prev.hdd as number) ? cur : prev))
-      : null;
-
-  const withCpu = serverAgents.filter((m) => typeof m.cpu === 'number');
-  const highCpuMonitor =
-    withCpu.length > 0
-      ? withCpu.reduce((prev, cur) => ((cur.cpu as number) > (prev.cpu as number) ? cur : prev))
-      : null;
-
-  const httpMonitors = monitors.filter((m) => {
-    const type = (m.type || '').toLowerCase();
-    return type === 'http' || type === 'https' || type === 'web' || (m.target || '').startsWith('http');
-  });
+  }, [attempt]);
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={t('insights.title', 'AI & Inteligentní Analýza (Insights)')}
-        subtitle={t('insights.subtitle', 'Predikce využití disků serverů, detekce anomálií a analytika HTTP služeb.')}
+        title={t('insights.title', 'Zjištění')}
+        subtitle={t(
+          'insights.subtitle',
+          'Co vyplývá z naměřených dat: weby mimo provoz, končící certifikáty, trendy a odchylky a doporučení pro routery.'
+        )}
       />
 
-      {loading ? (
+      {failed ? (
+        <ErrorState
+          message={t('insights.load_failed', 'Přehled se nepodařilo načíst. Stav serverů a webů teď není známý.')}
+          onRetry={retry}
+        />
+      ) : monitors === null || alertDays === undefined ? (
+        <LoadingState label={t('insights.loading', 'Načítám zjištění…')} />
+      ) : (
+        <WebsiteFindingsCard monitors={monitors} alertDays={alertDays} />
+      )}
+
+      <ServerInsights />
+
+      {monitors !== null && <RouterFindings monitors={monitors} />}
+    </div>
+  );
+}
+
+function WebsiteFindingsCard({ monitors, alertDays }: { monitors: ApiMonitor[]; alertDays: number | null }) {
+  const { t, lang } = useLanguage();
+  const { findings, websites, sslUnread } = websiteFindings(monitors, alertDays);
+  const dateLocale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+
+  const daysLabel = (n: number) => {
+    const form = pluralForm(lang, n);
+    if (form === 'one') return t('insights.days_one', { n }, `${n} den`);
+    if (form === 'few') return t('insights.days_few', { n }, `${n} dny`);
+    return t('insights.days_other', { n }, `${n} dní`);
+  };
+  const validToLabel = (validTo: string | null) => {
+    const ms = validTo ? Date.parse(validTo.replace(' ', 'T')) : NaN;
+    return Number.isFinite(ms) ? new Date(ms).toLocaleDateString(dateLocale) : null;
+  };
+
+  const sentence = (f: WebsiteFinding) => {
+    if (f.kind === 'down') {
+      return f.sinceSeconds != null
+        ? t(
+            'insights.web_down_for',
+            { time: formatUptime(f.sinceSeconds) },
+            `Web je mimo provoz ${formatUptime(f.sinceSeconds)}.`
+          )
+        : t('insights.web_down', 'Web je mimo provoz.');
+    }
+    const date = validToLabel(f.validTo);
+    if (f.kind === 'ssl_expired') {
+      return date
+        ? t('insights.ssl_expired_on', { date }, `Certifikát vypršel ${date}. Prohlížeče web hlásí jako nebezpečný.`)
+        : t('insights.ssl_expired', 'Certifikát vypršel. Prohlížeče web hlásí jako nebezpečný.');
+    }
+    if (f.days === 0) {
+      return date
+        ? t('insights.ssl_expiring_today_on', { date }, `Certifikát vyprší dnes (${date}).`)
+        : t('insights.ssl_expiring_today', 'Certifikát vyprší dnes.');
+    }
+    const days = daysLabel(f.days);
+    return date
+      ? t('insights.ssl_expiring_on', { days, date }, `Certifikát vyprší za ${days} (${date}).`)
+      : t('insights.ssl_expiring', { days }, `Certifikát vyprší za ${days}.`);
+  };
+
+  return (
+    <Card className="space-y-4 p-6">
+      <div className="border-border flex items-start gap-3 border-b pb-3">
+        <Globe aria-hidden="true" className="text-primary mt-0.5 size-5 shrink-0" />
+        <div>
+          <h2 className="text-base font-bold">{t('insights.web_title', 'Weby a certifikáty')}</h2>
+          <p className="text-muted-foreground text-xs">
+            {alertDays !== null
+              ? t(
+                  'insights.web_subtitle',
+                  { days: daysLabel(alertDays) },
+                  `Weby mimo provoz a certifikáty, které vyprší do ${daysLabel(alertDays)} (hranice upozornění v Nastavení).`
+                )
+              : t(
+                  'insights.web_subtitle_no_limit',
+                  'Hranici pro upozornění na certifikát se nepodařilo zjistit, uvedeny jsou jen certifikáty vypršelé nebo končící dnes.'
+                )}
+          </p>
+        </div>
+      </div>
+
+      {websites === 0 ? (
+        <EmptyState title={t('insights.web_none', 'Žádný web se zatím nesleduje.')} />
+      ) : findings.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          {t('insights.loading', 'Analytický engine vyhodnocuje metriky infrastruktury...')}
+          {/* Only certificates a check has read are vouched for; the unread ones are named below. */}
+          {alertDays !== null
+            ? t(
+                'insights.web_no_findings',
+                { days: daysLabel(alertDays) },
+                `Žádný sledovaný web není mimo provoz a žádný přečtený certifikát nevyprší do ${daysLabel(alertDays)}.`
+              )
+            : t(
+                'insights.web_no_findings_no_limit',
+                'Žádný sledovaný web není mimo provoz a žádný přečtený certifikát nevypršel.'
+              )}
         </p>
       ) : (
-        <>
-          <div className="grid gap-4 md:grid-cols-3">
-            {/* Card 1: Server Disk Growth */}
-            <Card className="p-5 flex flex-col justify-between space-y-4 border-warning/30">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-2.5 rounded-xl bg-warning/10 text-warning">
-                      <HardDrive className="size-6" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-sm">{t('insights.disk_pred', 'Predikce Disku (Servery & VPS)')}</h3>
-                      <p className="text-xs text-muted-foreground">
-                        {t('insights.disk_pred_desc', 'Lineární regrese (7 dnů)')}
-                      </p>
-                    </div>
-                  </div>
-                  <Badge variant={highDiskMonitor && highDiskMonitor.hdd >= 75 ? 'warning' : 'up'}>
-                    {highDiskMonitor && highDiskMonitor.hdd >= 75
-                      ? t('common.warning', 'Varování')
-                      : t('common.healthy', 'V pořádku')}
-                  </Badge>
-                </div>
-
-                {highDiskMonitor && highDiskMonitor.hdd >= 75 ? (
-                  <div className="space-y-2 text-xs">
-                    <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
-                      <p className="font-semibold text-foreground text-sm mb-0.5">{highDiskMonitor.name}</p>
-                      <p className="text-muted-foreground font-mono">
-                        {t('common.target', 'Cíl')}: {highDiskMonitor.target} · {t('common.hdd', 'Využití disku')}:{' '}
-                        <strong className="text-warning">{highDiskMonitor.hdd} %</strong>
-                      </p>
-                    </div>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {t(
-                        'insights.disk_over_75',
-                        { name: highDiskMonitor.name },
-                        `Využití hlavního diskového oddílu na serveru ${highDiskMonitor.name} přesáhlo hranici 75 %. Doporučujeme zkontrolovat zaplnění logů.`
-                      )}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="p-3 rounded-lg bg-secondary/30 text-xs text-muted-foreground space-y-1">
-                    <p className="font-semibold text-foreground text-sm">
-                      {t('insights.disk_healthy', 'Diskový prostor v pořádku')}
-                    </p>
-                    <p>
-                      {highDiskMonitor
-                        ? t(
-                            'insights.disk_healthy_detail',
-                            { hdd: highDiskMonitor.hdd, name: highDiskMonitor.name },
-                            `Všechny serverové agenty mají dostatek volného diskového prostoru (nejvyšší využití disku je ${highDiskMonitor.hdd} % u ${highDiskMonitor.name}).`
-                          )
-                        : t('insights.disk_healthy_no_agents', 'Všechny sledované uzly mají diskový prostor v normě.')}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {highDiskMonitor && (
-                <Link
-                  to={`/infrastructure/${highDiskMonitor.id}`}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline pt-2 border-t border-border"
-                >
-                  {t('insights.view_disk_detail', 'Detail disku')} {highDiskMonitor.name}{' '}
-                  <ArrowRight className="size-3.5" />
+        <ul className="divide-border divide-y" data-testid="website-findings">
+          {findings.map((f) => (
+            <li key={`${f.kind}-${f.monitorId}`} className="flex flex-wrap items-start gap-x-3 gap-y-1 py-3">
+              <Badge variant={f.kind === 'ssl_expiring' ? 'warning' : 'down'}>
+                {f.kind === 'down'
+                  ? t('insights.badge_down', 'Mimo provoz')
+                  : f.kind === 'ssl_expired'
+                    ? t('insights.badge_ssl_expired', 'Certifikát vypršel')
+                    : t('insights.badge_ssl_expiring', 'Certifikát končí')}
+              </Badge>
+              <p className="min-w-0 flex-1 text-sm">
+                <Link to={`/infrastructure/${f.monitorId}`} className="text-primary font-semibold hover:underline">
+                  {f.name}
                 </Link>
-              )}
-            </Card>
-
-            {/* Card 2: Server CPU / RAM */}
-            <Card className="p-5 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-2.5 rounded-xl bg-primary/10 text-primary">
-                      <Cpu className="size-6" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-sm font-sans">
-                        {t('insights.cpu_card_title', 'Výkon Procesoru & RAM')}
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        {t('insights.cpu_card_subtitle', 'Stresové metriky agentů')}
-                      </p>
-                    </div>
-                  </div>
-                  <Badge variant="up">{t('common.healthy', 'V pořádku')}</Badge>
-                </div>
-
-                {highCpuMonitor ? (
-                  <div className="space-y-2 text-xs">
-                    <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
-                      <p className="font-semibold text-foreground text-sm mb-0.5">{highCpuMonitor.name}</p>
-                      <p className="text-muted-foreground font-mono">
-                        CPU: <strong className="text-foreground">{highCpuMonitor.cpu} %</strong> · RAM:{' '}
-                        <strong className="text-foreground">{highCpuMonitor.ram} %</strong>
-                      </p>
-                    </div>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {t(
-                        'insights.cpu_stable',
-                        { name: highCpuMonitor.name },
-                        `Spotřeba paměti a zátež procesoru u serveru ${highCpuMonitor.name} vykazuje stabilní hodnoty.`
-                      )}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="p-3 rounded-lg bg-secondary/30 text-xs text-muted-foreground">
-                    {t('insights.cpu_all_optimal', 'Zatížení CPU/RAM u všech serverů je v optimálním rozmezí.')}
-                  </div>
-                )}
-              </div>
-
-              {highCpuMonitor && (
-                <Link
-                  to={`/infrastructure/${highCpuMonitor.id}`}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline pt-2 border-t border-border"
-                >
-                  {t('insights.view_cpu_detail', 'Detail vytížení')} {highCpuMonitor.name}{' '}
-                  <ArrowRight className="size-3.5" />
-                </Link>
-              )}
-            </Card>
-
-            {/* Card 3: HTTP & Web Endpoints */}
-            <Card className="p-5 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-2.5 rounded-xl bg-up/10 text-up">
-                      <Globe className="size-6" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-sm">{t('insights.web_card_title', 'Sledované Webové Služby')}</h3>
-                      <p className="text-xs text-muted-foreground">
-                        {t('insights.web_card_subtitle', 'SSL & Odezva HTTP')}
-                      </p>
-                    </div>
-                  </div>
-                  <Badge variant="up">{t('insights.ssl_valid_badge', 'SSL Platný')}</Badge>
-                </div>
-
-                <div className="space-y-2 text-xs">
-                  <div className="p-2.5 rounded-lg bg-secondary/50 border border-border">
-                    <p className="font-semibold text-up text-sm mb-0.5">TLS 1.3 & Web Uptime</p>
-                    <p className="text-muted-foreground font-mono">
-                      {t(
-                        'insights.monitored_prefix',
-                        { count: httpMonitors.length },
-                        `Sledováno ${httpMonitors.length} webových domén/API`
-                      )}
-                    </p>
-                  </div>
-                  <p className="text-muted-foreground leading-relaxed">
-                    {t('insights.web_all_ok', 'Všechny webové stránky a HTTP endpointy odpovídají v pořádku.')}
-                  </p>
-                </div>
-              </div>
-
-              <Link
-                to="/websites"
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline pt-2 border-t border-border"
-              >
-                {t('insights.go_to_websites', 'Přejít na Sledované weby')} ({httpMonitors.length}){' '}
-                <ArrowRight className="size-3.5" />
-              </Link>
-            </Card>
-          </div>
-
-          {/* Actionable recommendations for servers with an agent */}
-          <Card className="p-6 space-y-4">
-            <div className="flex items-center gap-2.5 border-b border-border pb-3">
-              <Lightbulb className="size-5 text-primary" />
-              <h3 className="font-bold text-base">
-                {t('insights.recommendations', 'Automatické analýzy a doporučení pro servery a infrastrukturu')}
-              </h3>
-            </div>
-
-            <div className="space-y-3">
-              {serverAgents.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  {t(
-                    'insights.no_agents',
-                    'Zatím nebyly připojeni žádní systémoví agenti. Pro diskovou analytiku nainstalujte agenta ze sekce API & Agenti.'
-                  )}
-                </p>
-              ) : (
-                serverAgents.map((m) => {
-                  // null = unmeasured, so it is reported neither as fine nor as a problem.
-                  const isHighDisk = typeof m.hdd === 'number' && m.hdd >= 70;
-                  const isHighCpu = typeof m.cpu === 'number' && m.cpu >= 60;
-
-                  return (
-                    <div
-                      key={m.id}
-                      className="p-4 rounded-lg bg-secondary/30 border border-border flex items-start justify-between gap-4 flex-wrap sm:flex-nowrap"
-                    >
-                      <div className="flex items-start gap-3">
-                        <Server className="size-5 text-primary shrink-0 mt-0.5" />
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-semibold text-sm">{m.name}</h4>
-                            <span className="text-xs text-muted-foreground font-mono">({m.target})</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                            {isHighDisk
-                              ? t(
-                                  'insights.rec_high_disk',
-                                  { hdd: m.hdd },
-                                  `Doporučujeme promazat staré logy v /var/log nebo rozšířit diskový oddíl (aktuálně zaplněno ${m.hdd} %).`
-                                )
-                              : isHighCpu
-                                ? t(
-                                    'insights.rec_high_cpu',
-                                    { cpu: m.cpu },
-                                    `Zaznamenáno vyšší vytížení procesoru (${m.cpu} %). Zkontrolujte spuštěné procesy.`
-                                  )
-                                : t(
-                                    'insights.rec_optimal',
-                                    {
-                                      extra: (() => {
-                                        // Only actually measured values - no "Latency 0 ms" for an unmeasured monitor.
-                                        const parts: string[] = [];
-                                        if (m.responseMs != null)
-                                          parts.push(`${t('insights.part_latency', 'Odezva')} ${m.responseMs} ms`);
-                                        if (m.cpu != null) parts.push(`CPU ${m.cpu} %`);
-                                        if (m.ram != null) parts.push(`RAM ${m.ram} %`);
-                                        if (m.hdd != null) parts.push(`HDD ${m.hdd} %`);
-                                        return parts.length > 0 ? ` ${parts.join(', ')}.` : '';
-                                      })(),
-                                    },
-                                    'Provoz zařízení je v optimálním stavu.{extra}'
-                                  )}
-                          </p>
-                        </div>
-                      </div>
-
-                      <Link
-                        to={`/infrastructure/${m.id}`}
-                        className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-semibold hover:bg-secondary/80 transition-colors"
-                      >
-                        {t('insights.open_link', 'Otevřít')} {m.name} <ArrowRight className="size-3" />
-                      </Link>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </Card>
-        </>
+                {': '}
+                {sentence(f)}
+              </p>
+            </li>
+          ))}
+        </ul>
       )}
+
+      {sslUnread > 0 && (
+        <p className="text-muted-foreground text-xs">
+          {pluralForm(lang, sslUnread) === 'one'
+            ? t(
+                'insights.ssl_unread_one',
+                { count: sslUnread },
+                `U ${sslUnread} webu s HTTPS kontrola certifikát zatím nepřečetla, proto tu chybí.`
+              )
+            : t(
+                'insights.ssl_unread_other',
+                { count: sslUnread },
+                `U ${sslUnread} webů s HTTPS kontrola certifikát zatím nepřečetla, proto tu chybí.`
+              )}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/** Each router's weekly recommendations, the same list and mute as on its own page. */
+function RouterFindings({ monitors }: { monitors: ApiMonitor[] }) {
+  const routers = routerMonitors(monitors);
+  if (routers.length === 0) return null;
+  return (
+    <div className="space-y-6">
+      {routers.map((r) => (
+        <RouterFindingsItem key={r.id} id={r.id} name={r.name} agentVersion={r.details?.agent_version ?? null} />
+      ))}
     </div>
+  );
+}
+
+function RouterFindingsItem({ id, name, agentVersion }: { id: number; name: string; agentVersion: string | null }) {
+  const { t } = useLanguage();
+  const source = useRouterRecommendations(id);
+  return (
+    <section className="space-y-2" aria-label={t('insights.router_section', { name }, `Doporučení pro ${name}`)}>
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <RouterIcon aria-hidden="true" className="text-muted-foreground size-4" />
+        <Link to={`/infrastructure/${id}`} className="text-primary hover:underline">
+          {name}
+        </Link>
+      </h2>
+      <RouterRecommendations
+        monitorId={id}
+        source={source}
+        agentVersion={agentVersion}
+        anchorId={`router-recommendations-${id}`}
+      />
+    </section>
   );
 }

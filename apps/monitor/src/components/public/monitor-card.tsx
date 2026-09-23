@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { UptimeStrip, type UptimeDay } from './uptime-strip';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
+import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
 
 export interface PublicMonitor {
   id: number;
@@ -61,6 +62,8 @@ export interface UptimeWindows {
   d7: number | null;
   d30: number | null;
   d90: number | null;
+  /** The first day with data in the 90-day window (server-local "Y-m-d", W1-B2). */
+  since?: string | null;
 }
 
 export function PublicMonitorCard({
@@ -68,6 +71,7 @@ export function PublicMonitorCard({
   uptime,
   uptimePct,
   windows,
+  windowStart90 = null,
   statusOnly = false,
 }: {
   monitor: PublicMonitor;
@@ -75,10 +79,12 @@ export function PublicMonitorCard({
   /** 30-day availability; null = unmeasured yet -> a dash. */
   uptimePct: number | null;
   windows?: UptimeWindows | null;
+  /** The first calendar day of the 90-day window, as the server counted it. */
+  windowStart90?: string | null;
   /** A page with detailLevel 'status': no expanding, just state and numbers. */
   statusOnly?: boolean;
 }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { session } = useSession();
   const signedIn = !!session?.authenticated;
   const [open, setOpen] = React.useState(false);
@@ -206,6 +212,16 @@ export function PublicMonitorCard({
                 </div>
               ))}
             </div>
+          )}
+          {windows && coverageStart(windows.since, windowStart90) && (
+            // A monitor younger than 90 days: the long windows cover only its history.
+            <p className="text-muted-foreground text-3xs">
+              {t(
+                'public.win_since',
+                { date: formatCoverageDay(coverageStart(windows.since, windowStart90)!, lang) },
+                `Data od ${formatCoverageDay(coverageStart(windows.since, windowStart90)!, lang)}, delší okna pokrývají jen tuto dobu.`
+              )}
+            </p>
           )}
           <LatencySparkline days={uptime} t={t} />
           {/* Server load - only where an agent measures. */}

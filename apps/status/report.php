@@ -38,11 +38,19 @@ if ($monitor_id > 0) {
     $monitors = $stmt->fetchAll();
 }
 
+// Availability in time, not in check rows (W1-B1): a silent agent's single
+// 'down' row left a three-day blackout at ~99.99 %, and maintenance or
+// 'unknown' rows pulled the percentage down as if they were outages. The
+// rollup behind it keeps days the raw logs no longer have, so an older
+// month is not an empty table either.
+$report_first_day = sprintf('%04d-%02d-01', $year, $month);
+$report_time = bk_uptime_between($pdo, array_map(fn ($m) => (int)$m['id'], $monitors), $report_first_day, date('Y-m-t', strtotime($report_first_day)));
+
 $report_data = [];
 foreach ($monitors as $m) {
     $mid = $m['id'];
     
-    // Compute uptime for the period from monitor_logs
+    // The check counts and the response time come from the logs (30 days)
     $stmt_logs = $pdo->prepare("
         SELECT status, response_time, checked_at 
         FROM monitor_logs 
@@ -55,18 +63,26 @@ foreach ($monitors as $m) {
     $up_checks = 0;
     $down_checks = 0;
     $total_resp = 0;
+    $resp_count = 0;
     
     foreach ($logs as $l) {
         if ($l['status'] === 'up') {
             $up_checks++;
-            $total_resp += (float)$l['response_time'];
+            if ($l['response_time'] !== null && (float)$l['response_time'] > 0) {
+                $total_resp += (float)$l['response_time'];
+                $resp_count++;
+            }
         } elseif ($l['status'] === 'down') {
             $down_checks++;
         }
     }
     
-    $uptime_pct = $total_checks > 0 ? ($up_checks / $total_checks) * 100 : 100.0;
-    $avg_resp = $up_checks > 0 ? round($total_resp / $up_checks, 1) : 0;
+    // Nothing measured in the month -> no percentage and no verdict (W1-B3):
+    // a month without data used to read "100 %, SLA met".
+    $time = $report_time[(int)$mid] ?? null;
+    $uptime_pct = $time['pct'] ?? null;
+    // No answered check -> no response time; 0 ms would claim instant answers.
+    $avg_resp = $resp_count > 0 ? round($total_resp / $resp_count, 1) : null;
     
     $report_data[] = [
         'id' => $mid,
@@ -77,8 +93,9 @@ foreach ($monitors as $m) {
         'up_checks' => $up_checks,
         'down_checks' => $down_checks,
         'uptime_pct' => $uptime_pct,
+        'outage_min' => $time !== null && $uptime_pct !== null ? (int)round($time['outage'] / 60) : null,
         'avg_resp_ms' => $avg_resp,
-        'sla_met' => $uptime_pct >= $sla_goal
+        'sla_met' => $uptime_pct !== null ? $uptime_pct >= $sla_goal : null,
     ];
 }
 
@@ -88,7 +105,13 @@ if ($format === 'csv') {
     header('Content-Disposition: attachment; filename="sla_report_' . sprintf('%04d_%02d', $year, $month) . '.csv"');
     
     $output = fopen('php://output', 'w');
-    fputcsv($output, ['Monitor ID', 'Název', 'Typ', 'Cíl', 'Celkem testů', 'Online testy', 'Výpadky', 'Uptime SLA (%)', 'Průměrná odezva (ms)', 'SLA Splněno']);
+    // "bez dat" where nothing was measured - an empty cell reads like a
+    // spreadsheet glitch, a 0 or 100 like a measurement. New columns go last,
+    // so a sheet that reads the old ones by position keeps working.
+    $no_data = 'bez dat';
+    // The escape character is passed explicitly: PHP 8.4+ deprecates the
+    // default and prints the notice into the CSV itself. '\\' keeps the output.
+    fputcsv($output, ['Monitor ID', 'Název', 'Typ', 'Cíl', 'Celkem testů', 'Online testy', 'Výpadky', 'Uptime SLA (%)', 'Průměrná odezva (ms)', 'SLA Splněno', 'Výpadek (min)'], ',', '"', '\\');
     
     foreach ($report_data as $row) {
         fputcsv($output, [
@@ -99,10 +122,11 @@ if ($format === 'csv') {
             $row['total_checks'],
             $row['up_checks'],
             $row['down_checks'],
-            number_format($row['uptime_pct'], 2, '.', ''),
-            $row['avg_resp_ms'],
-            $row['sla_met'] ? 'ANO' : 'NE'
-        ]);
+            $row['uptime_pct'] !== null ? number_format($row['uptime_pct'], 2, '.', '') : $no_data,
+            $row['avg_resp_ms'] ?? $no_data,
+            $row['sla_met'] === null ? $no_data : ($row['sla_met'] ? 'ANO' : 'NE'),
+            $row['outage_min'] ?? $no_data,
+        ], ',', '"', '\\');
     }
     fclose($output);
     exit;
@@ -130,6 +154,7 @@ $month_names = [1 => 'Leden', 2 => 'Únor', 3 => 'Březen', 4 => 'Duben', 5 => '
         th { background: rgba(255,255,255,0.03); color: #aaa; text-transform: uppercase; font-size: 0.75rem; }
         .badge-success { color: #2ec4b6; font-weight: bold; }
         .badge-danger { color: #e61e2a; font-weight: bold; }
+        .badge-none { color: #888; }
         @media print {
             body { background: #fff; color: #000; padding: 0; }
             .container { border: none; padding: 0; }
@@ -176,14 +201,17 @@ $month_names = [1 => 'Leden', 2 => 'Únor', 3 => 'Březen', 4 => 'Duben', 5 => '
                         <td><strong><?php echo htmlspecialchars($row['name']); ?></strong></td>
                         <td><code><?php echo htmlspecialchars($row['type']); ?></code></td>
                         <td><?php echo htmlspecialchars($row['target']); ?></td>
-                        <td><?php echo number_format($row['total_checks']); ?></td>
-                        <td><?php echo $row['down_checks']; ?></td>
-                        <td><?php echo $row['avg_resp_ms']; ?> ms</td>
+                        <?php // Raw checks are kept 30 days: an older month has none left, which is "unknown", not 0. ?>
+                        <td><?php echo $row['total_checks'] > 0 ? number_format($row['total_checks']) : '—'; ?></td>
+                        <td><?php echo $row['outage_min'] !== null ? htmlspecialchars(bk_format_duration_secs($row['outage_min'] * 60)) : '—'; ?></td>
+                        <td><?php echo $row['avg_resp_ms'] !== null ? $row['avg_resp_ms'] . ' ms' : '—'; ?></td>
                         <td style="font-family: monospace; font-size: 0.95rem; font-weight: bold;">
-                            <?php echo number_format($row['uptime_pct'], 2, ',', ' '); ?>%
+                            <?php echo $row['uptime_pct'] !== null ? number_format($row['uptime_pct'], 2, ',', ' ') . '%' : 'bez dat'; ?>
                         </td>
                         <td>
-                            <?php if ($row['sla_met']): ?>
+                            <?php if ($row['sla_met'] === null): ?>
+                                <span class="badge-none">— bez dat</span>
+                            <?php elseif ($row['sla_met']): ?>
                                 <span class="badge-success">✓ SPLNĚNO</span>
                             <?php else: ?>
                                 <span class="badge-danger">✗ PORUŠENO</span>

@@ -43,13 +43,14 @@ dřívějšímu odhadu.
 
 ```json
 {
-  "status": "healthy | degraded",
+  "status": "healthy | degraded | down | maintenance | unknown",
   "uptimePercent": 99.78,
-  "totalMonitors": 24, "downMonitors": 0,
+  "totalMonitors": 24, "downMonitors": 0, "warningMonitors": 0,
+  "unknownMonitors": 0, "unmeasuredMonitors": 0, "maintenanceMonitors": 0,
   "agentsOnline": 12, "agentsTotal": 12,
   "avgLatencyMs": 23,
-  "lastUpdated": "2026-07-28T10:00:00+02:00",
-  "nodes": [{ "name": "Frankfurt, DE", "status": "online|warning|offline", "latencyMs": 18 }]
+  "lastUpdated": "2026-07-28T10:00:00+02:00 | null",
+  "nodes": [{ "name": "Frankfurt, DE", "status": "online|warning|offline|maintenance|unknown", "latencyMs": 18 }]
 }
 ```
 
@@ -58,11 +59,30 @@ Pozor na detaily, které se snadno ztratí:
 - **Downsampling už existuje** a je odstupňovaný: bucket `0 s` pro 15m/1h,
   `300 s` pro 6h/24h, `1800 s` pro 7d, `7200 s` pro 30d. Go verze to musí
   držet, jinak 30denní graf potáhne stovky tisíc bodů.
-- **Uptime se počítá s vyloučením údržby** — `WHERE status != 'maintenance'`.
-  Naivní `up/total` dá jiné číslo a rozbije SLA reporty.
+- **Dostupnost se počítá v čase, ne v řádcích** (`bk_uptime_segments` ve
+  functions.php). Každý řádek kontroly platí do dalšího, nejvýš 2,5 intervalu
+  (interval = medián mezer vlastních řádků, 60-1800 s). Nepokrytý čas je u
+  agenta (`vps`, `openwrt`), který už hlásil, výpadek (`silent`), u aktivní
+  kontroly neměřeno. Údržba, neměřeno a řádky `unknown` stojí mimo zlomek,
+  `warning` není up, okno bez naměřené sekundy je `null`. Uzavřené dny čte z
+  `uptime_daily.secs_*` (cron je přepočítá každých 10 min), dnešek živě.
+  Naivní `up/total` nechal třídenní výpadek mlčícího agenta na ~99,99 %.
 - **Selhané čtení není prázdný úspěch**: `500` +
   `{"error":"<akce>_unavailable","message":"…"}`, nikdy `200` s prázdným
   seznamem (klient z něj četl „vše online"). Detail výjimky jen do logu.
+- **Jeden celkový verdikt** (`bk_overall_verdict`): `down` > `degraded`
+  (warning, nebo neznámý stav u už kontrolovaného monitoru) > `unknown`
+  (nic, jen nikdy nekontrolované, nebo sběr starší než
+  `collection_max_age_secs`, výchozí 900 s) > `maintenance` > `healthy`.
+  Stejný verdikt tiskne odznak flotily i stará stránka `/status/`.
+  `lastUpdated` je `null`, když se nic neměřilo (žádné `date('c')`), `nodes`
+  jen z typů agent/vps/openwrt/teamspeak/node/router.
+- **Okna nad 30 dní čtou `uptime_daily`**: `uptime_windows` nese u řádku
+  `since` a nahoře `windowStart {d7,d30,d90}`, `sla_report` nese `days`,
+  `windowStart`, `since`, `percentileDays`; `response_time` na 90d/180d/1y je
+  denní průměr z `uptime_daily.avg_response_ms` (`resolution:"daily"`,
+  `dailyRange` min/max `null`). `metric_series_batch` na 90d+ = `400
+  period_unsupported`, ne tiché 24 h.
 - **„Agent existuje" ≠ „má klíč".** `agent_key` se generuje všem monitorům;
   za agenta se počítá jen ten, který se někdy ozval (`agent_last_seen`).
 - **Hub se vylučuje z distribuovaných lokací** (`checked_from != 'Main Server'`

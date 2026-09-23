@@ -433,7 +433,7 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 | Endpoint | Přístup | Popis |
 |---|---|---|
 | `action=metric_series&monitor_id=&metric=&period=` | přiřazený monitor | Jedna metrika v čase. Metrika označená `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`) už nese přírůstek mezi dvěma hlášeními: syrový bod je krok té minuty a devadesátidenní pohled je SOUČET dne (`avg_val * samples`), nikdy jeho průměr |
-| `action=metric_series_batch&monitor_id=&period=` | přiřazený monitor | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu |
+| `action=metric_series_batch&monitor_id=&period=` | přiřazený monitor | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu. Jen období do `30d`: `90d`, `180d` a `1y` odpoví `400 {"error": "period_unsupported"}` - dřív vracela posledních 24 hodin pod dlouhým popiskem |
 | `action=metric_detail&monitor_id=&metric=` | přiřazený monitor | Kontext stránky detailu metriky |
 | `action=metric_correlations&monitor_id=&metric=&period=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | přiřazený monitor | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`) |
 | `action=metric_heatmap&monitor_id=&metric=&days=` | přiřazený monitor | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0` |
@@ -443,15 +443,15 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 | `action=storage_history&monitor_id=&days=` | přiřazený monitor | Denní historie jednotlivých disků (teplota, čítače chyb, zápisy hostitele, opotřebení). `days` se ořízne na 1-400; den, který nikdo nezměřil, je `null`, nikdy `0`. Viz „Zdraví routeru" níž |
 | `action=wan_bottleneck&monitor_id=` | přiřazený monitor | Co omezuje internetovou linku routeru, zvlášť pro každý směr, z jeho posledních měření rychlosti. Viz „Zdraví routeru" níž |
 | `action=metrics_history&monitor_id=&period=` | přiřazený monitor | Historie metrik agenta |
-| `action=daily_uptime&days=` | veřejný stav / přiřazené | Denní dostupnost z `uptime_daily` |
-| `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d jedním průchodem; nezměřené okno je `null`, nikdy 100 |
+| `action=daily_uptime&days=` | veřejný stav / přiřazené | Denní dostupnost v čase (viz „Dostupnost se měří v čase" níž): dnešek živě, uzavřené dny z `uptime_daily`. Den, kdy agent mlčel, je `down` a jeho `detail` říká, jak dlouho |
+| `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d v čase; `d1` je posledních 24 hodin, ostatní jsou kalendářní dny včetně dneška. Nezměřené okno je `null`, nikdy 100. Každý řádek nese `since`, první den s daty v 90denním okně, a odpověď nese `windowStart` (`d7`, `d30`, `d90`: první den každého okna); obojí je místní `Y-m-d` serveru, takže „90 dní" nad šesti týdny historie řekne, odkud jeho data jsou |
 | `action=check_stages&monitor_id=` | přiřazený monitor | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | veřejný stav / přiřazené | Dostupnost podle místa měření (`checked_from`) |
 | `action=public_status` | veřejný stav / přiřazené | Souhrn pro veřejnou stránku (počty, průměrná dostupnost). V aplikaci dostane účet `user` součty jen za přiřazené monitory |
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` shrnuje celou flotilu, neznámý monitor je 404 |
 | `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně |
 | `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru |
-| `action=dashboard_insights&limit=` | přiřazený monitor | Totéž napříč monitory, pro přehled |
+| `action=dashboard_insights&limit=&offset=&lang=` | přiřazený monitor | Totéž napříč monitory: předpovědi, anomálie a poznámky k síti, formulované v jazyce požadavku. Stránkované - `limit` 1-200 (výchozí 4), `offset`, a `total` říká, kolik jich je; seznam se už neuřezává na osm. V cache 5 minut pro každý jazyk zvlášť (`cachedAt`, když odpověď přišla z ní) |
 | `action=ui_config` | veřejné | Nastavení vzhledu pro frontend (logo, názvy) |
 | `action=alerts_read_state` | přihlášený | Meze přečtených upozornění (`readUpToId`) |
 | `action=convert_to_agent_check` | admin | Převede proces hlídaný agentem na samostatný monitor |
@@ -459,7 +459,50 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 **Poznámka k dlouhodobým datům:** syrové logy se po 30 dnech mažou. Roční SLA
 se proto počítá z denní agregace `uptime_daily`, ne z logů. Odpovědi vždy
 uvádějí, za jaké období hodnota skutečně je - nikdy nevydávají třicetidenní
-okno za rok.
+okno za rok: `uptime_windows` a `sla_report` říkají, kde okno začíná
+(`windowStart`) a kde začínají jeho data (`since`).
+
+### Jeden celkový verdikt
+
+`public_status` (`status`), odznak flotily (`badge`), nadpis staré stránky
+`/status/` a přes API i veřejná stránka a marketingový web tisknou jeden
+verdikt nad stejnou sadou monitorů (`bk_overall_verdict()`):
+
+| Verdikt | Kdy |
+|---|---|
+| `down` | některý monitor je nedostupný |
+| `degraded` | některý je `warning`, nebo ve stavu, který nikdo nezná, přestože už dřív kontrolou prošel |
+| `unknown` | žádný monitor, jen monitory, které ještě kontrolou neprošly, nebo sběr neběžel v rámci `collection_max_age_secs` (výchozí 15 minut) - uložené stavy pak nejsou ničím aktuálním měřením |
+| `maintenance` | některý je v údržbě |
+| `healthy` | všechno ostatní: vše běží a je čerstvě zkontrolované |
+
+Dřív to bylo „healthy, pokud nic není dole", takže zhoršený monitor, neznámý
+monitor i zastavený sběr se četly jako „vše v pořádku". Monitor, který ještě
+nemá první kontrolu („čeká na první data"), se počítá do `unmeasuredMonitors`,
+ale verdikt nezhorší.
+
+### Dostupnost se měří v čase
+
+Dostupnost bývala „řádky up / všechny řádky". Mlčící agent dostane od cronu
+jeden řádek `down` a pak nic, takže třídenní výpadek byl jeden řádek z tisíců
+a pořád ukazoval ~99,99 %. Každé číslo dostupnosti (`uptime_windows`,
+`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, odznak,
+widget, měsíční `report.php` i e-mailový přehled) se teď počítá v čase:
+
+- každý řádek kontroly platí do dalšího řádku, nejvýš 2,5 intervalu kontroly
+  (interval se čte z vlastních řádků monitoru, 60-1800 s);
+- čas, který žádný řádek nekryje, je u agenta (`vps`, `openwrt`), který už
+  dřív hlásil, **výpadek** - mlčení je ten výpadek - a u aktivní kontroly
+  **neměřeno**, protože to znamená, že neběžel cron;
+- `maintenance` a neměřený čas (i řádky `unknown` služby na agentovi, jehož
+  agent zmlkl) stojí mimo zlomek; `warning` není up;
+- okno bez jediné naměřené sekundy je `null`, nikdy 100.
+
+Uzavřené dny jdou z `uptime_daily`, kterou cron každých deset minut
+přepočítá v čase (`secs_up`, `secs_down`, `secs_warning`, `secs_silent`,
+`secs_maintenance`, `secs_unmeasured`); dnešek se počítá živě. Den z doby
+před časovým souhrnem (jeho logy už jsou smazané) zná jen počty kontrol a čte
+se jako celý naměřený den rozdělený podle nich.
 
 ### Období v `period`
 
@@ -467,9 +510,13 @@ okno za rok.
 |---|---|---|
 | `15m`, `1h`, `6h`, `12h`, `24h` | 15 min až den | `vps_metrics` / `monitor_logs` |
 | `7d`, `30d` | týden, měsíc | totéž |
-| `90d`, `180d`, `1y` | čtvrtletí až rok | `metrics_daily` (denní průměr) |
+| `90d`, `180d`, `1y` | čtvrtletí až rok | `metrics_daily` (denní průměr); `response_time` z `uptime_daily.avg_response_ms` |
 
-Neznámá hodnota spadne na den. U dlouhých období odpověď nese
+Neznámá hodnota spadne na den. `response_time` na `90d` / `1y` na ten den
+dřív spadlo taky, takže „1 rok" kreslil posledních 24 hodin; teď čte průměrnou
+odezvu dne z `uptime_daily`, jehož `dailyRange` nenese minimum ani maximum
+(`null` - souhrn je neukládá). Historie kratší než okno prostě začne později:
+první bod je první den s daty. U dlouhých období odpověď nese
 `resolution: "daily"` - bod je průměr dne, ne jednotlivé měření, a klient to
 musí přiznat, jinak by uživatel z grafu četl přesnost, kterou data nemají.
 
@@ -647,7 +694,7 @@ restartoval nebo čítač přetekl) a hodnota je dolní odhad.
 | `action=create_incident` | přihlášený | Ruční založení. Volitelné `monitorId` naváže incident na monitor: 404 neznámý, 409 archivovaný, 409 když už monitor otevřený incident má |
 | `action=incident_action` | přihlášený | `op`: acknowledge / resolve / postmortem. `resolve` vrátí `monitorStillDown: true`, když je monitor i po uzavření incidentu dál nedostupný |
 | `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky |
-| `action=sla_report&days=` | přiřazený monitor | SLA přehled |
+| `action=sla_report&days=` | přiřazený monitor | SLA přehled v čase: `uptimePct` (`null` bez jediné naměřené sekundy), `outageMinutes` = skutečné minuty výpadku včetně mlčení agenta, `silentMinutes` = kolik z nich agent mlčel, `unmeasuredMinutes` = čas, který nikdo neměřil (mimo procento). `upChecks` / `downChecks` zůstávají počty řádků; za 30 dní (`days` 90 / 365) jdou z `uptime_daily` plus dnešních logů, ne z měsíce logů, který zbyl. Odpověď nese `days`, `windowStart` (první den okna), `since` (první den s daty, i u každého řádku) a `percentileDays` (percentily latence čtou syrové logy, nejvýš 30 dní) |
 | `action=audit_logs&limit=` | admin | Poslední kontroly napříč monitory |
 
 > **Pozor:** `audit_logs` a `sla_report` jsou dnes bez přihlášení a vracejí

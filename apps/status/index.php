@@ -155,23 +155,18 @@ if (is_readable($bk_cache_file) && (time() - (int)@filemtime($bk_cache_file)) < 
 }
 
 if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'], $bk_agg['history_uptime'], $bk_agg['incidents'], $bk_agg['regions'])) {
-    // Výpočet 30-denního uptime procenta pro každý monitor
-    $stmt_upt = $pdo->query("
-        SELECT monitor_id,
-               SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-               SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
-        FROM monitor_logs
-        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-        GROUP BY monitor_id
-    ");
+    // 30-day availability of each monitor in time, not in rows (W1-B1) -
+    // the same number as the badge, the app and the SLA report. Counted in
+    // rows, a router that was off for three days wrote one 'down' row and
+    // this page still said 99.99 %.
     $uptime_pct = [];
-    while ($row = $stmt_upt->fetch()) {
-        // total_count počítá jen ne-maintenance kontroly. Monitor, který byl
-        // celé okno v údržbě, žádnou měřenou dostupnost nemá - vynecháním
-        // (místo dřívějších vymyšlených 100.00) se nepočítá do průměrů
-        // a isset() checky ho zobrazí jako "bez dat".
-        if ((int)$row['total_count'] > 0) {
-            $uptime_pct[$row['monitor_id']] = round(($row['up_count'] / $row['total_count']) * 100, 2);
+    $upt_ids = array_map('intval', $pdo->query("SELECT id FROM monitors WHERE archived_at IS NULL")->fetchAll(PDO::FETCH_COLUMN));
+    foreach (bk_uptime_day_windows($pdo, $upt_ids, [30]) as $upt_mid => $upt_win) {
+        // A monitor with no measured second (only maintenance, or nothing
+        // at all) stays out: isset() checks below print it as "bez dat"
+        // and it does not count into averages, instead of an invented 100.00.
+        if ($upt_win[30]['pct'] !== null) {
+            $uptime_pct[$upt_mid] = round($upt_win[30]['pct'], 2);
         }
     }
 
@@ -370,12 +365,15 @@ $portal_url = trim(get_setting('portal_url'));
         
         <!-- Celkový stav systému -->
         <?php
-        $hero_class = 'all-ok';
-        if ($down_monitors > 0) {
-            $hero_class = '';
-        } elseif ($maintenance_monitors_count > 0) {
-            $hero_class = 'has-maintenance';
-        }
+        // The headline is the shared overall verdict (W1-B4), as on the app's
+        // public page and the badge: a warning, a state nobody knows or a
+        // collector that stopped is not "all online" - this page is indexed,
+        // and it said so over an empty or silent fleet.
+        $bk_verdict = bk_overall_verdict($monitors, bk_collection_is_fresh())['verdict'];
+        $hero_class = [
+            'healthy' => 'all-ok', 'maintenance' => 'has-maintenance',
+            'degraded' => 'has-maintenance', 'unknown' => 'is-unknown',
+        ][$bk_verdict] ?? '';
         // Načtení aktivních (nevyřešených) incidentů
         try {
             $stmt_inc = $pdo->query("SELECT * FROM incidents WHERE status != 'resolved' ORDER BY created_at DESC");
@@ -417,10 +415,16 @@ $portal_url = trim(get_setting('portal_url'));
         ?>
         <div class="overall-status <?php echo $hero_class; ?>">
             <div class="overall-info">
-                <?php if ($down_monitors > 0): ?>
+                <?php if ($bk_verdict === 'down'): ?>
                     <h2><i class="fas fa-exclamation-triangle" style="color: var(--color-red);"></i> <?php echo htmlspecialchars(t('hero_down_title')); ?></h2>
                     <p><?php echo htmlspecialchars(sprintf(t('hero_down_desc'), $down_monitors, $total_monitors)); ?></p>
-                <?php elseif ($maintenance_monitors_count > 0): ?>
+                <?php elseif ($bk_verdict === 'degraded'): ?>
+                    <h2><i class="fas fa-exclamation-circle" style="color: var(--color-yellow, #f39c12);"></i> <?php echo htmlspecialchars(t('hero_degraded_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(t('hero_degraded_desc')); ?></p>
+                <?php elseif ($bk_verdict === 'unknown'): ?>
+                    <h2><i class="fas fa-question-circle" style="color: var(--text-muted);"></i> <?php echo htmlspecialchars(t('hero_unknown_title')); ?></h2>
+                    <p><?php echo htmlspecialchars(t('hero_unknown_desc')); ?></p>
+                <?php elseif ($bk_verdict === 'maintenance'): ?>
                     <h2><i class="fas fa-tools" style="color: var(--color-yellow, #f39c12);"></i> <?php echo htmlspecialchars(t('hero_maintenance_title')); ?></h2>
                     <p><?php echo htmlspecialchars(sprintf(t('hero_maintenance_desc'), $maintenance_monitors_count)); ?></p>
                 <?php else: ?>
