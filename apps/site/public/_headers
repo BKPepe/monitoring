@@ -5,7 +5,11 @@
 # Tady jsou jen hlavičky, které v <meta> tagu prohlížeč ignoruje, a ty,
 # které s CSP nesouvisí.
 
+# frame-ancestors works only in a header, never in the <meta> policy, where
+# Chrome logs an error instead. This policy holds nothing else, so it adds
+# the framing rule and changes nothing the meta policy allows or blocks.
 /*
+  Content-Security-Policy: frame-ancestors 'none'
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
