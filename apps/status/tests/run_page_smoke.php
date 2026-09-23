@@ -30,10 +30,12 @@ if ($monitor_id === null) {
 }
 
 /**
- * page => [description, expected status codes]
+ * page => [description, expected status codes, optional redirect target]
  *
  * 403 for admin.php is the right answer (an unauthenticated user), 404 for a
- * nonexistent monitor too - the test guards crashes, not authorisation.
+ * nonexistent monitor too - the test guards crashes, not authorisation. With
+ * a redirect target, a 3xx answer must point exactly there: accepting a
+ * redirect by its status alone would also accept one to anywhere.
  */
 $pages = [
     '/' => ['veřejná status stránka', [200]],
@@ -81,6 +83,16 @@ $pages = [
     '/README.md' => ['interní dokumentace není veřejná', [403]],
     '/.ftp-deploy-sync-state.json' => ['seznam nasazených souborů není veřejný', [403]],
     '/uploads/' => ['adresář nahraných souborů se nevypisuje', [404]],
+    // Without the slash production (LiteSpeed) answers either 404 or a 301 of
+    // its own to '/uploads/', the 404 above: the first request after a quiet
+    // spell gets the 404, the ones after it the 301 (seen 09/2026). The 301
+    // comes before the rewrite in .htaccess runs and has only been seen here,
+    // at the one directory with an .htaccess of its own; Apache answers 404.
+    // It is left as it is: it lands on the same 404, and whether LiteSpeed
+    // would honour "DirectorySlash Off" in uploads/.htaccess cannot be learnt
+    // without deploying it. A listing, an error or a redirect anywhere else
+    // than '/uploads/' fails the deploy.
+    '/uploads' => ['adresář nahraných souborů bez lomítka se nevypisuje', [301, 404], $base . '/uploads/'],
     // assets/ listed its files until W1-F3; the files themselves stay served.
     '/assets/' => ['adresář stylů a log se nevypisuje', [404]],
     '/assets/style.css' => ['styl stránek se dál poskytuje', [200]],
@@ -121,7 +133,8 @@ const BK_SMOKE_MAX_ATTEMPTS = 3;
 /**
  * One request with the retry rule above.
  *
- * @return array{0: int, 1: string|false, 2: int} status, body, attempts
+ * @return array{0: int, 1: string|false, 2: int, 3: string} status, body,
+ *         attempts, redirect target ('' when the answer is not a redirect)
  */
 function bk_smoke_request(string $url, array $expected): array {
     $attempts = 0;
@@ -139,22 +152,28 @@ function bk_smoke_request(string $url, array $expected): array {
         ]);
         $body = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        // Resolved to an absolute URL by curl, even from a relative Location.
+        $location = (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL);
 
         // The expected status ends it; otherwise retry only for gateway errors.
         $transient = !in_array($code, $expected, true) && in_array($code, BK_SMOKE_RETRY_CODES, true);
     } while ($transient && $attempts < BK_SMOKE_MAX_ATTEMPTS);
 
-    return [$code, $body, $attempts];
+    return [$code, $body, $attempts, $location];
 }
 
-foreach ($pages as $path => [$label, $expected]) {
-    [$code, $body, $attempts] = bk_smoke_request($base . $path, $expected);
+foreach ($pages as $path => $case) {
+    [$label, $expected] = $case;
+    $redirect_to = $case[2] ?? null;
+    [$code, $body, $attempts, $location] = bk_smoke_request($base . $path, $expected);
 
     $problem = null;
     if ($body === false) {
         $problem = 'požadavek selhal';
     } elseif (!in_array($code, $expected, true)) {
         $problem = 'neočekávaný stav (čekáno ' . implode('/', $expected) . ')';
+    } elseif ($redirect_to !== null && $code >= 300 && $code < 400 && $location !== $redirect_to) {
+        $problem = 'přesměrování vede na ' . ($location === '' ? '(nikam)' : $location) . ', čekáno ' . $redirect_to;
     } else {
         foreach ($fatal_markers as $marker) {
             if (stripos($body, $marker) !== false) {
