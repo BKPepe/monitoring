@@ -57,8 +57,9 @@ define('DB_PASS', 'heslo_databaze');
 // but no code ever read them - it was dead (and confusing) documentation.
 
 // --- OTHER SETTINGS ---
-// Default admin credentials after schema.sql import: admin / BloodKingsAdmin123!
-// Change your password immediately after first login (Admin -> Profile -> Change Password).
+// There are no default admin credentials. schema.sql creates no account; open
+// /app/setup after the import and create the first administrator there with a
+// password of your own (the step is refused once any account exists).
 // This zone is PHP's AND the database session's: db.php sends its current UTC
 // offset to MySQL after connecting, so SQL NOW() and PHP's date() mean the same
 // instant even when the database server itself runs in another zone.

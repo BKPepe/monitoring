@@ -369,7 +369,7 @@ jako úspěch. **Dnes neznámá akce vrací 400** a hlídá to lint
 | `action=annotations&monitor_id=&metric=&hours=` | přiřazený monitor | Poznámky pro vykreslení. Anonym i monitor, ke kterému účet není přiřazený, dostanou prázdný seznam, ne 403 - graf bez poznámek není chyba |
 | `action=delete_annotation` | admin, POST | Smaže poznámku podle `id`. Poznámka je tvrzení a chybné tvrzení u grafu musí jít vzít zpět |
 | `action=forgot_password` | veřejné, POST | Odešle odkaz na obnovu hesla. Odpověď je stejná pro existující i neexistující e-mail |
-| `action=setup` | veřejné, POST | Založí prvního administrátora. **Jen do prázdné tabulky uživatelů**, jinak 409 |
+| `action=setup` | veřejné, POST | Založí prvního administrátora. **Jen do prázdné tabulky uživatelů**, jinak 409. Jiná cesta k prvnímu účtu není: `schema.sql` žádný nezakládá, takže neexistuje ani výchozí heslo |
 | `action=user_audit_log&limit=` | admin | Skutečný auditní protokol (kdo se přihlásil, kdo co změnil) |
 
 > **Pozor na názvy:** `audit_logs` (s „s") vrací **výsledky kontrol z cronu**,
@@ -905,6 +905,11 @@ vrací `action=login` a `action=session`. Tokenem autentizované toky
 (`set_password`) a akce session teprve zakládající (`login`, `setup`,
 `forgot_password`, `logout`) jsou vyjmuté. CORS odráží jen vlastní origin -
 cizí origin `Access-Control-Allow-Origin` nedostane vůbec.
+
+Cookie session má `HttpOnly` a `SameSite=Lax`, přes HTTPS i `Secure`. db.php je
+nastaví dřív, než config.php stihne session spustit, a `/status/.user.ini` je
+nastaví znovu při startu PHP, takže už nezávisí na tom, jestli nasazený
+config.php nese vlastní blok pro cookie.
 
 ## Verzování a stabilita
 

@@ -12,7 +12,9 @@ error_reporting(E_ALL);
 
 header('Content-Type: application/json; charset=utf-8');
 
-require_once __DIR__ . '/config.php';
+// db.php loads config.php itself, after it has set the session cookie flags.
+// Requiring config.php first let its session start before them, and the
+// admin cookie went out without HttpOnly and SameSite.
 require_once __DIR__ . '/db.php';
 
 // 1. Ensure the checked_from column exists in monitor_logs

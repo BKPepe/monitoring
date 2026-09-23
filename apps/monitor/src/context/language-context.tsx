@@ -2029,17 +2029,17 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Two-factor authentication (2FA) is required.',
   },
   'setup.install_failed': { cs: 'Instalace selhala.', en: 'Installation failed.' },
-  'setup.forgot_sent': {
-    cs: 'Návod k obnovení hesla byl odeslán na váš e-mail.',
-    en: 'Password recovery instructions have been sent to your email.',
-  },
   'setup.forgot_processed': {
     cs: 'Žádost o reset hesla pro {email} byla zpracována. Pokud účet existuje, obdržíte e-mail s instrukcemi.',
     en: 'The password reset request for {email} has been processed. If the account exists, you will receive an email with instructions.',
   },
-  'setup.forgot_sent_to': {
-    cs: 'Na e-mail {email} byly odeslány instrukce pro obnovu hesla.',
-    en: 'Password recovery instructions have been sent to {email}.',
+  'setup.forgot_failed_http': {
+    cs: 'Žádost o obnovu hesla se nepodařilo odeslat (HTTP {status}). Zkuste to prosím znovu.',
+    en: 'The password reset request could not be sent (HTTP {status}). Please try again.',
+  },
+  'setup.forgot_failed_network': {
+    cs: 'Žádost o obnovu hesla se nepodařilo odeslat - server je nedostupný. Zkuste to prosím znovu.',
+    en: 'The password reset request could not be sent - the server is unreachable. Please try again.',
   },
   'setup.login_subtitle': {
     cs: 'Přihlášení správce do monitorovacího systému',

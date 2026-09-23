@@ -9,7 +9,11 @@ require_once __DIR__ . '/db.php';
 
 $is_cli = php_sapi_name() === 'cli';
 if (!$is_cli) {
-    session_start();
+    // config.php has usually started the session already; a second call only
+    // printed a notice. db.php set the cookie flags either way.
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
     // The role is read from the users table, not the session: a demoted or
     // deleted administrator keeps the old session until logging out.
     $bk_health_role = false;

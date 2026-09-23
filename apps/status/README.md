@@ -35,6 +35,9 @@ An open-source, ultra-fast server and service status monitoring application buil
      define('DB_USER', 'bloodkings_user');
      define('DB_PASS', 'YourStrongPassword123!');
      ```
+4. Open `/app/setup` and create the first administrator. `schema.sql` creates no
+   account and there is no default password; the setup step works only while the
+   `users` table is empty.
 
 ---
 

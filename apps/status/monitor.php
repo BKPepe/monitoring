@@ -5,11 +5,13 @@
  * Access: monitor.php?id=X
  */
 
+require_once __DIR__ . '/functions.php';
+// The session starts after functions.php: db.php sets the cookie flags
+// (HttpOnly, SameSite) before config.php runs, and a session started above
+// the include went out without them. config.php normally starts it already.
 if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
     @session_start();
 }
-
-require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
 
 // Admin-only controls need the admin role; the rest of this page needs access

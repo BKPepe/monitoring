@@ -105,7 +105,7 @@ strukturu databáze každému, kdo trefil chybu.
 vlastní administrátorská práva ani odstranit posledního aktivního správce.
 
 **Žádné výchozí heslo.** První účet se zakládá přes `bkctl` s heslem
-zadaným interaktivně. Původní README uvádělo `admin / BloodKingsAdmin123!`
+zadaným interaktivně. Původní README uvádělo výchozí heslo admina
 — což je přesně to, co zůstane nezměněné na produkci.
 
 ## Endpointy

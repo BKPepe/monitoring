@@ -37,7 +37,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-require_once __DIR__ . '/config.php';
+// db.php loads config.php itself, after it has set the session cookie flags.
+// Requiring config.php first let its session start before them, and the
+// admin cookie went out without HttpOnly and SameSite.
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
@@ -6637,14 +6639,20 @@ if ($action === 'setup') {
         $new_user_id = (int)$pdo->lastInsertId();
 
         // Sign in right away - otherwise the wizard would end on a login form
-        // for the account it just created itself.
+        // for the account it just created itself. A new session id, as login
+        // does, so a session id planted before the install is not the admin's.
+        session_regenerate_id(true);
         $_SESSION['admin_logged_in'] = true;
         $_SESSION['admin_id'] = $new_user_id;
         $_SESSION['admin_username'] = $su_username;
         $_SESSION['admin_role'] = 'admin';
 
         bk_audit_log($pdo, 'setup_completed', $su_username, 'user', $new_user_id, $new_user_id, $su_username);
-        echo json_encode(['success' => true, 'id' => $new_user_id], JSON_UNESCAPED_UNICODE);
+        // The CSRF token a login hands out. Without it the session had none, so
+        // the new admin's first save in the app was refused with 403 until they
+        // signed out and in again - and since W1-H2 setup is the only way a
+        // fresh install gets its first account.
+        echo json_encode(['success' => true, 'id' => $new_user_id, 'csrfToken' => bk_csrf_token()], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] setup selhal: ' . $e->getMessage());
         http_response_code(500);

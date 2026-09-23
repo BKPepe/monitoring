@@ -65,8 +65,10 @@ ErrorDocument 503 /status/error.php?code=503
 # database, the deploy sync state lists every deployed file with its hash, and
 # README.md is internal documentation - all three were served to anyone.
 # Nothing reads them over HTTP: schema.sql is imported by hand on a fresh install
-# and the sync state is read by the deploy over FTP.
-<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json)$">
+# and the sync state is read by the deploy over FTP. .user.ini is PHP's own
+# per-directory configuration (the session cookie flags); the server reads it
+# from disk, and nobody needs to learn from it how PHP is set up here.
+<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json|\.user\.ini)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

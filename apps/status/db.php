@@ -3,6 +3,38 @@
  * Database connection and settings bootstrap
  */
 
+/**
+ * Session cookie flags, set before config.php can start the session.
+ *
+ * The flags used to live only in config.php's own session block, and the
+ * deployed config.php does not have that block: the admin session cookie went
+ * out without HttpOnly or SameSite, readable by any injected script and sent
+ * along with cross-site requests. Setting them here, before config.php runs,
+ * makes them independent of whichever config.php a host carries.
+ * .user.ini sets the same values at PHP startup where the host honours it;
+ * this is the layer that does not depend on that. Every entry point loads
+ * db.php before anything else that can start a session.
+ *
+ * Secure is only ever turned ON here, for a request that arrived over HTTPS
+ * (directly or through the proxy). It is never turned off, so .user.ini's
+ * unconditional Secure stays in force on production.
+ */
+function bk_session_harden(): void {
+    if (PHP_SAPI === 'cli' || session_status() !== PHP_SESSION_NONE || headers_sent()) {
+        return;
+    }
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.use_only_cookies', '1');
+    ini_set('session.cookie_httponly', '1');
+    ini_set('session.cookie_samesite', 'Lax');
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+    if ($https) {
+        ini_set('session.cookie_secure', '1');
+    }
+}
+bk_session_harden();
+
 if (!file_exists(__DIR__ . '/config.php') && file_exists(__DIR__ . '/config.sample.php')) {
     @copy(__DIR__ . '/config.sample.php', __DIR__ . '/config.php');
 }

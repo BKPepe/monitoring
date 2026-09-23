@@ -4,10 +4,13 @@
  * Generates a printable SLA report or a downloadable CSV statement for a month.
  */
 
+require_once __DIR__ . '/functions.php';
+// The session starts after functions.php: db.php sets the cookie flags
+// (HttpOnly, SameSite) before config.php runs, and a session started above
+// the include went out without them. config.php normally starts it already.
 if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
     @session_start();
 }
-require_once __DIR__ . '/functions.php';
 
 // The SLA table names every monitor with its target and outages. It used to
 // answer anyone; now a signed-in account gets the monitors it may see.

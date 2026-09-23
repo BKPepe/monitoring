@@ -2,7 +2,7 @@
 //
 // Existuje hlavně kvůli založení prvního účtu: čerstvá instalace nemá
 // žádného uživatele a přihlásit se tedy nedá. Původní systém to řešil
-// výchozím heslem v dokumentaci (admin / BloodKingsAdmin123!), což je
+// výchozím heslem zveřejněným v dokumentaci, což je
 // přesně ten druh věci, který zůstane nezměněný na produkci.
 package main
 

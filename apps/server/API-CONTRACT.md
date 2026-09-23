@@ -241,7 +241,11 @@ Související funkcionalita:
 - rate limiting přihlášení: 5 pokusů / 15 min → lockout
 - `audit_log` (retence 90 dní), `users` s rolemi
 - CSRF tokeny v adminu
-- session cookie s `HttpOnly`, `SameSite=Lax`, `Secure` podle HTTPS
+- session cookie s `HttpOnly`, `SameSite=Lax`, `Secure` podle HTTPS; PHP je
+  nastavuje v db.php dřív, než config.php session spustí, a znovu v
+  `.user.ini` - na bloku v config.php nezávisí
+- žádné výchozí heslo: čerstvá instalace nemá účet a první admin vzniká jen
+  přes `action=setup` do prázdné tabulky uživatelů
 - nedostupná databáze = `503` + `Retry-After: 60`; strojové endpointy
   `{"error":"database_unavailable"}`, stránky značkovou chybovou stránku,
   hláška databáze jen do logu serveru

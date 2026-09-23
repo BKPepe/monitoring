@@ -375,7 +375,7 @@ and a lint guards it (`run_api_action_lint.php`).
 | `action=annotations&monitor_id=&metric=&hours=` | assigned monitor | Notes for rendering. An anonymous caller and a monitor the account is not assigned to get an empty list, not a 403 - a chart without notes is not an error |
 | `action=delete_annotation` | admin, POST | Deletes a note by `id`. A note is a claim, and a wrong claim next to a chart has to be retractable |
 | `action=forgot_password` | public, POST | Sends a password reset link. The response is identical for existing and nonexistent addresses |
-| `action=setup` | public, POST | Creates the first administrator. **Only into an empty users table**, otherwise 409 |
+| `action=setup` | public, POST | Creates the first administrator. **Only into an empty users table**, otherwise 409. This is the only way the first account comes to exist: `schema.sql` creates none, so there is no default password |
 | `action=user_audit_log&limit=` | admin | The actual audit log (who logged in, who changed what) |
 
 > **Careful with the names:** `audit_logs` (with an "s") returns **check results
@@ -921,6 +921,11 @@ Token-authenticated flows (`set_password`) and session-establishing ones
 (`login`, `setup`, `forgot_password`, `logout`) are exempt. CORS reflects
 only the site's own origin - a foreign origin gets no
 `Access-Control-Allow-Origin` at all.
+
+The session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` over HTTPS.
+db.php sets these before config.php can start the session, and
+`/status/.user.ini` sets them again at PHP startup, so they no longer depend on
+the deployed config.php carrying its own cookie block.
 
 ## Versioning and stability
 

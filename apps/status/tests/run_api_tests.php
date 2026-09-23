@@ -228,12 +228,38 @@ function api_get_auth(string $base, string $query, string $jar): array {
     return [$code, json_decode((string)$body, true), (string)$body];
 }
 
+// No known default password. schema.sql used to create "admin" with a
+// password printed in the public repository; now a fresh install has no
+// account at all and the first administrator comes from the setup step, with
+// a password only the installer knows. The suite installs itself the same way,
+// with a password generated for this run.
+check('schema.sql nezakládá žádný účet (žádné výchozí heslo)', (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn(), 0);
+[, $fresh_session] = api_get($base, 'action=session');
+check('čerstvá instalace hlásí installed=false', $fresh_session['installed'] ?? 'chybí', false);
+$bk_test_admin_password = 'Test-' . bin2hex(random_bytes(8));
+$setup_jar = tempnam(sys_get_temp_dir(), 'bk_setup0');
+[$code, $fresh_setup] = api_post($base, 'action=setup', [
+    'username' => 'admin', 'email' => 'admin@bloodkings.eu', 'password' => $bk_test_admin_password,
+], $setup_jar, '');
+check('průvodce instalací založí prvního admina', $code, 200);
+check('a je to účet 1', $fresh_setup['id'] ?? null, 1);
+// The wizard signs the new admin in; that session must be able to write. It
+// had no CSRF token, so the first save in the app ended on 403.
+[, $setup_session] = api_get_auth($base, 'action=session', $setup_jar);
+check_true('po instalaci má relace CSRF token a setup ho vrací',
+    ($setup_session['csrfToken'] ?? '') !== '' && ($setup_session['csrfToken'] ?? null) === ($fresh_setup['csrfToken'] ?? false));
+// A write that passes the CSRF gate and then refuses its input (400, nothing
+// stored) - 403 would be the gate.
+[$code] = api_post($base, 'action=save_settings', ['settings' => 'x'], $setup_jar, (string)($fresh_setup['csrfToken'] ?? ''));
+check('a první zápis nového admina projde branou CSRF (400 za vstup, ne 403)', $code, 400);
+@unlink($setup_jar);
+
 // Monitor data belongs to the accounts assigned to it, so almost every read
 // below needs a session. The admin logs in first; the tests that check what an
 // anonymous caller or a plain user gets call without this jar on purpose.
 [$code, $login] = api_post($base, 'action=login', [
     'username' => 'admin',
-    'password' => 'BloodKingsAdmin123!',
+    'password' => $bk_test_admin_password,
 ], $cookie_jar);
 $logged_in = $code === 200 && !empty($login['success']);
 check_true('přihlášení admina projde', $logged_in);
@@ -581,7 +607,7 @@ check_true('a nese klíč error', isset($wg_unknown['error']));
 // Sign-out from the app: POST only, it ends the session the legacy admin page
 // shares, and it leaves a trace in the audit log like that page's sign-out.
 $jar_lo = tempnam(sys_get_temp_dir(), 'bk_test_lo');
-[$lo_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!'], $jar_lo, '');
+[$lo_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $jar_lo, '');
 check('druhá relace admina se přihlásí', $lo_login, 200);
 [$lo_get] = api_get_auth($base, 'action=logout', $jar_lo);
 check('odhlášení přes GET se odmítne', $lo_get, 405);
@@ -1866,8 +1892,9 @@ check('a pro existující účet vrací totéž', $code, 200);
 check('odpověď neprozradí, jestli účet existuje', $fp1['message'] ?? 'a', $fp2['message'] ?? 'b');
 
 // --- Instalace ----------------------------------------------------------
-// Schema.sql creates the default account, so the users table is not empty
-// and the install must refuse. It used to return 200 and create nothing.
+// The suite's own setup created the first account at the start, so the users
+// table is not empty and a second install must refuse. It used to return 200
+// and create nothing.
 [$code, $su] = api_post($base, 'action=setup', [
     'username' => 'druhy_admin', 'email' => 'druhy@example.com', 'password' => 'DostDlouheHeslo1',
 ], tempnam(sys_get_temp_dir(), 'bk_setup'));
@@ -2762,7 +2789,7 @@ $login_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_c2');
 check_true('nové heslo funguje pro přihlášení', $code === 200 && !empty($relog['success']));
 // Vratit puvodni heslo, dalsi testy s nim pocitaji.
 $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = 1")
-    ->execute([password_hash('BloodKingsAdmin123!', PASSWORD_BCRYPT)]);
+    ->execute([password_hash($bk_test_admin_password, PASSWORD_BCRYPT)]);
 @unlink($login_jar2);
 
 // --- TOTP enrollment ------------------------------------------------------
@@ -2804,23 +2831,23 @@ if (function_exists('bk_totp_calculate')) {
     // Sign-in with a recovery code instead of the TOTP code (separate jar,
     // the admin session must stay intact).
     $rc_jar = tempnam(sys_get_temp_dir(), 'bk_test_rc');
-    [$code, $rc_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!', 'totp_code' => $rc[0]], $rc_jar, '');
+    [$code, $rc_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
     check('záložní kód přihlásí', $code, 200);
     check('a odpověď říká, kolik kódů zbývá', $rc_login['recoveryCodesRemaining'] ?? null, 9);
 
     // Strictly single use: the same code a second time must fail.
-    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!', 'totp_code' => $rc[0]], $rc_jar, '');
+    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
     check('použitý kód podruhé nepřihlásí', $code, 401);
     @unlink($rc_jar);
 
     // Regeneration requires the password and invalidates the old set.
     [$code] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'spatne-heslo'], $cookie_jar);
     check('regenerace se špatným heslem vrací 400', $code, 400);
-    [$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'BloodKingsAdmin123!'], $cookie_jar);
+    [$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => $bk_test_admin_password], $cookie_jar);
     check('se správným heslem vrací novou sadu', $code, 200);
     check('nová sada má zase 10 kódů', count($rr['recoveryCodes'] ?? []), 10);
     $rc_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_rc2');
-    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'BloodKingsAdmin123!', 'totp_code' => $rc[1]], $rc_jar2, '');
+    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[1]], $rc_jar2, '');
     check('starý kód po regeneraci neplatí', $code, 401);
     @unlink($rc_jar2);
 
@@ -2829,7 +2856,7 @@ if (function_exists('bk_totp_calculate')) {
     check('vypnutí se špatným heslem vrací 400', $code, 400);
     check('2FA drží', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
 
-    [$code] = api_post($base, 'action=totp_disable', ['password' => 'BloodKingsAdmin123!'], $cookie_jar);
+    [$code] = api_post($base, 'action=totp_disable', ['password' => $bk_test_admin_password], $cookie_jar);
     check('se správným heslem se vypne', $code, 200);
     check('a v databázi je vypnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 0);
     // Codes without 2FA would be a sign-in backdoor - disabling removes them.
@@ -4812,6 +4839,26 @@ function bk_raw_request(string $url, array $headers = [], ?string $post_body = n
     $size = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
     return [$code, substr($raw, 0, $size), substr($raw, $size)];
 }
+
+// =======================================================================
+// The session cookie carries HttpOnly and SameSite (W1-H1).
+//
+// The deployed config.php starts the session without its own cookie block,
+// and index.php started it even before config.php, so the admin cookie went
+// out bare. db.php now sets the flags before config.php runs; this suite's
+// config.php is exactly such a bare one, which makes it the right witness.
+// =======================================================================
+foreach (['api.php?action=session' => 'API', 'index.php' => 'veřejná stránka', 'admin.php' => 'administrace'] as $ck_path => $ck_label) {
+    [, $ck_head] = bk_raw_request($base . '/' . $ck_path);
+    preg_match('/^set-cookie:\s*(PHPSESSID=[^\r\n]*)/mi', $ck_head, $ck_m);
+    $ck_cookie = $ck_m[1] ?? '';
+    check_true("{$ck_label}: cookie relace přijde", $ck_cookie !== '');
+    check_true("{$ck_label}: cookie relace má HttpOnly", (bool)preg_match('/;\s*HttpOnly/i', $ck_cookie));
+    check_true("{$ck_label}: cookie relace má SameSite=Lax", (bool)preg_match('/;\s*SameSite=Lax/i', $ck_cookie));
+}
+[, $ck_https_head] = bk_raw_request($base . '/api.php?action=session', ['X-Forwarded-Proto: https']);
+preg_match('/^set-cookie:\s*(PHPSESSID=[^\r\n]*)/mi', $ck_https_head, $ck_m);
+check_true('za HTTPS proxy má cookie relace i Secure', (bool)preg_match('/;\s*Secure/i', $ck_m[1] ?? ''));
 
 // =======================================================================
 // Availability in time, through the real tables (W1-B1).

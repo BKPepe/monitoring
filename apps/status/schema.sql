@@ -292,13 +292,14 @@ CREATE TABLE IF NOT EXISTS `settings` (
   `key_value` TEXT DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Výchozí nastavení a uživatel - heslo změňte hned po prvním přihlášení.
--- Default uživatel: admin / heslo: BloodKingsAdmin123!
--- Hash níže je skutečný bcrypt hash tohoto hesla (password_hash('BloodKingsAdmin123!', PASSWORD_BCRYPT)),
--- ne placeholder - přihlášení proto jde přes běžný password_verify(), žádný speciální obchvat v admin.php.
-INSERT INTO `users` (`username`, `password_hash`, `email`, `role`)
-VALUES ('admin', '$2y$12$rRP/Lm2dxcJQmC2xwkhnE.1q.EypQOSl33iBR.t/5HPStN4MPPxme', 'admin@bloodkings.eu', 'admin')
-ON DUPLICATE KEY UPDATE `id`=`id`;
+-- No account is created here. The repository is public, so any password
+-- written into this file is known to everyone, and an install that forgot to
+-- change it was open to anyone who read it. A fresh database has an empty
+-- users table: /app/setup (api.php?action=setup) then creates the first
+-- administrator with a password the installer chooses, and that action is
+-- refused as soon as any account exists.
+
+-- Výchozí nastavení
 
 INSERT INTO `settings` (`key_name`, `key_value`) VALUES
 ('smtp_host', 'smtp.bloodkings.eu'),

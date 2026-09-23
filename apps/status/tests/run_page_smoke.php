@@ -84,6 +84,9 @@ $pages = [
     // assets/ listed its files until W1-F3; the files themselves stay served.
     '/assets/' => ['adresář stylů a log se nevypisuje', [404]],
     '/assets/style.css' => ['styl stránek se dál poskytuje', [200]],
+    // PHP's per-directory settings (the session cookie flags) are read from
+    // disk by the server and are nobody's business over HTTP.
+    '/.user.ini' => ['nastavení PHP není veřejné', [403, 404]],
 ];
 
 /** Strings that mean a broken page even with a 200 status. */
@@ -253,6 +256,71 @@ foreach ($error_pages as $path => [$label, $status]) {
         $failed++;
     }
     $results[] = [$path, $label, $code, $problem, $attempts];
+}
+
+/**
+ * The session cookie's flags.
+ *
+ * The admin login rides on this cookie. Until 09/2026 it went out without
+ * HttpOnly (any injected script could read it) and without SameSite (other
+ * sites' requests carried it), because the deployed config.php started the
+ * session without its own flags. db.php and .user.ini now set them before
+ * anything can start a session; this reads the real header a visitor gets.
+ * No cookie at all is a failure too: the sign-in form cannot work without one.
+ */
+$cookie_pages = [
+    '/admin.php' => 'cookie přihlášení (admin)',
+    '/api.php?action=session' => 'cookie přihlášení (aplikace)',
+];
+foreach ($cookie_pages as $path => $label) {
+    $ch = curl_init($base . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_TIMEOUT => 20,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_USERAGENT => 'BloodKings-PageSmoke',
+    ]);
+    $raw = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $header_size = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $head = is_string($raw) ? substr($raw, 0, $header_size) : '';
+    preg_match_all('/^set-cookie:\s*(.+)$/mi', $head, $cm);
+    // Cloudflare's own cookies (__cf_bm, cf_clearance) are its business and
+    // carry SameSite=None by design; only the application's cookies are ours.
+    $cookies = array_values(array_filter(
+        array_map('trim', $cm[1] ?? []),
+        fn (string $c): bool => !preg_match('/^(__cf|_cf|cf_)/i', $c)
+    ));
+
+    $problem = null;
+    if ($raw === false) {
+        $problem = 'požadavek selhal';
+    } elseif ($cookies === []) {
+        $problem = 'nepřišla žádná cookie relace - přihlášení bez ní nefunguje';
+    } else {
+        foreach ($cookies as $cookie) {
+            $cookie_name = strtok($cookie, '=');
+            $missing = [];
+            if (!preg_match('/;\s*httponly\b/i', $cookie)) {
+                $missing[] = 'HttpOnly';
+            }
+            if (!preg_match('/;\s*samesite=(lax|strict)\b/i', $cookie)) {
+                $missing[] = 'SameSite=Lax';
+            }
+            if (str_starts_with($base, 'https://') && !preg_match('/;\s*secure\b/i', $cookie)) {
+                $missing[] = 'Secure';
+            }
+            if ($missing !== []) {
+                $problem = sprintf('cookie %s nemá %s', $cookie_name, implode(', ', $missing));
+                break;
+            }
+        }
+    }
+    if ($problem !== null) {
+        $failed++;
+    }
+    $results[] = [$path, $label, $code, $problem, 1];
 }
 
 /** printf counts bytes, so Czech diacritics would misalign the columns. */

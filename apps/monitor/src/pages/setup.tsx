@@ -4,7 +4,9 @@ import { useLanguage } from '@/context/language-context';
 export function SetupPage() {
   const { t } = useLanguage();
   const [installed, setInstalled] = useState<boolean>(true);
-  const [username, setUsername] = useState('admin');
+  // Empty, not 'admin': the repo is public and a prefilled name is half of a
+  // known default login (W1-H2).
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');
@@ -17,6 +19,7 @@ export function SetupPage() {
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotMsg, setForgotMsg] = useState('');
+  const [forgotError, setForgotError] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
 
   useEffect(() => {
@@ -79,36 +82,40 @@ export function SetupPage() {
     if (!forgotEmail) return;
     setForgotLoading(true);
     setForgotMsg('');
+    setForgotError('');
 
-    try {
-      const res = await fetch('/status/api.php?action=forgot_password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail }),
-      }).catch(() => null);
-
-      if (res && res.ok) {
-        setForgotMsg(t('setup.forgot_sent', 'Návod k obnovení hesla byl odeslán na váš e-mail.'));
-      } else {
-        setForgotMsg(
-          t(
-            'setup.forgot_processed',
-            { email: forgotEmail },
-            `Žádost o reset hesla pro ${forgotEmail} byla zpracována. Pokud účet existuje, obdržíte e-mail s instrukcemi.`
-          )
-        );
-      }
-    } catch {
+    // Only a 2xx means the server took the request. It used to report success
+    // on a 500 and even on a dead network, so nobody knew to try again. The
+    // success text stays generic: the server never says whether the account
+    // exists, and this page must not either.
+    const res = await fetch('/status/api.php?action=forgot_password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: forgotEmail }),
+    }).catch(() => null);
+    if (res && res.ok) {
       setForgotMsg(
         t(
-          'setup.forgot_sent_to',
+          'setup.forgot_processed',
           { email: forgotEmail },
-          `Na e-mail ${forgotEmail} byly odeslány instrukce pro obnovu hesla.`
+          `Žádost o reset hesla pro ${forgotEmail} byla zpracována. Pokud účet existuje, obdržíte e-mail s instrukcemi.`
         )
       );
-    } finally {
-      setForgotLoading(false);
+    } else {
+      setForgotError(
+        res
+          ? t(
+              'setup.forgot_failed_http',
+              { status: res.status },
+              `Žádost o obnovu hesla se nepodařilo odeslat (HTTP ${res.status}). Zkuste to prosím znovu.`
+            )
+          : t(
+              'setup.forgot_failed_network',
+              'Žádost o obnovu hesla se nepodařilo odeslat - server je nedostupný. Zkuste to prosím znovu.'
+            )
+      );
     }
+    setForgotLoading(false);
   };
 
   async function tryLogin(u: string, p: string, totp?: string) {
@@ -465,6 +472,22 @@ export function SetupPage() {
             <h3 style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f8fafc', marginBottom: '0.5rem' }}>
               {t('setup.forgot_title', 'Obnovení zapomenutého hesla')}
             </h3>
+            {forgotError && (
+              <p
+                role="alert"
+                style={{
+                  fontSize: '0.8125rem',
+                  color: '#fca5a5',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid #ef4444',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: '0.375rem',
+                  marginBottom: '0.5rem',
+                }}
+              >
+                {forgotError}
+              </p>
+            )}
             {forgotMsg ? (
               <p
                 style={{
