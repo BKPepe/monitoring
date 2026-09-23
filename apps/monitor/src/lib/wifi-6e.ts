@@ -34,6 +34,9 @@ export function describeWifi6e(radio: Wifi6eRadio, t: TranslateFn): string | nul
   if (known === null || capable === null || capable > known) {
     return t('net.wifi6e_unknown', 'Podpora Wi-Fi 6E: neznámá (router nemá hostapd-utils ani hostapd přes ubus)');
   }
+  // "0 z 0 klientů" is a fraction of nothing: the router knows no client's
+  // support yet, so the line has nothing to say (W1-C2).
+  if (known === 0) return null;
   const base = t(
     'net.wifi6e_known',
     { capable, known },

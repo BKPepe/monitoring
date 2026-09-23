@@ -8,6 +8,7 @@ import { insertGaps } from '@/lib/series-gaps';
 import { ErrorState } from '@/components/ui/states';
 import type { ChartData, SpeedtestMeasurement } from '@/api/types';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { serverTimeMs } from '@/lib/probe-locations';
 
 interface Average {
   days: number;
@@ -41,6 +42,18 @@ function startedByLabel(startedBy: SpeedtestMeasurement['startedBy'], t: Transla
 }
 
 /**
+ * The test server, or why there is none. An agent before 0.1.7 sent neither
+ * the server nor the tool, so "Server —" on those rows read as a failure to
+ * find one. It was never recorded, and nothing is backfilled or guessed.
+ */
+function serverLabel(m: SpeedtestMeasurement, t: TranslateFn): { text: string; muted: boolean } {
+  if (m.server) return { text: m.server, muted: false };
+  if (m.tool == null)
+    return { text: t('speed.server_not_recorded', 'nezaznamenáno (agent 0.1.6 a starší)'), muted: true };
+  return { text: '—', muted: false };
+}
+
+/**
  * Link speed measured by the router itself (librespeed-cli).
  *
  * The router stores results in /tmp, a ramdisk on OpenWrt - gone after a
@@ -48,8 +61,25 @@ function startedByLabel(startedBy: SpeedtestMeasurement['startedBy'], t: Transla
  * where that history survives.
  */
 export function SpeedtestCard({ monitorId }: { monitorId: number }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const [data, setData] = useState<SpeedtestData | null | undefined>(undefined);
+  const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+  // measured_at is MySQL's 'YYYY-MM-DD HH:MM:SS': WebKit's Date.parse gives NaN
+  // for the space form, which drew an empty chart in Safari. The table printed
+  // the raw string; it now reads as a date in the chosen language.
+  const at = (value: string) => serverTimeMs(value);
+  const whenLabel = (value: string) => {
+    const ms = at(value);
+    return ms === null
+      ? value
+      : new Date(ms).toLocaleString(locale, {
+          day: 'numeric',
+          month: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+  };
 
   const load = useCallback(() => {
     return fetch(`/status/api.php?action=speedtest_history&monitor_id=${monitorId}&limit=30`, {
@@ -94,10 +124,15 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
   // a ramdisk - so it gets drawn. A failed test stays null and reads as a gap,
   // never as zero throughput.
   const ascending = [...data.measurements].reverse();
+  // A row whose time cannot be read has no place on a time axis.
+  const timed = ascending.flatMap((m) => {
+    const ms = at(m.measuredAt);
+    return ms === null ? [] : [{ m, ms }];
+  });
   // The table shows the newest ten; the chart above carries the whole answer.
   const recent = data.measurements.slice(0, 10);
   const speedChart: ChartData | null =
-    ascending.length >= 2
+    timed.length >= 2
       ? {
           id: `speedtest-${monitorId}`,
           title: t('speed.history_title', 'Naměřená rychlost v čase'),
@@ -109,14 +144,14 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
               label: t('speed.download', 'Stahování'),
               unit: 'Mb/s',
               tone: 'network',
-              points: insertGaps(ascending.map((m) => ({ t: Date.parse(m.measuredAt), v: m.downloadMbps }))),
+              points: insertGaps(timed.map(({ m, ms }) => ({ t: ms, v: m.downloadMbps }))),
             },
             {
               key: 'upload',
               label: t('speed.upload', 'Odesílání'),
               unit: 'Mb/s',
               tone: 'memory',
-              points: insertGaps(ascending.map((m) => ({ t: Date.parse(m.measuredAt), v: m.uploadMbps }))),
+              points: insertGaps(timed.map(({ m, ms }) => ({ t: ms, v: m.uploadMbps }))),
             },
           ],
         }
@@ -172,11 +207,17 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
           <TableBody>
             {recent.map((m) => (
               <TableRow key={m.measuredAt}>
-                <TableCell className="whitespace-nowrap tabular-nums">{m.measuredAt}</TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{whenLabel(m.measuredAt)}</TableCell>
                 {/* A damaged or failed measurement has no speed: a dash, never 0 Mb/s. */}
                 <TableCell className="tabular-nums">{fmt(m.downloadMbps, 'Mb/s')}</TableCell>
                 <TableCell className="tabular-nums">{fmt(m.uploadMbps, 'Mb/s')}</TableCell>
-                <TableCell className="text-muted-foreground">{m.server ?? '—'}</TableCell>
+                <TableCell
+                  className={
+                    serverLabel(m, t).muted ? 'text-muted-foreground text-2xs italic' : 'text-muted-foreground'
+                  }
+                >
+                  {serverLabel(m, t).text}
+                </TableCell>
                 <TableCell className="text-muted-foreground">{startedByLabel(m.startedBy, t)}</TableCell>
               </TableRow>
             ))}
@@ -218,7 +259,7 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
       </Table>
 
       <p className="text-muted-foreground text-2xs">
-        {t('speed.last', { at: latest.measuredAt }, `Poslední měření: ${latest.measuredAt}`)}
+        {t('speed.last', { at: whenLabel(latest.measuredAt) }, `Poslední měření: ${whenLabel(latest.measuredAt)}`)}
         {latest.server ? ` · ${latest.server}` : ''}
       </p>
     </Card>

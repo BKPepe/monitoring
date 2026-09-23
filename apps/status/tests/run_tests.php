@@ -3353,6 +3353,52 @@ if (!defined('BK_DEFAULT_THRESHOLDS')
 }
 
 
+// --- Řádky chyb z logu routeru (W1-C3) --------------------------------------------
+// Agent 0.1.8 posílá posledních pět chybových řádků, zamaskovaných už na
+// routeru. Server masky opakuje (starší nebo cizí agent), drží nejvýš pět
+// řádků po 200 znacích a s vypnutým přepínačem monitoru neuloží nic.
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_mask_log_line', 'bk_sanitize_log_lines', 'bk_log_lines_details']);
+{
+    check('IPv4 se zamaskuje', bk_mask_log_line('DHCPACK(br-lan) 192.168.1.23 to host'), 'DHCPACK(br-lan) <ipv4> to host');
+    check('MAC se zamaskuje', bk_mask_log_line('station aa:bb:cc:dd:ee:0f left'), 'station <mac> left');
+    check('IPv6 se zamaskuje', bk_mask_log_line('route to fe80::1c2:3ff:fe44:5566 failed'), 'route to <ipv6> failed');
+    check('čas 12:34:56 IPv6 není', bk_mask_log_line('at 12:34:56 retry'), 'at 12:34:56 retry');
+    check('e-mail se zamaskuje', bk_mask_log_line('mail for jan.novak@example.com bounced'), 'mail for <email> bounced');
+    check('místní jméno se zamaskuje', bk_mask_log_line('lookup nas.lan failed'), 'lookup <host> failed');
+    check('dlouhé hex id se zamaskuje', bk_mask_log_line('serial 0123456789abcdef bad'), 'serial <id> bad');
+    check('netisknutelný bajt je otazník', bk_mask_log_line("bad\x01byte"), 'bad?byte');
+    check('řádek nad 200 znaků se zkrátí a řekne to', strlen(bk_mask_log_line(str_repeat('a ', 150))), 200);
+    check_true('a končí třemi tečkami', str_ends_with(bk_mask_log_line(str_repeat('a ', 150)), '...'));
+
+    $ll = bk_sanitize_log_lines([
+        ['ts' => 1758600000, 'prog' => 'netifd', 'msg' => 'Interface wan is down', 'count' => 3],
+        ['ts' => 'x', 'prog' => 'bad prog!', 'msg' => 'kernel: oops', 'count' => 0],
+        ['ts' => 1, 'prog' => 'a', 'msg' => 42],
+        'není objekt',
+        ['msg' => '   '],
+    ]);
+    check('položka bez textu a neplatné kusy vypadnou', count($ll), 2);
+    check('platná položka projde beze změny', $ll[0], ['ts' => 1758600000, 'prog' => 'netifd', 'msg' => 'Interface wan is down', 'count' => 3]);
+    check('neplatný čas, program a počet: null, null, 1', [$ll[1]['ts'], $ll[1]['prog'], $ll[1]['count']], [null, null, 1]);
+    check('nejvýš pět řádků', count(bk_sanitize_log_lines(array_fill(0, 9, ['msg' => 'x']))), 5);
+    check('prázdný seznam = log přečten, chyba žádná', bk_sanitize_log_lines([]), []);
+    check('nečitelný seznam je null', bk_sanitize_log_lines('řádky'), null);
+    check('mapa místo seznamu je null', bk_sanitize_log_lines(['a' => ['msg' => 'x']]), null);
+
+    $ld_report = ['log_errors_recent' => [['msg' => 'boom 10.0.0.1']], 'log_window_secs' => 7200, 'log_lines_state' => 'on'];
+    check('zapnuto: řádky, okno i stav se uloží',
+        bk_log_lines_details($ld_report, true),
+        ['log_errors_recent' => [['ts' => null, 'prog' => null, 'msg' => 'boom <ipv4>', 'count' => 1]], 'log_window_secs' => 7200, 'log_lines_state' => 'on']);
+    check('vypnuto u monitoru: žádný řádek, stav řekne proč',
+        bk_log_lines_details($ld_report, false),
+        ['log_errors_recent' => null, 'log_window_secs' => 7200, 'log_lines_state' => 'off_monitor']);
+    check('vypnuto na routeru zůstane vypnuto na routeru',
+        bk_log_lines_details(['log_errors_recent' => null, 'log_lines_state' => 'off_router'], false)['log_lines_state'], 'off_router');
+    check('starší agent bez klíčů nic nezanechá', bk_log_lines_details(['cpu' => 5], true), []);
+    check('záporné okno a neznámý stav jsou null',
+        bk_log_lines_details(['log_window_secs' => -5, 'log_lines_state' => 'maybe'], true), ['log_window_secs' => null, 'log_lines_state' => null]);
+}
+
 $failed = bk_test_report('čisté funkce');
 // Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {

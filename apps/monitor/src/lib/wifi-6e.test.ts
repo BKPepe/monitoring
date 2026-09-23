@@ -47,3 +47,11 @@ describe('describeWifi6e', () => {
     expect(describeWifi6e({ band: '2.4GHz', clients: null }, t)).toBeNull();
   });
 });
+
+describe('describeWifi6e: nulový jmenovatel (W1-C2)', () => {
+  it('„0 z 0 klientů" se nevypisuje, i když jsou klienti připojení', () => {
+    expect(
+      describeWifi6e({ band: '2.4GHz', clients: 6, clients_6ghz_capable: 0, clients_caps_known: 0 }, t)
+    ).toBeNull();
+  });
+});

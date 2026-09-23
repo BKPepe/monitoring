@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `wan_plan_up_mbit` INT DEFAULT NULL, -- 1-100000
   `wan_plan_ok_pct` TINYINT UNSIGNED DEFAULT NULL, -- 30-100: share of the plan still counted as "as promised"; NULL = 85
   `wan_probe_enabled` TINYINT NOT NULL DEFAULT 0, -- consent to a speed test started by the agent; OFF by default, it moves gigabytes over the line
+  -- The last error lines of the router's log may leave the router (masked, at most 5, kept in
+  -- last_details only). 0 = the owner switched it off for this monitor; the agent is told so.
+  `log_lines_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`),
   FOREIGN KEY (`asset_id`) REFERENCES `assets`(`id`) ON DELETE SET NULL

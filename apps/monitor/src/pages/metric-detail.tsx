@@ -9,6 +9,7 @@ import {
   Network,
   GitCompareArrows,
   PenLine,
+  ScrollText,
   StickyNote,
   Trash2,
   TrendingDown,
@@ -44,11 +45,13 @@ import { percentile } from '@/lib/percentiles';
 import { metricHelp } from '@/lib/metric-help';
 import { betterDirection } from '@/lib/metric-direction';
 import { metricVerdict } from '@/lib/metric-verdict';
-import { rateSignalMetric, signalTone } from '@/lib/signal-quality';
+import { lteVerdict, rateSignalMetric, signalTone } from '@/lib/signal-quality';
 import { signalAdvice, signalLevelLabel } from '@/lib/signal-texts';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
+import { LogErrorLines } from '@/components/log-error-lines';
+import { readLogLines, type LogLinesView } from '@/lib/log-lines';
 
 /**
  * Level 3 - detail of a single metric.
@@ -239,6 +242,41 @@ export function MetricDetailPage() {
       active = false;
     };
   }, [monId, metric, monitorType]);
+
+  /**
+   * The lines behind the log error count (agent 0.1.8, W1-C3). A count of
+   * log lines has no daily rhythm and correlates with nothing: what the
+   * operator needs is which program said what. They live in the monitor's
+   * last report, not in a series. null = not asked yet, 'failed' = the
+   * monitors call failed (said out loud, the rest of the page stays).
+   */
+  const [logAttempt, setLogAttempt] = React.useState(0);
+  // The answer carries the request it answers, so another metric or a retry
+  // reads as "not asked yet" without a reset inside the effect.
+  const logKey = `${monId}|${metric}|${logAttempt}`;
+  const [logAnswer, setLogAnswer] = React.useState<{ key: string; view: LogLinesView | 'failed' } | null>(null);
+  const logLines = metric === 'log_errors_24h' && logAnswer?.key === logKey ? logAnswer.view : null;
+  const loadLogLines = React.useCallback(() => setLogAttempt((n) => n + 1), []);
+  React.useEffect(() => {
+    if (metric !== 'log_errors_24h') return;
+    let active = true;
+    appApi
+      .getMonitors()
+      .then((list) => {
+        if (!active) return;
+        const mon = list.find((m) => m.id === monId);
+        setLogAnswer({ key: logKey, view: readLogLines(mon?.details as Record<string, unknown> | undefined) });
+      })
+      .catch(() => {
+        if (active) setLogAnswer({ key: logKey, view: 'failed' });
+      });
+    return () => {
+      active = false;
+    };
+  }, [logKey, monId, metric]);
+  // Only once the lines exist do they replace the heatmap and correlations; an
+  // older agent keeps the page it had.
+  const linesReplaceCharts = logLines !== null && logLines !== 'failed' && logLines.kind !== 'absent';
 
   const loadAnnotations = React.useCallback(() => {
     appApi
@@ -520,6 +558,20 @@ export function MetricDetailPage() {
   const worstValue = direction === 'higher' ? stats.min : stats.max;
   const signalRating = rateSignalMetric(metric, stats.current);
   /**
+   * What to do about an LTE number is decided by all three of them together:
+   * a good RSRP with a bad SINR is interference, and "nothing to improve"
+   * from the RSRP alone was wrong on exactly that link. The other two come
+   * from the monitor's latest report, so the combined advice only speaks for
+   * "now" - a zoomed-in past window keeps this number's own advice.
+   */
+  const signalAdviceKey = (() => {
+    if (!signalRating) return null;
+    if (zoomWindow || !['lte_rsrp', 'lte_rsrq', 'lte_sinr'].includes(metric)) return signalRating.advice;
+    const latestOf = (key: string) =>
+      key === metric ? stats.current : (detail?.related.find((r) => r.key === key)?.latest ?? null);
+    return lteVerdict(latestOf('lte_rsrp'), latestOf('lte_rsrq'), latestOf('lte_sinr'))?.advice ?? signalRating.advice;
+  })();
+  /**
    * How many measurements the window stands on. On the 90d/1y rollup a chart
    * point is a whole day, so counting points would report a year of per-minute
    * reporting as "365 measurements"; the daily rows carry the real count.
@@ -713,7 +765,8 @@ export function MetricDetailPage() {
             <>
               <Badge variant={signalTone(signalRating.level)}>{signalLevelLabel(t, signalRating.level)}</Badge>
               <span className="text-muted-foreground">
-                {signalAdvice(t, signalRating.advice) || t('signal.nothing_to_do', 'Není co zlepšovat.')}
+                {signalAdvice(t, signalAdviceKey ?? signalRating.advice) ||
+                  t('signal.nothing_to_do', 'Není co zlepšovat.')}
               </span>
             </>
           ) : (
@@ -986,56 +1039,77 @@ export function MetricDetailPage() {
         </Card>
       )}
 
-      {/* Daily rhythm - its own 30-day window on purpose, see the effect above. */}
-      <Card className="space-y-3 p-5">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <LayoutGrid className="size-4 text-primary" />
-          {t('metric.heatmap_title', 'Denní rytmus (30 dní)')}
-        </h2>
-        {heatmap !== null ? (
-          <HeatmapPanel
-            data={heatmap}
-            tone={tone}
-            unit={unit}
-            convert={isRate ? (v) => convertRate(v, activeUnit) : undefined}
-          />
-        ) : (
-          <div className="text-muted-foreground grid h-32 place-items-center text-xs">
-            {heatmapFailed
-              ? t('metric.heatmap_failed', 'Heatmapu se nepodařilo načíst')
-              : t('metric.loading', 'Načítám měření…')}
-          </div>
-        )}
-        <p className="text-muted-foreground text-2xs leading-relaxed">
-          {t(
-            'metric.heatmap_note',
-            'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
-          )}
-        </p>
-      </Card>
-
-      {/* What else moved with this metric. Hidden entirely when the metric is
-          out of scope (response_time is not stored with the agent's rows) -
-          an empty card would suggest "nothing correlates", which is a claim
-          nobody measured. */}
-      {corrAvailable !== false && (
-        <Card className="space-y-3 p-5">
+      {(linesReplaceCharts || logLines === 'failed') && (
+        <Card className="space-y-3 p-5" data-testid="log-lines-card">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <GitCompareArrows className="size-4 text-primary" />
-            {t('corr.title', 'Co se hýbalo spolu s touto metrikou')}
+            <ScrollText className="size-4 text-primary" />
+            {t('metric.log_lines_title', 'Chybové řádky z posledního hlášení')}
           </h2>
-          {corr ? (
-            <CorrelationPanel
-              data={corr}
-              assetId={assetId ?? detail?.monitor.assetId ?? undefined}
-              monitorId={monId}
-              showingAll={corrAll}
-              onShowAll={() => setCorrAllFor(corrQuestion)}
+          {logLines === 'failed' ? (
+            <ErrorState
+              message={t('metric.log_lines_failed', 'Řádky z logu se nepodařilo načíst.')}
+              onRetry={loadLogLines}
             />
           ) : (
-            <LoadingState label={t('metric.loading', 'Načítám měření…')} size="inline" />
+            logLines !== null && <LogErrorLines view={logLines} open />
           )}
         </Card>
+      )}
+
+      {!linesReplaceCharts && (
+        <>
+          {/* Daily rhythm - its own 30-day window on purpose, see the effect above. */}
+          <Card className="space-y-3 p-5">
+            <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <LayoutGrid className="size-4 text-primary" />
+              {t('metric.heatmap_title', 'Denní rytmus (30 dní)')}
+            </h2>
+            {heatmap !== null ? (
+              <HeatmapPanel
+                data={heatmap}
+                tone={tone}
+                unit={unit}
+                convert={isRate ? (v) => convertRate(v, activeUnit) : undefined}
+              />
+            ) : (
+              <div className="text-muted-foreground grid h-32 place-items-center text-xs">
+                {heatmapFailed
+                  ? t('metric.heatmap_failed', 'Heatmapu se nepodařilo načíst')
+                  : t('metric.loading', 'Načítám měření…')}
+              </div>
+            )}
+            <p className="text-muted-foreground text-2xs leading-relaxed">
+              {t(
+                'metric.heatmap_note',
+                'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
+              )}
+            </p>
+          </Card>
+
+          {/* What else moved with this metric. Hidden entirely when the metric is
+            out of scope (response_time is not stored with the agent's rows) -
+            an empty card would suggest "nothing correlates", which is a claim
+            nobody measured. */}
+          {corrAvailable !== false && (
+            <Card className="space-y-3 p-5">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                <GitCompareArrows className="size-4 text-primary" />
+                {t('corr.title', 'Co se hýbalo spolu s touto metrikou')}
+              </h2>
+              {corr ? (
+                <CorrelationPanel
+                  data={corr}
+                  assetId={assetId ?? detail?.monitor.assetId ?? undefined}
+                  monitorId={monId}
+                  showingAll={corrAll}
+                  onShowAll={() => setCorrAllFor(corrQuestion)}
+                />
+              ) : (
+                <LoadingState label={t('metric.loading', 'Načítám měření…')} size="inline" />
+              )}
+            </Card>
+          )}
+        </>
       )}
 
       {/* Value distribution - the average of a bimodal load lies, the histogram does not. */}

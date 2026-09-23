@@ -9,6 +9,7 @@ import {
   clientSecurityLine,
   encryptionLabel,
   fiveGhzLine,
+  radioGenerationLabel,
   radioProfileLabel,
 } from './wifi-profile';
 
@@ -213,5 +214,18 @@ describe('bandLabel', () => {
     expect(bandLabel(null, 'cs')).toBeNull();
     expect(bandLabel(undefined, 'en')).toBeNull();
     expect(bandLabel('', 'cs')).toBeNull();
+  });
+});
+
+describe('fiveGhzLine a radioGenerationLabel (W1-C2)', () => {
+  const radio24: WifiRadio = { ...radio, band: '2.4GHz', clients_opclass_known: 0, clients_5ghz_capable: 0 };
+
+  it('„Umí 5 GHz: 0 z 0 klientů" se nevypisuje', () => {
+    expect(fiveGhzLine(radio24, t)).toBeNull();
+  });
+
+  it('generace bez šířky kanálu, neznámá je null', () => {
+    expect(radioGenerationLabel(radio, t)).toBe('Wi-Fi 6');
+    expect(radioGenerationLabel({ ...radio, generation: null }, t)).toBeNull();
   });
 });

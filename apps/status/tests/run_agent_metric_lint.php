@@ -132,6 +132,14 @@ $not_metrics = [
     // The router's own speed test (wave 2 of the release). State object in the
     // report, grant and durable counters in the response.
     'wan_probe_state', 'wan_probe', 'wan_probe_server', 'wan_probe_seed',
+    // The error lines behind log_errors_24h (agent 0.1.8, W1-C3): kept in
+    // last_details only (owner decision 5.7, no history). log_window_secs
+    // labels the count ("in the last N h"), it is not a series of its own;
+    // log_lines_state says which switch keeps the lines at home. `log_lines`
+    // is a key of the server RESPONSE the agent parses by name. ts / prog /
+    // msg / count are the items of log_errors_recent[] (composed inside awk).
+    'log_errors_recent', 'log_window_secs', 'log_lines_state', 'log_lines',
+    'ts', 'prog', 'msg', 'count',
 
     // Nested keys, one block per parent. They are listed because the regex above
     // does not know nesting: written with a single-quoted printf they would fail

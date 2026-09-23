@@ -121,6 +121,14 @@ server vrací příkaz (`restart_wan`, `restart_wireguard`, `reboot_router`,
 ověřuje. Go implementace musí použít **identický payload i pořadí polí**, jinak
 podpisy nesednou a Remote Actions přestanou fungovat.
 
+**Řádky chyb z logu (agent 0.1.8, OpenWrt).** `log_errors_recent` (nejvýš 5
+`{ts, prog, msg, count}`), `log_window_secs` a `log_lines_state` se ukládají
+jen do `last_details`, po druhém maskování na serveru (e-mail, MAC, IPv6,
+IPv4, místní hostitelé, hex id; ASCII, 200 znaků). Odpověď na každé hlášení
+nese `"log_lines":true|false` **bez mezer** podle `monitors.log_lines_enabled`
+(výchozí 1); agent ho hledá doslovně a při `false` přestane řádky sbírat.
+Při vypnutém přepínači server řádky neuloží (`null`, stav `off_monitor`).
+
 **Potvrzení dávky měření rychlosti (agent 0.1.7).** Nese-li payload
 `speedtests[]`, odpověď obsahuje klíč `speedtests_acked`: časovou značku
 nejnovější položky, která je opravdu vyřízená (uložená, už uložená dřív, nebo

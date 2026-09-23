@@ -45,6 +45,11 @@ function generationLabel(generation: WifiGeneration, band: WifiRadio['band'], t:
 const isGeneration = (value: unknown): value is WifiGeneration =>
   value === 0 || value === 4 || value === 5 || value === 6 || value === 7;
 
+/** `Wi-Fi 6` alone, for a place that already shows the channel width; null when unknown. */
+export function radioGenerationLabel(r: WifiRadio, t: TranslateFn): string | null {
+  return isGeneration(r.generation) ? generationLabel(r.generation, r.band, t) : null;
+}
+
 /** `Wi-Fi 6 · 80 MHz`, or null when the mode is unknown - never "Wi-Fi 0" or "Wi-Fi null". */
 export function radioProfileLabel(r: WifiRadio, t: TranslateFn): string | null {
   if (!isGeneration(r.generation)) return null;
@@ -176,6 +181,9 @@ export function fiveGhzLine(r: WifiRadio, t: TranslateFn): string | null {
   if (known === null || capable === null || capable > known) {
     return t('net.wifi_5g_unknown', 'Podpora 5 GHz: neznámá (router ji bez hostapd-utils nezjistí)');
   }
+  // No client said which bands it can use: "0 z 0 klientů" would be a
+  // fraction of nothing (W1-C2).
+  if (known === 0) return null;
   return t('net.wifi_5g_capable', { capable, known }, `Umí 5 GHz: ${capable} z ${known} klientů, kteří to uvedli`);
 }
 

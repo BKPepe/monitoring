@@ -827,6 +827,21 @@ Pravidla:
   domácnosti – kolik drátových zařízení sdílí které vedení – a jen když se
   obojí opravdu změřilo.
 
+**Poslední řádky chyb z logu routeru (agent 0.1.8, OpenWrt)** jezdí vedle
+`log_errors_24h`: `log_errors_recent` (nejvýš 5 `{ts, prog, msg, count}`,
+nejnovější první; `[]` = log se přečetl a žádný řádek chyby v něm není,
+`null` = žádný čitelný log, nebo je posílání vypnuté), `log_window_secs` (kolik
+sekund pokrývá počítaný buffer logu, pro „chyby za posledních N h") a
+`log_lines_state` (`on`, `off_monitor`, `off_router`). Rozhodnutí vlastníka:
+řádky smějí router opustit maskované, nejvýš pět, uložené jen v
+`last_details` - žádná tabulka historie - a vypínatelné u každého monitoru.
+Server je maskuje ještě jednou (e-mail, MAC, IPv6, IPv4, místní jména hostitelů,
+hex id od 12 znaků; tisknutelné ASCII, 200 znaků), takže ani starší agent
+neuloží syrovou adresu. S vypnutým `log_lines_enabled` monitoru si neuloží
+žádný (`log_errors_recent: null`, `log_lines_state: "off_monitor"`) a každá
+odpověď nese `"log_lines":true` nebo `"log_lines":false` - bez mezer, agent to
+porovnává doslova a od dalšího běhu přestane sbírat.
+
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Rozhraní pro vzdálené měřicí uzly. Autorizace sdíleným `cron_key`

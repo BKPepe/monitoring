@@ -106,6 +106,8 @@ export interface ApiMonitor {
   /** The monitor's target is unreachable from the hosting (private network) - admin-only. */
   unreachableTarget?: boolean;
   remoteActionsEnabled?: boolean;
+  /** The router's masked log lines are collected and stored (W1-C3); admin view only, absent on an older server. */
+  logLinesEnabled?: boolean;
   allowedActions?: string[];
 }
 

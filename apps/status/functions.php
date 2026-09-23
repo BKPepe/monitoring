@@ -9381,6 +9381,101 @@ function bk_sanitize_lan_ports($raw): ?array {
 }
 
 /**
+ * One line of the router's log as the server keeps it (W1-C3). Pure.
+ *
+ * The agent masks the line before it leaves the router (owner decision 5.7);
+ * this runs the same masks again, so an older or a foreign agent cannot put a
+ * raw address into the details: e-mail, MAC, IPv6 (validated, so a clock time
+ * "12:34:56" stays), IPv4, local host names and long hex ids (serials, keys).
+ * Only printable ASCII stays, and a line is at most 200 characters.
+ */
+function bk_mask_log_line(string $line): string {
+    $line = (string)preg_replace('/[^\x20-\x7E]/', '?', $line);
+    $line = (string)preg_replace('/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/', '<email>', $line);
+    $line = (string)preg_replace('/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])/', '<mac>', $line);
+    $line = (string)preg_replace_callback('/(?<![0-9A-Za-z:.])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(?![0-9A-Za-z:])/', function (array $m): string {
+        $candidate = rtrim($m[0], '.');
+        if (filter_var($candidate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            return '<ipv6>' . substr($m[0], strlen($candidate));
+        }
+        return $m[0];
+    }, $line);
+    $line = (string)preg_replace('/(?<![0-9.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9])/', '<ipv4>', $line);
+    $line = (string)preg_replace('/\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:lan|local|localdomain|home\.arpa|home|internal)\b/i', '<host>', $line);
+    $line = (string)preg_replace('/\b[0-9A-Fa-f]{12,}\b/', '<id>', $line);
+    $line = trim($line);
+    return strlen($line) > 200 ? substr($line, 0, 197) . '...' : $line;
+}
+
+/**
+ * The last error lines of an OpenWrt router's log (agent 0.1.8, W1-C3).
+ *
+ * At most five, newest first, each {ts, prog, msg, count}: ts is the newest
+ * repeat (epoch seconds or null), prog the program that wrote it or null,
+ * msg the masked text, count how often it repeats in the buffer (at least 1).
+ * An item without a text is dropped rather than shown empty. null = the
+ * router sent no readable list; [] = it read the log and found no error line.
+ *
+ * @return ?list<array{ts: ?int, prog: ?string, msg: string, count: int}>
+ */
+function bk_sanitize_log_lines($raw): ?array {
+    if (!is_array($raw) || !array_is_list($raw)) {
+        return null;
+    }
+    $out = [];
+    foreach (array_slice($raw, 0, 5) as $item) {
+        if (!is_array($item) || !isset($item['msg']) || !is_string($item['msg'])) {
+            continue;
+        }
+        $msg = bk_mask_log_line($item['msg']);
+        if ($msg === '') {
+            continue;
+        }
+        $ts = $item['ts'] ?? null;
+        $prog = $item['prog'] ?? null;
+        $count = $item['count'] ?? null;
+        $out[] = [
+            'ts' => (is_int($ts) || (is_string($ts) && ctype_digit($ts))) && (int)$ts > 0 ? (int)$ts : null,
+            'prog' => is_string($prog) && preg_match('/^[A-Za-z0-9_.@\/-]{1,64}$/', $prog) ? $prog : null,
+            'msg' => $msg,
+            'count' => (is_int($count) || (is_string($count) && ctype_digit($count))) && (int)$count >= 1 ? (int)$count : 1,
+        ];
+    }
+    return $out;
+}
+
+/**
+ * The three log-line keys of a report as last_details keeps them (W1-C3).
+ *
+ * Only keys the report carries are returned, so an older agent that sends
+ * none of them leaves nothing behind. With the monitor's switch off (owner
+ * decision 5.7, default on) no line is kept whatever the agent sent, and the
+ * state says who switched it off, so the page does not print "—" as if the
+ * router had simply said nothing.
+ *
+ * @param array<string, mixed> $data the agent's report
+ * @return array<string, mixed>
+ */
+function bk_log_lines_details(array $data, bool $enabled): array {
+    $out = [];
+    if (array_key_exists('log_errors_recent', $data)) {
+        $out['log_errors_recent'] = $enabled ? bk_sanitize_log_lines($data['log_errors_recent']) : null;
+    }
+    if (array_key_exists('log_window_secs', $data)) {
+        $win = $data['log_window_secs'];
+        $out['log_window_secs'] = (is_int($win) || (is_string($win) && ctype_digit($win))) && (int)$win >= 0 ? (int)$win : null;
+    }
+    if (array_key_exists('log_lines_state', $data) || (!$enabled && array_key_exists('log_errors_recent', $data))) {
+        $state = $data['log_lines_state'] ?? null;
+        $state = in_array($state, ['on', 'off_monitor', 'off_router'], true) ? $state : null;
+        // The router may not have heard the switch yet (it reads the answer
+        // of this very report); what the page shows is what is stored.
+        $out['log_lines_state'] = (!$enabled && $state !== 'off_router') ? 'off_monitor' : $state;
+    }
+    return $out;
+}
+
+/**
  * Fits the details of a monitor into the `last_details` TEXT column.
  *
  * The largest lists go first, then the largest strings; the scalars the UI

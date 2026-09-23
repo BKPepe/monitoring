@@ -26,6 +26,7 @@ import { useSession } from '@/api/use-session';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
 import { ProcessTop } from '@/components/process-top';
 import { lteVerdict, rateRsrp, rateRsrq, rateSinr, signalTone } from '@/lib/signal-quality';
+import { signalAdvice, signalLevelLabel } from '@/lib/signal-texts';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -56,6 +57,8 @@ import { ErrorState, LoadingState } from '@/components/ui/states';
 import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
 import { LanPortMap } from '@/components/lan-port-map';
 import { WifiRadioList } from '@/components/wifi-radio-list';
+import { LogErrorLines } from '@/components/log-error-lines';
+import { logWindow, readLogLines } from '@/lib/log-lines';
 import { seriesForTile } from '@/lib/tile-series';
 import { timelineSeverity, timelineTitle } from '@/lib/timeline-events';
 import { monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
@@ -1660,6 +1663,7 @@ function NetworkTab({
 
   const wifi: any[] = Array.isArray(d.wifi_radios) ? d.wifi_radios : [];
   const lteOverall = lteVerdict(d.lte_rsrp, d.lte_rsrq, d.lte_sinr);
+  const logSpan = logWindow(d.log_window_secs);
   const wg: any[] = Array.isArray(d.wireguard_peers) ? d.wireguard_peers : [];
   const ifaces: any[] = Array.isArray(d.interfaces) ? d.interfaces : [];
   const restarts =
@@ -1896,18 +1900,20 @@ function NetworkTab({
                 value={
                   <span className="inline-flex items-center gap-2">
                     <Badge variant={signalTone(lteOverall.level)} className="text-3xs">
-                      {
-                        {
-                          excellent: t('signal.level_excellent', 'výborný'),
-                          good: t('signal.level_good', 'dobrý'),
-                          fair: t('signal.level_fair', 'slabší'),
-                          poor: t('signal.level_poor', 'špatný'),
-                        }[lteOverall.level]
-                      }
+                      {signalLevelLabel(t, lteOverall.level)}
                     </Badge>
                   </span>
                 }
               />
+            )}
+            {/* The verdict already knew WHAT helps (antenna higher, or: that is
+              interference, moving it will not help) and only printed a word.
+              The sentence was hidden in three tooltips, one per number. */}
+            {lteOverall && lteOverall.advice !== 'none' && (
+              <p data-testid="lte-advice" className="text-foreground/90 border-border/40 border-b py-1.5 text-xs">
+                <span className="font-semibold">{t('signal.what_to_do', 'Co s tím:')}</span>{' '}
+                {signalAdvice(t, lteOverall.advice)}
+              </p>
             )}
             <SignalReading
               label="LTE RSRP"
@@ -1976,13 +1982,33 @@ function NetworkTab({
                   : null
               }
             />
+            {/* The agent counts the last 500 lines of logread, which is twenty
+              minutes on a chatty router and a week on a quiet one - "24 h" was
+              never true. Agent 0.1.8 says how far back the lines reach. */}
             <Row
-              label={t('net.log_errors', 'Chyby v logu (24 h)')}
+              label={
+                logSpan
+                  ? t(
+                      logSpan.unit === 'h' ? 'net.log_errors_window_h' : 'net.log_errors_window_min',
+                      { n: logSpan.value },
+                      `Chyby v logu za posledních ${logSpan.value} ${logSpan.unit}`
+                    )
+                  : t('net.log_errors_500', 'Chyby v posledních 500 řádcích logu')
+              }
               value={d.log_errors_24h}
               to={history('log_errors_24h')}
             />
+            <LogErrorLines view={readLogLines(d)} />
             <Row
-              label={t('net.log_warnings', 'Varování v logu (24 h)')}
+              label={
+                logSpan
+                  ? t(
+                      logSpan.unit === 'h' ? 'net.log_warnings_window_h' : 'net.log_warnings_window_min',
+                      { n: logSpan.value },
+                      `Varování v logu za posledních ${logSpan.value} ${logSpan.unit}`
+                    )
+                  : t('net.log_warnings_500', 'Varování v posledních 500 řádcích logu')
+              }
               value={d.log_warnings_24h}
               to={history('log_warnings_24h')}
             />

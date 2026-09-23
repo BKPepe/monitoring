@@ -840,6 +840,21 @@ endpoint of its own. Its rules:
   the port **capability**; the switch merely adds the household's own numbers -
   how many wired devices share which conduit - and only when both were measured.
 
+**The router's last error lines (agent 0.1.8, OpenWrt)** travel next to
+`log_errors_24h`: `log_errors_recent` (at most 5 `{ts, prog, msg, count}`,
+newest first; `[]` = the log was read and holds no error line, `null` = no
+readable log or sending is switched off), `log_window_secs` (how many seconds
+the counted log buffer covers, for "errors in the last N h") and
+`log_lines_state` (`on`, `off_monitor`, `off_router`). Owner decision: the lines
+may leave the router masked, at most five, kept in `last_details` only - no
+history table - and switchable per monitor. The server masks them again
+(e-mail, MAC, IPv6, IPv4, local host names, hex ids of 12+ digits; printable
+ASCII, 200 characters), so an older agent cannot store a raw address. With the
+monitor's `log_lines_enabled` off it keeps none (`log_errors_recent: null`,
+`log_lines_state: "off_monitor"`), and every answer carries `"log_lines":true`
+or `"log_lines":false` - unspaced, the agent matches it literally and stops
+collecting from its next run.
+
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Interface for remote measurement nodes. Authorised by a shared `cron_key`

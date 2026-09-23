@@ -861,6 +861,15 @@ try {
         log_monitor_event($pdo, $monitor_id, $monitor['name'], $monitor['type'], $bk_ev['type'], $bk_ev['message']);
     }
 
+    // The router's last error lines (agent 0.1.8, W1-C3): masked again and
+    // typed here, so the pass-through below never stores an agent's raw list.
+    // Kept in last_details only - no history (owner decision 5.7). With the
+    // monitor's switch off nothing is kept, whatever the agent sent.
+    $bk_log_lines_on = (int)($monitor['log_lines_enabled'] ?? 1) === 1;
+    foreach (bk_log_lines_details($data, $bk_log_lines_on) as $bk_log_key => $bk_log_val) {
+        $new_data[$bk_log_key] = $bk_log_val;
+    }
+
     // Data the server received and did NOT store. The list is rebuilt by every
     // report, so it says what is being lost right now, and it is what makes
     // the collection issue `ingest_dropped` end by itself.
@@ -1493,6 +1502,11 @@ try {
     }
 
     $response_payload = ['success' => true, 'message' => 'Metriky uloženy a stav aktualizován.'];
+
+    // Whether the router may send its masked log lines (W1-C3). The agent
+    // keeps the last answer and obeys it from its next run; it matches the
+    // unspaced `"log_lines":false` literally, which json_encode produces.
+    $response_payload['log_lines'] = (int)($monitor['log_lines_enabled'] ?? 1) === 1;
 
     // How far the batch of speed tests was dealt with (WAN 3.1.6). The agent
     // deletes its probe files and advances `last_sent` only up to this

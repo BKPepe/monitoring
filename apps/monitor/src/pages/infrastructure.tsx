@@ -140,6 +140,12 @@ export function InfrastructurePage() {
   const [ramThreshold, setRamThreshold] = React.useState('95');
   const [hddThreshold, setHddThreshold] = React.useState('90');
   const [remoteActionsEnabled, setRemoteActionsEnabled] = React.useState(false);
+  /**
+   * The router's masked log lines (W1-C3, owner decision 5.7), on by default.
+   * null = the server did not say (a new monitor, or an older server): the key
+   * is then left out of the save and the stored value stays as it is.
+   */
+  const [logLinesEnabled, setLogLinesEnabled] = React.useState<boolean | null>(null);
   const [allowedActions, setAllowedActions] = React.useState<string[]>([
     'restart_wan',
     'restart_wireguard',
@@ -355,6 +361,7 @@ export function InfrastructurePage() {
       setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
       setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
       setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
+      setLogLinesEnabled(typeof mon.logLinesEnabled === 'boolean' ? mon.logLinesEnabled : null);
       setAllowedActions(mon.allowedActions ?? []);
       setEnabledMetrics(mon.enabledMetrics ?? []);
     } else if (selectedAssetRef.current) {
@@ -508,6 +515,11 @@ export function InfrastructurePage() {
           ram_threshold: parseInt(ramThreshold, 10) || 95,
           hdd_threshold: parseInt(hddThreshold, 10) || 90,
           remote_actions_enabled: remoteActionsEnabled ? 1 : 0,
+          // Only a value somebody saw is sent back: an unknown one must not
+          // switch the lines on again by being saved as the default.
+          ...(monitorType === 'openwrt' && logLinesEnabled !== null
+            ? { log_lines_enabled: logLinesEnabled ? 1 : 0 }
+            : {}),
           allowed_actions: allowedActions,
           enabled_metrics: enabledMetrics,
           // Per-monitor channel overrides. Empty clears the override and the
@@ -633,6 +645,7 @@ export function InfrastructurePage() {
                 setRamThreshold('95');
                 setHddThreshold('90');
                 setRemoteActionsEnabled(false);
+                setLogLinesEnabled(null);
                 setAllowedActions([
                   'restart_wan',
                   'restart_wireguard',
@@ -1163,6 +1176,28 @@ export function InfrastructurePage() {
                           {t(
                             'infra.rcon_hint',
                             'RCON umožňuje dotazovat příkaz "tps" na serveru Spigot/Paper/BungeeCord pro přesný výpočet lagů (TPS).'
+                          )}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* The router's error lines (W1-C3): masked on the router, at most 5,
+                        kept in the last report only. On by default, off per router. */}
+                    {monitorType === 'openwrt' && (
+                      <div className="space-y-1.5 rounded-xl border border-border bg-secondary/40 p-4 text-xs">
+                        <label className="flex cursor-pointer items-center gap-2 font-semibold text-foreground">
+                          <input
+                            type="checkbox"
+                            checked={logLinesEnabled ?? true}
+                            onChange={(e) => setLogLinesEnabled(e.target.checked)}
+                            className="rounded border-border"
+                          />
+                          {t('infra.log_lines_label', 'Posílat chybové řádky z logu routeru')}
+                        </label>
+                        <p className="text-2xs leading-relaxed text-muted-foreground">
+                          {t(
+                            'infra.log_lines_hint',
+                            'Nejvýš 5 posledních různých chybových řádků. Adresy IP a MAC, e-maily a názvy zařízení router zamaskuje dřív, než je odešle. Po vypnutí je server neukládá a agent je od dalšího hlášení přestane sbírat.'
                           )}
                         </p>
                       </div>

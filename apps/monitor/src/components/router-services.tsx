@@ -9,30 +9,8 @@ import { verdictSentence, worstDisk, type HealthTone } from '@/lib/disk-health';
 import { radioProfileLabel } from '@/lib/wifi-profile';
 import { lteBackupState, type LteBackupReason } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
-
-/**
- * The "Services" section for a router (OpenWrt/Turris).
- *
- * Replaces the TLS certificate card, which made no sense for a router -
- * a router certifies no website. Shows what the router really has:
- * WAN and LTE connectivity, DNS incl. verified encryption, firewall, Wi-Fi,
- * VPN a SQM.
- *
- * Each tile renders only when the agent sent data for it - an empty
- * space is more honest than a card full of dashes.
- */
-/**
- * A verbal RSRP rating using the commonly used LTE bands.
- *
- * A bare "-83 dBm" tells nobody anything; the boundaries are standard
- * (above -80 excellent, to -90 good, to -100 weak, below that barely usable).
- */
-function rsrpQuality(rsrp: number, t: (k: string, f?: string) => string): string {
-  if (rsrp >= -80) return t('rsvc.signal_excellent', 'výborný');
-  if (rsrp >= -90) return t('rsvc.signal_good', 'dobrý');
-  if (rsrp >= -100) return t('rsvc.signal_fair', 'slabší');
-  return t('rsvc.signal_poor', 'slabý');
-}
+import { rateRsrp } from '@/lib/signal-quality';
+import { signalLevelLabel } from '@/lib/signal-texts';
 
 /** Large packet counters read better with thousands separators. */
 function formatCount(value: unknown): string {
@@ -48,12 +26,27 @@ const TONE_STATE: Record<HealthTone, 'good' | 'warn' | 'bad' | 'unknown'> = {
   muted: 'unknown',
 };
 
+/**
+ * The "Services" section for a router (OpenWrt/Turris).
+ *
+ * Replaces the TLS certificate card, which made no sense for a router -
+ * a router certifies no website. Shows what the router really has:
+ * WAN and LTE connectivity, DNS incl. verified encryption, firewall, Wi-Fi,
+ * VPN a SQM.
+ *
+ * Each tile renders only when the agent sent data for it - an empty
+ * space is more honest than a card full of dashes.
+ */
 export function RouterServices({ d }: { d: Record<string, any> }) {
   const { t } = useLanguage();
   // Read once, so every "x ago" on this card is measured from the same moment.
   const [nowSecs] = React.useState(() => Math.floor(Date.now() / 1000));
 
   const tiles: React.ReactNode[] = [];
+  const rsrpWord = (dbm: unknown) => {
+    const rating = rateRsrp(typeof dbm === 'number' ? dbm : Number(dbm));
+    return rating ? ` (${signalLevelLabel(t, rating.level)})` : '';
+  };
 
   // --- WAN -----------------------------------------------------------
   if (d.wan_up != null || d.wan_proto || d.wan_internet != null) {
@@ -177,7 +170,9 @@ export function RouterServices({ d }: { d: Record<string, any> }) {
           // and the card claimed the signal was unknown although we had RSSI,
           // the cell ID and the bandwidth - data obtainable only from the
           // very API the message said did not exist.
-          d.lte_rsrp != null ? `RSRP: ${d.lte_rsrp} dBm (${rsrpQuality(d.lte_rsrp, t)})` : null,
+          // The word comes from the same scale as the Network tab (rateRsrp), so
+          // -101 dBm cannot be "slabý" here and "špatný" there.
+          d.lte_rsrp != null ? `RSRP: ${d.lte_rsrp} dBm${rsrpWord(d.lte_rsrp)}` : null,
           d.lte_rssi != null ? `RSSI: ${d.lte_rssi} dBm` : null,
           d.lte_rsrq != null ? `RSRQ: ${d.lte_rsrq} dB` : null,
           d.lte_sinr != null ? `SINR: ${d.lte_sinr} dB` : null,

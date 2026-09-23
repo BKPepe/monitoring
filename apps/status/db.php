@@ -1056,6 +1056,9 @@ try {
         "ALTER TABLE uptime_daily ADD COLUMN secs_silent INT DEFAULT NULL",
         "ALTER TABLE uptime_daily ADD COLUMN secs_maintenance INT DEFAULT NULL",
         "ALTER TABLE uptime_daily ADD COLUMN secs_unmeasured INT DEFAULT NULL",
+        // The router's masked error lines (W1-C3, owner decision 5.7): on by
+        // default, switchable per monitor; the agent hears it in the answer.
+        "ALTER TABLE monitors ADD COLUMN log_lines_enabled TINYINT(1) NOT NULL DEFAULT 1",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

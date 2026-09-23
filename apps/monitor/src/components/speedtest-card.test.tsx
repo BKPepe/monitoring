@@ -9,8 +9,13 @@ import { SpeedtestCard } from './speedtest-card';
 // the real component throws inside setOption and React tears the whole card
 // down, so every later assertion would fail for the wrong reason. This file
 // tests the table columns and the error state, not the drawing.
+// The mock keeps the points it was handed, so a test can check the time axis.
+const drawn: { t: number; v: number | null }[][] = [];
 vi.mock('@/components/charts/metric-chart', () => ({
-  MetricChart: () => <div data-testid="speed-chart" />,
+  MetricChart: ({ data }: { data: { series: { points: { t: number; v: number | null }[] }[] } }) => {
+    drawn.push(data.series[0].points);
+    return <div data-testid="speed-chart" />;
+  },
 }));
 
 const json = (body: unknown, ok = true, status = 200) =>
@@ -69,7 +74,8 @@ describe('SpeedtestCard', () => {
     renderCard();
     const rows = await screen.findAllByRole('row');
     // The second data row is the W01-damaged one: speeds NULL, server unknown.
-    const damaged = rows.find((row) => row.textContent?.includes('2026-09-13'));
+    const damaged = rows.find((row) => /13\. ?9\. ?2026/.test(row.textContent ?? ''));
+    expect(damaged).toBeTruthy();
     expect(damaged?.textContent).toContain('—');
     expect(damaged?.textContent).not.toContain('0.01');
     expect(damaged?.textContent).not.toContain('0 Mb/s');
@@ -83,5 +89,57 @@ describe('SpeedtestCard', () => {
     renderCard();
     await screen.findByText('Spustil');
     expect(screen.queryByText('Turris OS')).toBeNull();
+  });
+});
+
+describe('Rychlost linky: server a datum (W1-C4)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    drawn.length = 0;
+  });
+
+  it('řádek bez serveru i nástroje (agent 0.1.6) řekne „nezaznamenáno", ne holou pomlčku', async () => {
+    stubHistory(() => history);
+    renderCard();
+    const rows = await screen.findAllByRole('row');
+    const old = rows.find((row) => /13\. ?9\. ?2026/.test(row.textContent ?? ''));
+    expect(old?.textContent).toContain('nezaznamenáno (agent 0.1.6 a starší)');
+    // Nothing is backfilled: the newer row keeps its own server, the old one gets none.
+    expect(screen.getAllByText('Prague, Czech Republic (CESNET)')).toHaveLength(1);
+  });
+
+  it('známý nástroj bez jména serveru zůstává pomlčkou', async () => {
+    stubHistory(() => ({
+      measurements: [{ ...omnia.speedtestHistory[0], server: null, tool: 'librespeed-cli' }],
+      averages: {},
+    }));
+    renderCard();
+    await screen.findByText('Spustil');
+    expect(screen.queryByText(/nezaznamenáno/)).toBeNull();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('čas z MySQL s mezerou se kreslí i čte jako datum (Safari vracelo NaN)', async () => {
+    // WebKit's Date.parse: the 'YYYY-MM-DD HH:MM:SS' form is NaN there, only the
+    // ISO 'T' form parses. V8 accepts both, so the test plays WebKit.
+    const parse = Date.parse;
+    vi.spyOn(Date, 'parse').mockImplementation((value: string) =>
+      /^\d{4}-\d{2}-\d{2} /.test(value) ? NaN : parse(value)
+    );
+    stubHistory(() => ({
+      measurements: [
+        { ...omnia.speedtestHistory[0], measuredAt: '2026-09-15 06:10:00' },
+        { ...omnia.speedtestHistory[0], measuredAt: '2026-09-14 06:10:00', downloadMbps: 900 },
+      ],
+      averages: {},
+    }));
+    renderCard();
+    await screen.findByText('Spustil');
+    expect(screen.queryByText('2026-09-15 06:10:00')).toBeNull();
+    expect(screen.getAllByText(/15\. ?9\. ?2026/).length).toBeGreaterThan(0);
+    const points = drawn[drawn.length - 1];
+    expect(points.filter((p) => Number.isFinite(p.t) && p.v !== null)).toHaveLength(2);
+    vi.restoreAllMocks();
   });
 });
