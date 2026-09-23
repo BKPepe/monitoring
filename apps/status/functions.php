@@ -1986,8 +1986,27 @@ function bk_uptime_totals(array $parts): array {
     return $s + [
         'measured' => $measured,
         'outage' => $outage,
-        'pct' => $measured > 0 ? round($s['up'] / $measured * 100, 3) : null,
+        // Five seconds of outage in 30 days is 99.9998 % - plain rounding to
+        // three decimals made it 100.0, a perfect month with an outage in it.
+        'pct' => $measured > 0 ? bk_uptime_pct_round($s['up'] / $measured * 100, 3) : null,
     ];
+}
+
+/**
+ * An availability percentage rounded for display, without rounding a failure
+ * away: a value below 100 stays below 100 at the given precision (99.954 at
+ * one decimal is 99.9, not 100.0). $failed says something failed in the
+ * period even when its recorded time is under a second, e.g. a failed check
+ * answered by another location within the same second. Otherwise ordinary
+ * half-up rounding; null (nothing measured) stays null.
+ */
+function bk_uptime_pct_round(?float $pct, int $decimals, bool $failed = false): ?float {
+    if ($pct === null) {
+        return null;
+    }
+    $rounded = round($pct, $decimals);
+    $ceiling = round(100 - 10 ** -$decimals, $decimals);
+    return ($pct < 100 || $failed) && $rounded > $ceiling ? $ceiling : $rounded;
 }
 
 /**

@@ -14,10 +14,15 @@ export function formatMs(value: number | null | undefined): string {
   return value == null ? '—' : `${value} ms`;
 }
 
-/** Percentages to one decimal place, without the pointless zero on whole numbers. */
+/**
+ * A percentage at `digits` decimals. A value below 100 never prints as 100:
+ * half-up rounding turned 99.999 % uptime - a month with an outage in it -
+ * into "100.00 %", so it stops one step short ("99.99 %") instead.
+ */
 export function formatPercent(value: number | null | undefined, digits = 0): string {
   if (value == null) return '—';
-  return `${value.toFixed(digits)} %`;
+  const shown = value < 100 && Number(value.toFixed(digits)) >= 100 ? 100 - 10 ** -digits : value;
+  return `${shown.toFixed(digits)} %`;
 }
 
 /**

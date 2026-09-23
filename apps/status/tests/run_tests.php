@@ -96,6 +96,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_uptime_segments',
     'bk_uptime_summary',
     'bk_uptime_totals',
+    'bk_uptime_pct_round',
     'bk_uptime_by_day',
 ]);
 
@@ -3307,6 +3308,31 @@ if (function_exists('bk_router_rec_evaluate') && is_readable(__DIR__ . '/fixture
     $ut_mid = strtotime('2026-09-10 00:00:00');
     $ut_days = bk_uptime_by_day([[$ut_mid - 600, $ut_mid + 1200, 'silent']], $ut_mid - 3600, $ut_mid + 3600);
     check('úsek přes půlnoc: 600 s do prvního dne, 1 200 s do druhého', [$ut_days['2026-09-09']['silent'] ?? null, $ut_days['2026-09-10']['silent'] ?? null], [600, 1200]);
+}
+
+// --- Zaokrouhlení výpadek neschová ---------------------------------------------
+// Den s výpadkem kratším než 43 s (0,05 % dne) se zaokrouhlil na 100,0 a pás
+// ukázal červený den s popiskem „100 % dostupnost". Totéž tři desetinná místa
+// u třiceti dní: pět sekund výpadku bylo 100,0.
+{
+    // 1440 minutových kontrol, jedna selže a další přijde za 30 s.
+    $pr_day = [];
+    for ($i = 0; $i < 1440; $i++) {
+        $pr_day[] = [$i * 60, 'up'];
+    }
+    $pr_day[] = [720 * 60 + 30, 'up'];
+    $pr_day[720] = [720 * 60, 'down'];
+    usort($pr_day, fn ($a, $b) => $a[0] <=> $b[0]);
+    $pr_sum = bk_uptime_summary(bk_uptime_segments($pr_day, 0, 86400, 60, false), 0, 86400);
+    check('den s 30 s výpadku: 30 s down', $pr_sum['down'], 30);
+    check('den s 30 s výpadku: na jedno desetinné místo 99,9, ne 100', bk_uptime_pct_round($pr_sum['pct'], 1, true), 99.9);
+    check('čistý den zůstane 100', bk_uptime_pct_round(100.0, 1), 100.0);
+    check('jinak se zaokrouhluje normálně', [bk_uptime_pct_round(57.25, 1), bk_uptime_pct_round(99.94, 1), bk_uptime_pct_round(99.95, 1)], [57.3, 99.9, 99.9]);
+    check('selhaná kontrola bez zapsaného času: pod 100', bk_uptime_pct_round(100.0, 1, true), 99.9);
+    check('nic neměřeno zůstane null', bk_uptime_pct_round(null, 1, true), null);
+    $pr_month = bk_uptime_totals([['up' => 30 * 86400 - 5, 'down' => 5]]);
+    check('třicet dní s 5 s výpadku: 99,999, ne 100,0', $pr_month['pct'], 99.999);
+    check('třicet dní bez výpadku: 100,0', bk_uptime_totals([['up' => 30 * 86400]])['pct'], 100.0);
 }
 
 // --- Chybějící data nikdy nedají 100 % (W1-B3) ----------------------------------

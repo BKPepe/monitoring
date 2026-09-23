@@ -2584,7 +2584,10 @@ if ($action === 'daily_uptime') {
                     continue;
                 }
 
-                $uptimePct = $tm['pct'] !== null ? round($tm['pct'], 1) : null;
+                // A red day never reads "100 %": a failure shorter than 43 s
+                // (0.05 % of a day) used to round up to 100.0 next to its
+                // failed-check count.
+                $uptimePct = bk_uptime_pct_round($tm['pct'] ?? null, 1, $down > 0 || !empty($tm['outage']));
 
                 if ($maint_secs > 0 && $maint_secs >= $m_secs) {
                     $status = 'maintenance';
@@ -5676,7 +5679,9 @@ if ($action === 'public_status') {
             }
         }
         if (!empty($uptime_values)) {
-            $avg_uptime = round(array_sum($uptime_values) / count($uptime_values), 3);
+            // The mean of 99.999 and three perfect months rounds to 100.0 at
+            // three decimals: an outage the public headline figure hid.
+            $avg_uptime = bk_uptime_pct_round(array_sum($uptime_values) / count($uptime_values), 3);
         }
 
         // Nodes are the machines that report on their own (agents) and the

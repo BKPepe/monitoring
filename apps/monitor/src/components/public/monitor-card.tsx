@@ -19,7 +19,7 @@ import { useSession } from '@/api/use-session';
 import { Badge } from '@/components/ui/badge';
 import { UptimeStrip, type UptimeDay } from './uptime-strip';
 import { useLanguage } from '@/context/language-context';
-import { cn } from '@/lib/utils';
+import { cn, formatPercent } from '@/lib/utils';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
 
 export interface PublicMonitor {
@@ -146,7 +146,7 @@ export function PublicMonitorCard({
                     : 'text-down'
             )}
           >
-            {uptimePct === null ? '—' : `${uptimePct.toFixed(2)} %`}
+            {formatPercent(uptimePct, 2)}
           </span>
           <span className="text-muted-foreground w-14 text-right text-xs tabular-nums">
             {monitor.responseMs === null ? '—' : `${monitor.responseMs} ms`}

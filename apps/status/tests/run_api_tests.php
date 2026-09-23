@@ -5049,6 +5049,91 @@ try {
     $pdo->exec("DELETE FROM monitors WHERE id = 180");
 }
 
+// A red strip day never says "100 %". A failed check answered 30 s later is
+// 0.035 % of the day; rounded half-up to one decimal it was 100.0, and the
+// strip printed "1 z 1441 kontrol selhalo (100 % dostupnost)" on a red cell.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (181, 'Den s krátkým výpadkem', 'web', 'https://example.net', 'up', 'Test'),
+            (182, 'Čistý den', 'web', 'https://example.org', 'up', 'Test')");
+$rd_from = strtotime('yesterday 00:00:00');
+$rd_to = strtotime('today 00:00:00');
+$rd_rows = [];
+for ($t = $rd_from; $t < $rd_to; $t += 60) {
+    $rd_rows[] = sprintf("(181, '%s', 100, '%s')", $t === $rd_from + 720 * 60 ? 'down' : 'up', date('Y-m-d H:i:s', $t));
+    $rd_rows[] = sprintf("(182, 'up', 100, '%s')", date('Y-m-d H:i:s', $t));
+}
+$rd_rows[] = sprintf("(181, 'up', 100, '%s')", date('Y-m-d H:i:s', $rd_from + 720 * 60 + 30));
+try {
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES " . implode(',', $rd_rows));
+    // The day as the ten-minute rollup writes it (bk_rollup_daily_uptime_time),
+    // limited to these two monitors so the rest of the suite keeps its rows.
+    $rd_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    foreach (bk_uptime_segments_for($pdo, $rd_from, $rd_to, [181, 182]) as $rd_mid => $rd_seg) {
+        foreach (bk_uptime_by_day($rd_seg['segments'], $rd_seg['from'], $rd_seg['to']) as $rd_day => $rd_sum) {
+            if ($rd_sum['measured'] > 0) {
+                $rd_ins->execute([$rd_mid, $rd_day, $rd_sum['up'], $rd_sum['down'], $rd_sum['warning'], $rd_sum['silent'], $rd_sum['maintenance'], $rd_sum['unmeasured']]);
+            }
+        }
+    }
+    check('souhrn dne: výpadek trval 30 s', (int)$pdo->query("SELECT secs_down FROM uptime_daily WHERE monitor_id = 181 AND day = '" . date('Y-m-d', $rd_from) . "'")->fetchColumn(), 30);
+    [$rd_code, $rd_du] = api_get_auth($base, 'action=daily_uptime&days=2', $cookie_jar);
+    check('daily_uptime vrací 200', $rd_code, 200);
+    $rd_day_of = function (int $mid) use ($rd_du, $rd_from): ?array {
+        foreach ($rd_du['series'][(string)$mid] ?? [] as $day) {
+            if (($day['date'] ?? '') === date('j.n.', $rd_from)) {
+                return $day;
+            }
+        }
+        return null;
+    };
+    $rd_bad = $rd_day_of(181);
+    check('den s 30 s výpadku: červený a 99,9 %, ne 100 (dostal ' . json_encode($rd_bad, JSON_UNESCAPED_UNICODE) . ')',
+        [$rd_bad['status'] ?? null, $rd_bad['uptimePct'] ?? null], ['down', 99.9]);
+    check_false('a popisek netvrdí 100 % dostupnost', str_contains((string)($rd_bad['detail'] ?? ''), '(100 %'));
+    $rd_ok = $rd_day_of(182);
+    check('čistý den zůstane zelený a 100 %', [$rd_ok['status'] ?? null, $rd_ok['uptimePct'] ?? null], ['up', 100]);
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (181, 182)");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (181, 182)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (181, 182)");
+}
+
+// The public headline "30 days" figure is the mean of the monitors' figures.
+// One second of outage in 29 days is 99.999 for that monitor; with three
+// perfect ones the mean is 99.99975, which rounded at three decimals printed
+// 100 on the public page over a month with an outage in it.
+$av_saved = $pdo->query("SELECT id, is_public FROM monitors")->fetchAll();
+$av_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                         VALUES (?, ?, ?, ?, 0, 0, 0, 0)");
+try {
+    $pdo->exec("UPDATE monitors SET is_public = 0");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES
+                (185, 'Měsíc s jednou sekundou výpadku', 'web', 'https://example.com/c', 'up', 'Test', 1, NOW()),
+                (186, 'Čistý měsíc A', 'web', 'https://example.com/d', 'up', 'Test', 1, NOW()),
+                (187, 'Čistý měsíc B', 'web', 'https://example.com/e', 'up', 'Test', 1, NOW()),
+                (188, 'Čistý měsíc C', 'web', 'https://example.com/f', 'up', 'Test', 1, NOW())");
+    for ($age = 1; $age <= 29; $age++) {
+        $av_day = date('Y-m-d', strtotime("-{$age} day", strtotime('today')));
+        $av_ins->execute([185, $av_day, $age === 10 ? 86399 : 86400, $age === 10 ? 1 : 0]);
+        foreach ([186, 187, 188] as $av_mid) {
+            $av_ins->execute([$av_mid, $av_day, 86400, 0]);
+        }
+    }
+    [, $av_win] = api_get($base, 'action=uptime_windows&scope=public');
+    check('monitor s 1 s výpadku za 29 dní: 99,999, ne 100', $av_win['windows']['185']['d30'] ?? null, 99.999);
+    [, $av_ps] = api_get($base, 'action=public_status');
+    check('souhrn 30 dní na veřejné stránce: 99,999, ne 100 (dostal ' . json_encode($av_ps['uptimePercent'] ?? null) . ')',
+        $av_ps['uptimePercent'] ?? null, 99.999);
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (185, 186, 187, 188)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (185, 186, 187, 188)");
+    $av_restore = $pdo->prepare("UPDATE monitors SET is_public = ? WHERE id = ?");
+    foreach ($av_saved as $av_row) {
+        $av_restore->execute([$av_row['is_public'], $av_row['id']]);
+    }
+}
+
 // =======================================================================
 // One overall verdict for public_status and the fleet badge (W1-B4).
 //
