@@ -1126,7 +1126,20 @@ function get_setting($key, $default = '') {
     }
 
     // Priority 4: the value stored in the database
-    $val = $system_settings[$key] ?? $default;
+    $val = $system_settings[$key] ?? null;
+
+    // A key with a documented default answers that default while it is unset
+    // OR stored empty. The empty row is what the settings form used to write
+    // for a switch it had never loaded: `agent_notifications_enabled = ''`
+    // then read as "off" and silenced every WAN, LTE, disk and firewall alert
+    // after one unrelated save. The default comes from the one map the read
+    // and write paths share, so the page and the cron cannot disagree.
+    if ($val === null || $val === '') {
+        $bk_defaults = bk_settings_defaults();
+        if (array_key_exists($key, $bk_defaults)) {
+            return $bk_defaults[$key];
+        }
+    }
     return $val === null ? $default : $val;
 }
 
@@ -1167,6 +1180,49 @@ function bk_settings_keys(): array {
         'collection_max_age_secs', 'trusted_proxies',
         'process_history_days', 'process_history_peak_after_days', 'process_history_peak_pct',
     ];
+}
+
+/**
+ * The default of every setting that has one, shared by reading and saving.
+ *
+ * Before this map each caller carried its own default and get_settings
+ * answered '' for a key nobody had saved yet. The form showed that '' and the
+ * next "Save all" stored it, and a stored '' beat the caller's default: the
+ * agent-alert switch read as off, the admin-only switch as "everyone", the
+ * offline timeout as 0. One save of an unrelated field changed alerting.
+ *
+ * Only keys whose every get_setting() caller agrees on the default belong
+ * here; tests/run_settings_parity_lint.php fails when a caller disagrees.
+ * Keys with no default (credentials, URLs, the site title that each page
+ * words differently) stay out and keep '' as "not configured".
+ */
+function bk_settings_defaults(): array {
+    return [
+        'email_lang' => 'cs',
+        'agent_offline_timeout' => '50',
+        'agent_notifications_enabled' => '1',
+        'agent_notify_admin_only' => '1',
+        'alert_confirm_failures' => '1',
+        'sla_goal_pct' => '99.95',
+        'ssl_alert_days' => '14',
+        'escalation_enabled' => '0',
+        'escalation_after_mins' => '15',
+        'daily_reminder_enabled' => '1',
+        'daily_reminder_hour' => '8',
+        'collection_max_age_secs' => '900',
+        'process_history_days' => '30',
+        'process_history_peak_after_days' => '0',
+        'process_history_peak_pct' => '50',
+    ];
+}
+
+/**
+ * On/off switches. A switch is exactly '1' or '0': save_settings refuses
+ * anything else, because an empty value is not a choice anybody made - it is
+ * a form that never loaded the value - and storing it used to flip the switch.
+ */
+function bk_settings_boolean_keys(): array {
+    return ['agent_notifications_enabled', 'agent_notify_admin_only', 'escalation_enabled', 'daily_reminder_enabled'];
 }
 
 /**

@@ -96,6 +96,27 @@ const OAUTH_PROVIDERS = [
 
 type SettingsMap = Record<string, string>;
 
+/**
+ * The on/off switches of this form and the server's default for each
+ * (bk_settings_defaults() in db.php; run_settings_parity_lint.php fails when
+ * the two drift). Older servers sent '' for a key that was never saved and
+ * then read a stored '' as "off", so saving the form without touching the box
+ * switched the router/agent alerts off. The server now answers the default and
+ * refuses '' for a switch; the form still shows the default for '' (an older
+ * server) and always posts an explicit '1' or '0'.
+ */
+const SWITCH_DEFAULTS: Record<string, '0' | '1'> = {
+  agent_notifications_enabled: '1',
+  agent_notify_admin_only: '1',
+  daily_reminder_enabled: '1',
+  escalation_enabled: '0',
+};
+
+/** Default-on switches are on unless explicitly '0'; default-off ones only when '1'. */
+function switchOn(settings: SettingsMap, key: string): boolean {
+  return SWITCH_DEFAULTS[key] === '1' ? settings[key] !== '0' : settings[key] === '1';
+}
+
 export function SettingsPage() {
   const { t } = useLanguage();
   const { session } = useSession();
@@ -168,11 +189,14 @@ export function SettingsPage() {
     setSaving(true);
     setError(null);
     try {
+      // Post what the boxes show, not the '' a never-saved key arrived as.
+      const payload: SettingsMap = { ...settings };
+      for (const key of Object.keys(SWITCH_DEFAULTS)) payload[key] = switchOn(settings, key) ? '1' : '0';
       const res = await fetch(`${API_BASE}?action=save_settings`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings }),
+        body: JSON.stringify({ settings: payload }),
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
@@ -731,23 +755,29 @@ export function SettingsPage() {
                   <label className="flex items-center gap-2 text-xs cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={settings.agent_notifications_enabled === '1'}
+                      checked={switchOn(settings, 'agent_notifications_enabled')}
                       onChange={(e) => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
                       className="rounded border-border"
                     />
+                    {/* One switch silences every agent-measured alert (functions.php
+                        $bk_agent_statuses), not only the CPU/RAM/HDD limits the old
+                        label named - switching it off also mutes WAN and LTE loss. */}
                     <span>
-                      {t('settings.agent_resource_alert_label', 'Upozorňovat na překročení limitů CPU/RAM/HDD')}
+                      {t(
+                        'settings.agent_alerts_label',
+                        'Upozornění z agentů: WAN, LTE, disky, firewall, DNS a limity CPU/RAM/HDD'
+                      )}
                     </span>
                   </label>
                   <label className="flex items-center gap-2 text-xs cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={settings.agent_notify_admin_only === '1'}
+                      checked={switchOn(settings, 'agent_notify_admin_only')}
                       onChange={(e) => set('agent_notify_admin_only', e.target.checked ? '1' : '0')}
                       className="rounded border-border"
                     />
                     <span>
-                      {t('settings.agent_admin_only_label', 'Upozornění VPS agenta doručovat pouze administrátorům')}
+                      {t('settings.agent_admin_only_label', 'Upozornění z agentů doručovat pouze administrátorům')}
                     </span>
                   </label>
                   <p className={hintCls}>
@@ -873,7 +903,7 @@ export function SettingsPage() {
                 <label className="flex items-start gap-2 text-xs cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={settings.escalation_enabled === '1'}
+                    checked={switchOn(settings, 'escalation_enabled')}
                     onChange={(e) => set('escalation_enabled', e.target.checked ? '1' : '0')}
                     className="mt-0.5 rounded border-border"
                   />
@@ -914,7 +944,7 @@ export function SettingsPage() {
                 {/* Escalation enabled without a channel reports nowhere. Incidents
                     keep waiting for it (no stamp is written), but nobody finds out -
                     which is why it has to be visible here, not only in the server log. */}
-                {settings.escalation_enabled === '1' && !settings.escalation_webhook_url?.trim() && (
+                {switchOn(settings, 'escalation_enabled') && !settings.escalation_webhook_url?.trim() && (
                   <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-2xs text-warning">
                     <AlertTriangle className="mt-px size-3.5 shrink-0" />
                     {t(
@@ -944,7 +974,7 @@ export function SettingsPage() {
                     /* The server default is on (1). A value that was never saved
                        must therefore read as on here, or the page would show the
                        reminder as off while the cron keeps sending it. */
-                    checked={settings.daily_reminder_enabled !== '0'}
+                    checked={switchOn(settings, 'daily_reminder_enabled')}
                     onChange={(e) => set('daily_reminder_enabled', e.target.checked ? '1' : '0')}
                     className="border-border mt-0.5 rounded"
                   />

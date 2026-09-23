@@ -29,11 +29,15 @@ $repo = realpath(__DIR__ . '/../../..');
 // db.php cannot simply be included - it connects to the database at the end.
 // Only those two functions are extracted, the same way the other tests do it.
 require_once __DIR__ . '/assert_helpers.php';
-bk_test_load_functions($root . '/db.php', ['bk_settings_keys', 'bk_settings_secret_keys']);
+bk_test_load_functions($root . '/db.php', [
+    'bk_settings_keys', 'bk_settings_secret_keys', 'bk_settings_defaults', 'bk_settings_boolean_keys',
+]);
 
-if (!function_exists('bk_settings_keys')) {
-    fwrite(STDERR, "bk_settings_keys() se nepodařilo načíst z db.php - přejmenovala se?\n");
-    exit(1);
+foreach (['bk_settings_keys', 'bk_settings_defaults', 'bk_settings_boolean_keys'] as $bk_fn) {
+    if (!function_exists($bk_fn)) {
+        fwrite(STDERR, "{$bk_fn}() se nepodařilo načíst z db.php - přejmenovala se?\n");
+        exit(1);
+    }
 }
 
 $known = bk_settings_keys();
@@ -115,6 +119,62 @@ foreach ($ui_keys as $key) {
     if (!in_array($key, $known, true)) {
         $problems[] = sprintf('settings.tsx pracuje s klíčem %s, který bk_settings_keys() nezná', $key);
     }
+}
+
+// 4. The defaults map. Reading and saving share bk_settings_defaults(); a
+//    caller that passes a different default to get_setting() would make the
+//    page show one value while the cron obeys another. The map wins at run
+//    time, so a disagreeing caller is dead code at best and a lie at worst.
+$defaults = bk_settings_defaults();
+$switches = bk_settings_boolean_keys();
+foreach (array_keys($defaults) as $key) {
+    if (!in_array($key, $known, true)) {
+        $problems[] = sprintf('bk_settings_defaults() zná %s, ale bk_settings_keys() ne', $key);
+    }
+}
+foreach ($switches as $key) {
+    if (!in_array($defaults[$key] ?? null, ['0', '1'], true)) {
+        $problems[] = sprintf('přepínač %s nemá ve výchozích hodnotách 0 nebo 1', $key);
+    }
+}
+$php_files = array_merge(glob($root . '/*.php') ?: [], glob($root . '/lib/*.php') ?: []);
+foreach ($php_files as $file) {
+    $src = (string)file_get_contents($file);
+    preg_match_all("/get_setting\(\s*'([a-z0-9_]+)'\s*,\s*(?:'([^']*)'|([0-9.]+))\s*\)/", $src, $calls, PREG_SET_ORDER);
+    foreach ($calls as $call) {
+        $key = $call[1];
+        // A quoted default fills group 2, a bare number (smtp_port, 587) group 3.
+        $given = isset($call[3]) && $call[3] !== '' ? $call[3] : $call[2];
+        if (array_key_exists($key, $defaults) && $given !== $defaults[$key]) {
+            $problems[] = sprintf(
+                '%s: get_setting(\'%s\', \'%s\') nesouhlasí s bk_settings_defaults() (\'%s\')',
+                basename($file), $key, $given, $defaults[$key]
+            );
+        }
+    }
+}
+
+// 5. The form's own switch defaults. settings.tsx shows a never-saved switch
+//    in its default state; if that disagreed with the server, the box would
+//    show "on" for a switch the cron treats as off.
+if (preg_match('/SWITCH_DEFAULTS[^=]*=\s*\{(.*?)\};/s', $tsx, $sm)) {
+    preg_match_all("/\b([a-z0-9_]+):\s*'([01])'/", $sm[1], $pairs, PREG_SET_ORDER);
+    $ui_switches = [];
+    foreach ($pairs as $pair) {
+        $ui_switches[$pair[1]] = $pair[2];
+    }
+    ksort($ui_switches);
+    $server_switches = array_intersect_key($defaults, array_flip($switches));
+    ksort($server_switches);
+    if ($ui_switches !== $server_switches) {
+        $problems[] = sprintf(
+            'SWITCH_DEFAULTS v settings.tsx (%s) nesouhlasí s přepínači serveru (%s)',
+            json_encode($ui_switches),
+            json_encode($server_switches)
+        );
+    }
+} else {
+    $problems[] = 'settings.tsx nemá SWITCH_DEFAULTS - formulář neví, jak ukázat nikdy neuložený přepínač';
 }
 
 if ($problems) {

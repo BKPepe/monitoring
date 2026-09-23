@@ -22,13 +22,14 @@ import { cn } from '@/lib/utils';
  */
 export function CorrelationPanel({
   data,
-  assetId,
+  detailId,
   monitorId,
   onShowAll,
   showingAll,
 }: {
   data: MetricCorrelationsResponse;
-  assetId: string | number | undefined;
+  /** The monitors.id of the detail page the metric sits under (/infrastructure/:id). */
+  detailId: string | number | undefined;
   monitorId: number;
   /** Loads every comparison, not only the strongest few. */
   onShowAll?: () => void;
@@ -83,9 +84,9 @@ export function CorrelationPanel({
 
           return (
             <li key={c.key} className="border-border/40 border-b last:border-0">
-              {assetId !== undefined ? (
+              {detailId !== undefined ? (
                 <Link
-                  to={`/infrastructure/${assetId}/metric/${monitorId}/${c.key}`}
+                  to={`/infrastructure/${detailId}/metric/${monitorId}/${c.key}`}
                   className="hover:bg-secondary/50 focus-visible:ring-ring -mx-2 flex items-center gap-3 rounded-md px-2 py-1.5 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
                 >
                   {row}

@@ -2,7 +2,8 @@ import type { ApiMonitor } from '@/api/app-api';
 
 export interface AttentionItem {
   key: string;
-  assetId: number;
+  /** monitors.id - the /infrastructure/:id segment, never an asset_id (W1-D2). */
+  monitorId: number;
   name: string;
   severity: 'down' | 'warning';
   text: string;
@@ -72,15 +73,15 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
 
   for (const m of monitors) {
     if (m.status === 'down') {
-      items.push({ key: `down-${m.id}`, assetId: m.id, name: m.name, severity: 'down', text: labels.down });
+      items.push({ key: `down-${m.id}`, monitorId: m.id, name: m.name, severity: 'down', text: labels.down });
     } else if (m.status === 'warning') {
-      items.push({ key: `warn-${m.id}`, assetId: m.id, name: m.name, severity: 'warning', text: labels.warning });
+      items.push({ key: `warn-${m.id}`, monitorId: m.id, name: m.name, severity: 'warning', text: labels.warning });
     }
 
     if (m.unreachableTarget) {
       items.push({
         key: `unreach-${m.id}`,
-        assetId: m.id,
+        monitorId: m.id,
         name: m.name,
         severity: 'warning',
         text: labels.unreachable,
@@ -91,7 +92,7 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
     if (typeof sslDays === 'number' && sslDays <= SSL_ATTENTION_DAYS) {
       items.push({
         key: `ssl-${m.id}`,
-        assetId: m.id,
+        monitorId: m.id,
         name: m.name,
         severity: sslDays <= 0 ? 'down' : 'warning',
         text: sslDays <= 0 ? labels.sslExpired : labels.sslExpiring(sslDays),
@@ -101,7 +102,7 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
     if (m.agentUpdateAvailable) {
       items.push({
         key: `agent-${m.id}`,
-        assetId: m.id,
+        monitorId: m.id,
         name: m.name,
         severity: 'warning',
         text: labels.agentUpdate(m.agentUpdateAvailable),
@@ -120,7 +121,7 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
       if (typeof value === 'number' && value >= thresholdFor(m, key)) {
         items.push({
           key: `${metric}-${m.id}`,
-          assetId: m.id,
+          monitorId: m.id,
           name: m.name,
           severity: 'warning',
           text: labels.metricHigh(metric, Math.round(value)),

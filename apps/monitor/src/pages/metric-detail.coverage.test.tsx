@@ -66,7 +66,7 @@ function renderAt(range: string, from: number) {
       <TooltipProvider>
         <MemoryRouter initialEntries={[`/infrastructure/2/metric/2/response_time?range=${range}`]}>
           <Routes>
-            <Route path="/infrastructure/:assetId/metric/:monitorId/:metricKey" element={<MetricDetailPage />} />
+            <Route path="/infrastructure/:id/metric/:monitorId/:metricKey" element={<MetricDetailPage />} />
           </Routes>
         </MemoryRouter>
       </TooltipProvider>

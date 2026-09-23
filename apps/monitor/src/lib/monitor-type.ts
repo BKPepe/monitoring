@@ -127,6 +127,33 @@ export function normalizeMonitorType(type: string | null | undefined): string {
   return (type ?? '').trim().toLowerCase();
 }
 
+/**
+ * Measurement vantage points (the Cloudflare edge nodes, probes), not things
+ * anyone monitors. Told apart by type, like api.php does (`type NOT IN
+ * ('node', 'probe')`): the dashboard used to drop anything whose NAME
+ * contained "as13335" or "as8075", which also hid a real monitor named so.
+ */
+export function isProbeMonitor(type: string | null | undefined): boolean {
+  const kind = normalizeMonitorType(type);
+  return kind === 'node' || kind === 'probe';
+}
+
+/**
+ * Whether the TeamSpeak tiles belong on this monitor: a teamspeak check, or
+ * an agent that actually found a TeamSpeak server on its host. It used to be
+ * decided by the monitor NAME as well ("donald", the owner's TS host), which
+ * gave any renamed or unrelated monitor that happened to match the TS layout.
+ * The agents always send the list, so only a non-empty one counts.
+ */
+export function isTeamSpeakMonitor(m: {
+  type: string | null | undefined;
+  details?: Record<string, unknown> | null;
+}): boolean {
+  if (normalizeMonitorType(m.type).includes('teamspeak')) return true;
+  const servers = m.details?.teamspeak_servers;
+  return Array.isArray(servers) && servers.length > 0;
+}
+
 /** What this type can ever report. An unknown type keeps every tile. */
 export function monitorTypeProfile(type: string | null | undefined): MonitorTypeProfile {
   return PROFILES[normalizeMonitorType(type)] ?? UNKNOWN;

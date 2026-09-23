@@ -82,7 +82,7 @@ function renderDetail() {
       <TooltipProvider>
         <MemoryRouter initialEntries={['/infrastructure/6']}>
           <Routes>
-            <Route path="/infrastructure/:assetId" element={<AssetDetailPage />} />
+            <Route path="/infrastructure/:id" element={<AssetDetailPage />} />
           </Routes>
         </MemoryRouter>
       </TooltipProvider>

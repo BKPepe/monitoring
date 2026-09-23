@@ -86,7 +86,7 @@ describe('buildNeedsAttention', () => {
 
   it('každá položka odkazuje na svůj monitor', () => {
     const out = buildNeedsAttention([mon({ id: 42, status: 'down' })], labels);
-    expect(out[0].assetId).toBe(42);
+    expect(out[0].monitorId).toBe(42);
   });
 });
 

@@ -67,7 +67,9 @@ import { readLogLines, type LogLinesView } from '@/lib/log-lines';
  *   3. What to do - related metrics of the same device, so you need not go back up.
  */
 export function MetricDetailPage() {
-  const { assetId, monitorId, metricKey } = useParams();
+  // :id is the monitors.id of the detail page this metric sits under; it is
+  // never replaced by monitor.assetId, which is a different id space (W1-D2).
+  const { id: detailId, monitorId, metricKey } = useParams();
   const { t, lang } = useLanguage();
   const { isAdmin } = useSession();
 
@@ -593,7 +595,7 @@ export function MetricDetailPage() {
   const goodDir = goodDirectionFor(tone);
   const deltaGood = delta && goodDir ? delta.direction === goodDir : null;
 
-  const backTo = assetId ? `/infrastructure/${assetId}` : '/infrastructure';
+  const backTo = detailId ? `/infrastructure/${detailId}` : '/infrastructure';
 
   const protocolSplit = (detail?.related ?? []).filter((r) => r.key === 'net_ipv4' || r.key === 'net_ipv6');
 
@@ -1099,7 +1101,7 @@ export function MetricDetailPage() {
               {corr ? (
                 <CorrelationPanel
                   data={corr}
-                  assetId={assetId ?? detail?.monitor.assetId ?? undefined}
+                  detailId={detailId ?? monId}
                   monitorId={monId}
                   showingAll={corrAll}
                   onShowAll={() => setCorrAllFor(corrQuestion)}
@@ -1173,7 +1175,7 @@ export function MetricDetailPage() {
             {protocolSplit.map((r) => (
               <Link
                 key={r.key}
-                to={`/infrastructure/${assetId ?? detail.monitor.assetId ?? ''}/metric/${monId}/${r.key}`}
+                to={`/infrastructure/${detailId ?? monId}/metric/${monId}/${r.key}`}
                 className="hover:border-primary/60 hover:bg-secondary/50 rounded-lg border border-border px-3 py-2 text-xs transition-colors"
               >
                 <span className="font-medium">{r.key === 'net_ipv4' ? 'IPv4' : 'IPv6'}</span>
@@ -1201,7 +1203,7 @@ export function MetricDetailPage() {
             {detail.related.map((r) => (
               <Link
                 key={r.key}
-                to={`/infrastructure/${assetId ?? detail.monitor.assetId ?? ''}/metric/${monId}/${r.key}`}
+                to={`/infrastructure/${detailId ?? monId}/metric/${monId}/${r.key}`}
                 className="hover:border-primary/60 hover:bg-secondary/50 rounded-lg border border-border px-3 py-2 text-xs transition-colors"
               >
                 <span className="font-medium">{r.label}</span>

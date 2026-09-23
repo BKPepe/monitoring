@@ -109,9 +109,9 @@ export function PublicMonitorCard({
           <TypeIcon type={monitor.type} />
           {/* The detail lives in the app, which needs a login and shows a user only
               the monitors assigned to them - an anonymous visitor gets the name alone. */}
-          {monitor.assetId !== null && signedIn ? (
+          {signedIn ? (
             <Link
-              to={`/infrastructure/${monitor.assetId}`}
+              to={`/infrastructure/${monitor.id}`}
               className="truncate text-sm font-medium hover:underline"
               title={t('public.open_detail', 'Otevřít detail služby')}
             >
@@ -265,9 +265,9 @@ export function PublicMonitorCard({
               where an agent actually reports metrics (cpu !== null), so it
               never leads into an empty page. Verified: monitors 4 and 5 have
               no agent and get no link. */}
-          {monitor.cpu !== null && monitor.assetId !== null && signedIn && (
+          {monitor.cpu !== null && signedIn && (
             <Link
-              to={`/infrastructure/${monitor.assetId}/metric/${monitor.id}/cpu`}
+              to={`/infrastructure/${monitor.id}/metric/${monitor.id}/cpu`}
               className="text-primary inline-flex items-center gap-1.5 text-xs font-medium hover:underline"
             >
               <LineChart className="size-3.5" />

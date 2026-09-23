@@ -19,6 +19,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'nav.reports': { cs: 'SLA Výkazy', en: 'Reports & SLA' },
   'nav.users': { cs: 'Uživatelé', en: 'Users' },
   'nav.api-agents': { cs: 'API & Agenti', en: 'API & Agents' },
+  'nav.outgoing-messages': { cs: 'Odchozí zprávy', en: 'Outgoing messages' },
   'nav.settings': { cs: 'Nastavení', en: 'Settings' },
 
   // Common UI
@@ -1289,7 +1290,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Loading device detail and diagnostic metrics…',
   },
   'asset.back': { cs: 'Zpět na infrastrukturální přehled', en: 'Back to Infrastructure Overview' },
-  'asset.not_found': { cs: 'Zařízení nenašeno', en: 'Device Not Found' },
+  'asset.not_found': { cs: 'Zařízení nenalezeno', en: 'Device Not Found' },
   'asset.not_found_desc': {
     cs: 'Zařízení s ID {id} nebylo v monitorovací databázi nalezeno.',
     en: 'A device with ID {id} was not found in the monitoring database.',
@@ -2192,13 +2193,13 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Doba neaktivity, po které bude agent považován za odpojeného. 0 = detekce neaktivity vypnuta.',
     en: 'Period of inactivity after which the agent is considered disconnected. 0 = inactivity detection disabled.',
   },
-  'settings.agent_resource_alert_label': {
-    cs: 'Upozorňovat na překročení limitů CPU/RAM/HDD',
-    en: 'Alert on CPU/RAM/HDD limit breaches',
+  'settings.agent_alerts_label': {
+    cs: 'Upozornění z agentů: WAN, LTE, disky, firewall, DNS a limity CPU/RAM/HDD',
+    en: 'Agent alerts: WAN, LTE, disks, firewall, DNS and CPU/RAM/HDD limits',
   },
   'settings.agent_admin_only_label': {
-    cs: 'Upozornění VPS agenta doručovat pouze administrátorům',
-    en: 'Deliver VPS agent alerts to administrators only',
+    cs: 'Upozornění z agentů doručovat pouze administrátorům',
+    en: 'Deliver agent alerts to administrators only',
   },
   'settings.agent_outdated_hint': {
     cs: 'Zastaralou verzi agenta systém pozná a označí u monitoru; e-mail o ní neposílá.',

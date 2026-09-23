@@ -110,7 +110,9 @@ export function Header({
         <Menu />
       </Button>
 
-      <div className="mx-auto w-full max-w-md">
+      {/* On a phone the search is an icon: as a full-width field it pushed
+          the theme switch and the bell off a 390 px screen (W1-D3). */}
+      <div className="min-w-0 sm:mx-auto sm:w-full sm:max-w-md">
         <SearchCommand results={searchResults} onSelect={onSearchSelect} />
       </div>
 

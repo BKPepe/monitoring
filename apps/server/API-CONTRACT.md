@@ -240,6 +240,9 @@ Související funkcionalita:
 - nedostupná databáze = `503` + `Retry-After: 60`; strojové endpointy
   `{"error":"database_unavailable"}`, stránky značkovou chybovou stránku,
   hláška databáze jen do logu serveru
+- přepínače v nastavení jsou přesně `'1'`/`'0'` (prázdná hodnota = 400) a
+  neuložený klíč se čte jako výchozí hodnota ze sdílené mapy
+  (`bk_settings_defaults()`), nikdy jako prázdno
 
 Co bych při přepisu **změnil, ne zkopíroval**: ingest se dnes autentizuje
 sdíleným `agent_key` v těle requestu. Vzor pro lepší řešení už v projektu je —

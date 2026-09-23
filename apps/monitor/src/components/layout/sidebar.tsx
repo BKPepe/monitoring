@@ -9,6 +9,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Lightbulb,
+  Mail,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -45,6 +46,9 @@ const primaryNav: NavItem[] = [
 const secondaryNav: NavItem[] = [
   { to: '/users', labelKey: 'nav.users', defaultLabel: 'Users', icon: Users },
   { to: '/api-agents', labelKey: 'nav.api-agents', defaultLabel: 'API & Agents', icon: KeyRound },
+  // "Did that alert go out?" The log was reachable only through the unlabelled
+  // envelope icon in the user menu; it gets a named entry like every page (W1-D3).
+  { to: '/outgoing-messages', labelKey: 'nav.outgoing-messages', defaultLabel: 'Outgoing messages', icon: Mail },
   { to: '/settings', labelKey: 'nav.settings', defaultLabel: 'Settings', icon: Settings },
 ];
 

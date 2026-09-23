@@ -1496,6 +1496,9 @@ if ($action === 'get_settings') {
     $settings = [];
     $env_locked = [];
     foreach ($all_keys as $key) {
+        // An unset key answers its default from bk_settings_defaults() (inside
+        // get_setting), never ''. The form posts back what it loaded, and a ''
+        // it posted back used to switch agent alerts off.
         $val = get_setting($key, '');
         $is_env = is_setting_env_defined($key);
         if ($is_env) {
@@ -1984,7 +1987,7 @@ if ($action === 'save_settings') {
     }
 
     $input = json_decode(file_get_contents('php://input'), true);
-    if (!$input || !isset($input['settings'])) {
+    if (!$input || !isset($input['settings']) || !is_array($input['settings'])) {
         http_response_code(400);
         echo json_encode(['error' => 'Chybějící data nastavení.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -1992,6 +1995,30 @@ if ($action === 'save_settings') {
 
     $allowed_keys = bk_settings_keys();
     $secret_keys = bk_settings_secret_keys();
+
+    // A switch is '1' or '0'. Anything else - above all '' - means the client
+    // lost the value, and storing it silently changed alerting (an empty
+    // agent_notifications_enabled read as "off"). The whole save is refused
+    // before anything is written, and the answer names the keys.
+    $bk_bad_switches = [];
+    foreach (bk_settings_boolean_keys() as $bool_key) {
+        if (!array_key_exists($bool_key, $input['settings']) || is_setting_env_defined($bool_key)) {
+            continue;
+        }
+        $bool_val = $input['settings'][$bool_key];
+        $bool_val = is_string($bool_val) ? trim($bool_val) : (is_int($bool_val) ? (string)$bool_val : null);
+        if (!in_array($bool_val, ['0', '1'], true)) {
+            $bk_bad_switches[] = $bool_key;
+        }
+    }
+    if ($bk_bad_switches !== []) {
+        http_response_code(400);
+        echo json_encode([
+            'error' => 'Přepínač musí být 0 nebo 1, prázdná hodnota se neukládá: ' . implode(', ', $bk_bad_switches),
+            'invalidKeys' => $bk_bad_switches,
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
     try {
         $pdo->beginTransaction();

@@ -3177,6 +3177,89 @@ if ($logged_in) {
 }
 
 // =======================================================================
+// A fresh install followed by one save leaves every alert switch unchanged.
+//
+// get_settings used to answer '' for a key nobody had saved, the form posted
+// that '' back with its first "Save", and a stored '' read as "off": one save
+// of an unrelated field silenced every WAN, LTE, disk and firewall alert and
+// sent agent alerts to all users instead of admins. Reproduced end to end:
+// the rows of a fresh install, the read the form does, the save it sends.
+// =======================================================================
+if ($logged_in) {
+    bk_test_load_functions($root . '/db.php', ['bk_settings_keys', 'bk_settings_defaults', 'bk_settings_boolean_keys']);
+    $fi_defaults = bk_settings_defaults();
+    $fi_switches = bk_settings_boolean_keys();
+    $fi_backup = $pdo->query("SELECT key_name, key_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
+
+    $fi_keys = array_keys($fi_defaults);
+    $pdo->prepare("DELETE FROM settings WHERE key_name IN (" . implode(',', array_fill(0, count($fi_keys), '?')) . ")")
+        ->execute($fi_keys);
+
+    [$code, $fi_read] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('čerstvá instalace: get_settings vrací 200', $code, 200);
+    $fi_s = $fi_read['settings'] ?? [];
+    $fi_shown = array_intersect_key($fi_s, $fi_defaults);
+    ksort($fi_shown);
+    $fi_expected = $fi_defaults;
+    ksort($fi_expected);
+    check('nikdy neuložený klíč ukáže svou výchozí hodnotu, ne prázdno', $fi_shown, $fi_expected);
+
+    // One save of exactly what the form loaded.
+    [$code] = api_post($base, 'action=save_settings', ['settings' => $fi_s], $cookie_jar);
+    check('první uložení čerstvé instalace projde', $code, 200);
+    $fi_rows = $pdo->query("SELECT key_name, key_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $fi_stored = [];
+    foreach ($fi_switches as $fi_key) {
+        $fi_stored[$fi_key] = $fi_rows[$fi_key] ?? null;
+    }
+    check(
+        'po jednom uložení zůstal každý přepínač upozornění na výchozí hodnotě',
+        $fi_stored,
+        array_intersect_key($fi_defaults, array_flip($fi_switches))
+    );
+    [, $fi_again] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    $fi_after = array_intersect_key($fi_again['settings'] ?? [], $fi_defaults);
+    ksort($fi_after);
+    check('a čte se stejně jako před uložením', $fi_after, $fi_shown);
+
+    // A production row already damaged by the old form: '' reads as the
+    // default, so the alerts come back on the deploy, not on the next save.
+    $pdo->exec("REPLACE INTO settings (key_name, key_value) VALUES ('agent_notifications_enabled', ''), ('agent_notify_admin_only', '')");
+    [, $fi_legacy] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('uložené prázdné upozornění z agentů se čte jako zapnuté', $fi_legacy['settings']['agent_notifications_enabled'] ?? null, '1');
+    check('uložené prázdné "jen adminům" se čte jako zapnuté', $fi_legacy['settings']['agent_notify_admin_only'] ?? null, '1');
+
+    // An empty switch is refused as a whole: nothing of that save is written.
+    $fi_host_before = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_host'")->fetchColumn();
+    [$code, $fi_bad] = api_post($base, 'action=save_settings', [
+        'settings' => ['agent_notifications_enabled' => '', 'smtp_host' => 'smtp.nesmi-se-ulozit.example'],
+    ], $cookie_jar);
+    check('prázdný přepínač uložení odmítne (400)', $code, 400);
+    check('a odpověď jmenuje ten klíč', $fi_bad['invalidKeys'] ?? null, ['agent_notifications_enabled']);
+    check(
+        'a z odmítnutého uložení se nezapsalo nic',
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_host'")->fetchColumn(),
+        $fi_host_before
+    );
+    [$code] = api_post($base, 'action=save_settings', ['settings' => ['escalation_enabled' => 'ano']], $cookie_jar);
+    check('přepínač s jinou hodnotou než 0/1 je taky 400', $code, 400);
+    [$code] = api_post($base, 'action=save_settings', ['settings' => ['agent_notifications_enabled' => '0']], $cookie_jar);
+    check('vědomé vypnutí (0) se uložit dá', $code, 200);
+    check(
+        'a opravdu se uložilo',
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_notifications_enabled'")->fetchColumn(),
+        '0'
+    );
+
+    // The rest of the suite runs on the settings it had before this block.
+    $pdo->exec("DELETE FROM settings");
+    $fi_restore = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?)");
+    foreach ($fi_backup as $fi_key => $fi_val) {
+        $fi_restore->execute([$fi_key, $fi_val]);
+    }
+}
+
+// =======================================================================
 // The digest in the recipient's language - the admin.php preview renders with
 // the same template as the real e-mail. The EN version must not leak a single
 // Czech template string; Czech data (monitor names from the seeds) is removed

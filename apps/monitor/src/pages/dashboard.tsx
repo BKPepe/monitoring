@@ -44,6 +44,7 @@ import { usePublicStatus } from '@/api/use-asset-charts';
 import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
 import { nestUnderAgents, processUsage } from '@/lib/monitor-grouping';
 import { buildNeedsAttention, metricSeverity, thresholdFor } from '@/lib/attention';
+import { isProbeMonitor } from '@/lib/monitor-type';
 import { LoadingState, EmptyState, ErrorState } from '@/components/ui/states';
 
 type MonitorStatus = ApiMonitor['status'];
@@ -122,9 +123,8 @@ export function DashboardPage() {
         if (!active) return;
         const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
         const userTargets = list.filter((m: ApiMonitor) => {
-          const t = (m.type || '').toLowerCase();
-          const n = (m.name || '').toLowerCase();
-          return t !== 'node' && t !== 'probe' && !n.includes('as13335') && !n.includes('as8075');
+          // By type, like api.php - never by name (W1-D2).
+          return !isProbeMonitor(m.type);
         });
 
         setMonitors(userTargets.length > 0 ? userTargets : list);
@@ -182,8 +182,8 @@ export function DashboardPage() {
 
   const realAlerts = React.useMemo(() => {
     const alertsList: {
+      /** monitors.id, also the /infrastructure/:id link. */
       id: number;
-      assetId: number;
       title: string;
       source: string;
       severity: 'down' | 'warning' | 'up';
@@ -194,7 +194,6 @@ export function DashboardPage() {
       if (m.status === 'down') {
         alertsList.push({
           id: m.id,
-          assetId: m.id,
           title: `🔴 ${t('dashboard.outage_title', 'Výpadek služby')}: ${m.name}`,
           source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'down',
@@ -203,7 +202,6 @@ export function DashboardPage() {
       } else if (m.status === 'warning') {
         alertsList.push({
           id: m.id,
-          assetId: m.id,
           title: `⚡ ${t('dashboard.high_latency', 'Zvýšená latence')}: ${m.name}`,
           source: `${m.type.toUpperCase()} · ${m.target}`,
           severity: 'warning',
@@ -405,7 +403,7 @@ export function DashboardPage() {
           needsAttention.map((item) => (
             <Link
               key={item.key}
-              to={`/infrastructure/${item.assetId}`}
+              to={`/infrastructure/${item.monitorId}`}
               className="hover:bg-muted/40 flex items-center gap-3 rounded-md px-3 py-2 transition-colors"
             >
               <StatusDot variant={item.severity} />
@@ -438,29 +436,35 @@ export function DashboardPage() {
 
       <CardContent className="px-0 pb-0">
         <Tabs value={filter} onValueChange={(v) => setFilter(v as StatusFilter)}>
-          <TabsList className="mx-5 mb-0">
-            <TabsTrigger value="all">
-              {t('common.all', 'Vše')} ({monitors.length})
-            </TabsTrigger>
-            <TabsTrigger value="up">
-              {t('common.online', 'Online')} ({monitors.filter((m) => m.status === 'up').length})
-            </TabsTrigger>
-            <TabsTrigger value="warning">
-              {t('common.warning', 'Varování')} ({monitors.filter((m) => m.status === 'warning').length})
-            </TabsTrigger>
-            <TabsTrigger value="down">
-              {t('common.offline', 'Offline')} ({monitors.filter((m) => m.status === 'down').length})
-            </TabsTrigger>
-            <TabsTrigger value="paused">
-              {t('common.paused', 'Pozastaveno')} ({monitors.filter((m) => m.status === 'paused').length})
-            </TabsTrigger>
-            {/* Silent agents had no tab - they were invisible in every filter but "all". */}
-            {(monitors.some((m) => m.status === 'unknown') || filter === 'unknown') && (
-              <TabsTrigger value="unknown">
-                {t('status.unknown', 'Neznámý')} ({monitors.filter((m) => m.status === 'unknown').length})
+          {/* Six tabs are wider than a phone. The strip scrolls on its own
+              instead of stretching the card, which pushed each card's status
+              past the screen edge (W1-D3). The wrapper scrolls, not the list,
+              so the active tab's underline is not clipped at its border. */}
+          <div className="mx-5 overflow-x-auto">
+            <TabsList className="mb-0 whitespace-nowrap">
+              <TabsTrigger value="all">
+                {t('common.all', 'Vše')} ({monitors.length})
               </TabsTrigger>
-            )}
-          </TabsList>
+              <TabsTrigger value="up">
+                {t('common.online', 'Online')} ({monitors.filter((m) => m.status === 'up').length})
+              </TabsTrigger>
+              <TabsTrigger value="warning">
+                {t('common.warning', 'Varování')} ({monitors.filter((m) => m.status === 'warning').length})
+              </TabsTrigger>
+              <TabsTrigger value="down">
+                {t('common.offline', 'Offline')} ({monitors.filter((m) => m.status === 'down').length})
+              </TabsTrigger>
+              <TabsTrigger value="paused">
+                {t('common.paused', 'Pozastaveno')} ({monitors.filter((m) => m.status === 'paused').length})
+              </TabsTrigger>
+              {/* Silent agents had no tab - they were invisible in every filter but "all". */}
+              {(monitors.some((m) => m.status === 'unknown') || filter === 'unknown') && (
+                <TabsTrigger value="unknown">
+                  {t('status.unknown', 'Neznámý')} ({monitors.filter((m) => m.status === 'unknown').length})
+                </TabsTrigger>
+              )}
+            </TabsList>
+          </div>
 
           <TabsContent value={filter} className="mt-0">
             {monitorsError && monitors.length === 0 ? (
@@ -521,7 +525,7 @@ export function DashboardPage() {
         {realAlerts.map((alert) => (
           <Link
             key={alert.id}
-            to={`/infrastructure/${alert.assetId}`}
+            to={`/infrastructure/${alert.id}`}
             className="hover:bg-muted/40 flex items-start gap-3 rounded-md px-3 py-2.5 transition-colors cursor-pointer"
           >
             <StatusDot variant={alert.severity} className="mt-1.5" />
@@ -609,7 +613,7 @@ export function DashboardPage() {
             {t('dashboard.insights_subtitle', 'Automatická analýza trendů a anomálií napříč infrastrukturou.')}
           </p>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 *:min-w-0 sm:grid-cols-2 xl:grid-cols-4">
           {systemInsights.map((ins, idx) => {
             const InsIcon =
               ins.kind === 'network'
@@ -737,7 +741,7 @@ export function DashboardPage() {
         const node = sectionFor(tl.key, wide);
         if (!node) return null;
         return (
-          <div key={tl.key} className={wide ? 'md:col-span-2' : undefined}>
+          <div key={tl.key} className={cn('min-w-0', wide && 'md:col-span-2')}>
             {node}
           </div>
         );
@@ -786,6 +790,10 @@ export function DashboardPage() {
 
       <CollectionIssuesBanner monitors={monitors} />
 
+      {/* Two tiles per row already on a phone: four full-width tiles pushed
+          the monitors a whole screen down (W1-D3). min-w-0 on every grid
+          child: a grid item is never narrower than its content by default,
+          so one wide child made the whole page scroll sideways. */}
       {kpiFailed && (
         <ErrorState
           message={t(
@@ -795,7 +803,7 @@ export function DashboardPage() {
           onRetry={() => setRefreshTick((n) => n + 1)}
         />
       )}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 *:min-w-0 xl:grid-cols-4">
         <MetricTile
           label={t('dashboard.total_monitors', 'Monitorů celkem')}
           value={kpiFailed ? '—' : totalMonitors}
@@ -860,7 +868,7 @@ export function DashboardPage() {
       {tiles.length === 0 ? (
         <>
           {attentionSection}
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-4 *:min-w-0 xl:grid-cols-3">
             {monitorsSection(false)}
             <div className="flex flex-col gap-4">
               {alertsSection}
@@ -946,11 +954,14 @@ function MonitorTable({
                 child && 'ml-5'
               )}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="min-w-0 truncate text-sm font-semibold">
-                  {child && <span className="text-muted-foreground/60 mr-1 font-mono text-xs">└</span>}
-                  {monitor.name}
-                </span>
+              {/* The status comes first: it is what the card is for, and a
+                  long name used to truncate it off a 390 px screen (W1-D3). */}
+              <div className="flex min-w-0 items-center gap-2">
+                {child && (
+                  <span aria-hidden="true" className="text-muted-foreground/60 shrink-0 font-mono text-xs">
+                    └
+                  </span>
+                )}
                 <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
                   <StatusDot variant={statusVariant[monitor.status]} />
                   <span
@@ -965,6 +976,7 @@ function MonitorTable({
                     {statusText[monitor.status]}
                   </span>
                 </span>
+                <span className="min-w-0 truncate text-sm font-semibold">{monitor.name}</span>
               </div>
               <div className="text-muted-foreground mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
                 <span>{monitor.responseMs != null ? formatMs(monitor.responseMs) : '—'}</span>

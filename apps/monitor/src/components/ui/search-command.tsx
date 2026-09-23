@@ -79,16 +79,19 @@ export function SearchCommand({
 
   return (
     <>
+      {/* Below sm only the magnifier shows, so the name lives in aria-label. */}
       <button
         type="button"
         onClick={() => setOpen(true)}
+        aria-label={resolvedPlaceholder}
         className={cn(
-          'bg-secondary/60 text-muted-foreground flex h-9 w-full items-center gap-2 rounded-md border border-input px-3 text-sm print:hidden',
+          'bg-secondary/60 text-muted-foreground flex h-9 w-9 items-center justify-center gap-2 rounded-md border border-input text-sm print:hidden',
+          'sm:w-full sm:justify-start sm:px-3',
           'hover:border-border-strong transition-colors'
         )}
       >
         <Search className="size-4 shrink-0" />
-        <span className="truncate">{resolvedPlaceholder}</span>
+        <span className="hidden truncate sm:inline">{resolvedPlaceholder}</span>
         <kbd className="text-muted-foreground bg-muted ml-auto hidden rounded border border-border px-1.5 py-0.5 font-mono text-3xs sm:inline-block">
           ⌘K
         </kbd>

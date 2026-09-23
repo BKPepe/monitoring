@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { monitorTypeLabel, monitorTypeProfile, normalizeMonitorType } from './monitor-type';
+import {
+  isProbeMonitor,
+  isTeamSpeakMonitor,
+  monitorTypeLabel,
+  monitorTypeProfile,
+  normalizeMonitorType,
+} from './monitor-type';
 
 const t = (key: string, params?: Record<string, string | number> | string, fallback?: string) =>
   typeof params === 'string' ? params : (fallback ?? key);
@@ -135,3 +141,26 @@ describe('monitorTypeLabel', () => {
     }
   });
 });
+
+describe('isProbeMonitor (W1-D2)', () => {
+  it('sondu pozná podle typu, ne podle jména', () => {
+    expect(isProbeMonitor('node')).toBe(true);
+    expect(isProbeMonitor('PROBE')).toBe(true);
+    expect(isProbeMonitor('web')).toBe(false);
+    expect(isProbeMonitor(null)).toBe(false);
+  });
+});
+
+describe('isTeamSpeakMonitor (W1-D2)', () => {
+  it('rozložení TeamSpeaku dostane typ teamspeak nebo agent, který TS server opravdu našel', () => {
+    expect(isTeamSpeakMonitor({ type: 'teamspeak' })).toBe(true);
+    expect(isTeamSpeakMonitor({ type: 'vps', details: { teamspeak_servers: [{ port: 9987 }] } })).toBe(true);
+  });
+
+  it('jméno monitoru ani prázdný seznam serverů o typu nerozhoduje', () => {
+    expect(isTeamSpeakMonitor({ type: 'vps', details: { teamspeak_servers: [] } })).toBe(false);
+    expect(isTeamSpeakMonitor({ type: 'web', details: null })).toBe(false);
+    expect(isTeamSpeakMonitor({ type: 'vps' })).toBe(false);
+  });
+});
+

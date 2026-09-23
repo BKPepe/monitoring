@@ -72,7 +72,7 @@ function renderMetric() {
       <TooltipProvider>
         <MemoryRouter initialEntries={['/infrastructure/6/metric/6/log_errors_24h']}>
           <Routes>
-            <Route path="/infrastructure/:assetId/metric/:monitorId/:metricKey" element={<MetricDetailPage />} />
+            <Route path="/infrastructure/:id/metric/:monitorId/:metricKey" element={<MetricDetailPage />} />
           </Routes>
         </MemoryRouter>
       </TooltipProvider>

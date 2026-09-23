@@ -61,7 +61,9 @@ import { LogErrorLines } from '@/components/log-error-lines';
 import { logWindow, readLogLines } from '@/lib/log-lines';
 import { seriesForTile } from '@/lib/tile-series';
 import { timelineSeverity, timelineTitle } from '@/lib/timeline-events';
-import { monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
+import { isTeamSpeakMonitor, monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
+import { parseMonitorId } from '@/lib/monitor-route';
+import { NotFoundPage } from '@/pages/not-found';
 import { processUsage } from '@/lib/monitor-grouping';
 import {
   agentRunText,
@@ -145,8 +147,9 @@ interface ServerInsights {
 
 export function AssetDetailPage() {
   const { t, lang } = useLanguage();
-  const { assetId } = useParams<{ assetId: string }>();
-  const idNum = Number(assetId) || 1;
+  // The segment is a monitors.id and nothing else (W1-D2); null = not an id.
+  const { id: routeId } = useParams<{ id: string }>();
+  const idNum = parseMonitorId(routeId);
 
   const [asset, setAsset] = React.useState<AssetDetail | null>(null);
   /** Bumped after an action that changes the monitor, to refetch it. */
@@ -186,6 +189,11 @@ export function AssetDetailPage() {
 
   React.useEffect(() => {
     let active = true;
+    if (idNum === null) {
+      // Nothing to look up: the page renders NotFound below.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
 
     appApi
@@ -193,9 +201,9 @@ export function AssetDetailPage() {
       .then(async (rows) => {
         if (!active) return;
         const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
-        let match: ApiMonitor | undefined =
-          list.find((m: ApiMonitor) => Number(m.id) === idNum) ??
-          list.find((m: ApiMonitor) => Number(m.assetId) === idNum);
+        // By monitors.id only. The asset_id fallback opened ANOTHER device as
+        // soon as one monitor's asset_id equalled a different monitor's id.
+        let match: ApiMonitor | undefined = list.find((m: ApiMonitor) => Number(m.id) === idNum);
         if (!match) {
           // An archived monitor is out of the live list; its history stays readable here.
           const archivedList = await appApi.getArchivedMonitors().catch(() => [] as ApiMonitor[]);
@@ -377,6 +385,8 @@ export function AssetDetailPage() {
     [routerMonitorId, recommendations, showAllRecommendations]
   );
 
+  if (idNum === null) return <NotFoundPage />;
+
   if (loading) {
     return <LoadingState size="page" label={t('asset.loading', 'Načítám detail zařízení a diagnostické metriky…')} />;
   }
@@ -398,7 +408,7 @@ export function AssetDetailPage() {
           <p className="text-muted-foreground text-sm">
             {t(
               'asset.not_found_desc',
-              { id: assetId ?? '' },
+              { id: routeId ?? '' },
               'Zařízení s ID {id} nebylo v monitorovací databázi nalezeno.'
             )}
           </p>
@@ -509,7 +519,6 @@ export function AssetDetailPage() {
             range={range}
             events={events}
             serverInsights={serverInsights}
-            assetId={assetId}
             statusChangeHint={statusChangeHint}
             recommendations={
               isRouter ? (
@@ -528,7 +537,6 @@ export function AssetDetailPage() {
             <NetworkTab
               d={asset.rawDetails}
               monitorId={Number(asset.id)}
-              assetId={assetId ?? asset.id}
               recommendations={isRouter ? compactRecommendations : undefined}
               // Where the line speed ends - only a router has a WAN to judge (X21).
               wanBottleneck={isRouter ? <WanBottleneckCard monitorId={asset.id} /> : undefined}
@@ -1019,7 +1027,6 @@ function OverviewTab({
   range,
   events,
   serverInsights,
-  assetId,
   statusChangeHint,
   recommendations,
 }: {
@@ -1031,9 +1038,6 @@ function OverviewTab({
   recommendations?: React.ReactNode;
   /** What happened at the last status change and why; undefined = unknown yet. */
   statusChangeHint?: string;
-  /** The URL segment - carried further down the path so that navigating to a
-      metric and back does not land on a different ID than the user is on. */
-  assetId: string | undefined;
 }) {
   const { t } = useLanguage();
   // One chart fetch for the whole tab: the same data feeds the big charts below
@@ -1176,7 +1180,6 @@ function OverviewTab({
           onRetry={charts.reload}
           range={range}
           events={events}
-          assetId={assetId ?? asset.id}
           monitorId={asset.id}
           thresholds={asset.thresholds}
           hasTimeSeries={asset.typeProfile.timeSeries}
@@ -1610,15 +1613,13 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
 function NetworkTab({
   d,
   monitorId,
-  assetId,
   recommendations,
   wanBottleneck,
   speedtest,
 }: {
   d: Record<string, any>;
+  /** This page's monitor: both the page to come back to and the owner of the metric. */
   monitorId: number;
-  /** For linking a row to the history of that metric. */
-  assetId: string | number;
   /** The compact recommendations of one area, placed next to the card they are about (routers only). */
   recommendations?: (area: 'wifi' | 'wan') => React.ReactNode;
   /** The WAN verdict card; it explains the speed tests below it, so it comes first. */
@@ -1628,7 +1629,7 @@ function NetworkTab({
 }) {
   // Rows whose number is also a stored metric: measured every minute, kept for
   // months, and until now readable only as its latest value.
-  const history = (key: string) => `/infrastructure/${assetId}/metric/${monitorId}/${key}`;
+  const history = (key: string) => `/infrastructure/${monitorId}/metric/${monitorId}/${key}`;
   const { t } = useLanguage();
 
   // "x minutes ago" labels need the clock, which is impure by definition.
@@ -2284,7 +2285,6 @@ function PerformanceCharts({
   loading,
   range,
   events = [],
-  assetId,
   monitorId,
   thresholds,
   hasTimeSeries = true,
@@ -2297,8 +2297,7 @@ function PerformanceCharts({
   onRetry?: () => void;
   range: TimeRange;
   events?: TimelineEvent[];
-  /** For linking through to the metric detail (Level 3). */
-  assetId: string | number;
+  /** This page's monitor; the metric detail (Level 3) links back to it. */
   monitorId: number;
   /** The monitor's effective limits, so the charts show the same line the alerts use. */
   thresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
@@ -2430,7 +2429,7 @@ function PerformanceCharts({
               t
             )}
             group="asset-performance"
-            to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
+            to={`/infrastructure/${monitorId}/metric/${monitorId}/${chart.id}`}
           />
         ))}
       </div>
@@ -2453,7 +2452,7 @@ function PerformanceCharts({
               <MetricRow
                 key={chart.id}
                 chart={chart}
-                to={`/infrastructure/${assetId}/metric/${monitorId}/${chart.id}`}
+                to={`/infrastructure/${monitorId}/metric/${monitorId}/${chart.id}`}
               />
             ))}
           </div>
@@ -2747,10 +2746,7 @@ function buildDynamicAsset(
     }
   }
 
-  const isTS3 =
-    m.type.toLowerCase().includes('teamspeak') ||
-    m.name.toLowerCase().includes('donald') ||
-    m.name.toLowerCase().includes('teamspeak');
+  const isTS3 = isTeamSpeakMonitor(m);
   const ts3Servers = Array.isArray(m.details?.teamspeak_servers) ? m.details.teamspeak_servers[0] : null;
   const ts3Clients: number | null = m.details?.ts3_clients ?? ts3Servers?.clients_online ?? null;
   const ts3Max: number | null = m.details?.ts3_max ?? ts3Servers?.clients_max ?? null;

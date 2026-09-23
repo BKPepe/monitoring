@@ -187,10 +187,10 @@ export const router = createBrowserRouter(
       children: [
         { index: true, element: <DashboardPage /> },
         { path: 'infrastructure', element: <InfrastructurePage /> },
-        { path: 'infrastructure/:assetId', element: <AssetDetailPage /> },
+        { path: 'infrastructure/:id', element: <AssetDetailPage /> },
         // Level 3 - detail of a single metric. The path carries monitorId too:
         // an asset can contain several monitors and a metric belongs to one.
-        { path: 'infrastructure/:assetId/metric/:monitorId/:metricKey', element: <MetricDetailPage /> },
+        { path: 'infrastructure/:id/metric/:monitorId/:metricKey', element: <MetricDetailPage /> },
         { path: 'websites', element: <WebsitesPage /> },
         { path: 'services', element: <ServicesPage /> },
         { path: 'status-pages', element: <StatusPagesPage /> },
