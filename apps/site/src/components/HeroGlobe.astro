@@ -2,27 +2,56 @@
 /**
  * HeroGlobe.astro — hlavní vizuál hero sekce.
  *
- * Globus s uzly agentů a oblouky spojení. Čisté inline SVG, nulový JS,
- * nulový third-party request. Pevný aspect-ratio drží CLS na nule.
+ * Globus s uzly agentů a oblouky spojení. Čisté inline SVG, nulový
+ * third-party request. Pevný aspect-ratio drží CLS na nule.
  *
- * Uzly jsou dekorativní ilustrace, ne živá data — proto `aria-hidden`
- * a textová alternativa v hero sekci vedle vizuálu.
+ * The globe is a decorative illustration. The numbers in the pills are not:
+ * they read the live `/api/status` through the shared lib/live-status, the
+ * same answer the dashboard preview renders (they used to be a hard-coded
+ * 12 and 9). Until it loads, and on failure, they show a dash.
  */
 
 interface Props {
-  agentsOnline?: number;
-  monitorsUp?: number;
   labels: {
     agents: string;
-    online: string;
     monitors: string;
-    up: string;
     /** Textová alternativa vizuálu pro čtečky. */
     visualDescription: string;
   };
 }
 
-const { agentsOnline = 12, monitorsUp = 9, labels } = Astro.props;
+const { labels } = Astro.props;
+
+const currentPath = Astro.url.pathname;
+const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+
+// State words of the pills. The monitors pill takes the server's verdict
+// (bk_overall_verdict) as it is; the site never upgrades it.
+const states = isCs
+  ? {
+      loading: 'Načítám…',
+      unavailable: 'Nedostupné',
+      stale: 'Stará data',
+      online: 'Online',
+      partial: 'online',
+      healthy: 'V pořádku',
+      degraded: 'Zhoršené',
+      down: 'mimo provoz',
+      maintenance: 'Údržba',
+      unknown: 'Neznámý stav',
+    }
+  : {
+      loading: 'Loading…',
+      unavailable: 'Unavailable',
+      stale: 'Stale data',
+      online: 'Online',
+      partial: 'online',
+      healthy: 'All up',
+      degraded: 'Degraded',
+      down: 'down',
+      maintenance: 'Maintenance',
+      unknown: 'Unknown',
+    };
 
 // Body agentů na projekci globusu (viewBox 0 0 600 600).
 // `d` je delay animace, aby pulzy neběžely synchronně.
@@ -114,21 +143,94 @@ const parallels = [-120, -60, 0, 60, 120];
     </g>
   </svg>
 
-  <!-- Stat pilulky: agregované počty, ne živá data - proto neutrální formulace. -->
-  <div class="globe-stats">
+  <!-- Live numbers from /api/status; a dash until they load. -->
+  <div
+    class="globe-stats"
+    aria-live="polite"
+    data-state-loading={states.loading}
+    data-state-unavailable={states.unavailable}
+    data-state-stale={states.stale}
+    data-state-online={states.online}
+    data-state-partial={states.partial}
+    data-state-healthy={states.healthy}
+    data-state-degraded={states.degraded}
+    data-state-down={states.down}
+    data-state-maintenance={states.maintenance}
+    data-state-unknown={states.unknown}
+  >
     <div class="globe-stat">
-      <span class="globe-stat-value tabular">{agentsOnline}</span>
+      <span class="globe-stat-value tabular" data-live="agents-value">—</span>
       <span class="globe-stat-label">{labels.agents}</span>
-      <span class="globe-stat-state up"><span class="status-dot status-dot-live"></span>{labels.online}</span>
+      <span class="globe-stat-state neutral" data-live="agents-state"><span class="status-dot"></span><span data-live="agents-text">{states.loading}</span></span>
     </div>
     <div class="globe-stat-divider" aria-hidden="true"></div>
     <div class="globe-stat">
-      <span class="globe-stat-value tabular">{monitorsUp}</span>
+      <span class="globe-stat-value tabular" data-live="monitors-value">—</span>
       <span class="globe-stat-label">{labels.monitors}</span>
-      <span class="globe-stat-state up"><span class="status-dot"></span>{labels.up}</span>
+      <span class="globe-stat-state neutral" data-live="monitors-state"><span class="status-dot"></span><span data-live="monitors-text">{states.loading}</span></span>
     </div>
   </div>
 </div>
+
+<script>
+  import { dash, onLiveStatus, type Verdict } from '../lib/live-status';
+
+  const box = document.querySelector<HTMLElement>('.globe-stats');
+  const el = (name: string) => box?.querySelector<HTMLElement>(`[data-live="${name}"]`) ?? null;
+  const word = (key: string) => box?.dataset[`state${key[0].toUpperCase()}${key.slice(1)}`] ?? '';
+
+  type Tone = 'up' | 'warning' | 'down' | 'info' | 'neutral';
+  const VERDICT_TONE: Record<Verdict, Tone> = {
+    healthy: 'up',
+    degraded: 'warning',
+    down: 'down',
+    maintenance: 'info',
+    unknown: 'neutral',
+  };
+
+  function setState(prefix: string, text: string, tone: Tone, live = false) {
+    const state = el(`${prefix}-state`);
+    const label = el(`${prefix}-text`);
+    if (label) label.textContent = text;
+    if (!state) return;
+    state.className = `globe-stat-state ${tone}`;
+    // The pulsing dot means "live and fine"; it is earned, not decoration.
+    state.querySelector('.status-dot')?.classList.toggle('status-dot-live', live);
+  }
+
+  onLiveStatus((result) => {
+    const agents = el('agents-value');
+    const monitors = el('monitors-value');
+
+    if (!result.ok) {
+      if (agents) agents.textContent = '—';
+      if (monitors) monitors.textContent = '—';
+      setState('agents', word('unavailable'), 'neutral');
+      setState('monitors', word('unavailable'), 'neutral');
+      return;
+    }
+
+    const d = result.data;
+    if (agents) agents.textContent = dash(d.agentsOnline);
+    if (monitors) monitors.textContent = dash(d.totalMonitors);
+
+    if (!d.fresh) {
+      setState('agents', word('stale'), 'neutral');
+    } else if (d.agentsTotal && d.agentsOnline === d.agentsTotal) {
+      // Every agent online is true on its own, but the pulse says "all fine"
+      // and needs the overall verdict to agree.
+      setState('agents', word('online'), 'up', d.verdict === 'healthy');
+    } else if (d.agentsTotal && d.agentsOnline !== null) {
+      setState('agents', `${d.agentsOnline} / ${d.agentsTotal} ${word('partial')}`, 'warning');
+    } else {
+      setState('agents', word('unknown'), 'neutral');
+    }
+
+    const verdictText =
+      d.verdict === 'down' && d.downMonitors ? `${d.downMonitors} ${word('down')}` : word(d.verdict);
+    setState('monitors', d.fresh ? verdictText : word('stale'), d.fresh ? VERDICT_TONE[d.verdict] : 'neutral');
+  });
+</script>
 
 <style>
   .globe-wrap {
@@ -268,6 +370,22 @@ const parallels = [-120, -60, 0, 60, 120];
 
   .globe-stat-state.up {
     color: var(--up);
+  }
+
+  .globe-stat-state.warning {
+    color: var(--warning);
+  }
+
+  .globe-stat-state.down {
+    color: var(--down);
+  }
+
+  .globe-stat-state.info {
+    color: var(--info);
+  }
+
+  .globe-stat-state.neutral {
+    color: var(--text-low);
   }
 
   .globe-stat-divider {

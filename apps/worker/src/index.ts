@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { AGENT_SOURCE_REPO, AgentVersionsIncomplete, NO_AGENT_VERSIONS, readAgentVersions } from './agent-versions';
 
 type Bindings = {
   GITHUB_TOKEN?: string;
@@ -125,7 +126,7 @@ app.get('/api/stats', async (c) => {
   }
 });
 
-// 2. GET /api/versions - Versions of Monitoring and Agents
+// 2. GET /api/versions - Latest release of the monitoring server (agents: /api/agents)
 app.get('/api/versions', async (c) => {
   const token = c.env?.GITHUB_TOKEN;
 
@@ -158,18 +159,11 @@ app.get('/api/versions', async (c) => {
         throw new Error('No release or tag found on GitHub');
       }
 
-      // We clean the tag version prefix "v" for comparisons
-      const cleanVersion = latestTag.replace(/^v/, '');
-
+      // No `agents` map here any more: it copied the server's release tag
+      // onto every platform, but the agents are versioned on their own
+      // (0.1.x in BKPepe/monitoring-agent). /api/agents reads the real ones.
       return {
         monitoring: latestTag,
-        agents: {
-          windows: cleanVersion,
-          linux: cleanVersion,
-          docker: cleanVersion,
-          macos: cleanVersion,
-          raspberrypi: cleanVersion,
-        },
         latestReleaseDate: publishedAt,
       };
     });
@@ -409,55 +403,30 @@ app.get('/api/test', async (c) => {
   });
 });
 
-// 6. GET /api/agents - Current agent versions (for download page)
+// 6. GET /api/agents - Current agent versions (for the download page).
+// Read from the monitoring-agent repository, see agent-versions.ts.
 app.get('/api/agents', async (c) => {
   const token = c.env?.GITHUB_TOKEN;
 
   try {
-    const agents = await withCache('github-agents', 3600, async () => {
-      // Fetch agent files from GitHub to extract version numbers
-      const files: Record<string, string> = {
-        bash: 'apps/status/agent.sh',
-        python: 'apps/status/agent.py',
-        powershell: 'apps/status/agent.ps1',
-        openwrt: 'apps/status/agent_openwrt.sh',
-      };
-
-      const versions: Record<string, string> = {};
-
-      for (const [key, path] of Object.entries(files)) {
-        try {
-          const res = await fetch(`https://raw.githubusercontent.com/BKPepe/monitoring/main/${path}`, {
-            headers: token ? { Authorization: `token ${token}` } : {},
-          });
-          if (res.ok) {
-            const content = await res.text();
-            const match = content.match(/\$?AGENT_VERSION\s*=\s*["']([0-9][0-9A-Za-z.-]*)["']/);
-            versions[key] = match ? match[1] : 'unknown';
-          } else {
-            versions[key] = 'unknown';
-          }
-        } catch {
-          versions[key] = 'unknown';
-        }
+    // New cache key: the old one may still hold the "unknown" answers from
+    // the dead apps/status paths for up to an hour after a deploy.
+    const agents = await withCache('agent-versions', 3600, async () => {
+      const { versions, missing } = await readAgentVersions((input, init) => fetch(input, init), token);
+      // Throwing keeps an incomplete answer out of the cache: one failed
+      // fetch must not blank a version for the next hour.
+      if (missing.length > 0) {
+        throw new AgentVersionsIncomplete(versions, missing);
       }
-
-      return {
-        ...versions,
-        updatedAt: new Date().toISOString(),
-      };
+      return { ...versions, source: AGENT_SOURCE_REPO, updatedAt: new Date().toISOString() };
     });
 
     return c.json(agents);
   } catch (err: any) {
-    return c.json({
-      bash: '1.7.0',
-      python: '1.7.0',
-      powershell: '1.7.0',
-      openwrt: '1.3.0',
-      updatedAt: new Date().toISOString(),
-      error: err.message,
-    });
+    // No invented fallback: a version nobody read is null, the site shows a
+    // dash, and the status code says the answer is incomplete - as /api/stats does.
+    const partial = err instanceof AgentVersionsIncomplete ? err.versions : NO_AGENT_VERSIONS;
+    return c.json({ ...partial, source: AGENT_SOURCE_REPO, updatedAt: null, error: err.message }, 503);
   }
 });
 

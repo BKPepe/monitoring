@@ -40,24 +40,17 @@ import Layout from '../../layouts/Layout.astro';
         <p>Tento průvodce vám pomůže zprovoznit kompletní monitorovací systém během několika minut.</p>
         
         <h2>Krok 1: Spuštění Serveru</h2>
-        <p>Centrální server Blood Kings se nejjednodušeji spouští pomocí Docker Compose. Vytvořte si prázdnou složku a vložte do ní následující konfiguraci:</p>
+        <p>Server je čisté PHP s databází MySQL nebo MariaDB - žádný obraz se nestahuje. Stáhněte kód, doplňte připojení k databázi a naimportujte schéma:</p>
         <div class="docs-code-wrapper">
-          <pre><code># docker-compose.yml
-version: '3.8'
-services:
-  bloodkings:
-    image: bkpepe/monitoring:latest
-    ports:
-      - "8080:80"
-    volumes:
-      - ./data:/var/www/html/data
-    restart: always</code></pre>
+          <pre><code>git clone https://github.com/BKPepe/monitoring.git &amp;&amp; cd monitoring/apps/status
+cp config.sample.php config.php    # DB_HOST, DB_NAME, DB_USER, DB_PASS
+mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
         </div>
-        <p>Spusťte server příkazem:</p>
+        <p>Obsah <code>apps/status/</code> nahrajte do <code>public_html/status/</code> a sběr dat spouštějte z cronu každou minutu:</p>
         <div class="docs-code-wrapper">
-          <pre><code>docker compose up -d</code></pre>
+          <pre><code>* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
         </div>
-        <p>Po dokončení stahování otevřete prohlížeč na adrese <code>http://localhost:8080</code> a postupujte podle pokynů na obrazovce k vytvoření administrátorského účtu.</p>
+        <p>Pak na své doméně otevřete <code>/app/setup</code> a založte prvního administrátora.</p>
 
         <h2>Krok 2: Přidání nového monitoru</h2>
         <p>Po přihlášení do administrace přejděte na záložku <strong>Monitors</strong> a klikněte na <strong>Add Monitor</strong>. Můžete přidat standardní HTTPS kontroly, ping na IP adresy, kontroly SSL certifikátů nebo <a href="#heartbeat">heartbeat</a> pro úlohy, které se hlásí samy.</p>
@@ -79,7 +72,7 @@ services:
 
         <h3>Vzdálený Agent:</h3>
         <ul>
-          <li><strong>OS:</strong> Linux (libovolná distribuce s Bash a Curl), Windows 10/11/Server, macOS, Raspberry Pi OS</li>
+          <li><strong>OS:</strong> Linux (libovolná distribuce s Bash a Curl), Windows 10/11/Server, OpenWrt/Turris OS, Raspberry Pi OS</li>
           <li><strong>Paměť:</strong> méně než 10 MB RAM</li>
           <li><strong>Síť:</strong> Odchozí HTTPS (port 443) přístup k centrálnímu serveru</li>
         </ul>
@@ -183,25 +176,27 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
       <section id="agent-install" class="docs-section">
         <hr class="docs-divider" />
         <h1>Instalace a Registrace Agenta</h1>
-        <p>Agenti jsou samostné telemetrické skripty dostupné pro Linux (Bash), Python, PowerShell a OpenWrt routery. Auto-registraci spustíte s tokenem serveru:</p>
+        <p>Agenti jsou samostatné skripty pro Linux (Bash), Python, PowerShell a OpenWrt routery. Bash a OpenWrt agent se zaregistrují sami: předejte jim registrační token z nastavení administrace a adresu <code>agent_api.php</code> vašeho serveru. Klíč, který agent dostane, uloží do <code>agent.cfg</code> vedle skriptu (na routeru do <code>agent_openwrt.cfg</code>).</p>
         <div class="docs-code-wrapper">
-          <pre><code>./agent.sh --register --token="VásRegistračníToken" --url="https://monitoring.bloodkings.eu/status/agent_api.php"</code></pre>
+          <pre><code>./agent.sh --register VAS_REGISTRACNI_TOKEN https://bloodkings.eu/status/agent_api.php</code></pre>
         </div>
+        <p>Oba argumenty jsou poziční; bez adresy se agent registruje proti výchozímu <code>localhost</code>. Python a PowerShell agent registrační příkaz nemají: do <code>agent.cfg</code> zapište <code>API_URL</code> a <code>AGENT_KEY</code> z nastavení monitoru. Celý postup pro každou platformu je na <a href="/cs/download#install-guide">stránce ke stažení</a>.</p>
       </section>
 
       <section id="agent-config" class="docs-section">
         <hr class="docs-divider" />
         <h1>Intervaly Agenta a Vzdálené Akce</h1>
-        <p>Agent spouští měření v nastavitelném intervalu (výchozí: 60 sekund). Na OpenWrt routerech lze zapnout opt-in HMAC podepsané Vzdálené akce nastavením <code>REMOTE_ACTIONS_ENABLED=1</code> v konfiguraci agenta.</p>
+        <p>Agenty spouští cron: na serverech každých 5 minut, na OpenWrt routerech každou minutu. Na OpenWrt routerech lze zapnout opt-in HMAC podepsané Vzdálené akce nastavením <code>REMOTE_ACTIONS_ENABLED=1</code> v konfiguraci agenta.</p>
       </section>
 
       <section id="agent-trouble" class="docs-section">
         <hr class="docs-divider" />
         <h1>Řešení Problémů s Agenty</h1>
-        <p>Pokud agent přestane hlásit data, zkontrolujte odchozí přístup na port 443 a nahlédněte do logů:</p>
+        <p>Pokud agent přestane hlásit data, zkontrolujte odchozí přístup na port 443, pak ho spusťte ručně a přečtěte jeho log (leží vedle skriptu):</p>
         <div class="docs-code-wrapper">
-          <pre><code># Kontrola logů systemd služby agenta
-journalctl -u bloodkings-agent -n 50 --no-pager</code></pre>
+          <pre><code># Jeden běh s úplným výpisem, pak poslední řádky logu
+/opt/bk-agent/agent.sh --verbose
+tail -n 50 /opt/bk-agent/agent.log</code></pre>
         </div>
       </section>
     </main>

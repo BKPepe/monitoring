@@ -1,18 +1,52 @@
 ---
-// AgentNetwork.astro - Interactive network of server and agent nodes
+// AgentNetwork.astro - architecture diagram: agents push to one central server.
+//
+// The diagram is an illustration of the supported platforms, so its nodes
+// carry no numbers (they used to show invented pings of 4-45 ms). The header
+// line above it is live: it reads the shared /api/status answer
+// (lib/live-status) and says "communicating without errors" only when every
+// reporting agent is online and the data is fresh. It used to say that
+// unconditionally, next to a hard-coded "24 ms".
 const currentPath = Astro.url.pathname;
 const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
-const statusText = isCs ? "Agenty komunikují bez chyb" : "Agents communicating without errors";
-const latencyText = isCs ? "Průměrná odezva" : "Average latency";
+const t = isCs
+  ? {
+      loading: 'Načítám živý stav agentů…',
+      allOk: 'Agenti komunikují bez chyb',
+      partial: 'agentů online',
+      none: 'Zatím se nehlásí žádný agent',
+      stale: 'Živá data jsou stará - sběr se možná zastavil',
+      unavailable: 'Živý stav agentů je teď nedostupný',
+      latency: 'Průměrná odezva (1 h)',
+      illustration: 'Schéma je ilustrace podporovaných platforem, ne živá data.',
+    }
+  : {
+      loading: 'Loading live agent state…',
+      allOk: 'Agents communicating without errors',
+      partial: 'agents online',
+      none: 'No agent is reporting yet',
+      stale: 'Live data is stale - collection may have stopped',
+      unavailable: 'Live agent state is unavailable right now',
+      latency: 'Average response (1 h)',
+      illustration: 'The diagram illustrates the supported platforms; it is not live data.',
+    };
 ---
 
 <div class="network-container card">
-  <div class="network-header">
+  <div
+    class="network-header"
+    aria-live="polite"
+    data-all-ok={t.allOk}
+    data-partial={t.partial}
+    data-none={t.none}
+    data-stale={t.stale}
+    data-unavailable={t.unavailable}
+  >
     <div class="status-indicator">
-      <span class="pulse-dot green"></span>
-      <span class="status-label">{statusText}</span>
+      <span class="pulse-dot neutral" data-live="net-dot"></span>
+      <span class="status-label" data-live="net-label">{t.loading}</span>
     </div>
-    <span class="ping-stats">{latencyText}: <strong>24 ms</strong></span>
+    <span class="ping-stats">{t.latency}: <strong class="tabular" data-live="net-latency">—</strong></span>
   </div>
 
   <div class="network-visualizer">
@@ -57,60 +91,67 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
 
       <!-- Surrounding Agent Nodes -->
       <!-- Agent 1: OpenWrt Router (top left) -->
-      <g class="node agent-node online" transform="translate(200, 90)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">📡</text>
-        <text x="0" y="-45" class="node-title">OpenWrt / Turris Router</text>
-        <text x="0" y="50" class="node-ping">4 ms</text>
+      <g transform="translate(200, 90)">
+        <g class="node agent-node online" data-slot="1">
+          <circle cx="0" cy="0" r="32" class="node-bg" />
+          <circle cx="0" cy="0" r="28" class="node-border" />
+          <text x="0" y="8" class="node-icon">📡</text>
+          <text x="0" y="-45" class="node-title">OpenWrt / Turris Router</text>
+        </g>
       </g>
 
       <!-- Agent 2: Linux (top right) -->
-      <g class="node agent-node online" transform="translate(600, 90)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">🐧</text>
-        <text x="0" y="-45" class="node-title">Linux VPS (BASH)</text>
-        <text x="0" y="50" class="node-ping">8 ms</text>
+      <g transform="translate(600, 90)">
+        <g class="node agent-node online" data-slot="2">
+          <circle cx="0" cy="0" r="32" class="node-bg" />
+          <circle cx="0" cy="0" r="28" class="node-border" />
+          <text x="0" y="8" class="node-icon">🐧</text>
+          <text x="0" y="-45" class="node-title">Linux VPS (BASH)</text>
+        </g>
       </g>
 
       <!-- Agent 3: Windows Server (mid left) -->
-      <g class="node agent-node online" transform="translate(140, 250)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">🪟</text>
-        <text x="0" y="-45" class="node-title">Windows (PowerShell)</text>
-        <text x="0" y="50" class="node-ping">18 ms</text>
+      <g transform="translate(140, 250)">
+        <g class="node agent-node online" data-slot="3">
+          <circle cx="0" cy="0" r="32" class="node-bg" />
+          <circle cx="0" cy="0" r="28" class="node-border" />
+          <text x="0" y="8" class="node-icon">🪟</text>
+          <text x="0" y="-45" class="node-title">Windows (PowerShell)</text>
+        </g>
       </g>
 
       <!-- Agent 4: Docker Container (mid right) -->
-      <g class="node agent-node online" transform="translate(660, 250)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">🐳</text>
-        <text x="0" y="-45" class="node-title">Docker Agent</text>
-        <text x="0" y="50" class="node-ping">12 ms</text>
+      <g transform="translate(660, 250)">
+        <g class="node agent-node online" data-slot="4">
+          <circle cx="0" cy="0" r="32" class="node-bg" />
+          <circle cx="0" cy="0" r="28" class="node-border" />
+          <text x="0" y="8" class="node-icon">🐳</text>
+          <text x="0" y="-45" class="node-title">Docker Agent</text>
+        </g>
       </g>
 
       <!-- Agent 5: Raspberry Pi (bottom left) -->
-      <g class="node agent-node online" transform="translate(220, 410)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">🍓</text>
-        <text x="0" y="-45" class="node-title">Raspberry Pi (Python)</text>
-        <text x="0" y="50" class="node-ping">25 ms</text>
+      <g transform="translate(220, 410)">
+        <g class="node agent-node online" data-slot="5">
+          <circle cx="0" cy="0" r="32" class="node-bg" />
+          <circle cx="0" cy="0" r="28" class="node-border" />
+          <text x="0" y="8" class="node-icon">🍓</text>
+          <text x="0" y="-45" class="node-title">Raspberry Pi (Python)</text>
+        </g>
       </g>
 
       <!-- Agent 6: Cloud VPS (bottom right) -->
-      <g class="node agent-node online" transform="translate(580, 410)">
-        <circle cx="0" cy="0" r="32" class="node-bg" />
-        <circle cx="0" cy="0" r="28" class="node-border" />
-        <text x="0" y="8" class="node-icon">☁️</text>
-        <text x="0" y="-45" class="node-title">Cloud Host (AWS/Hetzner)</text>
-        <text x="0" y="50" class="node-ping">45 ms</text>
+      <g transform="translate(580, 410)">
+        <g class="node agent-node online" data-slot="6">
+          <circle cx="0" cy="0" r="32" class="node-bg" />
+          <circle cx="0" cy="0" r="28" class="node-border" />
+          <text x="0" y="8" class="node-icon">☁️</text>
+          <text x="0" y="-45" class="node-title">Cloud Host (AWS/Hetzner)</text>
+        </g>
       </g>
     </svg>
   </div>
+  <p class="network-caption">{t.illustration}</p>
 
   <div class="network-legend-grid">
     <div class="legend-card">
@@ -129,6 +170,44 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
     </div>
   </div>
 </div>
+
+<script>
+  import { dash, onLiveStatus } from '../lib/live-status';
+
+  const header = document.querySelector<HTMLElement>('.network-header');
+  const dot = header?.querySelector<HTMLElement>('[data-live="net-dot"]');
+  const label = header?.querySelector<HTMLElement>('[data-live="net-label"]');
+  const latency = header?.querySelector<HTMLElement>('[data-live="net-latency"]');
+
+  function show(text: string, tone: 'green' | 'warning' | 'neutral') {
+    if (label) label.textContent = text;
+    if (dot) dot.className = `pulse-dot ${tone}`;
+  }
+
+  onLiveStatus((result) => {
+    const words: DOMStringMap = header?.dataset ?? {};
+    if (!result.ok) {
+      show(words.unavailable ?? '', 'neutral');
+      if (latency) latency.textContent = '—';
+      return;
+    }
+
+    const d = result.data;
+    if (latency) latency.textContent = d.fresh ? dash(d.avgLatencyMs, ' ms') : '—';
+
+    if (!d.fresh) {
+      show(words.stale ?? '', 'neutral');
+    } else if (!d.agentsTotal) {
+      show(words.none ?? '', 'neutral');
+    } else if (d.agentsOnline === d.agentsTotal && d.verdict === 'healthy') {
+      show(words.allOk ?? '', 'green');
+    } else {
+      // All agents up next to an outage elsewhere is a count, not "without errors".
+      const tone = d.agentsOnline === d.agentsTotal ? 'neutral' : 'warning';
+      show(`${dash(d.agentsOnline)} / ${d.agentsTotal} ${words.partial ?? ''}`, tone);
+    }
+  });
+</script>
 
 <style>
   .network-container {
@@ -178,6 +257,22 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
     border: 2px solid var(--up);
     opacity: 0;
     animation: ping-pulse 1.8s infinite cubic-bezier(0.4, 0, 0.6, 1);
+  }
+
+  /* Nothing loaded yet, or no live answer: no colour and no pulse. */
+  .pulse-dot.neutral {
+    background-color: var(--text-low);
+  }
+
+  .pulse-dot.warning {
+    background-color: var(--warning);
+  }
+
+  .network-caption {
+    margin: -0.75rem 0 0;
+    font-size: var(--text-xs);
+    color: var(--text-low);
+    text-align: center;
   }
 
   .status-label {
@@ -254,17 +349,6 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
     text-anchor: middle;
   }
 
-  .node-ping {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    fill: var(--up);
-    font-weight: 600;
-    text-anchor: middle;
-    opacity: 0;
-    transform: translateY(-5px);
-    transition: opacity var(--transition-fast), transform var(--transition-fast);
-  }
-
   /* Server Node Specifics */
   .server-bg {
     fill: var(--surface-1);
@@ -303,11 +387,6 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
     stroke-opacity: 0.8;
   }
 
-  .agent-node:hover .node-ping {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
   .server-node:hover {
     transform: scale(1.05);
   }
@@ -326,12 +405,15 @@ const latencyText = isCs ? "Průměrná odezva" : "Average latency";
     animation: agent-floating 8s ease-in-out infinite;
   }
   
-  /* Apply delay to create a natural dynamic look */
-  .agent-node:nth-child(2) { animation-delay: -1s; }
-  .agent-node:nth-child(3) { animation-delay: -2.5s; }
-  .agent-node:nth-child(4) { animation-delay: -4s; }
-  .agent-node:nth-child(5) { animation-delay: -5.5s; }
-  .agent-node:nth-child(6) { animation-delay: -7s; }
+  /* Apply delay to create a natural dynamic look. Each node sits in its own
+     positioning <g>: a CSS transform (the float animation, the hover scale)
+     replaces the SVG transform attribute on the same element, and the six
+     nodes used to collapse onto the top-left corner of the diagram. */
+  .agent-node[data-slot='2'] { animation-delay: -1s; }
+  .agent-node[data-slot='3'] { animation-delay: -2.5s; }
+  .agent-node[data-slot='4'] { animation-delay: -4s; }
+  .agent-node[data-slot='5'] { animation-delay: -5.5s; }
+  .agent-node[data-slot='6'] { animation-delay: -7s; }
 
   /* Red glowing flowing connection line style */
   .connection-line {

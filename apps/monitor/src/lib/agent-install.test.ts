@@ -59,6 +59,15 @@ describe('agentInstallSteps', () => {
     expect(schedule).not.toContain('/etc/crontabs');
   });
 
+  it('naplánování nezanechá prázdný crontab, když žádný ještě neexistuje (set -e)', () => {
+    // Under `set -e` a failing `crontab -l` (no crontab yet) stopped the subshell
+    // before the echo, and `| crontab -` then installed an EMPTY crontab.
+    for (const platform of ['openwrt', 'shell', 'python'] as const) {
+      const schedule = agentInstallSteps(platform, target, t).find((s) => s.id === 'schedule')!.command;
+      expect(schedule).toMatch(/crontab -l 2>\/dev\/null( \| grep -v agent_openwrt\.sh)? \|\| true; echo /);
+    }
+  });
+
   it('uses no flag or image the agents do not have', () => {
     for (const platform of ['openwrt', 'shell', 'python', 'windows', 'docker'] as const) {
       const text = all(platform);

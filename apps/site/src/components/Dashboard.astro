@@ -1,54 +1,102 @@
 ---
-// Dashboard.astro - Live status preview, fetched from the real status API.
-// Previously this was 100% fabricated (fake monitor names/domains, a randomly
-// animated latency chart, fake CPU/RAM/disk gauges for a "Central Server" we
-// have no honest way to expose, and a fake incident log). All of that is gone.
-// What's left only shows numbers the public status API actually returns -
-// individual monitor names are intentionally never exposed here, matching the
-// privacy convention used by the distributed probe agents themselves.
-import { API_ORIGIN } from '../config';
-
+// Dashboard.astro - live status preview from the real status API.
+//
+// Every number here comes from the shared /api/status answer (lib/live-status),
+// the same one the hero and the architecture header render. Nothing is
+// invented: until it loads, and whenever it fails, every value is a dash.
+//
+// The headline follows the server's overall verdict (bk_overall_verdict in
+// public_status). "All systems operational" appears only for a healthy
+// verdict over fresh data; degraded, down, maintenance and unknown each keep
+// their own line, and a node keeps its own state instead of turning red.
+//
+// The node list shows the names public_status returns. Which monitors are
+// public is decided on the server (the curated public set, W1-G3); the site
+// adds no filter of its own and shows no more than the API gives anonymously.
 const currentPath = Astro.url.pathname;
 const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
 
 const t = isCs ? {
   windowTitle: 'blood-kings-monitoring — živý stav',
+  loading: 'NAČÍTÁM',
   live: 'ŽIVĚ',
+  stale: 'STARÁ DATA',
   unavailable: 'NEDOSTUPNÉ',
   nodesTitle: 'Distribuovaní agenti',
   nodesEmpty: 'Zatím žádní distribuovaní agenti',
   totalUptime: 'Dostupnost (30 dní)',
-  avgLatency: 'Průměrná latence',
+  avgLatency: 'Průměrná odezva (1 h)',
   monitors: 'Monitorů',
   agents: 'Agentů online',
-  allOperational: 'Všechny systémy v pořádku',
-  degraded: 'Některé systémy mají výpadek',
+  healthy: 'Všechny systémy v pořádku',
+  degraded: 'Některé systémy mají potíže',
+  down: 'Některé systémy mají výpadek',
+  maintenance: 'Probíhá plánovaná údržba',
+  unknown: 'Stav zatím nelze určit - chybí čerstvé měření',
+  staleLine: 'Živá data jsou stará, poslední měření:',
   loadError: 'Živá data se nepodařilo načíst. Toto je self-hosted aplikace - vidíte přesně to, co vidí i majitel.',
+  nodeOnline: 'online',
+  nodeWarning: 'varování',
+  nodeOffline: 'mimo provoz',
+  nodeMaintenance: 'údržba',
+  nodeUnknown: 'neznámý stav',
 } : {
   windowTitle: 'blood-kings-monitoring — live status',
+  loading: 'LOADING',
   live: 'LIVE',
+  stale: 'STALE',
   unavailable: 'UNAVAILABLE',
   nodesTitle: 'Distributed Agents',
   nodesEmpty: 'No distributed agents yet',
   totalUptime: 'Uptime (30 days)',
-  avgLatency: 'Average Latency',
+  avgLatency: 'Average Response (1 h)',
   monitors: 'Monitors',
   agents: 'Agents Online',
-  allOperational: 'All systems operational',
+  healthy: 'All systems operational',
   degraded: 'Some systems are degraded',
+  down: 'Some systems are down',
+  maintenance: 'Scheduled maintenance in progress',
+  unknown: 'Status cannot be determined - no fresh measurement',
+  staleLine: 'Live data is stale, last check:',
   loadError: "Couldn't load live data. This is a self-hosted app - you're seeing exactly what the owner sees.",
+  nodeOnline: 'online',
+  nodeWarning: 'warning',
+  nodeOffline: 'down',
+  nodeMaintenance: 'maintenance',
+  nodeUnknown: 'unknown',
 };
+const locale = isCs ? 'cs-CZ' : 'en-GB';
 ---
 
-<div class="dashboard-card card card-glow" id="live-dashboard-card">
+<div
+  class="dashboard-card card card-glow"
+  id="live-dashboard-card"
+  data-locale={locale}
+  data-live-word={t.live}
+  data-stale-word={t.stale}
+  data-unavailable={t.unavailable}
+  data-healthy={t.healthy}
+  data-degraded={t.degraded}
+  data-down={t.down}
+  data-maintenance={t.maintenance}
+  data-unknown={t.unknown}
+  data-stale-line={t.staleLine}
+  data-load-error={t.loadError}
+  data-nodes-empty={t.nodesEmpty}
+  data-node-online={t.nodeOnline}
+  data-node-warning={t.nodeWarning}
+  data-node-offline={t.nodeOffline}
+  data-node-maintenance={t.nodeMaintenance}
+  data-node-unknown={t.nodeUnknown}
+>
   <div class="dashboard-topbar">
     <div class="dash-window-buttons">
       <span></span><span></span><span></span>
     </div>
     <div class="dash-window-title">{t.windowTitle}</div>
     <div class="dash-live-badge" id="dash-live-badge">
-      <span class="live-dot pulse"></span>
-      {t.live}
+      <span class="live-dot offline"></span>
+      <span id="dash-live-word">{t.loading}</span>
     </div>
   </div>
 
@@ -58,105 +106,131 @@ const t = isCs ? {
         <h4>{t.nodesTitle}</h4>
         <span class="count-badge" id="dash-nodes-count">—</span>
       </div>
-      <ul class="monitor-list" id="dash-nodes-list" data-empty={t.nodesEmpty}>
+      <ul class="monitor-list" id="dash-nodes-list">
         <li class="monitor-item-status">···</li>
       </ul>
     </aside>
 
     <section class="dash-main">
-      <div class="dash-status-line" id="dash-status-line">···</div>
+      <div class="dash-status-line status-unavailable" id="dash-status-line" aria-live="polite">···</div>
 
       <div class="stats-overview-grid">
         <div class="stat-box">
           <span class="stat-title">{t.totalUptime}</span>
-          <span class="stat-value text-gradient" id="dash-uptime">—</span>
+          <span class="stat-value text-gradient tabular" id="dash-uptime">—</span>
         </div>
         <div class="stat-box">
           <span class="stat-title">{t.avgLatency}</span>
-          <span class="stat-value" id="dash-latency">—</span>
+          <span class="stat-value tabular" id="dash-latency">—</span>
         </div>
         <div class="stat-box">
           <span class="stat-title">{t.monitors}</span>
-          <span class="stat-value" id="dash-monitors">—</span>
+          <span class="stat-value tabular" id="dash-monitors">—</span>
         </div>
         <div class="stat-box">
           <span class="stat-title">{t.agents}</span>
-          <span class="stat-value" id="dash-agents">—</span>
+          <span class="stat-value tabular" id="dash-agents">—</span>
         </div>
       </div>
     </section>
   </div>
 </div>
 
-<script define:vars={{ apiOrigin: API_ORIGIN, allOperational: t.allOperational, degraded: t.degraded, loadError: t.loadError, nodesEmpty: t.nodesEmpty, unavailable: t.unavailable, live: t.live }}>
-  async function loadLiveDashboard() {
-    const badge = document.getElementById('dash-live-badge');
-    const statusLine = document.getElementById('dash-status-line');
-    const nodesList = document.getElementById('dash-nodes-list');
-    const nodesCount = document.getElementById('dash-nodes-count');
-    const uptimeEl = document.getElementById('dash-uptime');
-    const latencyEl = document.getElementById('dash-latency');
-    const monitorsEl = document.getElementById('dash-monitors');
-    const agentsEl = document.getElementById('dash-agents');
+<script>
+  import { escapeHtml } from '../lib/github';
+  import { dash, onLiveStatus, type NodeState } from '../lib/live-status';
 
-    // The worker API lives on its own subdomain, independent of wherever the
-    // static site itself is served from (production domain, Pages preview, local dev).
+  const card = document.getElementById('live-dashboard-card');
+  const words: DOMStringMap = card?.dataset ?? {};
+  const byId = (id: string) => document.getElementById(id);
 
-    try {
-      const res = await fetch(`${apiOrigin}/api/status`);
-      if (!res.ok) throw new Error('unavailable');
-      const data = await res.json();
-      if (data.available === false) throw new Error('unavailable');
+  const NODE_WORD: Record<NodeState, string | undefined> = {
+    online: words.nodeOnline,
+    warning: words.nodeWarning,
+    offline: words.nodeOffline,
+    maintenance: words.nodeMaintenance,
+    unknown: words.nodeUnknown,
+  };
 
-      if (statusLine) {
-        statusLine.textContent = data.status === 'degraded' ? degraded : allOperational;
-        statusLine.className = 'dash-status-line ' + (data.status === 'degraded' ? 'status-degraded' : 'status-ok');
-      }
-      // null z API = nikdo nic nenaměřil; pomlčka místo vymyšlené nuly.
-      if (uptimeEl) uptimeEl.textContent = data.uptimePercent != null ? `${Number(data.uptimePercent).toFixed(2)}%` : '—';
-      if (latencyEl) latencyEl.textContent = data.avgLatencyMs != null ? `${data.avgLatencyMs} ms` : '—';
-      if (monitorsEl) monitorsEl.textContent = `${data.totalMonitors ?? 0}`;
-      if (agentsEl) agentsEl.textContent = `${data.agentsOnline ?? 0} / ${data.agentsTotal ?? 0}`;
+  function setBadge(text: string, live: boolean) {
+    const word = byId('dash-live-word');
+    const dot = byId('dash-live-badge')?.querySelector('.live-dot');
+    if (word) word.textContent = text;
+    // The pulse means "live data, just now"; stale or failed answers get none.
+    if (dot) dot.className = live ? 'live-dot pulse' : 'live-dot offline';
+  }
 
-      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
-      if (nodesCount) nodesCount.textContent = `${nodes.length}`;
-      if (nodesList) {
-        if (nodes.length === 0) {
-          nodesList.innerHTML = `<li class="monitor-item-status">${nodesEmpty}</li>`;
-        } else {
-          nodesList.innerHTML = nodes.slice(0, 6).map((n) => {
-            const safeName = String(n.name ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
-            const latency = typeof n.latencyMs === 'number' ? `${n.latencyMs} ms` : '';
-            return `
-              <li class="monitor-item">
-                <div class="monitor-status-info">
-                  <span class="indicator ${n.status === 'online' ? 'green' : (n.status === 'warning' ? 'yellow' : 'red')}"></span>
-                  <div class="monitor-meta">
-                    <span class="monitor-name">${safeName}</span>
-                  </div>
-                </div>
-                <div class="monitor-stats">
-                  <span class="latency">${latency}</span>
-                </div>
-              </li>
-            `;
-          }).join('');
-        }
-      }
-    } catch (e) {
-      if (badge) {
-        badge.innerHTML = `<span class="live-dot offline"></span>${unavailable}`;
-      }
-      if (statusLine) {
-        statusLine.textContent = loadError;
-        statusLine.className = 'dash-status-line status-unavailable';
-      }
-      if (nodesList) nodesList.innerHTML = `<li class="monitor-item-status">${unavailable}</li>`;
+  function setLine(text: string, tone: 'ok' | 'warning' | 'degraded' | 'info' | 'unavailable') {
+    const line = byId('dash-status-line');
+    if (!line) return;
+    line.textContent = text;
+    line.className = `dash-status-line status-${tone}`;
+  }
+
+  function setValues(values: Record<string, string>) {
+    for (const [id, text] of Object.entries(values)) {
+      const el = byId(id);
+      if (el) el.textContent = text;
     }
   }
 
-  loadLiveDashboard();
-  setInterval(loadLiveDashboard, 60000);
+  onLiveStatus((result) => {
+    const list = byId('dash-nodes-list');
+
+    if (!result.ok) {
+      setBadge(words.unavailable ?? '', false);
+      setLine(words.loadError ?? '', 'unavailable');
+      // A failed refresh must not leave the previous answer on screen as if current.
+      setValues({ 'dash-uptime': '—', 'dash-latency': '—', 'dash-monitors': '—', 'dash-agents': '—', 'dash-nodes-count': '—' });
+      if (list) list.innerHTML = `<li class="monitor-item-status">${escapeHtml(words.unavailable)}</li>`;
+      return;
+    }
+
+    const d = result.data;
+    setBadge((d.fresh ? words.liveWord : words.staleWord) ?? '', d.fresh);
+
+    if (!d.fresh) {
+      const when = d.lastUpdated
+        ? d.lastUpdated.toLocaleString(words.locale, { dateStyle: 'short', timeStyle: 'short' })
+        : '—';
+      setLine(`${words.staleLine} ${when}`, 'unavailable');
+    } else {
+      const tone = { healthy: 'ok', degraded: 'warning', down: 'degraded', maintenance: 'info', unknown: 'unavailable' } as const;
+      setLine(words[d.verdict] ?? '', tone[d.verdict]);
+    }
+
+    setValues({
+      'dash-uptime': d.uptimePercent !== null ? `${d.uptimePercent.toFixed(2)}%` : '—',
+      'dash-latency': dash(d.avgLatencyMs, ' ms'),
+      'dash-monitors': dash(d.totalMonitors),
+      'dash-agents': d.agentsTotal !== null ? `${dash(d.agentsOnline)} / ${d.agentsTotal}` : '—',
+      'dash-nodes-count': `${d.nodes.length}`,
+    });
+
+    if (!list) return;
+    if (d.nodes.length === 0) {
+      list.innerHTML = `<li class="monitor-item-status">${escapeHtml(words.nodesEmpty)}</li>`;
+      return;
+    }
+    list.innerHTML = d.nodes
+      .slice(0, 6)
+      .map(
+        (n) => `
+          <li class="monitor-item">
+            <div class="monitor-status-info">
+              <span class="indicator state-${n.status}" title="${escapeHtml(NODE_WORD[n.status])}"></span>
+              <div class="monitor-meta">
+                <span class="monitor-name">${escapeHtml(n.name)}</span>
+                <span class="visually-hidden">${escapeHtml(NODE_WORD[n.status])}</span>
+              </div>
+            </div>
+            <div class="monitor-stats">
+              <span class="latency">${n.latencyMs !== null ? `${n.latencyMs} ms` : ''}</span>
+            </div>
+          </li>`
+      )
+      .join('');
+  });
 </script>
 
 <style>
@@ -269,12 +343,15 @@ const t = isCs ? {
     gap: 0.75rem;
   }
 
-  .monitor-item-status {
+  /* The list items are written by the script (innerHTML), so they carry no
+     scoped attribute: the rules reach them through :global() under the list.
+     Without that the status dots rendered as nothing at all. */
+  .monitor-list :global(.monitor-item-status) {
     color: var(--text-low);
     font-size: 0.82rem;
   }
 
-  .monitor-item {
+  .monitor-list :global(.monitor-item) {
     background: var(--surface-1);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -284,14 +361,14 @@ const t = isCs ? {
     align-items: center;
   }
 
-  .monitor-status-info {
+  .monitor-list :global(.monitor-status-info) {
     display: flex;
     align-items: center;
     gap: 0.75rem;
     min-width: 0;
   }
 
-  .indicator {
+  .monitor-list :global(.indicator) {
     width: 8px;
     height: 8px;
     border-radius: 50%;
@@ -299,17 +376,20 @@ const t = isCs ? {
     flex-shrink: 0;
   }
 
-  .indicator.green { background-color: var(--up); box-shadow: 0 0 8px var(--up); }
-  .indicator.yellow { background-color: var(--warning); box-shadow: 0 0 8px var(--warning); }
-  .indicator.red { background-color: var(--down); box-shadow: 0 0 8px var(--down); }
+  .monitor-list :global(.indicator.state-online) { background-color: var(--up); box-shadow: 0 0 8px var(--up); }
+  .monitor-list :global(.indicator.state-warning) { background-color: var(--warning); box-shadow: 0 0 8px var(--warning); }
+  .monitor-list :global(.indicator.state-offline) { background-color: var(--down); box-shadow: 0 0 8px var(--down); }
+  .monitor-list :global(.indicator.state-maintenance) { background-color: var(--info); }
+  /* Unknown is not an outage: a hollow grey ring, not red. */
+  .monitor-list :global(.indicator.state-unknown) { background-color: transparent; border: 1.5px dashed var(--text-low); }
 
-  .monitor-meta {
+  .monitor-list :global(.monitor-meta) {
     display: flex;
     flex-direction: column;
     min-width: 0;
   }
 
-  .monitor-name {
+  .monitor-list :global(.monitor-name) {
     font-size: 0.82rem;
     font-weight: 600;
     color: var(--text-hi);
@@ -318,7 +398,7 @@ const t = isCs ? {
     text-overflow: ellipsis;
   }
 
-  .latency {
+  .monitor-list :global(.latency) {
     font-size: 0.8rem;
     font-family: var(--font-mono);
     color: var(--text-mid);
@@ -337,7 +417,9 @@ const t = isCs ? {
   }
 
   .dash-status-line.status-ok { color: var(--up); }
+  .dash-status-line.status-warning { color: var(--warning); }
   .dash-status-line.status-degraded { color: var(--down); }
+  .dash-status-line.status-info { color: var(--info); }
   .dash-status-line.status-unavailable { color: var(--text-low); font-weight: 500; font-size: 0.85rem; }
 
   .stats-overview-grid {

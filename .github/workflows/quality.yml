@@ -47,6 +47,12 @@ jobs:
       - name: Unit testy SPA (vitest)
         run: npm run test:react
 
+      # The site and the worker show the live status and the agent versions;
+      # these tests keep a failure from ever reading as an all-clear and an
+      # outage returning null instead of invented numbers.
+      - name: Unit testy webu a workeru (vitest)
+        run: npm run test -w apps/site && npm run test -w apps/worker
+
       - name: Build všech workspace aplikací
         run: npm run build
 

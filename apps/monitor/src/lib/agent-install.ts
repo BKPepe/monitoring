@@ -97,9 +97,14 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
           // a single mkdir (crontab.c:568). On a Turris /root/.cache does not
           // exist, so the backup fails with ENOENT and the step dies before it
           // schedules anything.
+          //
+          // The `|| true` keeps the new line when there is no crontab yet and
+          // the steps run under `set -e`: the subshell would stop at the failing
+          // `crontab -l` / `grep -v` and install an EMPTY crontab without a word.
+          // The website's download page uses the same command.
           command:
             'mkdir -p "${HOME:-/root}/.cache/crontab" && ' +
-            "( crontab -l 2>/dev/null | grep -v agent_openwrt.sh; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -",
+            "( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -",
         },
         {
           id: 'schedule_check',
@@ -138,7 +143,8 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
         {
           id: 'schedule',
           title: t('agent_install.cron_five', 'Zařaďte agenta do cronu, jednou za pět minut'),
-          command: `( crontab -l 2>/dev/null; echo '*/5 * * * * ${run} >/dev/null 2>&1' ) | crontab -`,
+          // `|| true`: see the OpenWrt schedule step (an empty crontab under set -e).
+          command: `( crontab -l 2>/dev/null || true; echo '*/5 * * * * ${run} >/dev/null 2>&1' ) | crontab -`,
         },
       ];
     }

@@ -82,7 +82,8 @@ The worker aggregates, filters and caches (1 hour) requests to the GitHub API to
 stay under rate limits:
 
 *   `GET /api/stats` — Aggregated repo stats (stars, forks, contributors, issues).
-*   `GET /api/versions` — Latest release version of the server and agents.
+*   `GET /api/versions` — Latest release of the monitoring server.
+*   `GET /api/agents` — Agent versions read from the published scripts (null + 503 when unreadable).
 *   `GET /api/changelog` — Version history formatted for a timeline.
 *   `GET /api/status` — Proxies status and response times of the main monitoring nodes.
 *   `GET /api/test?url=<url>` — Real speed test (ping) of a given address from the Cloudflare network (used by the Playground).

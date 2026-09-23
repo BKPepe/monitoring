@@ -1,33 +1,124 @@
 ---
-// AgentSelector.astro - Installation panels and agent switcher
+// AgentSelector.astro - installation panels and agent switcher.
+//
+// Every command here is one the scripts really accept. The page used to show
+// a Docker image that was never published, a PowerShell install function
+// that does not exist, an install.sh that is not served, and `--register TOKEN` without the server address, so
+// agent.sh registered against its localhost default. The steps now mirror
+// the app's own install guide (apps/monitor/src/lib/agent-install.ts):
+// `agent.sh --register TOKEN API_URL` for the shell agents, agent.cfg for
+// PowerShell, and the served docker-compose.agent.yml (python:3-alpine) for Docker.
+//
+// Versions come from the worker's /api/agents, which reads the published
+// scripts; until it answers, and when it fails, the badge shows a dash.
 const currentPath = Astro.url.pathname;
 const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
 
+const BASE = 'https://bloodkings.eu/status';
+const API_URL = `${BASE}/agent_api.php`;
+
 const t = isCs ? {
-  badge: 'Instalace v 1 kroku',
-  title: 'Nainstalujte Agenta během 10 sekund',
-  desc: 'Vyberte svou platformu a zkopírujte instalační příkaz. Agent automaticky detekuje systém a připojí se.',
+  badge: 'Instalace agenta',
+  title: 'Nainstalujte agenta několika příkazy',
+  desc: 'Vyberte platformu a zkopírujte příkazy. Registrační token a klíče agentů najdete v administraci. Adresy míří na server bloodkings.eu, na vlastní instanci je nahraďte její adresou.',
   versionLabel: 'Verze agenta:',
-  tagLabel: 'Docker Tag:',
-  linuxDesc: 'Jednoduchý Bash instalátor stáhne binární soubor, nastaví systemd službu a spustí agenta jako démona na pozadí.',
-  windowsDesc: 'PowerShell instalátor vytvoří Windows Službu (Service), zaregistruje agenta do registrů a spustí ho.',
-  dockerDesc: 'Přidejte monitorovacího agenta do své docker-compose struktury. Agent poběží v izolovaném kontejneru.',
-  raspberryDesc: 'Optimalizováno pro nízkou spotřebu paměti a CPU na jednodeskových počítačích s architekturou ARMv7/ARM64.',
+  imageLabel: 'Obraz:',
+  linuxDesc: 'Bash agent bez závislostí (stačí curl). Příkaz --register ho přihlásí registračním tokenem a klíč uloží do agent.cfg vedle skriptu, cron ho pak spouští každých 5 minut.',
+  openwrtDesc: 'Úsporný ash skript pro OpenWrt a Turris, bez bashe a Pythonu. Registrace uloží klíč do agent_openwrt.cfg, cron ho spouští každou minutu.',
+  windowsDesc: 'PowerShell agent (5.1+). Nemá registrační příkaz: klíč agenta z nastavení monitoru uložte do agent.cfg a Plánovač úloh ho spustí každých 5 minut (PowerShell jako správce).',
+  dockerDesc: 'Python agent v kontejneru python:3-alpine s pid: host, takže hlásí metriky hostitele, ne kontejneru. Doplňte klíč agenta z nastavení monitoru.',
+  raspberryDesc: 'Stejný Bash agent jako na Linuxu, běží na ARMv7 i ARM64 bez dalších balíčků kromě curl.',
   copy: 'Zkopírovat',
   copied: 'Zkopírováno!'
 } : {
-  badge: '1-Step Installation',
-  title: 'Install Agent in 10 Seconds',
-  desc: 'Choose your platform and copy the installation script. The agent automatically detects the target OS and runs.',
+  badge: 'Agent installation',
+  title: 'Install an Agent in a Few Commands',
+  desc: "Choose your platform and copy the commands. The registration token and agent keys are in the admin. The addresses point at the bloodkings.eu server; on your own instance, use its address instead.",
   versionLabel: 'Agent Version:',
-  tagLabel: 'Docker Tag:',
-  linuxDesc: 'A simple Bash script downloads the binary file, registers the systemd daemon, and starts the background task.',
-  windowsDesc: 'The PowerShell command registers a Windows Service, writes registry keys, and runs the monitoring thread.',
-  dockerDesc: 'Insert the monitoring agent service definition inside your docker-compose file. Runs isolated.',
-  raspberryDesc: 'Optimized for low CPU and memory footprints on ARMv7/ARM64 single-board systems.',
+  imageLabel: 'Image:',
+  linuxDesc: 'A dependency-free Bash agent (curl is enough). --register enrols it with the registration token and stores its key in agent.cfg next to the script; cron then runs it every 5 minutes.',
+  openwrtDesc: 'A lean ash script for OpenWrt and Turris, no bash or Python needed. Registration stores its key in agent_openwrt.cfg; cron runs it every minute.',
+  windowsDesc: "A PowerShell agent (5.1+). It has no register command: put the agent key from the monitor's settings into agent.cfg, and the Task Scheduler runs it every 5 minutes (run PowerShell as administrator).",
+  dockerDesc: "The Python agent in a python:3-alpine container with pid: host, so it reports the host's metrics, not the container's. Fill in the agent key from the monitor's settings.",
+  raspberryDesc: 'The same Bash agent as on Linux; it runs on ARMv7 and ARM64 with nothing but curl.',
   copy: 'Copy',
   copied: 'Copied!'
 };
+
+// The same crontab idiom as the app: through `crontab`, never by appending
+// to /etc/crontabs/root, which Turris OS (cronie) ignores. The mkdir is for
+// cronie's backup directory, which does not exist on a Turris. `|| true`
+// keeps the new line when there is no crontab yet and the steps run under
+// `set -e`: without it the subshell stops at the failing `crontab -l` and an
+// EMPTY crontab is installed without a word.
+const shellSteps = [
+  `mkdir -p /opt/bk-agent && curl -fsSL -o /opt/bk-agent/agent.sh ${BASE}/agent.sh && chmod +x /opt/bk-agent/agent.sh`,
+  `/opt/bk-agent/agent.sh --register YOUR_REGISTRATION_TOKEN ${API_URL}`,
+  `( crontab -l 2>/dev/null || true; echo '*/5 * * * * /opt/bk-agent/agent.sh >/dev/null 2>&1' ) | crontab -`,
+].join('\n');
+
+const panels = [
+  {
+    id: 'linux',
+    icon: '🐧',
+    label: 'Linux / VPS',
+    agent: 'bash',
+    desc: t.linuxDesc,
+    lang: 'bash',
+    code: shellSteps,
+  },
+  {
+    id: 'openwrt',
+    icon: '📡',
+    label: 'OpenWrt / Turris',
+    agent: 'openwrt',
+    desc: t.openwrtDesc,
+    lang: 'bash',
+    code: [
+      `wget -O /usr/bin/agent_openwrt.sh ${BASE}/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh`,
+      `/usr/bin/agent_openwrt.sh --register YOUR_REGISTRATION_TOKEN ${API_URL}`,
+      `mkdir -p "\${HOME:-/root}/.cache/crontab" && ( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -`,
+    ].join('\n'),
+  },
+  {
+    id: 'windows',
+    icon: '🪟',
+    label: 'Windows',
+    agent: 'powershell',
+    desc: t.windowsDesc,
+    lang: 'powershell',
+    code: [
+      `New-Item -ItemType Directory -Force C:\\bloodkings | Out-Null; Invoke-WebRequest -Uri "${BASE}/agent.ps1" -OutFile C:\\bloodkings\\agent.ps1`,
+      `Set-Content -Path C:\\bloodkings\\agent.cfg -Value @('API_URL="${API_URL}"', 'AGENT_KEY="YOUR_AGENT_KEY"')`,
+      `$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-ExecutionPolicy Bypass -File "C:\\bloodkings\\agent.ps1"'`,
+      '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)',
+      'Register-ScheduledTask -TaskName "BloodKingsAgent" -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest',
+    ].join('\n'),
+  },
+  {
+    id: 'docker',
+    icon: '🐳',
+    label: 'Docker',
+    agent: 'python',
+    image: 'python:3-alpine',
+    desc: t.dockerDesc,
+    lang: 'bash',
+    code: [
+      `mkdir -p /opt/bk-agent && cd /opt/bk-agent && curl -fsSL -o agent.py ${BASE}/agent.py && curl -fsSL -o docker-compose.agent.yml ${BASE}/docker-compose.agent.yml`,
+      `sed -i 's|STATUS_API_URL: .*|STATUS_API_URL: "${API_URL}"|; s|STATUS_AGENT_KEY: .*|STATUS_AGENT_KEY: "YOUR_AGENT_KEY"|' docker-compose.agent.yml`,
+      'docker compose -f docker-compose.agent.yml up -d',
+    ].join('\n'),
+  },
+  {
+    id: 'raspberry',
+    icon: '🍓',
+    label: 'Raspberry Pi',
+    agent: 'bash',
+    desc: t.raspberryDesc,
+    lang: 'bash',
+    code: shellSteps,
+  },
+];
 ---
 
 <div class="agent-selector-card card" id="install-guide">
@@ -40,121 +131,39 @@ const t = isCs ? {
   <div class="tabbed-selector">
     <!-- Tabs selectors -->
     <div class="tabs-nav">
-      <button class="tab-btn active" data-platform="linux">
-        <span>🐧</span> Linux / VPS
-      </button>
-      <button class="tab-btn" data-platform="openwrt">
-        <span>📡</span> OpenWrt / Turris
-      </button>
-      <button class="tab-btn" data-platform="windows">
-        <span>🪟</span> Windows
-      </button>
-      <button class="tab-btn" data-platform="docker">
-        <span>🐳</span> Docker
-      </button>
-      <button class="tab-btn" data-platform="raspberry">
-        <span>🍓</span> Raspberry Pi
-      </button>
+      {panels.map((panel, i) => (
+        <button class:list={['tab-btn', { active: i === 0 }]} data-platform={panel.id}>
+          <span>{panel.icon}</span> {panel.label}
+        </button>
+      ))}
     </div>
 
     <!-- Tab contents -->
     <div class="tab-contents">
-      <!-- Linux Panel -->
-      <div class="tab-panel active" id="panel-linux">
-        <div class="panel-meta">
-          <div class="meta-row">
-            <span class="meta-label">{t.versionLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-version">v1.7.1</span>
+      {panels.map((panel, i) => (
+        <div class:list={['tab-panel', { active: i === 0 }]} id={`panel-${panel.id}`}>
+          <div class="panel-meta">
+            <div class="meta-row">
+              <span class="meta-label">{t.versionLabel}</span>
+              <span class="meta-val badge badge-accent tabular" data-agent-version={panel.agent}>—</span>
+              {panel.image && (
+                <>
+                  <span class="meta-label">{t.imageLabel}</span>
+                  <span class="meta-val badge badge-accent">{panel.image}</span>
+                </>
+              )}
+            </div>
+            <p>{panel.desc}</p>
           </div>
-          <p>{t.linuxDesc}</p>
-        </div>
-        <div class="code-block-wrapper">
-          <pre><code class="language-bash" id="code-linux">curl -fsSL https://bloodkings.eu/status/agent.sh -o agent.sh && chmod +x agent.sh && ./agent.sh --register YOUR_SECRET_TOKEN</code></pre>
-          <button class="copy-code-btn" data-target="code-linux" aria-label="Copy code">
-            <span class="copy-txt">{t.copy}</span>
-            <span class="copied-txt">{t.copied}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- OpenWrt Panel -->
-      <div class="tab-panel" id="panel-openwrt">
-        <div class="panel-meta">
-          <div class="meta-row">
-            <span class="meta-label">{t.versionLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-version">v1.5.2</span>
+          <div class="code-block-wrapper">
+            <pre><code class={`language-${panel.lang}`} id={`code-${panel.id}`}>{panel.code}</code></pre>
+            <button class="copy-code-btn" data-target={`code-${panel.id}`} aria-label={t.copy}>
+              <span class="copy-txt">{t.copy}</span>
+              <span class="copied-txt">{t.copied}</span>
+            </button>
           </div>
-          <p>{isCs ? 'Mimořádně úsporný Ash skript pro OpenWrt a Turris routery. Sleduje WAN/LAN rozhraní, Wi-Fi rádio, DHCP a SQM.' : 'Ultra-lightweight Ash script for OpenWrt & Turris routers. Tracks WAN/LAN interfaces, Wi-Fi radios, DHCP, and SQM.'}</p>
         </div>
-        <div class="code-block-wrapper">
-          <pre><code class="language-bash" id="code-openwrt">wget -O agent_openwrt.sh https://bloodkings.eu/status/agent_openwrt.sh && chmod +x agent_openwrt.sh && ./agent_openwrt.sh --register YOUR_SECRET_TOKEN</code></pre>
-          <button class="copy-code-btn" data-target="code-openwrt" aria-label="Copy code">
-            <span class="copy-txt">{t.copy}</span>
-            <span class="copied-txt">{t.copied}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Windows Panel -->
-      <div class="tab-panel" id="panel-windows">
-        <div class="panel-meta">
-          <div class="meta-row">
-            <span class="meta-label">{t.versionLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-version">v1.7.1</span>
-          </div>
-          <p>{t.windowsDesc}</p>
-        </div>
-        <div class="code-block-wrapper">
-          <pre><code class="language-powershell" id="code-windows">irm https://bloodkings.eu/status/agent.ps1 | iex; install-agent -Token "YOUR_SECRET_TOKEN"</code></pre>
-          <button class="copy-code-btn" data-target="code-windows" aria-label="Copy code">
-            <span class="copy-txt">{t.copy}</span>
-            <span class="copied-txt">{t.copied}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Docker Panel -->
-      <div class="tab-panel" id="panel-docker">
-        <div class="panel-meta">
-          <div class="meta-row">
-            <span class="meta-label">{t.tagLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-tag">latest</span>
-          </div>
-          <p>{t.dockerDesc}</p>
-        </div>
-        <div class="code-block-wrapper">
-          <pre><code class="language-yaml" id="code-docker">version: '3.8'
-services:
-  bloodkings-agent:
-    image: bkpepe/bloodkings-agent:v0.1.0-alpha
-    restart: always
-    environment:
-      - SERVER_URL=https://monitoring.bloodkings.eu
-      - AGENT_TOKEN=YOUR_SECRET_TOKEN</code></pre>
-          <button class="copy-code-btn" data-target="code-docker" aria-label="Copy code">
-            <span class="copy-txt">{t.copy}</span>
-            <span class="copied-txt">{t.copied}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Raspberry Pi Panel -->
-      <div class="tab-panel" id="panel-raspberry">
-        <div class="panel-meta">
-          <div class="meta-row">
-            <span class="meta-label">{t.versionLabel}</span>
-            <span class="meta-val badge badge-accent current-agent-version">v0.1.0-alpha</span>
-          </div>
-          <p>{t.raspberryDesc}</p>
-        </div>
-        <div class="code-block-wrapper">
-          <pre><code class="language-bash" id="code-raspberry">curl -fsSL https://monitoring.bloodkings.eu/install.sh | sh -s -- --arch arm64 --token YOUR_SECRET_TOKEN</code></pre>
-          <button class="copy-code-btn" data-target="code-raspberry" aria-label="Copy code">
-            <span class="copy-txt">{t.copy}</span>
-            <span class="copied-txt">{t.copied}</span>
-          </button>
-        </div>
-      </div>
+      ))}
     </div>
   </div>
 </div>
@@ -166,121 +175,57 @@ services:
   const tabBtns = document.querySelectorAll('.tab-btn');
   const tabPanels = document.querySelectorAll('.tab-panel');
 
-  tabBtns.forEach(btn => {
+  tabBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
       const platform = btn.getAttribute('data-platform');
 
-      // Update button state
-      tabBtns.forEach(b => b.classList.remove('active'));
+      tabBtns.forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
 
-      // Update panels visibility
-      tabPanels.forEach(panel => {
-        panel.classList.remove('active');
-        if (panel.id === `panel-${platform}`) {
-          panel.classList.add('active');
-        }
+      tabPanels.forEach((panel) => {
+        panel.classList.toggle('active', panel.id === `panel-${platform}`);
       });
     });
   });
 
-  // Dynamic copy to clipboard logic
-  const copyButtons = document.querySelectorAll('.copy-code-btn');
-
-  copyButtons.forEach(btn => {
+  // Copy to clipboard
+  document.querySelectorAll('.copy-code-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const targetId = btn.getAttribute('data-target');
-      const codeElement = document.getElementById(targetId);
+      const codeElement = targetId ? document.getElementById(targetId) : null;
       if (!codeElement) return;
 
-      const codeText = codeElement.textContent;
-
       try {
-        await navigator.clipboard.writeText(codeText);
+        await navigator.clipboard.writeText(codeElement.textContent ?? '');
         btn.classList.add('copied');
-        setTimeout(() => {
-          btn.classList.remove('copied');
-        }, 2000);
+        setTimeout(() => btn.classList.remove('copied'), 2000);
       } catch (err) {
         console.error('Failed to copy to clipboard:', err);
       }
     });
   });
 
-  // Fetch versions at runtime from Hono Cloudflare Worker API
-  async function fetchVersions() {
-    // The worker API lives on its own subdomain, independent of wherever the
-    // static site itself is served from (production domain, Pages preview, local dev).
-
+  // Per-platform versions from the worker, which reads them from the
+  // published scripts. A version it could not read is null and stays a dash;
+  // nothing here falls back to a number written into the page.
+  async function loadAgentVersions() {
+    let versions: Record<string, unknown> = {};
     try {
-      const response = await fetch(`${API_ORIGIN}/api/versions`);
-      if (!response.ok) return;
-
-      const data = await response.json();
-      if (!data || !data.monitoring) return;
-
-      // Update version tag elements in UI
-      const cleanVer = data.monitoring;
-      const verDisplays = document.querySelectorAll('.current-agent-version');
-      verDisplays.forEach(el => {
-        el.textContent = cleanVer;
-      });
-
-      // Update tags displays (Docker tag matches release)
-      const tagDisplays = document.querySelectorAll('.current-agent-tag');
-      tagDisplays.forEach(el => {
-        el.textContent = cleanVer;
-      });
-
-      // Update Docker code block text as well
-      const dockerBlock = document.getElementById('code-docker');
-      if (dockerBlock) {
-        dockerBlock.innerHTML = `version: '3.8'
-services:
-  bloodkings-agent:
-    image: bkpepe/bloodkings-agent:${cleanVer}
-    restart: always
-    environment:
-      - SERVER_URL=https://monitoring.bloodkings.eu
-      - AGENT_TOKEN=YOUR_SECRET_TOKEN`;
-      }
-    } catch (e) {
-      console.warn('Could not load versions from API, falling back to static tags.', e);
+      const res = await fetch(`${API_ORIGIN}/api/agents`);
+      // A 503 still carries the versions that were read, with null for the rest.
+      versions = (await res.json()) as Record<string, unknown>;
+    } catch {
+      versions = {};
     }
 
-    // Fetch per-platform agent versions from /api/agents
-    try {
-      const agentsRes = await fetch(`${API_ORIGIN}/api/agents`);
-      if (!agentsRes.ok) return;
-      const agents = await agentsRes.json();
-      if (!agents) return;
-
-      // Map platform panels to agent version keys
-      const platformMap = { linux: 'python', windows: 'powershell', raspberry: 'bash' };
-      for (const [platform, key] of Object.entries(platformMap)) {
-        if (agents[key] && agents[key] !== 'unknown') {
-          const panel = document.getElementById(`panel-${platform}`);
-          if (panel) {
-            const badge = panel.querySelector('.current-agent-version');
-            if (badge) badge.textContent = `v${agents[key]}`;
-          }
-        }
-      }
-      // Docker uses python agent
-      if (agents.python && agents.python !== 'unknown') {
-        const dockerPanel = document.getElementById('panel-docker');
-        if (dockerPanel) {
-          const tag = dockerPanel.querySelector('.current-agent-tag');
-          if (tag) tag.textContent = `v${agents.python}`;
-        }
-      }
-    } catch (e) {
-      // Non-critical, static fallback is fine
-    }
+    document.querySelectorAll<HTMLElement>('[data-agent-version]').forEach((badge) => {
+      const value = versions[badge.dataset.agentVersion ?? ''];
+      // Only a version-shaped string counts; an older worker answered "unknown".
+      badge.textContent = typeof value === 'string' && /^\d[\w.-]*$/.test(value) ? `v${value}` : '—';
+    });
   }
 
-  // Load versions
-  fetchVersions();
+  loadAgentVersions();
 </script>
 
 <style>

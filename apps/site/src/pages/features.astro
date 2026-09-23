@@ -20,10 +20,10 @@ import Layout from '../layouts/Layout.astro';
           <span class="feature-number">01</span>
           <h2>Ultra-Lightweight Remote Agents</h2>
           <p>
-            Our remote probing agents are written using native scripts (Bash, Python, PowerShell, Go), ensuring zero footprint (using less than 10MB of memory and virtually 0% CPU on host systems).
+            The agents are plain scripts (Bash, Python, PowerShell, and ash on OpenWrt) that need nothing beyond their interpreter and curl. Cron starts them, they send one report and exit.
           </p>
           <ul class="feature-bullets">
-            <li><strong>Single Command Install:</strong> Spin up monitoring on Linux, Windows, or macOS in seconds.</li>
+            <li><strong>Short Install:</strong> Download, register with a token, add to cron - on Linux, OpenWrt, Windows and Docker.</li>
             <li><strong>Secure Communication:</strong> Agents establish outgoing connections and push telemetry data securely via HTTPS.</li>
             <li><strong>System Metrics out-of-the-box:</strong> Gathers real-time CPU utilization, RAM usage, storage loads, and network activity.</li>
           </ul>
@@ -32,13 +32,12 @@ import Layout from '../layouts/Layout.astro';
           <div class="mock-terminal">
             <div class="terminal-header"><span></span><span></span><span></span></div>
             <div class="terminal-body">
-              <p class="green-text">$ ./bloodkings-agent --status</p>
-              <p>Blood Kings Agent v0.1.2</p>
-              <p>Status: <span class="green-text">Online</span></p>
-              <p>Server: monitoring.bloodkings.eu</p>
-              <p>CPU: 4.2% | RAM: 24MB / 8192MB</p>
-              <p>Disk: 42% [======>............] 120GB free</p>
-              <p>Last Ping: 1.2s ago | Latency: 12ms</p>
+              <p class="green-text">$ ./agent.sh --register YOUR_REGISTRATION_TOKEN https://bloodkings.eu/status/agent_api.php</p>
+              <p>Registruji nového agenta na https://bloodkings.eu/status/agent_api.php...</p>
+              <p>OK: Agent byl úspěšně zaregistrován a nastavení bylo uloženo do /opt/bk-agent/agent.cfg (AGENT_KEY=…)</p>
+              <p class="green-text">$ ./agent.sh --verbose</p>
+              <p>…</p>
+              <p>OK: Statistiky úspěšně odeslány.</p>
             </div>
           </div>
         </div>
@@ -61,7 +60,7 @@ import Layout from '../layouts/Layout.astro';
         <div class="feature-visual-mock card">
           <div class="mock-status-page">
             <div class="status-page-header">
-              <span class="p-logo">👑 status.bloodkings.eu</span>
+              <span class="p-logo">👑 bloodkings.eu/app/public</span>
               <span class="p-badge-ok">All Systems Operational</span>
             </div>
             <div class="status-services">
@@ -78,6 +77,7 @@ import Layout from '../layouts/Layout.astro';
                 <span class="green-text">100.00%</span>
               </div>
             </div>
+            <p class="mock-caption">Illustration. The live page is at <a href="https://bloodkings.eu/app/public">bloodkings.eu/app/public</a>.</p>
           </div>
         </div>
       </div>
@@ -276,6 +276,13 @@ import Layout from '../layouts/Layout.astro';
   .terminal-body {
     color: #a1a1aa;
     line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .mock-caption {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-low);
   }
 
   .green-text {

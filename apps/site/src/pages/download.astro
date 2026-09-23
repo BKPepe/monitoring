@@ -3,11 +3,11 @@ import Layout from '../layouts/Layout.astro';
 import AgentSelector from '../components/AgentSelector.astro';
 ---
 
-<Layout title="Download & Setup | Blood Kings Monitoring" description="Download central Blood Kings Monitoring server or deploy remote probing agents for Linux, Windows, macOS, and Docker.">
+<Layout title="Download & Setup | Blood Kings Monitoring" description="Download central Blood Kings Monitoring server or deploy remote probing agents for Linux, OpenWrt, Windows and Docker.">
   <section class="page-header section">
     <div class="container text-center">
       <span class="badge badge-accent">Download Center</span>
-      <h1>Deploy Blood Kings v0.1.0</h1>
+      <h1>Deploy Blood Kings Monitoring</h1>
       <p class="section-subtitle">Download the central monitoring server or install lightweight agents on your target nodes in seconds.</p>
     </div>
   </section>
@@ -21,33 +21,33 @@ import AgentSelector from '../components/AgentSelector.astro';
       </div>
 
       <div class="grid-2 deploy-modes-grid">
-        <!-- Docker Compose -->
+        {/* Web hosting: the real install path (apps/status/README.md). The
+            Docker card that stood here named a server image that was never
+            published, so its very first command failed. */}
         <div class="card card-glow deploy-card">
           <div class="deploy-header-box">
-            <span class="d-icon">🐳</span>
+            <span class="d-icon">🐘</span>
             <div>
-              <h3>Docker Compose (Recommended)</h3>
-              <p>Ideal for secure, production-ready deploy on a VPS.</p>
+              <h3>Web Hosting (PHP + MySQL)</h3>
+              <p>The server is plain PHP: no image, no build step. It runs on shared hosting as well as on a VPS.</p>
             </div>
           </div>
+          <div class="deploy-steps">
+            <p>1. Download the code, create <code>config.php</code> and fill in <code>DB_HOST</code>, <code>DB_NAME</code>, <code>DB_USER</code> and <code>DB_PASS</code>, then import the schema:</p>
+          </div>
           <div class="code-box">
-            <pre><code id="srv-docker-yml">version: '3.8'
-services:
-  bloodkings:
-    image: bkpepe/monitoring:latest
-    ports:
-      - "8080:80"
-    volumes:
-      - ./data:/var/www/html/data
-    environment:
-      - DB_PASSWORD=your_secure_password
-    restart: always</code></pre>
-            <button class="copy-btn-sm" data-target="srv-docker-yml">Copy</button>
+            <pre><code id="srv-install">git clone https://github.com/BKPepe/monitoring.git && cd monitoring/apps/status
+cp config.sample.php config.php
+mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
+            <button class="copy-btn-sm" data-target="srv-install">Copy</button>
           </div>
           <div class="deploy-steps">
-            <p>1. Save the above snippet into a file named <code>docker-compose.yml</code></p>
-            <p>2. Spin up the container daemon: <code>docker compose up -d</code></p>
-            <p>3. Navigate in browser to: <code>http://localhost:8080</code></p>
+            <p>2. Upload the contents of <code>apps/status/</code> to <code>public_html/status/</code>.</p>
+            <p>3. Run the collector every minute from cron:</p>
+          </div>
+          <div class="code-box">
+            <pre><code id="srv-cron">* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
+            <button class="copy-btn-sm" data-target="srv-cron">Copy</button>
           </div>
         </div>
 
@@ -56,21 +56,21 @@ services:
           <div class="deploy-header-box">
             <span class="d-icon">🐘</span>
             <div>
-              <h3>Classic Web Hosting (LAMP)</h3>
-              <p>Run without Docker on standard PHP shared hosts or Apache configurations.</p>
+              <h3>What You Need</h3>
+              <p>What the host must provide, and the code as a ZIP if you do not use git.</p>
             </div>
           </div>
           <div class="deploy-steps manual-steps">
             <h4>System Requirements:</h4>
             <ul>
               <li>PHP 8.2 or higher</li>
-              <li>MySQL/MariaDB or SQLite database support</li>
+              <li>MySQL or MariaDB database</li>
               <li>Apache <code>mod_rewrite</code> enabled (with <code>.htaccess</code>)</li>
             </ul>
             <a href="https://github.com/BKPepe/monitoring/archive/refs/heads/main.zip" class="btn btn-secondary btn-full">
               📥 Download Source ZIP Archive
             </a>
-            <p class="manual-note">After uploading files via FTP, open the site domain and the setup page will guide you through database connection details.</p>
+            <p class="manual-note">The database connection is set in <code>config.php</code>, not in the browser, and the tables come from <code>schema.sql</code>. The first administrator account is then created in the setup wizard at <code>/app/setup</code>. Details are in <a href="https://github.com/BKPepe/monitoring/tree/main/apps/status#readme" target="_blank" rel="noopener">apps/status/README.md</a>.</p>
           </div>
         </div>
       </div>

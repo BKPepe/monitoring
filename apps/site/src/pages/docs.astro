@@ -40,24 +40,17 @@ import Layout from '../layouts/Layout.astro';
         <p>This guide helps you spin up a complete Blood Kings Monitoring server stack in under two minutes.</p>
         
         <h2>Step 1: Start Central Server</h2>
-        <p>Deploying via Docker Compose is the easiest route. Create a folder on your host VPS and create the compose file:</p>
+        <p>The server is plain PHP with a MySQL or MariaDB database - there is no image to pull. Download the code, fill in the database connection and import the schema:</p>
         <div class="docs-code-wrapper">
-          <pre><code># docker-compose.yml
-version: '3.8'
-services:
-  bloodkings:
-    image: bkpepe/monitoring:latest
-    ports:
-      - "8080:80"
-    volumes:
-      - ./data:/var/www/html/data
-    restart: always</code></pre>
+          <pre><code>git clone https://github.com/BKPepe/monitoring.git &amp;&amp; cd monitoring/apps/status
+cp config.sample.php config.php    # DB_HOST, DB_NAME, DB_USER, DB_PASS
+mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
         </div>
-        <p>Run the compose stack using:</p>
+        <p>Upload the contents of <code>apps/status/</code> to <code>public_html/status/</code> and run the collector from cron every minute:</p>
         <div class="docs-code-wrapper">
-          <pre><code>docker compose up -d</code></pre>
+          <pre><code>* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
         </div>
-        <p>Once running, open your web browser to <code>http://localhost:8080</code> and proceed with the initial admin account setup.</p>
+        <p>Then open <code>/app/setup</code> on your domain and create the first administrator account.</p>
 
         <h2>Step 2: Add Your First Monitor</h2>
         <p>Log in to your admin panel and use the <strong>Add monitor</strong> button above the monitors table. You can track URLs (HTTPS), TCP ports, Minecraft/TeamSpeak/Discord servers, VPS host metrics, or <a href="#heartbeat">heartbeats</a> from jobs that report in on their own. Note: the admin panel UI is currently Czech-only - English admin translation is planned.</p>
@@ -79,7 +72,7 @@ services:
 
         <h3>Remote Agent:</h3>
         <ul>
-          <li><strong>OS:</strong> Linux (any system with Bash and Curl), Windows 10/11/Server, macOS, or Raspberry Pi OS</li>
+          <li><strong>OS:</strong> Linux (any system with Bash and Curl), Windows 10/11/Server, OpenWrt/Turris OS, or Raspberry Pi OS</li>
           <li><strong>Memory:</strong> Under 10 MB RAM footprint</li>
           <li><strong>Network:</strong> Outgoing HTTPS access (port 443) targeting your central server URL</li>
         </ul>
@@ -183,25 +176,27 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
       <section id="agent-install" class="docs-section">
         <hr class="docs-divider" />
         <h1>Agent Registration & Setup</h1>
-        <p>Agents are self-contained telemetry daemons available for Bash, Python, PowerShell, and OpenWrt router systems. Run auto-registration with your server token:</p>
+        <p>Agents are self-contained scripts for Bash, Python, PowerShell and OpenWrt routers. The Bash and OpenWrt agents register themselves: pass the registration token from the admin settings and the address of your server's <code>agent_api.php</code>. The agent stores the key it receives in <code>agent.cfg</code> next to the script (<code>agent_openwrt.cfg</code> on a router).</p>
         <div class="docs-code-wrapper">
-          <pre><code>./agent.sh --register --token="YourRegistrationToken" --url="https://monitoring.bloodkings.eu/status/agent_api.php"</code></pre>
+          <pre><code>./agent.sh --register YOUR_REGISTRATION_TOKEN https://bloodkings.eu/status/agent_api.php</code></pre>
         </div>
+        <p>Both arguments are positional; without the address the agent registers against its <code>localhost</code> default. The Python and PowerShell agents have no register command: put <code>API_URL</code> and the <code>AGENT_KEY</code> from the monitor's settings into <code>agent.cfg</code>. The <a href="/download#install-guide">download page</a> has the full steps for every platform.</p>
       </section>
 
       <section id="agent-config" class="docs-section">
         <hr class="docs-divider" />
         <h1>Agent Intervals & Remote Actions</h1>
-        <p>Agents run on a configurable cron interval (default: 60 seconds). For OpenWrt routers, opt-in HMAC-signed Remote Actions can be enabled by setting <code>REMOTE_ACTIONS_ENABLED=1</code> in the agent script.</p>
+        <p>Agents run from cron: every 5 minutes on servers, every minute on OpenWrt routers. For OpenWrt routers, opt-in HMAC-signed Remote Actions can be enabled by setting <code>REMOTE_ACTIONS_ENABLED=1</code> in the agent script.</p>
       </section>
 
       <section id="agent-trouble" class="docs-section">
         <hr class="docs-divider" />
         <h1>Agent Troubleshooting</h1>
-        <p>If an agent stops reporting telemetry, verify outgoing HTTPS access to port 443 and check local logs:</p>
+        <p>If an agent stops reporting telemetry, verify outgoing HTTPS access to port 443, then run it by hand and read its log (it sits next to the script):</p>
         <div class="docs-code-wrapper">
-          <pre><code># Check systemd agent service logs
-journalctl -u bloodkings-agent -n 50 --no-pager</code></pre>
+          <pre><code># One run with the full trace, then the last lines of the log
+/opt/bk-agent/agent.sh --verbose
+tail -n 50 /opt/bk-agent/agent.log</code></pre>
         </div>
       </section>
     </main>
