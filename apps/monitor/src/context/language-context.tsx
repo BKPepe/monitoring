@@ -3280,6 +3280,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   // Placeholder
 
   // Routes / Error Boundaries
+  'routes.error_title': { cs: 'Stránku se nepodařilo zobrazit', en: 'The page could not be shown' },
+  'routes.error_desc': {
+    cs: 'V aplikaci nastala chyba. Obnovení stránky ji často vyřeší.',
+    en: 'The app ran into an error. Reloading the page often fixes it.',
+  },
   'routes.update_detected_title': { cs: 'Byla zjištěna aktualizace aplikace', en: 'An app update was detected' },
   'routes.update_detected_desc': {
     cs: 'Platforma byla aktualizována na novější verzi. Obnovte stránku pro načtení nejnovějších komponent.',
@@ -4446,6 +4451,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'not_found.go_back': { cs: 'Zpět na předchozí stránku', en: 'Back to Previous Page' },
   'not_found.go_dashboard': { cs: 'Hlavní Dashboard', en: 'Main Dashboard' },
+  'not_found.public_title': { cs: 'Stránka nenalezena', en: 'Page not found' },
+  'not_found.go_public': { cs: 'Stav služeb', en: 'Service status' },
+  'not_found.doc_title': { cs: 'Stránka nenalezena · Blood Kings', en: 'Page not found · Blood Kings' },
 };
 
 const LanguageContext = createContext<LanguageContextType>({

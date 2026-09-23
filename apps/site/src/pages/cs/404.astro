@@ -1,0 +1,43 @@
+---
+import Layout from '../../layouts/Layout.astro';
+
+// The Czech twin of ../404.astro: Pages picks the nearest 404.html, so every
+// missing path under /cs/ gets this page, still with status 404.
+---
+
+<Layout title="Stránka nenalezena | Blood Kings Monitoring" description="Tato adresa na monitoring.bloodkings.eu neexistuje." noindex>
+  <section class="not-found section">
+    <div class="container text-center">
+      <span class="badge badge-accent">404</span>
+      <h1>Stránka nenalezena</h1>
+      <p class="section-subtitle">
+        Adresa neexistuje nebo byla přesunuta. Skripty agentů a příkazy k jejich instalaci najdete na stránce Download.
+      </p>
+      <nav class="not-found-actions" aria-label="Kam dál">
+        <a href="/cs" class="btn btn-primary">Na úvod</a>
+        <a href="/cs/download" class="btn btn-secondary">Download</a>
+        <a href="/cs/docs" class="btn btn-secondary">Dokumentace</a>
+      </nav>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .not-found {
+    min-height: 60vh;
+    display: flex;
+    align-items: center;
+  }
+
+  .not-found h1 {
+    margin-top: 1rem;
+  }
+
+  .not-found-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 2rem;
+  }
+</style>

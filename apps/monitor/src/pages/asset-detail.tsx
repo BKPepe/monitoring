@@ -404,7 +404,7 @@ export function AssetDetailPage() {
     return (
       <Card className="grid place-items-center gap-4 p-12 text-center">
         <div className="space-y-1">
-          <p className="font-semibold text-base">{t('asset.not_found', 'Zařízení nenašeno')}</p>
+          <p className="font-semibold text-base">{t('asset.not_found', 'Zařízení nenalezeno')}</p>
           <p className="text-muted-foreground text-sm">
             {t(
               'asset.not_found_desc',

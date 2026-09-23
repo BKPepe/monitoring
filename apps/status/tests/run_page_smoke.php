@@ -81,6 +81,9 @@ $pages = [
     '/README.md' => ['interní dokumentace není veřejná', [403]],
     '/.ftp-deploy-sync-state.json' => ['seznam nasazených souborů není veřejný', [403]],
     '/uploads/' => ['adresář nahraných souborů se nevypisuje', [404]],
+    // assets/ listed its files until W1-F3; the files themselves stay served.
+    '/assets/' => ['adresář stylů a log se nevypisuje', [404]],
+    '/assets/style.css' => ['styl stránek se dál poskytuje', [200]],
 ];
 
 /** Strings that mean a broken page even with a 200 status. */
@@ -212,6 +215,44 @@ foreach ($agent_files as $file => $label) {
         $failed++;
     }
     $results[] = ['/' . $file, $label . ($version !== null ? " v{$version}" : ''), $code, $problem, $attempts];
+}
+
+/**
+ * The branded error page (W1-F3).
+ *
+ * It answers for any path, so its links have to be absolute: the relative
+ * "index.php" it used to print led from /status/foo/bar.php to
+ * /status/foo/index.php, which is another 404. It must not point at the admin
+ * login, must stay out of search results, and has to exist for 410 and 503 as
+ * well - db.php shows it with 503 whenever the database is down.
+ */
+$error_pages = [
+    '/neexistuje/stranka.php' => ['chybová stránka (hluboká cesta)', 404],
+    '/error.php?code=410' => ['chybová stránka 410', 410],
+    '/error.php?code=503' => ['chybová stránka 503', 503],
+    '/error.php?code=404&lang=en' => ['chybová stránka anglicky', 404],
+];
+foreach ($error_pages as $path => [$label, $status]) {
+    [$code, $body, $attempts] = bk_smoke_request($base . $path, [$status]);
+
+    $problem = null;
+    if ($body === false) {
+        $problem = 'požadavek selhal';
+    } elseif ($code !== $status) {
+        $problem = "neočekávaný stav (čekáno {$status})";
+    } elseif (strpos($body, 'href="/status/"') === false || strpos($body, 'href="/app/public"') === false) {
+        $problem = 'tlačítka nevedou na /status/ a /app/public';
+    } elseif (preg_match('/href="(index|admin)\.php"/', $body)) {
+        $problem = 'stránka má relativní odkaz nebo odkaz na administraci';
+    } elseif (stripos($body, '<meta name="robots" content="noindex">') === false) {
+        $problem = 'chybí meta robots noindex';
+    } elseif (str_contains($path, 'lang=en') && stripos($body, '<html lang="en">') === false) {
+        $problem = 'anglická verze nepřišla anglicky';
+    }
+    if ($problem !== null) {
+        $failed++;
+    }
+    $results[] = [$path, $label, $code, $problem, $attempts];
 }
 
 /** printf counts bytes, so Czech diacritics would misalign the columns. */

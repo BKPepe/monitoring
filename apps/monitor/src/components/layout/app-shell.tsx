@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
+import { Navigate, Outlet, useLocation, useMatches, useNavigate } from 'react-router';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { Footer } from './footer';
@@ -16,6 +16,7 @@ import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { useFocusTrap } from '@/lib/use-focus-trap';
 import { ErrorState, LoadingState } from '@/components/ui/states';
+import { NotFoundPage } from '@/pages/not-found';
 
 export function AppShell() {
   const { t } = useLanguage();
@@ -26,6 +27,9 @@ export function AppShell() {
   const mobileNavRef = useFocusTrap<HTMLDivElement>(mobileNavOpen, closeMobileNav);
   const { session, error: sessionError, refetchSession } = useSession();
   const location = useLocation();
+  // The catch-all route marks itself (routes.tsx): an unknown address is
+  // "not found" for anyone, it does not need a login to say so (W1-F5).
+  const isUnknownAddress = useMatches().some((m) => (m.handle as { notFound?: boolean } | undefined)?.notFound);
 
   // Global search index (⌘K): pages + real monitors.
   // It used to be a static list of four pages and clicking led nowhere.
@@ -204,6 +208,7 @@ export function AppShell() {
     return <LoadingState size="page" label={t('shell.loading_page', 'Načítám stránku…')} />;
   }
   if (!session.authenticated) {
+    if (isUnknownAddress) return <NotFoundPage variant="public" />;
     const next = location.pathname + location.search;
     return <Navigate to={`/setup${next && next !== '/' ? `?next=${encodeURIComponent(next)}` : ''}`} replace />;
   }

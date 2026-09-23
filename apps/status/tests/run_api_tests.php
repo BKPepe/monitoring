@@ -4966,6 +4966,21 @@ try {
 }
 
 // =======================================================================
+// The branded error page in both languages, absolute links (W1-F3).
+// =======================================================================
+[$f3_code, $f3_head, $f3_body] = bk_raw_request($base . '/error.php?code=410', ['Accept-Language: en-US,en;q=0.9']);
+check('chybová stránka 410 odpoví 410', $f3_code, 410);
+check_true('anglicky podle prohlížeče', str_contains($f3_body, '<html lang="en">') && str_contains($f3_body, 'This page is gone'));
+check_true('tlačítka vedou na /app/public a /status/', str_contains($f3_body, 'href="/app/public"') && str_contains($f3_body, 'href="/status/"'));
+check_false('a ne na administraci', str_contains($f3_body, 'admin.php'));
+check_true('stránka se neindexuje', str_contains($f3_body, '<meta name="robots" content="noindex">') && (bool)preg_match('/^x-robots-tag:\s*noindex/mi', $f3_head));
+[$f3_503, $f3_503_head, $f3_503_body] = bk_raw_request($base . '/error.php?code=503', ['Accept-Language: cs']);
+check('chybová stránka 503 odpoví 503 s Retry-After', [$f3_503, (bool)preg_match('/^retry-after:\s*60/mi', $f3_503_head)], [503, true]);
+check_true('česky', str_contains($f3_503_body, 'Služba je dočasně nedostupná'));
+[$f3_other] = bk_raw_request($base . '/error.php?code=418');
+check('neznámý kód je 404', $f3_other, 404);
+
+// =======================================================================
 // A failed query is a 5xx JSON error, never 200 with an empty list (W1-A2).
 //
 // Catch blocks answered `monitors: []`, `incidents: []`, `series: {}` with a

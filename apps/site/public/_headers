@@ -13,7 +13,17 @@
   Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
-  X-Robots-Tag: index, follow
+
+# The pages.dev copies (production and every preview) stay out of search
+# results, so only monitoring.bloodkings.eu is indexed. Pages joins repeated
+# headers with a comma, which is why /* no longer sends "index, follow" (the
+# default anyway): the two would read "index, follow, noindex".
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
+
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
+
 
 # Astro hashuje názvy buildovaných assetů, takže je lze cachovat natrvalo.
 /_astro/*

@@ -181,3 +181,12 @@ jobs:
             exit 1
           fi
           echo "SPA fallback OK (HTTP $code)."
+
+          # A missing build file is a real 404, not the app page with 200: a
+          # stale tab must see "file gone" and reload once (W1-F4).
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://bloodkings.eu/app/assets/missing-$GITHUB_SHA.js")
+          if [ "$code" != "404" ]; then
+            echo "/app/assets/missing-*.js vraci $code misto 404 - .htaccess nepusti assets/ pred fallbackem?"
+            exit 1
+          fi
+          echo "Chybejici asset: 404 OK."

@@ -8,10 +8,26 @@
 # route zase rozbilo, tohle je první místo, kam se podívat.
 RewriteEngine On
 
+# Hashed build files are served as they are, and a missing one is a real 404.
+# Answering it with the app page (200 text/html) made a stale tab fail on a
+# MIME error instead of a missing file, and hid the problem from any check
+# (W1-F4).
+RewriteRule ^assets/ - [L]
+
+# The public status page has its own HTML with an indexable head (W1-G4).
+# Only the page itself: /app/public/<anything> is the app's "not found".
+RewriteRule ^public/?$ public.html [L]
+
 # Skutečné soubory a adresáře buildu se servírují beze změny.
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
+# A path with a file extension asks for a file, not for a page of the app:
+# robots.txt, favicon.ico or an old chunk get a real 404 (W1-F4).
+RewriteCond %{REQUEST_URI} !\.[A-Za-z0-9]{1,8}$
 RewriteRule . index.html [L]
+
+# The branded page for those 404s, instead of the server's default.
+ErrorDocument 404 /app/404.html
 
 # Výpis adresáře nemá u buildových assetů co dělat.
 Options -Indexes

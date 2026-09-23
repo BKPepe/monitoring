@@ -53,6 +53,12 @@ jobs:
       - name: Unit testy webu a workeru (vitest)
         run: npm run test -w apps/site && npm run test -w apps/worker
 
+      # The files served at the bloodkings.eu root (root/): the .htaccess merge
+      # that must never touch the game portal's own lines, robots.txt rules,
+      # sitemap and security.txt generation, and the static error pages.
+      - name: Testy kořenových souborů bloodkings.eu (node --test)
+        run: node --test root/*.test.mjs
+
       - name: Build všech workspace aplikací
         run: npm run build
 

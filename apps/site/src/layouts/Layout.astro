@@ -6,6 +6,9 @@ interface Props {
   title?: string;
   description?: string;
   ogImage?: string;
+  /** Error pages: kept out of the index and without a canonical, because
+   *  Pages serves them for every missing path and none of those URLs is theirs. */
+  noindex?: boolean;
 }
 
 const currentPath = Astro.url.pathname;
@@ -20,7 +23,8 @@ const {
   description = isCs 
     ? "Blood Kings Monitoring je open-source, ultra-rychlý, 100% self-hosted server status a remote agent monitorovací systém s veřejnými status stránkami a okamžitými notifikacemi."
     : "Blood Kings Monitoring is an open-source, ultra-fast, 100% self-hosted server status and remote agent monitoring system with public status pages and instant notification alerts.",
-  ogImage = "https://monitoring.bloodkings.eu/og-image.png"
+  ogImage = "https://monitoring.bloodkings.eu/og-image.png",
+  noindex = false
 } = Astro.props;
 
 // Define the navigation target links relative to locale prefix
@@ -112,8 +116,8 @@ const DEMO_URL = 'https://bloodkings.eu/status/';
     <meta property="twitter:image" content={ogImage} />
 
     <!-- Robots & Sitemap -->
-    <meta name="robots" content="index, follow" />
-    <link rel="canonical" href={Astro.url.href} />
+    <meta name="robots" content={noindex ? 'noindex' : 'index, follow'} />
+    {!noindex && <link rel="canonical" href={Astro.url.href} />}
     <link rel="sitemap" href="/sitemap-index.xml" />
 
     <!-- Theme Detection Script -->

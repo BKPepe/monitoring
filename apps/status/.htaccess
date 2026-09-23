@@ -10,7 +10,9 @@
 # Blood Kings Status - Custom Error Documents & Rewrites
 ErrorDocument 404 /status/error.php?code=404
 ErrorDocument 403 /status/error.php?code=403
+ErrorDocument 410 /status/error.php?code=410
 ErrorDocument 500 /status/error.php?code=500
+ErrorDocument 503 /status/error.php?code=503
 
 <IfModule mod_headers.c>
     Header set X-Content-Type-Options "nosniff"
@@ -84,8 +86,11 @@ ErrorDocument 500 /status/error.php?code=500
 # Options, that single line turns every request under /status into a 500 -
 # agent_api.php, heartbeat.php and cron.php included. Only the constructs this
 # file already relies on are used here.
+#
+# assets/ (style.css, the logos, the favicon) listed its files the same way;
+# its files are linked from every page, only the listing itself closes.
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteRule ^(tests|lib|lang)(/|$) - [R=404,L]
-    RewriteRule ^uploads/?$ - [R=404,L]
+    RewriteRule ^(uploads|assets)/?$ - [R=404,L]
 </IfModule>
