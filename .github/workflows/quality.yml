@@ -325,6 +325,15 @@ jobs:
           if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           Write-Host "agent.ps1 se parsuje."
 
+      # The Worker's location label goes unchanged onto the public page; its
+      # tests gate the Worker deploy in the agents repo and, here, a submodule
+      # bump. Node 22+: they import the Worker's plain .js as an ES module.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Cloudflare Worker agent (node --test)
+        run: node --test agents/tests/*.test.mjs
+
       # Naostro, ne jen syntaxe: agent.sh a agent.py v Debianu (dva behy, aby
       # vznikly delty; druhy pod zatezi), agent_openwrt.sh v busyboxu (ash,
       # busybox awk/sed) se zastupnymi wg/mwan3/tc/uci/logread/iwinfo/nft/ubus.
