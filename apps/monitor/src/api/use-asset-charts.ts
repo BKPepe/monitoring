@@ -28,6 +28,8 @@ export function useSource(): SourceState | null {
 export function useAssetCharts(monitorId: number, range: TimeRange) {
   const [data, setData] = React.useState<ChartData[] | null>(null);
   const [error, setError] = React.useState<Error | null>(null);
+  // Bumped by reload(), so the error state's retry refetches without a range change.
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     // A response to an old request must not overwrite a newer one — with fast
@@ -48,9 +50,10 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
     return () => {
       active = false;
     };
-  }, [monitorId, range]);
+  }, [monitorId, range, attempt]);
 
-  return { data, error, loading: data === null && error === null };
+  const reload = React.useCallback(() => setAttempt((n) => n + 1), []);
+  return { data, error, loading: data === null && error === null, reload };
 }
 
 /**
@@ -82,6 +85,8 @@ function fetchPublicStatusShared(scope: PublicStatusScope): Promise<PublicStatus
 export function usePublicStatus(refreshMs?: number, scope: PublicStatusScope = 'app') {
   const [data, setData] = React.useState<PublicStatus | null>(null);
   const [error, setError] = React.useState<Error | null>(null);
+  // Bumped by reload(): a "try again" button must not wait for the next tick.
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
@@ -113,7 +118,8 @@ export function usePublicStatus(refreshMs?: number, scope: PublicStatusScope = '
       active = false;
       window.clearInterval(id);
     };
-  }, [refreshMs, scope]);
+  }, [refreshMs, scope, attempt]);
 
-  return { data, error, loading: data === null && error === null };
+  const reload = React.useCallback(() => setAttempt((n) => n + 1), []);
+  return { data, error, loading: data === null && error === null, reload };
 }

@@ -99,6 +99,27 @@ Error body: `{"error": "Description in Czech"}`. Agent endpoints return
 `{"success": false, "message": "…"}` instead - a historical difference;
 unifying it would break deployed agents.
 
+**A failed read is never an empty success.** When the query behind a list or
+a summary fails, the answer is `500` with `{"error": "<code>", "message":
+"<Czech sentence>"}` - never `200` with `monitors: []`, `incidents: []` or
+`series: {}`, which every client read as "all online" or "no outages" exactly
+when nothing was known. `error` is a stable code to branch on
+(`monitors_unavailable`, `incidents_unavailable`, `events_unavailable`,
+`daily_uptime_unavailable`, `uptime_windows_unavailable`,
+`metric_series_unavailable`, `audit_logs_unavailable`, `overview_unavailable`,
+`dashboard_insights_unavailable`, … - always `<action>_unavailable` for a read,
+`<action>_failed` for a write),
+`message` is the sentence to show. The exception text goes to the server log
+only; it can name tables and the database host.
+
+**Database unreachable:** every endpoint answers `503` with `Retry-After: 60`.
+`api.php`, `agent_api.php`, `node_api.php`, `heartbeat.php`, `health.php`,
+`cron.php` and `metrics.php` (and any request whose `Accept` asks for JSON but
+not HTML) get exactly `{"error": "database_unavailable"}`, agent endpoints
+included; browser pages get the branded error page with code 503. Neither says
+why - the database message used to be printed into the page, host, account and
+file names included; it now goes to the server's error log only.
+
 ---
 
 ## Data collection health

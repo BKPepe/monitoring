@@ -92,17 +92,33 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   }
 
   try {
-    const res = await fetch(url, { signal });
-    if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
-    return (await res.json()) as T;
+    return await readOk<T>(await fetch(url, { signal }), path);
   } catch (err) {
-    if (!isGoBackend && path.includes('action=metric_series')) {
+    // Only the single-series call has a Go twin. The batch path used to fall
+    // in here too, build a nonsense URL and, when anything answered it, return
+    // that answer unchecked - an error body then became an empty chart.
+    if (!isGoBackend && path.includes('action=metric_series&')) {
       const fallbackUrl = `/api/v1/metrics/series?${path.replace('api.php?action=metric_series&', '')}`;
       const res = await fetch(fallbackUrl, { signal }).catch(() => null);
-      if (res && res.ok) return (await res.json()) as T;
+      if (res && res.ok) return readOk<T>(res, path);
     }
     throw err;
   }
+}
+
+/**
+ * The body of a successful answer, or a thrown error.
+ *
+ * Older api.php answered a failed query with 200, an empty list and an `error`
+ * string. Read as data, that empty list became "no data" in the charts, so a
+ * named error is a failure whatever the status code says (W1-A5).
+ */
+async function readOk<T>(res: Response, path: string): Promise<T> {
+  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+  const body = (await res.json()) as T;
+  const named = (body as { error?: unknown } | null)?.error;
+  if (typeof named === 'string' && named !== '') throw new Error(named);
+  return body;
 }
 
 /**
@@ -125,11 +141,16 @@ export const httpMetricsSource: MetricsSource = {
     // monitorId is always the real monitors.id - api.php additionally accepts it
     // as asset_id too (WHERE id = ? OR asset_id = ?), so no ID re-mapping
     // normalisation is needed here.
+    // A failure propagates. It used to be swallowed into [], which the page
+    // showed as "no data in the database" for a server that never answered.
     const batch = await getJson<MetricSeriesBatchResponse>(
       `api.php?action=metric_series_batch&monitor_id=${monitorId}&period=${range}`
-    ).catch(() => null);
-
-    if (!batch || !batch.series) return [];
+    );
+    // PHP encodes an empty map as [], so an array is a real empty answer; a
+    // missing or scalar `series` is a broken one.
+    if (batch == null || batch.series == null || typeof batch.series !== 'object') {
+      throw new Error('Neplatná odpověď metric_series_batch.');
+    }
 
     const validCharts: ChartData[] = [];
 

@@ -687,6 +687,18 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.all_ok': { cs: 'Všechny systémy jsou online', en: 'All systems are online' },
   'public.degraded': { cs: '{count} služeb mimo provoz', en: '{count} services are down' },
   'public.load_error': { cs: 'Data se nepodařilo načíst.', en: 'Could not load the data.' },
+  // W1-A1: a failed request is its own verdict, never "all online".
+  'public.state_unknown': { cs: 'Stav se nepodařilo zjistit', en: 'Could not determine the status' },
+  'public.state_unknown_stale': {
+    cs: 'Níže je poslední známý stav. Další pokus proběhne za minutu.',
+    en: 'Below is the last known status. The next attempt runs in a minute.',
+  },
+  'public.partial': { cs: 'Provoz je částečně omezen', en: 'Service is partially degraded' },
+  'public.partial_desc': {
+    cs: '{count} služeb hlásí zhoršení nebo neznámý stav',
+    en: '{count} services report degradation or an unknown state',
+  },
+  'public.services_failed': { cs: 'Seznam služeb se nepodařilo načíst.', en: 'Could not load the list of services.' },
   'public.stat_online': { cs: 'Online', en: 'Online' },
   'public.stat_down': { cs: 'Mimo provoz', en: 'Down' },
   'public.stat_uptime': { cs: 'Dostupnost 30 dní', en: 'Availability, 30 days' },
@@ -988,6 +1000,16 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.monitors_card_title': { cs: 'Sledované Monitory & Služby', en: 'Monitored Services' },
   'dashboard.ongoing_outage': { cs: 'Probíhající výpadek', en: 'Ongoing outage' },
   'dashboard.no_outages': { cs: 'Všechny systémy bez výpadku', en: 'All systems without outage' },
+  // W1-A4: a failed or pending request is never a zero.
+  'dashboard.kpi_unknown': { cs: 'Stav nelze zjistit', en: 'Status unknown' },
+  'dashboard.kpi_failed': {
+    cs: 'Souhrnná čísla nejsou k dispozici - seznam monitorů se nepodařilo načíst.',
+    en: 'The summary numbers are unavailable - the monitor list could not be loaded.',
+  },
+  'dashboard.uptime_no_monitors': {
+    cs: 'Zatím nesledujete žádnou službu.',
+    en: 'You are not monitoring any service yet.',
+  },
   'dashboard.infra_health': { cs: 'Zdraví infrastruktury', en: 'Infrastructure Health' },
   'common.paused': { cs: 'Pozastaveno', en: 'Paused' },
   'common.retry': { cs: 'Zkusit znovu', en: 'Try again' },
@@ -1395,6 +1417,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.detected_services': { cs: 'Detekované Služby / Porty', en: 'Discovered Services / Ports' },
   'asset.no_related_services': { cs: 'Žádné navázané podslužby.', en: 'No related sub-services.' },
   'asset.charts_load_error': { cs: 'Grafy se nepodařilo načíst', en: 'Failed to load charts' },
+  'asset.load_failed': {
+    cs: 'Detail zařízení se nepodařilo načíst. Server neodpověděl, zkuste to znovu.',
+    en: 'Could not load the device detail. The server did not answer, try again.',
+  },
   'asset.no_chart_data': {
     cs: 'Data pro tento monitor nejsou v databázi k dispozici',
     en: 'No data is available in the database for this monitor',
@@ -1514,9 +1540,38 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.outage_start': { cs: 'Začátek výpadku', en: 'Outage Start' },
   'incidents.outage_end': { cs: 'Konec výpadku', en: 'Outage End' },
   'incidents.duration': { cs: 'Doba trvání', en: 'Duration' },
-  'incidents.probing_nodes': {
-    cs: 'Stav měřících uzlů a agentů (Probing Infrastructure)',
-    en: 'Probing Infrastructure & Agent Status',
+  // W1-A3: the places checks run from (action=regions), not monitors of type node.
+  'incidents.locations_title': { cs: 'Místa měření', en: 'Measurement locations' },
+  'incidents.locations_hint': {
+    cs: 'Odkud kontroly běží, za posledních {days} dní. Místo bez výsledku déle než {min} min (dva intervaly kontrol) je označené jako odmlčené.',
+    en: 'Where the checks run from, over the last {days} days. A place with no result for more than {min} min (two check intervals) is marked as gone quiet.',
+  },
+  'incidents.locations_loading': { cs: 'Načítám místa měření…', en: 'Loading measurement locations…' },
+  'incidents.locations_failed': {
+    cs: 'Místa měření se nepodařilo načíst.',
+    en: 'Could not load the measurement locations.',
+  },
+  'incidents.locations_empty': {
+    cs: 'Za posledních {days} dní nepřišel výsledek z žádného místa měření.',
+    en: 'No measurement location has reported a result in the last {days} days.',
+  },
+  'incidents.location_unnamed': { cs: 'Místo neuvedeno', en: 'Location not reported' },
+  'incidents.location_stale': { cs: 'Odmlčelo se', en: 'Gone quiet' },
+  'incidents.location_active': { cs: 'Měří', en: 'Measuring' },
+  'incidents.location_last': { cs: 'Poslední výsledek', en: 'Last result' },
+  'incidents.location_success': { cs: 'Úspěšnost', en: 'Success rate' },
+  'incidents.location_avg': { cs: 'Průměrná odezva', en: 'Average response' },
+  'incidents.ago_min': { cs: 'před {n} min', en: '{n} min ago' },
+  'incidents.ago_h': { cs: 'před {n} h', en: '{n} h ago' },
+  'incidents.ago_d': { cs: 'před {n} d', en: '{n} d ago' },
+  // W1-A3: a failed load is its own state, never "no outages".
+  'incidents.load_failed': {
+    cs: 'Incidenty se nepodařilo načíst. Stav výpadků teď není známý.',
+    en: 'Could not load the incidents. The outage status is unknown right now.',
+  },
+  'incidents.refresh_failed': {
+    cs: 'Incidenty se nepodařilo obnovit. Níže je poslední načtený stav.',
+    en: 'Could not refresh the incidents. Below is the last loaded state.',
   },
   'incidents.save_error': { cs: 'Incident se nepodařilo uložit.', en: 'Failed to save the incident.' },
   'incidents.create_modal_title': {
@@ -1539,9 +1594,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.manual_badge': { cs: 'Ručně nahlášeno', en: 'Manually Reported' },
   'incidents.created_label': { cs: 'Vytvořeno', en: 'Created' },
   'incidents.resolved_label': { cs: 'Vyřešeno', en: 'Resolved' },
-  'incidents.probe_latency': { cs: 'Latence sondy', en: 'Probe Latency' },
-  'incidents.probe_ok': { cs: 'Sonda OK', en: 'Probe OK' },
-  'incidents.probe_offline': { cs: 'Sonda OFFLINE', en: 'Probe OFFLINE' },
   'incidents.selected_monitor': { cs: 'Vybraný monitor', en: 'Selected monitor' },
   'incidents.default_detail': { cs: 'Ručně nahlášený incident.', en: 'Manually reported incident.' },
   'incidents.scope_prefix': { cs: 'Rozsah', en: 'Scope' },
@@ -2216,8 +2268,13 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.more_metrics': { cs: 'Další měřené metriky ({count})', en: 'Other measured metrics ({count})' },
   'collector.heading': { cs: 'Sběr dat neběží', en: 'Data collection is not running' },
   'avail.title': { cs: 'Dostupnost', en: 'Availability' },
+  'avail.load_failed': { cs: 'Dostupnost se nepodařilo načíst.', en: 'Could not load the availability.' },
   'notif.title': { cs: 'Odeslané notifikace', en: 'Notifications sent' },
   'iftraffic.title': { cs: 'Provoz po dnech (30 dní)', en: 'Traffic by day (30 days)' },
+  'iftraffic.load_failed': {
+    cs: 'Provoz po dnech se nepodařilo načíst.',
+    en: 'Could not load the daily traffic.',
+  },
   'proctop.title': { cs: 'Kdo bral výkon za posledních 24 hodin', en: 'What used the machine in the last 24 hours' },
   'settings.confirm_failures_label': {
     cs: 'Potvrdit výpadek až po N neúspěšných kontrolách',
@@ -3129,14 +3186,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'events.next_page': { cs: 'Další', en: 'Next' },
   'events.page_indicator': { cs: 'Strana {current} / {total}', en: 'Page {current} / {total}' },
   'incidents.all_scope': { cs: 'Všechny služby (Globální incident)', en: 'All services (Global incident)' },
-  'incidents.probes_ok': {
-    cs: 'Všechny testovací sondy pracují bez výpadků.',
-    en: 'All probing nodes are operating normally.',
-  },
-  'incidents.probing_hint': {
-    cs: 'Tyto uzly pouze provádějí měření z různých geografických lokací a NEJSOU cílovými službami.',
-    en: 'These nodes only perform measurements from various geographic locations and are NOT target services.',
-  },
   'incidents.public_notice': {
     cs: 'Prohlížení incidentů je veřejné. Pro ruční zakládání a úpravu incidentů se přihlaste.',
     en: 'Browsing incidents is public. Log in to manually create or edit incidents.',
@@ -3562,6 +3611,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Only RCON can report TPS. Add the RCON port and password in the monitor settings and the values will start arriving.',
   },
   'shell.loading_page': { cs: 'Načítám stránku…', en: 'Loading page…' },
+  // W1-A7: a failed session call is an outage, not a logout.
+  'shell.unavailable': { cs: 'Služba je dočasně nedostupná', en: 'The service is temporarily unavailable' },
+  'shell.unavailable_desc': {
+    cs: 'Přihlášení se teď nepodařilo ověřit. Nejste odhlášeni - zkuste to za chvíli znovu.',
+    en: 'Your sign-in could not be verified right now. You are not signed out - try again in a moment.',
+  },
   'sp.title': { cs: 'Veřejné status stránky', en: 'Public status pages' },
   'sp.subtitle': {
     cs: 'Vyberte, které služby uvidí veřejnost, a pod jakou adresou.',
@@ -4194,6 +4249,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'header.all_ok': { cs: 'Vše OK', en: 'All OK' },
   'header.outage_label': { cs: 'Výpadek', en: 'Outage' },
   'header.target_unresponsive': { cs: '{target} neodpovídá.', en: '{target} is not responding.' },
+  'header.alerts_loading': { cs: 'Načítám upozornění...', en: 'Loading alerts...' },
+  'header.alerts_failed': {
+    cs: 'Upozornění se nepodařilo načíst. Stav uzlů teď není známý.',
+    en: 'Could not load the alerts. The state of the nodes is unknown right now.',
+  },
   'header.all_nodes_ok': {
     cs: 'Všechny monitorované uzly fungují bez závad.',
     en: 'All monitored nodes are running without issues.',

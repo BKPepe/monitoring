@@ -66,6 +66,9 @@ const SEVERITY_RANK: Record<MonitorStatus, number> = {
   up: 5,
 };
 
+/** One stable empty list for "not loaded yet", so memo dependencies do not churn. */
+const NO_MONITORS: ApiMonitor[] = [];
+
 export function DashboardPage() {
   const { t, lang } = useLanguage();
   const [query, setQuery] = React.useState('');
@@ -74,7 +77,7 @@ export function DashboardPage() {
   // minute clock instead of following `live`: a failed refresh deliberately
   // keeps the old `live` object, so a list tied to it silently stopped
   // reloading while the caption kept promising a refresh every minute.
-  const { data: live } = usePublicStatus(60_000);
+  const { data: live, error: liveError } = usePublicStatus(60_000);
   const [refreshTick, setRefreshTick] = React.useState(0);
   React.useEffect(() => {
     const id = window.setInterval(() => setRefreshTick((n) => n + 1), 60_000);
@@ -103,7 +106,10 @@ export function DashboardPage() {
   }, []);
 
   const { session } = useSession();
-  const [monitors, setMonitors] = React.useState<ApiMonitor[]>([]);
+  // null until the first answer: an empty list before it arrived drew
+  // "Výpadky 0 - Všechny systémy bez výpadku" on every page load (W1-A4).
+  const [monitorsData, setMonitors] = React.useState<ApiMonitor[] | null>(null);
+  const monitors = monitorsData ?? NO_MONITORS;
   const [monitorsLoading, setMonitorsLoading] = React.useState(true);
   const [monitorsError, setMonitorsError] = React.useState<string | null>(null);
 
@@ -150,6 +156,11 @@ export function DashboardPage() {
   // with the mock's 100.0 default.
   const uptimeKnown = live?.uptimePercent != null;
   const uptime = live?.uptimePercent ?? 0;
+  // The KPI row: a placeholder until the first answer, a dash once the latest
+  // request failed. A stale 0 under "Výpadky" is an all-clear nobody measured.
+  const kpiLoading = monitorsData === null && monitorsError === null;
+  const kpiFailed = monitorsError !== null;
+  const uptimeLoading = live === null && liveError === null;
 
   const visibleMonitors = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -266,15 +277,27 @@ export function DashboardPage() {
     Record<number, { date: string; status: 'up' | 'down' | 'warning' | 'paused'; uptimePct: number }[]>
   >({});
   const [dailyUptimeError, setDailyUptimeError] = React.useState<string | null>(null);
+  // Whether an answer has arrived. A non-2xx answer used to return quietly, so
+  // "Načítám historii" spun for ever on a server that had already said no.
+  const [dailyUptimeLoaded, setDailyUptimeLoaded] = React.useState(false);
+  const [dailyUptimeAttempt, setDailyUptimeAttempt] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
     fetch(`/status/api.php?action=daily_uptime&days=30&lang=${lang}`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data) => {
-        if (!active || !data?.series) return;
+        if (!active) return;
+        if (
+          data?.series == null ||
+          typeof data.series !== 'object' ||
+          (typeof data.error === 'string' && data.error !== '')
+        ) {
+          throw new Error('invalid response');
+        }
         setDailyUptimeRows(data.series);
         setDailyUptimeError(null);
+        setDailyUptimeLoaded(true);
       })
       .catch(() => {
         if (active) setDailyUptimeError(t('dashboard.uptime_load_error', 'Chyba při načítání denní dostupnosti.'));
@@ -282,7 +305,7 @@ export function DashboardPage() {
     return () => {
       active = false;
     };
-  }, [t, lang]);
+  }, [t, lang, dailyUptimeAttempt]);
 
   // The "System Insights" row per the mockup - the server aggregates forecast/
   // anomalies/network insights across all monitors. Empty = the row does not
@@ -367,6 +390,11 @@ export function DashboardPage() {
         ) : monitorsError && monitors.length === 0 ? (
           <p className="text-muted-foreground px-3 py-3 text-sm">
             {t('attention.unknown', 'Stav nelze zjistit — seznam monitorů se nenačetl.')}
+          </p>
+        ) : needsAttention.length === 0 && monitorsError ? (
+          // Stale list after a failed refresh: no problems in it is not "all clear".
+          <p className="text-muted-foreground px-3 py-3 text-sm">
+            {t('dashboard.refresh_failed', 'Obnovení selhalo, data mohou být zastaralá')}
           </p>
         ) : needsAttention.length === 0 ? (
           <p className="text-muted-foreground flex items-center gap-2 px-3 py-3 text-sm">
@@ -480,7 +508,7 @@ export function DashboardPage() {
           <p className="text-muted-foreground flex items-center gap-2 px-3 py-4 text-sm">
             {monitorsLoading ? (
               t('dashboard.loading_monitors', 'Načítám monitory…')
-            ) : monitorsError && monitors.length === 0 ? (
+            ) : monitorsError ? (
               t('dashboard.alerts_unknown', 'Stav výstrah nelze zjistit — seznam monitorů se nenačetl.')
             ) : (
               <>
@@ -514,48 +542,58 @@ export function DashboardPage() {
         <CardTitle>{t('dashboard.infra_health', 'Zdraví infrastruktury')}</CardTitle>
       </CardHeader>
       <CardContent>
-        <HealthDonut
-          centerLabel={{
-            // No monitors = nothing measured. It used to print "0 %".
-            value: healthyPct == null ? '—' : formatPercent(healthyPct),
-            caption: t('dashboard.healthy_pct', 'Zdravých'),
-          }}
-          // Each status leads to the device list narrowed to it - the ring
-          // named a problem and offered no way to reach it.
-          hrefFor={(segment) => `/infrastructure?status=${segment.variant}`}
-          segments={[
-            {
-              label: t('common.online', 'Online'),
-              value: monitors.filter((m) => m.status === 'up').length,
-              variant: 'up',
-            },
-            {
-              label: t('common.warning', 'Varování'),
-              value: monitors.filter((m) => m.status === 'warning').length,
-              variant: 'warning',
-            },
-            {
-              label: t('common.offline', 'Offline'),
-              value: monitors.filter((m) => m.status === 'down').length,
-              variant: 'down',
-            },
-            {
-              label: t('common.paused', 'Pozastaveno'),
-              value: monitors.filter((m) => m.status === 'paused').length,
-              variant: 'paused',
-            },
-            {
-              label: t('common.maintenance', 'Údržba'),
-              value: monitors.filter((m) => m.status === 'maintenance').length,
-              variant: 'maintenance',
-            },
-            {
-              label: t('status.unknown', 'Neznámý'),
-              value: monitors.filter((m) => m.status === 'unknown').length,
-              variant: 'unknown',
-            },
-          ]}
-        />
+        {/* No ring before the list arrived or after it failed: an empty ring
+            with "Offline 0" is an all-clear drawn from no data. */}
+        {monitorsData === null ? (
+          monitorsError !== null ? (
+            <ErrorState message={monitorsError} onRetry={() => setRefreshTick((n) => n + 1)} />
+          ) : (
+            <LoadingState size="inline" label={t('dashboard.loading_monitors', 'Načítám monitory…')} />
+          )
+        ) : (
+          <HealthDonut
+            centerLabel={{
+              // No monitors = nothing measured. It used to print "0 %".
+              value: healthyPct == null ? '—' : formatPercent(healthyPct),
+              caption: t('dashboard.healthy_pct', 'Zdravých'),
+            }}
+            // Each status leads to the device list narrowed to it - the ring
+            // named a problem and offered no way to reach it.
+            hrefFor={(segment) => `/infrastructure?status=${segment.variant}`}
+            segments={[
+              {
+                label: t('common.online', 'Online'),
+                value: monitors.filter((m) => m.status === 'up').length,
+                variant: 'up',
+              },
+              {
+                label: t('common.warning', 'Varování'),
+                value: monitors.filter((m) => m.status === 'warning').length,
+                variant: 'warning',
+              },
+              {
+                label: t('common.offline', 'Offline'),
+                value: monitors.filter((m) => m.status === 'down').length,
+                variant: 'down',
+              },
+              {
+                label: t('common.paused', 'Pozastaveno'),
+                value: monitors.filter((m) => m.status === 'paused').length,
+                variant: 'paused',
+              },
+              {
+                label: t('common.maintenance', 'Údržba'),
+                value: monitors.filter((m) => m.status === 'maintenance').length,
+                variant: 'maintenance',
+              },
+              {
+                label: t('status.unknown', 'Neznámý'),
+                value: monitors.filter((m) => m.status === 'unknown').length,
+                variant: 'unknown',
+              },
+            ]}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -620,9 +658,19 @@ export function DashboardPage() {
       </CardHeader>
       <CardContent className="overflow-visible">
         {dailyUptimeError ? (
-          <ErrorState message={dailyUptimeError} />
-        ) : liveUptimeHistory.length === 0 ? (
+          <ErrorState
+            message={dailyUptimeError}
+            onRetry={() => {
+              setDailyUptimeError(null);
+              setDailyUptimeAttempt((n) => n + 1);
+            }}
+          />
+        ) : monitorsData === null && monitorsError !== null ? (
+          <ErrorState message={monitorsError} onRetry={() => setRefreshTick((n) => n + 1)} />
+        ) : monitorsData === null || !dailyUptimeLoaded ? (
           <LoadingState label={t('dashboard.loading_uptime', 'Načítám historii dostupnosti…')} />
+        ) : liveUptimeHistory.length === 0 ? (
+          <EmptyState title={t('dashboard.uptime_no_monitors', 'Zatím nesledujete žádnou službu.')} />
         ) : (
           <UptimeHeatmap rows={liveUptimeHistory} />
         )}
@@ -738,46 +786,73 @@ export function DashboardPage() {
 
       <CollectionIssuesBanner monitors={monitors} />
 
+      {kpiFailed && (
+        <ErrorState
+          message={t(
+            'dashboard.kpi_failed',
+            'Souhrnná čísla nejsou k dispozici - seznam monitorů se nepodařilo načíst.'
+          )}
+          onRetry={() => setRefreshTick((n) => n + 1)}
+        />
+      )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricTile
           label={t('dashboard.total_monitors', 'Monitorů celkem')}
-          value={totalMonitors}
+          value={kpiFailed ? '—' : totalMonitors}
+          loading={kpiLoading}
           icon={Signal}
-          hint={t('dashboard.monitors_hint', { healthy: healthyCount, down: downMonitors })}
+          hint={kpiFailed ? undefined : t('dashboard.monitors_hint', { healthy: healthyCount, down: downMonitors })}
         />
         {/* Both tones below are derived from the value. They used to be green
             by construction: 40 % healthy and a 91 % uptime looked exactly as
             reassuring as 100 % and 99.99 %. */}
         <MetricTile
           label={t('dashboard.healthy_pct', 'Zdravých')}
-          value={healthyPct == null ? '—' : formatPercent(healthyPct)}
+          value={kpiFailed || healthyPct == null ? '—' : formatPercent(healthyPct)}
+          loading={kpiLoading}
           icon={ShieldCheck}
-          tone={healthyPct == null ? undefined : downMonitors > 0 ? 'down' : healthyPct >= 100 ? 'up' : 'warning'}
-          hint={t('dashboard.healthy_of_total', { healthy: healthyCount, total: monitors.length })}
+          tone={
+            kpiFailed || healthyPct == null
+              ? undefined
+              : downMonitors > 0
+                ? 'down'
+                : healthyPct >= 100
+                  ? 'up'
+                  : 'warning'
+          }
+          hint={
+            kpiFailed ? undefined : t('dashboard.healthy_of_total', { healthy: healthyCount, total: monitors.length })
+          }
         />
         <MetricTile
           label={t('dashboard.outages', 'Výpadky')}
-          value={downMonitors}
+          value={kpiFailed ? '—' : downMonitors}
+          loading={kpiLoading}
           icon={AlertTriangle}
-          tone={downMonitors > 0 ? 'down' : 'up'}
+          tone={kpiFailed ? undefined : downMonitors > 0 ? 'down' : 'up'}
           hint={
-            downMonitors > 0
-              ? t('dashboard.ongoing_outage', 'Probíhající výpadek')
-              : t('dashboard.no_outages', 'Všechny systémy bez výpadku')
+            kpiFailed
+              ? t('dashboard.kpi_unknown', 'Stav nelze zjistit')
+              : downMonitors > 0
+                ? t('dashboard.ongoing_outage', 'Probíhající výpadek')
+                : t('dashboard.no_outages', 'Všechny systémy bez výpadku')
           }
         />
         <MetricTile
           label={t('dashboard.uptime_30d', 'Uptime (30 d)')}
           value={uptimeKnown ? uptime.toFixed(2) : '—'}
           unit={uptimeKnown ? '%' : undefined}
+          loading={uptimeLoading}
           icon={Activity}
           tone={!uptimeKnown ? undefined : uptime >= 99.9 ? 'up' : uptime >= 99 ? 'warning' : 'down'}
           hint={
-            !uptimeKnown
-              ? t('dashboard.uptime_pending', 'Zatím žádná data za 30 dní')
-              : live && live.avgLatencyMs != null
-                ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms`
-                : t('dashboard.whole_infra', 'Celá infrastruktura')
+            live === null && liveError !== null
+              ? t('dashboard.kpi_unknown', 'Stav nelze zjistit')
+              : !uptimeKnown
+                ? t('dashboard.uptime_pending', 'Zatím žádná data za 30 dní')
+                : live && live.avgLatencyMs != null
+                  ? `${t('dashboard.avg_response', 'Průměrná odezva')} ${live.avgLatencyMs} ms`
+                  : t('dashboard.whole_infra', 'Celá infrastruktura')
           }
         />
       </div>

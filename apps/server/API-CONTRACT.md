@@ -60,6 +60,9 @@ Pozor na detaily, které se snadno ztratí:
   držet, jinak 30denní graf potáhne stovky tisíc bodů.
 - **Uptime se počítá s vyloučením údržby** — `WHERE status != 'maintenance'`.
   Naivní `up/total` dá jiné číslo a rozbije SLA reporty.
+- **Selhané čtení není prázdný úspěch**: `500` +
+  `{"error":"<akce>_unavailable","message":"…"}`, nikdy `200` s prázdným
+  seznamem (klient z něj četl „vše online"). Detail výjimky jen do logu.
 - **„Agent existuje" ≠ „má klíč".** `agent_key` se generuje všem monitorům;
   za agenta se počítá jen ten, který se někdy ozval (`agent_last_seen`).
 - **Hub se vylučuje z distribuovaných lokací** (`checked_from != 'Main Server'`
@@ -206,6 +209,9 @@ Související funkcionalita:
 - `audit_log` (retence 90 dní), `users` s rolemi
 - CSRF tokeny v adminu
 - session cookie s `HttpOnly`, `SameSite=Lax`, `Secure` podle HTTPS
+- nedostupná databáze = `503` + `Retry-After: 60`; strojové endpointy
+  `{"error":"database_unavailable"}`, stránky značkovou chybovou stránku,
+  hláška databáze jen do logu serveru
 
 Co bych při přepisu **změnil, ne zkopíroval**: ingest se dnes autentizuje
 sdíleným `agent_key` v těle requestu. Vzor pro lepší řešení už v projektu je —

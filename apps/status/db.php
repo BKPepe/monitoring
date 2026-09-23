@@ -26,6 +26,69 @@ if (file_exists(__DIR__ . '/config.php')) {
 // Set here because every page and API request passes through db.php.
 ini_set('serialize_precision', '-1');
 
+/**
+ * Whether the caller of this request is a program that reads JSON.
+ *
+ * The API and the agent/node/heartbeat endpoints are called by the app and by
+ * agents, which parse the body; a browser opening a page wants a page.
+ * Decided by the script first (those endpoints answer JSON whatever the caller
+ * sends), then by a JSON content type the script already declared, then by an
+ * Accept header that asks for JSON and not for HTML.
+ */
+function bk_request_wants_json(): bool {
+    $script = basename((string)($_SERVER['SCRIPT_NAME'] ?? ''));
+    $json_scripts = ['api.php', 'agent_api.php', 'node_api.php', 'heartbeat.php', 'health.php', 'cron.php', 'metrics.php'];
+    if (in_array($script, $json_scripts, true)) {
+        return true;
+    }
+    foreach (headers_list() as $header) {
+        if (stripos($header, 'content-type:') === 0 && stripos($header, 'json') !== false) {
+            return true;
+        }
+    }
+    $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
+    return stripos($accept, 'application/json') !== false && stripos($accept, 'text/html') === false;
+}
+
+/**
+ * The database cannot be reached: 503 for everyone, and nothing about why.
+ *
+ * This used to be a 500 page with the PDO message printed into it - the
+ * database host, the account name and "config.php" for anyone who happened to
+ * load a page during an outage - and the API answered that HTML page to the
+ * app and to the agents, which cannot parse it. Now: 503 with Retry-After (an
+ * outage of the database is temporary, and a client or crawler should come
+ * back rather than drop the page), a JSON code for programs, the branded error
+ * page for people, and the detail only in the server's error log.
+ */
+function bk_database_unavailable(Throwable $e): never {
+    error_log('[db] database unavailable: ' . $e->getMessage());
+    if (PHP_SAPI === 'cli') {
+        // A cron run by hand: the operator is the reader, and nothing here is
+        // served to anyone.
+        fwrite(STDERR, 'Databáze je nedostupná: ' . $e->getMessage() . "\n");
+        exit(1);
+    }
+    if (!headers_sent()) {
+        http_response_code(503);
+        header('Retry-After: 60');
+        header('Cache-Control: no-store');
+    }
+    if (bk_request_wants_json()) {
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+        }
+        echo json_encode(['error' => 'database_unavailable']);
+        exit;
+    }
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=utf-8');
+    }
+    $bk_error_code = 503;
+    require __DIR__ . '/error.php';
+    exit;
+}
+
 try {
     $db_driver = defined('DB_DRIVER') ? strtolower(DB_DRIVER) : (defined('BK_DATABASE_URL') && strpos(BK_DATABASE_URL, 'postgres') !== false ? 'pgsql' : 'mysql');
     if ($db_driver === 'pgsql' || $db_driver === 'postgres') {
@@ -1002,31 +1065,7 @@ try {
 
     } // konec bloku migrací (schema_version)
 } catch (PDOException $e) {
-    // If the connection fails, show an intelligible error message
-    http_response_code(500);
-    ?>
-    <!DOCTYPE html>
-    <html lang="cs">
-    <head>
-        <meta charset="UTF-8">
-        <title>Chyba připojení k databázi</title>
-        <style>
-            body { background: #0f0f13; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-            .error-card { background: #1a1a24; padding: 2rem; border-radius: 12px; border-top: 4px solid #ff4444; max-width: 500px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-            h1 { font-size: 1.5rem; margin-top: 0; color: #ff4444; }
-            code { background: #0c0c0f; padding: 0.2rem 0.4rem; border-radius: 4px; color: #e5c07b; }
-        </style>
-    </head>
-    <body>
-        <div class="error-card">
-            <h1>Chyba databáze</h1>
-            <p>Nepodařilo se připojit k databázi. Zkontrolujte prosím nastavení v souboru <code>status/config.php</code>.</p>
-            <p style="font-size: 0.85rem; color: #888;">Podrobnosti: <?php echo htmlspecialchars($e->getMessage()); ?></p>
-        </div>
-    </body>
-    </html>
-    <?php
-    exit;
+    bk_database_unavailable($e);
 }
 
 // Loads dynamic settings from the database

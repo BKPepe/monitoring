@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Card } from '@/components/ui/card';
+import { ErrorState } from '@/components/ui/states';
 import { MetricChart } from '@/components/charts/metric-chart';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
@@ -36,6 +37,10 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
   const { session } = useSession();
   const signedIn = !!session?.authenticated;
   const [interfaces, setInterfaces] = React.useState<Iface[] | null>(null);
+  // A failed request renders as an error. The panel used to vanish, which read
+  // as "no daily traffic" when the server never answered.
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     if (!signedIn) return;
@@ -43,19 +48,41 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
     fetch(`/status/api.php?action=interface_traffic_daily&monitor_id=${monitorId}&days=30`, {
       credentials: 'include',
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data) => {
-        if (active && data && Array.isArray(data.interfaces)) setInterfaces(data.interfaces);
+        if (!active) return;
+        // Older servers answered a failed query with 200, [] and an error string.
+        if (!data || !Array.isArray(data.interfaces) || (typeof data.error === 'string' && data.error !== '')) {
+          setFailed(true);
+          return;
+        }
+        setInterfaces(data.interfaces);
+        setFailed(false);
       })
       .catch(() => {
-        // No daily history is not zero traffic - the panel stays away.
+        if (active) setFailed(true);
       });
     return () => {
       active = false;
     };
-  }, [signedIn, monitorId]);
+  }, [signedIn, monitorId, attempt]);
 
-  if (!signedIn || !interfaces) return null;
+  if (!signedIn) return null;
+  if (failed) {
+    return (
+      <Card className="space-y-2 p-5">
+        <h3 className="text-sm font-semibold">{t('iftraffic.title', 'Provoz po dnech (30 dní)')}</h3>
+        <ErrorState
+          message={t('iftraffic.load_failed', 'Provoz po dnech se nepodařilo načíst.')}
+          onRetry={() => {
+            setFailed(false);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      </Card>
+    );
+  }
+  if (!interfaces) return null;
   const shown = interfaces.filter((i) => i.days.length >= 2 && i.total > 0).slice(0, 3);
   if (shown.length === 0) return null;
 

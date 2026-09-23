@@ -99,6 +99,26 @@ Tělo chyby: `{"error": "Popis česky"}`. Endpointy agentů vracejí místo toho
 `{"success": false, "message": "…"}` - historický rozdíl, sjednocení by
 rozbilo nasazené agenty.
 
+**Selhané čtení nikdy není prázdný úspěch.** Když selže dotaz za seznamem
+nebo souhrnem, odpověď je `500` s `{"error": "<kód>", "message": "<věta
+česky>"}` - nikdy `200` s `monitors: []`, `incidents: []` nebo `series: {}`,
+které každý klient četl jako „vše online" nebo „bez výpadků" právě tehdy, když
+se nevědělo nic. `error` je stálý kód pro větvení (`monitors_unavailable`,
+`incidents_unavailable`, `events_unavailable`, `daily_uptime_unavailable`,
+`uptime_windows_unavailable`, `metric_series_unavailable`,
+`audit_logs_unavailable`, `overview_unavailable`, … - vždy
+`<akce>_unavailable` u čtení, `<akce>_failed` u zápisu), `message` je věta
+k zobrazení. Text výjimky jde jen do logu serveru; umí jmenovat tabulky
+i hostitele databáze.
+
+**Databáze nedostupná:** každý endpoint odpoví `503` s `Retry-After: 60`.
+`api.php`, `agent_api.php`, `node_api.php`, `heartbeat.php`, `health.php`,
+`cron.php` a `metrics.php` (a každý požadavek, jehož `Accept` chce JSON a ne
+HTML) dostanou přesně `{"error": "database_unavailable"}`, endpointy agentů
+taky; stránky pro prohlížeč dostanou značkovou chybovou stránku s kódem 503.
+Ani jedno neříká proč - hláška databáze se dřív tiskla do stránky i s hostem,
+účtem a jmény souborů; teď jde jen do chybového logu serveru.
+
 ---
 
 ## Stav sběru dat

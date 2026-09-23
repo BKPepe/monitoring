@@ -6,16 +6,20 @@ import { SearchCommand, type SearchResult } from '@/components/ui/search-command
 import { useTheme } from '@/lib/use-theme';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
+import { ErrorState, LoadingState } from '@/components/ui/states';
 
 export function Header({
   searchResults,
   onSearchSelect,
   alertCount: propAlertCount,
+  alertCountKnown = true,
   onOpenMobileNav,
 }: {
   searchResults?: SearchResult[];
   onSearchSelect?: (result: SearchResult) => void;
   alertCount?: number;
+  /** false when the last incidents call failed: the count is then a stale number, not a fresh zero. */
+  alertCountKnown?: boolean;
   onOpenMobileNav?: () => void;
 }) {
   const { theme, toggle } = useTheme();
@@ -53,17 +57,31 @@ export function Header({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // A failed events call used to leave the list empty, and an empty list drew
+  // the green "every node works" box - an all-clear from a server that never
+  // answered (W1-A). The box now needs a fresh successful answer.
+  const [eventsState, setEventsState] = useState<'loading' | 'ok' | 'failed'>('loading');
   useEffect(() => {
+    let active = true;
     fetch('/status/api.php?action=events&limit=20', { credentials: 'include' })
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (Array.isArray(data.events)) {
-          const downList = data.events.filter((e: any) => e.isDown);
-          setActiveAlerts(downList);
+        if (!active) return;
+        if (!Array.isArray(data?.events)) {
+          setEventsState('failed');
+          return;
         }
+        setActiveAlerts(data.events.filter((e: any) => e.isDown));
+        setEventsState('ok');
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setEventsState('failed');
+      });
+    return () => {
+      active = false;
+    };
   }, [showNotifications]);
+  const allClearKnown = eventsState === 'ok' && alertCountKnown;
 
   const unreadAlerts = activeAlerts.filter((e) => typeof e.id === 'number' && e.id > readUpToId);
   const currentlyDown = propAlertCount ?? 0;
@@ -193,7 +211,9 @@ export function Header({
                     ? `${currentlyDown} ${t('header.active_alerts', 'aktivní')}`
                     : unreadAlerts.length > 0
                       ? t('header.unread_count', { count: unreadAlerts.length }, `${unreadAlerts.length} nepřečtených`)
-                      : t('header.all_ok', 'Vše OK')}
+                      : allClearKnown
+                        ? t('header.all_ok', 'Vše OK')
+                        : '—'}
                 </span>
               </div>
 
@@ -225,11 +245,17 @@ export function Header({
                       </div>
                     </div>
                   ))
-                ) : (
+                ) : allClearKnown ? (
                   <div className="p-3 rounded-lg bg-up/10 border border-up/20 flex items-center gap-3 text-xs font-medium text-up">
                     <CheckCircle2 className="size-4 shrink-0" />
                     <span>{t('header.all_nodes_ok', 'Všechny monitorované uzly fungují bez závad.')}</span>
                   </div>
+                ) : eventsState === 'loading' ? (
+                  <LoadingState size="inline" label={t('header.alerts_loading', 'Načítám upozornění...')} />
+                ) : (
+                  <ErrorState
+                    message={t('header.alerts_failed', 'Upozornění se nepodařilo načíst. Stav uzlů teď není známý.')}
+                  />
                 )}
               </div>
 

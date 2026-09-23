@@ -1,36 +1,104 @@
 <?php
 /**
- * Blood Kings Monitoring - Custom HTML Error Page (404 / 403 / 500)
+ * Blood Kings Monitoring - branded HTML error page (403 / 404 / 410 / 500 / 503)
+ *
+ * Served by the web server's ErrorDocument (code in ?code=) and included by
+ * db.php when the database is unreachable ($bk_error_code = 503), so an
+ * outage shows this page instead of the database's own error text.
+ *
+ * It loads nothing but its own dictionary: it has to render when the rest of
+ * the application is what failed, so no lang.php (which sets a cookie), no
+ * session and no database. Its links are absolute because it answers for any
+ * path: on /status/foo/bar.php the old relative "index.php" led to
+ * /status/foo/index.php, which is another 404.
  */
 
-$code = isset($_GET['code']) ? (int)$_GET['code'] : 404;
-if (!in_array($code, [403, 404, 500], true)) {
+$code = isset($bk_error_code) ? (int)$bk_error_code : (isset($_GET['code']) ? (int)$_GET['code'] : 404);
+if (!in_array($code, [403, 404, 410, 500, 503], true)) {
     $code = 404;
 }
 
-http_response_code($code);
+// The language: an explicit ?lang= or the visitor's saved choice first (the
+// same order as lang.php), then the browser's Accept-Language. A visitor
+// whose browser names neither Czech nor Slovak reads English more likely than
+// Czech; only no header at all (crawlers, curl) keeps the Czech default.
+$err_lang = null;
+foreach ([$_GET['lang'] ?? null, $_SESSION['bk_lang'] ?? null, $_COOKIE['bk_lang'] ?? null] as $err_choice) {
+    if ($err_choice === 'cs' || $err_choice === 'en') {
+        $err_lang = $err_choice;
+        break;
+    }
+}
+if ($err_lang === null) {
+    $err_accept = strtolower((string)($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''));
+    $err_best_q = -1.0;
+    foreach ($err_accept === '' ? [] : explode(',', $err_accept) as $err_part) {
+        $err_bits = explode(';', trim($err_part));
+        $err_tag = substr(trim($err_bits[0]), 0, 2);
+        $err_mapped = $err_tag === 'en' ? 'en' : (($err_tag === 'cs' || $err_tag === 'sk') ? 'cs' : null);
+        if ($err_mapped === null) {
+            continue;
+        }
+        $err_q = 1.0;
+        foreach (array_slice($err_bits, 1) as $err_param) {
+            if (preg_match('/^\s*q\s*=\s*([0-9.]+)/', $err_param, $err_m)) {
+                $err_q = (float)$err_m[1];
+            }
+        }
+        if ($err_q > $err_best_q) {
+            $err_lang = $err_mapped;
+            $err_best_q = $err_q;
+        }
+    }
+    if ($err_lang === null) {
+        $err_lang = $err_accept === '' ? 'cs' : 'en';
+    }
+}
+// Literal paths, as in lang.php: the language is allowlisted above, and an
+// include built from a request value would look like a file inclusion bug.
+$err_strings = $err_lang === 'en' ? require __DIR__ . '/lang/en.php' : require __DIR__ . '/lang/cs.php';
 
-$error_titles = [
-    403 => 'Přístup odepřen (403)',
-    404 => 'Stránka nenalezena (404)',
-    500 => 'Interní chyba serveru (500)',
+$err_title_keys = [
+    403 => 'error_page_title_403',
+    404 => 'error_page_title_404',
+    410 => 'error_page_title_410',
+    500 => 'error_page_title_500',
+    503 => 'error_page_title_503',
+];
+$err_message_keys = [
+    403 => 'error_page_msg_403',
+    404 => 'error_page_msg_404',
+    410 => 'error_page_msg_410',
+    500 => 'error_page_msg_500',
+    // Only db.php knows the cause is the database; a 503 from the web server
+    // itself (overload, maintenance) gets the general sentence.
+    503 => isset($bk_error_code) ? 'error_page_msg_503_db' : 'error_page_msg_503',
 ];
 
-$error_messages = [
-    403 => 'K této sekci nebo souboru nemáte dostatečná přístupová práva.',
-    404 => 'Požadovaná stránka neexistuje nebo byla přemístěna na jinou adresu.',
-    500 => 'Došlo k neočekávané chybě na straně serveru. Zkuste to prosím znovu za malou chvíli.',
-];
+$title = (string)$err_strings[$err_title_keys[$code]];
+$message = (string)$err_strings[$err_message_keys[$code]];
+$brand = (string)$err_strings['error_page_brand'];
+$badge = sprintf((string)$err_strings['error_page_badge'], $code);
 
-$title = $error_titles[$code];
-$message = $error_messages[$code];
+if (!headers_sent()) {
+    http_response_code($code);
+    header('Content-Type: text/html; charset=utf-8');
+    // The text follows the browser's language, so a shared cache must not hand
+    // one visitor's language to the next. An error page is never a search result.
+    header('Vary: Accept-Language, Cookie');
+    header('X-Robots-Tag: noindex');
+    if ($code === 503) {
+        header('Retry-After: 60');
+    }
+}
 ?>
 <!DOCTYPE html>
-<html lang="cs">
+<html lang="<?php echo $err_lang; ?>">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title><?php echo htmlspecialchars($title); ?> | Blood Kings Monitoring</title>
+  <meta name="robots" content="noindex">
+  <title><?php echo htmlspecialchars($title); ?> (<?php echo $code; ?>) | <?php echo htmlspecialchars($brand); ?></title>
   <style>
     :root {
       --bg-main: #0b0c10;
@@ -147,12 +215,12 @@ $message = $error_messages[$code];
 </head>
 <body>
   <div class="error-card">
-    <div class="error-code-badge">CHYBA <?php echo $code; ?></div>
+    <div class="error-code-badge"><?php echo htmlspecialchars($badge); ?></div>
     <h1 class="error-title"><?php echo htmlspecialchars($title); ?></h1>
     <p class="error-message"><?php echo htmlspecialchars($message); ?></p>
     <div class="error-actions">
-      <a href="index.php" class="btn btn-primary">🏠 Zpět na Status</a>
-      <a href="admin.php" class="btn btn-outline">⚙️ Administrace</a>
+      <a href="/app/public" class="btn btn-primary"><?php echo htmlspecialchars((string)$err_strings['error_page_link_public']); ?></a>
+      <a href="/status/" class="btn btn-outline"><?php echo htmlspecialchars((string)$err_strings['error_page_link_status']); ?></a>
     </div>
   </div>
 </body>

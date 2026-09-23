@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { useFocusTrap } from '@/lib/use-focus-trap';
-import { LoadingState } from '@/components/ui/states';
+import { ErrorState, LoadingState } from '@/components/ui/states';
 
 export function AppShell() {
   const { t } = useLanguage();
@@ -24,7 +24,7 @@ export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const closeMobileNav = React.useCallback(() => setMobileNavOpen(false), []);
   const mobileNavRef = useFocusTrap<HTMLDivElement>(mobileNavOpen, closeMobileNav);
-  const { session, loading: sessionLoading } = useSession();
+  const { session, error: sessionError, refetchSession } = useSession();
   const location = useLocation();
 
   // Global search index (⌘K): pages + real monitors.
@@ -131,17 +131,26 @@ export function AppShell() {
   // A single source: the incidents endpoint already includes freshly fallen
   // monitors, so nothing is summed (an outage would be counted twice otherwise).
   const [realAlertCount, setRealAlertCount] = React.useState(0);
+  // The badges keep the last known count through a failed refresh, but the
+  // bell may only call it "all OK" after a fresh successful answer (W1-A).
+  const [alertCountKnown, setAlertCountKnown] = React.useState(false);
   React.useEffect(() => {
     let active = true;
     const load = () =>
       fetch('/status/api.php?action=incidents', { credentials: 'include' })
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
-          if (active && Array.isArray(data?.incidents)) {
+          if (!active) return;
+          if (Array.isArray(data?.incidents)) {
             setRealAlertCount(data.incidents.filter((i: any) => (i.status ?? 'investigating') !== 'resolved').length);
+            setAlertCountKnown(true);
+          } else {
+            setAlertCountKnown(false);
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          if (active) setAlertCountKnown(false);
+        });
     load();
     const timer = setInterval(load, 60000);
     return () => {
@@ -167,10 +176,34 @@ export function AppShell() {
   // user sees only the monitors assigned to them, so there is nothing to show
   // without an account. The public status page, invitations and subscription
   // links live outside this shell and stay open.
-  if (sessionLoading && !session) {
+  //
+  // Only the server's own "not signed in" leads to the login. A session call
+  // that failed (network, a 5xx while the database restarts) used to count as
+  // a logout, so an outage of the API looked like an expired session (W1-A7).
+  if (!session) {
+    if (sessionError) {
+      return (
+        <div className="mx-auto max-w-lg px-4 py-16">
+          <ErrorState
+            onRetry={refetchSession}
+            message={
+              <>
+                <p>{t('shell.unavailable', 'Služba je dočasně nedostupná')}</p>
+                <p className="mt-0.5 font-normal opacity-80">
+                  {t(
+                    'shell.unavailable_desc',
+                    'Přihlášení se teď nepodařilo ověřit. Nejste odhlášeni - zkuste to za chvíli znovu.'
+                  )}
+                </p>
+              </>
+            }
+          />
+        </div>
+      );
+    }
     return <LoadingState size="page" label={t('shell.loading_page', 'Načítám stránku…')} />;
   }
-  if (!session?.authenticated) {
+  if (!session.authenticated) {
     const next = location.pathname + location.search;
     return <Navigate to={`/setup${next && next !== '/' ? `?next=${encodeURIComponent(next)}` : ''}`} replace />;
   }
@@ -229,6 +262,7 @@ export function AppShell() {
           searchResults={searchIndex}
           onSearchSelect={onSearchSelect}
           alertCount={realAlertCount}
+          alertCountKnown={alertCountKnown}
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
 

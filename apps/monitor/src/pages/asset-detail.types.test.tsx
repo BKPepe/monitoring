@@ -74,6 +74,9 @@ function api(url: string, monitors: unknown[]): Response {
   if (url.includes('action=monitors')) return jsonResponse({ monitors });
   if (url.includes('action=router_recommendations'))
     return jsonResponse({ monitorId: 9, applicable: false, reason: 'not_a_router', items: [], muted: [] });
+  // api.php always sends `series` (an empty map encodes as []); a body without
+  // it is a broken answer and the charts now say so instead of "no data".
+  if (url.includes('action=metric_series_batch')) return jsonResponse({ series: [] });
   return jsonResponse({});
 }
 

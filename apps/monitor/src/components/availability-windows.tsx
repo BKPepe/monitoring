@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Card } from '@/components/ui/card';
+import { ErrorState } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 
 interface Windows {
@@ -21,23 +22,48 @@ interface Windows {
 export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
   const { t } = useLanguage();
   const [windows, setWindows] = React.useState<Windows | null>(null);
+  // A failed request renders as an error. The panel used to vanish, which read
+  // as "this monitor has no availability history" when the server never answered.
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
     fetch('/status/api.php?action=uptime_windows', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data) => {
-        if (!active || !data || typeof data.windows !== 'object' || data.windows == null) return;
+        if (!active) return;
+        if (!data || typeof data.windows !== 'object' || data.windows == null) {
+          setFailed(true);
+          return;
+        }
+        // No row for this monitor = nothing measured yet: the panel stays away.
         const row = (data.windows as Record<string, Windows>)[String(monitorId)];
         setWindows(row ?? null);
+        setFailed(false);
       })
       .catch(() => {
-        // No availability is not zero availability - the panel simply stays away.
+        if (active) setFailed(true);
       });
     return () => {
       active = false;
     };
-  }, [monitorId]);
+  }, [monitorId, attempt]);
+
+  if (failed) {
+    return (
+      <Card className="space-y-2 p-5">
+        <h3 className="text-sm font-semibold">{t('avail.title', 'Dostupnost')}</h3>
+        <ErrorState
+          message={t('avail.load_failed', 'Dostupnost se nepodařilo načíst.')}
+          onRetry={() => {
+            setFailed(false);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      </Card>
+    );
+  }
 
   if (!windows) return null;
 

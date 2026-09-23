@@ -18,6 +18,7 @@ export function MetricTile({
   goodDirection = 'up',
   icon: Icon,
   tone,
+  loading = false,
 }: {
   label: string;
   value: string | number;
@@ -27,11 +28,16 @@ export function MetricTile({
   goodDirection?: 'up' | 'down';
   icon?: LucideIcon;
   tone?: 'up' | 'down' | 'warning' | 'info';
+  /**
+   * The value is on its way: a placeholder bar instead of a number. A 0 drawn
+   * before the first answer read as "no outages" on every page load (W1-A4).
+   */
+  loading?: boolean;
 }) {
   const isGood = delta ? delta.direction === goodDirection : undefined;
 
   return (
-    <Card className="p-4">
+    <Card className="p-4" aria-busy={loading || undefined}>
       <div className="flex items-start justify-between gap-2">
         <p className="text-muted-foreground text-xs font-medium">{label}</p>
         {Icon && (
@@ -48,10 +54,16 @@ export function MetricTile({
         )}
       </div>
 
-      <div className="mt-2 flex items-baseline gap-1.5">
-        <span className="tabular-nums text-2xl font-semibold tracking-tight">{value}</span>
-        {unit && <span className="text-muted-foreground text-sm">{unit}</span>}
-      </div>
+      {loading ? (
+        <div className="mt-2 flex h-8 items-center" data-testid="metric-tile-skeleton">
+          <span className="bg-muted h-6 w-16 animate-pulse rounded-md motion-reduce:animate-none" />
+        </div>
+      ) : (
+        <div className="mt-2 flex items-baseline gap-1.5">
+          <span className="tabular-nums text-2xl font-semibold tracking-tight">{value}</span>
+          {unit && <span className="text-muted-foreground text-sm">{unit}</span>}
+        </div>
+      )}
 
       <div className="mt-1 flex items-center gap-2">
         {delta && (
@@ -59,7 +71,7 @@ export function MetricTile({
             {delta.direction === 'up' ? '▲' : '▼'} {delta.value}
           </span>
         )}
-        {hint && <span className="text-muted-foreground text-xs">{hint}</span>}
+        {hint && !loading && <span className="text-muted-foreground text-xs">{hint}</span>}
       </div>
     </Card>
   );

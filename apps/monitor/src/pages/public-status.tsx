@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, BellRing, CheckCircle2, Moon, Radio, Rss, Sun, Wrench } from 'lucide-react';
+import { Activity, BellRing, CheckCircle2, CloudOff, Moon, Radio, Rss, Sun, Wrench } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { PublicMonitorCard, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
 import { Timeline } from '@/components/timeline';
@@ -67,6 +68,9 @@ interface Incident {
  * (addresses, SSIDs, hostnames) from anonymous responses, so what arrives here
  * is already safe to show.
  */
+/** States the verdict has a word for; anything else (unknown, pending) is not "online". */
+const NAMED_STATES = new Set(['up', 'down', 'warning', 'maintenance']);
+
 /** How often the page re-fetches everything it shows. The header says so. */
 const REFRESH_MS = 60_000;
 
@@ -75,7 +79,7 @@ export function PublicStatusPage() {
   const { theme, toggle: toggleTheme } = useTheme();
   const [params] = useSearchParams();
   // A status page left open on a wall monitor has to stay true without F5.
-  const { data: status, error } = usePublicStatus(REFRESH_MS, 'public');
+  const { data: status, error, reload: reloadStatus } = usePublicStatus(REFRESH_MS, 'public');
 
   // ?lang=en in the URL wins over the stored preference - existing links to
   // the legacy page carry it and they have to keep meaning the same thing.
@@ -134,6 +138,9 @@ export function PublicStatusPage() {
     };
   }, [pageSlug]);
   const [monitors, setMonitors] = React.useState<PublicMonitor[] | null>(null);
+  // The LATEST monitors request failed. `monitors` may still hold the last
+  // known list, but the verdict can no longer vouch for the present.
+  const [monitorsError, setMonitorsError] = React.useState(false);
   const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]>>({});
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
   const [regions, setRegions] = React.useState<Region[] | null>(null);
@@ -168,13 +175,24 @@ export function PublicStatusPage() {
     // scope=public: the status of every public monitor, the same for everyone.
     // Without it a signed-in user would see only the monitors assigned to them
     // here too, and host internals would depend on who happens to be looking.
+    // A failure keeps `monitors` as it was (null before the first answer) and
+    // raises monitorsError. Turning it into [] made "no services, nothing
+    // down" out of "the API did not answer", and the verdict said all online.
     fetch('/status/api.php?action=monitors&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setMonitors(Array.isArray(d.monitors) ? d.monitors : []);
+        if (!active) return;
+        // An answer without the list (or one naming an error) is not an
+        // empty fleet either - older servers sent 200 + [] from a failed query.
+        if (!Array.isArray(d.monitors) || (typeof d.error === 'string' && d.error !== '')) {
+          setMonitorsError(true);
+          return;
+        }
+        setMonitors(d.monitors);
+        setMonitorsError(false);
       })
       .catch(() => {
-        if (active) setMonitors((prev) => prev ?? []);
+        if (active) setMonitorsError(true);
       });
     // The 30-day strips - one request for every monitor at once, keyed by id.
     fetch('/status/api.php?action=daily_uptime&days=30&scope=public')
@@ -215,30 +233,26 @@ export function PublicStatusPage() {
     fetch('/status/api.php?action=regions&days=30&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setRegions(Array.isArray(d.regions) ? d.regions : []);
+        if (active && Array.isArray(d.regions)) setRegions(d.regions);
       })
-      .catch(() => {
-        if (active) setRegions((prev) => prev ?? []);
-      });
+      // Failed: the tile keeps its dash (null) or the last known count - a 0
+      // would claim that nothing measures the services.
+      .catch(() => {});
     // Recent events - the "what happened lately" strip the legacy page had.
     fetch('/status/api.php?action=events&limit=200&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setEvents(Array.isArray(d.events) ? d.events : []);
+        if (active && Array.isArray(d.events)) setEvents(d.events);
       })
-      .catch(() => {
-        if (active) setEvents((prev) => prev ?? []);
-      });
+      .catch(() => {});
     // Incidents arrive as JSON and paginate client-side. The legacy page
     // shipped all 200 rows as styled HTML - a third of its 1.1 MB.
     fetch('/status/api.php?action=incidents&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setIncidents(Array.isArray(d.manualIncidents) ? d.manualIncidents : []);
+        if (active && Array.isArray(d.manualIncidents)) setIncidents(d.manualIncidents);
       })
-      .catch(() => {
-        if (active) setIncidents((prev) => prev ?? []);
-      });
+      .catch(() => {});
     return () => {
       active = false;
     };
@@ -308,15 +322,41 @@ export function PublicStatusPage() {
     }));
   }, [allFailureEvents, eventsShown, t]);
 
-  const down = filtered
-    ? (visibleMonitors ?? []).filter((m) => m.status === 'down').length
-    : (status?.downMonitors ?? 0);
+  // null = not known yet or the request failed. `?? 0` here once turned "the
+  // API did not answer" into "nothing is down".
+  const down: number | null = filtered
+    ? visibleMonitors === null
+      ? null
+      : visibleMonitors.filter((m) => m.status === 'down').length
+    : status
+      ? status.downMonitors
+      : null;
   // Announced maintenance is still unavailability. A verdict of "all systems
   // online" next to a service that is down for maintenance would be false -
   // the visitor gets an amber verdict naming the maintenance instead.
   const inMaintenance = (visibleMonitors ?? []).filter((m) => m.status === 'maintenance').length;
+  // Degraded, an agent gone silent, or a state the page has no word for (never
+  // reported yet): not an outage, but not "all online" either.
+  const partial = (visibleMonitors ?? []).filter(
+    (m) => m.status === 'warning' || m.agentSilent === true || !NAMED_STATES.has(m.status)
+  ).length;
   const online = visibleMonitors === null ? null : visibleMonitors.filter((m) => m.status === 'up').length;
-  const allGood = visibleMonitors !== null && (filtered || status != null) && down === 0 && inMaintenance === 0;
+  // The latest answer failed: whatever the last known list says, the page
+  // cannot vouch for the present. The fleet summary counts only on the
+  // unfiltered page, where the down count comes from it.
+  const failed = monitorsError || (!filtered && error !== null);
+  const verdict: 'error' | 'loading' | 'down' | 'partial' | 'maintenance' | 'ok' = failed
+    ? 'error'
+    : visibleMonitors === null || down === null
+      ? 'loading'
+      : down > 0
+        ? 'down'
+        : partial > 0
+          ? 'partial'
+          : inMaintenance > 0
+            ? 'maintenance'
+            : 'ok';
+
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
@@ -370,52 +410,92 @@ export function PublicStatusPage() {
         </Card>
       )}
 
-      {/* The headline verdict. `null` while loading is not "everything is fine" -
-          an unknown state must not read as a green light. */}
+      {/* The headline verdict, in strict precedence: a failed request, then an
+          outage, then a partial problem, then maintenance, and only then all
+          online. An unknown state must never read as a green light. */}
       <Card
         className={cn(
           'flex flex-wrap items-center gap-3 p-5',
-          allGood
+          verdict === 'ok'
             ? 'border-up/30 bg-up/5'
-            : down > 0
+            : verdict === 'down'
               ? 'border-down/30 bg-down/5'
-              : inMaintenance > 0
+              : verdict === 'partial' || verdict === 'maintenance'
                 ? 'border-warning/30 bg-warning/5'
-                : ''
+                : verdict === 'error'
+                  ? 'bg-muted/40'
+                  : ''
         )}
       >
-        {allGood ? (
+        {verdict === 'ok' ? (
           <CheckCircle2 className="text-up size-6 shrink-0" />
-        ) : down === 0 && inMaintenance > 0 ? (
+        ) : verdict === 'maintenance' ? (
           <Wrench className="text-warning size-6 shrink-0" />
+        ) : verdict === 'error' ? (
+          <CloudOff className="text-muted-foreground size-6 shrink-0" />
         ) : (
-          <Activity className="text-muted-foreground size-6 shrink-0" />
+          <Activity
+            className={cn(
+              'size-6 shrink-0',
+              verdict === 'down' ? 'text-down' : verdict === 'partial' ? 'text-warning' : 'text-muted-foreground'
+            )}
+          />
         )}
-        <div className="min-w-0">
-          <p className="text-base font-bold">
-            {status == null && monitors == null
-              ? t('public.loading', 'Zjišťuji stav…')
-              : down > 0
-                ? t('public.degraded', { count: down }, `${down} služeb mimo provoz`)
-                : inMaintenance > 0
-                  ? t('public.in_maintenance', { count: inMaintenance }, `${inMaintenance} služeb v plánované údržbě`)
-                  : t('public.all_ok', 'Všechny systémy jsou online')}
+        <div className="min-w-0 flex-1">
+          <p className="text-base font-bold" role={verdict === 'error' ? 'alert' : undefined}>
+            {verdict === 'error'
+              ? t('public.state_unknown', 'Stav se nepodařilo zjistit')
+              : verdict === 'loading'
+                ? t('public.loading', 'Zjišťuji stav…')
+                : verdict === 'down'
+                  ? t('public.degraded', { count: down ?? 0 }, `${down} služeb mimo provoz`)
+                  : verdict === 'partial'
+                    ? t('public.partial', 'Provoz je částečně omezen')
+                    : verdict === 'maintenance'
+                      ? t(
+                          'public.in_maintenance',
+                          { count: inMaintenance },
+                          `${inMaintenance} služeb v plánované údržbě`
+                        )
+                      : t('public.all_ok', 'Všechny systémy jsou online')}
           </p>
-          {error && (
-            <p className="text-muted-foreground text-xs">{t('public.load_error', 'Data se nepodařilo načíst.')}</p>
+          {verdict === 'partial' && (
+            <p className="text-muted-foreground text-xs">
+              {t('public.partial_desc', { count: partial }, `${partial} služeb hlásí zhoršení nebo neznámý stav`)}
+            </p>
+          )}
+          {verdict === 'error' && (
+            <p className="text-muted-foreground text-xs">
+              {monitors !== null
+                ? t('public.state_unknown_stale', 'Níže je poslední známý stav. Další pokus proběhne za minutu.')
+                : t('public.load_error', 'Data se nepodařilo načíst.')}
+            </p>
           )}
         </div>
+        {verdict === 'error' && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setRefreshTick((n) => n + 1);
+              reloadStatus();
+            }}
+          >
+            {t('common.retry', 'Zkusit znovu')}
+          </Button>
+        )}
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {/* "Online 6" next to "Agents online 6/6" read like the same thing twice and
             "agent" is internal jargon - the fourth tile now says from how many
             PLACES measurements run, which actually tells the visitor something. */}
-        <Stat label={t('public.stat_online', 'Online')} value={online} tone="up" />
+        {/* A green dash still reads as "fine"; unknown stays neutral. */}
+        <Stat label={t('public.stat_online', 'Online')} value={online} tone={online !== null ? 'up' : undefined} />
         <Stat
           label={t('public.stat_down', 'Mimo provoz')}
-          value={filtered ? down : status ? down : null}
-          tone={down > 0 ? 'down' : undefined}
+          value={down}
+          tone={down !== null && down > 0 ? 'down' : undefined}
         />
         <Stat label={t('public.stat_uptime', 'Dostupnost 30 dní')} value={status?.uptimePercent ?? null} suffix=" %" />
         <Stat label={t('public.stat_regions', 'Míst měření')} value={regions === null ? null : regions.length} />
@@ -481,7 +561,11 @@ export function PublicStatusPage() {
       })()}
 
       {monitors === null ? (
-        <LoadingState label={t('public.loading_services', 'Načítám služby…')} />
+        monitorsError ? (
+          <ErrorState message={t('public.services_failed', 'Seznam služeb se nepodařilo načíst.')} />
+        ) : (
+          <LoadingState label={t('public.loading_services', 'Načítám služby…')} />
+        )
       ) : (
         categories.map(([category, items]) => (
           <Card key={category} className="space-y-1 p-5">

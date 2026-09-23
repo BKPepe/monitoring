@@ -154,10 +154,12 @@ export function HealthDonut({
             <>
               <span className={cn('size-2.5 shrink-0 rounded-sm', dotClass[arc.variant])} />
               <span className={cn(href ? 'text-foreground' : 'text-muted-foreground')}>{arc.label}</span>
-              <span className="tabular-nums ml-auto font-medium">{arc.value}</span>
+              {/* Nothing counted = nothing known: "0 offline, 0.0 %" read as
+                  reassurance about a fleet nobody had measured (W1-A4). */}
+              <span className="tabular-nums ml-auto font-medium">{total === 0 ? '—' : arc.value}</span>
               {/* w-14: "100.0 %" wrapped onto two lines in the w-12 column. */}
               <span className="tabular-nums text-muted-foreground w-14 shrink-0 text-right text-xs whitespace-nowrap">
-                {(arc.fraction * 100).toFixed(1)} %
+                {total === 0 ? '—' : `${(arc.fraction * 100).toFixed(1)} %`}
               </span>
             </>
           );

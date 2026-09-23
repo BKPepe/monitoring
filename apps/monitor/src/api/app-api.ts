@@ -1,4 +1,5 @@
 import { STATUS_API } from './http-source';
+import { requestSessionRecheck } from './session-recheck';
 import type {
   OutgoingMessagePage,
   RouterRecommendationMuteResponse,
@@ -256,7 +257,17 @@ export const appApi = {
     csrfToken = null;
   },
 
-  getMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors').then((r) => r.monitors),
+  getMonitors: () =>
+    request<{ monitors: ApiMonitor[] }>('monitors').then((r) => {
+      // The public view strips every target to null; a signed-in view never
+      // does. A whole list without one means the server no longer sees this
+      // session, so the app asks who is signed in instead of showing the
+      // anonymous answer under a user's name (W1-A7).
+      if (Array.isArray(r.monitors) && r.monitors.length > 0 && r.monitors.every((m) => m.target === null)) {
+        requestSessionRecheck();
+      }
+      return r.monitors;
+    }),
 
   /** Archived monitors: read-only history, left out of every live list. */
   getArchivedMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors&archived=1').then((r) => r.monitors),

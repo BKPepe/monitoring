@@ -110,13 +110,18 @@ $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage
 // --- 3. config.php for the test instance ----------------------------------
 $config_path = $root . '/config.php';
 $config_backup = file_exists($config_path) ? file_get_contents($config_path) : null;
+// The X-BK-Test-DB-Down header points one request at a closed port on
+// 127.0.0.1: the database-down path is tested without stopping the shared
+// MySQL container other suites may be using. It exists only in this generated
+// file, never in a real config.php.
 file_put_contents($config_path, "<?php\n"
     . "ini_set('display_errors', 1);\n"
     . "error_reporting(E_ALL);\n"
     . "if (session_status() === PHP_SESSION_NONE && !headers_sent()) { @session_start(); }\n"
+    . "\$bk_test_db_down = isset(\$_SERVER['HTTP_X_BK_TEST_DB_DOWN']);\n"
     . "define('DB_DRIVER', 'mysql');\n"
-    . "define('DB_HOST', " . var_export($db_host, true) . ");\n"
-    . "define('DB_PORT', {$db_port});\n"
+    . "define('DB_HOST', \$bk_test_db_down ? '127.0.0.1' : " . var_export($db_host, true) . ");\n"
+    . "define('DB_PORT', \$bk_test_db_down ? 1 : {$db_port});\n"
     . "define('DB_NAME', " . var_export($db_name, true) . ");\n"
     . "define('DB_USER', " . var_export($db_user, true) . ");\n"
     . "define('DB_PASS', " . var_export($db_pass, true) . ");\n"
@@ -4675,6 +4680,156 @@ check('a nechá ty uvnitř, včetně řádku minutu před hranicí', $ret_left, 
 check('kratší retence se řídí parametrem', bk_prune_notification_log($pdo, 1)['deleted'], 1);
 check_true('a nechá to, co je mladší než den', (int)$pdo->query("SELECT COUNT(*) FROM notification_log")->fetchColumn() === 1);
 $pdo->exec("DELETE FROM notification_log");
+
+/**
+ * One raw request that keeps the response headers.
+ *
+ * @return array{0: int, 1: string, 2: string} status, headers, body
+ */
+function bk_raw_request(string $url, array $headers = [], ?string $post_body = null): array {
+    $ch = curl_init($url);
+    $opts = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_TIMEOUT => 15,
+    ];
+    if ($post_body !== null) {
+        $opts[CURLOPT_POST] = true;
+        $opts[CURLOPT_POSTFIELDS] = $post_body;
+    }
+    curl_setopt_array($ch, $opts);
+    $raw = (string)curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $size = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    return [$code, substr($raw, 0, $size), substr($raw, $size)];
+}
+
+// =======================================================================
+// A failed query is a 5xx JSON error, never 200 with an empty list (W1-A2).
+//
+// Catch blocks answered `monitors: []`, `incidents: []`, `series: {}` with a
+// 200, and every reader turned that into "all online", "no outages" or
+// "nothing in the database" exactly when nothing was known.
+// =======================================================================
+
+// 1. Statically: no catch block in api.php echoes a body without an error
+//    status. A catch may log, rethrow, fall back to null or go on - but when
+//    it answers, it answers with 4xx/5xx (bk_api_fail or http_response_code).
+$a2_tokens = token_get_all((string)file_get_contents($root . '/api.php'));
+$a2_bad = [];
+$a2_count = 0;
+for ($i = 0, $n = count($a2_tokens); $i < $n; $i++) {
+    if (!is_array($a2_tokens[$i]) || $a2_tokens[$i][0] !== T_CATCH) {
+        continue;
+    }
+    $a2_count++;
+    $a2_line = $a2_tokens[$i][2];
+    $j = $i;
+    while ($j < $n && $a2_tokens[$j] !== '{') {
+        $j++;
+    }
+    $depth = 0;
+    $body = '';
+    for ($k = $j; $k < $n; $k++) {
+        $t = $a2_tokens[$k];
+        if (is_array($t) && in_array($t[0], [T_COMMENT, T_DOC_COMMENT], true)) {
+            continue;
+        }
+        if ($t === '{' || (is_array($t) && in_array($t[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true))) {
+            $depth++;
+        } elseif ($t === '}' && --$depth === 0) {
+            break;
+        }
+        $body .= is_array($t) ? $t[1] : $t;
+    }
+    $answers = (bool)preg_match('/\b(echo|print)\b/', $body);
+    $error_status = (bool)preg_match('/bk_api_fail\s*\(|http_response_code\s*\([^;]*\b[45]\d\d\b/', $body);
+    if ($answers && !$error_status) {
+        $a2_bad[] = 'api.php:' . $a2_line;
+    }
+    if (trim($body, " \t\n\r{") === '') {
+        // An empty catch hides the failure from everyone, the log included.
+        $a2_bad[] = 'api.php:' . $a2_line . ' (prázdný catch)';
+    }
+}
+check_true('api.php má bloky catch ke kontrole', $a2_count > 50);
+check('žádný catch v api.php neodpovídá úspěchem ani nemlčí', $a2_bad, []);
+
+// 2. For real: the two tables almost every read touches disappear for a
+//    moment, and each list endpoint must say it failed.
+$pdo->exec("RENAME TABLE monitor_logs TO monitor_logs_a2, vps_metrics TO vps_metrics_a2");
+try {
+    $a2_actions = [
+        'monitors' => 'monitors',
+        'incidents' => 'incidents',
+        'daily_uptime&days=7' => 'series',
+        'uptime_windows' => 'windows',
+        'sla_report&days=30' => 'monitors',
+        'audit_logs&limit=5' => 'logs',
+        'public_status' => 'status',
+        'metric_series&monitor_id=1&metric=response_time&period=24h' => 'points',
+        'metric_series_batch&monitor_id=1&period=24h' => 'series',
+        'metric_heatmap&monitor_id=1&metric=response_time&days=7' => 'days',
+        'metrics_history&monitor_id=2&period=24h' => 'labels',
+        'websites_overview' => 'monitors',
+    ];
+    // The overview is cached for ten minutes; a cached answer is not the read under test.
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'websites_overview_cache'");
+    foreach ($a2_actions as $a2_query => $a2_list_key) {
+        [$a2_code, $a2_json, $a2_raw] = api_get_auth($base, 'action=' . $a2_query, $cookie_jar);
+        $a2_label = explode('&', $a2_query)[0];
+        check_true("selhaný dotaz, {$a2_label}: 5xx (dostal {$a2_code})", $a2_code >= 500 && $a2_code < 600);
+        check_true("selhaný dotaz, {$a2_label}: JSON s kódem chyby", is_array($a2_json) && is_string($a2_json['error'] ?? null) && $a2_json['error'] !== '');
+        check_false("selhaný dotaz, {$a2_label}: žádný prázdný seznam vedle chyby", is_array($a2_json) && array_key_exists($a2_list_key, $a2_json));
+        check_false("selhaný dotaz, {$a2_label}: nic neprozradí", str_contains($a2_raw, 'SQLSTATE') || str_contains($a2_raw, 'monitor_logs'));
+    }
+} finally {
+    $pdo->exec("RENAME TABLE monitor_logs_a2 TO monitor_logs, vps_metrics_a2 TO vps_metrics");
+}
+[$a2_after] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check('po obnovení tabulek monitory zase odpovídají', $a2_after, 200);
+
+// =======================================================================
+// The database is down (W1-A6): 503 for everyone, JSON for programs, the
+// branded page for people, and not one word about why.
+//
+// It used to be a 500 HTML page with the PDO message in it - the database
+// host, the account and "config.php" - served to browsers, to the app and to
+// the agents alike. The X-BK-Test-DB-Down header points the request at a
+// closed port (see the generated config.php above).
+// =======================================================================
+$dd_down = ['X-BK-Test-DB-Down: 1'];
+$dd_leaks = ['SQLSTATE', 'config.php', 'PDO', 'Connection refused', $db_name, 'Warning', 'Fatal', 'Stack trace'];
+$dd_machine = [
+    'api.php?action=monitors' => [null, 'API: monitory'],
+    'api.php?action=public_status' => [null, 'API: veřejný stav'],
+    'agent_api.php' => ['{"agent_key":"x"}', 'příjem od agenta'],
+    'node_api.php?action=get_monitors' => [null, 'API vzdálených uzlů'],
+    'heartbeat.php?token=' . str_repeat('a', 48) => [null, 'heartbeat'],
+];
+foreach ($dd_machine as $dd_path => [$dd_post, $dd_label]) {
+    [$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/' . $dd_path, $dd_down, $dd_post);
+    check("databáze dole, {$dd_label}: 503", $dd_code, 503);
+    check_true("databáze dole, {$dd_label}: JSON", (bool)preg_match('/^content-type:\s*application\/json/mi', $dd_head));
+    check("databáze dole, {$dd_label}: kód chyby", json_decode($dd_body, true), ['error' => 'database_unavailable']);
+    check_true("databáze dole, {$dd_label}: Retry-After", (bool)preg_match('/^retry-after:\s*60\b/mi', $dd_head));
+}
+$dd_pages = ['index.php' => 'veřejná stránka', 'admin.php' => 'administrace', 'monitor.php?id=1' => 'detail monitoru'];
+foreach ($dd_pages as $dd_path => $dd_label) {
+    [$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/' . $dd_path, array_merge($dd_down, ['Accept: text/html']));
+    check("databáze dole, {$dd_label}: 503", $dd_code, 503);
+    check_true("databáze dole, {$dd_label}: HTML", (bool)preg_match('/^content-type:\s*text\/html/mi', $dd_head));
+    check_true("databáze dole, {$dd_label}: značková stránka 503", str_contains($dd_body, 'CHYBA 503') && str_contains($dd_body, 'Blood Kings Monitoring'));
+}
+// A program asking a page for JSON gets JSON, not HTML it cannot parse.
+[$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/widget.php?id=1', array_merge($dd_down, ['Accept: application/json']));
+check('databáze dole, stránka s Accept JSON: JSON', json_decode($dd_body, true), ['error' => 'database_unavailable']);
+foreach (array_merge(array_keys($dd_machine), array_keys($dd_pages)) as $dd_path) {
+    [, , $dd_body] = bk_raw_request($base . '/' . $dd_path, $dd_down);
+    $dd_found = array_values(array_filter($dd_leaks, fn (string $leak): bool => stripos($dd_body, $leak) !== false));
+    check("databáze dole, {$dd_path}: tělo nic neprozradí", $dd_found, []);
+}
 
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {

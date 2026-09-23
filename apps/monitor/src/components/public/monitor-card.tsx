@@ -41,6 +41,8 @@ export interface PublicMonitor {
   maintenanceDescription?: string | null;
   maintenanceStart?: string | null;
   maintenanceEnd?: string | null;
+  /** true = the agent has been silent past agent_offline_timeout; null = no verdict. */
+  agentSilent?: boolean | null;
 }
 
 /**

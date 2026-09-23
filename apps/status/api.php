@@ -45,6 +45,34 @@ require_once __DIR__ . '/lang.php';
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /**
+ * A read that failed: an error status and a code, never a success body.
+ *
+ * Many catch blocks here used to answer 200 with an empty list - `monitors: []`,
+ * `incidents: []`, `series: {}` - and every reader turned that into "all
+ * online", "no outages" or "nothing in the database" precisely when nothing
+ * was known. Now the status says it failed, `error` is a stable code the app
+ * can branch on, `message` is the sentence it shows (app-api.ts prefers it),
+ * and the exception text goes to the server log only: it can name tables,
+ * columns and the database host.
+ */
+function bk_api_fail(string $code, int $http = 500, ?Throwable $e = null, string $message = ''): never {
+    global $action;
+    if ($e !== null) {
+        error_log('[api.php action=' . (string)$action . '] ' . $code . ': ' . $e->getMessage());
+    }
+    if (!headers_sent()) {
+        http_response_code($http);
+        header('Cache-Control: no-store');
+    }
+    $body = ['error' => $code];
+    if ($message !== '') {
+        $body['message'] = $message;
+    }
+    echo json_encode($body, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
  * Release the session lock for endpoints that only read from it.
  *
  * config.php calls session_start() on every request and PHP holds an exclusive
@@ -377,10 +405,10 @@ if ($action === 'monitors') {
                 'collectionIssues' => $is_admin ? bk_get_collection_issues($r, $details, $agent_offline_secs) : [],
             ];
         }
-    } catch (Exception $e) {
-        error_log('[api.php action=monitors] Base query failed: ' . $e->getMessage());
-        echo json_encode(['monitors' => []], JSON_UNESCAPED_UNICODE);
-        exit;
+    } catch (Throwable $e) {
+        // An empty list here read as "no monitors" on the public page and as
+        // "all online" on the dashboard.
+        bk_api_fail('monitors_unavailable', 500, $e, 'Seznam monitorů se nepodařilo načíst.');
     }
 
     // Configuration fields (may contain internals like the ServerQuery user,
@@ -638,9 +666,9 @@ if ($action === 'save_monitor') {
             $new_id = (int)$pdo->lastInsertId();
             echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // The PDO text named tables and columns; it goes to the log only.
+        bk_api_fail('save_monitor_failed', 500, $e, 'Monitor se nepodařilo uložit.');
     }
     exit;
 }
@@ -735,9 +763,8 @@ if ($action === 'delete_monitor') {
             $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
             $stmt->execute([$del_id]);
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
-        } catch (Exception $e) {
-            http_response_code(500);
-            echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            bk_api_fail('delete_monitor_failed', 500, $e, 'Monitor se nepodařilo smazat.');
         }
     } else {
         http_response_code(400);
@@ -971,7 +998,8 @@ if ($action === 'discovered_services') {
         usort($services, fn($a, $b) => $b['confidence'] <=> $a['confidence']);
         echo json_encode(['services' => $services], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['services' => []], JSON_UNESCAPED_UNICODE);
+        // [] read as "the agent found nothing to import".
+        bk_api_fail('discovered_services_unavailable', 500, $e, 'Nalezené služby se nepodařilo načíst.');
     }
     exit;
 }
@@ -1091,9 +1119,8 @@ if ($action === 'import_discovered_service') {
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
         bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
         echo json_encode(['success' => true, 'id' => $new_id, 'assetId' => $discovered_asset_id], JSON_UNESCAPED_UNICODE);
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_fail('import_failed', 500, $e, 'Službu se nepodařilo importovat.');
     }
     exit;
 }
@@ -1152,8 +1179,10 @@ if ($action === 'upload_logo') {
         bk_audit_log($pdo, 'setting_changed', 'custom_logo_url (upload loga, ' . strtoupper($ext) . ', ' . round($f['size'] / 1024) . ' kB)');
         echo json_encode(['success' => true, 'url' => $url], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Logo se nepodařilo uložit: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        // Only the one sentence this action throws itself is shown; a PDO or
+        // filesystem message would name server paths.
+        $logo_why = $e instanceof RuntimeException ? ' ' . $e->getMessage() : '';
+        bk_api_fail('upload_logo_failed', 500, $e, 'Logo se nepodařilo uložit.' . $logo_why);
     }
     exit;
 }
@@ -1303,7 +1332,8 @@ if ($action === 'alerts_read_state') {
         $stmt->execute([$uid]);
         echo json_encode(['readUpToId' => (int)$stmt->fetchColumn()], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['readUpToId' => 0], JSON_UNESCAPED_UNICODE);
+        // 0 turned every alert back to unread, and a failed POST looked saved.
+        bk_api_fail('alerts_read_state_unavailable', 500, $e, 'Stav přečtených upozornění se nepodařilo načíst ani uložit.');
     }
     exit;
 }
@@ -1428,6 +1458,7 @@ if ($action === 'dashboard_layout') {
             }
         } catch (Throwable $e) {
             // Bez per-stroj dlazdic se katalog jen zkrati.
+            error_log('[api.php action=' . $action . '] per-machine tiles skipped: ' . $e->getMessage());
         }
 
         $saved = [];
@@ -1697,8 +1728,8 @@ if ($action === 'process_top') {
             'processes' => $rows,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        error_log('[api.php action=process_top] ' . $e->getMessage());
-        echo json_encode(['enabled' => true, 'processes' => [], 'error' => 'Historii procesů se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        // A 200 with processes: [] next to the error read as "nothing ran".
+        bk_api_fail('process_top_unavailable', 500, $e, 'Historii procesů se nepodařilo načíst.');
     }
     exit;
 }
@@ -1749,8 +1780,8 @@ if ($action === 'interface_traffic_daily') {
         usort($out, fn($a, $b) => $b['total'] <=> $a['total']);
         echo json_encode(['interfaces' => $out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        error_log('[api.php action=interface_traffic_daily] ' . $e->getMessage());
-        echo json_encode(['interfaces' => [], 'error' => 'Denní provoz se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        // interfaces: [] with a 200 is "no traffic", which a failed read is not.
+        bk_api_fail('interface_traffic_unavailable', 500, $e, 'Denní provoz se nepodařilo načíst.');
     }
     exit;
 }
@@ -1980,10 +2011,11 @@ if ($action === 'save_settings') {
 
         $pdo->commit();
         echo json_encode(['success' => true, 'message' => 'Nastavení systému bylo úspěšně uloženo.'], JSON_UNESCAPED_UNICODE);
-    } catch (Exception $e) {
-        $pdo->rollBack();
-        http_response_code(500);
-        echo json_encode(['error' => 'Chyba při ukládání nastavení: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        bk_api_fail('save_settings_failed', 500, $e, 'Nastavení se nepodařilo uložit.');
     }
     exit;
 }
@@ -2199,8 +2231,9 @@ if ($action === 'events') {
             $status_change['errorMsg'] = bk_public_reason($status_change['errorMsg'], $ev_status_type);
         }
         echo json_encode(['events' => $events, 'statusChange' => $status_change], JSON_UNESCAPED_UNICODE);
-    } catch (Exception $e) {
-        echo json_encode(['events' => [], 'statusChange' => null], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // events: [] read as "nothing happened" on the timeline.
+        bk_api_fail('events_unavailable', 500, $e, 'Události se nepodařilo načíst.');
     }
     exit;
 }
@@ -2449,7 +2482,8 @@ if ($action === 'daily_uptime') {
         // frontend indexes into it by id.
         echo json_encode(['series' => (object)$series], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['series' => (object)[]], JSON_UNESCAPED_UNICODE);
+        // An empty series drew an empty 30-day strip where days of outage were.
+        bk_api_fail('daily_uptime_unavailable', 500, $e, 'Denní dostupnost se nepodařilo načíst.');
     }
     exit;
 }
@@ -2493,8 +2527,7 @@ if ($action === 'uptime_windows') {
         // the frontend indexes into it by monitor id.
         echo json_encode(['windows' => (object)$uw_out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Dostupnost se nepodařilo spočítat.'], JSON_UNESCAPED_UNICODE);
+        bk_api_fail('uptime_windows_unavailable', 500, $e, 'Dostupnost se nepodařilo spočítat.');
     }
     exit;
 }
@@ -2632,133 +2665,129 @@ if ($action === 'incidents') {
         // Outages of TARGET monitors that are down RIGHT NOW - takes the latest
         // 'down' row per currently unavailable monitor, not every historical down
         // row (that would show long-resolved outages as still ongoing).
-        try {
-            $stmt_logs = $pdo->prepare("
-                SELECT l.id, l.monitor_id, l.checked_at, l.error_message,
-                       m.name as monitor_name, m.target, m.type, m.last_status_change
-                FROM monitor_logs l
-                JOIN monitors m ON l.monitor_id = m.id
-                WHERE m.status = 'down' AND {$inc_scope}
-                  AND l.id = (SELECT MAX(l2.id) FROM monitor_logs l2 WHERE l2.monitor_id = l.monitor_id AND l2.status = 'down')
-                ORDER BY l.id DESC
-                LIMIT 50
-            ");
-            $stmt_logs->execute($inc_scope_params);
-            $log_rows = $stmt_logs->fetchAll();
+        // No inner catch any more: a failed read here used to leave the list
+        // empty, and the page said "no outages" during one. Every query of
+        // this action now fails the whole answer (the outer catch -> 500).
+        $stmt_logs = $pdo->prepare("
+            SELECT l.id, l.monitor_id, l.checked_at, l.error_message,
+                   m.name as monitor_name, m.target, m.type, m.last_status_change
+            FROM monitor_logs l
+            JOIN monitors m ON l.monitor_id = m.id
+            WHERE m.status = 'down' AND {$inc_scope}
+              AND l.id = (SELECT MAX(l2.id) FROM monitor_logs l2 WHERE l2.monitor_id = l.monitor_id AND l2.status = 'down')
+            ORDER BY l.id DESC
+            LIMIT 50
+        ");
+        $stmt_logs->execute($inc_scope_params);
+        $log_rows = $stmt_logs->fetchAll();
 
-            // Open DB incidents by monitor - a live outage links to them so it
-            // can be acknowledged/closed from the UI (the lifecycle creates them
-            // automatically on the transition to down).
-            $open_by_monitor = [];
-            try {
-                // monitor_id has to be SELECTed - the loop below indexes by it.
-                // Without it every open incident landed under key 0, so no
-                // monitor ever matched and "acknowledged by" and the incident
-                // id came out null for all of them: the Ack button was missing
-                // on exactly the incidents that had one.
-                $stmt_open = $pdo->query("
-                    SELECT id, monitor_id, acknowledged_by, acknowledged_at, escalated_at
-                    FROM incidents
-                    WHERE status != 'resolved' AND monitor_id IS NOT NULL
-                ");
-                foreach ($stmt_open->fetchAll() as $oi) {
-                    $open_by_monitor[(int)$oi['monitor_id']] = $oi;
-                }
-            } catch (Throwable $t) {}
+        // Open DB incidents by monitor - a live outage links to them so it
+        // can be acknowledged/closed from the UI (the lifecycle creates them
+        // automatically on the transition to down).
+        $open_by_monitor = [];
+        // monitor_id has to be SELECTed - the loop below indexes by it.
+        // Without it every open incident landed under key 0, so no
+        // monitor ever matched and "acknowledged by" and the incident
+        // id came out null for all of them: the Ack button was missing
+        // on exactly the incidents that had one.
+        $stmt_open = $pdo->query("
+            SELECT id, monitor_id, acknowledged_by, acknowledged_at, escalated_at
+            FROM incidents
+            WHERE status != 'resolved' AND monitor_id IS NOT NULL
+        ");
+        foreach ($stmt_open->fetchAll() as $oi) {
+            $open_by_monitor[(int)$oi['monitor_id']] = $oi;
+        }
 
-            foreach ($log_rows as $r) {
-                // When the outage STARTED, not when it was last confirmed. For an
-                // actively checked monitor cron writes a log every cycle, so the
-                // newest 'down' row is a few minutes old and the duration on the
-                // card reset with every check - an outage running since morning
-                // kept reporting "2 minutes". last_status_change is stamped once,
-                // on the transition to down. Rows from before that column existed
-                // fall back to the log.
-                $start_ts = !empty($r['last_status_change'])
-                    ? strtotime((string)$r['last_status_change'])
-                    : false;
-                if ($start_ts === false || $start_ts <= 0) {
-                    $start_ts = strtotime($r['checked_at']);
-                }
-                $open_inc = $open_by_monitor[(int)$r['monitor_id']] ?? null;
-                $incidents[] = [
-                    'id' => (int)$r['id'],
-                    'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
-                    'acknowledgedBy' => ($open_inc && !$inc_public) ? $open_inc['acknowledged_by'] : null,
-                    'acknowledgedAt' => ($open_inc && !empty($open_inc['acknowledged_at']))
-                        ? date('c', strtotime((string)$open_inc['acknowledged_at']))
-                        : null,
-                    // Escalation happened silently: cron stamps it and nobody
-                    // could see that an outage had already been escalated past
-                    // whoever was supposed to pick it up.
-                    'escalatedAt' => (!$inc_public && $open_inc && !empty($open_inc['escalated_at']))
-                        ? date('c', strtotime((string)$open_inc['escalated_at']))
-                        : null,
-                    'monitor_id' => (int)$r['monitor_id'],
-                    'monitor_name' => $r['monitor_name'],
-                    'target' => $inc_public ? null : $r['target'],
-                    'type' => strtoupper($r['type']),
-                    'status' => 'open',
-                    'severity' => 'down',
-                    'started_at' => date('d.m.Y H:i:s', $start_ts),
-                    'resolved_at' => null,
-                    'duration_text' => bk_duration_text(time() - $start_ts),
-                    'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: 'Cílový port neodpovídá',
-                ];
+        foreach ($log_rows as $r) {
+            // When the outage STARTED, not when it was last confirmed. For an
+            // actively checked monitor cron writes a log every cycle, so the
+            // newest 'down' row is a few minutes old and the duration on the
+            // card reset with every check - an outage running since morning
+            // kept reporting "2 minutes". last_status_change is stamped once,
+            // on the transition to down. Rows from before that column existed
+            // fall back to the log.
+            $start_ts = !empty($r['last_status_change'])
+                ? strtotime((string)$r['last_status_change'])
+                : false;
+            if ($start_ts === false || $start_ts <= 0) {
+                $start_ts = strtotime($r['checked_at']);
             }
-        } catch (Throwable $t) {}
+            $open_inc = $open_by_monitor[(int)$r['monitor_id']] ?? null;
+            $incidents[] = [
+                'id' => (int)$r['id'],
+                'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
+                'acknowledgedBy' => ($open_inc && !$inc_public) ? $open_inc['acknowledged_by'] : null,
+                'acknowledgedAt' => ($open_inc && !empty($open_inc['acknowledged_at']))
+                    ? date('c', strtotime((string)$open_inc['acknowledged_at']))
+                    : null,
+                // Escalation happened silently: cron stamps it and nobody
+                // could see that an outage had already been escalated past
+                // whoever was supposed to pick it up.
+                'escalatedAt' => (!$inc_public && $open_inc && !empty($open_inc['escalated_at']))
+                    ? date('c', strtotime((string)$open_inc['escalated_at']))
+                    : null,
+                'monitor_id' => (int)$r['monitor_id'],
+                'monitor_name' => $r['monitor_name'],
+                'target' => $inc_public ? null : $r['target'],
+                'type' => strtoupper($r['type']),
+                'status' => 'open',
+                'severity' => 'down',
+                'started_at' => date('d.m.Y H:i:s', $start_ts),
+                'resolved_at' => null,
+                'duration_text' => bk_duration_text(time() - $start_ts),
+                'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: 'Cílový port neodpovídá',
+            ];
+        }
 
         // Manually reported / global incidents (the `incidents` table - title/impact/status,
         // without a link to a specific monitor).
         $manual_incidents = [];
-        try {
-            $stmt_inc = $pdo->prepare("
-                SELECT id, title, impact, status, created_at, updated_at, resolved_at,
-                       monitor_id, acknowledged_by, acknowledged_at, postmortem
-                FROM incidents
-                WHERE {$inc_manual_where}
-                ORDER BY id DESC
-                LIMIT 50
-            ");
-            $stmt_inc->execute($inc_visible === null ? [] : $inc_m_params);
-            foreach ($stmt_inc->fetchAll() as $r) {
-                $start_ts = strtotime($r['created_at']);
-                $end_ts = $r['resolved_at'] ? strtotime($r['resolved_at']) : time();
-                $updates = [];
-                try {
-                    $stmt_upd = $pdo->prepare("SELECT status, message, created_at FROM incident_updates WHERE incident_id = ? ORDER BY id ASC");
-                    $stmt_upd->execute([(int)$r['id']]);
-                    foreach ($stmt_upd->fetchAll() as $u) {
-                        // The lifecycle stores the raw check failure and the incident
-                        // actions the operator's name; the public view gets neither.
-                        $updates[] = [
-                            'status' => $u['status'],
-                            'message' => $inc_public ? bk_public_incident_update($u['message']) : $u['message'],
-                            'at' => date('d.m.Y H:i:s', strtotime($u['created_at'])),
-                        ];
-                    }
-                } catch (Throwable $t) {}
-
-                $manual_incidents[] = [
-                    'id' => (int)$r['id'],
-                    'title' => $r['title'],
-                    'impact' => $r['impact'],
-                    'status' => $r['status'],
-                    'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
-                    'acknowledgedBy' => $inc_public ? null : $r['acknowledged_by'],
-                    'acknowledgedAt' => $r['acknowledged_at'] ? date('d.m.Y H:i:s', strtotime($r['acknowledged_at'])) : null,
-                    'postmortem' => $r['postmortem'],
-                    'createdAt' => date('d.m.Y H:i:s', $start_ts),
-                    'resolvedAt' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
-                    'durationText' => bk_duration_text($end_ts - $start_ts),
-                    'updates' => $updates,
+        $stmt_inc = $pdo->prepare("
+            SELECT id, title, impact, status, created_at, updated_at, resolved_at,
+                   monitor_id, acknowledged_by, acknowledged_at, postmortem
+            FROM incidents
+            WHERE {$inc_manual_where}
+            ORDER BY id DESC
+            LIMIT 50
+        ");
+        $stmt_inc->execute($inc_visible === null ? [] : $inc_m_params);
+        foreach ($stmt_inc->fetchAll() as $r) {
+            $start_ts = strtotime($r['created_at']);
+            $end_ts = $r['resolved_at'] ? strtotime($r['resolved_at']) : time();
+            $updates = [];
+            $stmt_upd = $pdo->prepare("SELECT status, message, created_at FROM incident_updates WHERE incident_id = ? ORDER BY id ASC");
+            $stmt_upd->execute([(int)$r['id']]);
+            foreach ($stmt_upd->fetchAll() as $u) {
+                // The lifecycle stores the raw check failure and the incident
+                // actions the operator's name; the public view gets neither.
+                $updates[] = [
+                    'status' => $u['status'],
+                    'message' => $inc_public ? bk_public_incident_update($u['message']) : $u['message'],
+                    'at' => date('d.m.Y H:i:s', strtotime($u['created_at'])),
                 ];
             }
-        } catch (Throwable $t) {}
+
+            $manual_incidents[] = [
+                'id' => (int)$r['id'],
+                'title' => $r['title'],
+                'impact' => $r['impact'],
+                'status' => $r['status'],
+                'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
+                'acknowledgedBy' => $inc_public ? null : $r['acknowledged_by'],
+                'acknowledgedAt' => $r['acknowledged_at'] ? date('d.m.Y H:i:s', strtotime($r['acknowledged_at'])) : null,
+                'postmortem' => $r['postmortem'],
+                'createdAt' => date('d.m.Y H:i:s', $start_ts),
+                'resolvedAt' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
+                'durationText' => bk_duration_text($end_ts - $start_ts),
+                'updates' => $updates,
+            ];
+        }
 
         echo json_encode(['incidents' => $incidents, 'manualIncidents' => $manual_incidents], JSON_UNESCAPED_UNICODE);
-    } catch (Exception $e) {
-        echo json_encode(['incidents' => [], 'manualIncidents' => []], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // Both lists empty was the green "no incidents" box.
+        bk_api_fail('incidents_unavailable', 500, $e, 'Incidenty se nepodařilo načíst.');
     }
     exit;
 }
@@ -2950,13 +2979,13 @@ if ($action === 'presets') {
         }
 
         // How many monitors use the preset - so a delete's impact is visible.
+        // No catch of its own: usedBy 0 after a failed read made deleting a
+        // preset that monitors rely on look harmless.
         $usage = [];
-        try {
-            $stmt_u = $pdo->query("SELECT preset_id, COUNT(*) AS c FROM monitors WHERE preset_id IS NOT NULL GROUP BY preset_id");
-            foreach ($stmt_u->fetchAll() as $u) {
-                $usage[(int)$u['preset_id']] = (int)$u['c'];
-            }
-        } catch (Throwable $e) {}
+        $stmt_u = $pdo->query("SELECT preset_id, COUNT(*) AS c FROM monitors WHERE preset_id IS NOT NULL GROUP BY preset_id");
+        foreach ($stmt_u->fetchAll() as $u) {
+            $usage[(int)$u['preset_id']] = (int)$u['c'];
+        }
         foreach ($presets as &$p) {
             $p['usedBy'] = $usage[$p['id']] ?? 0;
         }
@@ -3169,10 +3198,17 @@ if ($action === 'export_config') {
             $export['presets'] = $pdo->query("SELECT name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name")->fetchAll();
         } catch (Throwable $e) {
             // Stara DB bez tabulky presetu - export ostatniho ma stale smysl.
+            // null, not []: the file must not claim there were no presets.
+            error_log('[api.php action=export_config] presets skipped: ' . $e->getMessage());
+            $export['presets'] = null;
         }
         try {
             $export['statusPages'] = $pdo->query("SELECT title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title")->fetchAll();
         } catch (Throwable $e) {
+            // Same as presets: a backup that silently lacks the status pages
+            // would restore without them. null says "not exported".
+            error_log('[api.php action=export_config] status pages skipped: ' . $e->getMessage());
+            $export['statusPages'] = null;
         }
 
         // Nastaveni: vse krome tajemstvi. Radeji seznam zakazanych vzoru nez
@@ -3459,7 +3495,13 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
         $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
         $stmt_t->execute([$totp_uid]);
         // Codes without 2FA are a sign-in backdoor - they go with it.
-        try { $pdo->prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?")->execute([$totp_uid]); } catch (Throwable $e) {}
+        try {
+            $pdo->prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?")->execute([$totp_uid]);
+        } catch (Throwable $e) {
+            // 2FA is already off; codes that outlive it cannot sign anyone in,
+            // because the login checks them only while totp_enabled = 1.
+            error_log('[api.php action=totp_disable] recovery codes not deleted: ' . $e->getMessage());
+        }
         bk_audit_log($pdo, 'totp_disabled', '', 'user', $totp_uid);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -3735,6 +3777,7 @@ if ($action === 'regions') {
             if ($rg_visible === null) $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
         } catch (Throwable $e) {
             // Cache je optimalizace - kdyz se nezapise, odpoved stejne odejde.
+            error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
         }
         echo json_encode($rg_project($regions_payload), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -3836,6 +3879,7 @@ if ($action === 'websites_overview') {
             $stmt2->execute([json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE)]);
         } catch (Throwable $e) {
             // The cache is an optimisation - if it fails to store, the endpoint just computes more often.
+            error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
         }
         echo json_encode($wo_filter($data), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -4094,7 +4138,8 @@ if ($action === 'audit_logs') {
         }
         echo json_encode(['logs' => $logs], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['logs' => []], JSON_UNESCAPED_UNICODE);
+        // logs: [] read as "nothing happened".
+        bk_api_fail('audit_logs_unavailable', 500, $e, 'Protokol kontrol se nepodařilo načíst.');
     }
     exit;
 }
@@ -4262,7 +4307,8 @@ if ($action === 'metric_series') {
         }
         echo json_encode($series_payload, JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['points' => [], 'unit' => '', 'label' => 'Metrika', 'error' => 'Chyba při načítání metriky'], JSON_UNESCAPED_UNICODE);
+        // points: [] with a 200 was the chart's "no data in the database".
+        bk_api_fail('metric_series_unavailable', 500, $e, 'Metriku se nepodařilo načíst.');
     }
     exit;
 }
@@ -4357,8 +4403,7 @@ if ($action === 'metric_heatmap') {
 
         echo json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        error_log('[api] metric_heatmap selhal: ' . $e->getMessage());
-        echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Chyba při načítání heatmapy'], JSON_UNESCAPED_UNICODE);
+        bk_api_fail('metric_heatmap_unavailable', 500, $e, 'Heatmapu se nepodařilo načíst.');
     }
     exit;
 }
@@ -4493,8 +4538,7 @@ if ($action === 'metric_correlations') {
             'correlations' => array_slice($out, 0, $corr_top),
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        error_log('[api] metric_correlations selhal: ' . $e->getMessage());
-        echo json_encode(['correlations' => [], 'error' => 'Chyba při výpočtu korelací'], JSON_UNESCAPED_UNICODE);
+        bk_api_fail('metric_correlations_unavailable', 500, $e, 'Korelace se nepodařilo spočítat.');
     }
     exit;
 }
@@ -4847,7 +4891,8 @@ if ($action === 'metric_series_batch') {
 
         echo json_encode(['series' => $series], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['series' => [], 'error' => 'Chyba při načítání metrik'], JSON_UNESCAPED_UNICODE);
+        // series: [] with a 200 made every chart on the asset page say "no data".
+        bk_api_fail('metric_series_unavailable', 500, $e, 'Grafy se nepodařilo načíst.');
     }
     exit;
 }
@@ -4868,8 +4913,7 @@ if ($action === 'send_digest') {
             echo json_encode(['success' => false, 'message' => 'Odeslání digestu selhalo — zkontrolujte SMTP nastavení a e-mailové adresy administrátorů.'], JSON_UNESCAPED_UNICODE);
         }
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        bk_api_fail('send_digest_failed', 500, $e, 'Digest se nepodařilo odeslat.');
     }
     exit;
 }
@@ -4914,7 +4958,8 @@ if ($action === 'get_subscriptions') {
         }
         echo json_encode(['subscriptions' => $result], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        echo json_encode(['subscriptions' => []], JSON_UNESCAPED_UNICODE);
+        // [] read as "subscribed to nothing", and saving that form would say so.
+        bk_api_fail('subscriptions_unavailable', 500, $e, 'Odběry se nepodařilo načíst.');
     }
     exit;
 }
@@ -5172,8 +5217,8 @@ if ($action === 'users') {
             ];
         }
         echo json_encode(['users' => $users], JSON_UNESCAPED_UNICODE);
-    } catch (Exception $e) {
-        echo json_encode(['users' => []], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_fail('users_unavailable', 500, $e, 'Seznam uživatelů se nepodařilo načíst.');
     }
     exit;
 }
@@ -5265,7 +5310,10 @@ if ($action === 'metrics_history') {
                 $result["{$mk}_max"] = null;
             }
         }
-    } catch (Exception $e) { /* empty */ }
+    } catch (Throwable $e) {
+        // The zero averages of the empty $result above went out as measurements.
+        bk_api_fail('metrics_history_unavailable', 500, $e, 'Historii metrik se nepodařilo načíst.');
+    }
 
     echo json_encode($result, JSON_UNESCAPED_UNICODE);
     exit;
@@ -5425,6 +5473,7 @@ if ($action === 'public_status') {
     } catch (Throwable $e) {
         // Never return an invented "healthy" state on error - the client must see
         // that the infrastructure state could not be determined, not a false "all OK".
+        error_log('[api] public_status failed: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'Nepodařilo se zjistit stav infrastruktury.'], JSON_UNESCAPED_UNICODE);
     }
@@ -6614,6 +6663,9 @@ try {
             $response['minecraft']['version'] = $details['version'] ?? '';
         }
     }
-} catch (Exception $e) {}
+} catch (Throwable $e) {
+    // Every service "offline" was the answer to a failed read.
+    bk_api_fail('overview_unavailable', 500, $e, 'Přehled služeb se nepodařilo načíst.');
+}
 
 echo json_encode($response, JSON_UNESCAPED_UNICODE);

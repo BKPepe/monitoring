@@ -1,4 +1,11 @@
 import { getCsrfToken, setCsrfToken } from './app-api';
+import { requestSessionRecheck } from './session-recheck';
+
+/**
+ * Actions whose 401 is an answer about credentials (a wrong password, an
+ * expired e-mail link), not a sign that the signed-in session is gone.
+ */
+const AUTH_ACTIONS = /action=(session|login|logout|setup|set_password|forgot_password|totp_[a-z_]+)\b/;
 
 /**
  * Global fetch wrapper: every POST to api.php carries the session's CSRF
@@ -52,6 +59,13 @@ export function installCsrfFetch(): void {
       }
     }
 
-    return origFetch(input as RequestInfo, init);
+    const res = await origFetch(input as RequestInfo, init);
+    // Any api.php call answered 401 while the app thinks someone is signed in:
+    // the session expired or was deleted. Ask once who is signed in, so the
+    // shell goes to the login instead of rendering anonymous answers (W1-A7).
+    if (res.status === 401 && url.includes('/api.php') && !AUTH_ACTIONS.test(url)) {
+      requestSessionRecheck();
+    }
+    return res;
   };
 }

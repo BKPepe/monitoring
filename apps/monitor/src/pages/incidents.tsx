@@ -5,12 +5,15 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Plus, CheckCircle2, AlertTriangle, ArrowRight, Radio, History } from 'lucide-react';
 import { appApi } from '@/api/app-api';
-import { usePublicStatus } from '@/api/use-asset-charts';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { EventsHistoryTable } from '@/components/events-history-table';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { pluralForm } from '@/lib/plural';
+import { locationFreshness, PROBE_STALE_AFTER_MS, type ProbeRegion } from '@/lib/probe-locations';
+
+/** The window the measurement locations and their success rate cover. */
+const REGION_DAYS = 7;
 
 export function IncidentsPage() {
   const { t, lang } = useLanguage();
@@ -20,18 +23,18 @@ export function IncidentsPage() {
   // user sees the incidents of their own monitors and changes nothing.
   const isAdmin = session?.user?.role === 'admin';
   const [targetMonitors, setTargetMonitors] = useState<any[]>([]);
-  const [probingNodes, setProbingNodes] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showNewIncidentModal, setShowNewIncidentModal] = useState(false);
   const [incidentTitle, setIncidentTitle] = useState('');
   const [incidentDetail, setIncidentDetail] = useState('');
   const [affectedScope, setAffectedScope] = useState<string>('all');
-  const [manualIncidents, setManualIncidents] = useState<any[]>([]);
+  const [manualIncidents, setManualIncidents] = useState<any[] | null>(null);
   const [historyLimit, setHistoryLimit] = useState(5);
-  const [dbIncidents, setDbIncidents] = useState<any[]>([]);
+  // null = not loaded yet. The lists stay null after a failed first load, so
+  // "no outages" can only come from an answer that said so.
+  const [dbIncidents, setDbIncidents] = useState<any[] | null>(null);
+  const [incidentsError, setIncidentsError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const { data: publicData } = usePublicStatus();
   // The expanded incident (timeline + actions) and draft note texts.
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [noteText, setNoteText] = useState('');
@@ -61,14 +64,37 @@ export function IncidentsPage() {
     }
   };
 
+  // Measurement locations for the section at the bottom (W1-A3). null = not
+  // loaded yet; a failure is its own state, never an empty "all fine" list.
+  const [regions, setRegions] = useState<ProbeRegion[] | null>(null);
+  const [regionsCachedAt, setRegionsCachedAt] = useState<string | null>(null);
+  const [regionsError, setRegionsError] = useState(false);
+  const [regionsAttempt, setRegionsAttempt] = useState(0);
+  // "Now" for the "N min ago" labels, taken when the answer arrives: reading
+  // the clock during render is impure.
+  const [regionsAt, setRegionsAt] = useState(0);
+
   const loadIncidents = () => {
     fetch('/status/api.php?action=incidents', { credentials: 'include' })
-      .then((res) => res.json().catch(() => ({})))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data) => {
-        if (data && Array.isArray(data.incidents)) setDbIncidents(data.incidents);
-        if (data && Array.isArray(data.manualIncidents)) setManualIncidents(data.manualIncidents);
+        // Both lists or nothing: an answer without them (or one naming an
+        // error) is a failure, not "no outages".
+        if (
+          !data ||
+          !Array.isArray(data.incidents) ||
+          !Array.isArray(data.manualIncidents) ||
+          (typeof data.error === 'string' && data.error !== '')
+        ) {
+          throw new Error(typeof data?.error === 'string' && data.error ? data.error : 'invalid response');
+        }
+        setDbIncidents(data.incidents);
+        setManualIncidents(data.manualIncidents);
+        setIncidentsError(null);
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        setIncidentsError(e instanceof Error ? e.message : String(e));
+      });
   };
 
   useEffect(() => {
@@ -76,48 +102,47 @@ export function IncidentsPage() {
 
     loadIncidents();
 
+    // The monitors feed only the "affected service" picker of the new-incident form.
     appApi
       .getMonitors()
       .then((rows) => {
-        if (!active) return;
-        if (Array.isArray(rows) && rows.length > 0) {
-          const targets = rows.filter((m: any) => {
+        if (!active || !Array.isArray(rows)) return;
+        setTargetMonitors(
+          rows.filter((m: any) => {
             const type = (m.type || '').toLowerCase();
             return type !== 'node' && type !== 'probe';
-          });
-          const probes = rows.filter((m: any) => {
-            const type = (m.type || '').toLowerCase();
-            return type === 'node' || type === 'probe';
-          });
-
-          setTargetMonitors(targets);
-          if (probes.length > 0) setProbingNodes(probes);
-        } else {
-          setTargetMonitors([]);
-        }
+          })
+        );
       })
-      .catch(() => {
-        if (active) setTargetMonitors([]);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    if (publicData?.nodes) {
-      setProbingNodes(
-        publicData.nodes.map((node, i) => ({
-          id: i + 1,
-          name: node.name,
-          status: node.status === 'online' ? 'up' : 'down',
-          latencyMs: node.latencyMs,
-        }))
-      );
-    }
+      .catch(() => {});
 
     return () => {
       active = false;
     };
-  }, [publicData]);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/status/api.php?action=regions&days=${REGION_DAYS}`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => {
+        if (!active) return;
+        if (!data || !Array.isArray(data.regions)) {
+          setRegionsError(true);
+          return;
+        }
+        setRegions(data.regions);
+        setRegionsError(false);
+        setRegionsCachedAt(typeof data.cachedAt === 'string' ? data.cachedAt : null);
+        setRegionsAt(Date.now());
+      })
+      .catch(() => {
+        if (active) setRegionsError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [regionsAttempt]);
 
   // A resolved incident does not belong under "Ongoing outages".
   //
@@ -126,22 +151,25 @@ export function IncidentsPage() {
   // "Ongoing outages (0) - all systems healthy" with an outage from last month
   // marked "resolved" underneath it. You could not tell whether something is on
   // fire now or whether you are reading history.
-  const ongoingIncidents = manualIncidents.filter((inc) => inc.status !== 'resolved');
-  const resolvedIncidents = manualIncidents.filter((inc) => inc.status === 'resolved');
+  const incidentsLoaded = dbIncidents !== null && manualIncidents !== null;
+  const manualList = manualIncidents ?? [];
+  const liveOutages = dbIncidents ?? [];
+  const ongoingIncidents = manualList.filter((inc) => inc.status !== 'resolved');
+  const resolvedIncidents = manualList.filter((inc) => inc.status === 'resolved');
 
   // A live outage and the incident the lifecycle opened for it are one story.
   // Listed twice they looked like two outages, the count said 3 for one router
   // (the down monitor, its outage row and its incident), and the notes and
   // actions sat on the second card while the first had only "acknowledge".
-  const incidentById = new Map<number, any>(manualIncidents.map((inc) => [inc.id, inc]));
-  const linkedIncidentIds = new Set(dbIncidents.map((inc) => inc.incidentId).filter((id) => id != null));
+  const incidentById = new Map<number, any>(manualList.map((inc) => [inc.id, inc]));
+  const linkedIncidentIds = new Set(liveOutages.map((inc) => inc.incidentId).filter((id) => id != null));
   // Monitors that are down at this moment. A resolved incident of one of them is
   // history for the record only - the outage is still running above.
-  const downMonitorIds = new Set(dbIncidents.map((inc) => inc.monitor_id));
+  const downMonitorIds = new Set(liveOutages.map((inc) => inc.monitor_id));
   const standaloneIncidents = ongoingIncidents.filter((inc) => !linkedIncidentIds.has(inc.id));
 
   // The count in the heading must match what is listed below it.
-  const ongoingCount = dbIncidents.length + standaloneIncidents.length;
+  const ongoingCount = liveOutages.length + standaloneIncidents.length;
   const activeBadge = {
     one: t('incidents.active_badge_one', { count: ongoingCount }, `${ongoingCount} aktivní výpadek`),
     few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} aktivní výpadky`),
@@ -424,10 +452,26 @@ export function IncidentsPage() {
         </Card>
       )}
 
-      {loading ? (
-        <LoadingState label={t('incidents.loading', 'Načítám stav incidentů...')} />
+      {!incidentsLoaded ? (
+        incidentsError ? (
+          <ErrorState
+            message={t('incidents.load_failed', 'Incidenty se nepodařilo načíst. Stav výpadků teď není známý.')}
+            onRetry={loadIncidents}
+          />
+        ) : (
+          <LoadingState label={t('incidents.loading', 'Načítám stav incidentů...')} />
+        )
       ) : (
         <div className="space-y-6">
+          {/* A failed refresh keeps the last answer on screen, but says so and
+              withholds the all-clear below: it may be out of date. */}
+          {incidentsError && (
+            <ErrorState
+              tone="warning"
+              message={t('incidents.refresh_failed', 'Incidenty se nepodařilo obnovit. Níže je poslední načtený stav.')}
+              onRetry={loadIncidents}
+            />
+          )}
           {/* Section 1: Active target service outages */}
           <Card className="p-6 space-y-4 border-down/40">
             <div className="flex items-center justify-between border-b border-border pb-3">
@@ -437,24 +481,29 @@ export function IncidentsPage() {
                   {t('incidents.active_outages', 'Probíhající výpadky cílových služeb')} ({ongoingCount})
                 </h3>
               </div>
-              <Badge variant={ongoingCount > 0 ? 'down' : 'up'}>
-                {ongoingCount > 0 ? activeBadge : t('status.healthy', 'Všechny služby OK')}
-              </Badge>
+              {ongoingCount > 0 ? (
+                <Badge variant="down">{activeBadge}</Badge>
+              ) : (
+                !incidentsError && <Badge variant="up">{t('status.healthy', 'Všechny služby OK')}</Badge>
+              )}
             </div>
 
             {ongoingCount === 0 ? (
-              <div className="p-4 rounded-lg bg-up/10 border border-up/30 flex items-center gap-3">
-                <CheckCircle2 className="size-5 text-up shrink-0" />
-                <p className="text-xs text-up font-medium">
-                  {t(
-                    'incidents.all_ok',
-                    'Všechny sledované cílové monitory a servery (weby, Minecraft, TeamSpeak, routery) běží v pořádku bez výpadků.'
-                  )}
-                </p>
-              </div>
+              // The all-clear comes only from a fresh, successful answer.
+              !incidentsError && (
+                <div className="p-4 rounded-lg bg-up/10 border border-up/30 flex items-center gap-3">
+                  <CheckCircle2 className="size-5 text-up shrink-0" />
+                  <p className="text-xs text-up font-medium">
+                    {t(
+                      'incidents.all_ok',
+                      'Všechny sledované cílové monitory a servery (weby, Minecraft, TeamSpeak, routery) běží v pořádku bez výpadků.'
+                    )}
+                  </p>
+                </div>
+              )
             ) : (
               <div className="space-y-3">
-                {dbIncidents.map((inc) => {
+                {liveOutages.map((inc) => {
                   const linked = inc.incidentId != null ? incidentById.get(inc.incidentId) : undefined;
                   const expanded = linked != null && expandedId === linked.id;
                   return (
@@ -690,54 +739,104 @@ export function IncidentsPage() {
               )}
             </Card>
           )}
-
-          {/* Section 2: Probing nodes and running agents */}
-          <Card className="p-6 space-y-4">
-            <div className="flex items-center gap-2.5 border-b border-border pb-3">
-              <Radio className="size-5 text-primary" />
-              <div>
-                <h3 className="font-bold text-base">
-                  {t('incidents.probing_nodes', 'Stav měřících uzlů a agentů (Probing Infrastructure)')}
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {t(
-                    'incidents.probing_hint',
-                    'Tyto uzly pouze provádějí měření z různých geografických lokací a NEJSOU cílovými službami.'
-                  )}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {probingNodes.length === 0 ? (
-                <div className="col-span-full p-4 text-xs text-muted-foreground text-center">
-                  {t('incidents.probes_ok', 'Všechny testovací sondy pracují bez výpadků.')}
-                </div>
-              ) : (
-                probingNodes.map((node) => (
-                  <div
-                    key={node.id}
-                    className="p-3.5 rounded-lg bg-secondary/40 border border-border flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-semibold text-xs">{node.name}</p>
-                      <p className="text-2xs text-muted-foreground font-mono">
-                        {t('incidents.probe_latency', 'Latence sondy')}: {node.latencyMs ?? 12} ms
-                      </p>
-                    </div>
-                    <Badge variant={node.status === 'up' ? 'up' : 'down'}>
-                      {node.status === 'up'
-                        ? t('incidents.probe_ok', 'Sonda OK')
-                        : t('incidents.probe_offline', 'Sonda OFFLINE')}
-                    </Badge>
-                  </div>
-                ))
-              )}
-            </div>
-          </Card>
         </div>
       )}
+
+      {/* Where the checks come FROM (W1-A3). One row per place from
+          monitor_logs.checked_from, not the monitors of type node, and no
+          latency where nothing was measured. */}
+      <Card className="p-6 space-y-4">
+        <div className="flex items-center gap-2.5 border-b border-border pb-3">
+          <Radio className="size-5 text-primary" />
+          <div>
+            <h3 className="font-bold text-base">{t('incidents.locations_title', 'Místa měření')}</h3>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                'incidents.locations_hint',
+                { days: REGION_DAYS, min: PROBE_STALE_AFTER_MS / 60_000 },
+                `Odkud kontroly běží, za posledních ${REGION_DAYS} dní. Místo bez výsledku déle než ${PROBE_STALE_AFTER_MS / 60_000} min (dva intervaly kontrol) je označené jako odmlčené.`
+              )}
+            </p>
+          </div>
+        </div>
+
+        {regions === null ? (
+          regionsError ? (
+            <ErrorState
+              message={t('incidents.locations_failed', 'Místa měření se nepodařilo načíst.')}
+              onRetry={() => {
+                setRegionsError(false);
+                setRegionsAttempt((n) => n + 1);
+              }}
+            />
+          ) : (
+            <LoadingState size="inline" label={t('incidents.locations_loading', 'Načítám místa měření…')} />
+          )
+        ) : regions.length === 0 ? (
+          <p className="p-4 text-center text-xs text-muted-foreground">
+            {t(
+              'incidents.locations_empty',
+              { days: REGION_DAYS },
+              `Za posledních ${REGION_DAYS} dní nepřišel výsledek z žádného místa měření.`
+            )}
+          </p>
+        ) : (
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {regions.map((r) => {
+              const fresh = locationFreshness(r, regionsCachedAt, regionsAt);
+              return (
+                <li
+                  key={r.location ?? '—'}
+                  className="space-y-1.5 rounded-lg border border-border bg-secondary/40 p-3.5 text-xs"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="min-w-0 truncate font-semibold" title={r.location ?? undefined}>
+                      {r.location ?? t('incidents.location_unnamed', 'Místo neuvedeno')}
+                    </p>
+                    {fresh.stale !== null && (
+                      <Badge variant={fresh.stale ? 'warning' : 'up'}>
+                        {fresh.stale
+                          ? t('incidents.location_stale', 'Odmlčelo se')
+                          : t('incidents.location_active', 'Měří')}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-muted-foreground">
+                    {t('incidents.location_last', 'Poslední výsledek')}:{' '}
+                    <span className="text-foreground tabular-nums">
+                      {fresh.ageMin === null ? '—' : agoLabel(fresh.ageMin, t)}
+                    </span>
+                  </p>
+                  <p className="text-muted-foreground">
+                    {t('incidents.location_success', 'Úspěšnost')}:{' '}
+                    <span className="text-foreground tabular-nums">
+                      {r.successRate == null ? '—' : `${r.successRate} %`}
+                    </span>
+                    {' · '}
+                    {t('incidents.location_avg', 'Průměrná odezva')}:{' '}
+                    <span className="text-foreground tabular-nums">
+                      {r.avgResponseMs == null ? '—' : `${r.avgResponseMs} ms`}
+                    </span>
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
       <EventsHistoryTable />
     </div>
   );
+}
+
+/** "3 min" up to two hours, then hours, then days: minute precision stops meaning anything. */
+function agoLabel(
+  min: number,
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
+) {
+  if (min < 120) return t('incidents.ago_min', { n: min }, `před ${min} min`);
+  const h = Math.round(min / 60);
+  if (h < 48) return t('incidents.ago_h', { n: h }, `před ${h} h`);
+  const d = Math.round(h / 24);
+  return t('incidents.ago_d', { n: d }, `před ${d} d`);
 }

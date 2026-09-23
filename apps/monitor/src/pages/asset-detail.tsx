@@ -52,7 +52,7 @@ import { HeartbeatCard } from '@/components/heartbeat-card';
 import { StorageCard } from '@/components/storage-card';
 import { SpeedtestCard } from '@/components/speedtest-card';
 import { WanBottleneckCard } from '@/components/wan-bottleneck-card';
-import { LoadingState } from '@/components/ui/states';
+import { ErrorState, LoadingState } from '@/components/ui/states';
 import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
 import { LanPortMap } from '@/components/lan-port-map';
 import { WifiRadioList } from '@/components/wifi-radio-list';
@@ -167,6 +167,9 @@ export function AssetDetailPage() {
     [searchParams, setSearchParams]
   );
   const [loading, setLoading] = React.useState(true);
+  // The monitor list did not load. It used to fall through to "Zařízení
+  // nenalezeno ... v databázi", a failure dressed up as an answer (W1-A5).
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [events, setEvents] = React.useState<TimelineEvent[]>([]);
   /** The check that recorded the last status change, straight from the server. */
   const [statusChange, setStatusChange] = React.useState<{
@@ -203,11 +206,13 @@ export function AssetDetailPage() {
           : [];
         setAsset(match ? buildDynamicAsset(match, t, siblings) : null);
         setRawMonitor(match ?? null);
+        setLoadFailed(false);
       })
       .catch(() => {
         if (active) {
           setAsset(null);
           setRawMonitor(null);
+          setLoadFailed(true);
         }
       })
       .finally(() => {
@@ -370,6 +375,15 @@ export function AssetDetailPage() {
 
   if (loading) {
     return <LoadingState size="page" label={t('asset.loading', 'Načítám detail zařízení a diagnostické metriky…')} />;
+  }
+
+  if (!asset && loadFailed) {
+    return (
+      <ErrorState
+        message={t('asset.load_failed', 'Detail zařízení se nepodařilo načíst. Server neodpověděl, zkuste to znovu.')}
+        onRetry={() => setReloadToken((n) => n + 1)}
+      />
+    );
   }
 
   if (!asset) {
@@ -1159,6 +1173,7 @@ function OverviewTab({
           data={charts.data}
           error={charts.error}
           loading={charts.loading}
+          onRetry={charts.reload}
           range={range}
           events={events}
           assetId={assetId ?? asset.id}
@@ -2250,10 +2265,13 @@ function PerformanceCharts({
   monitorId,
   thresholds,
   hasTimeSeries = true,
+  onRetry,
 }: {
   data: ChartData[] | null;
   error: Error | null;
   loading: boolean;
+  /** Refetches after a failure; the error state offers it as "try again". */
+  onRetry?: () => void;
   range: TimeRange;
   events?: TimelineEvent[];
   /** For linking through to the metric detail (Level 3). */
@@ -2293,12 +2311,19 @@ function PerformanceCharts({
     return null;
   }, [rawData]);
 
+  // A failed request is never "no data": the empty copy below is reserved for
+  // a server that answered and had nothing measured.
   if (error) {
     return (
-      <Card className="grid place-items-center gap-1 p-10 text-center">
-        <p className="text-sm font-medium">{t('asset.charts_load_error', 'Grafy se nepodařilo načíst')}</p>
-        <p className="text-muted-foreground text-sm">{error.message}</p>
-      </Card>
+      <ErrorState
+        onRetry={onRetry}
+        message={
+          <>
+            <p>{t('asset.charts_load_error', 'Grafy se nepodařilo načíst')}</p>
+            <p className="mt-0.5 font-normal opacity-80">{error.message}</p>
+          </>
+        }
+      />
     );
   }
 
