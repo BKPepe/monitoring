@@ -41,7 +41,7 @@ import { DataSourceBanner } from '@/components/data-source-banner';
 import { CollectorHealthBanner } from '@/components/collector-health-banner';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { usePublicStatus } from '@/api/use-asset-charts';
-import { cn, formatMs, formatPercent, formatRelative, formatUptime } from '@/lib/utils';
+import { cn, formatMs, formatPercent, formatPercentValue, formatRelative, formatUptime } from '@/lib/utils';
 import { nestUnderAgents, processUsage } from '@/lib/monitor-grouping';
 import { buildNeedsAttention, metricSeverity, thresholdFor } from '@/lib/attention';
 import { isProbeMonitor } from '@/lib/monitor-type';
@@ -848,7 +848,7 @@ export function DashboardPage() {
         />
         <MetricTile
           label={t('dashboard.uptime_30d', 'Uptime (30 d)')}
-          value={uptimeKnown ? uptime.toFixed(2) : '—'}
+          value={uptimeKnown ? formatPercentValue(uptime, 2) : '—'}
           unit={uptimeKnown ? '%' : undefined}
           loading={uptimeLoading}
           icon={Activity}

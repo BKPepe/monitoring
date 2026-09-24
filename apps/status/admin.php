@@ -1466,7 +1466,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
         // dřív se počítaly jako 100 %, což uměle nafukovalo SLA nových assetů.
         $stmt_asset_sla = $pdo->query("
             SELECT m.asset_id,
-                   ROUND(AVG(CASE WHEN ml.total_count > 0 THEN (ml.up_count / ml.total_count) * 100 ELSE NULL END), 2) AS sla_pct
+                   AVG(CASE WHEN ml.total_count > 0 THEN (ml.up_count / ml.total_count) * 100 ELSE NULL END) AS sla_pct
             FROM monitors m
             LEFT JOIN (
                 SELECT monitor_id,
@@ -1480,7 +1480,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
         ");
         $asset_sla_map = [];
         foreach ($stmt_asset_sla->fetchAll() as $_sla_row) {
-            $asset_sla_map[(int)$_sla_row['asset_id']] = $_sla_row['sla_pct'] !== null ? (float)$_sla_row['sla_pct'] : null;
+            // Rounded here, not by ROUND() in SQL: 99.995 must read 99.99, not 100.00.
+            $asset_sla_map[(int)$_sla_row['asset_id']] = $_sla_row['sla_pct'] !== null ? bk_uptime_pct_round((float)$_sla_row['sla_pct'], 2) : null;
         }
         ?>
         <div class="admin-card">

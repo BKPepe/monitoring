@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { MapPin } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
-import { formatMs } from '@/lib/utils';
+import { formatMs, formatPercent } from '@/lib/utils';
 import { LoadingState } from '@/components/ui/states';
 
 interface Region {
@@ -105,7 +105,7 @@ export function RegionsPanel() {
                               : 'text-down'
                       }
                     >
-                      {r.successRate == null ? '—' : `${r.successRate.toFixed(2)} %`}
+                      {formatPercent(r.successRate, 2)}
                     </strong>
                   </span>
                   <span>

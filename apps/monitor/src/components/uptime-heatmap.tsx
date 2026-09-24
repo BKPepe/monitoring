@@ -1,5 +1,5 @@
 import { Link } from 'react-router';
-import { cn } from '@/lib/utils';
+import { cn, formatPercent } from '@/lib/utils';
 import type { DayStatus, UptimeHistoryRow } from '@/data/model';
 import { useLanguage } from '@/context/language-context';
 
@@ -74,10 +74,10 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                             <Link
                               to={`/infrastructure/${row.monitorId}`}
                               aria-label={`${row.name} · ${day.date} · ${statusLabel[day.status]}${
-                                day.uptimePct != null ? ` · ${day.uptimePct.toFixed(1)} %` : ''
+                                day.uptimePct != null ? ` · ${formatPercent(day.uptimePct, 1)}` : ''
                               }`}
                               title={`${day.date} · ${statusLabel[day.status]}${
-                                day.uptimePct != null ? ` · ${day.uptimePct.toFixed(1)} %` : ''
+                                day.uptimePct != null ? ` · ${formatPercent(day.uptimePct, 1)}` : ''
                               }`}
                               className={cn(
                                 'block h-8 min-w-[14px] rounded-[4px] transition-all hover:scale-125 hover:z-30 cursor-pointer shadow-sm',
@@ -109,7 +109,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                                           : 'bg-down/15 text-down'
                                     )}
                                   >
-                                    {day.uptimePct.toFixed(1)} % Uptime
+                                    {formatPercent(day.uptimePct, 1)} Uptime
                                   </span>
                                 ) : (
                                   <span className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-xs font-extrabold">

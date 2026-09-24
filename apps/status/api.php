@@ -2765,7 +2765,8 @@ if ($action === 'badge') {
                     $bdg_value = $bdg_lang === 'en' ? 'no data' : 'bez dat';
                 } else {
                     $bdg_state = $bdg_uptime < 95.0 ? 'down' : ($bdg_uptime < 99.0 ? 'warning' : 'up');
-                    $bdg_value = number_format($bdg_uptime, 2, '.', '') . ' %';
+                    // 99.999 (five seconds in 30 days) printed "100.00 %".
+                    $bdg_value = number_format(bk_uptime_pct_round($bdg_uptime, 2), 2, '.', '') . ' %';
                 }
             } else {
                 $bdg_state = in_array($bdg_row['status'], ['up', 'down', 'warning', 'maintenance'], true) ? $bdg_row['status'] : 'unknown';
@@ -3963,7 +3964,8 @@ if ($action === 'regions') {
                 'checks' => $checks,
                 'upChecks' => (int)$r['up_checks'],
                 'downChecks' => (int)$r['down_checks'],
-                'successRate' => $checks > 0 ? round(((int)$r['up_checks'] / $checks) * 100, 2) : null,
+                // One failed check in 20 000 is 99.995: never "100 %".
+                'successRate' => $checks > 0 ? bk_uptime_pct_round(((int)$r['up_checks'] / $checks) * 100, 2) : null,
                 // Average via NULLIF(...,0): a zero response is not a measurement.
                 'avgResponseMs' => $r['avg_response'] !== null ? round((float)$r['avg_response']) : null,
                 'monitors' => (int)$r['monitors'],
@@ -4292,8 +4294,10 @@ if ($action === 'sla_report') {
         // Average only over monitors with actually measured SLA; without a
         // single one the result is null, not an invented 100 %.
         $uptime_vals = array_filter(array_column($report, 'uptimePercent'), fn($v) => $v !== null);
+        // The mean of 99.999 and perfect months rounds to 100.0 at three
+        // decimals; below 100 stays below 100.
         $overall_uptime = count($uptime_vals) > 0
-            ? round(array_sum($uptime_vals) / count($uptime_vals), 3)
+            ? bk_uptime_pct_round(array_sum($uptime_vals) / count($uptime_vals), 3)
             : null;
         $total_outage = array_sum(array_column($report, 'outageMinutes'));
         $mttr_values = array_filter(array_column($report, 'mttrSec'), fn($v) => $v !== null);

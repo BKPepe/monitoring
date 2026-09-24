@@ -165,7 +165,8 @@ function ao_resolve_value($source, $details, $latest_metrics, $monitor, $pdo, $m
                     $s = $pdo->prepare("SELECT SUM(status='up')*100.0/COUNT(*) FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
                     $s->execute([$monitor_id]);
                     $v = $s->fetchColumn();
-                    return $v !== null ? round((float)$v, 1) : null;
+                    // One failed check in 2 000 must not read "100%".
+                    return $v !== null ? bk_uptime_pct_round((float)$v, 1) : null;
                 } catch (PDOException $e) { return null; }
             })(),
             default => null,

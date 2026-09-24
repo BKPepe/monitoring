@@ -29,6 +29,7 @@ import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
+import { formatPercent } from '@/lib/utils';
 
 const API_BASE = '/status/api.php';
 
@@ -319,7 +320,7 @@ export function ReportsPage() {
             <p
               className={`text-xl font-bold tabular-nums ${overallUptime == null ? 'text-muted-foreground' : overallUptime >= slaGoal ? 'text-up' : 'text-down'}`}
             >
-              {overallUptime != null ? `${overallUptime.toFixed(2)} %` : '—'}
+              {formatPercent(overallUptime, 2)}
             </p>
             <p className="text-3xs text-muted-foreground">
               {t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
@@ -455,7 +456,7 @@ export function ReportsPage() {
                         </span>
                       )}
                       <Badge variant={!measured ? 'paused' : isOk ? 'up' : 'down'} className="text-3xs">
-                        {measured ? `${(item.uptimePercent as number).toFixed(2)} %` : '—'}
+                        {formatPercent(item.uptimePercent, 2)}
                       </Badge>
                       {isExpanded ? (
                         <ChevronUp className="size-3.5 text-muted-foreground print:hidden" />

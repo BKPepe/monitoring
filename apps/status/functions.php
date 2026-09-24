@@ -11059,7 +11059,8 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         }
         $regions[] = [
             'name' => $r['checked_from'],
-            'uptime' => round(($r['up_count'] / $r['total_count']) * 100, 2),
+            // One failed check in 20 000 must not print "100%".
+            'uptime' => bk_uptime_pct_round(($r['up_count'] / $r['total_count']) * 100, 2),
             'avg_latency' => $r['avg_latency'] !== null ? (int)round($r['avg_latency']) : null,
         ];
     }
@@ -11090,7 +11091,10 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     // the best/worst split reads the outage seconds too, not only the rows.
     foreach ($all_monitor_stats as $i => $m) {
         $t = $dg_time[(int)$m['monitor_id']] ?? null;
-        $all_monitor_stats[$i]['uptime_pct'] = isset($t['pct']) ? round((float)$t['pct'], 2) : null;
+        // 99.999 at two decimals is 99.99, not 100 next to an outage - nor
+        // next to a failed check another location answered OK within the
+        // same second, which has no outage second of its own.
+        $all_monitor_stats[$i]['uptime_pct'] = isset($t['pct']) ? bk_uptime_pct_round((float)$t['pct'], 2, (int)$m['down_count'] > 0) : null;
         $all_monitor_stats[$i]['outage_secs'] = (int)($t['outage'] ?? 0);
     }
 
@@ -11510,7 +11514,7 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
     $worst_day = null;
     foreach ($day_rows as $d) {
         if ($d['total_count'] <= 0) continue;
-        $uptime = round(($d['up_count'] / $d['total_count']) * 100, 2);
+        $uptime = bk_uptime_pct_round(($d['up_count'] / $d['total_count']) * 100, 2);
         $entry = ['date' => date('d.m.', strtotime($d['d'])), 'uptime' => $uptime];
         if ($best_day === null || $uptime > $best_day['uptime']) $best_day = $entry;
         if ($worst_day === null || $uptime < $worst_day['uptime']) $worst_day = $entry;

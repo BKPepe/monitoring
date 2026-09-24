@@ -5217,6 +5217,154 @@ try {
     }
 }
 
+// The rest of the places that print an availability. Five seconds of outage
+// in 30 days is 99.9998 % and one failed check among 20 001 is 99.995 %; the
+// badge, the widget, the legacy page, the monthly report, the SLA report's
+// mean, the regions, the asset SLA, the old monitor page and the e-mail
+// digest rounded both to 100. Only these two monitors are active meanwhile,
+// so the means and the digest contain nothing else.
+$fs_saved = $pdo->query("SELECT id, archived_at FROM monitors")->fetchAll();
+$pdo->exec("INSERT INTO assets (name) VALUES ('Stroj s pěti sekundami výpadku')");
+$fs_asset = (int)$pdo->lastInsertId();
+$fs_day = strtotime('-3 day', strtotime('today'));
+$fs_clear_caches = function () use ($pdo, $root): void {
+    @unlink($root . '/cache/dashboard_agg.json');
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions\\_cache\\_%'");
+};
+$fs_page = function (string $path, ?string $jar = null) use ($base): string {
+    $ch = curl_init($base . $path);
+    $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30];
+    if ($jar !== null) {
+        $opts[CURLOPT_COOKIEFILE] = $jar;
+        $opts[CURLOPT_COOKIEJAR] = $jar;
+    }
+    curl_setopt_array($ch, $opts);
+    $body = (string)curl_exec($ch);
+    curl_close($ch);
+    return $body;
+};
+try {
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked, asset_id) VALUES
+                   (189, 'Pět sekund výpadku', 'web', 'https://example.com/g', 'up', 'Test', 1, NOW(), ?),
+                   (190, 'Čistý web', 'web', 'https://example.com/h', 'up', 'Test', 1, NOW(), ?)")
+        ->execute([$fs_asset, $fs_asset]);
+    $fs_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                             VALUES (?, ?, ?, ?, 0, 0, 0, 0)");
+    for ($age = 1; $age <= 29; $age++) {
+        $fs_d = date('Y-m-d', strtotime("-{$age} day", strtotime('today')));
+        $fs_ins->execute([189, $fs_d, $age === 3 ? 86395 : 86400, $age === 3 ? 5 : 0]);
+        $fs_ins->execute([190, $fs_d, 86400, 0]);
+    }
+    // The same day in the check log: one failed check among 20 001, all from one location.
+    $fs_rows = [];
+    for ($i = 0; $i < 20001; $i++) {
+        $fs_rows[] = sprintf("(189, '%s', 100, '%s', 'Zkušební region')", $i === 10000 ? 'down' : 'up', date('Y-m-d H:i:s', $fs_day + 3600 + $i * 4));
+        if (count($fs_rows) === 2000 || $i === 20000) {
+            $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES " . implode(',', $fs_rows));
+            $fs_rows = [];
+        }
+    }
+    $fs_clear_caches();
+
+    [, , $fs_badge] = api_get($base, 'action=badge&monitor_id=189&type=uptime');
+    check_true('odznak dostupnosti: 99.99 %, ne 100.00 % (dostal ' . json_encode(preg_match('/[0-9.]+ %/', $fs_badge, $fs_m) ? $fs_m[0] : $fs_badge) . ')',
+        str_contains($fs_badge, '99.99 %') && !str_contains($fs_badge, '100.00 %'));
+
+    $fs_widget = $fs_page('/widget.php?id=189');
+    check_true('widget: 99,99 %, ne 100,00 %', str_contains($fs_widget, '99,99%') && !str_contains($fs_widget, '100,00%'));
+
+    $fs_index = $fs_page('/index.php');
+    $fs_card = preg_match('/id="monitor-item-189".*?(?=id="monitor-item-|$)/s', $fs_index, $fs_m) ? $fs_m[0] : '';
+    check_true('stará stránka: karta monitoru 99,99 %', str_contains($fs_card, '99,99%') && !str_contains($fs_card, '100,00%'));
+    check('stará stránka: průměr za 30 dní 99,99 %, ne 100,00 %',
+        preg_match('/class="stat-value [a-z]+">([^<]*)<\/div>\s*<div class="stat-label">Dostupnost 30 dní/u', $fs_index, $fs_m) ? $fs_m[1] : null, '99,99%');
+    check_true('stará stránka: SLA stroje 99.99 %, ne 100.00 %', str_contains($fs_index, '99.99% SLA') && !str_contains($fs_index, '100.00% SLA'));
+    check_true('stará stránka: den s výpadkem v pásu „dostupnost 99,99 %“',
+        str_contains($fs_index, 'dostupnost 99,99 %') && !str_contains($fs_index, 'dostupnost 100,00'));
+
+    $fs_month = '&year=' . date('Y', $fs_day) . '&month=' . date('n', $fs_day) . '&monitor_id=189';
+    $fs_csv = $fs_page('/report.php?format=csv' . $fs_month, $cookie_jar);
+    $fs_csv_row = str_getcsv((string)(explode("\n", trim($fs_csv))[1] ?? ''), ',', '"', '\\');
+    check('měsíční report CSV: 99.99, ne 100.00', $fs_csv_row[7] ?? null, '99.99');
+    $fs_report = $fs_page('/report.php?format=html' . $fs_month, $cookie_jar);
+    check_true('měsíční report: 99,99 %, ne 100,00 %', str_contains($fs_report, '99,99%') && !str_contains($fs_report, '100,00%'));
+
+    [, $fs_sla] = api_get_auth($base, 'action=sla_report&days=30', $cookie_jar);
+    check('SLA report: průměr 99,999, ne 100 (dostal ' . json_encode($fs_sla['overallUptime'] ?? null) . ')', $fs_sla['overallUptime'] ?? null, 99.999);
+
+    [, $fs_reg] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    $fs_region = array_values(array_filter($fs_reg['regions'] ?? [], fn ($r) => ($r['location'] ?? null) === 'Zkušební region'))[0] ?? [];
+    check('místa měření: jedna selhaná kontrola z 20 001 je 99,99 %, ne 100', $fs_region['successRate'] ?? null, 99.99);
+
+    $fs_mon = $fs_page('/monitor.php?id=189', $cookie_jar);
+    check_true('detail monitoru: karta Uptime 99.9 %, ne 100 %', str_contains($fs_mon, '>99.9%<') && !str_contains($fs_mon, '>100%<'));
+
+    $fs_admin = $fs_page('/admin.php', $cookie_jar);
+    $fs_asset_row = preg_match('/Stroj s pěti sekundami výpadku.*?<\/tr>/su', $fs_admin, $fs_m) ? $fs_m[0] : '';
+    check_true('administrace: SLA stroje 99.99 %, ne 100.00 % (řádek ' . ($fs_asset_row === '' ? 'chybí' : 'nalezen') . ')',
+        str_contains($fs_asset_row, '99.99%') && !str_contains($fs_asset_row, '100.00%'));
+
+    $fs_weekly = $fs_page('/admin.php?action=preview_weekly_digest', $cookie_jar);
+    check('týdenní digest: monitor s výpadkem 99.99 %, ne 100 %',
+        preg_match('/Pět sekund výpadku<\/td><td[^>]*>([^<]*)</u', $fs_weekly, $fs_m) ? $fs_m[1] : null, '99.99%');
+    check('týdenní digest: místo měření 99.99 %, ne 100 %',
+        preg_match('/Zkušební region<\/td><td[^>]*>([^<]*)</u', $fs_weekly, $fs_m) ? $fs_m[1] : null, '99.99%');
+    $fs_monthly = $fs_page('/admin.php?action=preview_monthly_digest', $cookie_jar);
+    check_true('měsíční digest: den s výpadkem 99.99 %, ne 100 %',
+        str_contains($fs_monthly, date('d.m.', $fs_day) . ' &middot; 99.99%') && !str_contains($fs_monthly, date('d.m.', $fs_day) . ' &middot; 100%'));
+    check_true('měsíční digest: místo měření 99.99 %, ne 100 %',
+        str_contains($fs_monthly, 'Zkušební region &middot; 99.99%') && !str_contains($fs_monthly, 'Zkušební region &middot; 100%'));
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (189, 190)");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (189, 190)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (189, 190)");
+    $pdo->prepare("DELETE FROM assets WHERE id = ?")->execute([$fs_asset]);
+    $fs_restore = $pdo->prepare("UPDATE monitors SET archived_at = ? WHERE id = ?");
+    foreach ($fs_saved as $fs_row) {
+        $fs_restore->execute([$fs_row['archived_at'], $fs_row['id']]);
+    }
+    $fs_clear_caches();
+}
+
+// A failed check another location answered OK within the same second has no
+// outage second of its own: the day's rollup says 0 s of down and the 30-day
+// figure is exactly 100. The strip marks that day red, so the legacy card and
+// the digest row next to it must not read 100 either.
+$zs_saved = $pdo->query("SELECT id, archived_at FROM monitors")->fetchAll();
+try {
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES
+                (192, 'Selhání v téže sekundě', 'web', 'https://example.com/zs', 'up', 'Test', 1, NOW())");
+    $zs_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_up, checks_down, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                             VALUES (192, ?, ?, ?, 86400, 0, 0, 0, 0, 0)");
+    for ($age = 1; $age <= 29; $age++) {
+        $zs_ins->execute([date('Y-m-d', strtotime("-{$age} day", strtotime('today'))), $age === 3 ? 3 : 1, $age === 3 ? 1 : 0]);
+    }
+    $zs_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES (192, ?, 100, ?, ?)");
+    foreach ([[3600, 'up', 'Praha'], [3660, 'down', 'Praha'], [3660, 'up', 'Frankfurt'], [3720, 'up', 'Praha']] as [$zs_off, $zs_st, $zs_loc]) {
+        $zs_log->execute([$zs_st, date('Y-m-d H:i:s', $fs_day + $zs_off), $zs_loc]);
+    }
+    $fs_clear_caches();
+
+    $zs_index = $fs_page('/index.php');
+    $zs_card = preg_match('/id="monitor-item-192".*?(?=id="monitor-item-|$)/s', $zs_index, $zs_m) ? $zs_m[0] : '';
+    check_true('stará stránka: selhání bez vlastní sekundy výpadku - karta 99,99 %, ne 100,00 %',
+        str_contains($zs_card, '99,99%') && !str_contains($zs_card, '100,00%'));
+    $zs_weekly = $fs_page('/admin.php?action=preview_weekly_digest', $cookie_jar);
+    check('týdenní digest: selhání bez vlastní sekundy výpadku 99.99 %, ne 100 %',
+        preg_match('/Selhání v téže sekundě<\/td><td[^>]*>([^<]*)</u', $zs_weekly, $zs_m) ? $zs_m[1] : null, '99.99%');
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = 192");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 192");
+    $pdo->exec("DELETE FROM monitors WHERE id = 192");
+    $zs_restore = $pdo->prepare("UPDATE monitors SET archived_at = ? WHERE id = ?");
+    foreach ($zs_saved as $zs_row) {
+        $zs_restore->execute([$zs_row['archived_at'], $zs_row['id']]);
+    }
+    $fs_clear_caches();
+}
+
 // =======================================================================
 // One overall verdict for public_status and the fleet badge (W1-B4).
 //

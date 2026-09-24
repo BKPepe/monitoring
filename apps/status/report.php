@@ -125,7 +125,7 @@ if ($format === 'csv') {
             $row['total_checks'],
             $row['up_checks'],
             $row['down_checks'],
-            $row['uptime_pct'] !== null ? number_format($row['uptime_pct'], 2, '.', '') : $no_data,
+            $row['uptime_pct'] !== null ? number_format(bk_uptime_pct_round($row['uptime_pct'], 2), 2, '.', '') : $no_data,
             $row['avg_resp_ms'] ?? $no_data,
             $row['sla_met'] === null ? $no_data : ($row['sla_met'] ? 'ANO' : 'NE'),
             $row['outage_min'] ?? $no_data,
@@ -209,7 +209,7 @@ $month_names = [1 => 'Leden', 2 => 'Únor', 3 => 'Březen', 4 => 'Duben', 5 => '
                         <td><?php echo $row['outage_min'] !== null ? htmlspecialchars(bk_format_duration_secs($row['outage_min'] * 60)) : '—'; ?></td>
                         <td><?php echo $row['avg_resp_ms'] !== null ? $row['avg_resp_ms'] . ' ms' : '—'; ?></td>
                         <td style="font-family: monospace; font-size: 0.95rem; font-weight: bold;">
-                            <?php echo $row['uptime_pct'] !== null ? number_format($row['uptime_pct'], 2, ',', ' ') . '%' : 'bez dat'; ?>
+                            <?php echo $row['uptime_pct'] !== null ? number_format(bk_uptime_pct_round($row['uptime_pct'], 2), 2, ',', ' ') . '%' : 'bez dat'; ?>
                         </td>
                         <td>
                             <?php if ($row['sla_met'] === null): ?>

@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card';
 import { ErrorState } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
+import { formatPercent } from '@/lib/utils';
 
 interface Windows {
   d1: number | null;
@@ -115,7 +116,7 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
                       : 'text-down tabular-nums text-lg font-bold'
               }
             >
-              {cell.value == null ? '—' : `${cell.value.toFixed(2)} %`}
+              {formatPercent(cell.value, 2)}
             </p>
           </div>
         ))}

@@ -179,14 +179,14 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     // the same number as the badge, the app and the SLA report. Counted in
     // rows, a router that was off for three days wrote one 'down' row and
     // this page still said 99.99 %.
-    $uptime_pct = [];
+    $uptime_raw = [];
     $upt_ids = array_map('intval', $pdo->query("SELECT id FROM monitors WHERE archived_at IS NULL")->fetchAll(PDO::FETCH_COLUMN));
     foreach (bk_uptime_day_windows($pdo, $upt_ids, [30]) as $upt_mid => $upt_win) {
         // A monitor with no measured second (only maintenance, or nothing
         // at all) stays out: isset() checks below print it as "bez dat"
         // and it does not count into averages, instead of an invented 100.00.
         if ($upt_win[30]['pct'] !== null) {
-            $uptime_pct[$upt_mid] = round($upt_win[30]['pct'], 2);
+            $uptime_raw[$upt_mid] = (float)$upt_win[30]['pct'];
         }
     }
 
@@ -222,8 +222,24 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
         // Bez měřených kontrol není denní uptime - klíč se nezaloží
         // (dřív se dosazovalo vymyšlených 100.00).
         if ((int)$row['total_count'] > 0) {
-            $history_uptime[$mid][$date] = round(($row['up_count'] / $row['total_count']) * 100, 2);
+            $history_uptime[$mid][$date] = bk_uptime_pct_round(($row['up_count'] / $row['total_count']) * 100, 2);
         }
+    }
+
+    // Rounded once the strip is known. Below 100 stays below 100 (99.999,
+    // five seconds in 30 days, is 99.99), and so does a red day in the strip:
+    // a failed check another location answered OK within the same second
+    // has no outage second of its own, which left the card at 100.00.
+    $uptime_pct = [];
+    foreach ($uptime_raw as $upt_mid => $upt_raw) {
+        $upt_failed = false;
+        foreach ($past_30_days as $upt_day) {
+            if (($history_data[$upt_mid][$upt_day] ?? null) === 'down') {
+                $upt_failed = true;
+                break;
+            }
+        }
+        $uptime_pct[$upt_mid] = bk_uptime_pct_round($upt_raw, 2, $upt_failed);
     }
 
     // Načtení posledních incidentů – pouze výpadky a zprávy při návratu (ne každý úspěšný ping)
@@ -298,7 +314,7 @@ if ($bk_public_ids !== null) {
 // 30 dní (nová instalace nebo mrtvý cron) - fabrikovat "100 %" by to
 // vydávalo za ověřený perfektní stav, který ve skutečnosti nikdo nezměřil.
 $avg_uptime_known = !empty($uptime_pct);
-$avg_uptime = $avg_uptime_known ? round(array_sum($uptime_pct) / count($uptime_pct), 2) : 0.0;
+$avg_uptime = $avg_uptime_known ? bk_uptime_pct_round(array_sum($uptime_pct) / count($uptime_pct), 2) : 0.0;
 
 $site_title = get_setting('site_title', 'Blood Kings');
 // Vlastní status stránka se hlásí svým názvem, ať návštěvník pozná, na co
@@ -701,7 +717,7 @@ $portal_url = trim(get_setting('portal_url'));
                                     }
                                 }
                                 $asset_sla_known = !empty($asset_sla_vals);
-                                $asset_sla = $asset_sla_known ? round(array_sum($asset_sla_vals) / count($asset_sla_vals), 2) : 0.0;
+                                $asset_sla = $asset_sla_known ? bk_uptime_pct_round(array_sum($asset_sla_vals) / count($asset_sla_vals), 2) : 0.0;
                                 $asset_sla_class = !$asset_sla_known ? 'nodata' : ($asset_sla >= 99 ? 'up' : ($asset_sla >= 95 ? 'warn' : 'down'));
                                 $asset_sla_display = $asset_sla_known ? number_format($asset_sla, 2) . '% SLA' : t('uptime_no_data');
                                 echo '<div class="asset-group" style="border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0.6rem; margin-bottom: 0.75rem;">';

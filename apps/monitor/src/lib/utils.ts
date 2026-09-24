@@ -20,9 +20,13 @@ export function formatMs(value: number | null | undefined): string {
  * into "100.00 %", so it stops one step short ("99.99 %") instead.
  */
 export function formatPercent(value: number | null | undefined, digits = 0): string {
-  if (value == null) return '—';
+  return value == null ? '—' : `${formatPercentValue(value, digits)} %`;
+}
+
+/** The number alone, for a place that prints the unit apart ("99.99" next to "%"). */
+export function formatPercentValue(value: number, digits = 0): string {
   const shown = value < 100 && Number(value.toFixed(digits)) >= 100 ? 100 - 10 ** -digits : value;
-  return `${shown.toFixed(digits)} %`;
+  return shown.toFixed(digits);
 }
 
 /**

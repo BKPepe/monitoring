@@ -8,6 +8,7 @@ import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { LoadingState, ErrorState } from '@/components/ui/states';
+import { formatPercent } from '@/lib/utils';
 
 interface WebMonitor {
   id: number;
@@ -209,7 +210,7 @@ export function WebsitesPage() {
             <Globe className="size-4 text-primary" /> {t('websites.current_uptime', 'Aktuální dostupnost webů')}
           </div>
           <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-            {overallUptimePct != null ? `${overallUptimePct.toFixed(1)} %` : '—'}
+            {formatPercent(overallUptimePct, 1)}
           </p>
           <p className="text-2xs text-muted-foreground">
             {t(
@@ -441,7 +442,7 @@ export function WebsitesPage() {
                         <div>
                           <span className="text-muted-foreground">{label}</span>
                           <p className={`font-semibold ${cls}`}>
-                            {value == null ? '—' : `${value.toFixed(value >= 100 ? 0 : 2)} %`}
+                            {value == null ? '—' : formatPercent(value, value >= 100 ? 0 : 2)}
                           </p>
                         </div>
                       );

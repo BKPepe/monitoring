@@ -71,7 +71,7 @@ if ($status === 'down') {
             </div>
         </div>
         <div class="stat">
-            <div class="val"><?php echo $uptime === null ? '—' : number_format($uptime, 2, ',', ' ') . '%'; ?></div>
+            <div class="val"><?php echo $uptime === null ? '—' : number_format(bk_uptime_pct_round($uptime, 2), 2, ',', ' ') . '%'; ?></div>
             <div class="label">30d Uptime</div>
         </div>
     </div>
