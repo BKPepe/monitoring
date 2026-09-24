@@ -7,24 +7,24 @@ import Layout from '../layouts/Layout.astro';
     <!-- Sidebar Doc Links -->
     <aside class="docs-sidebar">
       <div class="docs-sidebar-section">
-        <h4>Getting Started</h4>
+        <p class="sidebar-heading">Getting Started</p>
         <a href="#quickstart" class="sidebar-link active">Quick Start</a>
         <a href="#requirements" class="sidebar-link">Requirements</a>
         <a href="#architecture" class="sidebar-link">Architecture</a>
       </div>
       <div class="docs-sidebar-section">
-        <h4>Central Server</h4>
+        <p class="sidebar-heading">Central Server</p>
         <a href="#server-config" class="sidebar-link">Database Config</a>
         <a href="#server-env" class="sidebar-link">Environment Vars</a>
         <a href="#server-status" class="sidebar-link">Status Pages</a>
       </div>
       <div class="docs-sidebar-section">
-        <h4>Reliability</h4>
+        <p class="sidebar-heading">Reliability</p>
         <a href="#heartbeat" class="sidebar-link">Heartbeat Monitors</a>
         <a href="#watchdog" class="sidebar-link">Watchdog</a>
       </div>
       <div class="docs-sidebar-section">
-        <h4>Agents</h4>
+        <p class="sidebar-heading">Agents</p>
         <a href="#agent-install" class="sidebar-link">Agent Registration</a>
         <a href="#agent-config" class="sidebar-link">Interval Tweaks</a>
         <a href="#agent-trouble" class="sidebar-link">Troubleshooting</a>
@@ -32,14 +32,18 @@ import Layout from '../layouts/Layout.astro';
     </aside>
 
     <!-- Docs Content Area -->
-    <main class="docs-main-content">
+    <div class="docs-main-content">
+      <header class="docs-head">
+        <h1>Documentation</h1>
+        <p class="docs-intro">Install the server, add monitors and connect agents.</p>
+      </header>
       <!-- Section 1 -->
       <section id="quickstart" class="docs-section">
         <span class="badge badge-accent">Developer Guide</span>
-        <h1>Quick Start</h1>
-        <p>This guide helps you spin up a complete Blood Kings Monitoring server stack in under two minutes.</p>
+        <h2>Quick Start</h2>
+        <p>This guide takes you from an empty PHP host to a running Blood Kings Monitoring server.</p>
         
-        <h2>Step 1: Start Central Server</h2>
+        <h3>Step 1: Start Central Server</h3>
         <p>The server is plain PHP with a MySQL or MariaDB database - there is no image to pull. Download the code, fill in the database connection and import the schema:</p>
         <div class="docs-code-wrapper">
           <pre><code>git clone https://github.com/BKPepe/monitoring.git &amp;&amp; cd monitoring/apps/status
@@ -50,27 +54,27 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
         <div class="docs-code-wrapper">
           <pre><code>* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
         </div>
-        <p>Then open <code>/app/setup</code> on your domain and create the first administrator account.</p>
+        <p>The dashboard at <code>/app</code> is a separate front end: build it once with <code>npm ci &amp;&amp; npm run build:monitor</code> and upload <code>apps/monitor/dist/</code> to <code>public_html/app/</code>. Then open <code>/app/setup</code> on your domain and create the first administrator account.</p>
 
-        <h2>Step 2: Add Your First Monitor</h2>
-        <p>Log in to your admin panel and use the <strong>Add monitor</strong> button above the monitors table. You can track URLs (HTTPS), TCP ports, Minecraft/TeamSpeak/Discord servers, VPS host metrics, or <a href="#heartbeat">heartbeats</a> from jobs that report in on their own. Note: the admin panel UI is currently Czech-only - English admin translation is planned.</p>
+        <h3>Step 2: Add Your First Monitor</h3>
+        <p>Log in to your admin panel and use the <strong>Add monitor</strong> button above the monitors table. You can track URLs (HTTPS), TCP ports, Minecraft/TeamSpeak/Discord servers, VPS host metrics, or <a href="#heartbeat">heartbeats</a> from jobs that report in on their own. Note: the legacy PHP admin (<code>admin.php</code>) is mostly Czech; the <code>/app</code> dashboard is in English and Czech.</p>
       </section>
 
       <!-- Section 2 -->
       <section id="requirements" class="docs-section">
         <hr class="docs-divider" />
-        <h1>System Requirements</h1>
+        <h2>System Requirements</h2>
         <p>Blood Kings is built to run on lightweight hardware profiles (e.g. Raspberry Pis, micro cloud nodes).</p>
         
-        <h3>Central Server:</h3>
+        <h4>Central Server:</h4>
         <ul>
           <li><strong>CPU:</strong> 1 vCPU (x86_64 or ARM64)</li>
           <li><strong>Memory:</strong> 128 MB RAM (256 MB recommended)</li>
-          <li><strong>Storage:</strong> 50 MB application core + SQLite database history size</li>
-          <li><strong>Non-DockerLAMP:</strong> PHP 8.2+, Apache/Nginx, mod_rewrite config, and a MySQL/MariaDB daemon.</li>
+          <li><strong>Storage:</strong> the application plus a MySQL/MariaDB database that grows with your check history</li>
+          <li><strong>Software:</strong> PHP 8.2+ (CI runs 8.4), Apache or Nginx with URL rewriting, and MySQL or MariaDB. The server runs without Docker; only the Python agent has a Docker option.</li>
         </ul>
 
-        <h3>Remote Agent:</h3>
+        <h4>Remote Agent:</h4>
         <ul>
           <li><strong>OS:</strong> Linux (any system with Bash and Curl), Windows 10/11/Server, OpenWrt/Turris OS, or Raspberry Pi OS</li>
           <li><strong>Memory:</strong> Under 10 MB RAM footprint</li>
@@ -81,7 +85,7 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
       <!-- Section 3 -->
       <section id="architecture" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Architecture Overview</h1>
+        <h2>Architecture Overview</h2>
         <p>Blood Kings combines active pings (server-side polling) and passive telemetry reports (pushed from agents).</p>
         
         <div class="architecture-diagram card">
@@ -92,7 +96,7 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
           </div>
           <div class="arch-block highlight">
             <strong>Central Server</strong>
-            <span>(PHP / SQLite or MySQL)</span>
+            <span>(PHP / MySQL or MariaDB)</span>
             <span class="arrow">↓ Render Static API</span>
           </div>
           <div class="arch-block">
@@ -102,17 +106,17 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
         </div>
 
         <p>
-          <strong>Passive Telemetry (Agents):</strong> The agent daemon runs locally on monitored boxes. Every 60 seconds, it fetches system resource parameters (CPU, memory, storage loads) and reports them back to the central server via secure POST requests. This means you do not have to expose open incoming firewall ports on the monitored hosts.
+          <strong>Passive Telemetry (Agents):</strong> The agent is a script that cron (or the Task Scheduler) starts on the monitored machine: every minute on OpenWrt, every 5 minutes by default elsewhere. Each run reads system resources (CPU, memory, disks, network), reports them to the central server via secure POST requests. This means you do not have to expose open incoming firewall ports on the monitored hosts.
         </p>
         <p>
-          <strong>Active Probing (Pinger):</strong> The central server initiates cron runs to ping targets (HTTP/HTTPS, TCP connection checks, ICMP pings) directly from server threads.
+          <strong>Active Probing (Pinger):</strong> The central server&#39;s cron run checks targets directly: HTTP/HTTPS requests (with an optional keyword and certificate expiry) and TCP connection checks. There is no ICMP ping and no UDP check; a &quot;ping&quot; is a TCP connect.
         </p>
       </section>
 
       <!-- Central Server Sections -->
       <section id="server-config" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Central Server Database Config</h1>
+        <h2>Central Server Database Config</h2>
         <p>Blood Kings Monitoring connects to standard MySQL or MariaDB database servers using PDO. Configure your database details inside <code>status/config.php</code>:</p>
         <div class="docs-code-wrapper">
           <pre><code>define('DB_HOST', '127.0.0.1');
@@ -125,7 +129,7 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
 
       <section id="server-env" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Environment Variables & Tokens</h1>
+        <h2>Environment Variables & Tokens</h2>
         <p>Essential security keys can be configured directly in <code>config.php</code> or via environment variables:</p>
         <ul>
           <li><code>cron_key</code>: Secret key authorizing <code>cron.php</code> execution from external webhooks or timers.</li>
@@ -136,14 +140,14 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
 
       <section id="server-status" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Public Status Pages & Branding</h1>
+        <h2>Public Status Pages & Branding</h2>
         <p>Customize public status pages directly inside the Admin Panel (Settings -> Branding). You can upload a custom logo, set accent color themes, and configure 24h / 7d / 30d SLA aggregation caching.</p>
       </section>
 
       <!-- Agent Sections -->
       <section id="heartbeat" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Heartbeat Monitors</h1>
+        <h2>Heartbeat Monitors</h2>
         <p>Active checks only reach what is reachable over the network. A backup that runs at 3 AM and fails silently is invisible to them - there is nothing to ping. Heartbeat monitors invert the direction: the job reports in, and the monitor goes down when it stays silent.</p>
         <p>Create a monitor of type <strong>Heartbeat</strong>, set how often the job should report, then call the URL it gives you at the end of your job:</p>
         <div class="docs-code-wrapper">
@@ -159,7 +163,7 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
 
       <section id="watchdog" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Watchdog: who watches the collector</h1>
+        <h2>Watchdog: who watches the collector</h2>
         <p>Everything is collected by one cron job. If that job dies, the application does not crash - it keeps serving the last known states and looks perfectly healthy. Of all the ways monitoring can fail, this is the worst, because it never announces itself.</p>
         <p>The server therefore records every completed collection run and exposes it:</p>
         <div class="docs-code-wrapper">
@@ -175,7 +179,7 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
 
       <section id="agent-install" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Agent Registration & Setup</h1>
+        <h2>Agent Registration & Setup</h2>
         <p>Agents are self-contained scripts for Bash, Python, PowerShell and OpenWrt routers. The Bash and OpenWrt agents register themselves: pass the registration token from the admin settings and the address of your server's <code>agent_api.php</code>. The agent stores the key it receives in <code>agent.cfg</code> next to the script (<code>agent_openwrt.cfg</code> on a router).</p>
         <div class="docs-code-wrapper">
           <pre><code>./agent.sh --register YOUR_REGISTRATION_TOKEN https://bloodkings.eu/status/agent_api.php</code></pre>
@@ -185,13 +189,13 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
 
       <section id="agent-config" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Agent Intervals & Remote Actions</h1>
+        <h2>Agent Intervals & Remote Actions</h2>
         <p>Agents run from cron: every 5 minutes on servers, every minute on OpenWrt routers. For OpenWrt routers, opt-in HMAC-signed Remote Actions can be enabled by setting <code>REMOTE_ACTIONS_ENABLED=1</code> in the agent script.</p>
       </section>
 
       <section id="agent-trouble" class="docs-section">
         <hr class="docs-divider" />
-        <h1>Agent Troubleshooting</h1>
+        <h2>Agent Troubleshooting</h2>
         <p>If an agent stops reporting telemetry, verify outgoing HTTPS access to port 443, then run it by hand and read its log (it sits next to the script):</p>
         <div class="docs-code-wrapper">
           <pre><code># One run with the full trace, then the last lines of the log
@@ -199,14 +203,14 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
 tail -n 50 /opt/bk-agent/agent.log</code></pre>
         </div>
       </section>
-    </main>
+    </div>
   </div>
 </Layout>
 
 <style>
   .docs-layout-container {
     display: grid;
-    grid-template-columns: 260px 1fr;
+    grid-template-columns: 260px minmax(0, 1fr);
     gap: 4rem;
     padding-top: 4rem;
     padding-bottom: 6rem;
@@ -228,7 +232,7 @@ tail -n 50 /opt/bk-agent/agent.log</code></pre>
     gap: 0.5rem;
   }
 
-  .docs-sidebar-section h4 {
+  .docs-sidebar-section .sidebar-heading {
     font-size: 0.85rem;
     font-weight: 700;
     text-transform: uppercase;
@@ -263,21 +267,31 @@ tail -n 50 /opt/bk-agent/agent.log</code></pre>
     gap: 4rem;
   }
 
-  .docs-section h1 {
-    font-size: 2.25rem;
+  .docs-head h1 {
+    font-size: var(--text-4xl);
+    font-weight: 700;
+  }
+
+  .docs-intro {
+    margin-top: 0.75rem;
+    font-size: var(--text-lg);
+  }
+
+  .docs-section h2 {
+    font-size: 2rem;
     font-weight: 800;
     margin-top: 0.5rem;
     margin-bottom: 1.5rem;
   }
 
-  .docs-section h2 {
+  .docs-section h3 {
     font-size: 1.5rem;
     font-weight: 700;
     margin-top: 2rem;
     margin-bottom: 1rem;
   }
 
-  .docs-section h3 {
+  .docs-section h4 {
     font-size: 1.15rem;
     font-weight: 700;
     margin-top: 1.5rem;
@@ -371,7 +385,7 @@ tail -n 50 /opt/bk-agent/agent.log</code></pre>
 
   @media (max-width: 992px) {
     .docs-layout-container {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
       gap: 2.5rem;
     }
     .docs-sidebar {

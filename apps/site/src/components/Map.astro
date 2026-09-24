@@ -1,61 +1,77 @@
 ---
-// Map.astro - Live distributed agents overview from the real status API.
-// No hardcoded cities/coordinates: it lists the nodes public_status returns,
+// Map.astro - the agents that report right now, from the real status API.
+// No cities and no coordinates: it lists the nodes public_status returns,
 // from the same shared answer as the rest of the page (lib/live-status).
-// Maintenance and unknown keep their own state instead of reading "inactive".
-const currentPath = Astro.url.pathname;
-const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+// Maintenance and unknown keep their own state instead of reading "down".
+import type { Lang } from '../i18n';
 
-const t = isCs ? {
-  title: 'Distribuovaní agenti',
-  desc: 'Živý přehled uzlů, jejichž stav hlásí veřejné status API.',
-  loading: 'Načítám živá data...',
-  unavailable: 'Data o agentech jsou momentálně nedostupná.',
-  empty: 'Zatím nejsou nasazeni žádní distribuovaní agenti - viz BKPepe/monitoring-agent.',
-  online: 'Online',
-  warning: 'Zpožděno',
-  offline: 'Mimo provoz',
-  maintenance: 'Údržba',
-  unknown: 'Neznámý stav',
-  nodesLabel: 'uzlů',
-} : {
-  title: 'Distributed Agents',
-  desc: 'Live view of the nodes the public status API reports.',
-  loading: 'Loading live data...',
-  unavailable: 'Agent data is temporarily unavailable.',
-  empty: 'No distributed agents deployed yet - see BKPepe/monitoring-agent.',
-  online: 'Online',
-  warning: 'Delayed',
-  offline: 'Down',
-  maintenance: 'Maintenance',
-  unknown: 'Unknown',
-  nodesLabel: 'nodes',
-};
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+
+const t =
+  lang === 'cs'
+    ? {
+        title: 'Agenti, kteří se právě hlásí',
+        desc: 'Uzly, jejichž stav vrací veřejné status API bloodkings.eu.',
+        loading: 'Načítám živá data…',
+        unavailable: 'Seznam agentů se teď nepodařilo načíst, proto tu žádný není.',
+        empty: 'Veřejné API teď nehlásí žádného agenta.',
+        online: 'online',
+        warning: 'zpožděný',
+        offline: 'mimo provoz',
+        maintenance: 'údržba',
+        unknown: 'neznámý stav',
+        nodesLabel: 'uzlů',
+      }
+    : {
+        title: 'Agents reporting right now',
+        desc: 'The nodes the public status API of bloodkings.eu returns.',
+        loading: 'Loading live data…',
+        unavailable: 'The agent list could not be loaded right now, so none is shown.',
+        empty: 'The public API reports no agent right now.',
+        online: 'online',
+        warning: 'delayed',
+        offline: 'down',
+        maintenance: 'maintenance',
+        unknown: 'unknown',
+        nodesLabel: 'nodes',
+      };
 ---
 
-<div class="map-card card" id="agent-map-card">
-  <div class="map-header">
-    <div class="map-title-info">
-      <h4>{t.title}</h4>
+<section class="agents-card" aria-labelledby="agents-title">
+  <header class="agents-head">
+    <div>
+      <h3 id="agents-title">{t.title}</h3>
       <p>{t.desc}</p>
     </div>
-    <div class="map-stats-badges">
-      <span class="badge badge-success" id="agent-map-count">— {t.nodesLabel}</span>
-    </div>
-  </div>
+    <span class="agents-count tabular" id="agent-map-count">— {t.nodesLabel}</span>
+  </header>
 
-  <div class="agent-nodes-grid" id="agent-nodes-grid" aria-live="polite" data-unavailable={t.unavailable} data-empty={t.empty} data-online={t.online} data-warning={t.warning} data-offline={t.offline} data-maintenance={t.maintenance} data-unknown={t.unknown} data-nodes-label={t.nodesLabel}>
-    <p class="agent-nodes-status">{t.loading}</p>
-  </div>
-</div>
+  <ul
+    class="agents-list"
+    id="agent-nodes-grid"
+    data-unavailable={t.unavailable}
+    data-empty={t.empty}
+    data-online={t.online}
+    data-warning={t.warning}
+    data-offline={t.offline}
+    data-maintenance={t.maintenance}
+    data-unknown={t.unknown}
+    data-nodes-label={t.nodesLabel}
+  >
+    <li class="agents-note">{t.loading}</li>
+  </ul>
+</section>
 
 <script>
   import { escapeHtml } from '../lib/github';
   import { onLiveStatus, type NodeState } from '../lib/live-status';
 
-  const grid = document.getElementById('agent-nodes-grid');
+  const list = document.getElementById('agent-nodes-grid');
   const countBadge = document.getElementById('agent-map-count');
-  const words: DOMStringMap = grid?.dataset ?? {};
+  const words: DOMStringMap = list?.dataset ?? {};
   const STATE_WORD: Record<NodeState, string | undefined> = {
     online: words.online,
     warning: words.warning,
@@ -63,141 +79,152 @@ const t = isCs ? {
     maintenance: words.maintenance,
     unknown: words.unknown,
   };
+  let lastHtml = '';
+
+  // Written only when it changed: the list is polled every minute and must
+  // not be re-announced or re-laid out when nothing moved.
+  const render = (html: string) => {
+    if (!list || html === lastHtml) return;
+    lastHtml = html;
+    list.innerHTML = html;
+  };
 
   onLiveStatus((result) => {
-    if (!grid) return;
-
     if (!result.ok) {
-      grid.innerHTML = `<p class="agent-nodes-status">${escapeHtml(words.unavailable)}</p>`;
+      render(`<li class="agents-note">${escapeHtml(words.unavailable)}</li>`);
       if (countBadge) countBadge.textContent = `— ${words.nodesLabel ?? ''}`;
       return;
     }
 
     const nodes = result.data.nodes;
     if (countBadge) countBadge.textContent = `${nodes.length} ${words.nodesLabel ?? ''}`;
-
     if (nodes.length === 0) {
-      grid.innerHTML = `<p class="agent-nodes-status">${escapeHtml(words.empty)}</p>`;
+      render(`<li class="agents-note">${escapeHtml(words.empty)}</li>`);
       return;
     }
 
-    grid.innerHTML = nodes
-      .map((n) => {
-        const meta = [STATE_WORD[n.status] ?? '', n.latencyMs !== null ? `${n.latencyMs} ms` : '']
-          .filter(Boolean)
-          .join(' · ');
-        return `
-          <div class="agent-node-item node-${n.status}">
-            <span class="node-dot"></span>
-            <div class="node-info">
-              <span class="node-name">${escapeHtml(n.name)}</span>
-              <span class="node-meta">${escapeHtml(meta)}</span>
-            </div>
-          </div>`;
-      })
-      .join('');
+    render(
+      nodes
+        .map((n) => {
+          const meta = [STATE_WORD[n.status] ?? '', n.latencyMs !== null ? `${n.latencyMs} ms` : '']
+            .filter(Boolean)
+            .join(' · ');
+          return `<li class="agent node-${n.status}"><span class="agent-dot" aria-hidden="true"></span><span class="agent-name">${escapeHtml(n.name)}</span><span class="agent-meta">${escapeHtml(meta)}</span></li>`;
+        })
+        .join('')
+    );
   });
 </script>
 
 <style>
-  .map-card {
+  .agents-card {
+    display: grid;
+    align-content: start;
+    gap: 1.25rem;
+    padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
     background: var(--surface-1);
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    padding: 2.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    min-width: 0;
   }
 
-  .map-header {
+  .agents-head {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 1.2rem;
+    gap: 1rem;
   }
 
-  .map-title-info h4 {
-    font-size: 1.25rem;
-    font-weight: 700;
+  .agents-head h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
   }
 
-  .map-title-info p {
-    font-size: 0.9rem;
-    margin-top: 0.2rem;
+  .agents-head p {
+    margin-top: 0.25rem;
+    font-size: var(--text-sm);
     color: var(--text-low);
   }
 
-  .map-stats-badges {
-    display: flex;
-    gap: 0.75rem;
+  .agents-count {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    color: var(--text-mid);
   }
 
-  .agent-nodes-grid {
+  .agents-list {
+    list-style: none;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 0.75rem;
-    min-height: 4rem;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+    gap: 0.5rem;
+    min-height: 3rem;
   }
 
-  /* Grid contents are written by the script (innerHTML) and carry no scoped
-     attribute, so the rules reach them through :global() under the grid. */
-  .agent-nodes-grid :global(.agent-nodes-status) {
-    color: var(--text-low);
-    font-size: 0.9rem;
+  /* List items are written by the script (innerHTML), so they carry no
+     scoped attribute; the rules reach them through :global() under the list. */
+  .agents-list :global(.agents-note) {
     grid-column: 1 / -1;
-    padding: 1rem 0;
+    padding: 0.9rem 1rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    color: var(--text-low);
   }
 
-  .agent-nodes-grid :global(.agent-node-item) {
-    display: flex;
+  .agents-list :global(.agent) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0.65rem;
     align-items: center;
-    gap: 0.75rem;
+    padding: 0.7rem 0.9rem;
     background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.85rem 1rem;
+    border-radius: var(--radius-md);
   }
 
-  .agent-nodes-grid :global(.node-dot) {
+  .agents-list :global(.agent-dot) {
+    grid-row: span 2;
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    flex-shrink: 0;
   }
 
-  .agent-nodes-grid :global(.node-online .node-dot) { background: var(--up); box-shadow: 0 0 0 3px var(--up-bg); }
-  .agent-nodes-grid :global(.node-warning .node-dot) { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-bg); }
-  .agent-nodes-grid :global(.node-offline .node-dot) { background: var(--down); box-shadow: 0 0 0 3px var(--down-bg); }
-  .agent-nodes-grid :global(.node-maintenance .node-dot) { background: var(--info); box-shadow: 0 0 0 3px var(--info-bg); }
+  .agents-list :global(.node-online .agent-dot) {
+    background: var(--up);
+    box-shadow: 0 0 0 3px var(--up-bg);
+  }
+  .agents-list :global(.node-warning .agent-dot) {
+    background: var(--warning);
+    box-shadow: 0 0 0 3px var(--warning-bg);
+  }
+  .agents-list :global(.node-offline .agent-dot) {
+    background: var(--down);
+    box-shadow: 0 0 0 3px var(--down-bg);
+  }
+  .agents-list :global(.node-maintenance .agent-dot) {
+    background: var(--info);
+    box-shadow: 0 0 0 3px var(--info-bg);
+  }
   /* Unknown is not an outage: a hollow grey ring, not red. */
-  .agent-nodes-grid :global(.node-unknown .node-dot) { border: 1.5px dashed var(--text-low); }
-
-  .agent-nodes-grid :global(.node-info) {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
+  .agents-list :global(.node-unknown .agent-dot) {
+    border: 1.5px dashed var(--text-low);
   }
 
-  .agent-nodes-grid :global(.node-name) {
-    font-size: 0.85rem;
-    font-weight: 700;
+  .agents-list :global(.agent-name) {
+    font-size: var(--text-sm);
+    font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .agent-nodes-grid :global(.node-meta) {
-    font-size: 0.75rem;
+  .agents-list :global(.agent-meta) {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
     color: var(--text-low);
-  }
-
-  @media (max-width: 768px) {
-    .map-card {
-      padding: 1.5rem;
-    }
-    .map-header {
-      flex-direction: column;
-      gap: 1rem;
-    }
   }
 </style>

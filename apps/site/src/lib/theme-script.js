@@ -5,39 +5,36 @@
 // an edit here can never leave a stale hash behind. Without the hash the
 // policy blocks the script whenever it runs after the <meta> CSP, which is
 // what Cloudflare Rocket Loader does, and every page stays light.
+//
+// Dark is the default: no stored choice, an unknown value, or a storage that
+// throws (private mode, blocked site data) all mean dark. "auto" follows the
+// operating system and is only used when the visitor picked it.
 export const THEME_SCRIPT = `
   (function () {
-    const getThemePreference = () => {
-      if (typeof localStorage !== 'undefined' && localStorage.getItem('theme')) {
-        return localStorage.getItem('theme');
+    var root = document.documentElement;
+    var read = function () {
+      try {
+        var v = window.localStorage.getItem('theme');
+        return v === 'light' || v === 'auto' ? v : 'dark';
+      } catch (e) {
+        return 'dark';
       }
-      return 'auto';
     };
-
-    const resolveTheme = (theme) => {
-      if (theme === 'dark') return true;
-      if (theme === 'light') return false;
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    };
-
-    const setTheme = (theme) => {
-      const isDark = resolveTheme(theme);
+    var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    var apply = function (theme) {
+      var isDark = theme === 'dark' || (theme === 'auto' && (!media || media.matches));
       if (isDark) {
-        document.documentElement.classList.add('dark');
+        root.classList.add('dark');
       } else {
-        document.documentElement.classList.remove('dark');
+        root.classList.remove('dark');
       }
-      document.documentElement.setAttribute('data-theme-resolved', isDark ? 'dark' : 'light');
+      root.setAttribute('data-theme', theme);
     };
-
-    const theme = getThemePreference();
-    setTheme(theme);
-
-    // Watch for system preference changes if auto
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      if (getThemePreference() === 'auto') {
-        setTheme('auto');
-      }
-    });
+    apply(read());
+    if (media && media.addEventListener) {
+      media.addEventListener('change', function () {
+        if (read() === 'auto') apply('auto');
+      });
+    }
   })();
 `;

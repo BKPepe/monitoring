@@ -1,79 +1,39 @@
 ---
-// Dashboard.astro - live status preview from the real status API.
+// Dashboard.astro - the live panel in the hero, from the real status API.
 //
-// Every number here comes from the shared /api/status answer (lib/live-status),
-// the same one the hero and the architecture header render. Nothing is
-// invented: until it loads, and whenever it fails, every value is a dash.
+// Every number here comes from the shared /api/status answer
+// (lib/live-status). Until it loads, and whenever it fails, every value is a
+// dash; a failed refresh blanks the previous answer instead of leaving it on
+// screen as if current. The verdict line follows the server's own verdict
+// (bk_overall_verdict behind public_status) and is never upgraded here:
+// "All systems operational" needs a healthy verdict over fresh data.
 //
-// The headline follows the server's overall verdict (bk_overall_verdict in
-// public_status). "All systems operational" appears only for a healthy
-// verdict over fresh data; degraded, down, maintenance and unknown each keep
-// their own line, and a node keeps its own state instead of turning red.
-//
-// The node list shows the names public_status returns. Which monitors are
-// public is decided on the server (the curated public set, W1-G3); the site
-// adds no filter of its own and shows no more than the API gives anonymously.
-const currentPath = Astro.url.pathname;
-const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+// The release is the server's latest GitHub release or tag from the worker's
+// /api/versions; when there is none the panel says so with a dash.
+import { dicts, type Lang } from '../i18n';
 
-const t = isCs ? {
-  windowTitle: 'blood-kings-monitoring — živý stav',
-  loading: 'NAČÍTÁM',
-  live: 'ŽIVĚ',
-  stale: 'STARÁ DATA',
-  unavailable: 'NEDOSTUPNÉ',
-  nodesTitle: 'Distribuovaní agenti',
-  nodesEmpty: 'Zatím žádní distribuovaní agenti',
-  totalUptime: 'Dostupnost (30 dní)',
-  avgLatency: 'Průměrná odezva (1 h)',
-  monitors: 'Monitorů',
-  agents: 'Agentů online',
-  healthy: 'Všechny systémy v pořádku',
-  degraded: 'Některé systémy mají potíže',
-  down: 'Některé systémy mají výpadek',
-  maintenance: 'Probíhá plánovaná údržba',
-  unknown: 'Stav zatím nelze určit - chybí čerstvé měření',
-  staleLine: 'Živá data jsou stará, poslední měření:',
-  loadError: 'Živá data se nepodařilo načíst. Toto je self-hosted aplikace - vidíte přesně to, co vidí i majitel.',
-  nodeOnline: 'online',
-  nodeWarning: 'varování',
-  nodeOffline: 'mimo provoz',
-  nodeMaintenance: 'údržba',
-  nodeUnknown: 'neznámý stav',
-} : {
-  windowTitle: 'blood-kings-monitoring — live status',
-  loading: 'LOADING',
-  live: 'LIVE',
-  stale: 'STALE',
-  unavailable: 'UNAVAILABLE',
-  nodesTitle: 'Distributed Agents',
-  nodesEmpty: 'No distributed agents yet',
-  totalUptime: 'Uptime (30 days)',
-  avgLatency: 'Average Response (1 h)',
-  monitors: 'Monitors',
-  agents: 'Agents Online',
-  healthy: 'All systems operational',
-  degraded: 'Some systems are degraded',
-  down: 'Some systems are down',
-  maintenance: 'Scheduled maintenance in progress',
-  unknown: 'Status cannot be determined - no fresh measurement',
-  staleLine: 'Live data is stale, last check:',
-  loadError: "Couldn't load live data. This is a self-hosted app - you're seeing exactly what the owner sees.",
-  nodeOnline: 'online',
-  nodeWarning: 'warning',
-  nodeOffline: 'down',
-  nodeMaintenance: 'maintenance',
-  nodeUnknown: 'unknown',
-};
-const locale = isCs ? 'cs-CZ' : 'en-GB';
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const t = dicts[lang].home.panel;
+const locale = dicts[lang].locale;
+const stats = [
+  { id: 'lp-monitors', label: t.monitors },
+  { id: 'lp-agents', label: t.agents },
+  { id: 'lp-latency', label: t.latency },
+  { id: 'lp-uptime', label: t.uptime },
+];
 ---
 
-<div
-  class="dashboard-card card card-glow"
-  id="live-dashboard-card"
+<section
+  class="live-panel"
+  id="live-panel"
+  aria-labelledby="live-panel-title"
   data-locale={locale}
-  data-live-word={t.live}
-  data-stale-word={t.stale}
+  data-loading={t.loading}
+  data-live={t.live}
+  data-stale={t.stale}
   data-unavailable={t.unavailable}
   data-healthy={t.healthy}
   data-degraded={t.degraded}
@@ -82,394 +42,277 @@ const locale = isCs ? 'cs-CZ' : 'en-GB';
   data-unknown={t.unknown}
   data-stale-line={t.staleLine}
   data-load-error={t.loadError}
-  data-nodes-empty={t.nodesEmpty}
-  data-node-online={t.nodeOnline}
-  data-node-warning={t.nodeWarning}
-  data-node-offline={t.nodeOffline}
-  data-node-maintenance={t.nodeMaintenance}
-  data-node-unknown={t.nodeUnknown}
 >
-  <div class="dashboard-topbar">
-    <div class="dash-window-buttons">
-      <span></span><span></span><span></span>
+  <header class="lp-head">
+    <div>
+      <h2 class="lp-title" id="live-panel-title">{t.title}</h2>
+      <p class="lp-sub">{t.subtitle}</p>
     </div>
-    <div class="dash-window-title">{t.windowTitle}</div>
-    <div class="dash-live-badge" id="dash-live-badge">
-      <span class="live-dot offline"></span>
-      <span id="dash-live-word">{t.loading}</span>
+    <span class="lp-state" id="lp-state" data-state="loading">
+      <span class="lp-dot" aria-hidden="true"></span>
+      <span id="lp-state-word">{t.loading}</span>
+    </span>
+  </header>
+
+  <p class="lp-verdict" id="lp-verdict" data-tone="none" aria-live="polite">{t.waiting}</p>
+
+  <dl class="lp-stats">
+    {
+      stats.map((s) => (
+        <div class="lp-stat">
+          <dt>{s.label}</dt>
+          <dd class="tabular" id={s.id}>
+            —
+          </dd>
+        </div>
+      ))
+    }
+  </dl>
+
+  <dl class="lp-meta">
+    <div>
+      <dt>{t.updated}</dt>
+      <dd class="tabular" id="lp-updated">—</dd>
     </div>
-  </div>
+    <div>
+      <dt>{t.release}</dt>
+      <dd class="tabular" id="lp-release">—</dd>
+    </div>
+  </dl>
 
-  <div class="dashboard-grid">
-    <aside class="dash-sidebar">
-      <div class="sidebar-header">
-        <h4>{t.nodesTitle}</h4>
-        <span class="count-badge" id="dash-nodes-count">—</span>
-      </div>
-      <ul class="monitor-list" id="dash-nodes-list">
-        <li class="monitor-item-status">···</li>
-      </ul>
-    </aside>
-
-    <section class="dash-main">
-      <div class="dash-status-line status-unavailable" id="dash-status-line" aria-live="polite">···</div>
-
-      <div class="stats-overview-grid">
-        <div class="stat-box">
-          <span class="stat-title">{t.totalUptime}</span>
-          <span class="stat-value text-gradient tabular" id="dash-uptime">—</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-title">{t.avgLatency}</span>
-          <span class="stat-value tabular" id="dash-latency">—</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-title">{t.monitors}</span>
-          <span class="stat-value tabular" id="dash-monitors">—</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-title">{t.agents}</span>
-          <span class="stat-value tabular" id="dash-agents">—</span>
-        </div>
-      </div>
-    </section>
-  </div>
-</div>
+  <p class="lp-source">{t.source}</p>
+</section>
 
 <script>
-  import { escapeHtml } from '../lib/github';
-  import { dash, onLiveStatus, type NodeState } from '../lib/live-status';
+  import { API_ORIGIN } from '../config';
+  import { onLiveStatus, type Verdict } from '../lib/live-status';
 
-  const card = document.getElementById('live-dashboard-card');
-  const words: DOMStringMap = card?.dataset ?? {};
+  const panel = document.getElementById('live-panel');
+  const words: DOMStringMap = panel?.dataset ?? {};
+  const locale = words.locale ?? 'en-GB';
   const byId = (id: string) => document.getElementById(id);
-
-  const NODE_WORD: Record<NodeState, string | undefined> = {
-    online: words.nodeOnline,
-    warning: words.nodeWarning,
-    offline: words.nodeOffline,
-    maintenance: words.nodeMaintenance,
-    unknown: words.nodeUnknown,
+  const set = (id: string, text: string) => {
+    const el = byId(id);
+    if (el) el.textContent = text;
   };
+  const num = (value: number | null, digits = 0) =>
+    value === null ? '—' : new Intl.NumberFormat(locale, { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value);
 
-  function setBadge(text: string, live: boolean) {
-    const word = byId('dash-live-word');
-    const dot = byId('dash-live-badge')?.querySelector('.live-dot');
-    if (word) word.textContent = text;
-    // The pulse means "live data, just now"; stale or failed answers get none.
-    if (dot) dot.className = live ? 'live-dot pulse' : 'live-dot offline';
+  function setState(state: 'loading' | 'live' | 'stale' | 'unavailable') {
+    const badge = byId('lp-state');
+    if (badge) badge.dataset.state = state;
+    set('lp-state-word', words[state] ?? '');
   }
 
-  function setLine(text: string, tone: 'ok' | 'warning' | 'degraded' | 'info' | 'unavailable') {
-    const line = byId('dash-status-line');
+  function setVerdict(text: string, tone: 'ok' | 'warn' | 'bad' | 'info' | 'none') {
+    const line = byId('lp-verdict');
     if (!line) return;
     line.textContent = text;
-    line.className = `dash-status-line status-${tone}`;
+    line.dataset.tone = tone;
   }
 
-  function setValues(values: Record<string, string>) {
-    for (const [id, text] of Object.entries(values)) {
-      const el = byId(id);
-      if (el) el.textContent = text;
-    }
+  function when(date: Date | null): string {
+    if (!date) return '—';
+    const today = new Date().toDateString() === date.toDateString();
+    return new Intl.DateTimeFormat(locale, today ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' }).format(date);
   }
+
+  const TONE: Record<Verdict, 'ok' | 'warn' | 'bad' | 'info' | 'none'> = {
+    healthy: 'ok',
+    degraded: 'warn',
+    down: 'bad',
+    maintenance: 'info',
+    unknown: 'none',
+  };
 
   onLiveStatus((result) => {
-    const list = byId('dash-nodes-list');
-
     if (!result.ok) {
-      setBadge(words.unavailable ?? '', false);
-      setLine(words.loadError ?? '', 'unavailable');
-      // A failed refresh must not leave the previous answer on screen as if current.
-      setValues({ 'dash-uptime': '—', 'dash-latency': '—', 'dash-monitors': '—', 'dash-agents': '—', 'dash-nodes-count': '—' });
-      if (list) list.innerHTML = `<li class="monitor-item-status">${escapeHtml(words.unavailable)}</li>`;
+      setState('unavailable');
+      setVerdict(words.loadError ?? '', 'none');
+      for (const id of ['lp-monitors', 'lp-agents', 'lp-latency', 'lp-uptime', 'lp-updated']) set(id, '—');
       return;
     }
-
     const d = result.data;
-    setBadge((d.fresh ? words.liveWord : words.staleWord) ?? '', d.fresh);
+    setState(d.fresh ? 'live' : 'stale');
+    if (d.fresh) setVerdict(words[d.verdict] ?? '', TONE[d.verdict]);
+    else setVerdict(words.staleLine ?? '', 'none');
 
-    if (!d.fresh) {
-      const when = d.lastUpdated
-        ? d.lastUpdated.toLocaleString(words.locale, { dateStyle: 'short', timeStyle: 'short' })
-        : '—';
-      setLine(`${words.staleLine} ${when}`, 'unavailable');
-    } else {
-      const tone = { healthy: 'ok', degraded: 'warning', down: 'degraded', maintenance: 'info', unknown: 'unavailable' } as const;
-      setLine(words[d.verdict] ?? '', tone[d.verdict]);
-    }
-
-    setValues({
-      'dash-uptime': d.uptimePercent !== null ? `${d.uptimePercent.toFixed(2)}%` : '—',
-      'dash-latency': dash(d.avgLatencyMs, ' ms'),
-      'dash-monitors': dash(d.totalMonitors),
-      'dash-agents': d.agentsTotal !== null ? `${dash(d.agentsOnline)} / ${d.agentsTotal}` : '—',
-      'dash-nodes-count': `${d.nodes.length}`,
-    });
-
-    if (!list) return;
-    if (d.nodes.length === 0) {
-      list.innerHTML = `<li class="monitor-item-status">${escapeHtml(words.nodesEmpty)}</li>`;
-      return;
-    }
-    list.innerHTML = d.nodes
-      .slice(0, 6)
-      .map(
-        (n) => `
-          <li class="monitor-item">
-            <div class="monitor-status-info">
-              <span class="indicator state-${n.status}" title="${escapeHtml(NODE_WORD[n.status])}"></span>
-              <div class="monitor-meta">
-                <span class="monitor-name">${escapeHtml(n.name)}</span>
-                <span class="visually-hidden">${escapeHtml(NODE_WORD[n.status])}</span>
-              </div>
-            </div>
-            <div class="monitor-stats">
-              <span class="latency">${n.latencyMs !== null ? `${n.latencyMs} ms` : ''}</span>
-            </div>
-          </li>`
-      )
-      .join('');
+    set('lp-monitors', num(d.totalMonitors));
+    set('lp-agents', d.agentsTotal === null ? '—' : `${num(d.agentsOnline)} / ${num(d.agentsTotal)}`);
+    set('lp-latency', d.avgLatencyMs === null ? '—' : `${num(d.avgLatencyMs)} ms`);
+    set('lp-uptime', d.uptimePercent === null ? '—' : `${num(d.uptimePercent, 2)} %`);
+    set('lp-updated', when(d.lastUpdated));
   });
+
+  // The server release: a tag-shaped string or a dash, never a typed-in version.
+  fetch(`${API_ORIGIN}/api/versions`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((v: { monitoring?: unknown } | null) => {
+      const tag = v?.monitoring;
+      set('lp-release', typeof tag === 'string' && /^v?\d[\w.-]*$/.test(tag) ? tag : '—');
+    })
+    .catch(() => set('lp-release', '—'));
 </script>
 
 <style>
-  .dashboard-card {
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    background: var(--surface-1);
-    border: 1px solid var(--border);
+  .live-panel {
+    position: relative;
+    display: grid;
+    gap: 1.25rem;
+    padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+    background: color-mix(in oklab, var(--surface-1) 92%, transparent);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
+  }
+
+  .lp-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .lp-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .lp-sub {
+    margin-top: 0.2rem;
+    font-size: var(--text-xs);
+    color: var(--text-low);
+  }
+
+  .lp-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-strong);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-mid);
+    white-space: nowrap;
+  }
+
+  .lp-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-low);
+  }
+
+  .lp-state[data-state='live'] {
+    color: var(--up);
+    border-color: color-mix(in oklab, var(--up) 35%, transparent);
+  }
+
+  /* The pulse means "live data, just now"; stale or failed answers get none. */
+  .lp-state[data-state='live'] .lp-dot {
+    background: var(--up);
+    animation: ping 2s var(--ease) infinite;
+  }
+
+  .lp-state[data-state='stale'] {
+    color: var(--warning);
+  }
+
+  .lp-state[data-state='stale'] .lp-dot {
+    background: var(--warning);
+  }
+
+  .lp-state[data-state='unavailable'] .lp-dot {
+    background: transparent;
+    border: 1.5px solid var(--text-low);
+  }
+
+  .lp-verdict {
+    min-height: 3em;
+    padding: 0.75rem 0.9rem;
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-mid);
+  }
+
+  .lp-verdict[data-tone='ok'] {
+    color: var(--up);
+    font-weight: 600;
+  }
+  .lp-verdict[data-tone='warn'] {
+    color: var(--warning);
+    font-weight: 600;
+  }
+  .lp-verdict[data-tone='bad'] {
+    color: var(--down);
+    font-weight: 600;
+  }
+  .lp-verdict[data-tone='info'] {
+    color: var(--info);
+    font-weight: 600;
+  }
+
+  .lp-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     overflow: hidden;
   }
 
-  .dashboard-topbar {
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
-    padding: 0.8rem 1.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .dash-window-buttons {
-    display: flex;
-    gap: 6px;
-  }
-
-  .dash-window-buttons span {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  .dash-window-buttons span:nth-child(1) { background-color: #ff5f56; }
-  .dash-window-buttons span:nth-child(2) { background-color: #ffbd2e; }
-  .dash-window-buttons span:nth-child(3) { background-color: #27c93f; }
-
-  .dash-window-title {
-    font-size: 0.85rem;
-    font-family: var(--font-mono);
-    color: var(--text-low);
-  }
-
-  .dash-live-badge {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: var(--brand-500);
-    letter-spacing: 0.05em;
-  }
-
-  .live-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: var(--brand-500);
-  }
-
-  .live-dot.offline {
-    background-color: var(--text-low);
-    animation: none;
-  }
-
-  .dashboard-grid {
+  .lp-stat {
     display: grid;
-    grid-template-columns: 280px 1fr;
-    min-height: 320px;
-  }
-
-  .dash-sidebar {
-    background: rgba(0, 0, 0, 0.02);
-    border-right: 1px solid var(--border);
-    padding: 1.5rem;
-  }
-
-  :global(.dark) .dash-sidebar {
-    background: rgba(255, 255, 255, 0.01);
-  }
-
-  .sidebar-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.2rem;
-  }
-
-  .sidebar-header h4 {
-    font-size: 0.95rem;
-    font-weight: 700;
-  }
-
-  .count-badge {
-    font-size: 0.75rem;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    padding: 0.1rem 0.5rem;
-    border-radius: var(--radius-sm);
-    color: var(--text-low);
-  }
-
-  .monitor-list {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  /* The list items are written by the script (innerHTML), so they carry no
-     scoped attribute: the rules reach them through :global() under the list.
-     Without that the status dots rendered as nothing at all. */
-  .monitor-list :global(.monitor-item-status) {
-    color: var(--text-low);
-    font-size: 0.82rem;
-  }
-
-  .monitor-list :global(.monitor-item) {
+    gap: 0.35rem;
+    padding: 0.9rem 1rem;
     background: var(--surface-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.75rem 1rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
   }
 
-  .monitor-list :global(.monitor-status-info) {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    min-width: 0;
-  }
-
-  .monitor-list :global(.indicator) {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
-  }
-
-  .monitor-list :global(.indicator.state-online) { background-color: var(--up); box-shadow: 0 0 8px var(--up); }
-  .monitor-list :global(.indicator.state-warning) { background-color: var(--warning); box-shadow: 0 0 8px var(--warning); }
-  .monitor-list :global(.indicator.state-offline) { background-color: var(--down); box-shadow: 0 0 8px var(--down); }
-  .monitor-list :global(.indicator.state-maintenance) { background-color: var(--info); }
-  /* Unknown is not an outage: a hollow grey ring, not red. */
-  .monitor-list :global(.indicator.state-unknown) { background-color: transparent; border: 1.5px dashed var(--text-low); }
-
-  .monitor-list :global(.monitor-meta) {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .monitor-list :global(.monitor-name) {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--text-hi);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .monitor-list :global(.latency) {
-    font-size: 0.8rem;
+  dt {
     font-family: var(--font-mono);
-    color: var(--text-mid);
-  }
-
-  .dash-main {
-    padding: 2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
-  .dash-status-line {
-    font-size: 0.95rem;
-    font-weight: 700;
-  }
-
-  .dash-status-line.status-ok { color: var(--up); }
-  .dash-status-line.status-warning { color: var(--warning); }
-  .dash-status-line.status-degraded { color: var(--down); }
-  .dash-status-line.status-info { color: var(--info); }
-  .dash-status-line.status-unavailable { color: var(--text-low); font-weight: 500; font-size: 0.85rem; }
-
-  .stats-overview-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1.5rem;
-  }
-
-  .stat-box {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 1.2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .stat-title {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--text-low);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    color: var(--text-low);
   }
 
-  .stat-value {
-    font-family: var(--font-heading);
-    font-size: 1.6rem;
-    font-weight: 800;
+  .lp-stat dd {
+    font-family: var(--font-mono);
+    font-size: clamp(1.35rem, 1.1rem + 0.8vw, 1.75rem);
+    font-weight: 600;
     line-height: 1.1;
+    color: var(--text-hi);
+    min-width: 7ch;
   }
 
-  @media (max-width: 992px) {
-    .dashboard-grid {
-      grid-template-columns: 1fr;
-    }
-    .dash-sidebar {
-      border-right: none;
-      border-bottom: 1px solid var(--border);
-    }
+  .lp-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 2rem;
   }
 
-  @media (max-width: 600px) {
-    .stats-overview-grid {
-      grid-template-columns: 1fr;
-      gap: 1rem;
-    }
-    .dash-main {
-      padding: 1.2rem;
-    }
+  .lp-meta div {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .lp-meta dd {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-hi);
+  }
+
+  .lp-source {
+    padding-top: 1rem;
+    border-top: 1px dashed var(--border-strong);
+    font-size: var(--text-xs);
+    color: var(--text-low);
   }
 </style>

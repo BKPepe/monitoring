@@ -1,0 +1,207 @@
+---
+// RouterDiagram.astro - how the OpenWrt agent's data flows, drawn as an
+// illustration. It carries no numbers and no state: the port lights only
+// show that a socket can have a link or not, and the caption says it is not
+// live data. Colours come from the theme tokens, so it works in both themes.
+import { dicts, type Lang } from '../../i18n';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const d = dicts[lang].home.routers.diagram;
+const lanX = [102, 156, 210, 264];
+---
+
+<figure class="rdiag">
+  <svg viewBox="0 0 420 468" role="img" aria-labelledby="rdiag-title">
+    <title id="rdiag-title">{d.title}</title>
+
+    <!-- Router -->
+    <rect class="box" x="10" y="10" width="400" height="272" rx="16"></rect>
+    <text class="t-strong" x="30" y="42">{d.router}</text>
+    <text class="t-mono" x="390" y="42" text-anchor="end">{d.cron}</text>
+
+    <!-- WAN socket -->
+    <g class="port port-wan">
+      <rect x="30" y="64" width="46" height="38" rx="5"></rect>
+      <path d="M41 76h24v14h-6v4h-12v-4h-6z" class="jack"></path>
+      <circle cx="36" cy="69" r="2" class="led on"></circle>
+    </g>
+    <text class="t-mono t-small" x="53" y="122" text-anchor="middle">{d.wan}</text>
+
+    <!-- LAN sockets -->
+    {
+      lanX.map((x, i) => (
+        <g class="port">
+          <rect x={x} y="64" width="46" height="38" rx="5" />
+          <path d={`M${x + 11} 76h24v14h-6v4h-12v-4h-6z`} class="jack" />
+          <circle cx={x + 6} cy="69" r="2" class:list={['led', { on: i !== 2 }]} />
+        </g>
+      ))
+    }
+    <text class="t-mono t-small" x="208" y="122" text-anchor="middle">{d.lan}</text>
+
+    <!-- Radios, LTE, disk -->
+    <g class="chip">
+      <rect x="30" y="140" width="112" height="40" rx="10"></rect>
+      <path class="ico" d="M42 163a9 9 0 0 1 12 0M39 159a14 14 0 0 1 18 0M48 167h.01"></path>
+      <text x="64" y="165">{d.radios}</text>
+    </g>
+    <g class="chip">
+      <rect x="154" y="140" width="112" height="40" rx="10"></rect>
+      <path class="ico" d="M166 170h.01M171 170v-4M176 170v-8M181 170v-12"></path>
+      <text x="190" y="165">{d.lte}</text>
+    </g>
+    <g class="chip">
+      <rect x="278" y="140" width="112" height="40" rx="10"></rect>
+      <path class="ico" d="M290 160h16M292 153h12l3 7v8h-18v-8zM294 165h.01"></path>
+      <text x="316" y="165">{d.disk}</text>
+    </g>
+
+    <!-- What stays on the router -->
+    <rect class="stays" x="30" y="200" width="360" height="62" rx="12"></rect>
+    <path class="ico ico-brand" d="M48 227h14v12H48zM51 227v-4a4 4 0 0 1 8 0v4"></path>
+    <text class="t-strong t-small" x="76" y="226">{d.stays}</text>
+    <text class="t-mono t-small" x="76" y="246">{d.staysList}</text>
+
+    <!-- Outbound HTTPS -->
+    <line class="flow" x1="210" y1="286" x2="210" y2="354"></line>
+    <path class="arrow" d="M202 348l8 10 8-10"></path>
+    <text class="t-mono t-small" x="224" y="324">{d.leaves}</text>
+
+    <!-- Server -->
+    <rect class="box box-brand" x="110" y="364" width="200" height="92" rx="16"></rect>
+    <text class="t-strong" x="210" y="404" text-anchor="middle">{d.server}</text>
+    <text class="t-mono" x="210" y="430" text-anchor="middle">{d.serverSub}</text>
+  </svg>
+  <figcaption>{d.title}</figcaption>
+</figure>
+
+<style>
+  .rdiag {
+    display: grid;
+    gap: 0.75rem;
+    padding: clamp(1rem, 0.75rem + 1vw, 1.5rem);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  svg {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 420 / 468;
+    font-family: var(--font-sans);
+  }
+
+  .box {
+    fill: var(--surface-0);
+    stroke: var(--border-strong);
+  }
+
+  .box-brand {
+    stroke: var(--brand-500);
+    stroke-width: 1.5;
+  }
+
+  text {
+    fill: var(--text-mid);
+    font-size: 12.5px;
+  }
+
+  .t-strong {
+    fill: var(--text-hi);
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .t-mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    fill: var(--text-low);
+  }
+
+  .t-small {
+    font-size: 11.5px;
+  }
+
+  .t-strong.t-small {
+    font-size: 12.5px;
+  }
+
+  .port rect {
+    fill: var(--surface-2);
+    stroke: var(--border-strong);
+  }
+
+  .port-wan rect {
+    stroke: var(--brand-500);
+  }
+
+  .jack {
+    fill: var(--surface-0);
+    stroke: var(--border-strong);
+  }
+
+  .led {
+    fill: var(--text-low);
+    opacity: 0.5;
+  }
+
+  .led.on {
+    fill: var(--up);
+    opacity: 1;
+  }
+
+  .chip rect {
+    fill: var(--surface-2);
+    stroke: var(--border);
+  }
+
+  .ico {
+    fill: none;
+    stroke: var(--text-mid);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .ico-brand {
+    stroke: var(--brand-500);
+  }
+
+  .stays {
+    fill: color-mix(in oklab, var(--brand-500) 6%, transparent);
+    stroke: color-mix(in oklab, var(--brand-500) 45%, transparent);
+    stroke-dasharray: 5 5;
+  }
+
+  .flow {
+    stroke: var(--text-mid);
+    stroke-width: 1.6;
+    stroke-dasharray: 4 6;
+    animation: flow 1.4s linear infinite;
+  }
+
+  .arrow {
+    fill: none;
+    stroke: var(--text-mid);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  @keyframes flow {
+    to {
+      stroke-dashoffset: -20;
+    }
+  }
+
+  figcaption {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-low);
+    text-align: center;
+  }
+</style>

@@ -6,7 +6,7 @@ import Layout from '../layouts/Layout.astro';
   <section class="page-header section">
     <div class="container text-center">
       <span class="badge badge-accent">Detailed Specs</span>
-      <h1>Every Feature. Zero Limits.</h1>
+      <h1>Every feature, as it is built today.</h1>
       <p class="section-subtitle">Discover a comprehensive monitoring toolset designed for sysadmins, devops engineers, and independent developers.</p>
     </div>
   </section>
@@ -18,7 +18,7 @@ import Layout from '../layouts/Layout.astro';
       <div class="feature-row">
         <div class="feature-text">
           <span class="feature-number">01</span>
-          <h2>Ultra-Lightweight Remote Agents</h2>
+          <h2>Lightweight Remote Agents</h2>
           <p>
             The agents are plain scripts (Bash, Python, PowerShell, and ash on OpenWrt) that need nothing beyond their interpreter and curl. Cron starts them, they send one report and exit.
           </p>
@@ -31,7 +31,7 @@ import Layout from '../layouts/Layout.astro';
         <div class="feature-visual-mock card">
           <div class="mock-terminal">
             <div class="terminal-header"><span></span><span></span><span></span></div>
-            <div class="terminal-body">
+            <div class="terminal-body" lang="cs">
               <p class="green-text">$ ./agent.sh --register YOUR_REGISTRATION_TOKEN https://bloodkings.eu/status/agent_api.php</p>
               <p>Registruji nového agenta na https://bloodkings.eu/status/agent_api.php...</p>
               <p>OK: Agent byl úspěšně zaregistrován a nastavení bylo uloženo do /opt/bk-agent/agent.cfg (AGENT_KEY=…)</p>
@@ -57,28 +57,17 @@ import Layout from '../layouts/Layout.astro';
             <li><strong>Custom Branding:</strong> Embed your corporate logo, adjust color styling, and customize navigation bars.</li>
           </ul>
         </div>
-        <div class="feature-visual-mock card">
-          <div class="mock-status-page">
-            <div class="status-page-header">
-              <span class="p-logo">👑 bloodkings.eu/app/public</span>
-              <span class="p-badge-ok">All Systems Operational</span>
-            </div>
-            <div class="status-services">
-              <div class="service-row">
-                <span>Web Portal</span>
-                <span class="green-text">99.99%</span>
-              </div>
-              <div class="service-row">
-                <span>Game Servers</span>
-                <span class="green-text">99.98%</span>
-              </div>
-              <div class="service-row">
-                <span>REST API Gateway</span>
-                <span class="green-text">100.00%</span>
-              </div>
-            </div>
-            <p class="mock-caption">Illustration. The live page is at <a href="https://bloodkings.eu/app/public">bloodkings.eu/app/public</a>.</p>
-          </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">What the public status page carries</p>
+          <ul class="fact-list">
+            <li>Current state of the monitors you make public</li>
+            <li>Incidents with their updates</li>
+            <li>Planned maintenance windows</li>
+            <li>E-mail subscribers (double opt-in)</li>
+            <li>An SVG badge and an RSS feed</li>
+            <li>Your logo, colour theme and navigation links</li>
+          </ul>
+          <a class="fact-panel-link" href="https://bloodkings.eu/app/public" rel="noopener">Open the live status page →</a>
         </div>
       </div>
 
@@ -93,37 +82,20 @@ import Layout from '../layouts/Layout.astro';
           <ul class="feature-bullets">
             <li><strong>Discord & Slack:</strong> Embedded rich alerts detailing target, code, and response latency.</li>
             <li><strong>Email (SMTP):</strong> Secure delivery of outage warnings straight to your inbox.</li>
-            <li><strong>Custom Webhooks:</strong> Trigger recovery actions or spin up self-healing scripts upon failure callback.</li>
+            <li><strong>More channels:</strong> SMS (Twilio), WhatsApp (CallMeBot), Telegram, Pushover and PagerDuty, plus an escalation webhook for incidents nobody acknowledged.</li>
           </ul>
         </div>
-        <div class="feature-visual-mock card">
-          <div class="mock-notification">
-            <div class="notif-header">
-              <span class="n-discord-icon">👾</span>
-              <strong>Discord Bot</strong>
-              <span class="n-time">Just now</span>
-            </div>
-            <div class="notif-embed">
-              <h5 class="danger-text">⚠️ Outage Detected!</h5>
-              <p><strong>Monitor:</strong> API Europe</p>
-              <p><strong>Error:</strong> Connection Refused (HTTP 502)</p>
-              <p><strong>Duration:</strong> Ongoing</p>
-              <p class="n-footer">Blood Kings Alert System</p>
-            </div>
-          </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Alert channels in the code today</p>
+          <ul class="fact-list">
+            <li>E-mail (SMTP or PHP mail)</li>
+            <li>SMS through Twilio</li>
+            <li>WhatsApp through CallMeBot</li>
+            <li>Discord, Slack and Telegram</li>
+            <li>Pushover and PagerDuty</li>
+            <li>Escalation webhook for unacknowledged incidents</li>
+          </ul>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- CTA Section -->
-  <section class="section">
-    <div class="container text-center cta-container">
-      <h2>Ready to take complete control?</h2>
-      <p>Try Blood Kings Monitoring today. Completely free and open-source.</p>
-      <div class="cta-buttons">
-        <a href="/download" class="btn btn-primary">🚀 Download & Install</a>
-        <a href="/docs" class="btn btn-secondary">Explore Documentation</a>
       </div>
 
       <!-- Feature 4 -->
@@ -141,23 +113,30 @@ import Layout from '../layouts/Layout.astro';
             <li><strong>Never invented:</strong> Unmeasured values stay empty. A blank is honest; a fabricated zero is not.</li>
           </ul>
         </div>
-        <div class="feature-visual-mock card">
-          <div class="mock-notification">
-            <div class="notif-header">
-              <span class="n-discord-icon">💓</span>
-              <strong>Watchdog</strong>
-              <span class="n-time">Just now</span>
-            </div>
-            <div class="notif-embed">
-              <h5 class="danger-text">🔴 Monitoring is not collecting data</h5>
-              <p><strong>Last run:</strong> 41 minutes ago</p>
-              <p><strong>Limit:</strong> 15 minutes</p>
-              <p><strong>Note:</strong> The dashboard still looks healthy.</p>
-              <p class="n-footer">Runs outside your server</p>
-            </div>
-          </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">How silence is caught</p>
+          <ul class="fact-list">
+            <li>Each heartbeat monitor expects a ping within its interval</li>
+            <li>A Cloudflare Worker checks from outside that the collector still runs</li>
+            <li>The dashboard marks stale data instead of showing it as current</li>
+            <li>A value nobody measured stays empty, never a zero</li>
+          </ul>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="section">
+    <div class="container text-center cta-container">
+      <h2>Ready to take complete control?</h2>
+      <p>Try Blood Kings Monitoring today. Completely free and open-source.</p>
+      <div class="cta-buttons">
+        <a href="/download/" class="btn btn-primary">Download & Install</a>
+        <a href="/docs/" class="btn btn-secondary">Explore Documentation</a>
+      </div>
+
+
     </div>
   </section>
 </Layout>
@@ -192,8 +171,7 @@ import Layout from '../layouts/Layout.astro';
     direction: rtl;
   }
 
-  .feature-row.reverse .feature-text,
-  .feature-row.reverse .feature-bullets {
+  .feature-row.reverse > * {
     direction: ltr;
     text-align: left;
   }
@@ -242,8 +220,8 @@ import Layout from '../layouts/Layout.astro';
   /* Visual mockups */
   .feature-visual-mock {
     height: 300px;
-    background: #09090b;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -274,131 +252,61 @@ import Layout from '../layouts/Layout.astro';
   }
 
   .terminal-body {
-    color: #a1a1aa;
+    color: var(--code-text);
     line-height: 1.5;
     overflow-wrap: anywhere;
-  }
-
-  .mock-caption {
-    margin: 0;
-    font-size: var(--text-xs);
-    color: var(--text-low);
   }
 
   .green-text {
     color: var(--up);
   }
 
-  .danger-text {
-    color: var(--brand-500);
+  /* Fact panels: plain lists of what the code does, in place of the drawn
+     mock status page and mock alerts that used to stand here. */
+  .fact-panel {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+    padding: 1.75rem;
   }
 
-  /* Status Page mockup */
-  .mock-status-page {
-    width: 100%;
-    background: var(--surface-0);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    height: 100%;
-    color: var(--text-hi);
+  .fact-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-low);
   }
 
-  .status-page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0.8rem;
+  .fact-list {
+    list-style: none;
+    display: grid;
+    gap: 0.65rem;
   }
 
-  .p-logo {
-    font-weight: 800;
-    font-size: 0.9rem;
+  .fact-list li {
+    position: relative;
+    padding-left: 1.25rem;
+    font-size: var(--text-sm);
+    color: var(--text-mid);
   }
 
-  .p-badge-ok {
-    font-size: 0.75rem;
-    background: var(--up-bg);
-    color: var(--up);
-    padding: 0.2rem 0.5rem;
-    border-radius: var(--radius-sm);
+  .fact-list li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--brand-500);
+  }
+
+  .fact-panel-link {
+    width: fit-content;
+    font-size: var(--text-sm);
     font-weight: 600;
-  }
-
-  .status-services {
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-  }
-
-  .service-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: var(--surface-1);
-    padding: 0.6rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 0.85rem;
-    font-weight: 500;
-  }
-
-  /* Notification mockup */
-  .mock-notification {
-    background: #2f3136;
-    color: #dcddde;
-    width: 100%;
-    border-radius: var(--radius-sm);
-    padding: 1.2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    height: 100%;
-    font-family: var(--font-sans);
-  }
-
-  .notif-header {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.85rem;
-  }
-
-  .n-discord-icon {
-    font-size: 1.2rem;
-  }
-
-  .n-time {
-    font-size: 0.75rem;
-    color: #72767d;
-    margin-left: auto;
-  }
-
-  .notif-embed {
-    background: #202225;
-    border-left: 4px solid var(--brand-500);
-    border-radius: 4px;
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    font-size: 0.8rem;
-  }
-
-  .notif-embed h5 {
-    color: #ffffff;
-    font-size: 0.9rem;
-    margin-bottom: 0.3rem;
-  }
-
-  .n-footer {
-    font-size: 0.7rem;
-    color: #72767d;
-    margin-top: 0.5rem;
+    color: var(--brand-500);
   }
 
   /* CTA container styling */
@@ -438,7 +346,8 @@ import Layout from '../layouts/Layout.astro';
       direction: ltr;
     }
     .feature-visual-mock {
-      height: 250px;
+      height: auto;
+      min-height: 220px;
     }
   }
 

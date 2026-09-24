@@ -6,7 +6,7 @@ import Layout from '../../layouts/Layout.astro';
   <section class="page-header section">
     <div class="container text-center">
       <span class="badge badge-accent">Funkce v detailech</span>
-      <h1>Každá Funkce. Žádné Omezení.</h1>
+      <h1>Všechny funkce, jak jsou dnes hotové.</h1>
       <p class="section-subtitle">Objevte kompletní sadu nástrojů navrženou pro sysadminy, devops inženýry a nezávislé vývojáře.</p>
     </div>
   </section>
@@ -18,7 +18,7 @@ import Layout from '../../layouts/Layout.astro';
       <div class="feature-row">
         <div class="feature-text">
           <span class="feature-number">01</span>
-          <h2>Ultra-lehcí Vzdálení Agenti</h2>
+          <h2>Lehcí vzdálení agenti</h2>
           <p>
             Agenti jsou obyčejné skripty (Bash, Python, PowerShell a ash na OpenWrt), které kromě interpretu a curl nic nepotřebují. Spustí je cron, odešlou jedno hlášení a skončí.
           </p>
@@ -57,28 +57,17 @@ import Layout from '../../layouts/Layout.astro';
             <li><strong>Vlastní branding:</strong> Přidejte logo, upravte barvy a přizpůsobte si vzhled do detailů.</li>
           </ul>
         </div>
-        <div class="feature-visual-mock card">
-          <div class="mock-status-page">
-            <div class="status-page-header">
-              <span class="p-logo">👑 bloodkings.eu/app/public</span>
-              <span class="p-badge-ok">Všechny služby online</span>
-            </div>
-            <div class="status-services">
-              <div class="service-row">
-                <span>Webový Portál</span>
-                <span class="green-text">99.99%</span>
-              </div>
-              <div class="service-row">
-                <span>Herní Servery</span>
-                <span class="green-text">99.98%</span>
-              </div>
-              <div class="service-row">
-                <span>REST API</span>
-                <span class="green-text">100.00%</span>
-              </div>
-            </div>
-            <p class="mock-caption">Ilustrace. Živá stránka je na <a href="https://bloodkings.eu/app/public">bloodkings.eu/app/public</a>.</p>
-          </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Co nese veřejná stavová stránka</p>
+          <ul class="fact-list">
+            <li>Aktuální stav monitorů, které zveřejníte</li>
+            <li>Incidenty s jejich aktualizacemi</li>
+            <li>Plánovaná údržba</li>
+            <li>Odběratelé e-mailů (s potvrzením)</li>
+            <li>SVG odznak a RSS kanál</li>
+            <li>Vaše logo, barevný motiv a odkazy v navigaci</li>
+          </ul>
+          <a class="fact-panel-link" href="https://bloodkings.eu/app/public" rel="noopener">Otevřít živou stavovou stránku →</a>
         </div>
       </div>
 
@@ -93,37 +82,20 @@ import Layout from '../../layouts/Layout.astro';
           <ul class="feature-bullets">
             <li><strong>Discord a Slack:</strong> Krásné strukturované zprávy s detaily výpadku.</li>
             <li><strong>E-mail (SMTP):</strong> Spolehlivé doručení výstrah přímo do schránky.</li>
-            <li><strong>Vlastní Webhooky:</strong> Spusťte automatické skripty a samo-opravné procesy při detekci offline stavu.</li>
+            <li><strong>Další kanály:</strong> SMS (Twilio), WhatsApp (CallMeBot), Telegram, Pushover a PagerDuty a k tomu eskalační webhook pro incidenty, které nikdo nepotvrdil.</li>
           </ul>
         </div>
-        <div class="feature-visual-mock card">
-          <div class="mock-notification">
-            <div class="notif-header">
-              <span class="n-discord-icon">👾</span>
-              <strong>Discord Bot</strong>
-              <span class="n-time">Právě teď</span>
-            </div>
-            <div class="notif-embed">
-              <h5 class="danger-text">⚠️ Výpadek Detekován!</h5>
-              <p><strong>Monitor:</strong> API Europe</p>
-              <p><strong>Chyba:</strong> Connection Refused (HTTP 502)</p>
-              <p><strong>Trvání:</strong> Aktuálně probíhá</p>
-              <p class="n-footer">Blood Kings Alert System</p>
-            </div>
-          </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Kanály upozornění, které dnes kód umí</p>
+          <ul class="fact-list">
+            <li>E-mail (SMTP nebo PHP mail)</li>
+            <li>SMS přes Twilio</li>
+            <li>WhatsApp přes CallMeBot</li>
+            <li>Discord, Slack a Telegram</li>
+            <li>Pushover a PagerDuty</li>
+            <li>Eskalační webhook pro nepotvrzené incidenty</li>
+          </ul>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- CTA Section -->
-  <section class="section">
-    <div class="container text-center cta-container">
-      <h2>Jste připraveni převzít kontrolu?</h2>
-      <p>Vyzkoušejte Blood Kings Monitoring ještě dnes. Je to zcela zdarma a open source.</p>
-      <div class="cta-buttons">
-        <a href="/cs/download" class="btn btn-primary">🚀 Stáhnout a nainstalovat</a>
-        <a href="/cs/docs" class="btn btn-secondary">Prostudovat dokumentaci</a>
       </div>
 
       <!-- Feature 4 -->
@@ -141,23 +113,30 @@ import Layout from '../../layouts/Layout.astro';
             <li><strong>Nic se nedomýšlí:</strong> Co se nezměřilo, zůstane prázdné. Pomlčka je poctivá, vymyšlená nula ne.</li>
           </ul>
         </div>
-        <div class="feature-visual-mock card">
-          <div class="mock-notification">
-            <div class="notif-header">
-              <span class="n-discord-icon">💓</span>
-              <strong>Hlídač</strong>
-              <span class="n-time">Právě teď</span>
-            </div>
-            <div class="notif-embed">
-              <h5 class="danger-text">🔴 Monitoring nesbírá data</h5>
-              <p><strong>Poslední běh:</strong> před 41 minutami</p>
-              <p><strong>Limit:</strong> 15 minut</p>
-              <p><strong>Pozn.:</strong> Přehled přitom dál vypadá zdravě.</p>
-              <p class="n-footer">Běží mimo váš server</p>
-            </div>
-          </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Jak se pozná ticho</p>
+          <ul class="fact-list">
+            <li>Každý heartbeat monitor čeká ping v rámci svého intervalu</li>
+            <li>Cloudflare Worker zvenku kontroluje, že sběr dat pořád běží</li>
+            <li>Přehled stará data označí, místo aby je vydával za aktuální</li>
+            <li>Co nikdo nezměřil, zůstane prázdné, nikdy nula</li>
+          </ul>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="section">
+    <div class="container text-center cta-container">
+      <h2>Jste připraveni převzít kontrolu?</h2>
+      <p>Vyzkoušejte Blood Kings Monitoring ještě dnes. Je to zcela zdarma a open source.</p>
+      <div class="cta-buttons">
+        <a href="/cs/download/" class="btn btn-primary">Stáhnout a nainstalovat</a>
+        <a href="/cs/docs/" class="btn btn-secondary">Prostudovat dokumentaci</a>
+      </div>
+
+
     </div>
   </section>
 </Layout>
@@ -192,8 +171,7 @@ import Layout from '../../layouts/Layout.astro';
     direction: rtl;
   }
 
-  .feature-row.reverse .feature-text,
-  .feature-row.reverse .feature-bullets {
+  .feature-row.reverse > * {
     direction: ltr;
     text-align: left;
   }
@@ -242,8 +220,8 @@ import Layout from '../../layouts/Layout.astro';
   /* Visual mockups */
   .feature-visual-mock {
     height: 300px;
-    background: #09090b;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -274,131 +252,61 @@ import Layout from '../../layouts/Layout.astro';
   }
 
   .terminal-body {
-    color: #a1a1aa;
+    color: var(--code-text);
     line-height: 1.5;
     overflow-wrap: anywhere;
-  }
-
-  .mock-caption {
-    margin: 0;
-    font-size: var(--text-xs);
-    color: var(--text-low);
   }
 
   .green-text {
     color: var(--up);
   }
 
-  .danger-text {
-    color: var(--brand-500);
+  /* Fact panels: plain lists of what the code does, in place of the drawn
+     mock status page and mock alerts that used to stand here. */
+  .fact-panel {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+    padding: 1.75rem;
   }
 
-  /* Status Page mockup */
-  .mock-status-page {
-    width: 100%;
-    background: var(--surface-0);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    height: 100%;
-    color: var(--text-hi);
+  .fact-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-low);
   }
 
-  .status-page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0.8rem;
+  .fact-list {
+    list-style: none;
+    display: grid;
+    gap: 0.65rem;
   }
 
-  .p-logo {
-    font-weight: 800;
-    font-size: 0.9rem;
+  .fact-list li {
+    position: relative;
+    padding-left: 1.25rem;
+    font-size: var(--text-sm);
+    color: var(--text-mid);
   }
 
-  .p-badge-ok {
-    font-size: 0.75rem;
-    background: var(--up-bg);
-    color: var(--up);
-    padding: 0.2rem 0.5rem;
-    border-radius: var(--radius-sm);
+  .fact-list li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--brand-500);
+  }
+
+  .fact-panel-link {
+    width: fit-content;
+    font-size: var(--text-sm);
     font-weight: 600;
-  }
-
-  .status-services {
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-  }
-
-  .service-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: var(--surface-1);
-    padding: 0.6rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 0.85rem;
-    font-weight: 500;
-  }
-
-  /* Notification mockup */
-  .mock-notification {
-    background: #2f3136;
-    color: #dcddde;
-    width: 100%;
-    border-radius: var(--radius-sm);
-    padding: 1.2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    height: 100%;
-    font-family: var(--font-sans);
-  }
-
-  .notif-header {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.85rem;
-  }
-
-  .n-discord-icon {
-    font-size: 1.2rem;
-  }
-
-  .n-time {
-    font-size: 0.75rem;
-    color: #72767d;
-    margin-left: auto;
-  }
-
-  .notif-embed {
-    background: #202225;
-    border-left: 4px solid var(--brand-500);
-    border-radius: 4px;
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    font-size: 0.8rem;
-  }
-
-  .notif-embed h5 {
-    color: #ffffff;
-    font-size: 0.9rem;
-    margin-bottom: 0.3rem;
-  }
-
-  .n-footer {
-    font-size: 0.7rem;
-    color: #72767d;
-    margin-top: 0.5rem;
+    color: var(--brand-500);
   }
 
   /* CTA container styling */
@@ -438,7 +346,8 @@ import Layout from '../../layouts/Layout.astro';
       direction: ltr;
     }
     .feature-visual-mock {
-      height: 250px;
+      height: auto;
+      min-height: 220px;
     }
   }
 

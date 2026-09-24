@@ -99,17 +99,26 @@ live updatu poskakují.
 
 ## 4. Komponenty
 
-Pořadí sekcí na homepage odpovídá mockupu:
+Homepage je jedna komponenta pro oba jazyky (`src/components/home/Home.astro`),
+texty jsou ve slovnících `src/i18n/{en,cs}.ts` se sdíleným typem `Dict`
+(chybějící klíč = chyba typu). `src/pages/index.astro` a `src/pages/cs/index.astro`
+jen vyberou jazyk. Pořadí sekcí:
 
-1. **Hero** — `HeroGlobe.astro`: globus s oblouky mezi lokacemi agentů,
-   nadpis, dvě CTA (`Get Started` primary / `View on GitHub` ghost),
-   trust řádek (Self Hosted · Open Source · MIT), stat pilulky (agenti/monitory).
-2. **Feature strip** — 6 karet s SVG glyfy v barevných dlaždicích
-   (Remote Agents, Multi Protocol, IPv4 & IPv6, Status Pages, Notifications, Open API).
-   Emoji nahrazena SVG: emoji se renderují různě podle platformy a screen reader
-   je čte jako "kotva", "domeček" — SVG má `aria-hidden` a popisek nese nadpis.
-3. **Playground**, **Dashboard preview**, **Map**, **Comparison**, **Quick start**,
-   **AgentSelector** — zachovány, přebarveny do nového systému.
+1. **Hero** — eyebrow, dvouřádkový H1, tři CTA (Install / živá stavová stránka /
+   GitHub) a živý panel `Dashboard.astro` z `/api/status` + verze serveru
+   z `/api/versions`; dokud nepřijde odpověď, všude je pomlčka.
+2. **Fact chips** — jen tvrzení, která kód dokládá, každé s odkazem na důkaz.
+3. **Routery** — slovy + `home/RouterDiagram.astro` (ilustrace toku dat, bez čísel),
+   poznámka o soukromí a cena běhu agenta s uvedeným zdrojem měření (e2e harness).
+4. **Co hlídá** — karty se stavem Hotovo / Částečně / V plánu (text, ne jen barva).
+5. **Živý důkaz** — `Map.astro` (agenti z `/api/status`) a `Playground.astro`
+   (jeden skutečný požadavek přes `/api/test`, jen stav HTTP a celková odezva).
+6. **Jak to funguje** (3 kroky), **Instalace agenta** (`AgentSelector.astro`,
+   ARIA taby, odkaz na skript, odinstalace), **Co (zatím) neumí**, **FAQ**
+   (details + FAQPage JSON-LD ze stejného slovníku), **Proč vznikl**.
+
+Screenshoty aplikace zatím záměrně nejsou; sekce jsou navržené tak, aby bez nich
+fungovaly, a nic nekreslí aplikaci s vymyšlenými čísly.
 
 ### Primitiva
 

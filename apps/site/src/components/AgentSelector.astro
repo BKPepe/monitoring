@@ -1,49 +1,70 @@
 ---
-// AgentSelector.astro - installation panels and agent switcher.
+// AgentSelector.astro - agent install tabs.
 //
-// Every command here is one the scripts really accept. The page used to show
-// a Docker image that was never published, a PowerShell install function
-// that does not exist, an install.sh that is not served, and `--register TOKEN` without the server address, so
-// agent.sh registered against its localhost default. The steps now mirror
-// the app's own install guide (apps/monitor/src/lib/agent-install.ts):
+// Every command here is one the scripts really accept. The install steps
+// mirror the app's own install guide (apps/monitor/src/lib/agent-install.ts):
 // `agent.sh --register TOKEN API_URL` for the shell agents, agent.cfg for
-// PowerShell, and the served docker-compose.agent.yml (python:3-alpine) for Docker.
+// PowerShell, and the served docker-compose.agent.yml (python:3-alpine) for
+// Docker. The uninstall steps undo exactly what the install steps did.
 //
 // Versions come from the worker's /api/agents, which reads the published
 // scripts; until it answers, and when it fails, the badge shows a dash.
-const currentPath = Astro.url.pathname;
-const isCs = currentPath.startsWith('/cs') || currentPath === '/cs';
+import type { Lang } from '../i18n';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const cs = lang === 'cs';
 
 const BASE = 'https://bloodkings.eu/status';
 const API_URL = `${BASE}/agent_api.php`;
 
-const t = isCs ? {
-  badge: 'Instalace agenta',
-  title: 'Nainstalujte agenta několika příkazy',
-  desc: 'Vyberte platformu a zkopírujte příkazy. Registrační token a klíče agentů najdete v administraci. Adresy míří na server bloodkings.eu, na vlastní instanci je nahraďte její adresou.',
-  versionLabel: 'Verze agenta:',
-  imageLabel: 'Obraz:',
-  linuxDesc: 'Bash agent bez závislostí (stačí curl). Příkaz --register ho přihlásí registračním tokenem a klíč uloží do agent.cfg vedle skriptu, cron ho pak spouští každých 5 minut.',
-  openwrtDesc: 'Úsporný ash skript pro OpenWrt a Turris, bez bashe a Pythonu. Registrace uloží klíč do agent_openwrt.cfg, cron ho spouští každou minutu.',
-  windowsDesc: 'PowerShell agent (5.1+). Nemá registrační příkaz: klíč agenta z nastavení monitoru uložte do agent.cfg a Plánovač úloh ho spustí každých 5 minut (PowerShell jako správce).',
-  dockerDesc: 'Python agent v kontejneru python:3-alpine s pid: host, takže hlásí metriky hostitele, ne kontejneru. Doplňte klíč agenta z nastavení monitoru.',
-  raspberryDesc: 'Stejný Bash agent jako na Linuxu, běží na ARMv7 i ARM64 bez dalších balíčků kromě curl.',
-  copy: 'Zkopírovat',
-  copied: 'Zkopírováno!'
-} : {
-  badge: 'Agent installation',
-  title: 'Install an Agent in a Few Commands',
-  desc: "Choose your platform and copy the commands. The registration token and agent keys are in the admin. The addresses point at the bloodkings.eu server; on your own instance, use its address instead.",
-  versionLabel: 'Agent Version:',
-  imageLabel: 'Image:',
-  linuxDesc: 'A dependency-free Bash agent (curl is enough). --register enrols it with the registration token and stores its key in agent.cfg next to the script; cron then runs it every 5 minutes.',
-  openwrtDesc: 'A lean ash script for OpenWrt and Turris, no bash or Python needed. Registration stores its key in agent_openwrt.cfg; cron runs it every minute.',
-  windowsDesc: "A PowerShell agent (5.1+). It has no register command: put the agent key from the monitor's settings into agent.cfg, and the Task Scheduler runs it every 5 minutes (run PowerShell as administrator).",
-  dockerDesc: "The Python agent in a python:3-alpine container with pid: host, so it reports the host's metrics, not the container's. Fill in the agent key from the monitor's settings.",
-  raspberryDesc: 'The same Bash agent as on Linux; it runs on ARMv7 and ARM64 with nothing but curl.',
-  copy: 'Copy',
-  copied: 'Copied!'
-};
+const t = cs
+  ? {
+      tabs: 'Platforma agenta',
+      version: 'Verze',
+      needs: 'Potřebuje',
+      readFirst: 'Nejdřív si přečtěte skript',
+      install: 'Instalace',
+      uninstall: 'Odinstalace',
+      uninstallNote: 'Pak v přehledu smažte monitor agenta, aby jeho klíč přestal platit.',
+      copy: 'Kopírovat',
+      copied: 'Zkopírováno do schránky',
+      copyFailed: 'Kopírování se nepodařilo, označte text ručně',
+      linux: 'Bash agent bez závislostí kromě curl. --register ho přihlásí registračním tokenem a klíč uloží do agent.cfg vedle skriptu; cron ho pak spouští každých 5 minut.',
+      linuxNeeds: 'Bash, curl a cron; práva roota pro /opt.',
+      openwrt: 'Skript v POSIX sh pro OpenWrt a Turris OS, bez bashe a Pythonu. Registrace uloží klíč do agent_openwrt.cfg; cron ho spouští každou minutu a skript po běhu skončí.',
+      openwrtNeeds: 'OpenWrt nebo Turris OS s cronem a ubus; curl, uclient-fetch nebo wget. Volitelně iw (vytížení kanálu) a smartmontools (SMART).',
+      windows: 'PowerShell agent. Nemá registrační příkaz: klíč agenta z přehledu uložte do agent.cfg a Plánovač úloh ho spouští každých 5 minut.',
+      windowsNeeds: 'Windows PowerShell 5.1 nebo novější, spuštěný jako správce.',
+      docker: 'Python agent v kontejneru python:3-alpine. Doplňte klíč agenta z přehledu.',
+      dockerNeeds: 'Docker s pluginem compose. Kontejner používá pid: host a network_mode: host a připojí / jen pro čtení, takže hlásí hostitele, ne sebe.',
+      raspberry: 'Stejný Bash agent jako na Linuxu.',
+      raspberryNeeds: 'Raspberry Pi OS (ARMv7 nebo ARM64) s curl a cronem.',
+    }
+  : {
+      tabs: 'Agent platform',
+      version: 'Version',
+      needs: 'Needs',
+      readFirst: 'Read the script first',
+      install: 'Install',
+      uninstall: 'Uninstall',
+      uninstallNote: 'Then delete the agent’s monitor in the dashboard so its key stops working.',
+      copy: 'Copy',
+      copied: 'Copied to the clipboard',
+      copyFailed: 'Copying failed; select the text by hand',
+      linux: 'A Bash agent with no dependency beyond curl. --register enrols it with the registration token and stores its key in agent.cfg next to the script; cron then runs it every 5 minutes.',
+      linuxNeeds: 'Bash, curl and cron; root for /opt.',
+      openwrt: 'A POSIX sh script for OpenWrt and Turris OS, no bash or Python. Registration stores its key in agent_openwrt.cfg; cron starts it every minute and it exits after each run.',
+      openwrtNeeds: 'OpenWrt or Turris OS with cron and ubus; curl, uclient-fetch or wget. Optional: iw (channel load) and smartmontools (SMART).',
+      windows: 'A PowerShell agent. It has no register command: put the agent key from the dashboard into agent.cfg, and the Task Scheduler runs it every 5 minutes.',
+      windowsNeeds: 'Windows PowerShell 5.1 or newer, run as administrator.',
+      docker: 'The Python agent in a python:3-alpine container. Fill in the agent key from the dashboard.',
+      dockerNeeds: 'Docker with the compose plugin. The container uses pid: host and network_mode: host and mounts / read-only, so it reports the host, not itself.',
+      raspberry: 'The same Bash agent as on Linux.',
+      raspberryNeeds: 'Raspberry Pi OS (ARMv7 or ARM64) with curl and cron.',
+    };
 
 // The same crontab idiom as the app: through `crontab`, never by appending
 // to /etc/crontabs/root, which Turris OS (cronie) ignores. The mkdir is for
@@ -56,37 +77,58 @@ const shellSteps = [
   `/opt/bk-agent/agent.sh --register YOUR_REGISTRATION_TOKEN ${API_URL}`,
   `( crontab -l 2>/dev/null || true; echo '*/5 * * * * /opt/bk-agent/agent.sh >/dev/null 2>&1' ) | crontab -`,
 ].join('\n');
+const shellRemove = [
+  `( crontab -l 2>/dev/null | grep -v /opt/bk-agent/agent.sh || true ) | crontab -`,
+  'rm -rf /opt/bk-agent',
+].join('\n');
+
+const ICONS = {
+  terminal: 'M4 17l6-6-6-6M12 19h8',
+  router: 'M4 14h16a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zM6 17.5h.01M10 17.5h.01M15 10v4M17.8 7.2a4 4 0 0 0-5.6 0M20.7 4.3a8 8 0 0 0-11.4 0',
+  windows: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM3 12h18M12 3v18',
+  box: 'M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8',
+  chip: 'M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4',
+};
 
 const panels = [
   {
     id: 'linux',
-    icon: '🐧',
+    icon: ICONS.terminal,
     label: 'Linux / VPS',
     agent: 'bash',
-    desc: t.linuxDesc,
-    lang: 'bash',
+    desc: t.linux,
+    needs: t.linuxNeeds,
+    scripts: [{ name: 'agent.sh', href: `${BASE}/agent.sh` }],
     code: shellSteps,
+    remove: shellRemove,
   },
   {
     id: 'openwrt',
-    icon: '📡',
+    icon: ICONS.router,
     label: 'OpenWrt / Turris',
     agent: 'openwrt',
-    desc: t.openwrtDesc,
-    lang: 'bash',
+    desc: t.openwrt,
+    needs: t.openwrtNeeds,
+    scripts: [{ name: 'agent_openwrt.sh', href: `${BASE}/agent_openwrt.sh` }],
     code: [
       `wget -O /usr/bin/agent_openwrt.sh ${BASE}/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh`,
       `/usr/bin/agent_openwrt.sh --register YOUR_REGISTRATION_TOKEN ${API_URL}`,
       `mkdir -p "\${HOME:-/root}/.cache/crontab" && ( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -`,
     ].join('\n'),
+    remove: [
+      `( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true ) | crontab -`,
+      'rm -f /usr/bin/agent_openwrt.sh /usr/bin/agent_openwrt.cfg',
+      'rm -rf /var/run/status-agent-openwrt /tmp/status-agent-openwrt*',
+    ].join('\n'),
   },
   {
     id: 'windows',
-    icon: '🪟',
+    icon: ICONS.windows,
     label: 'Windows',
     agent: 'powershell',
-    desc: t.windowsDesc,
-    lang: 'powershell',
+    desc: t.windows,
+    needs: t.windowsNeeds,
+    scripts: [{ name: 'agent.ps1', href: `${BASE}/agent.ps1` }],
     code: [
       `New-Item -ItemType Directory -Force C:\\bloodkings | Out-Null; Invoke-WebRequest -Uri "${BASE}/agent.ps1" -OutFile C:\\bloodkings\\agent.ps1`,
       `Set-Content -Path C:\\bloodkings\\agent.cfg -Value @('API_URL="${API_URL}"', 'AGENT_KEY="YOUR_AGENT_KEY"')`,
@@ -94,120 +136,175 @@ const panels = [
       '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)',
       'Register-ScheduledTask -TaskName "BloodKingsAgent" -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest',
     ].join('\n'),
+    remove: ['Unregister-ScheduledTask -TaskName "BloodKingsAgent" -Confirm:$false', 'Remove-Item -Recurse -Force C:\\bloodkings'].join(
+      '\n'
+    ),
   },
   {
     id: 'docker',
-    icon: '🐳',
+    icon: ICONS.box,
     label: 'Docker',
     agent: 'python',
-    image: 'python:3-alpine',
-    desc: t.dockerDesc,
-    lang: 'bash',
+    desc: t.docker,
+    needs: t.dockerNeeds,
+    scripts: [
+      { name: 'agent.py', href: `${BASE}/agent.py` },
+      { name: 'docker-compose.agent.yml', href: `${BASE}/docker-compose.agent.yml` },
+    ],
     code: [
       `mkdir -p /opt/bk-agent && cd /opt/bk-agent && curl -fsSL -o agent.py ${BASE}/agent.py && curl -fsSL -o docker-compose.agent.yml ${BASE}/docker-compose.agent.yml`,
       `sed -i 's|STATUS_API_URL: .*|STATUS_API_URL: "${API_URL}"|; s|STATUS_AGENT_KEY: .*|STATUS_AGENT_KEY: "YOUR_AGENT_KEY"|' docker-compose.agent.yml`,
       'docker compose -f docker-compose.agent.yml up -d',
     ].join('\n'),
+    remove: ['cd /opt/bk-agent && docker compose -f docker-compose.agent.yml down', 'rm -rf /opt/bk-agent'].join('\n'),
   },
   {
     id: 'raspberry',
-    icon: '🍓',
+    icon: ICONS.chip,
     label: 'Raspberry Pi',
     agent: 'bash',
-    desc: t.raspberryDesc,
-    lang: 'bash',
+    desc: t.raspberry,
+    needs: t.raspberryNeeds,
+    scripts: [{ name: 'agent.sh', href: `${BASE}/agent.sh` }],
     code: shellSteps,
+    remove: shellRemove,
   },
 ];
 ---
 
-<div class="agent-selector-card card" id="install-guide">
-  <div class="selector-header">
-    <span class="badge badge-success">{t.badge}</span>
-    <h3>{t.title}</h3>
-    <p>{t.desc}</p>
+<div class="installer" id="install-guide" data-copied={t.copied} data-copy-failed={t.copyFailed}>
+  <div class="inst-tabs" role="tablist" aria-label={t.tabs}>
+    {
+      panels.map((p, i) => (
+        <button
+          type="button"
+          role="tab"
+          class="inst-tab"
+          id={`tab-${p.id}`}
+          aria-controls={`panel-${p.id}`}
+          aria-selected={i === 0 ? 'true' : 'false'}
+          tabindex={i === 0 ? 0 : -1}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d={p.icon} />
+          </svg>
+          {p.label}
+        </button>
+      ))
+    }
   </div>
 
-  <div class="tabbed-selector">
-    <!-- Tabs selectors -->
-    <div class="tabs-nav">
-      {panels.map((panel, i) => (
-        <button class:list={['tab-btn', { active: i === 0 }]} data-platform={panel.id}>
-          <span>{panel.icon}</span> {panel.label}
-        </button>
-      ))}
-    </div>
-
-    <!-- Tab contents -->
-    <div class="tab-contents">
-      {panels.map((panel, i) => (
-        <div class:list={['tab-panel', { active: i === 0 }]} id={`panel-${panel.id}`}>
-          <div class="panel-meta">
-            <div class="meta-row">
-              <span class="meta-label">{t.versionLabel}</span>
-              <span class="meta-val badge badge-accent tabular" data-agent-version={panel.agent}>—</span>
-              {panel.image && (
-                <>
-                  <span class="meta-label">{t.imageLabel}</span>
-                  <span class="meta-val badge badge-accent">{panel.image}</span>
-                </>
-              )}
+  {
+    panels.map((p, i) => (
+      <div
+        class="inst-panel"
+        role="tabpanel"
+        id={`panel-${p.id}`}
+        aria-labelledby={`tab-${p.id}`}
+        tabindex="0"
+        hidden={i !== 0}
+      >
+        <div class="inst-info">
+          <p class="inst-desc">{p.desc}</p>
+          <dl class="inst-facts">
+            <div>
+              <dt>{t.version}</dt>
+              <dd class="tabular" data-agent-version={p.agent}>
+                —
+              </dd>
             </div>
-            <p>{panel.desc}</p>
-          </div>
-          <div class="code-block-wrapper">
-            <pre><code class={`language-${panel.lang}`} id={`code-${panel.id}`}>{panel.code}</code></pre>
-            <button class="copy-code-btn" data-target={`code-${panel.id}`} aria-label={t.copy}>
-              <span class="copy-txt">{t.copy}</span>
-              <span class="copied-txt">{t.copied}</span>
+            <div>
+              <dt>{t.needs}</dt>
+              <dd>{p.needs}</dd>
+            </div>
+            <div>
+              <dt>{t.readFirst}</dt>
+              <dd class="inst-scripts">
+                {p.scripts.map((s) => (
+                  <a href={s.href} rel="noopener">
+                    {s.name}
+                  </a>
+                ))}
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="inst-code">
+          <div class="code-head">
+            <span>{t.install}</span>
+            <button type="button" class="copy-btn" data-target={`code-${p.id}`}>
+              {t.copy}
             </button>
           </div>
+          <pre><code id={`code-${p.id}`}>{p.code}</code></pre>
+          <div class="code-head">
+            <span>{t.uninstall}</span>
+            <button type="button" class="copy-btn" data-target={`remove-${p.id}`}>
+              {t.copy}
+            </button>
+          </div>
+          <pre><code id={`remove-${p.id}`}>{p.remove}</code></pre>
+          <p class="inst-note">{t.uninstallNote}</p>
         </div>
-      ))}
-    </div>
-  </div>
+      </div>
+    ))
+  }
+  <p class="visually-hidden" id="copy-status" aria-live="polite"></p>
 </div>
 
 <script>
   import { API_ORIGIN } from '../config';
 
-  // Dynamic tab switcher
-  const tabBtns = document.querySelectorAll('.tab-btn');
-  const tabPanels = document.querySelectorAll('.tab-panel');
+  const root = document.getElementById('install-guide');
+  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.inst-tab'));
 
-  tabBtns.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const platform = btn.getAttribute('data-platform');
+  // WAI-ARIA tabs: arrows move between tabs, Home/End jump to the ends.
+  const select = (tab: HTMLButtonElement, focus: boolean) => {
+    for (const other of tabs) {
+      const selected = other === tab;
+      other.setAttribute('aria-selected', String(selected));
+      other.tabIndex = selected ? 0 : -1;
+      const panel = document.getElementById(other.getAttribute('aria-controls') ?? '');
+      if (panel) panel.hidden = !selected;
+    }
+    if (focus) tab.focus();
+  };
 
-      tabBtns.forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      tabPanels.forEach((panel) => {
-        panel.classList.toggle('active', panel.id === `panel-${platform}`);
-      });
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => select(tab, false));
+    tab.addEventListener('keydown', (e) => {
+      const last = tabs.length - 1;
+      const to =
+        e.key === 'ArrowRight' ? (i === last ? 0 : i + 1)
+        : e.key === 'ArrowLeft' ? (i === 0 ? last : i - 1)
+        : e.key === 'Home' ? 0
+        : e.key === 'End' ? last
+        : -1;
+      if (to < 0) return;
+      e.preventDefault();
+      select(tabs[to], true);
     });
   });
 
-  // Copy to clipboard
-  document.querySelectorAll('.copy-code-btn').forEach((btn) => {
+  const status = document.getElementById('copy-status');
+  document.querySelectorAll<HTMLButtonElement>('.copy-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const targetId = btn.getAttribute('data-target');
-      const codeElement = targetId ? document.getElementById(targetId) : null;
-      if (!codeElement) return;
-
+      const code = document.getElementById(btn.dataset.target ?? '');
+      if (!code || !status) return;
       try {
-        await navigator.clipboard.writeText(codeElement.textContent ?? '');
-        btn.classList.add('copied');
-        setTimeout(() => btn.classList.remove('copied'), 2000);
-      } catch (err) {
-        console.error('Failed to copy to clipboard:', err);
+        await navigator.clipboard.writeText(code.textContent?.trim() ?? '');
+        status.textContent = root?.dataset.copied ?? '';
+        btn.dataset.done = 'true';
+        setTimeout(() => delete btn.dataset.done, 1800);
+      } catch {
+        status.textContent = root?.dataset.copyFailed ?? '';
       }
     });
   });
 
   // Per-platform versions from the worker, which reads them from the
-  // published scripts. A version it could not read is null and stays a dash;
-  // nothing here falls back to a number written into the page.
+  // published scripts. A version it could not read is null and stays a dash.
   async function loadAgentVersions() {
     let versions: Record<string, unknown> = {};
     try {
@@ -217,10 +314,8 @@ const panels = [
     } catch {
       versions = {};
     }
-
     document.querySelectorAll<HTMLElement>('[data-agent-version]').forEach((badge) => {
       const value = versions[badge.dataset.agentVersion ?? ''];
-      // Only a version-shaped string counts; an older worker answered "unknown".
       badge.textContent = typeof value === 'string' && /^\d[\w.-]*$/.test(value) ? `v${value}` : '—';
     });
   }
@@ -229,189 +324,197 @@ const panels = [
 </script>
 
 <style>
-  .agent-selector-card {
-    background: var(--surface-1);
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-    padding: 3rem;
-  }
-
-  .selector-header h3 {
-    font-size: 1.8rem;
-    margin-top: 0.5rem;
-  }
-
-  .selector-header p {
-    font-size: 0.95rem;
-    color: var(--text-mid);
-    margin-top: 0.5rem;
-    max-width: 600px;
-  }
-
-  /* Tab Nav */
-  .tabs-nav {
-    display: flex;
-    gap: 0.5rem;
-    background: var(--surface-2);
+  .installer {
     border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-1);
+    overflow: hidden;
+  }
+
+  .inst-tabs {
+    display: flex;
+    gap: 0.25rem;
     padding: 0.4rem;
-    border-radius: var(--radius-sm);
-    margin-bottom: 2rem;
-    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-0);
+    overflow-x: auto;
+    scrollbar-width: thin;
   }
 
-  .tab-btn {
-    flex-grow: 1;
+  .inst-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
     background: transparent;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    font-family: var(--font-heading);
-    font-size: 0.95rem;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: 500;
     color: var(--text-mid);
-    border-radius: var(--radius-sm);
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    transition: all var(--transition-fast);
+    white-space: nowrap;
   }
 
-  .tab-btn:hover {
+  .inst-tab svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .inst-tab:hover {
     color: var(--text-hi);
-    background: rgba(0, 0, 0, 0.02);
   }
 
-  :global(.dark) .tab-btn:hover {
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  .tab-btn.active {
-    background: var(--surface-1);
+  .inst-tab[aria-selected='true'] {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
     color: var(--text-hi);
-    box-shadow: var(--shadow-sm);
-    border: 1px solid var(--border);
   }
 
-  /* Tab Panel Content */
-  .tab-panel {
+  .inst-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: clamp(1.25rem, 1rem + 2vw, 2.5rem);
+    padding: clamp(1.25rem, 1rem + 1.5vw, 2rem);
+  }
+
+  .inst-panel[hidden] {
     display: none;
-    flex-direction: column;
-    gap: 1.5rem;
   }
 
-  .tab-panel.active {
-    display: flex;
+  .inst-panel:focus-visible {
+    outline-offset: -3px;
   }
 
-  .panel-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+  .inst-desc {
+    font-size: var(--text-sm);
   }
 
-  .meta-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+  .inst-facts {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1.25rem;
   }
 
-  .meta-label {
-    font-size: 0.85rem;
-    font-weight: 600;
+  .inst-facts dt {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     color: var(--text-low);
+    margin-bottom: 0.2rem;
   }
 
-  .meta-val {
-    font-size: 0.85rem;
+  .inst-facts dd {
+    font-size: var(--text-sm);
+    color: var(--text-mid);
   }
 
-  .tab-panel p {
-    font-size: 0.95rem;
+  .inst-facts dd[data-agent-version] {
+    font-family: var(--font-mono);
+    color: var(--text-hi);
   }
 
-  /* Code Block Box */
-  .code-block-wrapper {
-    position: relative;
-    background: #09090b;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: var(--radius-sm);
-    padding: 1.2rem 4rem 1.2rem 1.5rem;
+  .inst-scripts {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
   }
 
-  .code-block-wrapper pre {
-    width: 100%;
+  .inst-scripts a {
+    font-family: var(--font-mono);
+    color: var(--brand-500);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .inst-code {
+    display: grid;
+    gap: 0.5rem;
+    align-content: start;
+    min-width: 0;
+  }
+
+  .code-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-low);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .code-head:not(:first-child) {
+    margin-top: 0.75rem;
+  }
+
+  .copy-btn {
+    min-height: 2rem;
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-mid);
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .copy-btn:hover {
+    color: var(--text-hi);
+  }
+
+  .copy-btn[data-done] {
+    color: var(--up);
+    border-color: color-mix(in oklab, var(--up) 40%, transparent);
+  }
+
+  pre {
     margin: 0;
+    padding: 1rem 1.1rem;
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
     overflow-x: auto;
   }
 
-  .code-block-wrapper code {
-    color: #f4f4f5;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
+  code {
+    display: block;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    color: var(--code-text);
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: anywhere;
   }
 
-  .copy-code-btn {
-    position: absolute;
-    right: 1.2rem;
-    top: 50%;
-    transform: translateY(-50%);
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #a1a1aa;
-    padding: 0.4rem 0.8rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all var(--transition-fast);
+  .inst-note {
+    font-size: var(--text-xs);
+    color: var(--text-low);
   }
 
-  .copy-code-btn:hover {
-    color: #ffffff;
-    background: rgba(255, 255, 255, 0.12);
-  }
-
-  .copy-code-btn .copied-txt {
-    display: none;
-    color: var(--up);
-  }
-
-  .copy-code-btn.copied {
-    border-color: var(--up);
-    background: rgba(64, 192, 87, 0.1);
-  }
-
-  .copy-code-btn.copied .copy-txt {
-    display: none;
-  }
-
-  .copy-code-btn.copied .copied-txt {
-    display: inline;
-  }
-
-  @media (max-width: 768px) {
-    .agent-selector-card {
-      padding: 1.5rem;
+  @media (max-width: 860px) {
+    .inst-panel {
+      grid-template-columns: 1fr;
     }
-    .tabs-nav {
-      flex-direction: column;
+  }
+
+  @media (max-width: 560px) {
+    .inst-tabs {
+      flex-wrap: wrap;
     }
-    .code-block-wrapper {
-      padding: 1.2rem 1.2rem 4rem 1.2rem;
-      align-items: flex-start;
-    }
-    .copy-code-btn {
-      top: auto;
-      bottom: 1.2rem;
-      right: 1.2rem;
-      transform: none;
+    .inst-tab {
+      flex: 1 1 auto;
+      justify-content: center;
     }
   }
 </style>

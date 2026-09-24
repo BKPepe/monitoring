@@ -1,12 +1,11 @@
 {
   "name": "Blood Kings Monitoring",
   "short_name": "Blood Kings",
-  "description": "Bezlimitní self-hosted monitoring pro servery a služby.",
+  "description": "Self-hosted monitoring for websites, servers and OpenWrt routers.",
   "start_url": "/",
-  "display": "standalone",
-  "background_color": "#09090b",
-  "theme_color": "#b00020",
-  "orientation": "any",
+  "display": "browser",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
   "icons": [
     {
       "src": "/favicon.svg",

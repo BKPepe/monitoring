@@ -58,7 +58,16 @@ const cspCheck = {
 export default defineConfig({
   site: 'https://monitoring.bloodkings.eu',
   // Error pages are not content: the sitemap lists live pages only.
-  integrations: [sitemap({ filter: (page) => !/\/404\/?$/.test(new URL(page).pathname) }), nestedNotFound, cspCheck],
+  integrations: [
+    sitemap({
+      filter: (page) => !/\/404\/?$/.test(new URL(page).pathname),
+      // Each URL lists its other-language twin (xhtml:link hreflang), the
+      // same pairs the <link rel="alternate"> tags in Layout.astro name.
+      i18n: { defaultLocale: 'en', locales: { en: 'en', cs: 'cs' } },
+    }),
+    nestedNotFound,
+    cspCheck,
+  ],
 
   security: {
     /**
