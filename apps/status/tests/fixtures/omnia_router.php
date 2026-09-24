@@ -160,6 +160,9 @@ $payload = [
     // Not captured for 0.1.7 (the 0.1.6 dry run took 9.47 s on this router).
     'agent_run_ms' => null, 'agent_prev_total_ms' => null,
     'runs_skipped_lock' => null, 'runs_skipped_post' => null,
+    // Keys of agent 0.1.9. This capture is older, so neither was measured:
+    // null, the same as the server stores for an agent that does not send them.
+    'agent_prev_cpu_ms' => null, 'runs_skipped_killed' => null,
 ];
 
 // One full day of `metrics_daily`, the same for each of the 7 days before

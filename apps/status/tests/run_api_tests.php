@@ -1991,6 +1991,22 @@ check('wifi_6e_unserved se průměruje jako podíl času', (float)($router_rows[
 $pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g', 'wifi_6e_unserved', 'cpu_core_max', 'wan_errors', 'wan_link_flaps', 'agent_run_ms', 'clock_skew_s')");
 $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2 AND checked_at IN (TIMESTAMP('{$sample_day}', '00:30:00'), TIMESTAMP('{$sample_day}', '00:40:00'))");
 
+// Agent 0.1.9: the CPU time of the previous run rides the same rollup. An
+// older agent's row is NULL and the day counts only measured runs - zeros in
+// the average would halve what the agent really costs.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, agent_prev_cpu_ms, checked_at) VALUES
+            (2, 190, TIMESTAMP('{$sample_day}', '01:30:00')), (2, 250, TIMESTAMP('{$sample_day}', '01:40:00')),
+            (2, NULL, TIMESTAMP('{$sample_day}', '01:50:00'))");
+bk_rollup_daily_metrics($pdo, 2);
+$cpu_prev_day = $pdo->prepare("SELECT avg_val, max_val, samples FROM metrics_daily WHERE monitor_id = 2 AND day = ? AND metric_key = 'agent_prev_cpu_ms'");
+$cpu_prev_day->execute([$sample_day]);
+$cpu_prev_row = $cpu_prev_day->fetch() ?: [];
+check('CPU čas agenta se agreguje jen z naměřených běhů, NULL staršího agenta není nula',
+    [(float)($cpu_prev_row['avg_val'] ?? -1), (float)($cpu_prev_row['max_val'] ?? -1), (int)($cpu_prev_row['samples'] ?? -1)],
+    [220.0, 250.0, 2]);
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key = 'agent_prev_cpu_ms'");
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2 AND checked_at IN (TIMESTAMP('{$sample_day}', '01:30:00'), TIMESTAMP('{$sample_day}', '01:40:00'), TIMESTAMP('{$sample_day}', '01:50:00'))");
+
 // A repeated run must neither duplicate nor double the counts.
 bk_rollup_daily_metrics($pdo, 2);
 $stmt_cpu_count = $pdo->prepare("SELECT COUNT(*) FROM metrics_daily
@@ -3507,6 +3523,65 @@ check('G24: agent, který SQM zná, hlásí dál true/false', [
     $omnia_at($omnia_details(), 'sqm_enabled'),
 ], [200, false]);
 
+// --- Agent 0.1.9: CPU time of the previous run, runs the takeover stopped -----
+//
+// agent_prev_cpu_ms is a stored metric (the fleet's measured cost per release),
+// runs_skipped_killed a counter in last_details for the reports_missing issue.
+// An agent up to 0.1.8 sends neither key, and "not measured" must stay null:
+// a 0 would read as a free run and as "nothing was killed".
+$cpu_col = function () use ($omnia_metrics) {
+    $row = $omnia_metrics('agent_prev_cpu_ms');
+    if (!array_key_exists('agent_prev_cpu_ms', $row)) {
+        return 'chybí';
+    }
+    return $row['agent_prev_cpu_ms'] === null ? null : (int)$row['agent_prev_cpu_ms'];
+};
+$cpu_seen = function () use ($cpu_col, $omnia_details, $omnia_at): array {
+    $d = $omnia_details();
+    return [$cpu_col(), $omnia_at($d, 'agent_prev_cpu_ms'), $omnia_at($d, 'runs_skipped_killed')];
+};
+$omnia_018 = array_merge($omnia_pl, ['agent_time' => time()]);
+unset($omnia_018['agent_prev_cpu_ms'], $omnia_018['runs_skipped_killed']);
+check('0.1.9: hlášení agenta 0.1.8 bez nových klíčů agent přijme', $post_agent($omnia_018), 200);
+check('0.1.9: agent 0.1.8 CPU čas ani ukončené běhy neměří - null ve sloupci i v details, ne nula',
+    $cpu_seen(), [null, null, null]);
+$omnia_019 = array_merge($omnia_pl, ['agent_time' => time()]);
+check('0.1.9: hlášení s CPU časem a ukončenými běhy agent přijme',
+    $post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => 190, 'runs_skipped_killed' => 2])), 200);
+check('0.1.9: CPU čas předchozího běhu se uloží jako metrika i do details, ukončené běhy do details',
+    $cpu_seen(), [190, 190, 2]);
+check('0.1.9: skutečná nula je měření, ne neznámo',
+    [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => 0, 'runs_skipped_killed' => 0])), $cpu_seen()],
+    [200, [0, 0, 0]]);
+check('0.1.9: horní meze (600 s CPU, 100 000 běhů) ještě platí',
+    [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => 600000, 'runs_skipped_killed' => 100000])), $cpu_seen()],
+    [200, [600000, 600000, 100000]]);
+// Out of range is dropped, never clamped: a clamped 600000 would read as a
+// real ten-minute run. The pass-through must not store the raw value either.
+foreach ([
+    'nad mezí' => [600001, 100001],
+    'záporné' => [-10, -1],
+    'text' => ['abc', 'dva'],
+    'desetinné' => [190.5, 2.5],
+    'bool' => [true, true],
+    'pole' => [[190], [2]],
+] as $cpu_case => [$cpu_bad, $killed_bad]) {
+    check("0.1.9: {$cpu_case} CPU čas a počet ukončených běhů se zahodí na null",
+        [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => $cpu_bad, 'runs_skipped_killed' => $killed_bad])), $cpu_seen()],
+        [200, [null, null, null]]);
+}
+check('0.1.9: celé číslo poslané jako text se přečte',
+    [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => '260', 'runs_skipped_killed' => '1'])), $cpu_seen()],
+    [200, [260, 260, 1]]);
+// The app reads the series under the same key; unmeasured minutes are gaps,
+// not zeros (the only 0 in it is the one the agent really measured).
+[$cpu_s_code, $cpu_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=agent_prev_cpu_ms&period=1h', $cookie_jar);
+// Reports of one second tie on checked_at, so the values are compared sorted.
+$cpu_s_vals = array_map(fn ($p) => (float)$p[1], $cpu_s['points'] ?? []);
+sort($cpu_s_vals);
+check('0.1.9: řada agent_prev_cpu_ms vrací jen naměřené body v ms', [$cpu_s_code, $cpu_s['unit'] ?? null, $cpu_s_vals],
+    [200, 'ms', [0.0, 190.0, 260.0, 600000.0]]);
+
 // Identifiers injected at three levels: the allow-lists must drop every one of
 // them, whatever the agent calls itself. Nothing here may reach last_details.
 $omnia_dirty = array_merge($omnia_pl, ['agent_time' => time()]);
@@ -4716,6 +4791,13 @@ check('migrace udělá z poškozené rychlosti 0.0148 neznámou a zdroj přepí�
 check('migrace nechá 0.5 být a maže jen poškozený sloupec', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
 check('zdravé měření migrace nezmění', $speedtest_row('2026-09-03 05:00:00'), ['download_mbps' => 940.25, 'upload_mbps' => 48.5, 'source' => 'turris']);
 
+// Agent 0.1.9: a database from before the release gains the CPU column on the
+// next schema bump. Without it every report's metrics INSERT would fail.
+$pdo->exec("ALTER TABLE vps_metrics DROP COLUMN agent_prev_cpu_ms");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('migrace doplní starší databázi sloupec CPU času agenta (0.1.9)', $column_exists('vps_metrics', 'agent_prev_cpu_ms'), true);
+
 // A later schema bump runs the same statements again. A result that a 0.1.7
 // agent really measured (it carries bytes_received) must survive it, however small.
 $pdo->exec("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, bytes_received) VALUES (2, '2026-09-04 05:00:00', 0.05, 0.04, 'agent', 93750)");
@@ -4875,14 +4957,19 @@ check_true('za HTTPS proxy má cookie relace i Secure', (bool)preg_match('/;\s*S
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES
             (160, 'Router, který zmlkl', 'openwrt', 'router-b1', 'down', 'Síť', DATE_SUB(NOW(), INTERVAL 3 DAY)),
             (161, 'Web bez cronu', 'web', 'https://example.org', 'up', 'Weby', DATE_SUB(NOW(), INTERVAL 3 DAY))");
+// One clock for every row: NOW() per insert let the 290 rows drift apart on
+// a loaded host (43506-43532 s instead of 43500), and a flaky check is how a
+// real failure gets ignored.
+$b1_now = (string)$pdo->query('SELECT NOW()')->fetchColumn();
 $b1_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
-                         VALUES (?, 'up', 20, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+                         VALUES (?, 'up', 20, DATE_SUB(?, INTERVAL ? MINUTE))");
 for ($b1_min = 20 * 60; $b1_min >= 8 * 60; $b1_min -= 5) {
-    $b1_ins->execute([160, $b1_min]);
-    $b1_ins->execute([161, $b1_min]);
+    $b1_ins->execute([160, $b1_now, $b1_min]);
+    $b1_ins->execute([161, $b1_now, $b1_min]);
 }
-$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at)
-            VALUES (160, 'down', 'Agent routeru neodpovídá', DATE_SUB(NOW(), INTERVAL 475 MINUTE))");
+$pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at)
+               VALUES (160, 'down', 'Agent routeru neodpovídá', DATE_SUB(?, INTERVAL 475 MINUTE))")
+    ->execute([$b1_now]);
 try {
     [$b1_code, $b1_uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
     check('uptime_windows vrací 200', $b1_code, 200);
@@ -4897,7 +4984,7 @@ try {
                                                   COALESCE(SUM(secs_silent), -1) AS silent
                                            FROM uptime_daily WHERE monitor_id = {$mid}")->fetch();
     $b1_r = $b1_sum(160);
-    check_true('souhrn routeru: 12 h 5 min provozu (dostal ' . $b1_r['up'] . ' s)', abs((int)$b1_r['up'] - 43500) <= 5);
+    check('souhrn routeru: 12 h 5 min provozu', (int)$b1_r['up'], 43500);
     check('souhrn routeru: řádek „neodpovídá“ platí 2,5 intervalu', (int)$b1_r['down'], 750);
     check_true('souhrn routeru: mlčení je výpadek, ~7 h 42 min (dostal ' . $b1_r['silent'] . ' s)', abs((int)$b1_r['silent'] - 27750) < 300);
     $b1_w = $b1_sum(161);

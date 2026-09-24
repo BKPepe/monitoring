@@ -92,6 +92,37 @@ describe('agentRunText (G42)', () => {
 
   it('is absent for an agent that does not measure itself', () => {
     expect(agentRunText({ agent_prev_total_ms: 12100 }, t)).toBeNull();
+    expect(agentRunText({ agent_prev_cpu_ms: 1400 }, t)).toBeNull();
+  });
+
+  // Agent 0.1.9: agent_prev_cpu_ms is the CPU of the same previous run.
+  it('přidá CPU předchozího běhu vedle jeho doby i s odesláním', () => {
+    expect(agentRunText({ agent_run_ms: 9470, agent_prev_total_ms: 12100, agent_prev_cpu_ms: 1400 }, t)).toBe(
+      '9.5 s (předchozí běh i s odesláním 12.1 s · CPU 1.4 s)'
+    );
+    expect(agentRunText({ agent_run_ms: 3200, agent_prev_total_ms: 4100, agent_prev_cpu_ms: 870 }, t)).toBe(
+      '3.2 s (předchozí běh i s odesláním 4.1 s · CPU 870 ms)'
+    );
+  });
+
+  it('naměřenou nulu CPU vypíše jako 0, ne jako chybějící hodnotu', () => {
+    expect(agentRunText({ agent_run_ms: 9470, agent_prev_total_ms: 12100, agent_prev_cpu_ms: 0 }, t)).toBe(
+      '9.5 s (předchozí běh i s odesláním 12.1 s · CPU 0 ms)'
+    );
+  });
+
+  it('bez celkové doby řekne, že CPU patří předchozímu běhu', () => {
+    // After a killed run the CPU is null and the total may be an older run's;
+    // the reverse is rare, but a bare "CPU" would read as this run's cost.
+    expect(agentRunText({ agent_run_ms: 9470, agent_prev_cpu_ms: 1400 }, t)).toBe('9.5 s (CPU předchozího běhu 1.4 s)');
+  });
+
+  it('null i chybějící klíč (agent do 0.1.8) nevypíše žádné CPU', () => {
+    expect(agentRunText({ agent_run_ms: 9470, agent_prev_total_ms: 12100, agent_prev_cpu_ms: null }, t)).toBe(
+      '9.5 s (předchozí běh i s odesláním 12.1 s)'
+    );
+    expect(agentRunText({ agent_run_ms: 9470, agent_prev_cpu_ms: null }, t)).toBe('9.5 s');
+    expect(agentRunText({ agent_run_ms: 9470, agent_prev_cpu_ms: -10 }, t)).toBe('9.5 s');
   });
 });
 
@@ -111,6 +142,30 @@ describe('agentSkippedText (G42)', () => {
   it('has nothing to say when neither counter was reported', () => {
     expect(agentSkippedText({}, t)).toBeNull();
     expect(agentSkippedText({ runs_skipped_lock: null, runs_skipped_post: null }, t)).toBeNull();
+    expect(
+      agentSkippedText({ runs_skipped_lock: null, runs_skipped_post: null, runs_skipped_killed: null }, t)
+    ).toBeNull();
+  });
+
+  // Agent 0.1.9: a run that held the lock for 300 s is killed.
+  it('přidá ukončené běhy jako třetí důvod', () => {
+    expect(agentSkippedText({ runs_skipped_lock: 2, runs_skipped_post: 1, runs_skipped_killed: 1 }, t)).toBe(
+      '2× předchozí běh ještě běžel · 1× se nepodařilo odeslat · 1× běh visel 5 min a byl ukončen'
+    );
+    expect(agentSkippedText({ runs_skipped_killed: 3 }, t)).toBe('3× běh visel 5 min a byl ukončen');
+  });
+
+  it('naměřenou nulu ukončených běhů vypíše jako 0', () => {
+    expect(agentSkippedText({ runs_skipped_lock: 0, runs_skipped_post: 0, runs_skipped_killed: 0 }, t)).toBe(
+      '0× předchozí běh ještě běžel · 0× se nepodařilo odeslat · 0× běh visel 5 min a byl ukončen'
+    );
+  });
+
+  it('agent do 0.1.8 ukončené běhy nehlásí: žádná třetí část, ne nula', () => {
+    expect(agentSkippedText({ runs_skipped_lock: 0, runs_skipped_post: 0 }, t)).not.toContain('visel');
+    expect(agentSkippedText({ runs_skipped_lock: 0, runs_skipped_post: 0, runs_skipped_killed: null }, t)).toBe(
+      '0× předchozí běh ještě běžel · 0× se nepodařilo odeslat'
+    );
   });
 });
 

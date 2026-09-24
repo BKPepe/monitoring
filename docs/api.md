@@ -881,6 +881,24 @@ monitor's `log_lines_enabled` off it keeps none (`log_errors_recent: null`,
 or `"log_lines":false` - unspaced, the agent matches it literally and stops
 collecting from its next run.
 
+**Agent 0.1.9 (OpenWrt) adds** two top-level integers about the agent itself:
+
+- `agent_prev_cpu_ms` - CPU time (user + system, children included) of the
+  PREVIOUS run in milliseconds, a multiple of 10. Range 0-600000. It is a
+  stored metric (`vps_metrics.agent_prev_cpu_ms`, rolled up into
+  `metrics_daily`, a series of `action=metric_series`) and is copied into
+  `last_details`. `null` after a first run, a version change or a run that was
+  killed (0.1.9 then sends `agent_prev_total_ms: null` too), and for every
+  agent up to 0.1.8, which does not send the key. Pair the two only when both
+  are non-null.
+- `runs_skipped_killed` - runs the lock takeover stopped after 300 s since the
+  last accepted report. Range 0-100000, `last_details` only, next to
+  `runs_skipped_lock` and `runs_skipped_post`. A count above 0 adds a third
+  reason to the `reports_missing` collection issue. `null` from agents up to
+  0.1.8, never 0.
+
+Out of range, negative, fractional or not a number is `null`, never a bound.
+
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Interface for remote measurement nodes. Authorised by a shared `cron_key`

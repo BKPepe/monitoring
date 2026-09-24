@@ -1120,6 +1120,9 @@ function bk_metric_column_map(): array {
     // Absolute value: a median of a signed column cannot be derived from a
     // daily avg/min/max, a weighted mean of a non-negative one can.
     'clock_skew_s' => ['col' => 'clock_skew_s', 'unit' => 's', 'label' => 'Odchylka hodin routeru', 'only' => ['openwrt']],
+    // Agent 0.1.9: CPU time of the PREVIOUS run (user + system, children
+    // included), a level like agent_run_ms. / 60,000 = the share of one core.
+    'agent_prev_cpu_ms' => ['col' => 'agent_prev_cpu_ms', 'unit' => 'ms', 'label' => 'CPU čas běhu agenta', 'only' => ['openwrt']],
 ];
 }
 
@@ -10626,7 +10629,7 @@ function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
         'wifi_busy_other_24g', 'wifi_busy_other_5g', 'wifi_busy_other_6g',
         'wifi_weak_clients', 'wifi_wpa2_clients', 'wifi_6e_unserved', 'wifi_5g_capable_24g',
         'cpu_core_max', 'cpu_core_max_softirq', 'wan_rx_mbps', 'wan_tx_mbps',
-        'agent_run_ms', 'clock_skew_s'
+        'agent_run_ms', 'clock_skew_s', 'agent_prev_cpu_ms'
     ];
     if (!in_array($metric_column, $allowed_cols, true)) {
         return $ctx;
@@ -16043,11 +16046,18 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
     if ($expected !== null && $received !== null && $expected >= 120 && $received < 0.9 * $expected) {
         $skipped_lock = bk_ranged_int($details['runs_skipped_lock'] ?? null, 0, 100000) ?? 0;
         $skipped_post = bk_ranged_int($details['runs_skipped_post'] ?? null, 0, 100000) ?? 0;
+        $skipped_killed = bk_ranged_int($details['runs_skipped_killed'] ?? null, 0, 100000) ?? 0;
         $message = sprintf(t('collection_issue_reports_missing'), $expected - $received, $expected);
         if ($skipped_lock > 0 || $skipped_post > 0) {
             // The agent's own counters: the difference between "the server
             // lost them" and "the previous run was still going".
             $message .= ' ' . sprintf(t('collection_issue_reports_missing_skips'), $skipped_lock, $skipped_post);
+        }
+        if ($skipped_killed > 0) {
+            // Third reason (agent 0.1.9): a run hung, the next one stopped it
+            // after 300 s and its report never went out. Its own sentence, so
+            // an older agent that does not count it is not told "0 times".
+            $message .= ' ' . sprintf(t('collection_issue_reports_missing_killed'), $skipped_killed);
         }
         $issues[] = [
             'type' => 'reports_missing',

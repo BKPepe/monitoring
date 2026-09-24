@@ -109,6 +109,28 @@ if (function_exists('bk_get_collection_issues')) {
         bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
             'runs_skipped_lock' => 96, 'runs_skipped_post' => 4])[0]['message'] ?? null,
         sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4));
+    // Agent 0.1.9: runs the lock takeover stopped are the third reason, in a
+    // sentence of their own; an older agent's missing counter adds nothing.
+    check('běh ukončený po 5 minutách visení se dopíše jako třetí důvod',
+        bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_lock' => 96, 'runs_skipped_post' => 4, 'runs_skipped_killed' => 3])[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4)
+            . ' ' . sprintf(t('collection_issue_reports_missing_killed'), 3));
+    check('samotné ukončené běhy se dopíšou i bez ostatních přeskoků',
+        bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_lock' => 0, 'runs_skipped_post' => 0, 'runs_skipped_killed' => 2])[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_killed'), 2));
+    check('nula ani chybějící počet ukončených běhů (agent do 0.1.8) nic nedopíše',
+        [bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_killed' => 0])[0]['message'] ?? null,
+         bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_killed' => null])[0]['message'] ?? null],
+        [sprintf(t('collection_issue_reports_missing'), 160, 1440), sprintf(t('collection_issue_reports_missing'), 160, 1440)]);
+    $ci_killed_cs = (require __DIR__ . '/../lang/cs.php')['collection_issue_reports_missing_killed'] ?? '';
+    $ci_killed_en = (require __DIR__ . '/../lang/en.php')['collection_issue_reports_missing_killed'] ?? '';
+    check('třetí důvod má český i anglický text a oba nesou počet',
+        [sprintf($ci_killed_cs, 3), sprintf($ci_killed_en, 3)],
+        ['Běh visel 5 minut a byl ukončen: 3×.', 'A run hung for 5 minutes and was stopped: 3×.']);
     check('ztráta pod deseti procenty se nehlásí',
         count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1300, 'checked_at' => time()]])), 0);
     check('krátké okno (router po restartu) se nesoudí',

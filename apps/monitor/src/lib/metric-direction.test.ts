@@ -72,6 +72,10 @@ describe('betterDirection', () => {
     expect(betterDirection('clock_skew_s')).toBe('lower');
   });
 
+  it('CPU předchozího běhu agenta je lepší nižší', () => {
+    expect(betterDirection('agent_prev_cpu_ms')).toBe('lower');
+  });
+
   // A busy line is what the line is for; colouring 900 Mbit/s as a fault
   // would punish the router for working.
   it('refuses to judge the WAN rate in either direction', () => {

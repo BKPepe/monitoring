@@ -254,6 +254,7 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `conntrack_drops` INT DEFAULT NULL, -- step of the conntrack `drop` counter only
   `agent_run_ms` INT DEFAULT NULL, -- wall time of the previous agent run
   `clock_skew_s` INT DEFAULT NULL, -- abs(receive time - agent_time); absolute so that a weekly mean cannot cancel out
+  `agent_prev_cpu_ms` INT DEFAULT NULL, -- CPU time (user+sys, children included) of the previous agent run; NULL = not measured (agent <= 0.1.8, first run, killed run)
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),

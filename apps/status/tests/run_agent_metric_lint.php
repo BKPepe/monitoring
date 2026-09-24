@@ -102,7 +102,8 @@ $not_metrics = [
     //
     // NOT here on purpose, because they are stored columns and an exemption
     // would hide a broken $metric_row: cpu_core_max_pct, cpu_core_max_softirq_pct,
-    // wan_rx_mbps, wan_tx_mbps, agent_run_ms, wan_link_mbit.
+    // wan_rx_mbps, wan_tx_mbps, agent_run_ms, wan_link_mbit, and agent_prev_cpu_ms
+    // of agent 0.1.9.
     //
     // storage_disks: per-disk structure with its own tables (storage_disks,
     // storage_disk_daily). agent_tools: capability flags, not a time series.
@@ -123,9 +124,13 @@ $not_metrics = [
     'agent_time', 'cpu_cores', 'cpu_core_max_index',
     // dns_resolver_ok: true/false, an event (dns_resolver_failed), not a chart.
     'dns_resolver_ok',
-    // Self-observation of the agent. agent_run_ms is the stored one; the total
-    // with the POST and the two skip counters feed the reports_missing issue.
-    'agent_prev_total_ms', 'runs_skipped_lock', 'runs_skipped_post',
+    // Self-observation of the agent. agent_run_ms and agent_prev_cpu_ms (0.1.9)
+    // are the stored ones; the total with the POST and the three skip counters
+    // feed the reports_missing issue. runs_skipped_killed (0.1.9) counts runs
+    // the lock takeover stopped after 300 s: a count of incidents since the
+    // last accepted report, cleared by the next one, so a chart of it would be
+    // a sawtooth of the agent's own bookkeeping.
+    'agent_prev_total_ms', 'runs_skipped_lock', 'runs_skipped_post', 'runs_skipped_killed',
     // Keys of the server RESPONSE that the agent parses by name (the regex above
     // sees them like update_available and action_id).
     'speedtests_acked',

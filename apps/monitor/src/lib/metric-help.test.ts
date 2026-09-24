@@ -55,6 +55,14 @@ describe('metricHelp', () => {
     expect(metricHelp('clock_skew_s', t)?.source).toBe(agent);
   });
 
+  it('vysvětlí CPU agenta 0.1.9 jako čas předchozího běhu, ne toho posledního', () => {
+    const help = metricHelp('agent_prev_cpu_ms', t);
+    // The chart label says "run"; only the explainer says which one.
+    expect(help?.what).toContain('předchozího běhu');
+    expect(help?.how).toContain('/proc/<agent>/stat');
+    expect(help?.source).toBe(metricHelp('agent_run_ms', t)?.source);
+  });
+
   it('gives the three bands of one measurement the same explainer', () => {
     expect(metricHelp('wifi_noise_6g', t)).toEqual(metricHelp('wifi_noise_24g', t));
     expect(metricHelp('wifi_busy_5g', t)).toEqual(metricHelp('wifi_busy_24g', t));

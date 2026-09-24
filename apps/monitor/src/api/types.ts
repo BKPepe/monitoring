@@ -69,7 +69,9 @@ export type MetricKey =
   | 'conntrack_drops'
   | 'wan_link_flaps'
   | 'agent_run_ms'
-  | 'clock_skew_s';
+  | 'clock_skew_s'
+  // Agent 0.1.9: the CPU time of the agent's previous run, in ms.
+  | 'agent_prev_cpu_ms';
 
 /** Colour tone of a series. Must match the `--chart-*` tokens. */
 export type MetricTone = 'cpu' | 'memory' | 'network' | 'temperature' | 'disk' | 'latency';

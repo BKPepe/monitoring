@@ -595,6 +595,15 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
         'Odeslání hlášení se do hodnoty nepočítá. Běh, který se blíží 60 sekundám, začne vynechávat minuty.'
       ),
     },
+    // Agent 0.1.9. The wall time above includes waiting on the network; this
+    // is what the agent actually takes from the router, the number the choice
+    // of a cheaper agent on slow MIPS routers is read from. No caveat: the
+    // dictionary is on the critical path, at its size budget (see there).
+    agent_prev_cpu_ms: {
+      what: t('help.agent_prev_cpu_ms_what', 'CPU čas předchozího běhu agenta i se vším, co spustil.'),
+      how: t('help.agent_prev_cpu_ms_how', 'utime+stime+cutime+cstime z /proc/<agent>/stat.'),
+      source: agent,
+    },
     // Computed by the server, but from the agent's report and at its cadence,
     // like wifi_6e_unserved above.
     clock_skew_s: {

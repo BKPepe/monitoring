@@ -1139,7 +1139,7 @@ if (function_exists('bk_details_fit')) {
         [5, ['type' => 'passthrough_key_limit', 'key' => 'key_1', 'bytes' => null], ['type' => 'passthrough_too_large', 'key' => 'big_list', 'bytes' => 9000]]);
 }
 
-// --- bk_metric_column_map: the 24 router metrics of the release ---------------
+// --- bk_metric_column_map: the router metrics of releases 0.1.7 and 0.1.9 -----
 // A metric missing from the map is stored every minute and read by nobody;
 // a metric whose key is longer than metrics_daily.metric_key is rolled up into
 // a TRUNCATED key and its chart stays empty for 30 days before anyone notices.
@@ -1153,8 +1153,10 @@ if (function_exists('bk_metric_column_map')) {
         'cpu_core_max', 'cpu_core_max_softirq', 'wan_rx_mbps', 'wan_tx_mbps',
         'wan_errors', 'wan_drops', 'wan_ring_drops', 'wan_link_flaps', 'conntrack_drops',
         'agent_run_ms', 'clock_skew_s',
+        // Agent 0.1.9: the CPU time of the previous run.
+        'agent_prev_cpu_ms',
     ];
-    check('registr metrik: všech 24 metrik routeru v něm je', [count($reg_new), array_values(array_diff($reg_new, array_keys($reg)))], [24, []]);
+    check('registr metrik: všech 25 metrik routeru v něm je', [count($reg_new), array_values(array_diff($reg_new, array_keys($reg)))], [25, []]);
     $reg_schema = (string)file_get_contents(__DIR__ . '/../schema.sql');
     preg_match('/CREATE TABLE IF NOT EXISTS `vps_metrics`\s*\((.*?)\n\)\s*ENGINE/s', $reg_schema, $reg_m);
     preg_match_all('/^\s*`(\w+)`\s/m', $reg_m[1] ?? '', $reg_cols);
@@ -1239,6 +1241,9 @@ if (function_exists('bk_metric_column_map')) {
         [$omnia_lan['ports'][0]['clients'], $omnia_lan['clients_total'], $omnia_lan['ports'][2]['clients']], [null, null, 0]);
     check('Omnia: vypnutá sekce SQM není fronta a měření rychlosti žádné není', [$omnia_p['wan_path']['sqm'], $omnia_p['speedtests']], [[], []]);
     check('Omnia: co router nezměřil, je neznámé (špička jádra, zaplnění conntrack, délka běhu)', [$omnia_p['cpu_core_max_pct'], $omnia_p['conntrack_pct'], $omnia_p['agent_run_ms']], [null, null, null]);
+    check('Omnia: klíče agenta 0.1.9 starší záznam nezměřil, takže jsou null, ne nula',
+        [array_key_exists('agent_prev_cpu_ms', $omnia_p), $omnia_p['agent_prev_cpu_ms'], array_key_exists('runs_skipped_killed', $omnia_p), $omnia_p['runs_skipped_killed']],
+        [true, null, true, null]);
     check_false('Omnia: tarif není součástí hlášení, zadává ho až majitel', array_key_exists('wan_plan_down_mbit', $omnia_p));
 
     // The week and the disk day must fit the tables they are seeded into.
@@ -1303,7 +1308,7 @@ if (function_exists('bk_metric_column_map')) {
     // turns red the day the agent really sends it.
     preg_match('/\$not_metrics = \[(.*?)\n\];/s', (string)file_get_contents(__DIR__ . '/run_agent_metric_lint.php'), $nm);
     preg_match_all("/'([a-z_0-9]+)'/", (string)preg_replace('#^\s*//.*$#m', '', $nm[1] ?? ''), $nm_keys);
-    $stored_by_contract = ['wifi_clients_count', 'wan_link_mbit', 'conntrack_count', 'conntrack_pct', 'cpu_core_max_pct', 'cpu_core_max_softirq_pct', 'wan_rx_mbps', 'wan_tx_mbps', 'agent_run_ms'];
+    $stored_by_contract = ['wifi_clients_count', 'wan_link_mbit', 'conntrack_count', 'conntrack_pct', 'cpu_core_max_pct', 'cpu_core_max_softirq_pct', 'wan_rx_mbps', 'wan_tx_mbps', 'agent_run_ms', 'agent_prev_cpu_ms'];
     check('Omnia: každý klíč hlášení je ukládaná metrika, nebo vědomá výjimka lintu', array_values(array_diff(array_keys($omnia_p), $nm_keys[1], $stored_by_contract)), []);
     check('Omnia: ukládané klíče mezi výjimkami lintu nejsou', array_values(array_intersect($stored_by_contract, $nm_keys[1])), []);
 }

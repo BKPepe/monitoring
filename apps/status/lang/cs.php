@@ -124,6 +124,7 @@ return [
     'collection_issue_ingest_dropped' => 'Část hlášení agenta se neuložila: %s.',
     'collection_issue_reports_missing' => 'Za posledních 24 h chybí %1$d z %2$d minutových hlášení.',
     'collection_issue_reports_missing_skips' => 'Agent vynechal %1$d běhů, protože předchozí ještě běžel, a %2$d hlášení se nepodařilo odeslat.',
+    'collection_issue_reports_missing_killed' => 'Běh visel 5 minut a byl ukončen: %d×.',
     'cpanel_hint_404' => 'Exporter na zadané URL neexistuje (404). Soubor cpanel_stats.php chybí v místě, kam míří cpanel_stats_url monitoru – nahrajte ho tam, nebo v nastavení monitoru opravte URL.',
     'cpanel_hint_403' => 'Exporter odmítl přístupový klíč (403). Klíč v ?key= v cpanel_stats_url musí odpovídat STATS_KEY v cpanel_config.php ležícím VEDLE souboru cpanel_stats.php, na který URL míří.',
     'cpanel_hint_conn' => 'Spojení s exporterem selhalo (timeout/DNS). Zkontrolujte, že cílový hosting běží a URL je dosažitelná.',

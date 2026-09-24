@@ -867,6 +867,23 @@ neuloží syrovou adresu. S vypnutým `log_lines_enabled` monitoru si neuloží
 odpověď nese `"log_lines":true` nebo `"log_lines":false` - bez mezer, agent to
 porovnává doslova a od dalšího běhu přestane sbírat.
 
+**Agent 0.1.9 (OpenWrt) přidává** dvě celá čísla o sobě samém, na nejvyšší
+úrovni hlášení:
+
+- `agent_prev_cpu_ms` - čas CPU (user + system, i s potomky) PŘEDCHOZÍHO běhu
+  v milisekundách, násobek 10. Rozsah 0-600000. Je to ukládaná metrika
+  (`vps_metrics.agent_prev_cpu_ms`, agreguje se do `metrics_daily`, řada
+  `action=metric_series`) a kopíruje se i do `last_details`. `null` po prvním
+  běhu, po změně verze nebo po běhu, který byl ukončen (0.1.9 pak pošle i
+  `agent_prev_total_ms: null`), a u každého agenta do 0.1.8, který klíč
+  neposílá. Obě čísla párujte jen tehdy, když ani jedno není null.
+- `runs_skipped_killed` - běhy, které převzetí zámku po 300 s ukončilo, od
+  posledního přijatého hlášení. Rozsah 0-100000, jen v `last_details`, vedle
+  `runs_skipped_lock` a `runs_skipped_post`. Počet nad 0 přidá do výpadku sběru
+  `reports_missing` třetí důvod. Od agentů do 0.1.8 `null`, nikdy 0.
+
+Hodnota mimo rozsah, záporná, desetinná nebo nečíselná je `null`, nikdy mez.
+
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Rozhraní pro vzdálené měřicí uzly. Autorizace sdíleným `cron_key`

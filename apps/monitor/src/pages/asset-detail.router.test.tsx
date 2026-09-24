@@ -74,8 +74,11 @@ const jsonResponse = (body: unknown) =>
     text: () => Promise.resolve(JSON.stringify(body)),
   }) as Response;
 
+// The monitor the stubbed API answers with; a test may swap the details.
+let served = monitor;
+
 const api = (url: string): Response => {
-  if (url.includes('action=monitors')) return jsonResponse({ monitors: [monitor] });
+  if (url.includes('action=monitors')) return jsonResponse({ monitors: [served] });
   if (url.includes('action=router_recommendations'))
     return jsonResponse({ monitorId: 6, applicable: true, reason: null, items: [], muted: [] });
   if (url.includes('action=storage_history')) return jsonResponse({ monitorId: 6, days: 90, disks: [] });
@@ -129,6 +132,7 @@ describe('router overview', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    served = monitor;
   });
 
   it('shows the temperature tile the page used to read under the column name (G22)', async () => {
@@ -180,5 +184,72 @@ describe('router overview', () => {
     expect(await screen.findByText('9.5 s (předchozí běh i s odesláním 12.1 s)')).toBeTruthy();
     expect(screen.getByText('2× předchozí běh ještě běžel · 0× se nepodařilo odeslat')).toBeTruthy();
     expect(screen.getByText('1298 z 1440 minut (90 %)')).toBeTruthy();
+  });
+
+  /**
+   * Agent 0.1.9: the CPU of the previous run next to its run time, and runs
+   * killed after 300 s next to the two skip reasons - through the real
+   * dictionary in both languages. The 0.1.7 details above lack both keys,
+   * which is the "older agent" case: nothing is added.
+   */
+  const agent019 = async (lang: 'cs' | 'en', extra: Record<string, unknown>) => {
+    // The language provider reads the stored choice once, when it mounts.
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === 'bk_lang' ? lang : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    served = { ...monitor, details: { ...details, version: '0.1.9', ...extra } };
+    renderDetail();
+    await screen.findByText('68 °C');
+    // Radix activates a tab on mouseDown, not on click.
+    fireEvent.mouseDown(screen.getByText(lang === 'en' ? 'Network' : 'Síť'));
+  };
+
+  it('agent 0.1.9: ukáže CPU předchozího běhu a ukončené běhy česky', async () => {
+    await agent019('cs', { agent_prev_cpu_ms: 1400, runs_skipped_killed: 1 });
+    expect(await screen.findByText('9.5 s (předchozí běh i s odesláním 12.1 s · CPU 1.4 s)')).toBeTruthy();
+    expect(
+      screen.getByText('2× předchozí běh ještě běžel · 0× se nepodařilo odeslat · 1× běh visel 5 min a byl ukončen')
+    ).toBeTruthy();
+  });
+
+  it('agent 0.1.9: ukáže CPU předchozího běhu a ukončené běhy anglicky', async () => {
+    await agent019('en', { agent_prev_cpu_ms: 1400, runs_skipped_killed: 1 });
+    expect(await screen.findByText('9.5 s (previous run incl. its upload 12.1 s · CPU 1.4 s)')).toBeTruthy();
+    expect(
+      screen.getByText(
+        '2× the previous run was still going · 0× the upload failed · 1× a run hung for 5 min and was stopped'
+      )
+    ).toBeTruthy();
+  });
+
+  it('agent 0.1.9: naměřená nula je 0 v obou jazycích', async () => {
+    await agent019('cs', { agent_prev_cpu_ms: 0, runs_skipped_killed: 0 });
+    expect(await screen.findByText('9.5 s (předchozí běh i s odesláním 12.1 s · CPU 0 ms)')).toBeTruthy();
+    expect(
+      screen.getByText('2× předchozí běh ještě běžel · 0× se nepodařilo odeslat · 0× běh visel 5 min a byl ukončen')
+    ).toBeTruthy();
+    cleanup();
+
+    await agent019('en', { agent_prev_cpu_ms: 0, runs_skipped_killed: 0 });
+    expect(await screen.findByText('9.5 s (previous run incl. its upload 12.1 s · CPU 0 ms)')).toBeTruthy();
+    expect(
+      screen.getByText(
+        '2× the previous run was still going · 0× the upload failed · 0× a run hung for 5 min and was stopped'
+      )
+    ).toBeTruthy();
+  });
+
+  it('agent 0.1.9: null nepřidá nic, ani nulu, v obou jazycích', async () => {
+    // null CPU: the first report after a reboot or an update, or a killed run.
+    await agent019('cs', { agent_prev_cpu_ms: null, runs_skipped_killed: null });
+    expect(await screen.findByText('9.5 s (předchozí běh i s odesláním 12.1 s)')).toBeTruthy();
+    expect(screen.getByText('2× předchozí běh ještě běžel · 0× se nepodařilo odeslat')).toBeTruthy();
+    cleanup();
+
+    await agent019('en', { agent_prev_cpu_ms: null, runs_skipped_killed: null });
+    expect(await screen.findByText('9.5 s (previous run incl. its upload 12.1 s)')).toBeTruthy();
+    expect(screen.getByText('2× the previous run was still going · 0× the upload failed')).toBeTruthy();
   });
 });

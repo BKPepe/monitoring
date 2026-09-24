@@ -68,6 +68,8 @@ const LOWER_IS_BETTER = new Set([
   'conntrack_drops',
   'wan_link_flaps',
   'agent_run_ms',
+  // Agent 0.1.9: what one run costs the router's CPU.
+  'agent_prev_cpu_ms',
   // Stored as an absolute value, so zero is the good end whichever way the clock is off.
   'clock_skew_s',
 ]);

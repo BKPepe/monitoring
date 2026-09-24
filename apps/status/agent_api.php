@@ -327,11 +327,20 @@ $ow_cpu_cores = bk_ranged_int($data['cpu_cores'] ?? null, 1, 256);
 $ow_wan_rx_mbps = bk_ranged_num($data['wan_rx_mbps'] ?? null, 0.0, 100000.0);
 $ow_wan_tx_mbps = bk_ranged_num($data['wan_tx_mbps'] ?? null, 0.0, 100000.0);
 $ow_wan_link_dev = bk_agent_str($data, 'wan_link_dev', 32);
-// The agent's own runtime, and the two counters of runs it had to skip.
+// The agent's own runtime, and the counters of runs it had to skip.
 $ow_agent_run_ms = bk_ranged_int($data['agent_run_ms'] ?? null, 0, 600000);
 $ow_agent_prev_total_ms = bk_ranged_int($data['agent_prev_total_ms'] ?? null, 0, 600000);
+// CPU time (user + system, children included) the PREVIOUS run cost, 0.1.9.
+// Same bound as the wall time: children barely run in parallel, so above
+// 600 s it is not a minute run. Null after a first run, a version change or a
+// killed run, and from agents up to 0.1.8, which do not send the key at all.
+$ow_agent_prev_cpu_ms = bk_ranged_int($data['agent_prev_cpu_ms'] ?? null, 0, 600000);
 $ow_runs_skipped_lock = bk_ranged_int($data['runs_skipped_lock'] ?? null, 0, 100000);
 $ow_runs_skipped_post = bk_ranged_int($data['runs_skipped_post'] ?? null, 0, 100000);
+// Runs killed by the lock takeover after 300 s, 0.1.9. The agent caps it at
+// the same 100000 as the two skip counters; an older agent's missing key stays
+// null, because "no run was killed" is a claim only a 0.1.9 agent can make.
+$ow_runs_skipped_killed = bk_ranged_int($data['runs_skipped_killed'] ?? null, 0, 100000);
 $ow_dns_resolver_ok = bk_agent_bool($data, 'dns_resolver_ok');
 $ow_speedtest_active = bk_agent_bool($data, 'speedtest_active');
 // Alert hygiene (X17, WAN 3.3): a 45 s test saturates the line and one core of
@@ -689,8 +698,10 @@ try {
         'wan_tx_mbps' => $ow_wan_tx_mbps,
         'agent_run_ms' => $ow_agent_run_ms,
         'agent_prev_total_ms' => $ow_agent_prev_total_ms,
+        'agent_prev_cpu_ms' => $ow_agent_prev_cpu_ms,
         'runs_skipped_lock' => $ow_runs_skipped_lock,
         'runs_skipped_post' => $ow_runs_skipped_post,
+        'runs_skipped_killed' => $ow_runs_skipped_killed,
         'dns_resolver_ok' => $ow_dns_resolver_ok,
         'speedtest_active' => $ow_speedtest_active,
         'reduced' => $ow_reduced,
@@ -1191,6 +1202,9 @@ try {
             'conntrack_drops' => $ow_wan_steps['steps']['conntrack_drops'],
             'agent_run_ms' => $ow_agent_run_ms,
             'clock_skew_s' => $ow_clock_skew_s,
+            // Agent 0.1.9: what the previous run cost in CPU. Grouped by
+            // version and board it is the fleet's measured cost per release.
+            'agent_prev_cpu_ms' => $ow_agent_prev_cpu_ms,
         ];
 
         // Column names come from the code above, not from agent input.

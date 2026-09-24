@@ -241,7 +241,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260924cf');
+    define('BK_SCHEMA_VERSION', '20260924r019');
 
     $bk_current_schema = false;
     try {
@@ -1165,6 +1165,10 @@ try {
         // The router's masked error lines (W1-C3, owner decision 5.7): on by
         // default, switchable per monitor; the agent hears it in the answer.
         "ALTER TABLE monitors ADD COLUMN log_lines_enabled TINYINT(1) NOT NULL DEFAULT 1",
+        // Agent 0.1.9 reports what its previous run cost in CPU. Stored, not
+        // only in last_details: per router and release it is the measured cost
+        // of the agent. NULL = not measured, which is every row of an older agent.
+        "ALTER TABLE vps_metrics ADD COLUMN agent_prev_cpu_ms INT DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

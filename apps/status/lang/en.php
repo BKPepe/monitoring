@@ -123,6 +123,7 @@ return [
     'collection_issue_ingest_dropped' => 'Part of the agent report was not stored: %s.',
     'collection_issue_reports_missing' => '%1$d of %2$d minute reports are missing in the last 24 h.',
     'collection_issue_reports_missing_skips' => 'The agent skipped %1$d runs because the previous one was still running, and %2$d reports could not be sent.',
+    'collection_issue_reports_missing_killed' => 'A run hung for 5 minutes and was stopped: %d×.',
     'cpanel_hint_404' => 'The exporter does not exist at the configured URL (404). The cpanel_stats.php file is missing where cpanel_stats_url points - upload it there, or fix the URL in the monitor settings.',
     'cpanel_hint_403' => 'The exporter rejected the access key (403). The ?key= in cpanel_stats_url must match STATS_KEY in cpanel_config.php located NEXT TO the cpanel_stats.php file the URL points to.',
     'cpanel_hint_conn' => 'Connection to the exporter failed (timeout/DNS). Check that the target hosting is up and the URL is reachable.',

@@ -77,25 +77,51 @@ export function runDuration(ms: unknown, t: TranslateFn): string | null {
 /**
  * G42: how long the last minute run took, and how long the one before it took
  * INCLUDING its POST - the send is what usually pushes a run past the minute.
+ *
+ * Agent 0.1.9 adds the CPU time of that previous run (`agent_prev_cpu_ms`).
+ * The wall time says whether a run fits the minute; only the CPU says what the
+ * agent costs the router, as a slow run may just be waiting on the network.
+ * The agent sends null after a reboot, a self-update or a killed run, and
+ * older agents do not send the key: both print nothing, a measured 0 prints 0.
  */
 export function agentRunText(d: Record<string, unknown>, t: TranslateFn): string | null {
   const run = runDuration(d.agent_run_ms, t);
   if (run === null) return null;
   const prev = runDuration(d.agent_prev_total_ms, t);
-  return prev === null ? run : `${run} (${t('net.agent_prev_total', { prev }, `předchozí běh i s odesláním ${prev}`)})`;
+  const cpu = runDuration(d.agent_prev_cpu_ms, t);
+  const parts: string[] = [];
+  if (prev !== null) parts.push(t('net.agent_prev_total', { prev }, `předchozí běh i s odesláním ${prev}`));
+  // Next to the total the CPU plainly belongs to the same previous run; alone
+  // it has to say so, or it reads as the cost of the run printed before it.
+  if (cpu !== null) {
+    parts.push(
+      prev !== null
+        ? t('net.agent_prev_cpu', { cpu }, `CPU ${cpu}`)
+        : t('net.agent_prev_cpu_alone', { cpu }, `CPU předchozího běhu ${cpu}`)
+    );
+  }
+  return parts.length === 0 ? run : `${run} (${parts.join(' · ')})`;
 }
 
 /**
  * G42: runs the agent skipped, by reason. Zero is a measurement and is shown
- * as one; only a router that reports neither counter has no row.
+ * as one; only a router that reports none of the counters has no row.
+ *
+ * Agent 0.1.9 adds the third reason: a run that held the lock for 300 s is
+ * killed so the next one can go on (`runs_skipped_killed`). Agents up to
+ * 0.1.8 cannot kill a run and do not send the key - no part then, not a 0.
  */
 export function agentSkippedText(d: Record<string, unknown>, t: TranslateFn): string | null {
   const lock = whole(d.runs_skipped_lock);
   const post = whole(d.runs_skipped_post);
-  if (lock === null && post === null) return null;
+  const killed = whole(d.runs_skipped_killed);
+  if (lock === null && post === null && killed === null) return null;
   const parts: string[] = [];
   if (lock !== null) parts.push(t('net.agent_skipped_lock', { n: lock }, `${lock}× předchozí běh ještě běžel`));
   if (post !== null) parts.push(t('net.agent_skipped_post', { n: post }, `${post}× se nepodařilo odeslat`));
+  if (killed !== null) {
+    parts.push(t('net.agent_skipped_killed', { n: killed }, `${killed}× běh visel 5 min a byl ukončen`));
+  }
   return parts.join(' · ');
 }
 

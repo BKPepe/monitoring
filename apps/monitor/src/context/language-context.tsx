@@ -2824,6 +2824,16 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Odeslání hlášení se do hodnoty nepočítá. Běh, který se blíží 60 sekundám, začne vynechávat minuty.',
     en: 'Sending the report is not included. A run that nears 60 seconds starts to skip minutes.',
   },
+  // Terse and without a caveat on purpose: this dictionary is on the critical
+  // path, which agent 0.1.9 found at 799 of its 800 kB.
+  'help.agent_prev_cpu_ms_what': {
+    cs: 'CPU čas předchozího běhu agenta i se vším, co spustil.',
+    en: "CPU time of the agent's previous run and all it started.",
+  },
+  'help.agent_prev_cpu_ms_how': {
+    cs: 'utime+stime+cutime+cstime z /proc/<agent>/stat.',
+    en: 'utime+stime+cutime+cstime from /proc/<agent>/stat.',
+  },
   'help.clock_skew_s_what': {
     cs: 'O kolik sekund se hodiny routeru liší od hodin serveru, bez ohledu na směr.',
     en: "By how many seconds the router's clock differs from the server's, whichever way.",
@@ -3995,9 +4005,16 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.agent_run_ms_unit': { cs: '{ms} ms', en: '{ms} ms' },
   'net.agent_run_s_unit': { cs: '{s} s', en: '{s} s' },
   'net.agent_prev_total': { cs: 'předchozí běh i s odesláním {prev}', en: 'previous run incl. its upload {prev}' },
+  // Agent 0.1.9: the CPU time of that previous run, and runs killed after 300 s.
+  'net.agent_prev_cpu': { cs: 'CPU {cpu}', en: 'CPU {cpu}' },
+  'net.agent_prev_cpu_alone': { cs: 'CPU předchozího běhu {cpu}', en: "previous run's CPU {cpu}" },
   'net.agent_skipped': { cs: 'Vynechané běhy', en: 'Skipped runs' },
   'net.agent_skipped_lock': { cs: '{n}× předchozí běh ještě běžel', en: '{n}× the previous run was still going' },
   'net.agent_skipped_post': { cs: '{n}× se nepodařilo odeslat', en: '{n}× the upload failed' },
+  'net.agent_skipped_killed': {
+    cs: '{n}× běh visel 5 min a byl ukončen',
+    en: '{n}× a run hung for 5 min and was stopped',
+  },
   'net.agent_reports': { cs: 'Hlášení za 24 h', en: 'Reports in 24 h' },
   'net.agent_reports_value': {
     cs: '{received} z {expected} minut ({pct} %)',
