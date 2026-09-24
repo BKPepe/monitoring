@@ -55,7 +55,7 @@ import { SpeedtestCard } from '@/components/speedtest-card';
 import { WanBottleneckCard } from '@/components/wan-bottleneck-card';
 import { ErrorState, LoadingState } from '@/components/ui/states';
 import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
-import { LanPortMap } from '@/components/lan-port-map';
+import { RouterPortPanel } from '@/components/router-ports/port-panel';
 import { WifiRadioList } from '@/components/wifi-radio-list';
 import { LogErrorLines } from '@/components/log-error-lines';
 import { logWindow, readLogLines } from '@/lib/log-lines';
@@ -537,6 +537,7 @@ export function AssetDetailPage() {
             <NetworkTab
               d={asset.rawDetails}
               monitorId={Number(asset.id)}
+              reportedAt={asset.lastCheck ? Math.floor(Date.parse(asset.lastCheck) / 1000) || null : null}
               recommendations={isRouter ? compactRecommendations : undefined}
               // Where the line speed ends - only a router has a WAN to judge (X21).
               wanBottleneck={isRouter ? <WanBottleneckCard monitorId={asset.id} /> : undefined}
@@ -1613,6 +1614,7 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
 function NetworkTab({
   d,
   monitorId,
+  reportedAt,
   recommendations,
   wanBottleneck,
   speedtest,
@@ -1620,6 +1622,8 @@ function NetworkTab({
   d: Record<string, any>;
   /** This page's monitor: both the page to come back to and the owner of the metric. */
   monitorId: number;
+  /** When the server received the report (epoch seconds); the port panel judges staleness by it. */
+  reportedAt: number | null;
   /** The compact recommendations of one area, placed next to the card they are about (routers only). */
   recommendations?: (area: 'wifi' | 'wan') => React.ReactNode;
   /** The WAN verdict card; it explains the speed tests below it, so it comes first. */
@@ -1698,9 +1702,7 @@ function NetworkTab({
       {speedtest}
       {/* The wiring of the household itself. Only the OpenWrt agent reports a
           switch, so nothing else gets a card that could only say "no data". */}
-      {d.agent_type === 'openwrt' && (
-        <LanPortMap lanPorts={d.lan_ports} agentVersion={typeof d.version === 'string' ? d.version : null} />
-      )}
+      {d.agent_type === 'openwrt' && <RouterPortPanel details={d} reportedAt={reportedAt} />}
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         {(d.wan_proto != null || d.wan_up != null || d.wan_internet != null) && (
