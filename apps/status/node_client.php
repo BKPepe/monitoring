@@ -10,7 +10,7 @@
 
 // --- KONFIGURACE UZLU ---
 $central_api_url = 'https://bloodkings.eu/status/node_api.php';
-$node_key        = 'BloodKingsNodeDefaultKey123!'; // Musí se shodovat s cron_key v nastavení hlavního statusu
+$node_key        = '';                             // Musí se shodovat s cron_key v nastavení hlavního statusu
 $node_location   = 'AUTO';                         // Nastavte na název lokace (např. 'Praha, CZ') nebo 'AUTO' pro autodetekci s vlaječkou
 $timeout_seconds = 5;                              // Výchozí timeout pro testy (sekundy)
 
@@ -25,6 +25,13 @@ error_reporting(E_ALL);
 
 if (!$is_cli) {
     echo "<pre>";
+}
+
+// The key used to ship with a sample value. The repository is public, so a
+// node left on it would announce its key to anyone reading the code - the
+// node refuses to run until it has the owner's own cron_key.
+if (trim($node_key) === '') {
+    exit("CHYBA: Nastavte \$node_key na hodnotu cron_key z nastavení hlavního statusu.\n");
 }
 
 echo "=== Blood Kings Status - Spouštím monitorovací uzel [$node_location] ===\n\n";

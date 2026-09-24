@@ -4172,6 +4172,23 @@ $post_agent(['wireguard_peers' => [
 check('WireGuard: do sloupce se uloží počet protějšků, ne NULL',
     (int)$pdo->query("SELECT wireguard_peers FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetchColumn(), 2);
 
+// The first report of an interface carries its counters since boot. Booked
+// as today's traffic it made a new agent look like it moved terabytes today.
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'lan9'");
+$if_row = function () use ($pdo) {
+    return $pdo->query("SELECT rx_bytes_total, tx_bytes_total, last_rx_bytes FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'lan9'")->fetch();
+};
+$post_agent(['interfaces' => [['iface' => 'lan9', 'rx_bytes' => 5e12, 'tx_bytes' => 7e11, 'rx_packets' => 9e9, 'tx_packets' => 8e8]]]);
+$if1 = $if_row();
+check('Provoz rozhraní: první hlášení je jen výchozí bod, ne dnešní provoz',
+    [(float)($if1['rx_bytes_total'] ?? -1), (float)($if1['tx_bytes_total'] ?? -1)], [0.0, 0.0]);
+check('Provoz rozhraní: a čítač od startu se uloží jako výchozí bod', (float)($if1['last_rx_bytes'] ?? -1), 5e12);
+$post_agent(['interfaces' => [['iface' => 'lan9', 'rx_bytes' => 5e12 + 1500, 'tx_bytes' => 7e11 + 300, 'rx_packets' => 9e9 + 3, 'tx_packets' => 8e8 + 2]]]);
+$if2 = $if_row();
+check('Provoz rozhraní: další hlášení přičte jen rozdíl',
+    [(float)($if2['rx_bytes_total'] ?? -1), (float)($if2['tx_bytes_total'] ?? -1)], [1500.0, 300.0]);
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'lan9'");
+
 // G42: the hourly cron pass. Without it the banner could never say how many
 // minutes are missing - the pure function has no database to count with.
 $ra_reset(['reports_24h', 'boot_time']);

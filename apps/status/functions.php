@@ -6422,7 +6422,11 @@ function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) 
                 : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
             $mail->Port       = $smtp_port;
             $mail->CharSet    = 'UTF-8';
-            
+            // PHPMailer waits 300 s by default. Alerts are sent inside the
+            // agent's own report request, so a hung SMTP server held that
+            // request - and every alert queued behind it - for five minutes.
+            $mail->Timeout    = 10;
+
             $mail->setFrom($smtp_user, $site_title);
             $mail->addAddress($to);
             $mail->isHTML(true);

@@ -1429,7 +1429,11 @@ try {
                 $stmt_if->execute([$monitor_id, $ifname]);
                 $prevrow = $stmt_if->fetch();
 
-                $d_rx_b = $cur_rx_b; $d_tx_b = $cur_tx_b; $d_rx_p = $cur_rx_p; $d_tx_p = $cur_tx_p;
+                // The first report of an interface is only a baseline: its
+                // counters hold everything since the router booted, which may
+                // be months of traffic, and booking that as today's inflated
+                // the daily totals of every new interface or new agent.
+                $d_rx_b = 0.0; $d_tx_b = 0.0; $d_rx_p = 0; $d_tx_p = 0;
                 if ($prevrow) {
                     $p_rx_b = (float)$prevrow['last_rx_bytes'];
                     $p_tx_b = (float)$prevrow['last_tx_bytes'];
