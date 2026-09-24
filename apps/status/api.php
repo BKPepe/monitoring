@@ -2213,14 +2213,23 @@ if ($action === 'events') {
         // Oldest first per monitor: a failure before the found 'up' shares it
         // with every failure between, and none after a failure means none after
         // the later ones either - one indexed lookup per outage, not per row.
+        //
+        // "After" is a later second, or the same second written later (several
+        // locations check at once). Two MIN()s, not one ORDER BY checked_at
+        // LIMIT 1: for that form MySQL 8.4 often walked the (monitor_id,
+        // checked_at) index from the monitor's oldest row up to the failure,
+        // 2-25 ms per outage. Each MIN() here is one dive into
+        // idx_logs_cover_latency (monitor_id, status, checked_at).
         $down_rows = array_values(array_filter($rows, fn ($r) => $r['status'] === 'down'));
         usort($down_rows, fn ($a, $b) => [(int)$a['monitor_id'], (string)$a['checked_at'], (int)$a['id']]
             <=> [(int)$b['monitor_id'], (string)$b['checked_at'], (int)$b['id']]);
         $stmt_next_up = $pdo->prepare("
-            SELECT checked_at FROM monitor_logs
-            WHERE monitor_id = ? AND status = 'up' AND checked_at >= ? AND (checked_at > ? OR id > ?)
-            ORDER BY checked_at ASC
-            LIMIT 1
+            SELECT COALESCE(
+                (SELECT MIN(checked_at) FROM monitor_logs
+                 WHERE monitor_id = ? AND status = 'up' AND checked_at = ? AND id > ?),
+                (SELECT MIN(checked_at) FROM monitor_logs
+                 WHERE monitor_id = ? AND status = 'up' AND checked_at > ?)
+            )
         ");
         $outage_end_ts = [];
         $last_lookup = null;
@@ -2231,7 +2240,7 @@ if ($action === 'events') {
                 $outage_end_ts[(int)$d['id']] = $last_lookup[1];
                 continue;
             }
-            $stmt_next_up->execute([$d_mid, $d['checked_at'], $d['checked_at'], (int)$d['id']]);
+            $stmt_next_up->execute([$d_mid, $d['checked_at'], (int)$d['id'], $d_mid, $d['checked_at']]);
             $next_up = $stmt_next_up->fetchColumn();
             $end_ts = ($next_up !== false && $next_up !== null) ? (int)strtotime((string)$next_up) : null;
             $outage_end_ts[(int)$d['id']] = $end_ts;

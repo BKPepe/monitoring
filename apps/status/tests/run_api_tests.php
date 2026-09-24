@@ -5151,6 +5151,37 @@ try {
     $pdo->exec("DELETE FROM monitors WHERE id IN (183, 184)");
 }
 
+// Several locations check in the same second, so "after the failure" is a
+// later second or the same second written later (a higher id). A failure
+// answered by another location within its own second ended then (0 s); an
+// 'up' written before the failure in that second does not end it - the next
+// one, a second later, does.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (191, 'Web měřený z více míst', 'web', 'https://example.com/tie', 'up', 'Test')");
+$ts_at = time() - 2 * 86400;
+$ts_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES (191, ?, 100, ?, ?)");
+try {
+    foreach ([
+        [$ts_at, 'down', 'Praha'], [$ts_at, 'up', 'Frankfurt'],
+        [$ts_at + 600, 'up', 'Frankfurt'], [$ts_at + 600, 'down', 'Praha'], [$ts_at + 601, 'up', 'Praha'],
+    ] as [$ts, $st, $loc]) {
+        $ts_ins->execute([$st, $op_at($ts), $loc]);
+    }
+    for ($i = 10; $i >= 1; $i--) {
+        $ts_ins->execute(['up', $op_at($op_now - $i * 60), 'Praha']);
+    }
+    [$ts_code, $ts_ev] = api_get($base, 'action=events&monitor_id=191&limit=10&scope=public');
+    check('events se dvěma místy vrací 200', $ts_code, 200);
+    $ts_191 = $op_by_time($ts_ev['events'] ?? []);
+    check('výpadek, na který jiné místo odpovědělo OK v téže sekundě, skončil tehdy: 0 s',
+        $ts_191[date('c', $ts_at)] ?? null, [0, date('d.m.Y H:i:s', $ts_at)]);
+    check('OK zapsané v téže sekundě před výpadkem ho neukončí; konec je OK o sekundu později',
+        $ts_191[date('c', $ts_at + 600)] ?? null, [1, date('d.m.Y H:i:s', $ts_at + 601)]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 191");
+    $pdo->exec("DELETE FROM monitors WHERE id = 191");
+}
+
 // The public headline "30 days" figure is the mean of the monitors' figures.
 // One second of outage in 29 days is 99.999 for that monitor; with three
 // perfect ones the mean is 99.99975, which rounded at three decimals printed
