@@ -83,18 +83,24 @@ Or run auto-registration (positional arguments, as implemented in the script):
 ./agent.sh --register YOUR_REGISTRATION_TOKEN https://your-server.com/status/agent_api.php
 ```
 
-> **If `agent.sh` disappears from your `/status/` directory**, a server-side
+> **If an agent disappears from your `/status/` directory**, a server-side
 > malware scanner has quarantined it. cPGuard reports it as `BAD_SHELL_SCRIPT`
 > under "Suspicious File", and the heuristic is not wrong about the
 > capabilities: the agent downloads a replacement of itself over HTTP when
 > `AUTO_UPDATE=1`, and it runs `systemctl restart` when the server sends an
 > HMAC-signed action. Both are opt-in and both are what a dropper does too, so
-> a generic rule cannot tell them apart. Whitelist the path in the scanner
-> (cPGuard: quarantine entry -> restore, then add `public_html/status/agent.sh`
-> to the ignore list) - the agents are also downloadable straight from
+> a generic rule cannot tell them apart. It took `agent.sh` on 2026-09-02 and
+> `agent_openwrt.sh` 0.1.9 on 2026-09-24 - the version whose lock takeover
+> walks `/proc` and kills a hung run. Any version bump can trip it, so
+> whitelist all four paths in the scanner, not only the one it took
+> (cPGuard: quarantine entry -> restore, then add `public_html/status/agent.sh`,
+> `agent.py`, `agent.ps1` and `agent_openwrt.sh` to the ignore list) - the
+> agents are also downloadable straight from
 > [BKPepe/monitoring-agent](https://github.com/BKPepe/monitoring-agent). The
 > deploy checks all four agent URLs after every upload, so a quarantined agent
-> fails the deploy instead of silently breaking self-update.
+> fails the deploy instead of silently breaking self-update. While one is
+> missing the server offers no update for it (it reads the version from the
+> file), so agents stay on their old version rather than fetch an error page.
 
 ### OpenWrt Router Agent (`agent_openwrt.sh`)
 Supports Wi-Fi client tracking, conntrack table %, per-interface traffic, and HMAC-signed Remote Actions (`restart_wan`, `restart_wireguard`, `reboot_router`, `renew_dhcp`).

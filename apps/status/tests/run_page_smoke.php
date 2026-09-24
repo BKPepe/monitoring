@@ -224,7 +224,10 @@ foreach ($agent_files as $file => $label) {
     if ($body === false) {
         $problem = 'požadavek selhal';
     } elseif ($code !== 200) {
-        $problem = 'agent se neposkytuje (čekáno 200) - self-update i návod na instalaci vedou na tuhle adresu';
+        // Every deploy uploads all four agents, so a 404 here has so far
+        // always been the host's malware scanner removing one afterwards.
+        $problem = 'agent se neposkytuje (čekáno 200) - self-update i návod na instalaci vedou na tuhle adresu;'
+            . ' po nasazení ho nejspíš smazal malware skener hostingu (karanténa cPGuard, viz apps/status/README.md)';
     } elseif (!preg_match('/^\$?AGENT_VERSION\s*=\s*["\']([0-9][0-9A-Za-z.\-]*)["\']/m', $body, $vm)) {
         // A styled 404 page, a quarantined stub or a truncated upload - all of
         // them arrive as "something", none of them is the agent.
