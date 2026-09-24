@@ -9,12 +9,15 @@ import {
   mergeHtaccess,
   MARK_BEGIN,
   MARK_END,
+  notProxiedProblems,
   parseSecurityTxt,
   publicStatusPageUrls,
+  redirectProblems,
   ROOT_DIRS,
   robotsProblems,
   securityTxt,
   securityTxtProblems,
+  serverHeaderProblems,
   sitemapLocs,
   sitemapXml,
 } from './lib.mjs';
@@ -215,6 +218,51 @@ test('errorPageProblems: výpis adresáře se jménem serveru místo značkové 
   ]);
   const branded = readFileSync(new URL('./errors/404.html', import.meta.url), 'utf8');
   assert.deepEqual(errorPageProblems('/errors/', '404', { status: 404, body: branded }), []);
+});
+
+test('notProxiedProblems: bez cf-ray odpověď Cloudflarem neprošla', () => {
+  assert.deepEqual(notProxiedProblems('https://bloodkings.eu/', { 'cf-ray': '8c1f-PRG', server: 'cloudflare' }), []);
+  assert.deepEqual(notProxiedProblems('https://www.bloodkings.eu/', { server: 'LiteSpeed' }), [
+    'https://www.bloodkings.eu/ did not pass through Cloudflare (no cf-ray header)',
+  ]);
+});
+
+test('serverHeaderProblems: x-turbo-charged-by i hlavičky originu prozradí LiteSpeed', () => {
+  const clean = { 'cf-ray': '8c1f-PRG', server: 'cloudflare', 'content-type': 'text/html; charset=utf-8' };
+  assert.deepEqual(serverHeaderProblems('https://bloodkings.eu/', clean), []);
+  const proxied = { 'cf-ray': '8c1f-PRG', server: 'cloudflare', 'x-turbo-charged-by': 'LiteSpeed' };
+  assert.deepEqual(serverHeaderProblems('https://bloodkings.eu/', proxied), [
+    'https://bloodkings.eu/ names the server software: x-turbo-charged-by: LiteSpeed',
+  ]);
+  const dnsOnly = { server: 'LiteSpeed', 'x-litespeed-cache': 'miss' };
+  assert.deepEqual(serverHeaderProblems('https://www.bloodkings.eu/', dnsOnly), [
+    'https://www.bloodkings.eu/ names the server software: server: LiteSpeed',
+    'https://www.bloodkings.eu/ names the server software: x-litespeed-cache: miss',
+  ]);
+});
+
+test('redirectProblems: 301 se stejnou cestou a dotazem projde, 302 na zkoušku ne', () => {
+  const url = 'https://www.bloodkings.eu/x?y=1';
+  const want = 'https://bloodkings.eu/x?y=1';
+  assert.deepEqual(redirectProblems(url, { status: 301, location: want }, want), []);
+  assert.deepEqual(redirectProblems(url, { status: 302, location: want }, want), [
+    `${url} is a 302, expected a permanent 301`,
+  ]);
+});
+
+test('redirectProblems: zahozená cesta nebo žádné přesměrování se hlásí', () => {
+  const url = 'https://bloodkings-monitoring-web.pages.dev/cs/docs?x=1';
+  const want = 'https://monitoring.bloodkings.eu/cs/docs?x=1';
+  assert.deepEqual(redirectProblems(url, { status: 301, location: 'https://monitoring.bloodkings.eu/' }, want), [
+    `${url} redirects to https://monitoring.bloodkings.eu/, expected ${want}`,
+  ]);
+  assert.deepEqual(redirectProblems(url, { status: 200, location: null }, want), [
+    `${url} answered HTTP 200, expected a 301 to ${want}`,
+  ]);
+  assert.deepEqual(redirectProblems(url, { status: 308, location: null }, want), [
+    `${url} is a 308, expected a permanent 301`,
+    `${url} redirects to nowhere, expected ${want}`,
+  ]);
 });
 
 const CF_MANAGED = `# As a condition of accessing this website, you agree to abide by the following

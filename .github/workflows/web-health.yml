@@ -1,10 +1,13 @@
-name: Web health (security.txt, robots, 404s)
+name: Web health (security.txt, robots, 404s, Cloudflare)
 
 # The files served at the two hosts' roots, checked from outside once a week.
 # security.txt carries an Expires date (RFC 9116); it is renewed by every
 # deploy, and this run fails 30 days before a copy lapses, so a quiet month
 # without deploys cannot let it expire unnoticed. The fix is to re-run
 # deploy-root.yml (bloodkings.eu) or deploy.yml (monitoring.bloodkings.eu).
+# The Cloudflare step checks settings made in the dashboard, not in this
+# repository: it stays red until all four are in place, and each error line
+# names the one still missing.
 on:
   schedule:
     - cron: '17 6 * * 1'
@@ -36,3 +39,7 @@ jobs:
       - name: monitoring.bloodkings.eu - chybějící stránka je 404
         if: ${{ !cancelled() }}
         run: node root/deploy.mjs check-site
+
+      - name: Cloudflare - bez x-turbo-charged-by, www přes proxy a 301, pages.dev 301
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-cloudflare

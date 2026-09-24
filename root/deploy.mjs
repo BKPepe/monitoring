@@ -9,7 +9,8 @@
 //   node root/deploy.mjs check-root [<tag>]          live robots/sitemap/error pages
 //   node root/deploy.mjs check-site                  monitoring.bloodkings.eu 404s
 //   node root/deploy.mjs check-security              security.txt on both hosts
-/* global process, fetch, console, AbortSignal */
+//   node root/deploy.mjs check-cloudflare            the four settings made in Cloudflare
+/* global process, fetch, console, AbortSignal, URL */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,11 +19,14 @@ import {
   mergeHtaccess,
   MARK_BEGIN,
   MARK_END,
+  notProxiedProblems,
   publicStatusPageUrls,
+  redirectProblems,
   ROOT_DIRS,
   robotsProblems,
   securityTxt,
   securityTxtProblems,
+  serverHeaderProblems,
   sitemapLocs,
   sitemapXml,
 } from './lib.mjs';
@@ -34,6 +38,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = 'https://bloodkings.eu';
 const ORIGIN = process.env.BK_ROOT_ORIGIN || PUBLIC;
 const SITE = 'https://monitoring.bloodkings.eu';
+const WWW = 'https://www.bloodkings.eu';
+// The Cloudflare Pages project behind SITE (deploy.yml --project-name).
+const PAGES_DEV = 'https://bloodkings-monitoring-web.pages.dev';
 const ROOT_SECURITY_TXT = `${PUBLIC}/.well-known/security.txt`;
 const SITE_SECURITY_TXT = `${SITE}/.well-known/security.txt`;
 const ERROR_CODES = ['403', '404', '410', '500', '503'];
@@ -48,7 +55,13 @@ async function get(url) {
     headers: { 'User-Agent': 'BloodKings-RootDeploy' },
     signal: AbortSignal.timeout(20_000),
   });
-  return { status: res.status, type: res.headers.get('content-type'), body: await res.text() };
+  return {
+    status: res.status,
+    type: res.headers.get('content-type'),
+    location: res.headers.get('location'),
+    headers: Object.fromEntries(res.headers),
+    body: await res.text(),
+  };
 }
 
 /** Appends a cache-busting tag, so a check right after an upload reads the origin, not Cloudflare's copy. */
@@ -185,6 +198,93 @@ async function checkSecurity() {
   return problems;
 }
 
+/**
+ * The four settings only Cloudflare's dashboard can make (owner's list from
+ * 2026-09-23). Every problem names the item whose setting is missing or wrong,
+ * so a red run lists exactly what is still open. Always the real hosts: none
+ * of this exists on a local origin.
+ */
+async function checkCloudflare() {
+  const TURBO = 'x-turbo-charged-by';
+  const PROXIED = 'www Proxied';
+  const REDIRECT = 'www -> apex 301';
+  const PAGES = 'pages.dev Bulk Redirect';
+  const problems = [];
+  const item = (name, found) => problems.push(...found.map((p) => `[${name}] ${p}`));
+  // A request that fails (DNS, TLS, timeout) is a problem of its item, not the
+  // end of the run: a DNS-only www with an origin certificate that does not
+  // cover it must not hide the state of the other items.
+  const tryGet = async (name, url) => {
+    try {
+      return await get(url);
+    } catch (e) {
+      item(name, [`${url} failed: ${e.cause?.code ?? e.name}: ${e.cause?.message ?? e.message}`]);
+      return null;
+    }
+  };
+  const mitigated = (r) => (r.headers['cf-mitigated'] ? ` (cf-mitigated: ${r.headers['cf-mitigated']})` : '');
+
+  // 1. A response header rule removes the origin's x-turbo-charged-by. Only
+  // an answer from the origin can show that: one Cloudflare makes itself (a
+  // challenge, a 52x) carries no origin header whether the rule exists or not.
+  const missing = `/bk-edge-check-${Date.now().toString(36)}-missing`;
+  let apexHome = null;
+  for (const [path, want] of [
+    ['/', 200],
+    ['/app/public', 200],
+    ['/status/api.php?action=public_status', 200],
+    [missing, 404],
+  ]) {
+    const url = `${PUBLIC}${path}`;
+    const r = await tryGet(TURBO, url);
+    if (!r) continue;
+    if (path === '/') apexHome = r;
+    if (r.status !== want || 'cf-mitigated' in r.headers) {
+      item(TURBO, [`${url} could not be judged: HTTP ${r.status}${mitigated(r)}, expected ${want} from the origin`]);
+      continue;
+    }
+    item(TURBO, [...notProxiedProblems(url, r.headers), ...serverHeaderProblems(url, r.headers)]);
+  }
+
+  // 2. www is proxied: its answers carry cf-ray like the apex's. Once they
+  // do, the header rule has to cover www too, and nothing may challenge or
+  // block the machine endpoints under its /status.
+  const wwwStatus = `${WWW}/status/api.php?action=public_status`;
+  const ws = await tryGet(PROXIED, wwwStatus);
+  const wwwProxied = ws !== null && 'cf-ray' in ws.headers;
+  if (ws) item(PROXIED, notProxiedProblems(wwwStatus, ws.headers));
+  if (wwwProxied) {
+    const leaks = serverHeaderProblems(wwwStatus, ws.headers);
+    item(
+      TURBO,
+      leaks.map((p) => `${p} - the rule must match www.bloodkings.eu as well`)
+    );
+    if (ws.status !== 200 && (ws.status < 300 || ws.status > 399)) {
+      item(PROXIED, [`${wwwStatus} answered HTTP ${ws.status}${mitigated(ws)}, expected 200 - agents POST there`]);
+    }
+  }
+
+  // 3. Everything else on www is a 301 to the apex, path and query kept. Its
+  // /status is served, never redirected: agents, cron jobs and heartbeats set
+  // up from a www session POST there, and curl without -L drops the body.
+  const wwwPage = `${WWW}/bk-edge-check?x=1`;
+  const wp = await tryGet(REDIRECT, wwwPage);
+  if (wp) item(REDIRECT, redirectProblems(wwwPage, wp, `${PUBLIC}/bk-edge-check?x=1`));
+  if (wwwProxied && ws.status >= 300 && ws.status <= 399) {
+    item(REDIRECT, [`${wwwStatus} redirects to ${ws.location ?? 'nowhere'} - the rule must leave /status alone`]);
+  }
+  const home = apexHome?.location ? new URL(apexHome.location, PUBLIC) : null;
+  if (home && home.host === new URL(WWW).host) {
+    item(REDIRECT, [`${PUBLIC}/ redirects to ${apexHome.location}, which loops with the www rule`]);
+  }
+
+  // 4. A Bulk Redirect sends the Pages project's own hostname to the site.
+  const pagesDev = `${PAGES_DEV}/bk-site-check?x=1`;
+  const pd = await tryGet(PAGES, pagesDev);
+  if (pd) item(PAGES, redirectProblems(pagesDev, pd, `${SITE}/bk-site-check?x=1`));
+  return problems;
+}
+
 function report(problems, what) {
   for (const p of problems) console.error(`::error::${p}`);
   if (problems.length > 0) process.exit(1);
@@ -205,6 +305,7 @@ else if (cmd === 'same-statuses' && a) {
 } else if (cmd === 'check-root') report(await checkRoot(a), 'bloodkings.eu root files');
 else if (cmd === 'check-site') report(await checkSite(), 'monitoring.bloodkings.eu 404s');
 else if (cmd === 'check-security') report(await checkSecurity(), 'security.txt on both hosts');
+else if (cmd === 'check-cloudflare') report(await checkCloudflare(), 'Cloudflare settings');
 else {
   console.error('usage: see the header of root/deploy.mjs');
   process.exit(2);

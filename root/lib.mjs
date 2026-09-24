@@ -30,6 +30,51 @@ export function errorPageProblems(path, code, { status, body }) {
 }
 
 /**
+ * An answer without cf-ray never passed through Cloudflare, so no rule of the
+ * zone applied to it.
+ * @param {string} url
+ * @param {Record<string, string>} headers lower-cased names, as fetch gives them
+ * @returns {string[]}
+ */
+export function notProxiedProblems(url, headers) {
+  return 'cf-ray' in headers ? [] : [`${url} did not pass through Cloudflare (no cf-ray header)`];
+}
+
+/**
+ * Headers that name the origin's server software: LiteSpeed adds
+ * x-turbo-charged-by, and a host Cloudflare does not proxy sends
+ * `server: LiteSpeed`.
+ * @param {string} url
+ * @param {Record<string, string>} headers lower-cased names, as fetch gives them
+ * @returns {string[]}
+ */
+export function serverHeaderProblems(url, headers) {
+  const problems = [];
+  for (const [name, value] of Object.entries(headers)) {
+    if (name === 'x-turbo-charged-by' || /litespeed/i.test(`${name}: ${value}`)) {
+      problems.push(`${url} names the server software: ${name}: ${value}`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * What is wrong with an answer that must be a 301 to exactly `want` - the
+ * path and the query kept, not dropped to the home page.
+ * @param {string} url
+ * @param {{ status: number, location: string | null }} res
+ * @param {string} want
+ * @returns {string[]}
+ */
+export function redirectProblems(url, { status, location }, want) {
+  if (status < 300 || status > 399) return [`${url} answered HTTP ${status}, expected a 301 to ${want}`];
+  const problems = [];
+  if (status !== 301) problems.push(`${url} is a ${status}, expected a permanent 301`);
+  if (location !== want) problems.push(`${url} redirects to ${location ?? 'nowhere'}, expected ${want}`);
+  return problems;
+}
+
+/**
  * `now` plus `months` calendar months, in UTC. A day that does not exist in
  * the target month clamps to its last day, so the result never runs past the
  * one-year ceiling RFC 9116 recommends for Expires.
