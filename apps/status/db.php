@@ -121,6 +121,76 @@ function bk_database_unavailable(Throwable $e): never {
     exit;
 }
 
+/**
+ * Gives the Cloudflare Worker's past checks the country of the colo they ran in.
+ *
+ * Until agents e13a2d4 the Worker put its egress IP's country (US) next to the
+ * right city, and every page shows the stored label: "🇺🇸 Mumbai, US". Each
+ * wrong label is rebuilt from the Worker's map (cloudflare_colos.php); other
+ * providers, unknown cities and correct labels are left alone.
+ *
+ * Cost on a quarter million rows: one pass over idx_logs_regions (it holds
+ * checked_from and the id, so no row is read) finds the distinct labels, then
+ * one UPDATE per wrong label, walking only the id range that label was posted
+ * in. The labels are compared in utf8mb4_bin: the table's unicode_ci weighs
+ * every emoji the same, so "🇺🇸 X" and "🇩🇪 X" would be one value there.
+ * A second run finds nothing to change. Returns the number of rows rewritten.
+ */
+function bk_cf_fix_location_history(PDO $pdo): int {
+    require_once __DIR__ . '/cloudflare_colos.php';
+    $labels = $pdo->query("
+        SELECT checked_from COLLATE utf8mb4_bin AS label, MIN(id) AS first_id, MAX(id) AS last_id
+        FROM monitor_logs
+        WHERE checked_from LIKE '%(AS13335 Cloudflare)'
+        GROUP BY checked_from COLLATE utf8mb4_bin
+    ")->fetchAll();
+    $update = $pdo->prepare("
+        UPDATE monitor_logs SET checked_from = ?
+        WHERE id BETWEEN ? AND ? AND checked_from COLLATE utf8mb4_bin = ?
+    ");
+    $rows = 0;
+    foreach ($labels as $l) {
+        $fixed = bk_cf_corrected_label((string)$l['label']);
+        if ($fixed !== null) {
+            $update->execute([$fixed, (int)$l['first_id'], (int)$l['last_id'], $l['label']]);
+            $rows += $update->rowCount();
+        }
+    }
+    if ($rows > 0) {
+        // The regions answer is cached for ten minutes with the old labels in it.
+        $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions_cache_%'");
+        error_log("[db] Cloudflare Worker locations: {$rows} checks relabelled with their colo's country");
+    }
+    // The digest compares each region's latency with the last digest's by
+    // label; renamed there as well, the trend of a relabelled colo carries on.
+    // Where the right label is already in the snapshot, its value stays.
+    // Checked on every run, not only when rows changed: a run cut short after
+    // the UPDATEs would otherwise never get here again.
+    $read = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
+    $write = $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = ?");
+    foreach (['digest_snapshot_weekly', 'digest_snapshot_monthly'] as $key) {
+        $read->execute([$key]);
+        $snapshot = json_decode((string)$read->fetchColumn(), true);
+        if (!is_array($snapshot) || !is_array($snapshot['regions'] ?? null)) {
+            continue;
+        }
+        $regions = [];
+        foreach ($snapshot['regions'] as $label => $latency) {
+            $fixed = bk_cf_corrected_label((string)$label);
+            if ($fixed === null) {
+                $regions[$label] = $latency;
+            } elseif (!array_key_exists($fixed, $snapshot['regions']) && !array_key_exists($fixed, $regions)) {
+                $regions[$fixed] = $latency;
+            }
+        }
+        if ($regions !== $snapshot['regions']) {
+            $snapshot['regions'] = $regions;
+            $write->execute([json_encode($snapshot, JSON_UNESCAPED_UNICODE), $key]);
+        }
+    }
+    return $rows;
+}
+
 try {
     $db_driver = defined('DB_DRIVER') ? strtolower(DB_DRIVER) : (defined('BK_DATABASE_URL') && strpos(BK_DATABASE_URL, 'postgres') !== false ? 'pgsql' : 'mysql');
     if ($db_driver === 'pgsql' || $db_driver === 'postgres') {
@@ -171,7 +241,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260923b');
+    define('BK_SCHEMA_VERSION', '20260924cf');
 
     $bk_current_schema = false;
     try {
@@ -1101,6 +1171,14 @@ try {
         } catch (PDOException $e) {
             // Column or table already exists - ignore
         }
+    }
+
+    // Cloudflare Worker checks posted before agents e13a2d4 carry a US flag on
+    // every colo (20260924cf). Data only, safe to repeat on every later bump.
+    try {
+        bk_cf_fix_location_history($pdo);
+    } catch (PDOException $e) {
+        error_log('[db] Cloudflare location history not rewritten: ' . $e->getMessage());
     }
 
     // Store the current schema version - migrations get skipped next time

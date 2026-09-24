@@ -5675,6 +5675,143 @@ try {
 check('po obnovení tabulek monitory zase odpovídají', $a2_after, 200);
 
 // =======================================================================
+// Cloudflare Worker history (agents e13a2d4): until then the Worker put its
+// egress IP's country on every colo, and production shows "🇺🇸 Mumbai, US"
+// in the regions list and in every event. The schema migration gives those
+// rows the colo's country and leaves every other label as it was.
+// =======================================================================
+$cf_suffix = ' (AS13335 Cloudflare)';
+// The version db.php stores after the migrations, read from its source: a
+// later bump (or a merge that needs a third value) keeps these checks true.
+$cf_version = preg_match("/BK_SCHEMA_VERSION',\s*'([0-9a-z]+)'/", (string)file_get_contents($root . '/db.php'), $cf_v) ? $cf_v[1] : null;
+check_true('db.php definuje BK_SCHEMA_VERSION', $cf_version !== null);
+$cf_seed = [
+    // [minutes ago, status, label, label after the migration]
+    [180, 'up', '🇺🇸 Mumbai, US' . $cf_suffix, '🇮🇳 Mumbai, IN' . $cf_suffix],
+    [120, 'up', '🇺🇸 Mumbai, US' . $cf_suffix, '🇮🇳 Mumbai, IN' . $cf_suffix],
+    [100, 'up', '🇺🇸 TXL, US' . $cf_suffix, '🇩🇪 Berlin, DE' . $cf_suffix],
+    [90, 'down', '🇺🇸 Frankfurt, US' . $cf_suffix, '🇩🇪 Frankfurt, DE' . $cf_suffix],
+    // Only the flag is wrong - to the table's unicode_ci the same value as
+    // the correct label below, which is older: grouped in unicode_ci, the
+    // correct label would stand for both and this row would stay wrong.
+    [80, 'up', '🇺🇸 Frankfurt, DE' . $cf_suffix, '🇩🇪 Frankfurt, DE' . $cf_suffix],
+    [95, 'up', '🇩🇪 Frankfurt, DE' . $cf_suffix, '🇩🇪 Frankfurt, DE' . $cf_suffix],
+    [5, 'up', '🇺🇸 Seattle, US' . $cf_suffix, '🇺🇸 Seattle, US' . $cf_suffix],
+    [4, 'up', '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)', '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)'],
+    [3, 'up', '🇺🇸 Ashburn, US' . $cf_suffix, '🇺🇸 Ashburn, US' . $cf_suffix],
+    // No colo in the trace, and a colo the map does not know.
+    [70, 'up', '🇺🇸 US' . $cf_suffix, '🌐 Cloudflare Edge' . $cf_suffix],
+    [60, 'up', '🇺🇸 XYZ, US' . $cf_suffix, '🌐 XYZ' . $cf_suffix],
+];
+$cf_labels = function () use ($pdo): array {
+    return $pdo->query("SELECT id, checked_from COLLATE utf8mb4_bin AS label FROM monitor_logs ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);
+};
+$cf_snapshot = function () use ($pdo): ?array {
+    $raw = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'digest_snapshot_weekly'")->fetchColumn();
+    $regions = json_decode((string)$raw, true)['regions'] ?? null;
+    if (is_array($regions)) {
+        ksort($regions);
+    }
+    return $regions;
+};
+$cf_locations = fn (array $rows): array => array_values(array_unique(array_map(fn ($r) => (string)($r['location'] ?? ''), $rows)));
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES
+                (195, 'Web z Cloudflare', 'web', 'https://example.com/cf', 'up', 'Test', 1, NOW())");
+    $cf_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at, checked_from)
+                             VALUES (195, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE), ?)");
+    $cf_ids = [];
+    foreach ($cf_seed as [$cf_ago, $cf_status, $cf_label]) {
+        $cf_ins->execute([$cf_status, $cf_status === 'up' ? 80 : null, $cf_status === 'up' ? null : 'Timeout', $cf_ago, $cf_label]);
+        $cf_ids[] = (int)$pdo->lastInsertId();
+    }
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('digest_snapshot_weekly', '" . json_encode(['score' => 90, 'regions' => [
+        '🇺🇸 Mumbai, US' . $cf_suffix => 120,
+        '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)' => 30,
+        '🇺🇸 Frankfurt, US' . $cf_suffix => 40,
+        '🇩🇪 Frankfurt, DE' . $cf_suffix => 35,
+    ]], JSON_UNESCAPED_UNICODE) . "') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+
+    // Both regions answers get cached with the wrong labels first.
+    [, $cf_reg_before] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    [, $cf_pub_before] = api_get($base, 'action=regions&days=7');
+    check_true('před migrací: místa měření ukazují Mumbai s vlajkou USA',
+        in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_locations($cf_reg_before['regions'] ?? []), true)
+        && in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_locations($cf_pub_before['regions'] ?? []), true));
+
+    $cf_before = $cf_labels();
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('migrace Cloudflare proběhla a uložila novou verzi', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $cf_version);
+    $cf_after = $cf_labels();
+
+    $cf_expected = $cf_before;
+    foreach ($cf_seed as $cf_i => $cf_row) {
+        $cf_expected[$cf_ids[$cf_i]] = $cf_row[3];
+    }
+    check('přepíšou se jen špatné štítky Cloudflare, ostatní řádky beze změny', $cf_after, $cf_expected);
+    check('změněné řádky: dva Mumbai, TXL, dva Frankfurty, bez kolokace a neznámý kód',
+        array_keys(array_diff_assoc($cf_after, $cf_before)), [$cf_ids[0], $cf_ids[1], $cf_ids[2], $cf_ids[3], $cf_ids[4], $cf_ids[9], $cf_ids[10]]);
+
+    [, $cf_reg] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    $cf_reg_rows = array_values(array_filter($cf_reg['regions'] ?? [], fn ($r) => str_contains((string)($r['location'] ?? ''), 'Cloudflare') || str_contains((string)($r['location'] ?? ''), 'RackNerd')));
+    $cf_reg_locs = $cf_locations($cf_reg_rows);
+    sort($cf_reg_locs);
+    $cf_reg_expected = [
+        '🇩🇪 Berlin, DE' . $cf_suffix,
+        '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)',
+        '🇩🇪 Frankfurt, DE' . $cf_suffix,
+        '🇮🇳 Mumbai, IN' . $cf_suffix,
+        '🇺🇸 Ashburn, US' . $cf_suffix,
+        '🇺🇸 Seattle, US' . $cf_suffix,
+        '🌐 Cloudflare Edge' . $cf_suffix,
+        '🌐 XYZ' . $cf_suffix,
+    ];
+    sort($cf_reg_expected);
+    check('místa měření (administrace): opravené štítky, RackNerd a neznámé město beze změny', $cf_reg_locs, $cf_reg_expected);
+    $cf_fra = array_values(array_filter($cf_reg_rows, fn ($r) => ($r['location'] ?? null) === '🇩🇪 Frankfurt, DE' . $cf_suffix))[0] ?? [];
+    check('Frankfurt je jedno místo se všemi třemi kontrolami, výpadek v něm', [$cf_fra['checks'] ?? null, $cf_fra['downChecks'] ?? null], [3, 1]);
+
+    [, $cf_pub] = api_get($base, 'action=regions&days=7');
+    $cf_pub_locs = $cf_locations($cf_pub['regions'] ?? []);
+    check_true('veřejná místa měření: Mumbai v Indii, žádná stará vlajka',
+        in_array('🇮🇳 Mumbai, IN' . $cf_suffix, $cf_pub_locs, true)
+        && !in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_pub_locs, true)
+        && !in_array('🇺🇸 Frankfurt, US' . $cf_suffix, $cf_pub_locs, true));
+
+    [$cf_ev_code, $cf_ev] = api_get($base, 'action=events&monitor_id=195&limit=50&scope=public');
+    check('události veřejně vrací 200', $cf_ev_code, 200);
+    $cf_ev_locs = $cf_locations($cf_ev['events'] ?? []);
+    sort($cf_ev_locs);
+    $cf_ev_expected = array_values(array_unique(array_column($cf_seed, 3)));
+    sort($cf_ev_expected);
+    check('události: každá kontrola nese opravené místo', $cf_ev_locs, $cf_ev_expected);
+    $cf_down = array_values(array_filter($cf_ev['events'] ?? [], fn ($e) => ($e['rawStatus'] ?? null) === 'down'))[0] ?? [];
+    check('výpadek z Frankfurtu: vlajka a země Německa', $cf_down['location'] ?? null, '🇩🇪 Frankfurt, DE' . $cf_suffix);
+    [, $cf_ev_admin] = api_get_auth($base, 'action=events&monitor_id=195&limit=50', $cookie_jar);
+    $cf_ev_admin_locs = $cf_locations($cf_ev_admin['events'] ?? []);
+    sort($cf_ev_admin_locs);
+    check('události v administraci stejně', $cf_ev_admin_locs, $cf_ev_expected);
+
+    check('týdenní digest porovná trend pod opraveným štítkem (správný už uložený vyhrává)', $cf_snapshot(), [
+        '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)' => 30,
+        '🇩🇪 Frankfurt, DE' . $cf_suffix => 35,
+        '🇮🇳 Mumbai, IN' . $cf_suffix => 120,
+    ]);
+
+    // A second run (every later schema bump) finds nothing to change.
+    $cf_snap_first = $cf_snapshot();
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('druhý běh migrace: verze zase uložená', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $cf_version);
+    check('druhý běh migrace nezmění žádný řádek', $cf_labels(), $cf_after);
+    check('druhý běh migrace nezmění snímek digestu', $cf_snapshot(), $cf_snap_first);
+} finally {
+    $pdo->exec("DELETE FROM monitors WHERE id = 195");
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'digest_snapshot_weekly' OR key_name LIKE 'regions_cache_%'");
+}
+
+// =======================================================================
 // The database is down (W1-A6): 503 for everyone, JSON for programs, the
 // branded page for people, and not one word about why.
 //

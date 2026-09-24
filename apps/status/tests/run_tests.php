@@ -3468,6 +3468,102 @@ bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_mask_log_line', 'bk_s
         bk_log_lines_details(['log_window_secs' => -5, 'log_lines_state' => 'maybe'], true), ['log_window_secs' => null, 'log_lines_state' => null]);
 }
 
+// --- Cloudflare Worker locations (cloudflare_colos.php) ----------------------
+// Until agents e13a2d4 the Worker put its egress IP's country (US) on every
+// colo: "🇺🇸 Mumbai, US". db.php rewrites that history from the server's copy
+// of the Worker's map, so the copy must say what the Worker says.
+require_once __DIR__ . '/../cloudflare_colos.php';
+$cf_worker_file = __DIR__ . '/../../../agents/cloudflare-agent.js';
+$cf_worker = is_readable($cf_worker_file) ? (string)file_get_contents($cf_worker_file) : '';
+check_true('Worker agents/cloudflare-agent.js je k přečtení (submodul agents)', $cf_worker !== '');
+$cf_body = preg_match('/\bconst COLO = \{(.*?)\n\};/s', $cf_worker, $cf_m) ? $cf_m[1] : '';
+preg_match_all('/\b([A-Z]{3})\s*:\s*\[\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\]/u', $cf_body, $cf_entries, PREG_SET_ORDER);
+$cf_js = [];
+foreach ($cf_entries as $cf_e) {
+    $cf_js[$cf_e[1]] = [$cf_e[2], $cf_e[3]];
+}
+check('Workerova mapa se celá přečetla (každý kód má město i zemi)', count($cf_js), preg_match_all('/\b[A-Z]{3}\s*:/', $cf_body));
+$cf_php = bk_cf_colos();
+ksort($cf_js);
+ksort($cf_php);
+check('mapa kolokací na serveru = COLO ve Workeru', $cf_php, $cf_js);
+// The label the server rebuilds is the one the Worker builds.
+check_true('Worker skládá místo z města a země kolokace',
+    str_contains($cf_worker, "const geo = [city, cc].filter(Boolean).join(', ');")
+    && str_contains($cf_worker, '`${countryFlag(cc)} ${geo} (AS13335 Cloudflare)`'));
+check_true('Worker kreslí vlajku stejně (dvě regionální písmena, jinak glóbus)',
+    str_contains($cf_worker, "if (!code || code.length !== 2) return '🌐';")
+    && str_contains($cf_worker, '0x1F1E6 + c.charCodeAt(0) - 65'));
+check_true('Worker bez kolokace místo netvrdí, neznámý kód nechá pod glóbem',
+    str_contains($cf_worker, "const EDGE_UNKNOWN = '" . BK_CF_EDGE_UNKNOWN . "';")
+    && str_contains($cf_worker, 'if (!/^[A-Z]{3}$/.test(colo)) return EDGE_UNKNOWN;')
+    && str_contains($cf_worker, "const [city, cc] = COLO[colo] ?? [colo, ''];"));
+
+$cf_city_cc = [];
+$cf_bad = [];
+foreach ($cf_php as $cf_colo => [$cf_city, $cf_cc]) {
+    if (!preg_match('/^[A-Z]{2}$/', $cf_cc) || (isset($cf_city_cc[$cf_city]) && $cf_city_cc[$cf_city] !== $cf_cc)) {
+        $cf_bad[] = $cf_colo;
+    }
+    $cf_city_cc[$cf_city] = $cf_cc;
+}
+check('každá kolokace má dvoupísmennou zemi a město leží v jedné zemi', $cf_bad, []);
+
+check('vlajka DE', bk_cf_country_flag('DE'), '🇩🇪');
+check('vlajka z malých písmen jako ve Workeru', bk_cf_country_flag('us'), '🇺🇸');
+check('bez země glóbus', bk_cf_country_flag(''), '🌐');
+check('štítek kolokace', bk_cf_location_label('Frankfurt', 'DE'), '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)');
+check('neznámá kolokace: kód a glóbus', bk_cf_location_label('XYZ', ''), '🌐 XYZ (AS13335 Cloudflare)');
+
+$cf_cases = [
+    // What production showed: the right city, the US next to it.
+    '🇺🇸 Mumbai, US (AS13335 Cloudflare)' => '🇮🇳 Mumbai, IN (AS13335 Cloudflare)',
+    '🇺🇸 Frankfurt, US (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    '🇺🇸 Zürich, US (AS13335 Cloudflare)' => '🇨🇭 Zürich, CH (AS13335 Cloudflare)',
+    // Flag and country disagree either way round.
+    '🇩🇪 Frankfurt, US (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    '🇺🇸 Frankfurt, DE (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    // The trace had no country: the city alone under a globe.
+    '🌐 Frankfurt (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    // Colos the old map lacked were posted as their code.
+    '🇺🇸 TXL, US (AS13335 Cloudflare)' => '🇩🇪 Berlin, DE (AS13335 Cloudflare)',
+    '🇺🇸 SLC, US (AS13335 Cloudflare)' => '🇺🇸 Salt Lake City, US (AS13335 Cloudflare)',
+    // A code the map does not know: the code under a globe, no country.
+    '🇺🇸 XYZ, US (AS13335 Cloudflare)' => '🌐 XYZ (AS13335 Cloudflare)',
+    // The trace named no colo: only the egress country, or nothing at all.
+    '🇺🇸 US (AS13335 Cloudflare)' => '🌐 Cloudflare Edge (AS13335 Cloudflare)',
+    '🇩🇪 DE (AS13335 Cloudflare)' => '🌐 Cloudflare Edge (AS13335 Cloudflare)',
+    '🌐  (AS13335 Cloudflare)' => '🌐 Cloudflare Edge (AS13335 Cloudflare)',
+    // Left alone: already right, another provider, a city the map does not know.
+    '🇺🇸 Seattle, US (AS13335 Cloudflare)' => null,
+    '🇺🇸 Washington DC, US (AS13335 Cloudflare)' => null,
+    '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)' => null,
+    '🇺🇸 Frankfurt, US (RackNerd, LLC)' => null,
+    '🇺🇸 Prague, CZ (AS13335 Cloudflare, Inc.)' => null,
+    '🇺🇸 Ashburn, US (AS13335 Cloudflare)' => null,
+    '🇺🇸 Ab, US (AS13335 Cloudflare)' => null,
+    '🌐 Cloudflare Edge (AS13335 Cloudflare)' => null,
+    '🌐 XYZ (AS13335 Cloudflare)' => null,
+    'Frankfurt, US (AS13335 Cloudflare)' => null,
+    'Main Server' => null,
+    '' => null,
+];
+foreach ($cf_cases as $cf_in => $cf_out) {
+    check("opravený štítek: {$cf_in}", bk_cf_corrected_label((string)$cf_in), $cf_out);
+}
+$cf_again = [];
+foreach ($cf_php as $cf_colo => [$cf_city, $cf_cc]) {
+    if (bk_cf_corrected_label(bk_cf_location_label($cf_city, $cf_cc)) !== null) {
+        $cf_again[] = $cf_colo;
+    }
+}
+foreach ([BK_CF_EDGE_UNKNOWN, bk_cf_location_label('XYZ', '')] as $cf_now) {
+    if (bk_cf_corrected_label($cf_now) !== null) {
+        $cf_again[] = $cf_now;
+    }
+}
+check('co dnes posílá Worker, zůstane beze změny (oprava je idempotentní)', $cf_again, []);
+
 $failed = bk_test_report('čisté funkce');
 // Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {
