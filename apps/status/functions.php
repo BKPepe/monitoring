@@ -11941,11 +11941,11 @@ function render_digest_html($data) {
     // --- New / removed servers ---
     if (!empty($data['new_servers']) || !empty($data['removed_servers'])) {
         $ns_html = '';
-        $site_url = rtrim((string)get_setting('site_url', ''), '/');
+        $site_origin = bk_site_origin((string)get_setting('site_url', ''));
         foreach ($data['new_servers'] as $s) {
             $ns_label = htmlspecialchars($s['name']) . ' <span style="color:#888896;">(' . htmlspecialchars($s['type']) . ')</span>';
-            if ($site_url !== '' && !empty($s['id'])) {
-                $ns_label = '<a href="' . htmlspecialchars($site_url . '/index.php?expand=' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
+            if ($site_origin !== '' && !empty($s['id'])) {
+                $ns_label = '<a href="' . htmlspecialchars($site_origin . '/status/index.php?expand=' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
             }
             $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . $ns_label . '</div>';
         }
@@ -12030,14 +12030,18 @@ function render_digest_html($data) {
     // section would suggest the router data is missing rather than absent.
     if (!empty($data['routers'])) {
         $rt_color = ['critical' => '#ef233c', 'warning' => '#f39c12', 'info' => '#888896'];
-        // The new/removed section above defines $site_url only when it renders.
-        $rt_base = rtrim((string)get_setting('site_url', ''), '/');
+        // The new/removed section above defines its origin only when it renders.
+        // Without a site_url there is no link: a relative href in a mail leads nowhere.
+        $rt_origin = bk_site_origin((string)get_setting('site_url', ''));
         $rt_html = '';
         foreach ($data['routers'] as $router) {
-            $link = $rt_base . '/index.php?expand=' . (int)$router['id'];
+            $rt_name = htmlspecialchars((string)$router['name']);
+            if ($rt_origin !== '') {
+                $rt_name = '<a href="' . htmlspecialchars($rt_origin . '/status/index.php?expand=' . (int)$router['id'])
+                    . '" style="color:#e1e1e6; text-decoration:none;">' . $rt_name . '</a>';
+            }
             $rt_html .= '<div style="padding:10px 0; border-bottom:1px solid #22222c;">'
-                . '<div style="font-size:14px; font-weight:bold;"><a href="' . htmlspecialchars($link)
-                . '" style="color:#e1e1e6; text-decoration:none;">' . htmlspecialchars((string)$router['name']) . '</a></div>';
+                . '<div style="font-size:14px; font-weight:bold;">' . $rt_name . '</div>';
             if (empty($router['applicable'])) {
                 $params = is_array($router['reason_params'] ?? null) ? $router['reason_params'] : [];
                 $why = '';
@@ -12555,9 +12559,9 @@ function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): voi
  * SERVER_NAME, which the server config sets, not the request.
  */
 function bk_public_base_origin(): string {
-    $configured = trim((string)get_setting('site_url', ''));
+    $configured = bk_site_origin((string)get_setting('site_url', ''));
     if ($configured !== '') {
-        return rtrim($configured, '/');
+        return $configured;
     }
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $allow = array_filter(array_map(
@@ -12570,6 +12574,29 @@ function bk_public_base_origin(): string {
         $allow
     );
     return $scheme . '://' . $trusted;
+}
+
+/**
+ * The origin (scheme://host[:port]) of the site_url setting, or '' when it is
+ * empty or not an absolute http(s) URL.
+ *
+ * The setting used to be read two ways: the digest appended /index.php to it
+ * (a URL ending in /status), public mails appended /app/... (a bare origin).
+ * Whichever one the admin typed, the other set of links was a 404. /status
+ * and /app always sit side by side at the root of one origin (the SPA calls
+ * /status/api.php), so every mail link is built from the origin and a path
+ * in the setting is ignored.
+ */
+function bk_site_origin(string $site_url): string {
+    $p = parse_url(trim($site_url));
+    if (!is_array($p) || !isset($p['scheme'], $p['host'])) {
+        return '';
+    }
+    $scheme = strtolower($p['scheme']);
+    if ($scheme !== 'http' && $scheme !== 'https') {
+        return '';
+    }
+    return $scheme . '://' . strtolower($p['host']) . (isset($p['port']) ? ':' . $p['port'] : '');
 }
 
 /**

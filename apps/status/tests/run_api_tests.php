@@ -4367,13 +4367,18 @@ if (function_exists('bk_digest_routers')) {
     //    template the e-mail uses, so this is the only place where a fatal in
     //    the section or a missing dictionary key would show up.
     if (isset($cookie_jar)) {
+        // site_url as the old label asked for it - the URL of the status page.
+        // The link is built from its origin, so it cannot lose /status.
+        $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('site_url', 'https://bloodkings.eu/status') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
         $ch = curl_init($base . '/admin.php?action=preview_weekly_digest');
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
             CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
         $dg_html = (string)curl_exec($ch);
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'site_url'");
         check_true('Digest: e-mail má sekci Routery', str_contains($dg_html, 'Routery'));
         check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku',
-            str_contains($dg_html, 'Router bez metrik') && str_contains($dg_html, 'index.php?expand=2'));
+            str_contains($dg_html, 'Router bez metrik')
+            && str_contains($dg_html, 'href="https://bloodkings.eu/status/index.php?expand=2"'));
         check_true('Digest: položka je vidět i s tím, co se naměřilo a co s tím',
             str_contains($dg_html, 'Plný oddíl') && str_contains($dg_html, 'Uvolněte místo'));
         check_true('Digest: fakta o disku jsou v e-mailu, ne poplach',

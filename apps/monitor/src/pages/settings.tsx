@@ -117,6 +117,17 @@ function switchOn(settings: SettingsMap, key: string): boolean {
   return SWITCH_DEFAULTS[key] === '1' ? settings[key] !== '0' : settings[key] === '1';
 }
 
+/** The origin of site_url, as the server reads it (bk_site_origin): a path in it is ignored. */
+function siteOrigin(siteUrl: string | undefined): string {
+  try {
+    const u = new URL(siteUrl ?? '');
+    if (u.protocol === 'http:' || u.protocol === 'https:') return u.origin;
+  } catch {
+    // Not an absolute URL: the server ignores it too.
+  }
+  return window.location.origin;
+}
+
 export function SettingsPage() {
   const { t } = useLanguage();
   const { session } = useSession();
@@ -425,7 +436,10 @@ export function SettingsPage() {
                     k="site_url"
                     label={t('settings.site_url_label', 'Veřejná URL status stránky (bez lomítka na konci)')}
                     placeholder="https://status.vasedomena.cz"
-                    hint={t('settings.site_url_hint', 'Používá se k prokliku z e-mailů zpět na konkrétní monitor.')}
+                    hint={t(
+                      'settings.site_url_hint',
+                      'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů; cesta za doménou se ignoruje.'
+                    )}
                   />
                 </div>
 
@@ -440,7 +454,7 @@ export function SettingsPage() {
                     {settings.cron_key && (
                       <p className="text-3xs text-muted-foreground/60 mt-1 font-mono break-all">
                         {t('settings.cron_url_label', 'Cron URL:')}{' '}
-                        <code className="text-primary/80">{`${settings.site_url || window.location.origin}/status/cron.php?key=${settings.cron_key}`}</code>
+                        <code className="text-primary/80">{`${siteOrigin(settings.site_url)}/status/cron.php?key=${settings.cron_key}`}</code>
                       </p>
                     )}
                   </div>

@@ -29,6 +29,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_pearson',
     'bk_counter_deltas',
     'bk_trusted_link_host',
+    'bk_site_origin',
     'bk_lte_backup_state',
     'bk_wan_link_state',
     'bk_pair_link_periods',
@@ -503,6 +504,19 @@ if (function_exists('bk_trusted_link_host')) {
     // Case-folding: a Host differing only in case must still match SERVER_NAME,
     // or the check could be dodged with BloodKings.EU.
     check('velikost písmen nerozhoduje', bk_trusted_link_host('BloodKings.EU', 'bloodkings.eu', $allow), 'bloodkings.eu');
+}
+
+// --- Origin of the site_url setting (bk_site_origin) ------------------------
+//
+// The digest read site_url as the /status URL, public mails as the bare
+// origin; whichever the admin typed, one set of mail links was a 404.
+if (function_exists('bk_site_origin')) {
+    check('URL se /status dá origin', bk_site_origin('https://bloodkings.eu/status'), 'https://bloodkings.eu');
+    check('holý origin i s lomítkem zůstane', bk_site_origin('https://bloodkings.eu/'), 'https://bloodkings.eu');
+    check('port a velikost písmen', bk_site_origin(' HTTPS://Status.Example.cz:8443/status/ '), 'https://status.example.cz:8443');
+    check('bez schématu to URL není', bk_site_origin('bloodkings.eu'), '');
+    check('jiné schéma než http(s) ne', bk_site_origin('javascript://bloodkings.eu/%0aalert(1)'), '');
+    check('prázdné nastavení', bk_site_origin(''), '');
 }
 
 // --- LTE backup verdict (bk_lte_backup_state) -------------------------------
