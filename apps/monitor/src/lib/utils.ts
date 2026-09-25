@@ -33,15 +33,17 @@ export function formatPercentValue(value: number, digits = 0): string {
  * Relative time. Deliberately coarse — with "3 s ago" nobody cares whether
  * it was 3.4 s, and a finer value only makes eyes read harder.
  */
-export function formatRelative(iso: string, now = Date.now()): string {
+export function formatRelative(iso: string, lang: 'cs' | 'en' = 'cs', now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  // Units read the same in both languages; only the word order differs.
+  const ago = (n: number, unit: string) => (lang === 'en' ? `${n} ${unit} ago` : `před ${n} ${unit}`);
 
-  if (seconds < 60) return `před ${seconds} s`;
+  if (seconds < 60) return ago(seconds, 's');
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `před ${minutes} min`;
+  if (minutes < 60) return ago(minutes, 'min');
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `před ${hours} h`;
-  return `před ${Math.round(hours / 24)} d`;
+  if (hours < 24) return ago(hours, 'h');
+  return ago(Math.round(hours / 24), 'd');
 }
 
 /** Uptime as 42d 7h 23m — omits zero units from the left. */

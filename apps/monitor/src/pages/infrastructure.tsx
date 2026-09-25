@@ -63,7 +63,7 @@ const kindIcon: Record<string, LucideIcon> = {
 };
 
 export function InfrastructurePage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { session, isAdmin } = useSession();
   const [query, setQuery] = React.useState('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1254,7 +1254,7 @@ export function InfrastructurePage() {
                         // SERVICE's version (e.g. the TS3 server) and the old '3.13.8' fallback was fiction.
                         const agentVer = mon?.details?.agent_version ?? null;
                         const lastSeenText = mon?.agentLastSeen
-                          ? formatRelative(new Date(mon.agentLastSeen * 1000).toISOString())
+                          ? formatRelative(new Date(mon.agentLastSeen * 1000).toISOString(), lang)
                           : null;
 
                         return (
@@ -2049,13 +2049,13 @@ export function InfrastructurePage() {
                   {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && !selectedMonitor.agentSilent && (
                     <p className="text-3xs font-semibold text-up mt-0.5">
                       🟢 {t('infra.active_since', 'Aktivní')}{' '}
-                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
+                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString(), lang)}
                     </p>
                   )}
                   {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && selectedMonitor.agentSilent && (
                     <p className="text-3xs font-semibold text-down mt-0.5">
                       🔴 {t('infra.agent_silent', 'Agent mlčí, naposledy')}{' '}
-                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString())}
+                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString(), lang)}
                     </p>
                   )}
                   {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen == null && (
@@ -2134,8 +2134,8 @@ export function InfrastructurePage() {
                       <span className="text-muted-foreground">
                         {t(
                           'infra.archived_at',
-                          { when: formatRelative(m.archivedAt) },
-                          `archivováno ${formatRelative(m.archivedAt)}`
+                          { when: formatRelative(m.archivedAt, lang) },
+                          `archivováno ${formatRelative(m.archivedAt, lang)}`
                         )}
                       </span>
                     )}

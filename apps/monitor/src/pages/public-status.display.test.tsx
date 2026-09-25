@@ -128,21 +128,21 @@ describe('Poslední události: probíhá jen výpadek, který opravdu trvá (ext
     renderPage();
 
     await screen.findByText('Poslední události');
-    await waitFor(() => expect(within(eventRow('Cílový server neodpovídá.')).queryByText('Open')).toBeTruthy());
+    await waitFor(() => expect(within(eventRow('Cílový server neodpovídá.')).queryByText('Probíhá')).toBeTruthy());
 
     const short = eventRow('Časový limit vypršel');
-    expect(within(short).queryByText('Open')).toBeNull();
-    expect(within(short).getByText('Resolved')).toBeTruthy();
+    expect(within(short).queryByText('Probíhá')).toBeNull();
+    expect(within(short).getByText('Vyřešeno')).toBeTruthy();
     expect(short.textContent).toContain('Časový limit vypršel (trvání < 1 min)');
     expect(short.textContent).not.toContain('0 min');
 
     const unknownEnd = eventRow('Spojení odmítnuto');
-    expect(within(unknownEnd).queryByText('Open')).toBeNull();
-    expect(within(unknownEnd).getByText('Resolved')).toBeTruthy();
+    expect(within(unknownEnd).queryByText('Probíhá')).toBeNull();
+    expect(within(unknownEnd).getByText('Vyřešeno')).toBeTruthy();
     expect(unknownEnd.textContent).not.toContain('trvání');
 
     // Exactly one outage is running, and the page says so once.
-    expect(screen.getAllByText('Open')).toHaveLength(1);
+    expect(screen.getAllByText('Probíhá')).toHaveLength(1);
   });
 
   it('bez známého stavu služby a bez konce stránka nic netvrdí', async () => {
@@ -155,8 +155,8 @@ describe('Poslední události: probíhá jen výpadek, který opravdu trvá (ext
 
     await screen.findByText('Poslední události');
     const row = await waitFor(() => eventRow('Chyba DNS'));
-    expect(within(row).queryByText('Open')).toBeNull();
-    expect(within(row).queryByText('Resolved')).toBeNull();
+    expect(within(row).queryByText('Probíhá')).toBeNull();
+    expect(within(row).queryByText('Vyřešeno')).toBeNull();
   });
 });
 

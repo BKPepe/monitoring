@@ -18,7 +18,7 @@ import { LoadingState, ErrorState } from '@/components/ui/states';
  * including process consumption from the agents' rankings.
  */
 export function ServicesPage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   // One word per state, so the colour is never the only carrier.
   const statusLabel: Record<string, string> = {
     up: t('common.online', 'Online'),
@@ -126,7 +126,7 @@ export function ServicesPage() {
                         <span className="font-mono">{svc.target}</span>
                         {usage.cpu != null && <span>CPU {formatPercent(usage.cpu)}</span>}
                         {usage.ram != null && <span>RAM {usage.ram} MB</span>}
-                        {svc.lastCheck && <span>{formatRelative(svc.lastCheck)}</span>}
+                        {svc.lastCheck && <span>{formatRelative(svc.lastCheck, lang)}</span>}
                       </div>
                     </Link>
                   );

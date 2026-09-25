@@ -571,7 +571,7 @@ export function DashboardPage() {
               <p className="text-muted-foreground truncate text-xs">{alert.source}</p>
             </div>
             <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
-              {alert.at ? formatRelative(alert.at) : '—'}
+              {alert.at ? formatRelative(alert.at, lang) : '—'}
             </span>
           </Link>
         ))}
@@ -939,7 +939,7 @@ function MonitorTable({
   rows: ApiMonitor[];
   latencySeries: Record<number, (number | null)[]>;
 }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
 
   const statusText: Record<MonitorStatus, string> = {
     up: t('common.online', 'Online'),
@@ -998,7 +998,7 @@ function MonitorTable({
                   </span>
                 )}
                 {monitor.hdd != null && <span>HDD {formatPercent(monitor.hdd)}</span>}
-                {monitor.lastCheck && <span>{formatRelative(monitor.lastCheck)}</span>}
+                {monitor.lastCheck && <span>{formatRelative(monitor.lastCheck, lang)}</span>}
               </div>
             </Link>
           );
@@ -1117,7 +1117,7 @@ function MonitorTable({
                       : formatUptime(monitor.uptimeSeconds)}
                 </TableCell>
                 <TableCell className="text-muted-foreground pr-5 pl-2 font-mono text-xs whitespace-nowrap tabular-nums">
-                  {monitor.lastCheck ? formatRelative(monitor.lastCheck) : '—'}
+                  {monitor.lastCheck ? formatRelative(monitor.lastCheck, lang) : '—'}
                 </TableCell>
               </TableRow>
             ))}

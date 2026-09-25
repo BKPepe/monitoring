@@ -9,6 +9,14 @@ const resolutionVariant = {
   Open: 'warning',
 } as const;
 
+// The resolution is a code, not a caption: printed raw it put English words
+// on the Czech page. Existing keys carry the same meaning in both languages.
+const resolutionLabel = {
+  Resolved: ['incidents.resolved_label', 'Vyřešeno'],
+  Info: ['timeline.sev_info', 'Informace'],
+  Open: ['public.incident_open', 'Probíhá'],
+} as const;
+
 /**
  * Event timeline for a device.
  *
@@ -44,7 +52,11 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
                   </span>
                 )}
               </div>
-              {event.resolution && <Badge variant={resolutionVariant[event.resolution]}>{event.resolution}</Badge>}
+              {event.resolution && (
+                <Badge variant={resolutionVariant[event.resolution]}>
+                  {t(resolutionLabel[event.resolution][0], resolutionLabel[event.resolution][1])}
+                </Badge>
+              )}
             </div>
 
             <p className="text-muted-foreground text-xs leading-relaxed">{event.detail}</p>

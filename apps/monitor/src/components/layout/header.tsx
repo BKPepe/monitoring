@@ -133,7 +133,7 @@ export function Header({
             aria-label={t('settings.lang_cs', 'Čeština')}
             title={t('settings.lang_cs', 'Čeština')}
           >
-            🇨🇿 CS
+            CS
           </button>
           <button
             type="button"
@@ -146,7 +146,7 @@ export function Header({
             aria-label="English"
             title="English"
           >
-            🇬🇧 EN
+            EN
           </button>
         </div>
 
