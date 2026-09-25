@@ -38,8 +38,8 @@ function renderLan(lanPorts: LanPorts | null | undefined, version: string | null
 
 /** The socket of one port: everything about it hangs under its own <li>. */
 function tile(name: string): HTMLElement {
-  const label = screen.getAllByText(name).find((el) => el.closest('li button'));
-  const li = label?.closest('li');
+  const button = screen.queryByRole('button', { name: new RegExp(`^${name}[: ]`) });
+  const li = button?.closest('li');
   if (!li) throw new Error(`port ${name} nemá vlastní zdířku`);
   return li;
 }
@@ -69,19 +69,21 @@ describe('RouterPortPanel', () => {
 
   it('nakreslí porty v pořadí, jak sedí na routeru', () => {
     renderLan(omnia.lanPortsCounted);
-    const names = [...document.querySelectorAll('li button')].map((b) => b.querySelector('.font-mono')?.textContent);
-    expect(names).toEqual(['lan0', 'lan1', 'lan2', 'lan3', 'lan4']);
+    const names = [...document.querySelectorAll('li button')].map(
+      (b) => b.querySelector('[data-part="label"]')?.textContent
+    );
+    expect(names).toEqual(['LAN 0', 'LAN 1', 'LAN 2', 'LAN 3', 'LAN 4']);
   });
 
   it('port s kabelem ukazuje počet zařízení a vyjednanou rychlost', () => {
     renderLan(omnia.lanPortsCounted);
-    expect(tile('lan0').querySelector('.tabular-nums.text-sm')?.textContent).toBe('3');
+    expect(tile('lan0').querySelector('[data-part="figure"]')?.textContent).toBe('3');
     expect(tile('lan0').textContent).toContain('zařízení');
-    expect(tile('lan0').textContent).toContain('1G');
+    expect(tile('lan0').textContent).toContain('1 Gbit/s');
     expect(tile('lan0').querySelector('button')?.getAttribute('aria-label')).toBe('lan0: 3 zařízení, 1 Gbit/s');
-    expect(tile('lan4').querySelector('.tabular-nums.text-sm')?.textContent).toBe('1');
+    expect(tile('lan4').querySelector('[data-part="figure"]')?.textContent).toBe('1');
     expect(tile('lan1').querySelector('button')?.getAttribute('aria-label')).toContain('100 Mbit/s');
-    expect(tile('lan1').textContent).toContain('100M');
+    expect(tile('lan1').textContent).toContain('100 Mbit/s');
   });
 
   it('kabel bez zařízení a prázdná zdířka jsou dva různé stavy, i bez legendy', () => {
@@ -91,11 +93,12 @@ describe('RouterPortPanel', () => {
     expect(tile('lan1').textContent).not.toContain('volný');
     expect(tile('lan2').textContent).toContain('volný');
     expect(tile('lan2').textContent).not.toContain('nic se neozvalo');
-    // A obrázek: do připojeného portu vede šňůra, prázdný je čárkovaný obrys.
-    expect(tile('lan1').querySelector('[data-part="lead"]')).not.toBeNull();
-    expect(tile('lan2').querySelector('[data-part="lead"]')).toBeNull();
-    expect(tile('lan2').querySelector('[data-part="opening"]')?.getAttribute('stroke-dasharray')).toBeTruthy();
-    expect(tile('lan1').querySelector('[data-part="opening"]')?.getAttribute('stroke-dasharray')).toBeNull();
+    // A obrázek: připojený port má rozsvícené kontakty a hranu linky, prázdný zhaslé.
+    expect(tile('lan1').querySelector('svg')?.getAttribute('data-link')).toBe('true');
+    expect(tile('lan1').querySelector('[data-part="pins"]')?.getAttribute('class')).toBe('fill-port-pin');
+    expect(tile('lan2').querySelector('svg')?.getAttribute('data-link')).toBe('false');
+    expect(tile('lan2').querySelector('svg')?.getAttribute('data-edge')).toBe('off');
+    expect(tile('lan2').querySelector('[data-part="pins"]')?.getAttribute('class')).toBe('fill-port-pin-off');
     // Prázdná zdířka nikdy není červená.
     expect(tile('lan2').querySelector('.text-down')).toBeNull();
   });
@@ -103,12 +106,14 @@ describe('RouterPortPanel', () => {
   it('nespočítaný port ukáže pomlčku, nikdy nulu', () => {
     renderLan(omnia.lanPorts);
     // Number in its own element, so "lan0" in the name cannot pass for a count.
-    expect(tile('lan0').querySelector('.tabular-nums.text-sm')?.textContent).toBe('—');
+    expect(tile('lan0').querySelector('[data-part="figure"]')?.textContent).toBe('—');
     expect(tile('lan0').textContent).toContain('nespočítáno');
-    expect(tile('lan1').querySelector('.tabular-nums.text-sm')?.textContent).toBe('0');
+    // Změřená nula se řekne slovy, pomlčka patří jen nespočítanému portu.
+    expect(tile('lan1').textContent).toContain('nic se neozvalo');
+    expect(tile('lan1').textContent).not.toContain('—');
     // A nespočítaný port se ani barvou netváří, že za ním někdo je.
-    expect(tile('lan0').querySelector('.tabular-nums.text-sm')?.className).not.toContain('text-up');
-    expect(tile('lan4').querySelector('.tabular-nums.text-sm')?.className).not.toContain('text-up');
+    expect(tile('lan0').querySelector('[data-part="figure"]')?.className).not.toContain('text-up');
+    expect(tile('lan4').querySelector('[data-part="figure"]')?.className).not.toContain('text-up');
   });
 
   it('port na 100 Mbit vysvětlí protistranu a netváří se jako závada', () => {
@@ -202,7 +207,7 @@ describe('RouterPortPanel', () => {
     });
     expect(tile('lan0').textContent).toContain('neznámý');
     expect(tile('lan0').textContent).not.toContain('volný');
-    expect(tile('lan0').querySelector('[data-part="opening"]')?.getAttribute('stroke-dasharray')).toBeNull();
+    expect(tile('lan0').querySelector('svg')?.getAttribute('data-link')).toBe('null');
     expect(tile('lan0').textContent).toContain('?');
     // "N z M" počítá jen porty se známou linkou.
     expect(screen.getByText('1 neznámé')).toBeTruthy();
@@ -232,6 +237,7 @@ describe('RouterPortPanel', () => {
     const internet = screen.getByRole('group', { name: 'Internet' });
     expect(within(internet).getAllByRole('button')).toHaveLength(2);
     expect(within(internet).getByText('záloha')).toBeTruthy();
+    expect(within(internet).getByRole('button', { name: /^WAN/ }).querySelector('.port-wan-halo')).not.toBeNull();
     expect(within(screen.getByRole('group', { name: 'LAN – přepínač' })).getAllByRole('button')).toHaveLength(5);
     expect(screen.getByText('Na USB: 2')).toBeTruthy();
     // Six Ethernet sockets with a known link; the LTE modem is not one of them.
@@ -253,7 +259,7 @@ describe('RouterPortPanel', () => {
 
   it('legenda ukáže jen stavy, které na routeru opravdu jsou', () => {
     renderLan(omnia.lanPortsCounted);
-    const legend = document.querySelector('ul.border-t') as HTMLElement;
+    const legend = document.querySelector('[data-part="legend"]') as HTMLElement;
     expect(legend.textContent).toContain('kabel, za ním zařízení');
     expect(legend.textContent).toContain('nic se neozvalo');
     expect(legend.textContent).toContain('volný');
@@ -275,6 +281,9 @@ describe('RouterPortPanel', () => {
     expect(wan.getAttribute('aria-label')).toContain('bez internetu');
     expect(wan.querySelector('.text-warning')).not.toBeNull();
     expect(wan.querySelector('.text-down')).toBeNull();
+    // The halo belongs to a WAN that carries the internet, not to one that does not.
+    expect(wan.querySelector('.port-wan-halo')).toBeNull();
+    expect(wan.querySelector('svg')?.getAttribute('data-edge')).toBe('warning');
     expect(tile('lan0').textContent).toContain('HD');
     expect(tile('lan0').querySelector('button')?.getAttribute('aria-label')).toContain('poloviční duplex');
   });
@@ -285,6 +294,9 @@ describe('RouterPortPanel', () => {
     expect(screen.getByText('stav před 1 h')).toBeTruthy();
     expect(document.querySelector('.text-up')).toBeNull();
     expect(document.querySelectorAll('[data-led="true"]')).toHaveLength(0);
+    // No halo and no lit contacts on a picture that is not live.
+    expect(document.querySelector('.port-wan-halo')).toBeNull();
+    expect(document.querySelector('.fill-port-pin')).toBeNull();
     // No legend of live meanings under a picture that is not live.
     expect(screen.queryByText('kabel, za ním zařízení')).toBeNull();
   });
@@ -296,7 +308,7 @@ describe('RouterPortPanel', () => {
       renderPanel({ ...withUplinks, lan_ports: omnia.lanPorts });
       fireEvent.click(screen.getByRole('button', { name: /^lan1/ }));
       const dialog = screen.getByRole('dialog');
-      expect(within(dialog).getByText('lan1')).toBeTruthy();
+      expect(within(dialog).getByText('LAN 1')).toBeTruthy();
       expect(within(dialog).getByText('Protistrana nabídla').nextElementSibling?.textContent).toBe('100 Mbit/s');
       expect(within(dialog).getByText('plný')).toBeTruthy();
       expect(within(dialog).getByText('stav před 40 s')).toBeTruthy();

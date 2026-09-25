@@ -113,6 +113,27 @@
   --chart-corr-positive: #2a71fe;
   --chart-corr-negative: #ab4501;
 
+  /* --- The router's port panel (router-ports/*): the jacks drawn as
+     hardware, the way NetPulse draws them - a recessed well, jack bodies with
+     a coloured edge, gold contacts, two LEDs and a cyan WAN. Hardware colours,
+     not verdicts: a verdict on a socket still speaks through --status-*, and
+     none of these is ever a warning. Text on them (--port-wan) keeps 4.5:1 on
+     the well; the edges and LEDs keep 3:1 as marks. */
+  --port-well: #ffffff;
+  --port-well-edge: rgb(0 0 0 / 0.08);
+  --port-body: #f4f6f8;
+  --port-hole: #80858d;
+  --port-edge: #5fbba3;
+  --port-edge-off: #d3d8de;
+  --port-pin: #df8526;
+  --port-pin-off: #c6cbd2;
+  --port-led-on: #0e9a6a;
+  --port-led-off: #d9dee4;
+  --port-led-glow: rgb(14 154 106 / 0.25);
+  --port-wan: #0a7896;
+  --port-wan-edge: #4fb0cf;
+  --port-wan-glow: rgb(79 176 207 / 0.22);
+
   --radius: 0.625rem;
 }
 
@@ -177,6 +198,20 @@
   --chart-annotation: #d946ef;
   --chart-corr-positive: #286ef9;
   --chart-corr-negative: #dd5c00;
+  --port-well: #0b0f14;
+  --port-well-edge: rgb(255 255 255 / 0.06);
+  --port-body: #0a0d12;
+  --port-hole: #030405;
+  --port-edge: #1b7f60;
+  --port-edge-off: #262d37;
+  --port-pin: #d8a21d;
+  --port-pin-off: #333a45;
+  --port-led-on: #2dd489;
+  --port-led-off: #222a33;
+  --port-led-glow: rgb(45 212 137 / 0.55);
+  --port-wan: #22c3dd;
+  --port-wan-edge: #1b9fb8;
+  --port-wan-glow: rgb(34 195 221 / 0.28);
   --chart-grid: rgb(255 255 255 / 0.06);
   --chart-glow: 8;
   --chart-fill: 0.3;
@@ -225,6 +260,19 @@
   --color-chart-temperature: var(--chart-temperature);
   --color-chart-disk: var(--chart-disk);
   --color-chart-latency: var(--chart-latency);
+
+  --color-port-well: var(--port-well);
+  --color-port-well-edge: var(--port-well-edge);
+  --color-port-body: var(--port-body);
+  --color-port-hole: var(--port-hole);
+  --color-port-edge: var(--port-edge);
+  --color-port-edge-off: var(--port-edge-off);
+  --color-port-pin: var(--port-pin);
+  --color-port-pin-off: var(--port-pin-off);
+  --color-port-led-on: var(--port-led-on);
+  --color-port-led-off: var(--port-led-off);
+  --color-port-wan: var(--port-wan);
+  --color-port-wan-edge: var(--port-wan-edge);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -296,6 +344,27 @@
   filter: drop-shadow(0 0 calc(var(--chart-glow) * 0.35px) currentColor);
 }
 
+/* Router port panel: the halo behind the WAN jack, the glow of a lit LED and
+   the slow breath of an activity LED. Decoration on top of a state the text
+   already states; the breath exists only for people who have not asked for
+   reduced motion. */
+.port-wan-halo {
+  background: radial-gradient(closest-side, var(--port-wan-glow), transparent);
+}
+.port-led-glow {
+  box-shadow: 0 0 6px var(--port-led-glow);
+}
+@keyframes port-led-breath {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .port-led-breath {
+    animation: port-led-breath 2.4s ease-in-out infinite;
+  }
+}
+
 /* ==========================================================================
    TISK a PDF REPORTY (@media print)
    ========================================================================== */
@@ -350,6 +419,20 @@
     --chart-grid: rgb(0 0 0 / 0.07);
     --chart-glow: 0;
     --chart-fill: 0.18;
+    --port-well: #ffffff;
+    --port-well-edge: rgb(0 0 0 / 0.08);
+    --port-body: #f4f6f8;
+    --port-hole: #80858d;
+    --port-edge: #5fbba3;
+    --port-edge-off: #d3d8de;
+    --port-pin: #df8526;
+    --port-pin-off: #c6cbd2;
+    --port-led-on: #0e9a6a;
+    --port-led-off: #d9dee4;
+    --port-led-glow: rgb(14 154 106 / 0.25);
+    --port-wan: #0a7896;
+    --port-wan-edge: #4fb0cf;
+    --port-wan-glow: rgb(79 176 207 / 0.22);
   }
 
   /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka bez obsahu */

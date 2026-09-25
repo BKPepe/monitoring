@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import omnia from '@/api/omnia-router.fixture';
 import type { LanPorts } from '@/api/types';
-import { STALE_AFTER_SECS, buildPortPanel, rateLabel, rateShort, type PortPanel, type PortSocket } from './model';
+import { STALE_AFTER_SECS, buildPortPanel, rateLabel, type PortPanel, type PortSocket } from './model';
 
 const NOW = 1_789_890_000;
 const fresh = { reportedAt: NOW - 40, now: NOW };
@@ -111,9 +111,6 @@ describe('buildPortPanel', () => {
     expect(socket(panel, 'lan0').speedTier).toBe(2);
     expect(socket(panel, 'WAN').speedTier).toBe(3);
     expect(rateLabel(2500)).toBe('2.5 Gbit/s');
-    expect(rateShort(2500)).toBe('2.5G');
-    expect(rateShort(100)).toBe('100M');
-    expect(rateShort(null)).toBeNull();
   });
 
   it('WAN: online, measured rate lights the activity LED, counters since boot', () => {

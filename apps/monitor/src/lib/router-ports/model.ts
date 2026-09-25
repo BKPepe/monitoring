@@ -20,8 +20,8 @@
  *   - Unmeasured stays null. A socket nobody could read is "unknown", never
  *     "free"; a port whose devices were not counted is "uncounted", never 0.
  *   - An empty socket is never red, and a slow link is never a warning: the
- *     speed is drawn as a shape (tier ticks), and a port below its capability
- *     gets an explanation, not a colour.
+ *     speed is printed, never coloured, and a port below its capability gets
+ *     an explanation, not a colour.
  *   - The activity LED exists only where a rate was measured. LAN ports have
  *     no rate yet, so they have no activity LED at all - not an unlit one.
  *   - Stale data does not look live: every live value is dropped and every
@@ -62,8 +62,9 @@ export type PortState =
   | 'unverified';
 
 /**
- * The token a socket is drawn in. `foreground` and `muted` are chrome, the rest
- * are the status tokens of theme.css - no new colour exists for this panel.
+ * The token a socket's verdict is written in. `foreground` and `muted` are
+ * chrome, the rest are the status tokens of theme.css; the hardware itself
+ * (jack bodies, contacts, LEDs) takes the --port-* tokens.
  */
 export type PortTone = 'up' | 'info' | 'warning' | 'down' | 'foreground' | 'muted' | 'paused';
 
@@ -188,16 +189,6 @@ function reportsPorts(version: string | null): boolean {
 export function rateLabel(mbit: number | null): string | null {
   if (mbit === null) return null;
   return mbit >= 1000 ? `${Number((mbit / 1000).toFixed(1))} Gbit/s` : `${mbit} Mbit/s`;
-}
-
-/**
- * The short form printed under a socket, the way switch fronts label their
- * ports: "100M", "1G", "2.5G". The full rate is in the detail and the
- * button's label; this one has to fit a 56 px column.
- */
-export function rateShort(mbit: number | null): string | null {
-  if (mbit === null) return null;
-  return mbit >= 1000 ? `${Number((mbit / 1000).toFixed(1))}G` : `${mbit}M`;
 }
 
 function speedTier(mbit: number | null): 0 | 1 | 2 | 3 {

@@ -1,30 +1,49 @@
 /**
- * The drawn parts of a socket, all in `currentColor`, so a socket takes its
- * tone from one class and no glyph owns a colour of its own.
+ * The drawn parts of a socket, as hardware: a jack body with a coloured edge,
+ * a row of contacts and a dark opening, and the small round LEDs above it.
+ * Every colour is a --port-* token of theme.css (or a --status-* one for a
+ * verdict), so light and dark mode each get their own hardware.
  *
- * Every glyph encodes the link in its SHAPE, not only its colour, the way the
- * old port map did: with a cable the opening is filled and a lead runs out of
- * the bottom, without one the outline is dashed and empty, and an unknown
- * link is a solid empty outline with a question mark - which is not a claim
- * that the socket is free.
+ * The link is never told by colour alone: a jack with a live link has lit
+ * contacts, a free one has grey contacts and the word "volný" under it, and a
+ * jack nobody could read carries a "?" in its opening - which is not a claim
+ * that it is free.
  */
 
 import { cn } from '@/lib/utils';
 import type { PortGlyph } from '@/lib/router-ports/model';
 
-const STROKE = { stroke: 'currentColor', strokeWidth: 1.5, strokeLinejoin: 'round' as const };
+/** The colour of a jack's edge: hardware for a link, a status token only for an uplink verdict. */
+export type JackEdge = 'linked' | 'off' | 'wan' | 'warning' | 'down';
 
-/** The body of an unknown socket: the outline stays solid, a "?" says what we know. */
-function Question({ x, y }: { x: number; y: number }) {
+const EDGE: Record<JackEdge, string> = {
+  linked: 'stroke-port-edge',
+  off: 'stroke-port-edge-off',
+  wan: 'stroke-port-wan-edge',
+  warning: 'stroke-warning',
+  down: 'stroke-down',
+};
+
+/** The contacts of an RJ45 jack: eight gold fingers across the top of the opening. */
+function Pins({ lit }: { lit: boolean }) {
+  return (
+    <g className={lit ? 'fill-port-pin' : 'fill-port-pin-off'} data-part="pins">
+      {Array.from({ length: 8 }, (_, i) => (
+        <rect key={i} x={14.4 + i * 3.6} y="9" width="1.8" height="9" rx="0.5" />
+      ))}
+    </g>
+  );
+}
+
+function Question({ y }: { y: number }) {
   return (
     <text
-      x={x}
+      x="28"
       y={y}
       textAnchor="middle"
-      fontSize="9"
-      fontWeight="600"
-      fill="currentColor"
-      stroke="none"
+      fontSize="11"
+      fontWeight="700"
+      className="fill-paused"
       style={{ fontFamily: 'var(--font-mono)' }}
     >
       ?
@@ -32,140 +51,158 @@ function Question({ x, y }: { x: number; y: number }) {
   );
 }
 
-/**
- * An RJ45 jack seen from the front, 40x32: the frame, the opening with its
- * latch notch at the bottom, the eight contacts, and the plug's lead.
- */
-function Rj45({ link }: { link: boolean | null }) {
-  const plugged = link === true;
+/** An RJ45 jack from the front: contacts on top, the opening for the plug below. */
+function Rj45({ link, lit }: { link: boolean | null; lit: boolean }) {
   return (
     <>
-      <rect x="3" y="2" width="34" height="26" rx="4" {...STROKE} strokeWidth={1} fill="none" opacity="0.55" />
-      <path
+      <Pins lit={lit} />
+      <rect
         data-part="opening"
-        d="M9 7h22v12h-6v4H15v-4H9z"
-        {...STROKE}
-        strokeDasharray={link === false ? '2.5 2' : undefined}
-        fill={plugged ? 'currentColor' : 'none'}
-        fillOpacity={plugged ? 0.2 : undefined}
+        x="13"
+        y="22"
+        width="30"
+        height="15"
+        rx="2.5"
+        className="fill-port-hole stroke-port-edge-off"
+        strokeWidth="1"
       />
-      {plugged && (
-        <>
-          <path
-            d="M12 9v4M14.3 9v4M16.6 9v4M18.9 9v4M21.1 9v4M23.4 9v4M25.7 9v4M28 9v4"
-            stroke="currentColor"
-            strokeWidth="1"
-          />
-          {/* The lead leaving the socket: the one cue that says "a cable is in". */}
-          <path data-part="lead" d="M20 23v9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-        </>
-      )}
-      {link === null && <Question x={20} y={17} />}
+      {link === null && <Question y={33.5} />}
     </>
   );
 }
 
 /**
  * The uplink port whose medium is not reported (an SFP cage or an RJ45 jack -
- * the agent does not say which): a plain rectangular port, no latch notch and
- * no contacts, so the drawing claims no medium either.
+ * the agent does not say which): the same body with one plain opening and a
+ * contact strip, so the drawing claims no medium.
  */
-function Uplink({ link }: { link: boolean | null }) {
-  const plugged = link === true;
-  return (
-    <>
-      <rect x="3" y="2" width="34" height="26" rx="4" {...STROKE} strokeWidth={1} fill="none" opacity="0.55" />
-      <rect
-        data-part="opening"
-        x="8"
-        y="8"
-        width="24"
-        height="12"
-        rx="1.5"
-        {...STROKE}
-        strokeDasharray={link === false ? '2.5 2' : undefined}
-        fill={plugged ? 'currentColor' : 'none'}
-        fillOpacity={plugged ? 0.2 : undefined}
-      />
-      {plugged && (
-        <>
-          <rect x="12" y="11.5" width="16" height="5" rx="1" fill="currentColor" fillOpacity="0.55" />
-          <path data-part="lead" d="M20 20v12" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-        </>
-      )}
-      {link === null && <Question x={20} y={17.5} />}
-    </>
-  );
-}
-
-/** A cellular modem: a stick with an antenna. Plugged in or not, it is not a cable socket. */
-function Modem({ link }: { link: boolean | null }) {
-  const up = link === true;
+function Uplink({ link, lit }: { link: boolean | null; lit: boolean }) {
   return (
     <>
       <rect
         data-part="opening"
         x="11"
-        y="9"
-        width="18"
-        height="20"
+        y="10"
+        width="34"
+        height="27"
         rx="3"
-        {...STROKE}
-        strokeDasharray={link === false ? '2.5 2' : undefined}
-        fill={up ? 'currentColor' : 'none'}
-        fillOpacity={up ? 0.2 : undefined}
+        className="fill-port-hole stroke-port-edge-off"
+        strokeWidth="1"
       />
-      <path d="M25 9V3" {...STROKE} strokeLinecap="round" />
-      {up && <path d="M16 15h8M16 19h8M16 23h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />}
-      {link === null && <Question x={20} y={22} />}
+      {link !== null && (
+        // A contact strip along the top of the cage: fingers, but no RJ45 split.
+        <g className={lit ? 'fill-port-pin' : 'fill-port-pin-off'} data-part="pins">
+          {Array.from({ length: 10 }, (_, i) => (
+            <rect key={i} x={15.3 + i * 2.6} y="13" width="1.5" height="5" rx="0.4" />
+          ))}
+          <rect x="15" y="31" width="26" height="2" rx="1" opacity="0.5" />
+        </g>
+      )}
+      {link === null && <Question y={28} />}
     </>
   );
 }
 
-export function SocketGlyph({ kind, link, className }: { kind: PortGlyph; link: boolean | null; className?: string }) {
+/** The cellular modem: not a cable socket, so an antenna instead of contacts; waves only when it is up. */
+function Modem({ link, lit }: { link: boolean | null; lit: boolean }) {
+  const tone = lit ? 'stroke-port-pin' : 'stroke-port-pin-off';
   return (
-    <svg viewBox="0 0 40 32" className={cn('h-8 w-10', className)} aria-hidden="true" fill="none">
-      {kind === 'rj45' ? <Rj45 link={link} /> : kind === 'uplink' ? <Uplink link={link} /> : <Modem link={link} />}
-    </svg>
-  );
-}
-
-/**
- * A status LED, 6 px. `lit` true is filled, false is a hollow ring (measured
- * dark), null is a dashed ring (nobody measured it). No glow and no animation:
- * a blinking LED would claim a liveness the minute-old report does not have.
- */
-export function Led({ lit, className }: { lit: boolean | null; className?: string }) {
-  return (
-    <svg viewBox="0 0 8 8" className={cn('size-1.5', className)} aria-hidden="true" data-led={String(lit)}>
-      <circle
-        cx="4"
-        cy="4"
-        r={lit === true ? 4 : 3.25}
-        fill={lit === true ? 'currentColor' : 'none'}
-        stroke={lit === true ? 'none' : 'currentColor'}
-        strokeWidth="1.5"
-        strokeDasharray={lit === null ? '1.6 1.4' : undefined}
+    <>
+      <rect
+        data-part="opening"
+        x="13"
+        y="8"
+        width="30"
+        height="31"
+        rx="3"
+        className="fill-port-hole stroke-port-edge-off"
+        strokeWidth="1"
       />
+      {link === null ? (
+        <Question y={28} />
+      ) : (
+        <g className={tone} fill="none" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M28 20v13" />
+          <circle cx="28" cy="18" r="1.8" className={lit ? 'fill-port-pin' : 'fill-port-pin-off'} stroke="none" />
+          {lit && (
+            <>
+              <path d="M23.5 13.5a6.5 6.5 0 0 0 0 9" />
+              <path d="M32.5 13.5a6.5 6.5 0 0 1 0 9" />
+              <path d="M20 10.5a11 11 0 0 0 0 15" opacity="0.6" />
+              <path d="M36 10.5a11 11 0 0 1 0 15" opacity="0.6" />
+            </>
+          )}
+        </g>
+      )}
+    </>
+  );
+}
+
+/**
+ * One socket, 56x48: the body with its edge and what sits inside.
+ * @param lit whether the contacts are lit - a live link on a fresh report.
+ */
+export function Jack({
+  kind,
+  link,
+  edge,
+  lit,
+  className,
+}: {
+  kind: PortGlyph;
+  link: boolean | null;
+  edge: JackEdge;
+  lit: boolean;
+  className?: string;
+}) {
+  return (
+    <svg
+      viewBox="0 0 56 48"
+      className={cn('h-12 w-14', className)}
+      aria-hidden="true"
+      data-link={String(link)}
+      data-edge={edge}
+    >
+      <rect
+        x="1.5"
+        y="1.5"
+        width="53"
+        height="45"
+        rx="8"
+        className={cn('fill-port-body', EDGE[edge])}
+        strokeWidth="2.5"
+      />
+      {kind === 'rj45' ? (
+        <Rj45 link={link} lit={lit} />
+      ) : kind === 'uplink' ? (
+        <Uplink link={link} lit={lit} />
+      ) : (
+        <Modem link={link} lit={lit} />
+      )}
     </svg>
   );
 }
 
 /**
- * The speed tier as three rising bars: up to 100 Mbit, up to 1 Gbit, 2.5 Gbit
- * and more. Shape and fill only - a slow link is never drawn in a warning
- * colour, because the port is not at fault.
+ * A round status LED, 7 px. `lit` true glows, false is a dark LED (measured
+ * off, or a report too old to be live), null is a hollow ring - nobody
+ * measured it. `breath` lets a lit activity LED pulse slowly; the CSS drops
+ * the pulse for anyone who asked for reduced motion.
  */
-export function SpeedTicks({ tier }: { tier: 0 | 1 | 2 | 3 }) {
+export function Led({ lit, breath, className }: { lit: boolean | null; breath?: boolean; className?: string }) {
   return (
-    <span className="inline-flex items-end gap-px" aria-hidden="true" data-tier={tier}>
-      {[1, 2, 3].map((n) => (
-        <span
-          key={n}
-          className={cn('w-0.5 rounded-full', n <= tier ? 'bg-muted-foreground' : 'bg-border-strong')}
-          style={{ height: `${2 + n * 2}px` }}
-        />
-      ))}
-    </span>
+    <span
+      aria-hidden="true"
+      data-led={String(lit)}
+      className={cn(
+        'block size-[7px] shrink-0 rounded-full',
+        lit === true
+          ? cn('bg-port-led-on port-led-glow', breath && 'port-led-breath')
+          : lit === false
+            ? 'bg-port-led-off'
+            : 'border-port-led-off border-[1.5px]',
+        className
+      )}
+    />
   );
 }

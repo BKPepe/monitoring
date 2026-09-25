@@ -1,41 +1,37 @@
 /**
- * The router drawn as its front panel: the Internet side (WAN, the LTE
- * backup), the LAN switch in the order the agent reports it, and what hangs
- * off USB - each socket with its link and activity LEDs, the port name, the
- * link rate and what is behind it (replaces the LAN-only port map).
+ * The router drawn as its front panel, in the look of NetPulse's port panel:
+ * a recessed well holding a row of hardware jacks - the Internet side (WAN
+ * with its cyan halo, the LTE backup as an antenna tile), a thin divider, the
+ * LAN switch in the order the agent reports it, and USB as small chips. Two
+ * LEDs above a jack, the port name, what is behind it and the link rate under
+ * it; everything else one hover, focus or tap away.
  *
- * The owner asked for a picture, not a table: which sockets carry a cable,
- * which are empty, how fast they run and how many devices talk behind each.
  * Every fact comes from lib/router-ports/model.ts, which also decides what is
  * unknown; this file only draws it:
  *
- *   - An empty socket versus a socket with a cable and nothing behind it are
- *     two facts, and the CABLE itself is drawn so a colour alone never has to
- *     say which is which.
+ *   - An empty socket and a socket with a cable and nothing behind it are two
+ *     facts: lit contacts versus grey ones, and words under each, so a
+ *     colour alone never has to say which is which. An unread socket shows a
+ *     "?", never "volný".
  *   - A port running at 100 Mbit is not a fault. It is never drawn in a
  *     warning colour; the footnote says what the other end offered.
  *   - Every wired device shares ONE line to the CPU. That is a property of
  *     the hardware, drawn as a bus under the switch and stated as a fact.
  *   - A report older than three minutes is the last known picture: greyed,
- *     without activity, and labelled with its time.
+ *     LEDs dark, no halo, and labelled with its time.
+ *   - On a phone the jacks scroll sideways inside the well, port by port,
+ *     rather than widening the page.
  */
 
 import * as React from 'react';
-import { Cable, Clock, Globe, HardDrive, Network, Router, Usb } from 'lucide-react';
+import { Cable, Clock, HardDrive, Usb } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
-import {
-  STATE_TONE,
-  buildPortPanel,
-  rateLabel,
-  type PortGroup,
-  type PortPanel,
-  type PortState,
-} from '@/lib/router-ports/model';
-import { Led, SocketGlyph } from './glyphs';
-import { PortSocketButton, TONE_CLASS, ageLabel, slowerNote, stateLabel } from './port-socket';
+import { buildPortPanel, rateLabel, type PortGroup, type PortPanel, type PortState } from '@/lib/router-ports/model';
+import { Led } from './glyphs';
+import { PortSocketButton, ageLabel, slowerNote, stateLabel } from './port-socket';
 
 type T = ReturnType<typeof useLanguage>['t'];
 
@@ -81,28 +77,20 @@ function LanEmpty({ panel, t, inline }: { panel: PortPanel; t: T; inline?: boole
   );
 }
 
-function GroupCaption({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <p className="text-muted-foreground flex items-center gap-1.5 text-3xs font-medium tracking-wider uppercase [&>svg]:size-3">
-      {icon}
-      {children}
-    </p>
-  );
+/** A thin vertical rule between groups, as on the front of the box. */
+function Divider() {
+  return <div className="bg-border-strong mx-1 my-3 w-px shrink-0 self-stretch" aria-hidden="true" />;
 }
 
 function SocketGroup({ group, panel, t }: { group: PortGroup; panel: PortPanel; t: T }) {
   const isLan = group.id === 'lan';
   return (
     <div
-      className="flex min-w-0 flex-col gap-1.5"
+      className="flex shrink-0 flex-col"
       role="group"
       aria-label={isLan ? t('ports.group_lan', 'LAN – přepínač') : 'Internet'}
     >
-      <GroupCaption icon={isLan ? <Network /> : <Globe />}>
-        {isLan ? t('ports.group_lan', 'LAN – přepínač') : 'Internet'}
-      </GroupCaption>
-      {/* Sockets never wrap inside a group: a switch over two rows is no longer the box. */}
-      <ul className="flex flex-nowrap items-start gap-1 sm:gap-1.5">
+      <ul className="flex items-start gap-1 sm:gap-2">
         {group.sockets.map((s) => (
           <PortSocketButton key={s.id} s={s} ageSecs={panel.reportAgeSecs} stale={panel.stale} />
         ))}
@@ -110,9 +98,9 @@ function SocketGroup({ group, panel, t }: { group: PortGroup; panel: PortPanel; 
       {isLan && panel.conduit && (
         // The bus every LAN socket hangs on: the one link to the CPU. A fact,
         // drawn in chrome colours - it is not a warning.
-        <div className="px-1" aria-hidden="true">
-          <div className="bg-border-strong h-1 rounded-full" />
-          <p className="text-muted-foreground mt-1 flex items-center gap-1 font-mono text-3xs">
+        <div className="mt-2 px-3" aria-hidden="true">
+          <div className="border-border-strong h-1.5 rounded-b-md border-x border-b" />
+          <p className="text-muted-foreground mt-1 flex items-center justify-center gap-1 font-mono text-3xs">
             <Cable className="size-3" />
             {[panel.conduit.devs, rateLabel(panel.conduit.rateMbit)].filter(Boolean).join(' · ')}
             <span aria-hidden="true">→</span> CPU
@@ -123,22 +111,26 @@ function SocketGroup({ group, panel, t }: { group: PortGroup; panel: PortPanel; 
   );
 }
 
-function UsbGroup({ usb, t }: { usb: NonNullable<PortPanel['usb']>; t: T }) {
+/** USB in the same hardware language: small dark chips with an edge, stacked beside the jacks. */
+function UsbGroup({ usb, stale, t }: { usb: NonNullable<PortPanel['usb']>; stale: boolean; t: T }) {
+  const chip = cn(
+    'bg-port-body text-foreground flex items-center gap-1.5 rounded-lg border-2 px-2 py-1 text-2xs whitespace-nowrap',
+    stale ? 'border-port-edge-off' : 'border-port-edge'
+  );
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
-      <GroupCaption icon={<Usb />}>{t('storage.transport_usb', 'USB')}</GroupCaption>
-      <ul className="flex flex-col gap-1">
+    <div className="flex shrink-0 snap-start flex-col gap-1.5 px-1 pt-1">
+      <p className="text-muted-foreground font-mono text-2xs font-bold tracking-wide">
+        {t('storage.transport_usb', 'USB')}
+      </p>
+      <ul className="flex flex-col gap-1.5">
         {usb.devices !== null && (
-          <li className="border-border bg-card text-foreground flex items-center gap-1.5 rounded-md border px-2 py-1 text-2xs">
+          <li className={chip}>
             <Usb aria-hidden="true" className="text-muted-foreground size-3" />
             {t('ports.usb_devices', { n: usb.devices }, `Na USB: ${usb.devices}`)}
           </li>
         )}
         {usb.disks.map((name) => (
-          <li
-            key={name}
-            className="border-border bg-card text-foreground flex items-center gap-1.5 rounded-md border px-2 py-1 text-2xs"
-          >
+          <li key={name} className={chip}>
             <HardDrive aria-hidden="true" className="text-muted-foreground size-3" />
             {t('public.disk', 'Disk')} <span className="font-mono">{name}</span>
           </li>
@@ -148,20 +140,31 @@ function UsbGroup({ usb, t }: { usb: NonNullable<PortPanel['usb']>; t: T }) {
   );
 }
 
-/** A 12 px mini socket for the legend, drawn exactly as the state is drawn on the panel. */
+/** The dot a LAN state wears in the legend. */
+const LEGEND_DOT: Partial<Record<PortState, string>> = {
+  in_use: 'bg-port-led-on',
+  idle: 'bg-info',
+  uncounted: 'bg-muted-foreground',
+  free: 'bg-port-edge-off',
+};
+
 function LegendItem({ state, t }: { state: PortState; t: T }) {
-  const uplink = state === 'online' || state === 'no_internet' || state === 'offline' || state === 'unverified';
-  const link = state === 'free' ? false : state === 'unknown' ? null : state === 'offline' ? null : true;
-  const tone = STATE_TONE[state];
   return (
     <li className="flex items-center gap-1.5">
-      <span className={TONE_CLASS[tone]}>
-        <SocketGlyph kind={uplink ? 'uplink' : 'rj45'} link={link} className="h-3 w-4" />
-      </span>
+      {state === 'unknown' ? (
+        <span className="text-paused font-mono text-2xs font-bold" aria-hidden="true">
+          ?
+        </span>
+      ) : (
+        <span className={cn('size-2 rounded-full', LEGEND_DOT[state])} aria-hidden="true" />
+      )}
       {stateLabel(state, t)}
     </li>
   );
 }
+
+/** The states the legend explains: the LAN ones. An uplink prints its verdict in words under the jack. */
+const LAN_STATES: ReadonlySet<PortState> = new Set(['in_use', 'idle', 'uncounted', 'free', 'unknown']);
 
 /**
  * @param details `last_details` of an OpenWrt router, as the API returns it.
@@ -179,8 +182,10 @@ export function RouterPortPanel({
   const panel = React.useMemo(() => buildPortPanel(details, { reportedAt, now }), [details, reportedAt, now]);
   const lan = panel.groups.find((g) => g.id === 'lan');
   const internet = panel.groups.find((g) => g.id === 'internet');
+  const hasWan = internet?.sockets.some((s) => s.role === 'wan') ?? false;
   const hasActivityLed = panel.groups.some((g) => g.sockets.some((s) => s.activity !== null));
   const notes = (lan?.sockets ?? []).map((s) => ({ id: s.id, text: slowerNote(s, t) })).filter((n) => n.text !== null);
+  const legend = panel.legend.filter((s) => LAN_STATES.has(s));
 
   const { inUse, known, unknown } = panel.summary;
   const subtitle = [
@@ -200,23 +205,16 @@ export function RouterPortPanel({
         });
 
   return (
-    <Card className="space-y-3 p-4 sm:p-5">
+    <Card className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-lg">
-            <Router aria-hidden="true" className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <h4 className="text-sm font-semibold">{t('ports.title', 'Porty routeru')}</h4>
-            {subtitle.length > 0 && (
-              <p className="text-muted-foreground text-xs tabular-nums">{subtitle.join(' · ')}</p>
-            )}
-          </div>
+        <div className="min-w-0">
+          <h4 className="text-lg font-bold tracking-tight">{t('ports.title', 'Porty routeru')}</h4>
+          {subtitle.length > 0 && <p className="text-muted-foreground text-sm tabular-nums">{subtitle.join(' · ')}</p>}
         </div>
         {panel.reportAgeSecs !== null && (
           <span
             className={cn(
-              'flex shrink-0 items-center gap-1 font-mono text-2xs tabular-nums',
+              'mt-1 flex shrink-0 items-center gap-1 font-mono text-2xs tabular-nums',
               panel.stale ? 'text-paused' : 'text-muted-foreground'
             )}
           >
@@ -236,67 +234,51 @@ export function RouterPortPanel({
               {t('ports.stale', { time: stamp }, `Poslední hlášení z ${stamp} – nejde o živý stav.`)}
             </p>
           )}
-          {/* The box: a raised strip in chrome colours, as wide as its sockets
-              (the device is not wider than its front). Groups wrap as whole
-              blocks on a narrow screen; the sockets inside a group never do. */}
+          {/* The well: a recessed strip holding the jacks. On a narrow screen the
+              jacks scroll sideways inside it, snapping port by port - a switch
+              wrapped over two rows is no longer a picture of the box. */}
           <div
             className={cn(
-              'bg-secondary border-border-strong rounded-xl border border-t-2 px-2 py-3 sm:px-4',
-              'flex flex-wrap items-start gap-x-4 gap-y-4 sm:w-fit sm:max-w-full sm:gap-x-6 sm:pr-6'
+              'bg-port-well border-port-well-edge overflow-x-auto overscroll-x-contain rounded-2xl border shadow-inner',
+              'snap-x snap-mandatory scroll-px-3 [scrollbar-width:thin]'
             )}
           >
-            {internet && <SocketGroup group={internet} panel={panel} t={t} />}
-            {internet && (lan || panel.lanEmpty) && (
-              <div className="bg-border-strong hidden w-px self-stretch sm:block" aria-hidden="true" />
-            )}
-            {lan ? (
-              <SocketGroup group={lan} panel={panel} t={t} />
-            ) : (
-              <div className="flex max-w-xs min-w-0 flex-col gap-1.5">
-                <GroupCaption icon={<Network />}>{t('ports.group_lan', 'LAN – přepínač')}</GroupCaption>
-                <LanEmpty panel={panel} t={t} inline />
-              </div>
-            )}
-            {panel.usb && (
-              <>
-                <div className="bg-border-strong hidden w-px self-stretch sm:block" aria-hidden="true" />
-                <UsbGroup usb={panel.usb} t={t} />
-              </>
-            )}
+            <div className="flex w-max items-start gap-1 px-2 py-3 sm:gap-2 sm:px-4 sm:py-4">
+              {internet && <SocketGroup group={internet} panel={panel} t={t} />}
+              {internet && <Divider />}
+              {lan ? (
+                <SocketGroup group={lan} panel={panel} t={t} />
+              ) : (
+                <div className="flex max-w-60 min-w-0 flex-col gap-1.5 self-center px-2 whitespace-normal">
+                  <LanEmpty panel={panel} t={t} inline />
+                </div>
+              )}
+              {panel.usb && (
+                <>
+                  <Divider />
+                  <UsbGroup usb={panel.usb} stale={panel.stale} t={t} />
+                </>
+              )}
+            </div>
           </div>
 
-          {panel.conduit && (
-            <p className="text-muted-foreground flex items-start gap-1.5 text-2xs leading-relaxed">
-              <Cable aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-              <span>
-                {panel.conduit.rateMbit !== null
-                  ? t(
-                      'lan.conduit_rate',
-                      { dev: panel.conduit.devs, rate: rateLabel(panel.conduit.rateMbit) ?? '' },
-                      `Všechny porty vedou do procesoru routeru jedním spojem (${panel.conduit.devs}, ${rateLabel(panel.conduit.rateMbit)}) a kabelová zařízení si ho dělí – dohromady tudy víc neprojde.`
-                    )
-                  : t(
-                      'lan.conduit_plain',
-                      { dev: panel.conduit.devs },
-                      `Všechny porty vedou do procesoru routeru jedním spojem (${panel.conduit.devs}) a kabelová zařízení si ho dělí.`
-                    )}
-              </span>
-            </p>
-          )}
-          {notes.map((n) => (
-            <p key={n.id} className="text-muted-foreground text-2xs leading-relaxed">
-              {n.text}
-            </p>
-          ))}
-
-          {panel.legend.length > 0 && (
-            <ul className="text-muted-foreground border-border flex flex-wrap gap-x-4 gap-y-1.5 border-t pt-3 text-2xs">
-              {panel.legend.map((state) => (
+          {(legend.length > 0 || (hasWan && !panel.stale)) && (
+            <ul
+              data-part="legend"
+              className="text-muted-foreground flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs"
+            >
+              {legend.map((state) => (
                 <LegendItem key={state} state={state} t={t} />
               ))}
-              {hasActivityLed && (
+              {hasWan && !panel.stale && (
                 <li className="flex items-center gap-1.5">
-                  <span className="text-foreground flex items-center gap-0.5">
+                  <span className="text-port-wan font-mono text-2xs font-bold">WAN</span>
+                  Internet
+                </li>
+              )}
+              {hasActivityLed && !panel.stale && (
+                <li className="flex items-center gap-1.5">
+                  <span className="flex items-center gap-1">
                     <Led lit={true} />
                     <Led lit={true} />
                   </span>
@@ -304,6 +286,34 @@ export function RouterPortPanel({
                 </li>
               )}
             </ul>
+          )}
+
+          {(panel.conduit || notes.length > 0) && (
+            <div className="text-muted-foreground space-y-1 text-2xs leading-relaxed">
+              {panel.conduit && (
+                <p className="flex items-start gap-1.5">
+                  <Cable aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    {panel.conduit.rateMbit !== null
+                      ? t(
+                          'lan.conduit_rate',
+                          { dev: panel.conduit.devs, rate: rateLabel(panel.conduit.rateMbit) ?? '' },
+                          `Všechny porty vedou do procesoru routeru jedním spojem (${panel.conduit.devs}, ${rateLabel(panel.conduit.rateMbit)}) a kabelová zařízení si ho dělí – dohromady tudy víc neprojde.`
+                        )
+                      : t(
+                          'lan.conduit_plain',
+                          { dev: panel.conduit.devs },
+                          `Všechny porty vedou do procesoru routeru jedním spojem (${panel.conduit.devs}) a kabelová zařízení si ho dělí.`
+                        )}
+                  </span>
+                </p>
+              )}
+              {notes.map((n) => (
+                <p key={n.id} className="pl-5">
+                  {n.text}
+                </p>
+              ))}
+            </div>
           )}
         </>
       )}

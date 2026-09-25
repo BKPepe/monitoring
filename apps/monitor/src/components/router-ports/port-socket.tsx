@@ -13,8 +13,8 @@ import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/language-context';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { rateLabel, rateShort, type PortSocket, type PortState, type PortTone } from '@/lib/router-ports/model';
-import { Led, SocketGlyph, SpeedTicks } from './glyphs';
+import { rateLabel, type PortSocket, type PortState, type PortTone } from '@/lib/router-ports/model';
+import { Jack, Led, type JackEdge } from './glyphs';
 
 type T = ReturnType<typeof useLanguage>['t'];
 
@@ -139,76 +139,101 @@ function ariaSentence(s: PortSocket, t: T): string {
   return `${name}: ${summaryLine(s, t)}`;
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+/** The name printed under a jack, the way a router's front is labelled: "lan1" reads "LAN 1", "WAN" stays. */
+export function jackLabel(label: string): string {
+  const m = /^([a-z]+)(\d+)$/i.exec(label);
+  return m ? `${m[1].toUpperCase()} ${m[2]}` : label.toUpperCase();
+}
+
+/** The edge of a jack: a live link in hardware colours, an uplink verdict in its status token. */
+function jackEdge(s: PortSocket, stale: boolean): JackEdge {
+  if (stale) return 'off';
+  // A lost uplink is a fault even when its cable was not read.
+  if (s.state === 'offline') return 'down';
+  if (s.link === null) return 'off';
+  if (s.role === 'wan') {
+    if (s.state === 'online') return 'wan';
+    return s.state === 'no_internet' ? 'warning' : 'off';
+  }
+  if (s.role === 'lte') return s.state === 'online' ? 'linked' : 'off';
+  return s.link ? 'linked' : 'off';
+}
+
+/** A small facts tile of the detail card: an uppercase caption over a mono value; unknown is a dash. */
+function Tile({ label, value, wide }: { label: string; value: React.ReactNode; wide?: boolean }) {
   return (
-    <>
-      <dt className="text-muted-foreground min-w-0">{label}</dt>
-      <dd className="text-foreground text-right font-mono whitespace-nowrap tabular-nums">{value ?? '—'}</dd>
-    </>
+    <div className={cn('bg-muted min-w-0 rounded-lg px-2.5 py-1.5', wide && 'col-span-full')}>
+      <dt className="text-muted-foreground text-3xs leading-snug font-medium tracking-wider uppercase">{label}</dt>
+      <dd className="text-foreground truncate font-mono text-xs tabular-nums">{value ?? '—'}</dd>
+    </div>
   );
 }
 
-/** Every known field of a socket; an unknown one is a dash, a field the port cannot have is no row. */
+/**
+ * Every known field of a socket, as NetPulse lays out a port card: the
+ * verdict line, then small tiles of facts. An unknown field is a dash, a field
+ * the port cannot have is no tile at all.
+ */
 function PortDetail({ s, ageSecs, stale }: { s: PortSocket; ageSecs: number | null; stale: boolean }) {
   const { t, lang } = useLanguage();
   const note = slowerNote(s, t);
   const rx = mbps(s.rxMbps, lang);
   const tx = mbps(s.txMbps, lang);
+  const duplex =
+    s.duplex === 'full'
+      ? t('ports.duplex_full', 'plný')
+      : s.duplex === 'half'
+        ? t('ports.duplex_half', 'poloviční duplex')
+        : null;
+  const tiles: { label: string; value: React.ReactNode }[] = [];
+  if (s.role === 'wan') tiles.push({ label: t('net.proto', 'Protokol'), value: s.proto });
+  if (s.speedApplies) tiles.push({ label: t('speed.title', 'Rychlost linky'), value: rateLabel(s.speedMbit) });
+  if (s.duplexApplies) tiles.push({ label: 'Duplex', value: duplex });
+  if (s.role === 'lan') {
+    tiles.push(
+      { label: t('ports.row_cap', 'Port umí'), value: rateLabel(s.maxMbit) },
+      { label: t('ports.row_partner', 'Protistrana nabídla'), value: rateLabel(s.partnerMaxMbit) },
+      { label: t('ports.row_clients', 'Zařízení za portem'), value: s.clients }
+    );
+  }
+  const rate =
+    s.role === 'wan'
+      ? rx === null && tx === null
+        ? null
+        : `↓ ${rx ?? '—'} · ↑ ${tx ?? '—'} Mbit/s`
+      : s.role === 'lte' && rx !== null
+        ? `${rx} Mbit/s`
+        : null;
   return (
     <div className="space-y-2 text-xs">
       <p className={cn('font-medium', TONE_CLASS[s.tone])}>{s.role === 'lte' ? lteVerdict(s, t) : summaryLine(s, t)}</p>
-      <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1">
-        {s.role === 'wan' && <Row label={t('net.proto', 'Protokol')} value={s.proto} />}
-        {s.speedApplies && <Row label={t('speed.title', 'Rychlost linky')} value={rateLabel(s.speedMbit)} />}
-        {s.duplexApplies && (
-          <Row
-            label="Duplex"
-            value={
-              s.duplex === 'full'
-                ? t('ports.duplex_full', 'plný')
-                : s.duplex === 'half'
-                  ? t('ports.duplex_half', 'poloviční duplex')
-                  : null
-            }
-          />
-        )}
-        {s.role === 'lan' && (
-          <>
-            <Row label={t('ports.row_cap', 'Port umí')} value={rateLabel(s.maxMbit)} />
-            <Row label={t('ports.row_partner', 'Protistrana nabídla')} value={rateLabel(s.partnerMaxMbit)} />
-            <Row label={t('ports.row_clients', 'Zařízení za portem')} value={s.clients} />
-          </>
-        )}
-        {s.role === 'wan' && (
-          <>
-            <Row
-              label={t('ports.row_rate', 'Provoz, poslední minuta')}
-              value={rx === null && tx === null ? null : `↓ ${rx ?? '—'} ↑ ${tx ?? '—'} Mbit/s`}
-            />
-            {/* Cumulative kernel counters: they restart at 0 with the router, so they say so. */}
-            <dt className="text-muted-foreground col-span-2 pt-1 text-3xs font-medium tracking-wider uppercase">
-              {t('ports.since_boot', 'Od startu routeru')}
-            </dt>
-            <Row label={t('ports.row_flaps', 'Ztráty linky')} value={s.carrierDrops} />
-            <Row label={t('ports.row_errors', 'Chyby')} value={s.errors} />
-            <Row label={t('net.fw_dropped', 'Zahozeno')} value={s.drops} />
-          </>
-        )}
-        {s.role === 'lte' && (
-          <Row label={t('ports.row_rate', 'Provoz, poslední minuta')} value={rx === null ? null : `${rx} Mbit/s`} />
+      <dl className="grid grid-cols-2 gap-1.5">
+        {tiles.map((tile, i) => (
+          <Tile key={tile.label} {...tile} wide={i === tiles.length - 1 && tiles.length % 2 === 1} />
+        ))}
+        {(s.role === 'wan' || s.role === 'lte') && (
+          <Tile label={t('ports.row_rate', 'Provoz, poslední minuta')} value={rate} wide />
         )}
       </dl>
+      {s.role === 'wan' && (
+        // Cumulative kernel counters: they restart at 0 with the router, so they say so.
+        <div className="space-y-1.5">
+          <p className="text-muted-foreground text-3xs font-medium tracking-wider uppercase">
+            {t('ports.since_boot', 'Od startu routeru')}
+          </p>
+          <dl className="grid grid-cols-3 gap-1.5">
+            <Tile label={t('ports.row_flaps', 'Ztráty linky')} value={s.carrierDrops} />
+            <Tile label={t('ports.row_errors', 'Chyby')} value={s.errors} />
+            <Tile label={t('net.fw_dropped', 'Zahozeno')} value={s.drops} />
+          </dl>
+        </div>
+      )}
       {note !== null && <p className="text-muted-foreground leading-relaxed">{note}</p>}
       {s.glyph === 'uplink' && (
         <p className="text-muted-foreground leading-relaxed">{t('ports.medium', 'Médium (SFP/RJ45) agent nehlásí.')}</p>
       )}
       {ageSecs !== null && (
-        <p
-          className={cn(
-            'border-border border-t pt-1.5 font-mono text-2xs',
-            stale ? 'text-paused' : 'text-muted-foreground'
-          )}
-        >
+        <p className={cn('font-mono text-2xs', stale ? 'text-paused' : 'text-muted-foreground')}>
           {t('ports.as_of', { ago: ageLabel(ageSecs) }, `stav před ${ageLabel(ageSecs)}`)}
         </p>
       )}
@@ -227,14 +252,50 @@ function useCoarsePointer(): boolean {
   return coarse;
 }
 
-export function PortSocketButton({ s, ageSecs, stale }: { s: PortSocket; ageSecs: number | null; stale: boolean }) {
-  const { t } = useLanguage();
-  const coarse = useCoarsePointer();
-  const [open, setOpen] = React.useState(false);
+/** The line under the name: the device count behind a LAN port, the verdict of an uplink. */
+function PrimaryLine({ s, stale, t }: { s: PortSocket; stale: boolean; t: T }) {
   const p = primary(s, t);
   const tone = TONE_CLASS[s.tone];
-  const short = rateShort(s.speedMbit);
+  // A measured 0 is said in words ("nic se neozvalo"), which already carry the zero.
+  if (s.role === 'lan' && s.link === true && s.clients !== 0) {
+    return (
+      <span className={cn('line-clamp-2 text-xs leading-tight', stale ? 'text-paused' : 'text-foreground')}>
+        <span
+          data-part="figure"
+          className={cn('font-semibold tabular-nums', s.clients === null ? 'text-muted-foreground' : tone)}
+        >
+          {p.figure}
+        </span>{' '}
+        {s.clients === null ? <span className="text-muted-foreground">{p.words}</span> : p.words}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        'line-clamp-2 text-xs leading-tight',
+        s.state === 'free' ? 'text-muted-foreground' : cn('font-medium', tone)
+      )}
+    >
+      {p.words}
+    </span>
+  );
+}
+
+export function PortSocketButton({ s, ageSecs, stale }: { s: PortSocket; ageSecs: number | null; stale: boolean }) {
+  const { t, lang } = useLanguage();
+  const coarse = useCoarsePointer();
+  const [open, setOpen] = React.useState(false);
+  const rate = rateLabel(s.speedMbit);
   const half = s.duplex === 'half';
+  const wan = s.role === 'wan';
+  const edge = jackEdge(s, stale);
+  // Contacts light only on a live link of a fresh report - a stale picture is not a live one.
+  const lit = !stale && s.link === true && (s.role !== 'lte' || s.state === 'online');
+  const halo = wan && edge === 'wan';
+  const rx = mbps(s.rxMbps, lang);
+  const tx = mbps(s.txMbps, lang);
+  const dim = stale || s.state === 'free' || s.state === 'unknown';
 
   const button = (
     <button
@@ -242,44 +303,52 @@ export function PortSocketButton({ s, ageSecs, stale }: { s: PortSocket; ageSecs
       aria-label={ariaSentence(s, t)}
       onClick={coarse ? () => setOpen(true) : undefined}
       className={cn(
-        // w-14 x5 plus the gaps fits the five sockets of an Omnia in ONE row
-        // on a 390 px screen - a switch drawn over two rows stops being a
-        // picture of the box.
-        'flex w-14 flex-col items-center gap-1 rounded-lg px-0.5 pt-1.5 pb-1 text-center sm:w-18',
-        'hover:bg-card focus-visible:ring-ring outline-none focus-visible:ring-2',
-        'transition-colors'
+        'group relative flex min-w-[72px] shrink-0 snap-start flex-col items-center rounded-xl px-1 pt-1 pb-1.5 text-center sm:min-w-[84px]',
+        s.role === 'lan' && 'w-[72px] sm:w-[84px]',
+        'focus-visible:ring-ring outline-none focus-visible:ring-2'
       )}
     >
-      {/* Link on the left; activity on the right only where a rate exists. */}
-      <span className="flex h-1.5 w-8 items-center justify-between">
-        <span className={stale ? 'text-paused' : tone}>
-          <Led lit={stale ? null : s.link} />
-        </span>
-        {s.activity !== null && (
-          <span className={tone}>
-            <Led lit={s.activity} />
-          </span>
+      {/* The halo of the uplink: the one port that carries the internet. Decoration only. */}
+      {halo && (
+        <span
+          aria-hidden="true"
+          className="port-wan-halo pointer-events-none absolute -top-2 left-1/2 size-24 -translate-x-1/2"
+        />
+      )}
+      <span
+        className={cn(
+          'relative flex flex-col items-center transition-transform duration-150 group-hover:-translate-y-0.5 group-focus-visible:-translate-y-0.5',
+          dim && 'opacity-70'
         )}
+      >
+        {/* Link on the left; activity on the right, only where a rate exists. */}
+        <span className="mb-1.5 flex w-14 justify-between px-2">
+          <Led lit={stale ? false : s.link} />
+          {s.activity !== null ? <Led lit={s.activity} breath={s.activity} /> : <span className="size-[7px]" />}
+        </span>
+        <Jack kind={s.glyph} link={s.link} edge={edge} lit={lit} />
       </span>
-      <span className={tone}>
-        <SocketGlyph kind={s.glyph} link={s.link} />
+      <span
+        data-part="label"
+        className={cn(
+          'mt-2 font-mono text-2xs leading-none font-bold tracking-wide whitespace-nowrap',
+          wan && !stale ? 'text-port-wan' : 'text-muted-foreground'
+        )}
+      >
+        {jackLabel(s.label)}
       </span>
-      <span className="text-muted-foreground font-mono text-3xs leading-none font-medium tracking-wide uppercase">
-        {s.label}
+      <span className="mt-1.5 flex min-h-4 w-full flex-col items-center">
+        <PrimaryLine s={s} stale={stale} t={t} />
       </span>
-      {/* The speed line keeps its height on the modem too, so the state lines of a group stay level. */}
-      {!s.speedApplies && <span className="h-3" aria-hidden="true" />}
-      {s.speedApplies && (
-        <span className="text-muted-foreground flex h-3 items-center gap-1 font-mono text-3xs leading-none tabular-nums">
-          {s.link === true && (
-            <>
-              <SpeedTicks tier={s.speedTier} />
-              {short ?? '—'}
-            </>
-          )}
+      {s.speedApplies && (s.link === true || half) && (
+        <span
+          className="text-muted-foreground mt-0.5 flex flex-wrap items-center justify-center gap-x-1 gap-y-0.5 font-mono text-3xs leading-tight whitespace-nowrap tabular-nums"
+          data-tier={s.speedTier}
+        >
+          {s.link === true && (rate ?? '—')}
           {half && (
             <span
-              className="border-warning/30 text-warning rounded-sm border px-0.5"
+              className="border-warning/40 text-warning rounded-sm border px-0.5 leading-none"
               title={t('ports.duplex_half', 'poloviční duplex')}
             >
               HD
@@ -287,21 +356,21 @@ export function PortSocketButton({ s, ageSecs, stale }: { s: PortSocket; ageSecs
           )}
         </span>
       )}
-      {p.figure !== null ? (
-        <span className="flex flex-col items-center">
-          <span className={cn('font-mono text-sm leading-tight font-semibold tabular-nums', tone)}>{p.figure}</span>
-          <span className="text-muted-foreground text-3xs leading-tight">{p.words}</span>
+      {wan && (rx !== null || tx !== null) && (
+        <span className="text-muted-foreground mt-0.5 flex flex-col font-mono text-3xs leading-tight whitespace-nowrap tabular-nums">
+          <span>↓{rx ?? '—'} Mbit/s</span>
+          <span>↑{tx ?? '—'} Mbit/s</span>
         </span>
-      ) : (
-        <span className={cn('text-3xs leading-tight font-medium', tone)}>{p.words}</span>
       )}
       {s.role === 'lte' && (
-        <span className="text-muted-foreground text-3xs leading-tight">{t('ports.backup', 'záloha')}</span>
+        <span className="text-muted-foreground mt-0.5 font-mono text-3xs leading-tight">
+          {t('ports.backup', 'záloha')}
+        </span>
       )}
     </button>
   );
 
-  const title = s.netdev !== null && s.netdev !== s.label ? `${s.label} · ${s.netdev}` : s.label;
+  const title = s.netdev !== null && s.netdev !== s.label ? `${jackLabel(s.label)} · ${s.netdev}` : jackLabel(s.label);
 
   if (coarse) {
     return (
@@ -310,7 +379,7 @@ export function PortSocketButton({ s, ageSecs, stale }: { s: PortSocket; ageSecs
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogContent aria-describedby={undefined} className="max-w-sm">
             <DialogHeader>
-              <DialogTitle className="font-mono">{title}</DialogTitle>
+              <DialogTitle>{title}</DialogTitle>
             </DialogHeader>
             <div className="px-5 pb-5">
               <PortDetail s={s} ageSecs={ageSecs} stale={stale} />
@@ -325,8 +394,14 @@ export function PortSocketButton({ s, ageSecs, stale }: { s: PortSocket; ageSecs
     <li className="list-none">
       <Tooltip>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
-        <TooltipContent className="w-80 max-w-[calc(100vw-2rem)] px-3 py-2.5">
-          <p className="mb-1.5 font-mono text-xs font-semibold">{title}</p>
+        <TooltipContent className="border-border-strong w-80 max-w-[calc(100vw-2rem)] rounded-xl p-3 shadow-xl">
+          <div className="mb-1.5 flex items-baseline justify-between gap-3">
+            <p className="text-sm font-semibold">{title}</p>
+            <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs">
+              <Led lit={stale ? false : s.link} />
+              {s.link === true ? (rate ?? stateLabel(s.state, t)) : stateLabel(s.state, t)}
+            </span>
+          </div>
           <PortDetail s={s} ageSecs={ageSecs} stale={stale} />
         </TooltipContent>
       </Tooltip>
