@@ -80,14 +80,15 @@
      Hodnoty tady jsou pro SVĚTLÝ podklad, tmavé varianty jsou v .dark - stejně
      jako u --status-*. Dokud tenhle blok platil pro obě témata, byla čára
      latence na bílé kartě v kontrastu ~1,2:1, tedy prakticky neviditelná. */
-  /* Six metric hues with a NetPulse-style look (emerald, blue, cyan, orange,
-     violet, amber) - the same families as before, so CPU still reads green
-     and RAM blue. Validated with the dataviz validate_palette.js against
+  /* Six metric hues with a NetPulse-style look (rose, blue, cyan, orange,
+     violet, amber). CPU left green because a green CPU line sat 7.5 dE from
+     --status-up and read as "all fine"; rose keeps >= 11.8 from every status
+     colour. Validated with the dataviz validate_palette.js against
      --card and --background in each mode (lightness band, chroma floor,
      adjacent CVD >= 8, normal-vision >= 15, >= 3:1), and the pairs that share
      a chart (network+memory, network+temperature) on their own. Never more
      than two share one plot: all six cannot be told apart pairwise. */
-  --chart-cpu: #007d51;
+  --chart-cpu: #c2255c;
   --chart-memory: #2a71fe;
   --chart-network: #03919d;
   --chart-temperature: #ab4501;
@@ -167,7 +168,7 @@
      the previous -400/-500 steps were brighter than that and drowned the
      annotations and bands. The glow gives back the brightness the band takes
      away, without a mark getting louder than its neighbours. */
-  --chart-cpu: #009863;
+  --chart-cpu: #e0457b;
   --chart-memory: #286ef9;
   --chart-network: #05a5b3;
   --chart-temperature: #dd5c00;
@@ -337,7 +338,7 @@
     --status-down-foreground: #ffffff;
     --status-up-foreground: #ffffff;
     --status-warning-foreground: #ffffff;
-    --chart-cpu: #007d51;
+    --chart-cpu: #c2255c;
     --chart-memory: #2a71fe;
     --chart-network: #03919d;
     --chart-temperature: #ab4501;

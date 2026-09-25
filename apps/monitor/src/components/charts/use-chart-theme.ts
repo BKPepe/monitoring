@@ -33,7 +33,7 @@ function readTokens(): ChartTheme {
     tooltipBg: token('--popover', '#ffffff'),
     tooltipBorder: token('--border-strong', 'rgba(0,0,0,0.18)'),
     series: {
-      cpu: token('--chart-cpu', '#007d51'),
+      cpu: token('--chart-cpu', '#c2255c'),
       memory: token('--chart-memory', '#2a71fe'),
       network: token('--chart-network', '#03919d'),
       temperature: token('--chart-temperature', '#ab4501'),
