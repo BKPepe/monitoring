@@ -191,15 +191,6 @@ export type TimeRange = '15m' | '1h' | '6h' | '24h' | '7d' | '30d';
 export type LongTimeRange = '90d' | '1y';
 export type MetricRange = TimeRange | LongTimeRange;
 
-export const timeRangeLabels: Record<TimeRange, string> = {
-  '15m': 'Posledních 15 minut',
-  '1h': 'Poslední hodina',
-  '6h': 'Posledních 6 hodin',
-  '24h': 'Posledních 24 hodin',
-  '7d': 'Posledních 7 dní',
-  '30d': 'Posledních 30 dní',
-};
-
 /** Response of `api.php?action=metric_series`. */
 export interface MetricSeriesResponse {
   label: string;

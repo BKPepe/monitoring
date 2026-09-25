@@ -1,11 +1,25 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, BellRing, CheckCircle2, CloudOff, Moon, Radio, Rss, Sun, Wrench } from 'lucide-react';
+import {
+  Activity,
+  BellRing,
+  CheckCircle2,
+  CloudOff,
+  History,
+  Moon,
+  Radio,
+  Rss,
+  Siren,
+  Sun,
+  Wrench,
+} from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { usePublicStatus } from '@/api/use-asset-charts';
-import { PublicMonitorCard, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
+import { PublicMonitorCard, typeIcon, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
+import { SectionTitle } from '@/components/ui/section-title';
+import { FreshnessPill } from '@/components/freshness-pill';
 import { Timeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import type { UptimeDay } from '@/components/public/uptime-strip';
@@ -148,6 +162,9 @@ export function PublicStatusPage() {
   // The LATEST monitors request failed. `monitors` may still hold the last
   // known list, but the verdict can no longer vouch for the present.
   const [monitorsError, setMonitorsError] = React.useState(false);
+  // When the list last arrived intact - what a failed refresh names as the
+  // time of the data still on screen.
+  const [okAt, setOkAt] = React.useState<number | null>(null);
   const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]>>({});
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
   const [regions, setRegions] = React.useState<Region[] | null>(null);
@@ -199,6 +216,7 @@ export function PublicStatusPage() {
         }
         setMonitors(d.monitors);
         setMonitorsError(false);
+        setOkAt(Date.now());
       })
       .catch(() => {
         if (active) setMonitorsError(true);
@@ -410,13 +428,76 @@ export function PublicStatusPage() {
       ? updatedDate.toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' })
       : lastUpdated;
 
+  // Announced FUTURE maintenance - the window is yet to come, the service still runs.
+  const upcoming = (visibleMonitors ?? []).filter(
+    (m) =>
+      m.maintenance === true &&
+      m.status !== 'maintenance' &&
+      m.maintenanceStart != null &&
+      new Date(m.maintenanceStart.replace(' ', 'T')).getTime() > nowTs
+  );
+  // "Ongoing" derives from the STATE, not from a missing field. The first
+  // version read resolved_at (snake_case) while the API sends resolvedAt - a
+  // resolved incident from 8 Aug thus showed as ongoing.
+  const shownIncidents = opts.showIncidents ? (incidents ?? []).slice(0, 10) : [];
+  const openIncidents = shownIncidents.filter((i) => i.status !== 'resolved');
+  const pastIncidents = shownIncidents.filter((i) => i.status === 'resolved');
+  const updatedMs = updatedDate && !Number.isNaN(updatedDate.getTime()) ? updatedDate.getTime() : null;
+
+  const incidentItem = (inc: Incident) => (
+    <li key={inc.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+      {/* A badge with a word instead of a dot: a green circle next to
+          "Outage: ..." read as a contradiction - now it literally says
+          "Resolved" or "Ongoing". */}
+      <span className="flex items-center gap-2 font-medium">
+        <Badge variant={inc.status === 'resolved' ? 'up' : 'down'} dot>
+          {inc.status === 'resolved' ? t('public.incident_resolved', 'Vyřešeno') : t('public.incident_open', 'Probíhá')}
+        </Badge>
+        {inc.title}
+      </span>
+      {/* Without seconds: with them the range wrapped mid-time on a narrow
+          display. Minute precision is enough here - the duration is stated
+          by durationText. */}
+      <span className="text-muted-foreground font-mono tabular-nums">
+        {noSeconds(inc.createdAt)}
+        {inc.status === 'resolved' && inc.resolvedAt
+          ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
+          : ''}
+      </span>
+      {/* Resolution progress - the same timeline the admin sees. A status
+          page that can only say "broken/fixed" makes people ask on Discord;
+          this is that answer. */}
+      {(inc.updates ?? []).length > 0 && (
+        <ul className="w-full space-y-1 border-l border-border pl-3">
+          {(inc.updates ?? []).map((u, i) => (
+            <li key={i} className="text-muted-foreground text-xs">
+              <span className="text-foreground font-medium">{updateStatusLabel(u.status, t)}</span>
+              {u.message ? ` — ${u.message}` : ''}
+              <span className="ml-1 font-mono tabular-nums">({noSeconds(u.at)})</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {/* The postmortem after resolution: the admin UI could always write it,
+          but the public never saw it - though it is written precisely for them. */}
+      {inc.status === 'resolved' && inc.postmortem && (
+        <div className="bg-muted/40 w-full rounded-md border border-border p-2.5">
+          <p className="text-foreground mb-1 text-2xs font-semibold">
+            {t('public.postmortem', 'Co se stalo (postmortem)')}
+          </p>
+          <p className="text-muted-foreground text-xs whitespace-pre-wrap">{inc.postmortem}</p>
+        </div>
+      )}
+    </li>
+  );
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
+    <div className="mx-auto max-w-5xl space-y-5 px-4 py-6 sm:py-8">
       <title>{docTitle}</title>
       {/* A custom page that does not exist (or is not public) must not be
           indexed as an empty status page; it answers 200 like every route. */}
       {pageError && <meta name="robots" content="noindex" />}
-      <header className="flex flex-wrap items-start justify-between gap-3">
+      <header className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {branding?.customLogoUrl && (
             <img src={branding.customLogoUrl} alt="" className="size-10 shrink-0 rounded-md object-contain" />
@@ -436,11 +517,11 @@ export function PublicStatusPage() {
         </div>
         {/* Language and theme toggles - the two things an anonymous visitor
             may actually need from a header. */}
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={() => setLang(lang === 'cs' ? 'en' : 'cs')}
-            className="text-muted-foreground hover:text-foreground rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             {lang === 'cs' ? 'EN' : 'CS'}
           </button>
@@ -448,7 +529,7 @@ export function PublicStatusPage() {
             type="button"
             onClick={toggleTheme}
             aria-label={t('public.theme_toggle', 'Přepnout motiv')}
-            className="text-muted-foreground hover:text-foreground rounded-md border border-border p-1.5 transition-colors"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-md border border-border p-1.5 transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           </button>
@@ -471,7 +552,7 @@ export function PublicStatusPage() {
           online. An unknown state must never read as a green light. */}
       <Card
         className={cn(
-          'flex flex-wrap items-center gap-3 p-5',
+          'flex flex-wrap items-center gap-4 p-5 sm:p-6',
           verdict === 'ok'
             ? 'border-up/30 bg-up/5'
             : verdict === 'down'
@@ -484,21 +565,21 @@ export function PublicStatusPage() {
         )}
       >
         {verdict === 'ok' ? (
-          <CheckCircle2 className="text-up size-6 shrink-0" />
+          <CheckCircle2 className="text-up size-8 shrink-0" />
         ) : verdict === 'maintenance' ? (
-          <Wrench className="text-warning size-6 shrink-0" />
+          <Wrench className="text-warning size-8 shrink-0" />
         ) : verdict === 'error' ? (
-          <CloudOff className="text-muted-foreground size-6 shrink-0" />
+          <CloudOff className="text-muted-foreground size-8 shrink-0" />
         ) : (
           <Activity
             className={cn(
-              'size-6 shrink-0',
+              'size-8 shrink-0',
               verdict === 'down' ? 'text-down' : verdict === 'partial' ? 'text-warning' : 'text-muted-foreground'
             )}
           />
         )}
         <div className="min-w-0 flex-1">
-          <p className="text-base font-bold" role={verdict === 'error' ? 'alert' : undefined}>
+          <p className="text-lg font-bold tracking-tight" role={verdict === 'error' ? 'alert' : undefined}>
             {verdict === 'error'
               ? t('public.state_unknown', 'Stav se nepodařilo zjistit')
               : verdict === 'loading'
@@ -520,6 +601,10 @@ export function PublicStatusPage() {
             </p>
           )}
         </div>
+        {/* How old the verdict is, from the newest check the server holds -
+            a wall display left open must not look live after cron or the
+            API stopped. Cron writes every 1-5 minutes, hence 300 s. */}
+        <FreshnessPill at={updatedMs} intervalSecs={300} failed={failed} okAt={okAt} />
         {verdict === 'error' && (
           <Button
             size="sm"
@@ -534,7 +619,39 @@ export function PublicStatusPage() {
         )}
       </Card>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* What is being done about it comes right under the verdict: an
+          ongoing incident sat below every service card and the whole event
+          log, a long scroll away from the visitor who came because of it. */}
+      {openIncidents.length > 0 && (
+        <Card className="border-down/30 space-y-4 p-5">
+          <SectionTitle icon={Siren} title={t('public.incidents', 'Incidenty')} count={openIncidents.length} />
+          <ul className="space-y-3">{openIncidents.map(incidentItem)}</ul>
+        </Card>
+      )}
+
+      {/* Announced future maintenance: the visitor should learn about a
+          planned window ahead of time, not when the service disappears.
+          Running maintenance is in the verdict and on the card. */}
+      {upcoming.length > 0 && (
+        <Card className="border-warning/30 space-y-4 p-5">
+          <SectionTitle icon={Wrench} title={t('public.upcoming_maintenance', 'Plánovaná údržba')} />
+          <ul className="space-y-1.5">
+            {upcoming.map((m) => (
+              <li key={m.id} className="text-xs">
+                <span className="font-medium">{m.name}</span>
+                {m.maintenanceDescription ? ` — ${m.maintenanceDescription}` : ''}
+                <span className="text-muted-foreground ml-1 font-mono tabular-nums">
+                  {fmtWindow(m.maintenanceStart, m.maintenanceEnd)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {/* Two tiles a row on a phone: four full-width tiles pushed the
+          services a whole screen down. */}
+      <div className="grid grid-cols-2 gap-3 *:min-w-0 lg:grid-cols-4">
         {/* "Online 6" next to "Agents online 6/6" read like the same thing twice and
             "agent" is internal jargon - the fourth tile now says from how many
             PLACES measurements run, which actually tells the visitor something. */}
@@ -549,65 +666,6 @@ export function PublicStatusPage() {
         <Stat label={t('public.stat_regions', 'Míst měření')} value={regions === null ? null : regions.length} />
       </div>
 
-      {/* The measurement locations - where the checks come FROM. This answers
-          "is the service down, or can one vantage point just not see it". */}
-      {opts.showRegions && regions !== null && regions.length > 0 && !filtered && (
-        <Card className="space-y-3 p-5">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Radio className="size-4 text-primary" />
-            {t('public.regions', 'Místa měření')}
-          </h2>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {regions.slice(0, 9).map((r) => (
-              <div
-                key={r.location}
-                className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs"
-              >
-                <span className="truncate font-medium" title={r.location}>
-                  {r.location}
-                </span>
-                <span className="text-muted-foreground shrink-0 tabular-nums">
-                  {r.successRate === null ? '—' : `${r.successRate} %`}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {/* Announced FUTURE maintenance - the window is yet to come, the service still runs.
-          The visitor should learn about a planned window ahead of time, not when
-          the service disappears. Running maintenance is in the verdict and on the card. */}
-      {(() => {
-        const upcoming = (visibleMonitors ?? []).filter(
-          (m) =>
-            m.maintenance === true &&
-            m.status !== 'maintenance' &&
-            m.maintenanceStart != null &&
-            new Date(m.maintenanceStart.replace(' ', 'T')).getTime() > nowTs
-        );
-        if (upcoming.length === 0) return null;
-        return (
-          <Card className="border-warning/30 space-y-2 p-5">
-            <h2 className="text-warning flex items-center gap-2 text-sm font-semibold">
-              <Wrench className="size-4" />
-              {t('public.upcoming_maintenance', 'Plánovaná údržba')}
-            </h2>
-            <ul className="space-y-1.5">
-              {upcoming.map((m) => (
-                <li key={m.id} className="text-xs">
-                  <span className="font-medium">{m.name}</span>
-                  {m.maintenanceDescription ? ` — ${m.maintenanceDescription}` : ''}
-                  <span className="text-muted-foreground ml-1 tabular-nums">
-                    {fmtWindow(m.maintenanceStart, m.maintenanceEnd)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        );
-      })()}
-
       {monitors === null ? (
         monitorsError ? (
           <ErrorState message={t('public.services_failed', 'Seznam služeb se nepodařilo načíst.')} />
@@ -616,8 +674,11 @@ export function PublicStatusPage() {
         )
       ) : (
         categories.map(([category, items]) => (
-          <Card key={category} className="space-y-1 p-5">
-            <h2 className="text-sm font-semibold">{category}</h2>
+          <Card key={category} className="space-y-2 p-5">
+            {/* The category names are the admin's free text; the icon is that
+                of the first service in it, so "Herní servery" gets a gamepad
+                without the page guessing from the name. */}
+            <SectionTitle icon={typeIcon(items[0].type)} title={category} count={items.length} />
             <ul>
               {items.map((m) => (
                 <PublicMonitorCard
@@ -639,14 +700,14 @@ export function PublicStatusPage() {
           severity dots, location), not a bare text list. Only failures and
           degradations: a wall of "check passed" rows tells a visitor nothing. */}
       {opts.showEvents && publicTimeline.length > 0 && (
-        <Card className="space-y-3 p-5">
-          <h2 className="text-sm font-semibold">{t('public.recent_events', 'Poslední události')}</h2>
+        <Card className="space-y-4 p-5">
+          <SectionTitle icon={History} title={t('public.recent_events', 'Poslední události')} />
           <Timeline events={publicTimeline} />
           {allFailureEvents.length > eventsShown && (
             <button
               type="button"
               onClick={() => setEventsShown((n) => n + 10)}
-              className="text-muted-foreground hover:text-foreground w-full rounded-md border border-border py-1.5 text-xs font-medium transition-colors"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring w-full rounded-md border border-border py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
             >
               {t(
                 'public.show_more_events',
@@ -658,74 +719,41 @@ export function PublicStatusPage() {
         </Card>
       )}
 
-      {opts.showIncidents && incidents !== null && incidents.length > 0 && (
-        <Card className="space-y-3 p-5">
-          <h2 className="text-sm font-semibold">{t('public.incidents', 'Incidenty')}</h2>
-          <ul className="space-y-2">
-            {incidents.slice(0, 10).map((inc) => (
-              // "Ongoing" derives from the STATE, not from a missing field.
-              // The first version read resolved_at (snake_case) while the API
-              // sends resolvedAt - a resolved incident from 8 Aug thus showed
-              // as ongoing. Verified against the real response.
-              <li key={inc.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
-                {/* A badge with a word instead of a dot: a green circle next to
-                    "Outage: ..." read as a contradiction - now it literally says
-                    "Resolved" or "Ongoing". */}
-                <span className="flex items-center gap-2 font-medium">
-                  <Badge variant={inc.status === 'resolved' ? 'up' : 'down'}>
-                    {inc.status === 'resolved'
-                      ? t('public.incident_resolved', 'Vyřešeno')
-                      : t('public.incident_open', 'Probíhá')}
-                  </Badge>
-                  {inc.title}
+      {pastIncidents.length > 0 && (
+        <Card className="space-y-4 p-5">
+          <SectionTitle icon={Siren} title={t('public.incidents', 'Incidenty')} />
+          <ul className="space-y-3">{pastIncidents.map(incidentItem)}</ul>
+        </Card>
+      )}
+
+      {/* The measurement locations - where the checks come FROM. This answers
+          "is the service down, or can one vantage point just not see it". */}
+      {opts.showRegions && regions !== null && regions.length > 0 && !filtered && (
+        <Card className="space-y-4 p-5">
+          <SectionTitle icon={Radio} title={t('public.regions', 'Místa měření')} />
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {regions.slice(0, 9).map((r) => (
+              <div
+                key={r.location}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs"
+              >
+                <span className="truncate font-medium" title={r.location}>
+                  {r.location}
                 </span>
-                {/* Without seconds: with them the range wrapped mid-time on
-                    mid-time on a narrow display. Minute precision is enough here -
-                    the duration is stated by durationText. */}
-                <span className="text-muted-foreground tabular-nums">
-                  {noSeconds(inc.createdAt)}
-                  {inc.status === 'resolved' && inc.resolvedAt
-                    ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
-                    : ''}
+                <span className="text-muted-foreground shrink-0 font-mono tabular-nums">
+                  {r.successRate === null ? '—' : `${r.successRate} %`}
                 </span>
-                {/* Resolution progress - the same timeline the admin sees.
-                    A status page that can only say "broken/fixed" makes people
-                    ask on Discord; this is that answer. */}
-                {(inc.updates ?? []).length > 0 && (
-                  <ul className="w-full space-y-1 border-l border-border/60 pl-3">
-                    {(inc.updates ?? []).map((u, i) => (
-                      <li key={i} className="text-muted-foreground text-2xs">
-                        <span className="text-foreground font-medium">{updateStatusLabel(u.status, t)}</span>
-                        {u.message ? ` — ${u.message}` : ''}
-                        <span className="ml-1 tabular-nums">({noSeconds(u.at)})</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {/* The postmortem after resolution: the admin UI could always write it, but
-                    the public never saw it - though it is written precisely for them. */}
-                {inc.status === 'resolved' && inc.postmortem && (
-                  <div className="bg-secondary/30 w-full rounded-md border border-border/60 p-2.5">
-                    <p className="text-foreground mb-1 text-2xs font-semibold">
-                      {t('public.postmortem', 'Co se stalo (postmortem)')}
-                    </p>
-                    <p className="text-muted-foreground text-2xs whitespace-pre-wrap">{inc.postmortem}</p>
-                  </div>
-                )}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </Card>
       )}
 
       {/* E-mail subscription for visitors without accounts. Double opt-in on
           the server; the honest emailSent flag distinguishes "check your
           inbox" from "stored, but the mail failed - try again later". */}
-      <Card className="space-y-2 p-5">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <BellRing className="size-4 text-primary" />
-          {t('pubsub.box_title', 'Upozornění na výpadky e-mailem')}
-        </h2>
+      <Card className="space-y-3 p-5">
+        <SectionTitle icon={BellRing} title={t('pubsub.box_title', 'Upozornění na výpadky e-mailem')} />
         {subState === 'done' ? (
           // One message for every outcome. The server deliberately no longer
           // reports whether a mail went out: only a not-yet-subscribed address
@@ -767,19 +795,20 @@ export function PublicStatusPage() {
               value={subEmail}
               onChange={(e) => setSubEmail(e.target.value)}
               placeholder={t('pubsub.box_placeholder', 'vas@email.cz')}
-              className="bg-secondary/60 h-9 min-w-0 flex-1 rounded-md border border-input px-3 text-sm"
+              aria-label={t('pubsub.box_title', 'Upozornění na výpadky e-mailem')}
+              className="bg-secondary/60 focus-visible:ring-ring h-9 min-w-0 flex-1 rounded-md border border-input px-3 text-sm focus-visible:ring-2 focus-visible:outline-none"
             />
             <button
               type="submit"
               disabled={subState === 'busy'}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 h-9 shrink-0 rounded-md px-4 text-xs font-semibold transition-colors disabled:opacity-60"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring h-9 shrink-0 rounded-md px-4 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-60"
             >
               {subState === 'busy' ? t('pubsub.box_sending', 'Odesílám…') : t('pubsub.box_subscribe', 'Odebírat')}
             </button>
           </form>
         )}
         {subError && <ErrorState size="inline" message={subError} />}
-        <p className="text-muted-foreground/70 text-2xs">
+        <p className="text-muted-foreground text-2xs">
           {t('pubsub.box_hint', 'Pošleme jen výpadky a jejich obnovení. Odhlášení jedním klikem v každém e-mailu.')}
         </p>
       </Card>
@@ -899,11 +928,11 @@ function Stat({
 }) {
   return (
     <Card className="p-4">
-      <p className="text-muted-foreground text-2xs font-medium">{label}</p>
+      <p className="text-muted-foreground truncate text-2xs font-semibold tracking-wider uppercase">{label}</p>
       {/* Unknown renders as a dash. A zero here would claim a measurement. */}
       <p
         className={cn(
-          'mt-1 text-2xl font-bold tracking-tight tabular-nums',
+          'mt-1 font-mono text-2xl font-semibold tracking-tight tabular-nums',
           tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : ''
         )}
       >

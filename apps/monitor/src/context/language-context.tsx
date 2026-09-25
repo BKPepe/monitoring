@@ -502,7 +502,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'speed.started_turris': { cs: 'Turris OS', en: 'Turris OS' },
   'speed.started_agent': { cs: 'Monitoring', en: 'Monitoring' },
   'common.refresh': { cs: 'Obnovit', en: 'Refresh' },
-  'common.open_details': { cs: 'Otevřít detail', en: 'Open Details' },
   'common.close': { cs: 'Zavřít', en: 'Close' },
 
   // Buttons & Status Labels
@@ -510,14 +509,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'status.healthy': { cs: 'Všechny systémy v pořádku', en: 'All Systems Operational' },
 
   // Banner
-  'banner.loading_status': { cs: 'Načítám stav infrastruktury…', en: 'Loading infrastructure status…' },
   'banner.load_failed': { cs: 'Stav infrastruktury se nepodařilo načíst', en: 'Failed to load infrastructure status' },
-  'banner.all_healthy': {
-    cs: 'Všechny monitorované uzly a systémoví agenti fungují bez závad',
-    en: 'All monitored nodes and system agents are running without issues',
-  },
-  'banner.monitors_reporting_outage': { cs: 'monitorů hlásí výpadek', en: 'monitors reporting an outage' },
-  'banner.live_data_status_api': { cs: 'Živá data z /status API', en: 'Live data from /status API' },
   'banner.api_down_title': {
     cs: 'Monitorovací API neodpovídá — zobrazená data mohou chybět nebo být zastaralá',
     en: 'The monitoring API is not responding — data shown may be missing or stale',
@@ -993,7 +985,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Real-time overview of all monitored services, domains, and servers.',
   },
   'dashboard.total_monitors': { cs: 'Monitorů celkem', en: 'Total Monitors' },
-  'dashboard.monitors_hint': { cs: '{healthy} běží · {down} výpadků', en: '{healthy} running · {down} outages' },
+  'dashboard.monitors_hint': { cs: '{healthy} běží · mimo provoz {down}', en: '{healthy} running · {down} down' },
   'dashboard.healthy_pct': { cs: 'Zdravých', en: 'Healthy' },
   'dashboard.healthy_of_total': {
     cs: '{healthy} z {total} monitorů běží',
@@ -1019,8 +1011,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Sledovaná dostupnost v čase (posledních 30 dní)',
     en: 'Tracked availability over time (last 30 days)',
   },
-  'dashboard.outage_title': { cs: 'Výpadek služby', en: 'Service Outage' },
-  'dashboard.high_latency': { cs: 'Zvýšená latence', en: 'Increased Latency' },
   'dashboard.whole_infra': { cs: 'Celá infrastruktura', en: 'Entire infrastructure' },
   'dashboard.uptime_pending': { cs: 'Zatím žádná data za 30 dní', en: 'No 30-day data yet' },
   'dashboard.monitors_card_title': { cs: 'Sledované Monitory & Služby', en: 'Monitored Services' },
@@ -2488,7 +2478,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Histogram: most frequent band {band} {unit} ({count}×).',
   },
   'heatmap.status_nodata': { cs: 'Bez měření', en: 'Not measured' },
-  'heatmap.detail_nodata': { cs: '⬚ Pro tento den nejsou žádná měření.', en: '⬚ No measurements for this day.' },
+  'heatmap.detail_nodata': { cs: 'Pro tento den nejsou žádná měření.', en: 'No measurements for this day.' },
   'speed.history_title': { cs: 'Naměřená rychlost v čase', en: 'Measured speed over time' },
   'reports.not_measured': { cs: 'Bez měření', en: 'Not measured' },
   'net.lte_quality': { cs: 'Kvalita LTE signálu', en: 'LTE signal quality' },
@@ -3768,10 +3758,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'attention.metric_high': { cs: '{metric} na {value} %', en: '{metric} at {value} %' },
   'dashboard.metric_worst': { cs: 'Nejvyšší {label}', en: 'Highest {label}' },
   'dashboard.customize': { cs: 'Upravit rozložení', en: 'Customize layout' },
-  'dashboard.data_as_of': {
-    cs: 'Data z {time}, obnovují se každou minutu',
-    en: 'Data as of {time}, refreshed every minute',
-  },
+  // FreshnessPill states; the age beside them ("34 s") needs no translation.
+  'fresh.live': { cs: 'Živě', en: 'Live' },
+  'fresh.late': { cs: 'Zpožděno', en: 'Delayed' },
+  'fresh.stale': { cs: 'Zastaralé', en: 'Stale' },
+  'fresh.failed': { cs: 'Obnovení selhalo', en: 'Refresh failed' },
   'layout.title': { cs: 'Rozložení dashboardu', en: 'Dashboard layout' },
   'layout.subtitle': {
     cs: 'Vyberte, co se má zobrazovat a v jakém pořadí. Nabízí se jen to, pro co se opravdu sbírají data.',
@@ -4135,13 +4126,13 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Daily monitor availability over the last {days} days',
   },
   'heatmap.monitor_status': { cs: 'Stav monitoru:', en: 'Monitor Status:' },
-  'heatmap.detail_down': { cs: '🔴 Detekován výpadek.', en: '🔴 Outage detected.' },
-  'heatmap.detail_warning': { cs: '⚡ Zhoršená odezva zaznamenána.', en: '⚡ Degraded response recorded.' },
-  'heatmap.detail_maintenance': { cs: '🔧 Plánovaná údržba.', en: '🔧 Scheduled maintenance.' },
-  'heatmap.detail_paused': { cs: '⏸️ Monitor byl pozastaven.', en: '⏸️ The monitor was paused.' },
+  'heatmap.detail_down': { cs: 'Detekován výpadek.', en: 'Outage detected.' },
+  'heatmap.detail_warning': { cs: 'Zhoršená odezva zaznamenána.', en: 'Degraded response recorded.' },
+  'heatmap.detail_maintenance': { cs: 'Plánovaná údržba.', en: 'Scheduled maintenance.' },
+  'heatmap.detail_paused': { cs: 'Monitor byl pozastaven.', en: 'The monitor was paused.' },
   'heatmap.detail_up': {
-    cs: '🟢 Všechny testy dostupnosti proběhly bez chyb.',
-    en: '🟢 All availability checks passed without errors.',
+    cs: 'Všechny testy dostupnosti proběhly bez chyb.',
+    en: 'All availability checks passed without errors.',
   },
 
   // Timeline

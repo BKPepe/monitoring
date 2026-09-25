@@ -32,6 +32,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ChartCard } from '@/components/charts/chart-card';
 import { Sparkline } from '@/components/sparkline';
+import { RangePills } from '@/components/charts/range-pills';
 import { lteBackupState } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
@@ -990,38 +991,25 @@ function Hero({ asset }: { asset: AssetDetail }) {
   );
 }
 
+/** The page's range control: the shared pills, with each window spelled out on hover. */
 function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: TimeRange) => void }) {
   const { t } = useLanguage();
-  const timeRangeLabels: Record<TimeRange, string> = {
-    '24h': t('asset.range_24h', 'Posledních 24 hodin'),
-    '7d': t('asset.range_7d', 'Posledních 7 dní'),
-    '30d': t('asset.range_30d', 'Posledních 30 dní'),
-  };
-
   return (
-    <div
-      role="group"
-      aria-label={t('asset.time_range', 'Časový rozsah')}
-      className="bg-secondary/60 flex items-center rounded-md border border-input p-0.5"
-    >
-      {(Object.keys(timeRangeLabels) as TimeRange[]).map((range) => (
-        <button
-          key={range}
-          type="button"
-          onClick={() => onChange(range)}
-          aria-pressed={value === range}
-          title={timeRangeLabels[range]}
-          className={cn(
-            'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-            value === range ? 'bg-background text-foreground' : 'text-muted-foreground hover:text-foreground'
-          )}
-        >
-          {range}
-        </button>
-      ))}
-    </div>
+    <RangePills
+      value={value}
+      options={TIME_RANGES}
+      onChange={onChange}
+      label={t('asset.time_range', 'Časový rozsah')}
+      titles={{
+        '24h': t('asset.range_24h', 'Posledních 24 hodin'),
+        '7d': t('asset.range_7d', 'Posledních 7 dní'),
+        '30d': t('asset.range_30d', 'Posledních 30 dní'),
+      }}
+    />
   );
 }
+
+const TIME_RANGES = ['24h', '7d', '30d'] as const;
 
 function OverviewTab({
   asset,

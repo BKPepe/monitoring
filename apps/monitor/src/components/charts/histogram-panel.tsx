@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { EChartsCoreOption } from 'echarts/core';
 import { Chart } from './chart';
 import { withAlpha } from './color';
+import { tooltipBase, tooltipHeader, tooltipRow, valueAxis } from './chart-style';
 import { useChartTheme, usePrefersReducedMotion } from './use-chart-theme';
 import type { MetricPoint, MetricTone } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
@@ -21,7 +22,8 @@ import { percentile } from '@/lib/percentiles';
 export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; unit: string; tone: MetricTone }) {
   const theme = useChartTheme();
   const reducedMotion = usePrefersReducedMotion();
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
+  const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
 
   const histogram = React.useMemo(() => {
     const values = points.map((p) => p.v).filter((v): v is number => v != null);
@@ -45,20 +47,23 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
     const color = theme.series[tone];
     const total = histogram.counts.reduce((s, c) => s + c, 0);
 
+    const axisText = { color: theme.textMuted, fontSize: 10, fontFamily: theme.fontMono };
+
     return {
       animation: !reducedMotion,
       animationDuration: 300,
-      grid: { top: 12, right: 12, bottom: 24, left: 44 },
+      grid: { top: 24, right: 12, bottom: 24, left: 44 },
       tooltip: {
+        ...tooltipBase(theme),
+        // The column is the target - no crosshair on a bar chart.
         trigger: 'item',
-        backgroundColor: theme.tooltipBg,
-        borderColor: theme.tooltipBorder,
-        borderWidth: 1,
-        textStyle: { color: theme.text, fontSize: 12 },
         formatter: (params: { dataIndex: number }) => {
           const count = histogram.counts[params.dataIndex];
           const pct = total > 0 ? Math.round((count / total) * 1000) / 10 : 0;
-          return `${histogram.labels[params.dataIndex]} ${unit}: <b>${count}</b> ${t('metric.hist_measurements', 'měření')} (${pct} %)`;
+          return (
+            tooltipHeader(theme, `${histogram.labels[params.dataIndex]} ${unit}`) +
+            tooltipRow(theme, color, t('metric.hist_measurements', 'měření'), `${count} (${pct} %)`)
+          );
         },
       },
       xAxis: {
@@ -66,41 +71,61 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
         data: histogram.labels,
         axisLine: { lineStyle: { color: theme.grid } },
         axisTick: { show: false },
-        axisLabel: { color: theme.textMuted, fontSize: 10, hideOverlap: true },
+        axisLabel: { ...axisText, hideOverlap: true },
       },
-      yAxis: {
-        type: 'value',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { color: theme.textMuted, fontSize: 11 },
-        splitLine: { lineStyle: { color: theme.grid } },
-      },
+      // A count: measured from zero, no unit on the axis.
+      yAxis: valueAxis(theme, { unit: '', locale }),
       series: [
         {
           type: 'bar' as const,
           data: histogram.counts,
-          barCategoryGap: '15%',
-          itemStyle: { color: withAlpha(color, 0.75), borderRadius: [3, 3, 0, 0] },
+          // Neighbouring bins touch in a histogram; a narrow gap keeps them
+          // readable as separate bins without a stroke drawn around each.
+          barCategoryGap: '12%',
+          barMaxWidth: 24,
+          itemStyle: {
+            borderRadius: [4, 4, 0, 0],
+            color: {
+              type: 'linear' as const,
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color },
+                { offset: 1, color: withAlpha(color, 0.4) },
+              ],
+            },
+          },
           emphasis: { itemStyle: { color } },
           markLine: marks.length
             ? {
                 symbol: 'none' as const,
                 silent: true,
-                lineStyle: { color: theme.textMuted, type: 'dashed' as const, width: 1 },
+                // Solid hairline: a dashed rule reads as a threshold or a projection.
+                lineStyle: { color: theme.textMuted, type: 'solid' as const, width: 1, opacity: 0.7 },
                 label: {
                   show: true,
                   formatter: '{b}',
-                  color: theme.textMuted,
-                  fontSize: 10,
-                  position: 'insideEndTop' as const,
+                  ...axisText,
+                  // Above the rule, level: rotated along it the label was clipped by the plot edge.
+                  position: 'end' as const,
                 },
-                data: marks.map((m) => ({ xAxis: m.bin, name: `p${m.p}` })),
+                // Percentiles that fall into the same bin share one rule and one
+                // label ("p95 · p99"); two labels on one rule printed over each other.
+                data: [...new Set(marks.map((m) => m.bin))].map((bin) => ({
+                  xAxis: bin,
+                  name: marks
+                    .filter((m) => m.bin === bin)
+                    .map((m) => `p${m.p}`)
+                    .join(' · '),
+                })),
               }
             : undefined,
         },
       ],
     };
-  }, [histogram, marks, theme, reducedMotion, unit, t, tone]);
+  }, [histogram, marks, theme, reducedMotion, unit, t, tone, locale]);
 
   if (!histogram || !option) {
     return (
@@ -117,6 +142,10 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
       height={180}
       ariaLabel={t('metric.hist_aria', 'Histogram naměřených hodnot')}
       summary={describeHistogram(histogram, unit, marks, t)}
+      table={{
+        columns: [unit, t('metric.hist_measurements', 'měření')],
+        rows: histogram.labels.map((label, i) => [label, String(histogram.counts[i])]),
+      }}
     />
   );
 }

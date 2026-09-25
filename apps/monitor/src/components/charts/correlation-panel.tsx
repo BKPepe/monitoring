@@ -75,7 +75,10 @@ export function CorrelationPanel({
               </span>
               <CorrelationBar r={c.r} />
               <span
-                className={cn('w-12 shrink-0 text-right text-xs tabular-nums', c.r === null && 'text-muted-foreground')}
+                className={cn(
+                  'w-12 shrink-0 text-right font-mono text-xs tabular-nums',
+                  c.r === null && 'text-muted-foreground'
+                )}
               >
                 {c.r === null ? '—' : formatR(c.r)}
               </span>
@@ -166,8 +169,10 @@ function CorrelationBar({ r }: { r: number | null }) {
       title={t('corr.bar_title', { value: formatR(r) }, `Míra souběhu ${formatR(r)}`)}
     >
       <span className="bg-secondary absolute inset-0 rounded-sm" />
+      {/* Rounded at the data end only: the square end sits on the zero line
+          the bar grows from. */}
       <span
-        className="absolute inset-y-0.5 rounded-sm"
+        className={cn('absolute inset-y-0.5', positive ? 'rounded-r-[4px]' : 'rounded-l-[4px]')}
         style={{
           left: positive ? '50%' : `${50 - width}%`,
           width: `${width}%`,

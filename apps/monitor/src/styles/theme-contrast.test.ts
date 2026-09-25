@@ -117,3 +117,49 @@ describe('printing', () => {
     }
   });
 });
+
+/*
+ * The chart series tokens. The palette was chosen with the dataviz
+ * validate_palette.js (lightness band, chroma floor, CVD and normal-vision
+ * separation, contrast) against --card and --background in each theme; the
+ * two checks that a later "prettier shade" would most likely break are
+ * repeated here so the edit fails in CI and not in somebody's eyes.
+ */
+const SERIES = ['cpu', 'memory', 'network', 'temperature', 'disk', 'latency'] as const;
+
+/** OKLCH lightness of a hex colour (Björn Ottosson's OKLab). */
+const oklabL = (hex: string) => {
+  const [r, g, b] = channels(hex).map(linear);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+};
+
+describe('chart series colours', () => {
+  const BAND = { light: [0.43, 0.77], dark: [0.48, 0.67] } as const;
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`every series is a mark (>= 3:1) on the ${theme} card and page, inside the ${theme} lightness band`, () => {
+      for (const name of SERIES) {
+        const color = token(`chart-${name}`, theme);
+        for (const ground of ['card', 'background'] as const) {
+          expect(contrast(color, token(ground, theme)), `chart-${name} on --${ground}`).toBeGreaterThanOrEqual(3);
+        }
+        const L = oklabL(color);
+        expect(L, `chart-${name} lightness`).toBeGreaterThanOrEqual(BAND[theme][0]);
+        expect(L, `chart-${name} lightness`).toBeLessThanOrEqual(BAND[theme][1]);
+      }
+    });
+
+    // Status colours mean a verdict. A series painted in one would read as
+    // "this line is an outage" - the dark palette used to reuse --status-up
+    // for CPU and --status-warning for latency, hex for hex.
+    it(`no ${theme} series reuses a status colour`, () => {
+      const statuses = STATUSES.map((s) => token(s, theme).toLowerCase());
+      for (const name of SERIES) {
+        expect(statuses, `chart-${name}`).not.toContain(token(`chart-${name}`, theme).toLowerCase());
+      }
+    });
+  }
+});

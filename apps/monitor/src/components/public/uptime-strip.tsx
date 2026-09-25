@@ -34,9 +34,9 @@ export function UptimeStrip({ days }: { days: UptimeDay[] }) {
   }
 
   return (
-    <div className="min-w-0">
+    <div className="min-w-0 flex-1 sm:w-72 sm:flex-none">
       <div
-        className="flex items-end gap-[3px]"
+        className="flex items-end gap-[2px] sm:gap-[3px]"
         role="img"
         aria-label={t('public.uptime_strip_aria', 'Dostupnost po dnech, posledních 30 dní')}
         onMouseLeave={() => setPicked(null)}
@@ -55,7 +55,8 @@ export function UptimeStrip({ days }: { days: UptimeDay[] }) {
               setPicked(d);
             }}
             className={cn(
-              'h-6 w-[7px] rounded-[2px] transition-transform hover:scale-y-110',
+              // Cells share the width: 30 of them fit a phone as well as a desktop.
+              'h-6 min-w-0 flex-1 rounded-[2px] transition-transform hover:scale-y-110',
               d.status === 'up' ? 'bg-up/80' : d.status === 'down' ? 'bg-down' : 'bg-muted'
             )}
           />

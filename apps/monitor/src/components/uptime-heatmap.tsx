@@ -9,7 +9,9 @@ const cellClass: Record<DayStatus, string> = {
   up: 'bg-up hover:ring-2 hover:ring-up/80',
   warning: 'bg-warning hover:ring-2 hover:ring-warning/80',
   down: 'bg-down hover:ring-2 hover:ring-down/80',
-  paused: 'bg-muted hover:ring-2 hover:ring-muted-foreground/80',
+  // The paused token, as in the health bar: bg-muted made a paused day the
+  // same near-white as an unmeasured one.
+  paused: 'bg-paused/60 hover:ring-2 hover:ring-paused/80',
   maintenance: 'bg-info/70 hover:ring-2 hover:ring-info/80',
   nodata: 'bg-muted/40 border border-dashed border-border hover:ring-2 hover:ring-muted-foreground/60',
 };
@@ -80,28 +82,29 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                                 day.uptimePct != null ? ` · ${formatPercent(day.uptimePct, 1)}` : ''
                               }`}
                               className={cn(
-                                'block h-8 min-w-[14px] rounded-[4px] transition-all hover:scale-125 hover:z-30 cursor-pointer shadow-sm',
+                                'block h-8 min-w-[14px] cursor-pointer rounded-[4px]',
                                 'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
                                 cellClass[day.status]
                               )}
                             />
 
-                            {/* Large, clear tooltip with smart up/down direction */}
+                            {/* The same card as every chart tooltip. It opens on keyboard
+                                focus as well as hover - the cell is a link a keyboard
+                                reaches, and a readout only a mouse could open was one
+                                a keyboard user never got. */}
                             <div
                               className={cn(
-                                // The same --popover token every ECharts tooltip uses: this one was
-                                // hardcoded dark, so the light theme got a black box.
-                                'absolute hidden group-hover:flex flex-col gap-1.5 w-64 p-3.5 rounded-xl bg-popover text-popover-foreground border border-border text-xs shadow-2xl z-50 pointer-events-none backdrop-blur-xl',
+                                'bg-popover text-popover-foreground border-border-strong pointer-events-none absolute z-50 hidden w-64 flex-col gap-1.5 rounded-[10px] border p-3 text-xs group-focus-within:flex group-hover:flex',
                                 isTopRow ? 'top-full mt-2.5' : 'bottom-full mb-2.5',
                                 isNearRight ? 'right-0' : isNearLeft ? 'left-0' : 'left-1/2 -translate-x-1/2'
                               )}
                             >
                               <div className="flex items-center justify-between border-b border-border pb-1.5">
-                                <span className="text-foreground text-xs font-bold">{day.date}</span>
+                                <span className="text-foreground font-mono text-xs font-semibold">{day.date}</span>
                                 {day.uptimePct != null ? (
                                   <span
                                     className={cn(
-                                      'font-extrabold text-xs px-2 py-0.5 rounded-md',
+                                      'rounded-md px-2 py-0.5 font-mono text-xs font-semibold',
                                       day.uptimePct >= 99.5
                                         ? 'bg-up/15 text-up'
                                         : day.uptimePct >= 95
@@ -112,7 +115,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                                     {formatPercent(day.uptimePct, 1)} Uptime
                                   </span>
                                 ) : (
-                                  <span className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-xs font-extrabold">
+                                  <span className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-xs font-semibold">
                                     {t('heatmap.no_data_badge', 'Bez dat')}
                                   </span>
                                 )}
@@ -124,7 +127,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                                 </span>
                                 <span
                                   className={cn(
-                                    'font-bold',
+                                    'font-semibold',
                                     day.status === 'down'
                                       ? 'text-down'
                                       : day.status === 'warning'
@@ -141,19 +144,16 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
                               <div className="border-border text-muted-foreground border-t pt-1 font-sans text-xs leading-relaxed">
                                 {day.detail ??
                                   (day.status === 'down'
-                                    ? t('heatmap.detail_down', '🔴 Detekován výpadek.')
+                                    ? t('heatmap.detail_down', 'Detekován výpadek.')
                                     : day.status === 'warning'
-                                      ? t('heatmap.detail_warning', '⚡ Zhoršená odezva zaznamenána.')
+                                      ? t('heatmap.detail_warning', 'Zhoršená odezva zaznamenána.')
                                       : day.status === 'maintenance'
-                                        ? t('heatmap.detail_maintenance', '🔧 Plánovaná údržba.')
+                                        ? t('heatmap.detail_maintenance', 'Plánovaná údržba.')
                                         : day.status === 'paused'
-                                          ? t('heatmap.detail_paused', '⏸️ Monitor byl pozastaven.')
+                                          ? t('heatmap.detail_paused', 'Monitor byl pozastaven.')
                                           : day.status === 'nodata'
-                                            ? t('heatmap.detail_nodata', '⬚ Pro tento den nejsou žádná měření.')
-                                            : t(
-                                                'heatmap.detail_up',
-                                                '🟢 Všechny testy dostupnosti proběhly bez chyb.'
-                                              ))}
+                                            ? t('heatmap.detail_nodata', 'Pro tento den nejsou žádná měření.')
+                                            : t('heatmap.detail_up', 'Všechny testy dostupnosti proběhly bez chyb.'))}
                               </div>
                             </div>
                           </div>
@@ -168,7 +168,7 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center gap-6 pl-48 text-xs pt-1">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-1 text-xs sm:pl-48">
         {(Object.keys(statusLabel) as DayStatus[]).map((status) => (
           <span key={status} className="text-muted-foreground flex items-center gap-2 font-medium text-xs">
             <span className={cn('size-3.5 rounded-[4px]', cellClass[status])} />

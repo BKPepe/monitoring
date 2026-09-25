@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router';
 import { useSession } from '@/api/use-session';
-import { Badge } from '@/components/ui/badge';
+import { Badge, StatusDot, statusVariant, type MonitorState } from '@/components/ui/badge';
 import { UptimeStrip, type UptimeDay } from './uptime-strip';
 import { useLanguage } from '@/context/language-context';
 import { cn, formatPercent } from '@/lib/utils';
@@ -91,6 +91,16 @@ export function PublicMonitorCard({
   const d = (monitor.details ?? {}) as Record<string, any>;
 
   const rows = buildRows(monitor, d, t);
+  // The word for the state rides on the dot for screen readers and on hover:
+  // the dot alone was colour only, and a paused service read as a warning.
+  const stateWord = {
+    up: t('common.online', 'Online'),
+    down: t('common.offline', 'Offline'),
+    warning: t('common.warning', 'Varování'),
+    maintenance: t('common.maintenance', 'Údržba'),
+    paused: t('common.paused', 'Pozastaveno'),
+    unknown: t('status.unknown', 'Neznámý'),
+  }[monitor.status as MonitorState];
 
   return (
     <li className="border-b border-border/50 py-3 last:border-0">
@@ -98,13 +108,12 @@ export function PublicMonitorCard({
           uvnitr <button> je stejne neplatne HTML jako ty vnorene buttony,
           ktere odhalil prohlizec u pasu dostupnosti. Rozbaleni ma vlastni
           tlacitko - sipku. */}
-      <div className="flex w-full flex-wrap items-center justify-between gap-3">
+      <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <span className="flex min-w-0 items-center gap-2.5">
-          <span
-            className={cn(
-              'size-2.5 shrink-0 rounded-full',
-              monitor.status === 'up' ? 'bg-up' : monitor.status === 'down' ? 'bg-down' : 'bg-warning'
-            )}
+          <StatusDot
+            variant={statusVariant[monitor.status as MonitorState] ?? 'warning'}
+            label={stateWord ?? monitor.status}
+            className="size-2.5"
           />
           <TypeIcon type={monitor.type} />
           {/* The detail lives in the app, which needs a login and shows a user only
@@ -130,13 +139,16 @@ export function PublicMonitorCard({
             </Badge>
           )}
         </span>
-        <span className="flex items-center gap-3">
+        {/* Below sm the strip takes the whole second line and its cells
+            shrink with it; a fixed 300 px strip pushed the percentage off a
+            390 px screen. */}
+        <span className="flex w-full items-center gap-3 sm:w-auto">
           {uptime.length > 0 && <UptimeStrip days={uptime} />}
           {/* Colour by level: below 99 % already deserves attention, below 95 % is
               a problem - the same thresholds as the legacy uptime-pct classes. */}
           <span
             className={cn(
-              'w-16 text-right text-xs font-semibold tabular-nums',
+              'ml-auto w-16 shrink-0 text-right font-mono text-xs font-semibold tabular-nums',
               uptimePct === null
                 ? 'text-muted-foreground'
                 : uptimePct >= 99
@@ -148,7 +160,7 @@ export function PublicMonitorCard({
           >
             {formatPercent(uptimePct, 2)}
           </span>
-          <span className="text-muted-foreground w-14 text-right text-xs tabular-nums">
+          <span className="text-muted-foreground w-14 shrink-0 text-right font-mono text-xs tabular-nums">
             {monitor.responseMs === null ? '—' : `${monitor.responseMs} ms`}
           </span>
           {!statusOnly && (
@@ -157,7 +169,7 @@ export function PublicMonitorCard({
               onClick={() => setOpen((o) => !o)}
               aria-expanded={open}
               aria-label={t('public.toggle_detail', 'Rozbalit detail')}
-              className="text-muted-foreground hover:text-foreground -m-1 p-1 transition-colors"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -m-1 shrink-0 rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
             >
               <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
             </button>
@@ -197,7 +209,7 @@ export function PublicMonitorCard({
                   <p className="text-muted-foreground text-3xs font-medium">{label}</p>
                   <p
                     className={cn(
-                      'text-xs font-semibold tabular-nums',
+                      'font-mono text-xs font-semibold tabular-nums',
                       windows[key] === null
                         ? 'text-muted-foreground'
                         : windows[key]! >= 99
@@ -298,6 +310,11 @@ const TYPE_ICONS: Record<string, typeof Globe> = {
   agent_service: Activity,
 };
 
+/** The icon of a monitor type - also what a category heading on the public page shows. */
+export function typeIcon(type: string): typeof Globe {
+  return TYPE_ICONS[type] ?? Activity;
+}
+
 function TypeIcon({ type }: { type: string }) {
   const Icon = TYPE_ICONS[type] ?? Activity;
   return <Icon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />;
@@ -358,7 +375,7 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
       {/* nowrap: "39.01 GB / 124.4 GB" did not fit the fixed width and wrapped
           onto two lines - the value takes what it needs and the bar shrinks,
           not the legibility. */}
-      <span className="shrink-0 text-right whitespace-nowrap tabular-nums" title={detail}>
+      <span className="shrink-0 text-right font-mono whitespace-nowrap tabular-nums" title={detail}>
         {detail ?? `${percent} %`}
       </span>
     </div>

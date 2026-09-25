@@ -5,17 +5,14 @@ import { cn } from '@/lib/utils';
 /**
  * A tile with a single key value (KPI).
  *
- * The trend is always described in words too, not just color and arrow -
- * and importantly: "lower is better" differs between latency and uptime,
- * so the caller controls the evaluation direction via `goodDirection`.
+ * The tone is always told in words too (the hint), never by colour alone.
+ * The caller derives it from the value; the tile never guesses one.
  */
 export function MetricTile({
   label,
   value,
   unit,
   hint,
-  delta,
-  goodDirection = 'up',
   icon: Icon,
   tone,
   loading = false,
@@ -24,8 +21,6 @@ export function MetricTile({
   value: string | number;
   unit?: string;
   hint?: string;
-  delta?: { value: string; direction: 'up' | 'down' };
-  goodDirection?: 'up' | 'down';
   icon?: LucideIcon;
   tone?: 'up' | 'down' | 'warning' | 'info';
   /**
@@ -34,14 +29,14 @@ export function MetricTile({
    */
   loading?: boolean;
 }) {
-  const isGood = delta ? delta.direction === goodDirection : undefined;
-
   return (
     <Card className="p-4" aria-busy={loading || undefined}>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-muted-foreground text-xs font-medium">{label}</p>
+        {/* A micro-label, not a heading: the number is what the tile is for. */}
+        <p className="text-muted-foreground text-2xs font-semibold tracking-wider uppercase">{label}</p>
         {Icon && (
           <Icon
+            aria-hidden="true"
             className={cn(
               'size-4 shrink-0',
               tone === 'up' && 'text-up',
@@ -59,20 +54,15 @@ export function MetricTile({
           <span className="bg-muted h-6 w-16 animate-pulse rounded-md motion-reduce:animate-none" />
         </div>
       ) : (
+        // Mono, tabular digits (apps/site DESIGN.md §3): a refreshed value
+        // does not shift sideways, and figures read as measurements.
         <div className="mt-2 flex items-baseline gap-1.5">
-          <span className="tabular-nums text-2xl font-semibold tracking-tight">{value}</span>
+          <span className="font-mono text-2xl font-semibold tracking-tight tabular-nums">{value}</span>
           {unit && <span className="text-muted-foreground text-sm">{unit}</span>}
         </div>
       )}
 
-      <div className="mt-1 flex items-center gap-2">
-        {delta && (
-          <span className={cn('tabular-nums text-xs font-medium', isGood ? 'text-up' : 'text-down')}>
-            {delta.direction === 'up' ? '▲' : '▼'} {delta.value}
-          </span>
-        )}
-        {hint && !loading && <span className="text-muted-foreground text-xs">{hint}</span>}
-      </div>
+      {hint && !loading && <p className="text-muted-foreground mt-1 text-xs">{hint}</p>}
     </Card>
   );
 }

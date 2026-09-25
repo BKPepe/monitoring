@@ -1,4 +1,6 @@
 import * as React from 'react';
+import type { ChartTheme } from './chart-style';
+import { withAlpha } from './color';
 
 /**
  * Translation of design tokens into ECharts colours.
@@ -7,55 +9,50 @@ import * as React from 'react';
  * neither CSS classes nor `var(--…)`. So the tokens are read at runtime from `:root` via
  * `getComputedStyle` and re-read on a theme switch, otherwise the chart
  * would keep the previous theme's colours.
+ *
+ * Dark and light are SELECTED, not flipped: each theme has its own validated
+ * chart steps, glow and wash strength in theme.css, and this only reads
+ * whichever block is active. The fallbacks are the light values, used only
+ * when a stylesheet failed to load (a test environment).
  */
-export interface ChartTheme {
-  text: string;
-  textMuted: string;
-  grid: string;
-  tooltipBg: string;
-  tooltipBorder: string;
-  series: Record<SeriesTone, string>;
-  /** Fill of the threshold bands. Weak enough not to overpower the data line. */
-  band: Record<'warning' | 'critical', string>;
-  /**
-   * Colour of user-written chart notes. Deliberately not any series tone and
-   * not the event gray - a note is a human's claim, not a measurement.
-   */
-  annotation: string;
-  /** Key for the `key` prop — forces a chart re-render after a theme change. */
-  key: string;
-}
-
-export type SeriesTone = 'cpu' | 'memory' | 'network' | 'temperature' | 'disk' | 'latency';
-
 function readTokens(): ChartTheme {
   const style = getComputedStyle(document.documentElement);
   const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  const number = (name: string, fallback: number) => {
+    const n = parseFloat(style.getPropertyValue(name));
+    return Number.isFinite(n) ? n : fallback;
+  };
 
   const isDark = document.documentElement.classList.contains('dark');
 
   return {
-    text: token('--foreground', isDark ? '#e5e7eb' : '#0b0d10'),
-    textMuted: token('--muted-foreground', isDark ? '#8b93a1' : '#6b7280'),
-    // The grid must be noticeably weaker than the text, or it overpowers the data.
-    grid: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)',
-    tooltipBg: token('--popover', isDark ? '#14181d' : '#ffffff'),
-    tooltipBorder: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)',
+    text: token('--foreground', '#0b0d10'),
+    textMuted: token('--muted-foreground', '#6b7280'),
+    grid: token('--chart-grid', 'rgba(0,0,0,0.07)'),
+    surface: token('--card', '#f7f8fa'),
+    tooltipBg: token('--popover', '#ffffff'),
+    tooltipBorder: token('--border-strong', 'rgba(0,0,0,0.18)'),
     series: {
-      cpu: token('--chart-cpu', '#22c55e'),
-      memory: token('--chart-memory', '#60a5fa'),
-      network: token('--chart-network', '#2dd4bf'),
-      temperature: token('--chart-temperature', '#fb923c'),
-      disk: token('--chart-disk', '#a78bfa'),
-      latency: token('--chart-latency', '#facc15'),
+      cpu: token('--chart-cpu', '#007d51'),
+      memory: token('--chart-memory', '#2a71fe'),
+      network: token('--chart-network', '#03919d'),
+      temperature: token('--chart-temperature', '#ab4501'),
+      disk: token('--chart-disk', '#7544cd'),
+      latency: token('--chart-latency', '#9c6900'),
     },
-    // In the light theme the bands must be weaker - the same opacity reads
-    // stronger on a white ground than on a dark one.
+    // Threshold bands ARE state (warning, critical), so they wear the status
+    // tokens - at a strength that stays behind the data line. The same alpha
+    // reads stronger on a white ground than on a dark one.
     band: {
-      warning: isDark ? 'rgba(250,204,21,0.10)' : 'rgba(202,138,4,0.09)',
-      critical: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(220,38,38,0.10)',
+      warning: withAlpha(token('--status-warning', '#854d0e'), isDark ? 0.1 : 0.08),
+      critical: withAlpha(token('--status-down', '#991b1b'), isDark ? 0.12 : 0.08),
     },
-    annotation: token('--chart-annotation', isDark ? '#d946ef' : '#c026d3'),
+    alert: token('--status-down', '#991b1b'),
+    annotation: token('--chart-annotation', '#c026d3'),
+    glow: number('--chart-glow', 0),
+    fill: number('--chart-fill', 0.18),
+    fontMono: token('--font-mono', 'ui-monospace, monospace'),
+    fontSans: token('--font-sans', 'ui-sans-serif, system-ui, sans-serif'),
     key: isDark ? 'dark' : 'light',
   };
 }
@@ -89,4 +86,18 @@ export function usePrefersReducedMotion(): boolean {
   }, []);
 
   return reduced;
+}
+
+/**
+ * The current time, re-read every 30 s. Freshness is a function of the clock
+ * as much as of the data: an open tab whose collector stopped must stop
+ * looking live without anyone reloading it.
+ */
+export function useNow(): number {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
 }

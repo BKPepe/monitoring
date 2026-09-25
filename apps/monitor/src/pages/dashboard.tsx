@@ -4,11 +4,15 @@ import {
   Activity,
   AlertTriangle,
   CalendarClock,
+  CalendarDays,
+  CheckCircle2,
   Gamepad2,
   Globe,
+  LayoutList,
   Lightbulb,
   MessageSquare,
   Mic,
+  PieChart,
   Radar,
   Router as RouterIcon,
   Search,
@@ -19,7 +23,9 @@ import {
   Wifi,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { SectionTitle } from '@/components/ui/section-title';
+import { FreshnessPill, ageText } from '@/components/freshness-pill';
 import { PageHeader } from '@/components/layout/page-header';
 import { StatusDot, statusVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -143,12 +149,25 @@ export function DashboardPage() {
     };
   }, [session, refreshTick, t]);
 
+  // Every count on the page comes from this one pass: the tabs, the tiles
+  // and the ring used to filter the list again each, six times per render.
+  const counts = React.useMemo(() => {
+    const c: Record<MonitorStatus, number> = { up: 0, down: 0, warning: 0, paused: 0, maintenance: 0, unknown: 0 };
+    for (const m of monitors) c[m.status]++;
+    return c;
+  }, [monitors]);
+  // The newest measurement in the list - what the freshness pill judges.
+  // The fetch time alone would call data "live" that cron wrote an hour ago.
+  const newestCheck = monitors.reduce<number | null>((max, m) => {
+    const at = m.lastCheck ? Date.parse(m.lastCheck) : NaN;
+    return at > (max ?? -Infinity) ? at : max;
+  }, null);
   const totalMonitors = monitors.length > 0 ? monitors.length : (live?.totalMonitors ?? 0);
-  const downMonitors = monitors.filter((m) => m.status === 'down').length;
+  const downMonitors = counts.down;
   // Healthy = actually UP. "Total minus down" counted warnings, paused
   // checks and silent agents as healthy, so the tile said 100 % with a
   // degraded service on the list.
-  const healthyCount = monitors.filter((m) => m.status === 'up').length;
+  const healthyCount = counts.up;
   const healthyPct = monitors.length > 0 ? (healthyCount / monitors.length) * 100 : null;
   // null/missing means nobody measured a 30-day uptime (new install, dead
   // cron, unreachable API) - that state renders as "no data". Falling back
@@ -191,20 +210,14 @@ export function DashboardPage() {
       at: string | null;
     }[] = [];
     monitors.forEach((m) => {
-      if (m.status === 'down') {
+      // The state in words, not an emoji: a warning used to be titled
+      // "Zvýšená latence" whatever raised it - a disk or a certificate too.
+      if (m.status === 'down' || m.status === 'warning') {
         alertsList.push({
           id: m.id,
-          title: `🔴 ${t('dashboard.outage_title', 'Výpadek služby')}: ${m.name}`,
-          source: `${m.type.toUpperCase()} · ${m.target}`,
-          severity: 'down',
-          at: m.lastStatusChange ?? null,
-        });
-      } else if (m.status === 'warning') {
-        alertsList.push({
-          id: m.id,
-          title: `⚡ ${t('dashboard.high_latency', 'Zvýšená latence')}: ${m.name}`,
-          source: `${m.type.toUpperCase()} · ${m.target}`,
-          severity: 'warning',
+          title: m.name,
+          source: `${m.status === 'down' ? t('common.offline', 'Offline') : t('common.warning', 'Varování')} · ${m.type} · ${m.target}`,
+          severity: m.status,
           at: m.lastStatusChange ?? null,
         });
       }
@@ -370,19 +383,24 @@ export function DashboardPage() {
   // layout the default mockup renders (monitors left, alerts+health in the
   // right column).
   const attentionSection = (
+    // The answer to "is anything wrong right now", first on the page: every
+    // outage, warning, expiring certificate and silent agent, each with how
+    // long it has been so where the server measured it.
     <Card key="attention">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <AlertTriangle className={`size-4 ${needsAttention.length > 0 ? 'text-warning' : 'text-up'}`} />
-          {t('attention.title', 'Vyžaduje pozornost')}
-          {needsAttention.length > 0 && (
-            <span className="bg-warning/15 text-warning rounded-full px-2 py-0.5 text-xs font-bold">
-              {needsAttention.length}
-            </span>
-          )}
-        </CardTitle>
+        <SectionTitle
+          icon={needsAttention.length > 0 || monitorsError ? AlertTriangle : CheckCircle2}
+          title={t('attention.title', 'Vyžaduje pozornost')}
+          // A failed refresh leaves an old list: its count would be an all-clear nobody measured.
+          count={monitorsLoading || monitorsError ? undefined : needsAttention.length}
+          action={
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/incidents">{t('nav.incidents', 'Incidenty')}</Link>
+            </Button>
+          }
+        />
       </CardHeader>
-      <CardContent className="flex flex-col gap-1 px-2 pb-3">
+      <CardContent className="flex flex-col gap-0.5 px-2 pb-3">
         {monitorsLoading ? (
           <LoadingState size="inline" label={t('dashboard.loading_monitors', 'Načítám monitory…')} />
         ) : monitorsError && monitors.length === 0 ? (
@@ -400,38 +418,53 @@ export function DashboardPage() {
             {t('attention.all_clear', 'Nic nevyžaduje pozornost — vše v normálu.')}
           </p>
         ) : (
-          needsAttention.map((item) => (
-            <Link
-              key={item.key}
-              to={`/infrastructure/${item.monitorId}`}
-              className="hover:bg-muted/40 flex items-center gap-3 rounded-md px-3 py-2 transition-colors"
-            >
-              <StatusDot variant={item.severity} />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.name}</span>
-              <span className={`shrink-0 text-xs ${item.severity === 'down' ? 'text-down' : 'text-warning'}`}>
-                {item.text}
-              </span>
-            </Link>
-          ))
+          needsAttention.map((item) => {
+            // Only a state change has a start the server measured; an
+            // expiring certificate or a full disk gets no invented "since".
+            const since = /^(down|warn)-/.test(item.key)
+              ? monitors.find((m) => m.id === item.monitorId)?.sinceStatusChangeSeconds
+              : null;
+            return (
+              <Link
+                key={item.key}
+                to={`/infrastructure/${item.monitorId}`}
+                className="hover:bg-muted/40 focus-visible:ring-ring flex items-center gap-3 rounded-md px-3 py-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <StatusDot variant={item.severity} />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.name}</span>
+                <span className={`shrink-0 text-xs ${item.severity === 'down' ? 'text-down' : 'text-warning'}`}>
+                  {item.text}
+                </span>
+                <span className="text-muted-foreground hidden w-14 shrink-0 text-right font-mono text-xs tabular-nums sm:inline">
+                  {since == null ? '' : ageText(since)}
+                </span>
+              </Link>
+            );
+          })
         )}
       </CardContent>
     </Card>
   );
 
-  const monitorsSection = (wide: boolean) => (
-    <Card className={wide ? undefined : 'xl:col-span-2'}>
+  const monitorsSection = (
+    <Card>
       <CardHeader className="flex-wrap">
-        <CardTitle>{t('dashboard.monitors_card_title', 'Sledované Monitory & Služby')}</CardTitle>
-        <div className="relative w-full max-w-56">
-          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('dashboard.search_placeholder', 'Hledat monitory…')}
-            aria-label={t('dashboard.search_placeholder', 'Hledat monitory…')}
-            className="h-8 pl-8 text-xs"
-          />
-        </div>
+        <SectionTitle
+          icon={LayoutList}
+          title={t('dashboard.monitors_card_title', 'Sledované Monitory & Služby')}
+          action={
+            <div className="relative w-full sm:w-56">
+              <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('dashboard.search_placeholder', 'Hledat monitory…')}
+                aria-label={t('dashboard.search_placeholder', 'Hledat monitory…')}
+                className="h-8 pl-8 text-xs"
+              />
+            </div>
+          }
+        />
       </CardHeader>
 
       <CardContent className="px-0 pb-0">
@@ -442,27 +475,23 @@ export function DashboardPage() {
               so the active tab's underline is not clipped at its border. */}
           <div className="mx-5 overflow-x-auto">
             <TabsList className="mb-0 whitespace-nowrap">
-              <TabsTrigger value="all">
-                {t('common.all', 'Vše')} ({monitors.length})
-              </TabsTrigger>
-              <TabsTrigger value="up">
-                {t('common.online', 'Online')} ({monitors.filter((m) => m.status === 'up').length})
-              </TabsTrigger>
-              <TabsTrigger value="warning">
-                {t('common.warning', 'Varování')} ({monitors.filter((m) => m.status === 'warning').length})
-              </TabsTrigger>
-              <TabsTrigger value="down">
-                {t('common.offline', 'Offline')} ({monitors.filter((m) => m.status === 'down').length})
-              </TabsTrigger>
-              <TabsTrigger value="paused">
-                {t('common.paused', 'Pozastaveno')} ({monitors.filter((m) => m.status === 'paused').length})
-              </TabsTrigger>
-              {/* Silent agents had no tab - they were invisible in every filter but "all". */}
-              {(monitors.some((m) => m.status === 'unknown') || filter === 'unknown') && (
-                <TabsTrigger value="unknown">
-                  {t('status.unknown', 'Neznámý')} ({monitors.filter((m) => m.status === 'unknown').length})
-                </TabsTrigger>
-              )}
+              {(
+                [
+                  ['all', t('common.all', 'Vše'), monitors.length],
+                  ['up', t('common.online', 'Online'), counts.up],
+                  ['warning', t('common.warning', 'Varování'), counts.warning],
+                  ['down', t('common.offline', 'Offline'), counts.down],
+                  ['paused', t('common.paused', 'Pozastaveno'), counts.paused],
+                  // Silent agents had no tab - they were invisible in every filter but "all".
+                  ['unknown', t('status.unknown', 'Neznámý'), counts.unknown],
+                ] as const
+              )
+                .filter(([key, , n]) => key !== 'unknown' || n > 0 || filter === 'unknown')
+                .map(([key, label, n]) => (
+                  <TabsTrigger key={key} value={key}>
+                    {label} ({n})
+                  </TabsTrigger>
+                ))}
             </TabsList>
           </div>
 
@@ -476,9 +505,11 @@ export function DashboardPage() {
                 {/* A failed minute refresh keeps the last good list on screen and
                     says it is stale - it used to replace the whole table. */}
                 {monitorsError && (
-                  <p className="px-5 pt-3 text-xs text-warning">
-                    ⚠ {t('dashboard.refresh_failed', 'Obnovení selhalo, data mohou být zastaralá')} — {monitorsError}
-                  </p>
+                  <ErrorState
+                    tone="warning"
+                    message={`${t('dashboard.refresh_failed', 'Obnovení selhalo, data mohou být zastaralá')} — ${monitorsError}`}
+                    className="mx-5 mt-3"
+                  />
                 )}
                 <MonitorTable rows={visibleMonitors} latencySeries={latencySeries} />
               </>
@@ -490,7 +521,7 @@ export function DashboardPage() {
       <div className="text-muted-foreground flex items-center justify-between border-t border-border px-5 py-3 text-xs">
         <span>{t('dashboard.showing', { shown: visibleMonitors.length, total: monitors.length })}</span>
         <Button variant="outline" size="sm" asChild>
-          <Link to="/infrastructure">{t('common.open_details', 'Zobrazit vše')}</Link>
+          <Link to="/infrastructure">{t('nav.infrastructure', 'Infrastruktura')}</Link>
         </Button>
       </div>
     </Card>
@@ -502,12 +533,18 @@ export function DashboardPage() {
         {/* Named for what it holds: monitors that are down or degraded RIGHT
             NOW, newest change first. It never contained history - a service
             that failed and recovered an hour ago was never in it. */}
-        <CardTitle>{t('dashboard.active_alerts', 'Aktivní výstrahy')}</CardTitle>
-        <Button variant="ghost" size="sm" asChild>
-          <Link to="/incidents">{t('common.open_details', 'Zobrazit vše')}</Link>
-        </Button>
+        <SectionTitle
+          icon={AlertTriangle}
+          title={t('dashboard.active_alerts', 'Aktivní výstrahy')}
+          count={monitorsLoading ? undefined : realAlerts.length}
+          action={
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/incidents">{t('nav.incidents', 'Incidenty')}</Link>
+            </Button>
+          }
+        />
       </CardHeader>
-      <CardContent className="flex flex-col gap-1 px-2">
+      <CardContent className="flex flex-col gap-0.5 px-2">
         {realAlerts.length === 0 && (
           <p className="text-muted-foreground flex items-center gap-2 px-3 py-4 text-sm">
             {monitorsLoading ? (
@@ -526,14 +563,16 @@ export function DashboardPage() {
           <Link
             key={alert.id}
             to={`/infrastructure/${alert.id}`}
-            className="hover:bg-muted/40 flex items-start gap-3 rounded-md px-3 py-2.5 transition-colors cursor-pointer"
+            className="hover:bg-muted/40 focus-visible:ring-ring flex items-start gap-3 rounded-md px-3 py-2.5 transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <StatusDot variant={alert.severity} className="mt-1.5" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{alert.title}</p>
               <p className="text-muted-foreground truncate text-xs">{alert.source}</p>
             </div>
-            <span className="text-muted-foreground shrink-0 text-xs">{alert.at ? formatRelative(alert.at) : '—'}</span>
+            <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
+              {alert.at ? formatRelative(alert.at) : '—'}
+            </span>
           </Link>
         ))}
       </CardContent>
@@ -541,9 +580,9 @@ export function DashboardPage() {
   );
 
   const healthSection = (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
-        <CardTitle>{t('dashboard.infra_health', 'Zdraví infrastruktury')}</CardTitle>
+        <SectionTitle icon={PieChart} title={t('dashboard.infra_health', 'Zdraví infrastruktury')} />
       </CardHeader>
       <CardContent>
         {/* No ring before the list arrived or after it failed: an empty ring
@@ -565,36 +604,12 @@ export function DashboardPage() {
             // named a problem and offered no way to reach it.
             hrefFor={(segment) => `/infrastructure?status=${segment.variant}`}
             segments={[
-              {
-                label: t('common.online', 'Online'),
-                value: monitors.filter((m) => m.status === 'up').length,
-                variant: 'up',
-              },
-              {
-                label: t('common.warning', 'Varování'),
-                value: monitors.filter((m) => m.status === 'warning').length,
-                variant: 'warning',
-              },
-              {
-                label: t('common.offline', 'Offline'),
-                value: monitors.filter((m) => m.status === 'down').length,
-                variant: 'down',
-              },
-              {
-                label: t('common.paused', 'Pozastaveno'),
-                value: monitors.filter((m) => m.status === 'paused').length,
-                variant: 'paused',
-              },
-              {
-                label: t('common.maintenance', 'Údržba'),
-                value: monitors.filter((m) => m.status === 'maintenance').length,
-                variant: 'maintenance',
-              },
-              {
-                label: t('status.unknown', 'Neznámý'),
-                value: monitors.filter((m) => m.status === 'unknown').length,
-                variant: 'unknown',
-              },
+              { label: t('common.online', 'Online'), value: counts.up, variant: 'up' },
+              { label: t('common.warning', 'Varování'), value: counts.warning, variant: 'warning' },
+              { label: t('common.offline', 'Offline'), value: counts.down, variant: 'down' },
+              { label: t('common.paused', 'Pozastaveno'), value: counts.paused, variant: 'paused' },
+              { label: t('common.maintenance', 'Údržba'), value: counts.maintenance, variant: 'maintenance' },
+              { label: t('status.unknown', 'Neznámý'), value: counts.unknown, variant: 'unknown' },
             ]}
           />
         )}
@@ -604,16 +619,15 @@ export function DashboardPage() {
 
   const insightsSection =
     systemInsights.length > 0 ? (
-      <div className="space-y-3">
-        <div>
-          <h2 className="text-sm font-semibold tracking-tight flex items-center gap-2">
-            <Lightbulb className="size-4 text-primary" /> {t('dashboard.insights_title', 'System Insights')}
-          </h2>
-          <p className="text-muted-foreground text-xs">
-            {t('dashboard.insights_subtitle', 'Automatická analýza trendů a anomálií napříč infrastrukturou.')}
-          </p>
-        </div>
-        <div className="grid gap-4 *:min-w-0 sm:grid-cols-2 xl:grid-cols-4">
+      <Card>
+        <CardHeader>
+          <SectionTitle
+            icon={Lightbulb}
+            title={t('dashboard.insights_title', 'System Insights')}
+            hint={t('dashboard.insights_subtitle', 'Automatická analýza trendů a anomálií napříč infrastrukturou.')}
+          />
+        </CardHeader>
+        <CardContent className="grid gap-3 *:min-w-0 sm:grid-cols-2">
           {systemInsights.map((ins, idx) => {
             const InsIcon =
               ins.kind === 'network'
@@ -623,42 +637,43 @@ export function DashboardPage() {
                   : ins.kind === 'forecast'
                     ? CalendarClock
                     : TrendingUp;
-            const iconCls = ins.kind === 'network' || ins.kind === 'anomaly' ? 'text-warning' : 'text-primary';
             return (
-              <Card key={`${ins.monitorId}-${idx}`} className="p-4 flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="bg-muted grid size-7 shrink-0 place-items-center rounded-lg">
-                    <InsIcon className={`size-3.5 ${iconCls}`} />
-                  </span>
-                  <p className="text-xs font-semibold truncate">{ins.monitorName}</p>
-                </div>
-                <p className="text-xs leading-relaxed">{ins.text}</p>
-                {ins.detail && <p className="text-muted-foreground text-2xs">{ins.detail}</p>}
-                <Link
-                  to={`/infrastructure/${ins.monitorId}`}
-                  className="text-primary mt-auto text-xs font-semibold hover:underline"
-                >
-                  {t('common.open_details', 'Zobrazit vše')}
-                </Link>
-              </Card>
+              // The whole tile is the link: a separate "open" line under the
+              // text was a second, smaller target for the same place.
+              <Link
+                key={`${ins.monitorId}-${idx}`}
+                to={`/infrastructure/${ins.monitorId}`}
+                className="hover:border-border-strong focus-visible:ring-ring flex flex-col gap-1.5 rounded-lg border border-border p-3 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <span className="flex items-center gap-2 text-xs font-semibold">
+                  <InsIcon
+                    aria-hidden="true"
+                    className={`size-3.5 shrink-0 ${ins.kind === 'network' || ins.kind === 'anomaly' ? 'text-warning' : 'text-muted-foreground'}`}
+                  />
+                  <span className="truncate">{ins.monitorName}</span>
+                </span>
+                <span className="text-xs leading-relaxed">{ins.text}</span>
+                {ins.detail && <span className="text-muted-foreground text-2xs">{ins.detail}</span>}
+              </Link>
             );
           })}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     ) : null;
 
   const uptimeSection = (
     <Card className="overflow-visible relative z-20">
-      <CardHeader className="flex-row items-center justify-between">
-        <div>
-          <CardTitle>{t('dashboard.availability_history', 'Historie dostupnosti sledovaných služeb')}</CardTitle>
-          <CardDescription>
-            {t('dashboard.availability_30d', 'Sledovaná dostupnost v čase (posledních 30 dní)')}
-          </CardDescription>
-        </div>
-        <Button variant="outline" size="sm" asChild>
-          <Link to="/reports">{t('dashboard.full_report', 'Celý report')}</Link>
-        </Button>
+      <CardHeader>
+        <SectionTitle
+          icon={CalendarDays}
+          title={t('dashboard.availability_history', 'Historie dostupnosti sledovaných služeb')}
+          hint={t('dashboard.availability_30d', 'Sledovaná dostupnost v čase (posledních 30 dní)')}
+          action={
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/reports">{t('dashboard.full_report', 'Celý report')}</Link>
+            </Button>
+          }
+        />
       </CardHeader>
       <CardContent className="overflow-visible">
         {dailyUptimeError ? (
@@ -722,9 +737,9 @@ export function DashboardPage() {
   // oba ("siroka"). Drive se sirka ukladala, ale nikdo ji necetl - prepinac
   // v editoru nedelal nic.
   const orderedLayout = () => {
-    const sectionFor = (key: string, wide: boolean): React.ReactNode => {
+    const sectionFor = (key: string): React.ReactNode => {
       if (key === 'attention') return attentionSection;
-      if (key === 'monitors') return monitorsSection(wide);
+      if (key === 'monitors') return monitorsSection;
       if (key === 'alerts') return alertsSection;
       if (key === 'health') return healthSection;
       if (key === 'insights') return insightsSection;
@@ -738,7 +753,7 @@ export function DashboardPage() {
       .filter((tl) => tl.visible)
       .map((tl) => {
         const wide = tl.size === 'wide';
-        const node = sectionFor(tl.key, wide);
+        const node = sectionFor(tl.key);
         if (!node) return null;
         return (
           <div key={tl.key} className={cn('min-w-0', wide && 'md:col-span-2')}>
@@ -760,21 +775,22 @@ export function DashboardPage() {
           'Přehled všech vašich monitorovaných služeb, domén a serverů v reálném čase.'
         )}
         actions={
-          <Button variant="outline" size="sm" onClick={() => setLayoutOpen(true)} className="gap-2 font-semibold">
-            <LayoutGrid className="size-4" /> {t('dashboard.customize', 'Upravit rozložení')}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Cron writes every 1-5 minutes, so 300 s is the cadence the age
+                is judged by: live up to 10 min, late up to the server's
+                15-minute collection limit, stale after. */}
+            <FreshnessPill
+              at={newestCheck}
+              intervalSecs={300}
+              failed={monitorsError !== null}
+              okAt={loadedAt?.getTime() ?? null}
+            />
+            <Button variant="outline" size="sm" onClick={() => setLayoutOpen(true)} className="gap-2 font-semibold">
+              <LayoutGrid className="size-4" /> {t('dashboard.customize', 'Upravit rozložení')}
+            </Button>
+          </div>
         }
-      >
-        {loadedAt && (
-          <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
-            {t(
-              'dashboard.data_as_of',
-              { time: loadedAt.toLocaleTimeString(lang === 'en' ? 'en-GB' : 'cs-CZ') },
-              `Data z ${loadedAt.toLocaleTimeString('cs-CZ')}, obnovují se každou minutu`
-            )}
-          </p>
-        )}
-      </PageHeader>
+      />
 
       <DashboardLayoutEditor
         open={layoutOpen}
@@ -867,15 +883,18 @@ export function DashboardPage() {
 
       {tiles.length === 0 ? (
         <>
-          {attentionSection}
+          {/* What is wrong now, beside the shape of the whole fleet; then the
+              full-width list, where eight columns fit without wrapping. The
+              separate "Aktivní výstrahy" card is left to custom layouts: it
+              listed the same outages as this one, a screen apart. */}
           <div className="grid gap-4 *:min-w-0 xl:grid-cols-3">
-            {monitorsSection(false)}
-            <div className="flex flex-col gap-4">
-              {alertsSection}
-              {healthSection}
+            <div className="flex flex-col gap-4 xl:col-span-2">
+              {attentionSection}
+              {insightsSection}
             </div>
+            {healthSection}
           </div>
-          {insightsSection}
+          {monitorsSection}
           {uptimeSection}
         </>
       ) : (
@@ -900,21 +919,18 @@ const typeIcon: Record<string, LucideIcon> = {
   agent_service: Radar,
 };
 
-// Icon colour tuning by type (mockup: each service kind has its own shade).
-const typeTint: Record<string, string> = {
-  // The kind of a monitor is a category, not a verdict: one neutral chip,
-  // the word does the telling. Ten hues used to carry nothing but decoration.
-  web: 'bg-secondary text-secondary-foreground',
-  http: 'bg-secondary text-secondary-foreground',
-  https: 'bg-secondary text-secondary-foreground',
-  teamspeak: 'bg-secondary text-secondary-foreground',
-  minecraft: 'bg-secondary text-secondary-foreground',
-  discord: 'bg-secondary text-secondary-foreground',
-  openwrt: 'bg-secondary text-secondary-foreground',
-  vps: 'bg-secondary text-secondary-foreground',
-  cpanel: 'bg-secondary text-secondary-foreground',
-  agent_service: 'bg-secondary text-secondary-foreground',
+/**
+ * The status word's colour, shared by the phone card and the table row: the
+ * two had their own ternaries and a warning was amber in one, grey in the other.
+ */
+const STATUS_TEXT: Partial<Record<MonitorStatus, string>> = {
+  up: 'text-up',
+  down: 'text-down',
+  warning: 'text-warning',
 };
+
+/** Figures in the table: mono, tabular, and never broken over two lines ("48 / ms"). */
+const NUM = 'px-2 font-mono text-xs tabular-nums whitespace-nowrap';
 
 function MonitorTable({
   rows,
@@ -950,7 +966,7 @@ function MonitorTable({
               key={monitor.id}
               to={`/infrastructure/${monitor.id}`}
               className={cn(
-                'rounded-lg border border-border bg-card p-3 transition-colors hover:border-primary/40',
+                'focus-visible:ring-ring rounded-lg border border-border bg-card p-3 transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:outline-none',
                 child && 'ml-5'
               )}
             >
@@ -964,21 +980,13 @@ function MonitorTable({
                 )}
                 <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
                   <StatusDot variant={statusVariant[monitor.status]} />
-                  <span
-                    className={
-                      monitor.status === 'up'
-                        ? 'text-up'
-                        : monitor.status === 'down'
-                          ? 'text-down'
-                          : 'text-muted-foreground'
-                    }
-                  >
+                  <span className={STATUS_TEXT[monitor.status] ?? 'text-muted-foreground'}>
                     {statusText[monitor.status]}
                   </span>
                 </span>
                 <span className="min-w-0 truncate text-sm font-semibold">{monitor.name}</span>
               </div>
-              <div className="text-muted-foreground mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+              <div className="text-muted-foreground mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-xs tabular-nums">
                 <span>{monitor.responseMs != null ? formatMs(monitor.responseMs) : '—'}</span>
                 {usage.cpu != null && <span>CPU {formatPercent(usage.cpu)}</span>}
                 {usage.ram != null && (
@@ -1032,14 +1040,14 @@ function MonitorTable({
                       const tkey = (monitor.type || '').toLowerCase();
                       const Icon = typeIcon[tkey] ?? Server;
                       return (
-                        <span
-                          className={`grid size-8 shrink-0 place-items-center rounded-lg ${typeTint[tkey] ?? 'bg-muted text-muted-foreground'}`}
-                        >
+                        // The kind of a monitor is a category, not a verdict: one
+                        // neutral chip for all of them, the word does the telling.
+                        <span className="bg-muted text-muted-foreground grid size-8 shrink-0 place-items-center rounded-lg">
                           <Icon className="size-4" />
                         </span>
                       );
                     })()}
-                    <div className="leading-tight min-w-0 max-w-[10rem]">
+                    <div className="leading-tight min-w-0 max-w-64">
                       <Link
                         to={`/infrastructure/${monitor.id}`}
                         className="block truncate font-medium hover:underline text-foreground"
@@ -1060,22 +1068,12 @@ function MonitorTable({
                   {/* Mockup: status as coloured text with a dot, not a pill badge. */}
                   <span className="flex items-center gap-1.5 text-xs font-semibold">
                     <StatusDot variant={statusVariant[monitor.status]} />
-                    <span
-                      className={
-                        monitor.status === 'up'
-                          ? 'text-up'
-                          : monitor.status === 'down'
-                            ? 'text-down'
-                            : monitor.status === 'warning'
-                              ? 'text-warning'
-                              : 'text-muted-foreground'
-                      }
-                    >
+                    <span className={STATUS_TEXT[monitor.status] ?? 'text-muted-foreground'}>
                       {statusText[monitor.status]}
                     </span>
                   </span>
                 </TableCell>
-                <TableCell className="tabular-nums px-2">
+                <TableCell className={NUM}>
                   <div className="flex items-center gap-1.5">
                     <span>{formatMs(monitor.responseMs)}</span>
                     {(latencySeries[monitor.id]?.length ?? 0) >= 2 && (
@@ -1090,10 +1088,10 @@ function MonitorTable({
                   const isProc = (monitor.type || '').toLowerCase() === 'agent_service';
                   return (
                     <>
-                      <TableCell className="tabular-nums px-2">
+                      <TableCell className={NUM}>
                         <ThresholdValue value={usage.cpu} limit={thresholdFor(monitor, 'cpu')} />
                       </TableCell>
-                      <TableCell className="tabular-nums px-2">
+                      <TableCell className={NUM}>
                         {isProc ? (
                           usage.ram != null ? (
                             <span className="text-muted-foreground">{usage.ram} MB</span>
@@ -1107,12 +1105,10 @@ function MonitorTable({
                     </>
                   );
                 })()}
-                <TableCell className="tabular-nums px-2">
+                <TableCell className={NUM}>
                   <ThresholdValue value={monitor.hdd} limit={thresholdFor(monitor, 'hdd')} />
                 </TableCell>
-                <TableCell
-                  className={cn('tabular-nums px-2', monitor.status === 'down' ? 'text-down' : 'text-muted-foreground')}
-                >
+                <TableCell className={cn(NUM, monitor.status === 'down' ? 'text-down' : 'text-muted-foreground')}>
                   {/* A monitor that is down has no uptime - it has an outage duration. */}
                   {monitor.status === 'down' && monitor.sinceStatusChangeSeconds != null
                     ? `${t('dashboard.down_for', 'Výpadek')} ${formatUptime(monitor.sinceStatusChangeSeconds)}`
@@ -1120,7 +1116,7 @@ function MonitorTable({
                       ? '—'
                       : formatUptime(monitor.uptimeSeconds)}
                 </TableCell>
-                <TableCell className="text-muted-foreground pr-5 pl-2 text-xs whitespace-nowrap">
+                <TableCell className="text-muted-foreground pr-5 pl-2 font-mono text-xs whitespace-nowrap tabular-nums">
                   {monitor.lastCheck ? formatRelative(monitor.lastCheck) : '—'}
                 </TableCell>
               </TableRow>

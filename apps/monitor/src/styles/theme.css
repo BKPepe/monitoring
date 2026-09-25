@@ -80,12 +80,26 @@
      Hodnoty tady jsou pro SVĚTLÝ podklad, tmavé varianty jsou v .dark - stejně
      jako u --status-*. Dokud tenhle blok platil pro obě témata, byla čára
      latence na bílé kartě v kontrastu ~1,2:1, tedy prakticky neviditelná. */
-  --chart-cpu: #15803d;
-  --chart-memory: #2563eb;
-  --chart-network: #0d9488;
-  --chart-temperature: #c2410c;
-  --chart-disk: #7c3aed;
-  --chart-latency: #a16207;
+  /* Six metric hues with a NetPulse-style look (emerald, blue, cyan, orange,
+     violet, amber) - the same families as before, so CPU still reads green
+     and RAM blue. Validated with the dataviz validate_palette.js against
+     --card and --background in each mode (lightness band, chroma floor,
+     adjacent CVD >= 8, normal-vision >= 15, >= 3:1), and the pairs that share
+     a chart (network+memory, network+temperature) on their own. Never more
+     than two share one plot: all six cannot be told apart pairwise. */
+  --chart-cpu: #007d51;
+  --chart-memory: #2a71fe;
+  --chart-network: #03919d;
+  --chart-temperature: #ab4501;
+  --chart-disk: #7544cd;
+  --chart-latency: #9c6900;
+  /* Chart chrome. The grid is a hairline one step off the surface; the glow
+     (px of blur behind a line) and the area wash (alpha at the top of the
+     gradient) are decoration only - they never carry meaning, and on a white
+     card a glow reads as blur, so light mode has none. */
+  --chart-grid: rgb(0 0 0 / 0.07);
+  --chart-glow: 0;
+  --chart-fill: 0.18;
   /* Poznámky psané člověkem (svislé čáry v grafu). Purpurová sedí proto, že
      musí být rozeznatelná od šedých naměřených událostí - ověřeno: CVD ΔE 12.5,
      normální vidění 24.9, kontrast 4,7:1. Vůči sériím ji barva sama neuhlídá
@@ -95,8 +109,8 @@
   /* Korelace: rozcestná (diverging) škála. Kladný a záporný vztah nejsou dobrý
      a špatný, takže se sem záměrně nesmí dostat stavové zelená/červená -
      modrá a oranžová nesou jen směr. Ověřeno: CVD ΔE 31, kontrast nad 3:1. */
-  --chart-corr-positive: #2563eb;
-  --chart-corr-negative: #ea580c;
+  --chart-corr-positive: #2a71fe;
+  --chart-corr-negative: #ab4501;
 
   --radius: 0.625rem;
 }
@@ -149,16 +163,22 @@
   --status-up-foreground: #0a0c0f;
   --status-warning-foreground: #0a0c0f;
 
-  /* Na tmavém podkladu potřebují barvy víc světla, aby držely kontrast. */
-  --chart-cpu: #22c55e;
-  --chart-memory: #60a5fa;
-  --chart-network: #2dd4bf;
-  --chart-temperature: #fb923c;
-  --chart-disk: #a78bfa;
-  --chart-latency: #facc15;
+  /* The dark steps sit inside the dark lightness band (OKLCH L 0.48-0.67):
+     the previous -400/-500 steps were brighter than that and drowned the
+     annotations and bands. The glow gives back the brightness the band takes
+     away, without a mark getting louder than its neighbours. */
+  --chart-cpu: #009863;
+  --chart-memory: #286ef9;
+  --chart-network: #05a5b3;
+  --chart-temperature: #dd5c00;
+  --chart-disk: #9568f3;
+  --chart-latency: #b77b04;
   --chart-annotation: #d946ef;
-  --chart-corr-positive: #60a5fa;
-  --chart-corr-negative: #fb923c;
+  --chart-corr-positive: #286ef9;
+  --chart-corr-negative: #dd5c00;
+  --chart-grid: rgb(255 255 255 / 0.06);
+  --chart-glow: 8;
+  --chart-fill: 0.3;
 }
 
 /* Mapování tokenů do Tailwind utility tříd (bg-card, text-muted-foreground…). */
@@ -268,6 +288,13 @@
   }
 }
 
+/* The halo behind a sparkline trace, in the trace's own colour
+   (currentColor). Sized by --chart-glow, which is 0 in the light theme and on
+   paper, so it only exists where the theme asks for it. Decoration only. */
+.chart-glow {
+  filter: drop-shadow(0 0 calc(var(--chart-glow) * 0.35px) currentColor);
+}
+
 /* ==========================================================================
    TISK a PDF REPORTY (@media print)
    ========================================================================== */
@@ -310,15 +337,18 @@
     --status-down-foreground: #ffffff;
     --status-up-foreground: #ffffff;
     --status-warning-foreground: #ffffff;
-    --chart-cpu: #15803d;
-    --chart-memory: #2563eb;
-    --chart-network: #0d9488;
-    --chart-temperature: #c2410c;
-    --chart-disk: #7c3aed;
-    --chart-latency: #a16207;
+    --chart-cpu: #007d51;
+    --chart-memory: #2a71fe;
+    --chart-network: #03919d;
+    --chart-temperature: #ab4501;
+    --chart-disk: #7544cd;
+    --chart-latency: #9c6900;
     --chart-annotation: #c026d3;
-    --chart-corr-positive: #2563eb;
-    --chart-corr-negative: #ea580c;
+    --chart-corr-positive: #2a71fe;
+    --chart-corr-negative: #ab4501;
+    --chart-grid: rgb(0 0 0 / 0.07);
+    --chart-glow: 0;
+    --chart-fill: 0.18;
   }
 
   /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka bez obsahu */

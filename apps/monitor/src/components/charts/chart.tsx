@@ -7,6 +7,7 @@ import {
   LegendComponent,
   MarkAreaComponent,
   MarkLineComponent,
+  MarkPointComponent,
   ToolboxComponent,
   TooltipComponent,
 } from 'echarts/components';
@@ -23,7 +24,8 @@ import { cn } from '@/lib/utils';
  *
  * MarkLine/MarkArea and DataZoom are here ahead of time — Sprint 5 (zoom,
  * brush, event markers) will need them and registering them later means
- * hunting down why annotations silently do not draw.
+ * hunting down why annotations silently do not draw. MarkPoint draws the dot
+ * on the newest sample, and only when that sample is fresh.
  */
 echarts.use([
   LineChart,
@@ -35,6 +37,7 @@ echarts.use([
   DataZoomComponent,
   MarkLineComponent,
   MarkAreaComponent,
+  MarkPointComponent,
   ToolboxComponent,
   CanvasRenderer,
 ]);
@@ -50,6 +53,12 @@ export interface ChartProps {
   ariaLabel: string;
   /** Data summary (min/max/avg) — read by the screen reader instead of the canvas. */
   summary?: string;
+  /**
+   * The chart's values as a table, for a screen reader. Only for charts with
+   * a handful of marks (daily totals, histogram bins) - for a 24-hour series
+   * of 1 440 samples the summary is the useful alternative, not a table.
+   */
+  table?: { columns: string[]; rows: string[][] };
   height?: number;
   className?: string;
   /**
@@ -73,7 +82,17 @@ export interface ChartProps {
   onZoom?: (window: { from: number; to: number } | null) => void;
 }
 
-export function Chart({ option, ariaLabel, summary, height = 200, className, group, onPickTime, onZoom }: ChartProps) {
+export function Chart({
+  option,
+  ariaLabel,
+  summary,
+  table,
+  height = 200,
+  className,
+  group,
+  onPickTime,
+  onZoom,
+}: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
 
@@ -177,6 +196,34 @@ export function Chart({ option, ariaLabel, summary, height = 200, className, gro
     <figure className={cn('relative', className)}>
       <div ref={containerRef} style={{ height }} role="img" aria-label={ariaLabel} className="w-full" />
       {summary && <figcaption className="sr-only">{summary}</figcaption>}
+      {table && (
+        <table className="sr-only">
+          <thead>
+            <tr>
+              {table.columns.map((c) => (
+                <th key={c} scope="col">
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row) => (
+              <tr key={row[0]}>
+                {row.map((cell, i) =>
+                  i === 0 ? (
+                    <th key={i} scope="row">
+                      {cell}
+                    </th>
+                  ) : (
+                    <td key={i}>{cell}</td>
+                  )
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </figure>
   );
 }

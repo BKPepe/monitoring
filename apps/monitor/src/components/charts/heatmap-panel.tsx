@@ -138,7 +138,7 @@ export function HeatmapPanel({
           <div className="mb-1 grid grid-cols-[3rem_repeat(24,minmax(0,1fr))] gap-px">
             <span />
             {Array.from({ length: 24 }, (_, h) => (
-              <span key={h} className="text-muted-foreground text-center text-3xs tabular-nums">
+              <span key={h} className="text-muted-foreground text-center font-mono text-3xs tabular-nums">
                 {h % 3 === 0 ? h : ''}
               </span>
             ))}
@@ -156,7 +156,7 @@ export function HeatmapPanel({
               >
                 <span
                   className={cn(
-                    'text-muted-foreground pr-1.5 text-right text-3xs leading-[13px] tabular-nums',
+                    'text-muted-foreground pr-1.5 text-right font-mono text-3xs leading-[13px] tabular-nums',
                     label.weekend && 'font-semibold'
                   )}
                 >
@@ -169,7 +169,7 @@ export function HeatmapPanel({
                     // the ramp: on a dark ground a faint border made an
                     // unmeasured hour look like a measured near-zero one.
                     className={cn(
-                      'h-[13px] rounded-[2px]',
+                      'h-[13px] rounded-[3px]',
                       v === null && 'border border-dashed border-muted-foreground/45'
                     )}
                     style={v === null ? undefined : { backgroundColor: fillFor(v) }}
@@ -196,19 +196,19 @@ export function HeatmapPanel({
 
           {hover && hovered && (
             <div
-              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-2xs whitespace-nowrap shadow-md"
+              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-[10px] border border-border-strong bg-popover px-3 py-2 text-2xs whitespace-nowrap"
               style={{ left: hover.x, top: hover.y - 4 }}
             >
-              <span className="text-muted-foreground">
+              <span className="text-muted-foreground font-mono">
                 {dayLabel(hovered.day).text} {String(hover.hour).padStart(2, '0')}:00–
                 {String(hover.hour).padStart(2, '0')}:59
               </span>{' '}
               {hoveredValue === null ? (
                 <span className="font-medium">{t('metric.heatmap_unmeasured', 'neměřeno')}</span>
               ) : (
-                <span className="font-semibold tabular-nums">
+                <span className="font-mono font-semibold tabular-nums">
                   {fmt(hoveredValue)} {unit}
-                  <span className="text-muted-foreground ml-1 font-normal">
+                  <span className="text-muted-foreground ml-1 font-sans font-normal">
                     {t(
                       'metric.heatmap_samples',
                       { count: hovered.samples[hover.hour] },
@@ -226,7 +226,7 @@ export function HeatmapPanel({
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-3xs">
         {/* Both ends are labelled: the ramp starts at the lowest measured
             value, so an unlabelled light end would read as zero. */}
-        <span className="flex items-center gap-1.5 tabular-nums">
+        <span className="flex items-center gap-1.5 font-mono tabular-nums">
           {fmt(min)} {unit}
           <span
             className="h-2 w-24 rounded-sm"

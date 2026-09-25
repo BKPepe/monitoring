@@ -22,6 +22,7 @@ import { MetricChart } from '@/components/charts/metric-chart';
 import { HeatmapPanel } from '@/components/charts/heatmap-panel';
 import { HistogramPanel } from '@/components/charts/histogram-panel';
 import { CorrelationPanel } from '@/components/charts/correlation-panel';
+import { RangePills } from '@/components/charts/range-pills';
 import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { ProcessCulprits } from '@/components/process-culprits';
@@ -677,7 +678,12 @@ export function MetricDetailPage() {
               {t('metric.compare_toggle', 'Porovnat s předchozím obdobím')}
             </Button>
           )}
-          <RangePicker value={range} onChange={setRange} />
+          <RangePills
+            value={range}
+            options={RANGES}
+            onChange={setRange}
+            label={t('asset.time_range', 'Časový rozsah')}
+          />
         </div>
       </div>
 
@@ -1301,29 +1307,6 @@ const RANGE_HOURS: Record<MetricRange, number> = {
   '90d': 90 * 24,
   '1y': 365 * 24,
 };
-
-function RangePicker({ value, onChange }: { value: MetricRange; onChange: (r: MetricRange) => void }) {
-  return (
-    <div className="flex flex-wrap gap-1" role="group">
-      {RANGES.map((r) => (
-        <button
-          key={r}
-          type="button"
-          onClick={() => onChange(r)}
-          aria-pressed={value === r}
-          className={cn(
-            'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',
-            value === r
-              ? 'border-primary bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:text-foreground border-border'
-          )}
-        >
-          {r}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /** Stats are computed from the very points the chart draws - never another window. */
 function computeStats(points: { t: number; v: number | null }[]): {

@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { Card } from '@/components/ui/card';
-import { ErrorState } from '@/components/ui/states';
+import { ErrorState, LoadingState } from '@/components/ui/states';
 import { MetricChart } from '@/components/charts/metric-chart';
+import { ChartStats } from '@/components/charts/chart-stats';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
 import type { ChartData } from '@/api/types';
@@ -82,7 +83,15 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
       </Card>
     );
   }
-  if (!interfaces) return null;
+  if (!interfaces) {
+    // The same frame the answer will fill, so the page does not jump when it lands.
+    return (
+      <Card className="space-y-2 p-5">
+        <h3 className="text-sm font-semibold">{t('iftraffic.title', 'Provoz po dnech (30 dní)')}</h3>
+        <LoadingState size="inline" label={t('metric.loading', 'Načítám měření…')} />
+      </Card>
+    );
+  }
   const shown = interfaces.filter((i) => i.days.length >= 2 && i.total > 0).slice(0, 3);
   if (shown.length === 0) return null;
 
@@ -127,9 +136,13 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
           ],
         };
         return (
+          // Columns, not a line: each value is one day's total, and a curve
+          // between two totals would claim the hours in between. A day the
+          // agent never reported has no row and so no column - never a zero.
           <div key={iface.iface} className="space-y-1">
             <p className="text-muted-foreground font-mono text-2xs">{iface.iface}</p>
-            <MetricChart data={chart} height={150} />
+            <MetricChart data={chart} height={150} bars legend={false} />
+            <ChartStats series={chart.series} />
           </div>
         );
       })}
