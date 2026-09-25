@@ -58,6 +58,9 @@ $not_metrics = [
     'agent_key', 'nonce', 'signature', 'timestamp', 'action', 'action_id',
     'agent_type', 'monitor_id', 'version', 'latest_version', 'auto_update',
     'update_available', 'update_url', 'update_sha256', 'heavy_op_interval_hours',
+    // The one-time registration token (--register, agent 0.1.10 sends the body
+    // from a file, so the lint now sees the key) - a secret, never a series.
+    'token',
     // Machine description - changes rarely, a chart makes no sense
     'hostname', 'os', 'kernel', 'model', 'board_name', 'timezone',
     'virtualization', 'cloud_provider', 'uptime', 'boot_time', 'reboot_required',
