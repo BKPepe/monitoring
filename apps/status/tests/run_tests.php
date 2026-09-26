@@ -1610,13 +1610,13 @@ if (function_exists('bk_speedtest_uplink_fields')) {
     $ul_rows = [
         ['measured_at' => '2026-09-26 11:51:29', 'download_mbps' => 393.09, 'upload_mbps' => 435.67, 'ping_ms' => 3.49, 'uplink' => 'wan'],
         ['measured_at' => '2026-09-25 03:20:49', 'download_mbps' => 47.18, 'upload_mbps' => 44.08, 'ping_ms' => 37.75, 'uplink' => 'backup'],
-        ['measured_at' => '2026-09-24 03:20:00', 'download_mbps' => 400.0, 'upload_mbps' => 420.0, 'ping_ms' => 4.0, 'uplink' => null],
+        ['measured_at' => '2026-09-24 03:20:00', 'download_mbps' => 400.01, 'upload_mbps' => 420.0, 'ping_ms' => 4.0, 'uplink' => null],
         ['measured_at' => '2026-09-23 03:20:00', 'download_mbps' => 200.0, 'upload_mbps' => 200.0, 'ping_ms' => 9.0, 'uplink' => 'mixed'],
     ];
     $ul_avg = bk_speedtest_averages($ul_rows, ['week' => 7], $ul_now);
     check('průměr WAN: LTE ani smíšené měření ho nestáhnou dolů',
         [$ul_avg['wan']['week']['samples'], $ul_avg['wan']['week']['downloadMbps'], $ul_avg['wan']['week']['unknownSamples']],
-        [2, 396.54, 1]);
+        [2, 396.55, 1]);
     check('LTE má vlastní průměr',
         [$ul_avg['backup']['week']['samples'], $ul_avg['backup']['week']['downloadMbps']], [1, 47.18]);
     $ul_none = bk_speedtest_averages([], ['week' => 7], $ul_now);
