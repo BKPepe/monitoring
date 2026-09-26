@@ -536,6 +536,9 @@ CREATE TABLE IF NOT EXISTS `speedtest_results` (
   `bytes_received` BIGINT DEFAULT NULL, -- NULL = written by an agent before 0.1.7
   `bytes_sent` BIGINT DEFAULT NULL,
   `diagnostics` TEXT DEFAULT NULL, -- whitelisted JSON, at most 2048 B: what the CPU and the WAN port of the router did during the test
+  `uplink` VARCHAR(8) DEFAULT NULL, -- which line carried the test as the AGENT measured it: 'wan', 'backup' (LTE) or 'mixed'; NULL = not measured (every row before agent 0.1.11). A guess from an outage is computed at read time and never stored here
+  `uplink_source` VARCHAR(12) DEFAULT NULL, -- the evidence behind `uplink`: 'counters' (per-device byte counters during the test); NULL = the agent did not say
+  `proto` VARCHAR(5) DEFAULT NULL, -- 'http' or 'https' as the test client used it; NULL = not reported
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   UNIQUE KEY `uniq_speedtest_measurement` (`monitor_id`, `measured_at`),

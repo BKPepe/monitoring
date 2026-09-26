@@ -241,7 +241,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260924r019');
+    define('BK_SCHEMA_VERSION', '20260925r020');
 
     $bk_current_schema = false;
     try {
@@ -1169,6 +1169,15 @@ try {
         // only in last_details: per router and release it is the measured cost
         // of the agent. NULL = not measured, which is every row of an older agent.
         "ALTER TABLE vps_metrics ADD COLUMN agent_prev_cpu_ms INT DEFAULT NULL",
+        // Which line carried a speed test (agent 0.1.11). The Turris runs its
+        // nightly test unbound, so during a WAN outage it measures the LTE
+        // backup; without this the LTE figure was shown as the line speed.
+        // NULL = not measured: every older row stays NULL and is NOT
+        // backfilled from outages - that guess is made at read time
+        // (bk_speedtest_attribute) so it can never pass for a measurement.
+        "ALTER TABLE speedtest_results ADD COLUMN uplink VARCHAR(8) DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN uplink_source VARCHAR(12) DEFAULT NULL",
+        "ALTER TABLE speedtest_results ADD COLUMN proto VARCHAR(5) DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

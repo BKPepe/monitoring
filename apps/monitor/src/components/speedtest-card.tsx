@@ -23,7 +23,10 @@ interface Average {
 
 interface SpeedtestData {
   measurements: SpeedtestMeasurement[];
+  /** The WAN line: LTE and mixed tests never enter it. */
   averages: Record<string, Average>;
+  /** The LTE backup's own averages (servers before this field omit it). */
+  backupAverages?: Record<string, Average>;
 }
 
 const fmt = (v: number | null | undefined, unit: string) => (v === null || v === undefined ? '—' : `${v} ${unit}`);
@@ -51,6 +54,30 @@ function serverLabel(m: SpeedtestMeasurement, t: TranslateFn): { text: string; m
   if (m.tool == null)
     return { text: t('speed.server_not_recorded', 'nezaznamenáno (agent 0.1.6 a starší)'), muted: true };
   return { text: '—', muted: false };
+}
+
+/**
+ * A test that ran over the LTE backup, in whole or in part, says nothing about
+ * the WAN line. The Turris runs its nightly test unbound, and during a WAN
+ * outage that was the LTE: 47 Mbit/s shown as the speed of a 400 Mbit/s fibre.
+ */
+function offWan(m: SpeedtestMeasurement): boolean {
+  return m.uplink === 'backup' || m.uplink === 'mixed';
+}
+
+/**
+ * Which line carried a test. A server guess from an outage is marked with a
+ * question mark and says why; an unknown line stays a dash, never "WAN".
+ */
+function lineLabel(m: SpeedtestMeasurement, t: TranslateFn): { text: string; title?: string } {
+  if (m.uplink === 'wan') return { text: 'WAN' };
+  if (m.uplink === 'mixed') return { text: t('speed.line_mixed', 'WAN i LTE') };
+  if (m.uplink === 'backup') {
+    return m.uplinkSource === 'outage'
+      ? { text: 'LTE?', title: t('speed.line_guess', 'Proběhl během výpadku WAN – odhad, ne měření.') }
+      : { text: t('speed.line_backup', 'LTE záloha') };
+  }
+  return { text: '—' };
 }
 
 /**
@@ -118,12 +145,17 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
     return null;
   }
 
-  const latest = data.measurements[0];
+  // The headline is the WAN line: the newest test that did not run over the
+  // backup. The newest LTE test gets its own line below it.
+  const latest = data.measurements.find((m) => !offWan(m)) ?? null;
+  const latestBackup = data.measurements.find((m) => m.uplink === 'backup') ?? null;
   // The card fetches thirty measurements and used to show one. This is the
   // only place that history survives at all - the router keeps its results in
   // a ramdisk - so it gets drawn. A failed test stays null and reads as a gap,
   // never as zero throughput.
-  const ascending = [...data.measurements].reverse();
+  // The chart is the WAN line too: an LTE point would read as the fibre
+  // collapsing for a night.
+  const ascending = data.measurements.filter((m) => !offWan(m)).reverse();
   // A row whose time cannot be read has no place on a time axis.
   const timed = ascending.flatMap((m) => {
     const ms = at(m.measuredAt);
@@ -175,18 +207,36 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatBlock icon={ArrowDown} label={t('speed.download', 'Stahování')} value={fmt(latest.downloadMbps, 'Mb/s')} />
-        <StatBlock icon={ArrowUp} label={t('speed.upload', 'Odesílání')} value={fmt(latest.uploadMbps, 'Mb/s')} />
+        <StatBlock
+          icon={ArrowDown}
+          label={t('speed.download', 'Stahování')}
+          value={fmt(latest?.downloadMbps, 'Mb/s')}
+        />
+        <StatBlock icon={ArrowUp} label={t('speed.upload', 'Odesílání')} value={fmt(latest?.uploadMbps, 'Mb/s')} />
         <StatBlock
           label={t('speed.ping', 'Odezva')}
-          value={fmt(latest.pingMs, 'ms')}
+          value={fmt(latest?.pingMs, 'ms')}
           hint={
-            latest.jitterMs !== null
+            latest && latest.jitterMs !== null
               ? t('speed.jitter', { v: latest.jitterMs }, `rozptyl ${latest.jitterMs} ms`)
               : undefined
           }
         />
       </div>
+
+      {latestBackup && (
+        <p className="text-muted-foreground text-xs">
+          {t(
+            'speed.last_backup',
+            {
+              down: fmt(latestBackup.downloadMbps, 'Mb/s'),
+              up: fmt(latestBackup.uploadMbps, 'Mb/s'),
+              at: whenLabel(latestBackup.measuredAt),
+            },
+            `Naposledy přes LTE zálohu: ↓ ${fmt(latestBackup.downloadMbps, 'Mb/s')} · ↑ ${fmt(latestBackup.uploadMbps, 'Mb/s')} (${whenLabel(latestBackup.measuredAt)})`
+          )}
+        </p>
+      )}
 
       {speedChart && <MetricChart data={speedChart} height={170} />}
 
@@ -200,6 +250,7 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
               <TableHead>{t('speed.when', 'Kdy')}</TableHead>
               <TableHead>{t('speed.download', 'Stahování')}</TableHead>
               <TableHead>{t('speed.upload', 'Odesílání')}</TableHead>
+              <TableHead>{t('speed.line', 'Linka')}</TableHead>
               <TableHead>{t('speed.server', 'Server')}</TableHead>
               <TableHead>{t('speed.started_by', 'Spustil')}</TableHead>
             </TableRow>
@@ -211,12 +262,18 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
                 {/* A damaged or failed measurement has no speed: a dash, never 0 Mb/s. */}
                 <TableCell className="tabular-nums">{fmt(m.downloadMbps, 'Mb/s')}</TableCell>
                 <TableCell className="tabular-nums">{fmt(m.uploadMbps, 'Mb/s')}</TableCell>
+                <TableCell className="whitespace-nowrap" title={lineLabel(m, t).title}>
+                  {lineLabel(m, t).text}
+                </TableCell>
                 <TableCell
                   className={
                     serverLabel(m, t).muted ? 'text-muted-foreground text-2xs italic' : 'text-muted-foreground'
                   }
                 >
                   {serverLabel(m, t).text}
+                  {/* Whether the test was encrypted: TLS runs on the router's
+                      CPU and can bound the result on its own. */}
+                  {m.proto ? ` · ${m.proto.toUpperCase()}` : ''}
                 </TableCell>
                 <TableCell className="text-muted-foreground">{startedByLabel(m.startedBy, t)}</TableCell>
               </TableRow>
@@ -236,8 +293,15 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {periods.map(({ key, label }) => {
-            const a = data.averages?.[key];
+          {[
+            ...periods.map((p) => ({ ...p, a: data.averages?.[p.key] })),
+            // The LTE backup's own rows, only where it was measured at all.
+            ...periods.map((p) => ({
+              key: `backup-${p.key}`,
+              label: `${t('speed.line_backup', 'LTE záloha')} · ${p.label}`,
+              a: data.backupAverages?.[p.key]?.samples ? data.backupAverages[p.key] : undefined,
+            })),
+          ].map(({ key, label, a }) => {
             if (!a) return null;
             return (
               <TableRow key={key}>
@@ -258,10 +322,12 @@ export function SpeedtestCard({ monitorId }: { monitorId: number }) {
         </TableBody>
       </Table>
 
-      <p className="text-muted-foreground text-2xs">
-        {t('speed.last', { at: whenLabel(latest.measuredAt) }, `Poslední měření: ${whenLabel(latest.measuredAt)}`)}
-        {latest.server ? ` · ${latest.server}` : ''}
-      </p>
+      {latest && (
+        <p className="text-muted-foreground text-2xs">
+          {t('speed.last', { at: whenLabel(latest.measuredAt) }, `Poslední měření: ${whenLabel(latest.measuredAt)}`)}
+          {latest.server ? ` · ${latest.server}` : ''}
+        </p>
+      )}
     </Card>
   );
 }

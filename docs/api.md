@@ -476,6 +476,7 @@ answers 409.
 | `action=router_recommendations&monitor_id=` | assigned monitor | What the weekly router engine finds on this router right now, read-only (the GET never writes a state row). See "Router health" below |
 | `action=storage_history&monitor_id=&days=` | assigned monitor | Per-disk daily history (temperature, error counters, host writes, wear). `days` is clamped to 1-400; a day nobody measured is `null`, never `0`. See "Router health" below |
 | `action=wan_bottleneck&monitor_id=` | assigned monitor | What limits the internet line of a router, per direction, from its last speed tests. See "Router health" below |
+| `action=speedtest_history&monitor_id=&limit=` | assigned monitor | The router's speed tests (newest first, `limit` 1-200) and 7 / 30 / 365-day averages, split by the line that carried each test. See "Router health" below |
 | `action=metrics_history&monitor_id=&period=` | assigned monitor | Agent metric history |
 | `action=daily_uptime&days=` | public status / assigned | Daily availability in time (see "Availability is measured in time" below): today live, finished days from `uptime_daily`. A day an agent was silent is `down` and its `detail` says for how long |
 | `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in time; `d1` is the last 24 hours, the others are calendar days with today included. An unmeasured window is `null`, never 100. Each row carries `since`, the first day with data in the 90-day window, and the answer carries `windowStart` (`d7`, `d30`, `d90`: each window's first day); both are server-local `Y-m-d`, so "90 days" over six weeks of history can say where its data starts |
@@ -721,6 +722,30 @@ plan:
   declare the line slow.
 - `basis` lists the ids of the `speedtest_results` rows the verdict rests on, so
   the card can show exactly what was measured.
+- A test that ran over the backup (`uplink` `backup` or `mixed`, measured or
+  inferred, see below) never yields a WAN verdict: it is
+  `inconclusive / ran_over_backup` and never counts towards the aggregate.
+
+`action=speedtest_history&monitor_id=` says which line carried each test. The
+Turris runs its nightly test unbound, so during a WAN outage it measures the
+LTE backup; that figure is real, it is just not the line speed.
+
+- Every measurement carries `uplink` (`wan`, `backup`, `mixed` or `null` =
+  unknown), `uplinkSource`, `proto` (`http`, `https` or `null`) and `iface`.
+- `uplinkSource: "counters"` = the agent (0.1.11+) measured it from per-device
+  byte counters during the test. `uplinkSource: "outage"` = a guess by the
+  server: the test started inside a WAN-down period (`wan_lost` /
+  `wan_restored`, paired as in `link_traffic`), so it is `backup`. The guess is
+  computed on every read and never stored, so it can never pass for a
+  measurement. Anything else stays `null`.
+- `averages.week|month|year` are the WAN averages: `backup` and `mixed` rows are
+  excluded, rows with an unknown uplink are included as before and counted in
+  `unknownSamples`. `backupAverages` holds the same windows for the LTE backup
+  (measured and inferred). `mixed` rows enter no average.
+- The agent report item may carry `uplink` (`wan` / `backup` / `mixed`),
+  `uplink_evidence` (`counters`) and `proto` (`http` / `https`); any other
+  value is stored as `null`. A stored uplink is never overwritten by a re-send
+  without one.
 
 ---
 

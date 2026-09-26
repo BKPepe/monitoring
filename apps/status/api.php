@@ -5814,16 +5814,41 @@ if ($action === 'speedtest_history') {
     try {
         $stmt = $pdo->prepare("
             SELECT measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name,
-                   source, iface, tool, link_mbit
+                   source, iface, tool, link_mbit, uplink, uplink_source, proto
             FROM speedtest_results
             WHERE monitor_id = ?
             ORDER BY measured_at DESC
             LIMIT {$sp_limit}
         ");
         $stmt->execute([$sp_monitor_id]);
+        $sp_rows = $stmt->fetchAll();
+
+        // The averages are computed in PHP, not with AVG(): which line a row
+        // belongs to can depend on the outage events (an inferred backup), and
+        // that is not a column SQL could filter on. A year is ~425 rows.
+        $sp_now = time();
+        $stmt_avg = $pdo->prepare("
+            SELECT measured_at, download_mbps, upload_mbps, ping_ms, uplink, uplink_source
+            FROM speedtest_results
+            WHERE monitor_id = ? AND measured_at >= DATE_SUB(NOW(), INTERVAL 365 DAY)
+        ");
+        $stmt_avg->execute([$sp_monitor_id]);
+        $sp_avg_rows = $stmt_avg->fetchAll();
+
+        // The outage events must reach back to the oldest row either list holds.
+        $sp_since = $sp_now - 365 * 86400;
+        foreach ($sp_rows as $r) {
+            $sp_ts = strtotime((string)$r['measured_at']);
+            if ($sp_ts !== false && $sp_ts < $sp_since) {
+                $sp_since = $sp_ts;
+            }
+        }
+        $sp_down = bk_wan_down_ranges($pdo, [$sp_monitor_id], $sp_since - 1, $sp_now)[$sp_monitor_id] ?? [];
+        $sp_rows = bk_speedtest_attribute_rows($sp_rows, $sp_down);
+        $sp_avg_rows = bk_speedtest_attribute_rows($sp_avg_rows, $sp_down);
 
         $measurements = [];
-        foreach ($stmt->fetchAll() as $r) {
+        foreach ($sp_rows as $r) {
             $measurements[] = [
                 'measuredAt' => $r['measured_at'],
                 // NULL stays NULL: librespeed sometimes returns no jitter and a zero
@@ -5840,36 +5865,22 @@ if ($action === 'speedtest_history') {
                 'iface' => $r['iface'] ?? null,
                 'tool' => $r['tool'] ?? null,
                 'linkMbit' => $r['link_mbit'] !== null ? (int)$r['link_mbit'] : null,
+                // Which line carried it: measured ('counters'), guessed from an
+                // outage ('outage') or unknown (both null). Never a silent WAN.
+                'uplink' => $r['uplink'],
+                'uplinkSource' => $r['uplink_source'],
+                'proto' => in_array($r['proto'] ?? null, ['http', 'https'], true) ? $r['proto'] : null,
             ];
         }
 
-        $averages = [];
-        $stmt_avg = $pdo->prepare("
-            SELECT AVG(download_mbps) AS dl, AVG(upload_mbps) AS ul, AVG(ping_ms) AS ping,
-                   MIN(download_mbps) AS dl_min, MAX(download_mbps) AS dl_max,
-                   COUNT(*) AS samples, MIN(measured_at) AS since
-            FROM speedtest_results
-            WHERE monitor_id = ? AND measured_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-        ");
-        foreach (['week' => 7, 'month' => 30, 'year' => 365] as $label => $days) {
-            $stmt_avg->execute([$sp_monitor_id, $days]);
-            $row = $stmt_avg->fetch() ?: [];
-            $samples = (int)($row['samples'] ?? 0);
-            $averages[$label] = [
-                'days' => $days,
-                'samples' => $samples,
-                // Nothing measured, nothing to average - a zero would look like
-                // a measured zero speed.
-                'downloadMbps' => $samples > 0 && $row['dl'] !== null ? round((float)$row['dl'], 2) : null,
-                'uploadMbps' => $samples > 0 && $row['ul'] !== null ? round((float)$row['ul'], 2) : null,
-                'pingMs' => $samples > 0 && $row['ping'] !== null ? round((float)$row['ping'], 1) : null,
-                'downloadMinMbps' => $samples > 0 && $row['dl_min'] !== null ? round((float)$row['dl_min'], 2) : null,
-                'downloadMaxMbps' => $samples > 0 && $row['dl_max'] !== null ? round((float)$row['dl_max'], 2) : null,
-                'measuredSince' => $row['since'] ?? null,
-            ];
-        }
+        $sp_split = bk_speedtest_averages($sp_avg_rows, ['week' => 7, 'month' => 30, 'year' => 365], $sp_now);
 
-        echo json_encode(['measurements' => $measurements, 'averages' => $averages], JSON_UNESCAPED_UNICODE);
+        echo json_encode([
+            'measurements' => $measurements,
+            // The WAN line: LTE and mixed rows never drag it down.
+            'averages' => $sp_split['wan'],
+            'backupAverages' => $sp_split['backup'],
+        ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] speedtest_history selhal: ' . $e->getMessage());
         http_response_code(500);
@@ -6206,7 +6217,8 @@ if ($action === 'wan_bottleneck') {
         // traffic, an unverified path) does not count towards the three the
         // aggregate stands on, so the classifier has to be able to look past it.
         $wb_agent = $pdo->prepare("
-            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics
+            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics,
+                   uplink, uplink_source
             FROM speedtest_results
             WHERE monitor_id = ? AND source = 'agent' AND measured_at >= DATE_SUB(NOW(), INTERVAL 21 DAY)
             ORDER BY measured_at DESC LIMIT 10
@@ -6214,14 +6226,32 @@ if ($action === 'wan_bottleneck') {
         $wb_agent->execute([$wb_monitor_id]);
         $wb_agent_rows = $wb_agent->fetchAll();
 
+        // The newest Turris row that did not run over the backup: its LTE
+        // figure next to the agent's probes would read as a slow WAN. Up to
+        // a week of nights is looked at, the attribution picks the first.
         $wb_turris = $pdo->prepare("
-            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics
+            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics,
+                   uplink, uplink_source
             FROM speedtest_results
             WHERE monitor_id = ? AND (source IS NULL OR source <> 'agent')
-            ORDER BY measured_at DESC LIMIT 1
+            ORDER BY measured_at DESC LIMIT 7
         ");
         $wb_turris->execute([$wb_monitor_id]);
         $wb_turris_rows = $wb_turris->fetchAll();
+
+        $wb_since = time() - 21 * 86400;
+        foreach ($wb_turris_rows as $r) {
+            $wb_ts = strtotime((string)$r['measured_at']);
+            if ($wb_ts !== false && $wb_ts < $wb_since) {
+                $wb_since = $wb_ts;
+            }
+        }
+        $wb_down = bk_wan_down_ranges($pdo, [$wb_monitor_id], $wb_since - 1, time())[$wb_monitor_id] ?? [];
+        $wb_agent_rows = bk_speedtest_attribute_rows($wb_agent_rows, $wb_down);
+        $wb_turris_rows = array_slice(array_values(array_filter(
+            bk_speedtest_attribute_rows($wb_turris_rows, $wb_down),
+            fn (array $r): bool => !bk_speedtest_off_wan($r)
+        )), 0, 1);
 
         // Server capability is observed, never assumed (WAN 3.4): the Turris
         // list publishes no capacity. Only the maximum this server has ever
@@ -6230,7 +6260,7 @@ if ($action === 'wan_bottleneck') {
         $wb_server_max = [];
         $wb_names = [];
         foreach ($wb_agent_rows as $r) {
-            if (($r['server_name'] ?? '') !== '') {
+            if (($r['server_name'] ?? '') !== '' && !bk_speedtest_off_wan($r)) {
                 $wb_names[(string)$r['server_name']] = true;
             }
         }
@@ -6266,6 +6296,10 @@ if ($action === 'wan_bottleneck') {
             $wb_tests[] = [
                 'measuredAt' => $r['measured_at'],
                 'startedBy' => in_array($r['source'] ?? null, ['turris', 'agent'], true) ? $r['source'] : null,
+                // An agent probe over the backup is still listed (it happened),
+                // with its line and the ran_over_backup verdict.
+                'uplink' => $r['uplink'],
+                'uplinkSource' => $r['uplink_source'],
                 'server' => $r['server_name'],
                 'downloadMbps' => $r['download_mbps'] === null ? null : round((float)$r['download_mbps'], 2),
                 'uploadMbps' => $r['upload_mbps'] === null ? null : round((float)$r['upload_mbps'], 2),

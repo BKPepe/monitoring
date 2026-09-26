@@ -85,6 +85,13 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_speedtest_diagnostics',
     'bk_speedtest_unit_ok',
     'bk_speedtest_item',
+    'bk_speedtest_uplink_fields',
+    'bk_speedtest_attribute',
+    'bk_speedtest_attribute_rows',
+    'bk_speedtest_off_wan',
+    'bk_link_down_ranges',
+    'bk_speedtest_averages',
+    'bk_speedtest_window_stats',
     'bk_speedtest_ack',
     'bk_speedtest_in_report',
     'bk_router_alert_event',
@@ -1566,6 +1573,56 @@ if (function_exists('bk_fs_alert_eval')) {
     check('a po návratu se upozornění neposílá znovu',
         $fs_types(bk_fs_alert_eval($fs_one(95.0), $fs_gone['state'], 90.0, $fs_now + 3 * 86400 + 60)), []);
 }
+// --- Která linka nesla měření rychlosti (agent 0.1.11) ------------------------
+// Turris spouští noční test bez vazby na rozhraní: při výpadku WAN změřil LTE
+// zálohu (47/44 Mbit/s) a stránka to ukázala jako rychlost optiky (393/436).
+if (function_exists('bk_speedtest_uplink_fields')) {
+    check('agent: změřená linka, důkaz a protokol projdou',
+        bk_speedtest_uplink_fields(['uplink' => 'backup', 'uplink_evidence' => 'counters', 'proto' => 'http']),
+        ['uplink' => 'backup', 'uplink_source' => 'counters', 'proto' => 'http']);
+    check('agent: cokoli mimo smlouvu je neměřeno, ne odhad',
+        bk_speedtest_uplink_fields(['uplink' => 'lte', 'uplink_evidence' => 'counters', 'proto' => 'ftp']),
+        ['uplink' => null, 'uplink_source' => null, 'proto' => null]);
+    check('agent: důkaz bez linky se neuloží',
+        bk_speedtest_uplink_fields(['uplink_evidence' => 'counters']),
+        ['uplink' => null, 'uplink_source' => null, 'proto' => null]);
+    check('starší agent bez klíčů: tři null',
+        bk_speedtest_uplink_fields([]), ['uplink' => null, 'uplink_source' => null, 'proto' => null]);
+
+    $ul_down = [[strtotime('2026-09-25 03:15:00'), strtotime('2026-09-25 03:25:00')], [strtotime('2026-09-26 03:10:00'), null]];
+    check('změřená linka vyhraje nad výpadkem',
+        bk_speedtest_attribute(['uplink' => 'wan', 'uplink_source' => 'counters', 'measured_at' => '2026-09-25 03:20:49'], $ul_down),
+        ['uplink' => 'wan', 'source' => 'counters']);
+    check('bez údaje od agenta: test během výpadku WAN je odhadnutá záloha',
+        bk_speedtest_attribute(['uplink' => null, 'measured_at' => '2026-09-25 03:20:49'], $ul_down),
+        ['uplink' => 'backup', 'source' => 'outage']);
+    check('výpadek, který ještě trvá, platí také',
+        bk_speedtest_attribute(['measured_at' => '2026-09-26 04:00:00'], $ul_down), ['uplink' => 'backup', 'source' => 'outage']);
+    check('mimo výpadek zůstane linka neznámá, ne WAN',
+        bk_speedtest_attribute(['measured_at' => '2026-09-25 12:00:00'], $ul_down), ['uplink' => null, 'source' => null]);
+    check('konec výpadku do něj už nepatří',
+        bk_speedtest_attribute(['measured_at' => '2026-09-25 03:25:00'], $ul_down), ['uplink' => null, 'source' => null]);
+    check_true('záloha i smíšené měření jsou mimo WAN',
+        bk_speedtest_off_wan(['uplink' => 'backup']) && bk_speedtest_off_wan(['uplink' => 'mixed'])
+        && !bk_speedtest_off_wan(['uplink' => 'wan']) && !bk_speedtest_off_wan(['uplink' => null]));
+
+    $ul_now = strtotime('2026-09-26 12:00:00');
+    $ul_rows = [
+        ['measured_at' => '2026-09-26 11:51:29', 'download_mbps' => 393.09, 'upload_mbps' => 435.67, 'ping_ms' => 3.49, 'uplink' => 'wan'],
+        ['measured_at' => '2026-09-25 03:20:49', 'download_mbps' => 47.18, 'upload_mbps' => 44.08, 'ping_ms' => 37.75, 'uplink' => 'backup'],
+        ['measured_at' => '2026-09-24 03:20:00', 'download_mbps' => 400.0, 'upload_mbps' => 420.0, 'ping_ms' => 4.0, 'uplink' => null],
+        ['measured_at' => '2026-09-23 03:20:00', 'download_mbps' => 200.0, 'upload_mbps' => 200.0, 'ping_ms' => 9.0, 'uplink' => 'mixed'],
+    ];
+    $ul_avg = bk_speedtest_averages($ul_rows, ['week' => 7], $ul_now);
+    check('průměr WAN: LTE ani smíšené měření ho nestáhnou dolů',
+        [$ul_avg['wan']['week']['samples'], $ul_avg['wan']['week']['downloadMbps'], $ul_avg['wan']['week']['unknownSamples']],
+        [2, 396.54, 1]);
+    check('LTE má vlastní průměr',
+        [$ul_avg['backup']['week']['samples'], $ul_avg['backup']['week']['downloadMbps']], [1, 47.18]);
+    $ul_none = bk_speedtest_averages([], ['week' => 7], $ul_now);
+    check('bez měření je průměr null, ne nula', [$ul_none['wan']['week']['downloadMbps'], $ul_none['backup']['week']['samples']], [null, 0]);
+}
+
 // --- bk_speedtest_item / _ack / _in_report: příjem měření rychlosti ----------
 // W01: agent před 0.1.7 dělil skutečné Mbit/s číslem 125000, takže v tabulce
 // leží hodnoty jako 0.0148. Neměřeno je NULL, nikdy vymyšlená nula.
@@ -2078,7 +2135,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_rec_rules_gap', 'bk_rec_dir_label', 'bk_router_rec_render', 'bk_rec_area_of',
     // The aggregate rules ARE the classifier's consumer, so it is loaded here
     // too; the block below re-loads it for its own tests.
-    'bk_wan_dir_inputs', 'bk_wan_core_pinned', 'bk_wan_core_net_share', 'bk_wan_dir_verdict',
+    'bk_wan_dir_inputs', 'bk_wan_core_pinned', 'bk_wan_core_net_share', 'bk_wan_dir_verdict', 'bk_speedtest_off_wan',
     'bk_wan_test_verdict', 'bk_wan_test_countable', 'bk_wan_bottleneck', 'bk_wan_aggregate',
     'bk_wan_agree_numbers', 'bk_wan_line_guards', 'bk_rec_install_cmd', 'bk_rec_command',
     'bk_with_email_lang', 'bk_rec_num', 'bk_rec_band_label', 'bk_rec_radio_label', 'bk_rec_disk_label',
@@ -2551,7 +2608,7 @@ if (function_exists('bk_router_rec_render')) {
 // tady zkouší každé pravidlo i každá branka - špatný verdikt by poslal
 // majitele reklamovat linku, která je v pořádku.
 bk_test_load_functions(__DIR__ . '/../functions.php', [
-    'bk_wan_dir_inputs', 'bk_wan_core_pinned', 'bk_wan_core_net_share', 'bk_wan_dir_verdict',
+    'bk_wan_dir_inputs', 'bk_wan_core_pinned', 'bk_wan_core_net_share', 'bk_wan_dir_verdict', 'bk_speedtest_off_wan',
     'bk_wan_test_verdict', 'bk_wan_test_countable', 'bk_wan_bottleneck', 'bk_wan_aggregate',
     'bk_wan_agree_numbers', 'bk_wan_line_guards',
 ]);

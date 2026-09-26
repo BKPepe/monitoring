@@ -4002,6 +4002,33 @@ check('Speedtesty: hlášení bez dávky klíč speedtests_acked vůbec nenese',
     array_key_exists('speedtests_acked', $sp_post([])[1]), false);
 $pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
 
+// Agent 0.1.11 says which line carried the test. The Turris ran its nightly
+// test over the LTE backup and the page used to show 47 Mbit/s as the WAN.
+$ul_wan = ['timestamp' => date('c', time() - 3600), 'download_mbps' => 393.09, 'upload_mbps' => 435.67, 'ping_ms' => 3.49,
+    'started_by' => 'turris', 'iface' => 'pppoe-wan', 'uplink' => 'wan', 'uplink_evidence' => 'counters', 'proto' => 'https'];
+$ul_lte = ['timestamp' => date('c', time() - 7200), 'download_mbps' => 47.18, 'upload_mbps' => 44.08, 'ping_ms' => 37.75,
+    'started_by' => 'turris', 'iface' => 'eth3', 'uplink' => 'backup', 'uplink_evidence' => 'counters', 'proto' => 'http'];
+$ul_bad = ['timestamp' => date('c', time() - 9000), 'download_mbps' => 10.0, 'upload_mbps' => 10.0,
+    'started_by' => 'turris', 'uplink' => 'lte', 'uplink_evidence' => 'guess', 'proto' => 'ftp'];
+check('Linka: dávku s linkami agent přijme', $sp_post(['speedtests' => [$ul_bad, $ul_lte, $ul_wan]])[0], 200);
+$ul_db = $pdo->query("SELECT uplink, uplink_source, proto FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at")->fetchAll(PDO::FETCH_NUM);
+check('Linka: uloží se změřená linka, důkaz i protokol; neplatné hodnoty jako NULL',
+    $ul_db, [[null, null, null], ['backup', 'counters', 'http'], ['wan', 'counters', 'https']]);
+$sp_post(['speedtests' => [array_diff_key($ul_lte, ['uplink' => 1, 'uplink_evidence' => 1])]]);
+check('Linka: opakované poslání od staršího agenta změřenou linku nesmaže',
+    $pdo->query("SELECT uplink FROM speedtest_results WHERE monitor_id = 2 AND ABS(download_mbps - 47.18) < 0.001")->fetchColumn(), 'backup');
+[$ul_code, $ul_hist] = api_get_auth($base, 'action=speedtest_history&monitor_id=2', $cookie_jar);
+check('Linka: historie odpoví', $ul_code, 200);
+check('Linka: každé měření nese svou linku a protokol',
+    array_map(fn ($m) => [$m['uplink'], $m['uplinkSource'], $m['proto']], $ul_hist['measurements'] ?? []),
+    [['wan', 'counters', 'https'], ['backup', 'counters', 'http'], [null, null, null]]);
+check('Linka: týdenní průměr WAN LTE nestáhne dolů (WAN + neznámý řádek)',
+    [$ul_hist['averages']['week']['samples'] ?? null, $ul_hist['averages']['week']['unknownSamples'] ?? null,
+     (float)($ul_hist['averages']['week']['downloadMinMbps'] ?? -1)], [2, 1, 10.0]);
+check('Linka: LTE má vlastní průměr',
+    [$ul_hist['backupAverages']['week']['samples'] ?? null, $ul_hist['backupAverages']['week']['downloadMbps'] ?? null], [1, 47.18]);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
 // X17: while the router's own test runs, the CPU of that minute is the test.
 // The latch is left exactly as it was - not set, and not cleared either.
 $sp_thr = function () use ($pdo): int {
@@ -4217,6 +4244,8 @@ bk_test_load_functions($root . '/functions.php', [
     'bk_digest_routers', 'bk_digest_router_facts', 'bk_digest_router_facts_lines', 'bk_digest_router_new_split',
     'bk_disk_label', 'bk_disk_error_counters', 'bk_disk_temp_limit', 'bk_wifi_radio_profile',
     'bk_version_is_older', 'bk_format_bytes_cz',
+    'bk_wan_down_ranges', 'bk_link_down_ranges', 'bk_pair_link_periods', 'bk_speedtest_attribute',
+    'bk_speedtest_attribute_rows',
 ]);
 
 if (function_exists('bk_digest_routers')) {
@@ -4596,7 +4625,8 @@ if (function_exists('bk_digest_routers')) {
     check_true('Cena digestu: 120 routerů se sestaví ve třech dávkách', count($cost_data['routers']) === 10 && $cost_data['more'] >= 110);
     // 1 list + 3 chunks x at most 7 (X13) + the second fetch of facts, which
     // is one more batch of at most 7 plus its own details query. The bound is
-    // per CHUNK, so it does not move when a router is added.
+    // per CHUNK, so it does not move when a router is added. A chunk that
+    // holds speed tests adds two outage queries; these routers have none.
     check_true('Cena digestu: nejvýše 7 dotazů na dávku po 50 routerech (' . $cost_used . ' celkem)', $cost_used <= 1 + 4 * 7 + 1);
     check_true('Cena digestu: routery bez špiček žádný dotaz navíc', $cost_used < 120);
     $pdo->exec("DELETE FROM monitors WHERE id >= 9000 AND id < 9120");

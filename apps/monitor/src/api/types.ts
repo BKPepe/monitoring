@@ -857,6 +857,14 @@ export interface SpeedtestMeasurement {
   iface: string | null;
   tool: string | null;
   linkMbit: number | null;
+  /**
+   * The line that carried the test: measured by agent 0.1.11+ from byte
+   * counters ('counters'), guessed by the server because it ran during a WAN
+   * outage ('outage'), or unknown (both null). Optional: older servers omit it.
+   */
+  uplink?: 'wan' | 'backup' | 'mixed' | null;
+  uplinkSource?: 'counters' | 'outage' | null;
+  proto?: 'http' | 'https' | null;
 }
 
 /**

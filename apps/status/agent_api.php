@@ -1252,12 +1252,16 @@ try {
         $bk_speed_handled = [];
         $bk_speed_failed = [];
         $stmt_speed = null;
+        // uplink_source is assigned before uplink on purpose: the evidence
+        // travels with the uplink it proves, and MySQL applies the SET list
+        // left to right, so the `uplink IS NULL` test must see the old value.
+        // A re-send from an older agent (no uplink) never erases a measured one.
         try {
             $stmt_speed = $pdo->prepare("
                 INSERT INTO speedtest_results
                     (monitor_id, measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name, source,
-                     iface, tool, link_mbit, bytes_received, bytes_sent, diagnostics)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     iface, tool, link_mbit, bytes_received, bytes_sent, diagnostics, uplink, uplink_source, proto)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     download_mbps = IF(VALUES(download_mbps) IS NOT NULL
                             AND (download_mbps IS NULL OR (download_mbps < 0.1 AND VALUES(download_mbps) > download_mbps)),
@@ -1273,10 +1277,13 @@ try {
                     link_mbit = COALESCE(link_mbit, VALUES(link_mbit)),
                     bytes_received = COALESCE(bytes_received, VALUES(bytes_received)),
                     bytes_sent = COALESCE(bytes_sent, VALUES(bytes_sent)),
-                    diagnostics = COALESCE(diagnostics, VALUES(diagnostics))
+                    diagnostics = COALESCE(diagnostics, VALUES(diagnostics)),
+                    uplink_source = IF(uplink IS NULL, VALUES(uplink_source), uplink_source),
+                    uplink = COALESCE(uplink, VALUES(uplink)),
+                    proto = COALESCE(proto, VALUES(proto))
             ");
         } catch (PDOException $e) {
-            // An old database without the six columns of this release. Nothing
+            // An old database without the columns of this release. Nothing
             // is stored and nothing is acked, so the router keeps its files.
             error_log('[agent_api] speedtest INSERT prepare failed (monitor ' . $monitor_id . '): ' . $e->getMessage());
         }

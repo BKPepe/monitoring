@@ -467,6 +467,7 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 | `action=router_recommendations&monitor_id=` | přiřazený monitor | Co na tomhle routeru právě teď najde týdenní stroj doporučení, jen pro čtení (GET nikdy nezapíše řádek stavu). Viz „Zdraví routeru" níž |
 | `action=storage_history&monitor_id=&days=` | přiřazený monitor | Denní historie jednotlivých disků (teplota, čítače chyb, zápisy hostitele, opotřebení). `days` se ořízne na 1-400; den, který nikdo nezměřil, je `null`, nikdy `0`. Viz „Zdraví routeru" níž |
 | `action=wan_bottleneck&monitor_id=` | přiřazený monitor | Co omezuje internetovou linku routeru, zvlášť pro každý směr, z jeho posledních měření rychlosti. Viz „Zdraví routeru" níž |
+| `action=speedtest_history&monitor_id=&limit=` | přiřazený monitor | Měření rychlosti routeru (nejnovější první, `limit` 1-200) a průměry za 7 / 30 / 365 dní, rozdělené podle linky, po které test běžel. Viz „Zdraví routeru" níž |
 | `action=metrics_history&monitor_id=&period=` | přiřazený monitor | Historie metrik agenta |
 | `action=daily_uptime&days=` | veřejný stav / přiřazené | Denní dostupnost v čase (viz „Dostupnost se měří v čase" níž): dnešek živě, uzavřené dny z `uptime_daily`. Den, kdy agent mlčel, je `down` a jeho `detail` říká, jak dlouho |
 | `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d v čase; `d1` je posledních 24 hodin, ostatní jsou kalendářní dny včetně dneška. Nezměřené okno je `null`, nikdy 100. Každý řádek nese `since`, první den s daty v 90denním okně, a odpověď nese `windowStart` (`d7`, `d30`, `d90`: první den každého okna); obojí je místní `Y-m-d` serveru, takže „90 dní" nad šesti týdny historie řekne, odkud jeho data jsou |
@@ -708,6 +709,29 @@ restartoval nebo čítač přetekl) a hodnota je dolní odhad.
   pomalou.
 - `basis` vypisuje id řádků `speedtest_results`, o které se verdikt opírá, aby
   karta mohla ukázat přesně to, co se měřilo.
+- Test, který běžel po záloze (`uplink` `backup` nebo `mixed`, změřené nebo
+  odvozené, viz níž), nikdy nedá verdikt o WAN: je
+  `inconclusive / ran_over_backup` a do souhrnu se nepočítá.
+
+`action=speedtest_history&monitor_id=` říká, po které lince každý test běžel.
+Turris spouští noční test bez vazby na rozhraní, takže během výpadku WAN změří
+LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
+
+- Každé měření nese `uplink` (`wan`, `backup`, `mixed` nebo `null` = nevíme),
+  `uplinkSource`, `proto` (`http`, `https` nebo `null`) a `iface`.
+- `uplinkSource: "counters"` = agent (0.1.11+) to změřil z bajtových čítačů
+  zařízení během testu. `uplinkSource: "outage"` = odhad serveru: test začal
+  v období výpadku WAN (`wan_lost` / `wan_restored`, spárované jako
+  v `link_traffic`), takže je `backup`. Odhad se počítá při každém čtení a nikdy
+  se neukládá, takže se nemůže vydávat za měření. Cokoli jiného zůstává `null`.
+- `averages.week|month|year` jsou průměry WAN: řádky `backup` a `mixed` se
+  vynechávají, řádky s neznámou linkou se počítají jako dosud a jejich počet je
+  v `unknownSamples`. `backupAverages` nese tatáž okna pro LTE zálohu (změřenou
+  i odvozenou). Řádky `mixed` nejsou v žádném průměru.
+- Položka hlášení agenta smí nést `uplink` (`wan` / `backup` / `mixed`),
+  `uplink_evidence` (`counters`) a `proto` (`http` / `https`); jakákoli jiná
+  hodnota se uloží jako `null`. Uložená linka se opakovaným odesláním bez ní
+  nikdy nepřepíše.
 
 ---
 

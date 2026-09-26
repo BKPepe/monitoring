@@ -143,3 +143,46 @@ describe('Rychlost linky: server a datum (W1-C4)', () => {
     vi.restoreAllMocks();
   });
 });
+
+describe('Rychlost linky: přes kterou linku se měřilo (agent 0.1.11)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    drawn.length = 0;
+  });
+
+  const wan = { ...omnia.speedtestHistory[0], uplink: 'wan' as const, uplinkSource: 'counters' as const };
+  const lte = {
+    ...omnia.speedtestHistory[0],
+    measuredAt: '2026-09-21T05:23:41+02:00',
+    downloadMbps: 47.18,
+    uploadMbps: 44.08,
+    uplink: 'backup' as const,
+    uplinkSource: 'counters' as const,
+    proto: 'http' as const,
+  };
+
+  it('a test over LTE is labelled, kept out of the chart and not the headline', async () => {
+    const older = { ...wan, measuredAt: '2026-09-19T05:23:41+02:00', downloadMbps: 1300 };
+    stubHistory(() => ({ measurements: [lte, wan, older], averages: {} }));
+    renderCard();
+    await screen.findByText('Linka');
+    expect(screen.getByText('LTE záloha')).toBeTruthy();
+    expect(screen.getAllByText('WAN')).toHaveLength(2);
+    expect(screen.getByText(/Naposledy přes LTE zálohu/)).toBeTruthy();
+    const points = drawn[drawn.length - 1];
+    expect(points.map((p) => p.v)).toEqual([1300, 1350.12]);
+  });
+
+  it('an outage guess says it is a guess, and an unknown line stays a dash', async () => {
+    stubHistory(() => ({
+      measurements: [{ ...lte, uplinkSource: 'outage' as const }, omnia.speedtestHistory[0]],
+      averages: {},
+    }));
+    renderCard();
+    const guess = await screen.findByText('LTE?');
+    expect(guess.closest('td')?.getAttribute('title')).toContain('odhad, ne měření');
+    const rows = screen.getAllByRole('row');
+    expect(rows.some((row) => row.textContent?.includes('WAN'))).toBe(false);
+  });
+});

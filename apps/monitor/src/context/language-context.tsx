@@ -477,6 +477,17 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Měří router pomocí librespeed-cli. Historii drží monitoring, router jen dočasně.',
     en: 'Measured by the router via librespeed-cli. History lives here; the router keeps it only temporarily.',
   },
+  'speed.line': { cs: 'Linka', en: 'Line' },
+  'speed.line_backup': { cs: 'LTE záloha', en: 'LTE backup' },
+  'speed.line_guess': {
+    cs: 'Proběhl během výpadku WAN, takže nejspíš přes LTE – odhad, ne měření.',
+    en: 'It ran during a WAN outage, so most likely over LTE – a guess, not a measurement.',
+  },
+  'speed.line_mixed': { cs: 'WAN i LTE', en: 'WAN and LTE' },
+  'speed.last_backup': {
+    cs: 'Naposledy přes LTE zálohu: ↓ {down} · ↑ {up} ({at})',
+    en: 'Last over the LTE backup: ↓ {down} · ↑ {up} ({at})',
+  },
   'speed.download': { cs: 'Stahování', en: 'Download' },
   'speed.upload': { cs: 'Odesílání', en: 'Upload' },
   'speed.ping': { cs: 'Odezva', en: 'Ping' },

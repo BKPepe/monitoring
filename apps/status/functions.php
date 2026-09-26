@@ -9734,8 +9734,245 @@ function bk_speedtest_item($raw): ?array {
         'bytes_received' => $bytes_rx,
         'bytes_sent' => $bytes_tx,
         'diagnostics' => $diag['diagnostics'] === null ? null : (string)json_encode($diag['diagnostics'], JSON_UNESCAPED_UNICODE),
-    ];
+    ] + bk_speedtest_uplink_fields($raw);
     return ['ts' => (int)$ts, 'raw_ts' => $raw_ts, 'row' => $row, 'issues' => $issues];
+}
+
+/**
+ * The uplink attribution an agent (0.1.11+) sends with a speed test, whitelisted.
+ *
+ * Strict on purpose: the value decides whether a result counts as the line's
+ * speed, so anything outside the contract is null (= not measured), never a
+ * best guess at what the agent meant. The evidence is kept only together with
+ * an uplink - evidence for nothing is not a claim. Older agents send none of
+ * the keys and get three nulls.
+ *
+ * @param array<mixed> $raw one item of `speedtests[]`
+ * @return array{uplink: ?string, uplink_source: ?string, proto: ?string}
+ */
+function bk_speedtest_uplink_fields(array $raw): array {
+    $uplink = $raw['uplink'] ?? null;
+    $uplink = (is_string($uplink) && in_array($uplink, ['wan', 'backup', 'mixed'], true)) ? $uplink : null;
+    $evidence = $raw['uplink_evidence'] ?? null;
+    $proto = $raw['proto'] ?? null;
+    return [
+        'uplink' => $uplink,
+        'uplink_source' => ($uplink !== null && $evidence === 'counters') ? 'counters' : null,
+        'proto' => (is_string($proto) && in_array($proto, ['http', 'https'], true)) ? $proto : null,
+    ];
+}
+
+/**
+ * Which line carried a stored speed test, and on what evidence.
+ *
+ * What the agent measured always wins. Only a row it did not attribute (every
+ * Turris row before agent 0.1.11) is judged by the server: a test that STARTED
+ * while the primary WAN was down cannot have run over the WAN, so it is
+ * `backup` with the source `outage` - a guess the page labels as one. Anything
+ * else stays null = unknown; it is not called WAN, only treated like one in
+ * the averages as before this existed.
+ *
+ * The guess is made at read time and never stored: the outage events can be
+ * written after the test arrives (a restore comes later, a lost event from the
+ * same report), so a stored guess would freeze whatever was known at ingest,
+ * and a stored `backup` would look exactly like a measured one in the column.
+ *
+ * @param array<string, mixed> $row  a speedtest_results row (uplink, uplink_source, measured_at)
+ * @param list<array{0: int, 1: ?int}> $down [from, to] unix seconds of the WAN-down periods; to = null still down
+ * @return array{uplink: ?string, source: ?string}
+ */
+function bk_speedtest_attribute(array $row, array $down): array {
+    $uplink = $row['uplink'] ?? null;
+    if (is_string($uplink) && in_array($uplink, ['wan', 'backup', 'mixed'], true)) {
+        $src = $row['uplink_source'] ?? null;
+        return ['uplink' => $uplink, 'source' => $src === 'counters' ? 'counters' : null];
+    }
+    $ts = isset($row['measured_at']) ? strtotime((string)$row['measured_at']) : false;
+    if ($ts !== false) {
+        foreach ($down as [$from, $to]) {
+            if ($ts >= $from && ($to === null || $ts < $to)) {
+                return ['uplink' => 'backup', 'source' => 'outage'];
+            }
+        }
+    }
+    return ['uplink' => null, 'source' => null];
+}
+
+/**
+ * Stamps every row with its attribution (bk_speedtest_attribute) in place.
+ *
+ * The classifier and the averages read `uplink` from the row, so an inferred
+ * `backup` has to be on the row too; `uplink_source` = 'outage' keeps it
+ * distinguishable from a measured one all the way to the JSON.
+ *
+ * @param list<array<string, mixed>> $rows
+ * @param list<array{0: int, 1: ?int}> $down
+ * @return list<array<string, mixed>>
+ */
+function bk_speedtest_attribute_rows(array $rows, array $down): array {
+    foreach ($rows as $i => $row) {
+        $attr = bk_speedtest_attribute($row, $down);
+        $rows[$i]['uplink'] = $attr['uplink'];
+        $rows[$i]['uplink_source'] = $attr['source'];
+    }
+    return $rows;
+}
+
+/**
+ * Did this test (as attributed) run over the backup, in whole or in part?
+ *
+ * Such a result says nothing about the WAN line: it never enters a WAN
+ * average and never yields a WAN verdict.
+ */
+function bk_speedtest_off_wan(array $row): bool {
+    return in_array($row['uplink'] ?? null, ['backup', 'mixed'], true);
+}
+
+/**
+ * Turns bk_pair_link_periods() output into closed [from, to] ranges.
+ *
+ * A period whose start lies before the event window (from = null) is taken
+ * from the window start: that is as far back as the events prove the line
+ * was down, and claiming more would stretch the guess past its evidence.
+ *
+ * @param array{periods: array<int, array{from: int|null, to: int|null, seconds: int}>} $paired
+ * @return list<array{0: int, 1: ?int}>
+ */
+function bk_link_down_ranges(array $paired, int $window_start): array {
+    $out = [];
+    foreach ($paired['periods'] as $p) {
+        $out[] = [$p['from'] ?? $window_start, $p['to']];
+    }
+    return $out;
+}
+
+/**
+ * The WAN-down periods of several routers since $since, in two queries.
+ *
+ * Same pairing as the backup-link card (bk_pair_link_periods), so the card
+ * that says "on the backup from 02:10 to 02:40" and the speed test that is
+ * called LTE because it ran at 02:15 stand on the same events.
+ *
+ * @param list<int> $ids
+ * @return array<int, list<array{0: int, 1: ?int}>> monitor id => ranges
+ */
+function bk_wan_down_ranges($pdo, array $ids, int $since, int $now): array {
+    $out = [];
+    if ($ids === []) {
+        return $out;
+    }
+    $in_list = implode(',', array_fill(0, count($ids), '?'));
+    // An outage still running from before $since: the newest event older than
+    // it decides, exactly like bk_get_link_traffic().
+    $open_since = [];
+    $stmt = $pdo->prepare(
+        "SELECT e.monitor_id, e.event_type, UNIX_TIMESTAMP(e.occurred_at) AS ts
+           FROM monitor_events e
+           JOIN (SELECT monitor_id, MAX(occurred_at) AS last_at
+                   FROM monitor_events
+                  WHERE monitor_id IN ($in_list) AND event_type IN ('wan_lost', 'wan_restored')
+                    AND occurred_at < FROM_UNIXTIME(?)
+                  GROUP BY monitor_id) p ON p.monitor_id = e.monitor_id AND p.last_at = e.occurred_at
+          WHERE e.event_type IN ('wan_lost', 'wan_restored')
+          ORDER BY e.id ASC"
+    );
+    $stmt->execute(array_merge($ids, [$since]));
+    foreach ($stmt->fetchAll() as $r) {
+        // The highest id of the newest second wins (ordered ascending).
+        $open_since[(int)$r['monitor_id']] = (string)$r['event_type'] === 'wan_lost' ? (int)$r['ts'] : null;
+    }
+    $events = [];
+    $stmt = $pdo->prepare(
+        "SELECT monitor_id, event_type, UNIX_TIMESTAMP(occurred_at) AS ts
+           FROM monitor_events
+          WHERE monitor_id IN ($in_list) AND event_type IN ('wan_lost', 'wan_restored')
+            AND occurred_at >= FROM_UNIXTIME(?)
+          ORDER BY occurred_at ASC, id ASC"
+    );
+    $stmt->execute(array_merge($ids, [$since]));
+    foreach ($stmt->fetchAll() as $r) {
+        $events[(int)$r['monitor_id']][] = [(string)$r['event_type'], (int)$r['ts']];
+    }
+    foreach ($ids as $id) {
+        $paired = bk_pair_link_periods($events[$id] ?? [], $since, $now, $open_since[$id] ?? null);
+        $out[$id] = bk_link_down_ranges($paired, $since);
+    }
+    return $out;
+}
+
+/**
+ * Per-window averages of attributed speed tests, split by line.
+ *
+ * `wan` holds what may stand for the WAN line: rows measured as WAN and rows
+ * nobody attributed (unknown - treated as WAN like before, the page marks
+ * them); `unknown` says how many of its samples are such rows. `backup` holds
+ * the LTE rows, measured or inferred. `mixed` rows belong to neither line and
+ * enter no average at all. Null means nothing measured - never a zero.
+ *
+ * @param list<array<string, mixed>> $rows attributed rows (bk_speedtest_attribute_rows)
+ * @param array<string, int> $windows label => days
+ * @return array{wan: array<string, array<string, mixed>>, backup: array<string, array<string, mixed>>}
+ */
+function bk_speedtest_averages(array $rows, array $windows, int $now): array {
+    $out = ['wan' => [], 'backup' => []];
+    foreach ($windows as $label => $days) {
+        $acc = ['wan' => [], 'backup' => []];
+        $unknown = 0;
+        foreach ($rows as $row) {
+            $ts = isset($row['measured_at']) ? strtotime((string)$row['measured_at']) : false;
+            if ($ts === false || $ts < $now - $days * 86400) {
+                continue;
+            }
+            $uplink = $row['uplink'] ?? null;
+            if ($uplink === 'mixed') {
+                continue;
+            }
+            $line = $uplink === 'backup' ? 'backup' : 'wan';
+            if ($uplink === null) {
+                $unknown++;
+            }
+            $acc[$line][] = $row;
+        }
+        foreach (['wan', 'backup'] as $line) {
+            $out[$line][$label] = bk_speedtest_window_stats($acc[$line], $days)
+                + ($line === 'wan' ? ['unknownSamples' => $unknown] : []);
+        }
+    }
+    return $out;
+}
+
+/**
+ * Mean, min and max of one window, as speedtest_history has always shown
+ * them: SQL AVG semantics (a null value is skipped, not a zero).
+ *
+ * @param list<array<string, mixed>> $rows
+ * @return array<string, mixed>
+ */
+function bk_speedtest_window_stats(array $rows, int $days): array {
+    $vals = ['dl' => [], 'ul' => [], 'ping' => []];
+    $since = null;
+    foreach ($rows as $row) {
+        foreach (['dl' => 'download_mbps', 'ul' => 'upload_mbps', 'ping' => 'ping_ms'] as $k => $col) {
+            if (isset($row[$col]) && is_numeric($row[$col])) {
+                $vals[$k][] = (float)$row[$col];
+            }
+        }
+        $at = (string)($row['measured_at'] ?? '');
+        if ($at !== '' && ($since === null || strcmp($at, $since) < 0)) {
+            $since = $at;
+        }
+    }
+    $avg = fn (array $v, int $p): ?float => $v === [] ? null : round(array_sum($v) / count($v), $p);
+    return [
+        'days' => $days,
+        'samples' => count($rows),
+        'downloadMbps' => $avg($vals['dl'], 2),
+        'uploadMbps' => $avg($vals['ul'], 2),
+        'pingMs' => $avg($vals['ping'], 1),
+        'downloadMinMbps' => $vals['dl'] === [] ? null : round(min($vals['dl']), 2),
+        'downloadMaxMbps' => $vals['dl'] === [] ? null : round(max($vals['dl']), 2),
+        'measuredSince' => $since,
+    ];
 }
 
 /**
@@ -9875,6 +10112,9 @@ function bk_wan_dir_inputs(array $test, array $diag, string $dir, array $ctx): a
         'cpu_measured' => is_bool($diag['cpu_measured'] ?? null) ? $diag['cpu_measured'] : null,
         'path_verified' => is_bool($diag['path_verified'] ?? null) ? $diag['path_verified'] : null,
         'threaded_napi' => is_bool($ctx['threaded_napi'] ?? null) ? $ctx['threaded_napi'] : null,
+        // Measured by the agent or inferred from an outage: a test over the
+        // backup is a fine LTE figure and no evidence about the WAN at all.
+        'off_wan' => bk_speedtest_off_wan($test),
     ];
 }
 
@@ -9961,7 +10201,11 @@ function bk_wan_dir_verdict(array $in, ?string $started_by, array $basis): array
     // leave rules 1-3 open.
     $gate = null;
     $restricted = false;
-    if ($in['s'] === null) {
+    if (!empty($in['off_wan'])) {
+        // First, before anything else: even "plan reached" would be a claim
+        // about the WAN made from a number the LTE produced.
+        $gate = 'ran_over_backup';
+    } elseif ($in['s'] === null) {
         $gate = 'no_result';
     } elseif ($in['path_verified'] === false) {
         $gate = 'path_unverified';
@@ -10076,6 +10320,10 @@ function bk_wan_test_verdict(array $test, array $ctx): array {
  */
 function bk_wan_test_countable(array $test, array $diag, array $in, int $now, int $days = 21): bool {
     if (($test['source'] ?? null) !== 'agent') {
+        return false;
+    }
+    // A probe over the backup (or partly over it) measured the LTE.
+    if (!empty($in['off_wan'])) {
         return false;
     }
     if (!empty($diag['unit_mismatch'])) {
@@ -15247,7 +15495,7 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
     //    itself decides they may only ever confirm a reached plan (WAN 3.4).
     $stmt = $pdo->prepare(
         "SELECT id, monitor_id, measured_at, download_mbps, upload_mbps, link_mbit, source,
-                server_name, diagnostics
+                server_name, diagnostics, uplink, uplink_source
            FROM speedtest_results
           WHERE monitor_id IN ($in_list) AND measured_at >= (NOW() - INTERVAL 21 DAY)
           ORDER BY measured_at DESC"
@@ -15255,6 +15503,20 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
     $stmt->execute($id_list);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $out[(int)$row['monitor_id']]['speedtests'][] = $row;
+    }
+    // Which line carried each test, the same way the page decides it: a test
+    // over the LTE backup (measured, or inferred from an outage) must never
+    // turn into a WAN sentence in the e-mail. The classifier drops such rows.
+    // Only routers that have a test to attribute cost the two outage queries:
+    // most chunks have none, and the digest's per-chunk query bound (X13)
+    // must not grow for them.
+    $st_ids = array_values(array_filter($id_list, fn ($id) => ($out[$id]['speedtests'] ?? []) !== []));
+    if ($st_ids !== []) {
+        $st_now = time();
+        $st_down = bk_wan_down_ranges($pdo, $st_ids, $st_now - 21 * 86400 - 1, $st_now);
+        foreach ($st_ids as $id) {
+            $out[$id]['speedtests'] = bk_speedtest_attribute_rows($out[$id]['speedtests'], $st_down[$id] ?? []);
+        }
     }
 
     // 4b. What those test servers have ever delivered, to ANY router, in 90
