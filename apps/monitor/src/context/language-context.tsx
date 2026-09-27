@@ -4759,6 +4759,39 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'config.php vypisuje {bytes} B ({where}): opravte soubor',
     en: 'config.php prints {bytes} bytes ({where}): fix the file',
   },
+  'sitehealth.self_off_title': {
+    cs: 'Kontrola vlastního API neběží',
+    en: 'The check of the site’s own API is not running',
+  },
+  'sitehealth.self_off_body': {
+    cs: 'V nastavení chybí adresa webu (site_url), takže cron neví, kde veřejné API číst. Když přestane odpovídat, nikdo se to nedozví.',
+    en: 'The site URL (site_url) is not set, so the cron does not know where to read the public API. If it stops answering, nobody will hear about it.',
+  },
+  'sitehealth.self_failed_title': {
+    cs: 'Samokontrola webu selhala',
+    en: 'The site’s self-check failed',
+  },
+  'sitehealth.self_failed_since': {
+    cs: 'Od {since}, {n}× za sebou; naposledy v pořádku {ok}.',
+    en: 'Since {since}, {n} in a row; last fine {ok}.',
+  },
+  'sitehealth.self_told_sent': {
+    cs: 'Upozornění odešlo a poskytovatel ho převzal',
+    en: 'The notice went out and a provider accepted it',
+  },
+  'sitehealth.self_told_unknown': {
+    cs: 'Upozornění odešlo, převzetí nikdo nepotvrdil',
+    en: 'The notice went out, nobody confirmed taking it',
+  },
+  'sitehealth.self_told_failed': { cs: 'Upozornění žádný kanál nepřevzal', en: 'No channel took the notice' },
+  'sitehealth.self_told_none': {
+    cs: 'Upozornění nemělo komu odejít: žádný administrátor s e-mailem ani sdílený kanál',
+    en: 'The notice had nobody to go to: no administrator with an e-mail and no shared channel',
+  },
+  'sitehealth.self_told_pending': {
+    cs: 'Upozornění odejde po druhé neúspěšné kontrole za sebou.',
+    en: 'A notice goes out after the second failed check in a row.',
+  },
   'sitehealth.where_before': { cs: 'před <?php', en: 'before <?php' },
   'sitehealth.where_after': { cs: 'za ?>', en: 'after ?>' },
   'sitehealth.where_inside': { cs: 'z kódu souboru', en: 'from the code in the file' },

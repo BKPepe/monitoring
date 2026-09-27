@@ -1002,9 +1002,31 @@ export interface ConfigOutput {
   excerpt: string;
 }
 
+/** The cron's last check of the site's own public API and of config.php's output. */
+export interface SelfCheck {
+  /**
+   * `ok`, `failed`, `recovering` (an announced failure passed once; the
+   * recovery is announced after the second pass in a row, and /app shows
+   * nothing meanwhile) or `unconfigured` (no site_url, so the check cannot run).
+   */
+  state: string;
+  url: string | null;
+  checkedAt: string | null;
+  /** Failed checks in a row. */
+  failures: number;
+  since: string | null;
+  reason: string | null;
+  lastOkAt: string | null;
+  alertAttemptAt: string | null;
+  /** `sent`, `unknown`, `failed` or `no_channel`; `null` = no notice yet (it waits for a second failure). */
+  alertResult: string | null;
+}
+
 /** What `action=site_health` returns. */
 export interface SiteHealth {
   configOutput: ConfigOutput | null;
+  /** `null` before the cron's first check (or from an older server). */
+  selfCheck?: SelfCheck | null;
 }
 
 /** A page of the log plus the values the filters offer. */

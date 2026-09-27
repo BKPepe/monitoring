@@ -770,10 +770,11 @@ foreach (['functions.php', 'api.php', 'admin.php'] as $mail_file) {
         }
     }
 }
-// Nine call sites when the log was built, ten since the daily reminder. The
-// number is hard-coded on purpose: a new send_email() has to be noticed here,
-// where someone decides which kind it writes into the log.
-check_true('kontrola opravdu našla všech deset volání', $kind_calls === 10);
+// Nine call sites when the log was built, ten since the daily reminder,
+// eleven since the admin notice (the self-check). The number is hard-coded on
+// purpose: a new send_email() has to be noticed here, where someone decides
+// which kind it writes into the log.
+check_true('kontrola opravdu našla všech jedenáct volání', $kind_calls === 11);
 check('každé volání send_email() uvádí druh zprávy', $kind_gaps, []);
 
 if (function_exists('bk_notification_kinds')) {
@@ -840,8 +841,10 @@ foreach (['functions.php', 'api.php', 'admin.php', 'cron.php', 'agent_api.php'] 
     }
 }
 // Hard-coded like the send_email() count above: a new call has to be noticed
-// here, where somebody decides what its row may claim.
-check('kontrola našla všech 14 volání protokolu', $delivery_calls, 14);
+// here, where somebody decides what its row may claim. 14, then 12: the
+// reminder's four shared-channel calls became one in bk_send_shared_channels(),
+// and the admin notice added its WhatsApp row.
+check('kontrola našla všech 12 volání protokolu', $delivery_calls, 12);
 check('každé volání protokolu uvádí výsledek doručení (delivery:)', $delivery_gaps, []);
 
 // SMS: a refusal says why. Only the paths that stop before any request are
@@ -1175,7 +1178,7 @@ if (function_exists('bk_notification_problems')) {
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_send_daily_reminder', 'bk_daily_reminder_collect', 'bk_daily_reminder_select',
     'bk_daily_reminder_recipients', 'bk_daily_reminder_due', 'bk_daily_reminder_text',
-    'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification',
+    'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification', 'bk_send_shared_channels',
     'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
 ]);
 bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
@@ -1183,12 +1186,19 @@ bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defa
 // The mail stub: nothing leaves the machine, and every attempt is kept so the
 // tests can ask what the reminder said. send_email() writes the log row
 // itself in production - here that row is not the subject of the test.
-if (!function_exists('send_email')) {
+// Fails closed like the CallMeBot stub: with the real one loaded, the
+// reminder and admin-notice tests would send real mail.
+if (function_exists('send_email')) {
+    fwrite(STDERR, "send_email() is already defined, so the reminder and admin-notice tests would send real mail."
+        . " Stopping.\n");
+    exit(1);
+} else {
     function send_email($to, $subject, $html_body, array $extra_headers = [], array $context = []) {
         $GLOBALS['bk_test_mails'][] = ['to' => $to, 'subject' => $subject, 'body' => $html_body, 'context' => $context];
         return true;
     }
 }
+check_true('e-mail se posílá jen přes testovací náhradu', (new ReflectionFunction('send_email'))->getFileName() === __FILE__);
 
 $dr_pdo = null;
 if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
@@ -1403,6 +1413,197 @@ if ($dr_pdo instanceof PDO) {
     // Reported, never skipped in silence: a suite that quietly tests nothing
     // is the same lie as a chart with invented values.
     check_true('SQLite ovladač pro testy denní připomínky je k dispozici', false);
+}
+
+// =======================================================================
+// Self-check of the site's own public API (cron)
+//
+// On 27 Sep 2026 every PHP answer began with "Ah" for an hour, /app could not
+// read any of them, and the cron - watching everything else - did not notice
+// its own site. What counts as a working API, when to tell the administrators
+// and how the telling is logged. bk_self_check_run() itself needs MySQL and
+// is covered in run_api_tests.php.
+// =======================================================================
+// The webhook stub, the same rule as the CallMeBot one: fail closed.
+if (function_exists('send_webhook_post')) {
+    fwrite(STDERR, "send_webhook_post() is already defined, so the admin-notice tests would reach real webhooks."
+        . " Stopping.\n");
+    exit(1);
+} else {
+    function send_webhook_post($url, $payload_json): bool {
+        $GLOBALS['bk_test_webhooks'][] = ['url' => (string)$url, 'payload' => (string)$payload_json];
+        $ok = !str_contains((string)$url, 'telegram');
+        $GLOBALS['last_webhook_error'] = $ok ? null : 'HTTP 400';
+        return $ok;
+    }
+}
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_config_output_excerpt']);
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_self_check_url', 'bk_site_origin', 'bk_self_check_quote', 'bk_self_check_verdict', 'bk_self_check_step',
+    'bk_self_check_message',
+    'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert',
+]);
+
+if (function_exists('bk_self_check_verdict')) {
+    check('adresa kontroly: původ site_url + /status/api.php, cesta se ignoruje',
+        [bk_self_check_url('https://Example.com/status/'), bk_self_check_url(''), bk_self_check_url('ftp://x')],
+        ['https://example.com/status/api.php?action=public_status', null, null]);
+
+    $sc_good = json_encode(['status' => 'healthy', 'uptimePercent' => 99.9, 'totalMonitors' => 3, 'downMonitors' => 0,
+        'lastUpdated' => null, 'nodes' => []]);
+    check('platný JSON se všemi klíči prochází', bk_self_check_verdict(200, (string)$sc_good, 0, ''), ['ok' => true, 'reason' => null]);
+    check('„Ah" před JSONem: kolik bajtů a jaké',
+        bk_self_check_verdict(200, 'Ah' . $sc_good, 0, ''), ['ok' => false, 'reason' => '2 bytes before the JSON: "Ah"']);
+    check('500 s chybou API ji ocituje',
+        bk_self_check_verdict(500, '{"error":"Nepodařilo se zjistit stav infrastruktury."}', 0, '')['reason'],
+        'HTTP 500: Nepodařilo se zjistit stav infrastruktury.');
+    $sc_v = bk_self_check_verdict(503, '<html><head><title>503 Service Unavailable</title></head><body>nginx secret-host-123456</body></html>', 0, '');
+    check_true('stránka chyby: kód a nanejvýš 16 bajtů textu', $sc_v['ok'] === false
+        && str_starts_with((string)$sc_v['reason'], 'HTTP 503: 503 Service Unav…') && !str_contains((string)$sc_v['reason'], 'secret-host'));
+    check('nedosažitelné', bk_self_check_verdict(0, '', 6, 'Could not resolve host: example.com')['reason'],
+        'Not reached: Could not resolve host: example.com');
+    check('prázdná odpověď', bk_self_check_verdict(200, '', 0, '')['reason'], 'Empty answer');
+    check('stránka místo JSONu (výzva proxy): její titulek', bk_self_check_verdict(200,
+        "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script>x()</script></body></html>", 0, '')['reason'],
+        'Not JSON but an HTML page: "Just a •••"');
+    check('stránka bez titulku: text bez značek', bk_self_check_verdict(200, "<html><body><p>Ahoj</p>\n<p>svete</p></body></html>", 0, '')['reason'],
+        'Not JSON but an HTML page: "Ahoj svete"');
+    check('text, který není JSON, maskovaný jako výstup config.php',
+        bk_self_check_verdict(200, 'Tr0ub4dor&3! {', 0, '')['reason'], 'Not JSON, starts with "••• {"');
+    check('JSON bez klíčů, které čte /app',
+        bk_self_check_verdict(200, '{"status":"healthy","nodes":[]}', 0, '')['reason'],
+        'JSON without totalMonitors, downMonitors, uptimePercent, lastUpdated');
+    check('neznámý stav je nečekaný tvar', bk_self_check_verdict(200, str_replace('healthy', 'fine', (string)$sc_good), 0, '')['ok'], false);
+
+    // The latch. One failure is a blip; the second in a row is announced,
+    // once; a notice nobody took is retried after an hour, not every minute.
+    $sc_t = 1790000000;
+    $sc_bad = ['ok' => false, 'reason' => '2 bytes before the JSON: "Ah"'];
+    $sc_ok = ['ok' => true, 'reason' => null];
+    $sc1 = bk_self_check_step([], $sc_bad, $sc_t);
+    check('první selhání: zatím nikomu', [$sc1['notify'], $sc1['state']['failures']], [null, 1]);
+    $sc2 = bk_self_check_step($sc1['state'], $sc_bad, $sc_t + 60);
+    check('druhé za sebou: upozornit', [$sc2['notify'], $sc2['state']['failures'], $sc2['state']['since']],
+        ['failed', 2, date('c', $sc_t)]);
+    $sc_told = $sc2['state'] + [];
+    $sc_told['alerted'] = true;
+    $sc_told['alertAttemptAt'] = date('c', $sc_t + 60);
+    $sc_told['alertResult'] = 'sent';
+    $sc3 = bk_self_check_step($sc_told, $sc_bad, $sc_t + 120);
+    check('ohlášené selhání se neopakuje', [$sc3['notify'], $sc3['state']['failures'], $sc3['state']['alertResult']], [null, 3, 'sent']);
+    $sc_untold = $sc_told;
+    $sc_untold['alerted'] = false;
+    $sc_untold['alertResult'] = 'failed';
+    check('nepřevzaté upozornění se za 10 minut neopakuje', bk_self_check_step($sc_untold, $sc_bad, $sc_t + 660)['notify'], null);
+    check('ale za hodinu ano', bk_self_check_step($sc_untold, $sc_bad, $sc_t + 60 + 3600)['notify'], 'failed');
+    // An announced failure is over after two passes in a row, not one.
+    $sc4a = bk_self_check_step($sc3['state'], $sc_ok, $sc_t + 180);
+    check('první úspěch po ohlášeném selhání: zotavuje se, nikomu nic',
+        [$sc4a['notify'], $sc4a['state']['state'], $sc4a['state']['alerted'], $sc4a['state']['since']],
+        [null, 'recovering', true, date('c', $sc_t)]);
+    $sc4 = bk_self_check_step($sc4a['state'], $sc_ok, $sc_t + 240);
+    check('druhý za sebou: obnova se ohlásí, i s tím, co selhávalo',
+        [$sc4['notify'], $sc4['state']['state'], $sc4['state']['recoveredFrom']],
+        ['restored', 'ok', ['since' => date('c', $sc_t), 'reason' => $sc_bad['reason']]]);
+    $sc_relapse = bk_self_check_step($sc4a['state'], $sc_bad, $sc_t + 240);
+    check('návrat selhání při zotavování pokračuje v ohlášeném: bez nového upozornění, stejné od kdy',
+        [$sc_relapse['notify'], $sc_relapse['state']['alerted'], $sc_relapse['state']['since'], $sc_relapse['state']['alertResult']],
+        [null, true, date('c', $sc_t), 'sent']);
+    // The review's flapping API: fail, fail, ok for an hour at the cron's
+    // cadence gave 20 notices. Now one failure notice, and one recovery once
+    // it passes twice in a row.
+    $sc_flap = [];
+    $sc_notes = [];
+    for ($i = 0; $i < 30; $i++) {
+        $step = bk_self_check_step($sc_flap, $i % 3 === 2 ? $sc_ok : $sc_bad, $sc_t + $i * 60);
+        if ($step['notify'] === 'failed') {
+            $step['state']['alerted'] = true;
+            $step['state']['alertResult'] = 'sent';
+            $step['state']['alertAttemptAt'] = date('c', $sc_t + $i * 60);
+        }
+        $sc_notes[] = $step['notify'];
+        $sc_flap = $step['state'];
+    }
+    foreach ([$sc_ok, $sc_ok] as $i => $v) {
+        $step = bk_self_check_step($sc_flap, $v, $sc_t + (30 + $i) * 60);
+        $sc_notes[] = $step['notify'];
+        $sc_flap = $step['state'];
+    }
+    check('kolísající API: jedno selhání a jedna obnova', array_values(array_filter($sc_notes)), ['failed', 'restored']);
+    // The two short sequences step by step (f = failed check, o = passed),
+    // with every failure notice taken by a channel.
+    $sc_seq = function (string $seq) use ($sc_bad, $sc_ok, $sc_t): array {
+        $state = [];
+        $notes = [];
+        foreach (str_split($seq) as $i => $c) {
+            $step = bk_self_check_step($state, $c === 'o' ? $sc_ok : $sc_bad, $sc_t + $i * 60);
+            if ($step['notify'] === 'failed') {
+                $step['state']['alerted'] = true;
+                $step['state']['alertResult'] = 'sent';
+                $step['state']['alertAttemptAt'] = date('c', $sc_t + $i * 60);
+            }
+            $notes[] = $step['notify'];
+            $state = $step['state'];
+        }
+        return $notes;
+    };
+    check('selhání, selhání, úspěch, selhání, selhání, úspěch: jediné upozornění, žádná obnova',
+        $sc_seq('ffoffo'), [null, 'failed', null, null, null, null]);
+    check('selhání, selhání, úspěch, úspěch: upozornění a jedna obnova', $sc_seq('ffoo'), [null, 'failed', null, 'restored']);
+    check('obnova po neohlášeném blipu mlčí', bk_self_check_step($sc1['state'], $sc_ok, $sc_t + 60)['notify'], null);
+    check('po chybějící adrese začíná počítání znovu',
+        bk_self_check_step(['state' => 'unconfigured'], $sc_bad, $sc_t)['state']['failures'], 1);
+
+    // The message: the URL, how long, why - escaped in the HTML.
+    $sc_state = $sc2['state'] + ['url' => 'https://example.com/status/api.php?action=public_status'];
+    $sc_state['reason'] = 'Not JSON, starts with "<b>x"';
+    [$sc_subj, $sc_html, $sc_text] = bk_with_email_lang('cs', fn (): array => bk_self_check_message('failed', $sc_state));
+    check_true('zpráva o selhání: co, kolikrát, proč',
+        str_contains($sc_subj, 'Samokontrola webu') && str_contains($sc_text, '2× za sebou')
+        && str_contains($sc_text, 'https://example.com/status/api.php') && str_contains($sc_text, '<b>x'));
+    check_true('v HTML escapovaná', str_contains($sc_html, '&lt;b&gt;x') && !str_contains($sc_html, '<b>x'));
+    [$sc_subj_en] = bk_with_email_lang('en', fn (): array => bk_self_check_message('restored', $sc4['state'] + ['url' => 'u']));
+    check_true('obnova anglicky', str_contains($sc_subj_en, 'passes again'));
+}
+
+if (function_exists('bk_send_admin_notice') && $dr_pdo instanceof PDO) {
+    // Every channel an alert uses, each with its own honest row.
+    $dr_pdo->exec('DELETE FROM notification_log');
+    $dr_pdo->exec("UPDATE users SET phone = '777123456', whatsapp_apikey = '1234567', whatsapp_notifications = 1 WHERE id = 1");
+    $GLOBALS['bk_test_mails'] = [];
+    $GLOBALS['bk_test_webhooks'] = [];
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued', 'errno' => 0, 'error' => '', 'sent' => true];
+    $sc_settings = $GLOBALS['system_settings'];
+    $GLOBALS['system_settings'] += ['discord_webhook_url' => 'https://discord.invalid/api/webhooks/1/x',
+        'telegram_bot_token' => '123:abc', 'telegram_chat_id' => '-100200300'];
+    $sc_n = bk_send_admin_notice($dr_pdo, 'self_check_failed',
+        fn (): array => bk_self_check_message('failed', $sc_state), 1);
+    // The mail stub confirms nothing, so its e-mail counts as unconfirmed.
+    check('upozornění: e-mail, WhatsApp, Discord a Telegram, každý se svým výsledkem', $sc_n,
+        ['attempted' => 4, 'sent' => 2, 'unknown' => 1, 'failed' => 1]);
+    $sc_mail = $GLOBALS['bk_test_mails'][0] ?? ['to' => null, 'subject' => '', 'context' => []];
+    check('e-mail administrátorovi jako admin_notice se stavem',
+        [$sc_mail['to'], $sc_mail['context']['kind'] ?? null, $sc_mail['context']['status'] ?? null],
+        ['admin@example.com', 'admin_notice', 'self_check_failed']);
+    $sc_rows = $dr_pdo->query("SELECT channel, status, kind, ok, delivery, error_message FROM notification_log ORDER BY id")
+        ->fetchAll(PDO::FETCH_ASSOC);
+    check('řádky v protokolu: kanál, druh a výsledek',
+        array_map(fn (array $r): string => "{$r['channel']}/{$r['kind']}/{$r['status']}/{$r['delivery']}", $sc_rows),
+        ['whatsapp/admin_notice/self_check_failed/sent', 'discord/admin_notice/self_check_failed/sent',
+         'telegram/admin_notice/self_check_failed/failed']);
+    check('odmítnutí nese důvod', $sc_rows[2]['error_message'] ?? null, 'HTTP 400');
+    check_false('webhooky dostaly text, ne HTML', str_contains($GLOBALS['bk_test_webhooks'][0]['payload'] ?? '<', '<p'));
+    // "public_status" in the URL: an unpaired "_" makes Telegram refuse Markdown.
+    check_false('Telegram bez Markdownu', str_contains($GLOBALS['bk_test_webhooks'][1]['payload'] ?? 'parse_mode', 'parse_mode'));
+
+    // Nobody to tell: nothing attempted, and the caller can say so.
+    $dr_pdo->exec("UPDATE users SET role = 'user' WHERE id = 1");
+    $GLOBALS['system_settings'] = $sc_settings;
+    check('bez administrátora a kanálů se nic nepokusí',
+        bk_send_admin_notice($dr_pdo, 'self_check_failed', fn (): array => bk_self_check_message('failed', $sc_state), 1),
+        ['attempted' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0]);
+    $dr_pdo->exec("UPDATE users SET role = 'admin', phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_answer'] = null;
 }
 
 // --- cron: the reminder really is wired in --------------------------------

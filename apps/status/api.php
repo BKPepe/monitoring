@@ -2110,14 +2110,39 @@ if ($action === 'notification_log') {
 // The site's own faults that no data path reports (the /app warning). Admin
 // only: an excerpt of a hand-edited config.php is not for everyone.
 // configOutput: what config.php prints while it loads (db.php holds it back
-// from every response), or null.
+// from every response), or null. selfCheck: the cron's last check of the
+// public API (bk_self_check_run()), or null before its first run.
 if ($action === 'site_health') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);
         echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    echo json_encode(['configOutput' => bk_config_output()], JSON_UNESCAPED_UNICODE);
+    try {
+        $sh_stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'self_check_state'");
+        $sh_stmt->execute();
+        $sh_state = json_decode((string)$sh_stmt->fetchColumn(), true);
+        $sh_self = null;
+        if (is_array($sh_state)) {
+            $sh_self = [
+                'state' => (string)($sh_state['state'] ?? 'unknown'),
+                'url' => $sh_state['url'] ?? null,
+                'checkedAt' => $sh_state['checkedAt'] ?? null,
+                'failures' => (int)($sh_state['failures'] ?? 0),
+                'since' => $sh_state['since'] ?? null,
+                'reason' => $sh_state['reason'] ?? null,
+                'lastOkAt' => $sh_state['lastOkAt'] ?? null,
+                'alertAttemptAt' => $sh_state['alertAttemptAt'] ?? null,
+                'alertResult' => $sh_state['alertResult'] ?? null,
+            ];
+        }
+        echo json_encode(['configOutput' => bk_config_output(), 'selfCheck' => $sh_self], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=site_health] ' . $e->getMessage());
+        // 500, never "all is well" from a read that died.
+        http_response_code(500);
+        echo json_encode(['error' => 'Stav webu se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+    }
     exit;
 }
 

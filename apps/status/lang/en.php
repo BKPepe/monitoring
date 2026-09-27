@@ -1039,6 +1039,12 @@ return [
     'reminder_cron_never' => 'Data collection has not completed a single run yet.',
     'reminder_cron_stale' => 'Collection has not completed for a long time; the values above may be stale.',
     'reminder_skipped' => 'Nothing broken, no reminder was sent.',
+    // --- Self-check of the site's own public API (cron) ---------------
+    'selfcheck_subject_failed' => '🔴 The site\'s self-check failed',
+    'selfcheck_subject_restored' => '🟢 The site\'s self-check passes again',
+    'selfcheck_failed_body' => 'The check of %1$s and of config.php failed %2$d times in a row, first at %3$s: %4$s',
+    'selfcheck_failed_hint' => '/app and the public page may not load anything now. A common cause: a hand edit of config.php or a PHP error; details in /app and in health.php.',
+    'selfcheck_restored_body' => 'The check of %1$s and of config.php passes again. It had been failing since %2$s: %3$s',
     // error.php (web server ErrorDocument and the database-down page).
     'error_page_brand' => 'Blood Kings Monitoring',
     'error_page_badge' => 'ERROR %d',

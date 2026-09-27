@@ -1052,6 +1052,26 @@ try {
     error_log('[cron] Eskalace selhala: ' . $e->getMessage());
 }
 
+// --- Self-check of the site's own public API -------------------------------
+//
+// On 27 Sep 2026 every PHP answer began with two stray bytes for an hour: /app
+// could not read anything, and this cron, watching everything else, did not
+// notice its own site. It now reads the public API over HTTP the way /app
+// does, and tells the administrators when that fails and when it recovers.
+// Stray output of config.php fails it too: it no longer reaches the API.
+try {
+    $sc = bk_self_check_run($pdo, bk_self_check_url((string)get_setting('site_url', '')), time(), bk_config_output());
+    if ($sc['state'] === 'unconfigured') {
+        echo "VAROVÁNÍ: kontrola vlastního API neběží, v nastavení chybí adresa webu (site_url).\n";
+    } elseif ($sc['ran'] && $sc['state'] === 'failed') {
+        echo "VAROVÁNÍ: veřejné API webu neodpovídá správně ({$sc['failures']}× za sebou): {$sc['reason']}\n";
+    }
+} catch (Throwable $e) {
+    // Never takes the run down; the error log says why the check did not happen.
+    error_log('[cron] Kontrola vlastního API selhala: ' . $e->getMessage());
+    echo "Chyba při kontrole vlastního API: " . $e->getMessage() . "\n";
+}
+
 // --- Stamp of this run ----------------------------------------------------
 //
 // Without this record there is no way to tell that data collection stopped.

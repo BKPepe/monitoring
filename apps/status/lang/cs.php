@@ -1043,6 +1043,12 @@ return [
     'reminder_cron_never' => 'Sběr dat zatím nedokončil ani jeden běh.',
     'reminder_cron_stale' => 'Sběr se dlouho nedokončil, hodnoty výše mohou být zastaralé.',
     'reminder_skipped' => 'Nic rozbitého, připomínka se neodesílala.',
+    // --- Self-check of the site's own public API (cron) ---------------
+    'selfcheck_subject_failed' => '🔴 Samokontrola webu selhala',
+    'selfcheck_subject_restored' => '🟢 Samokontrola webu zase prochází',
+    'selfcheck_failed_body' => 'Kontrola %1$s a config.php selhala %2$d× za sebou, poprvé %3$s: %4$s',
+    'selfcheck_failed_hint' => 'Aplikace /app a veřejná stránka teď nemusí nic načíst. Častá příčina: ruční úprava config.php nebo chyba PHP; podrobnosti v /app a v health.php.',
+    'selfcheck_restored_body' => 'Kontrola %1$s a config.php zase prochází. Selhávala od %2$s: %3$s',
     // error.php (web server ErrorDocument and the database-down page).
     'error_page_brand' => 'Blood Kings Monitoring',
     'error_page_badge' => 'CHYBA %d',

@@ -8422,40 +8422,11 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
 
     // The shared channels - global settings only. A per-monitor webhook belongs
     // to one monitor and this message is about all of them at once.
-    $discord = (string)get_setting('discord_webhook_url', '');
-    if ($discord !== '') {
-        $ok = send_webhook_post($discord, json_encode(['content' => $text], JSON_UNESCAPED_UNICODE));
-        bk_log_notification($pdo, null, 'daily_reminder', 'discord', null, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
-        $result['channels'] += $ok ? 1 : 0;
-    }
-    $slack = (string)get_setting('slack_webhook_url', '');
-    if ($slack !== '') {
-        $ok = send_webhook_post($slack, json_encode(['text' => $text], JSON_UNESCAPED_UNICODE));
-        bk_log_notification($pdo, null, 'daily_reminder', 'slack', null, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
-        $result['channels'] += $ok ? 1 : 0;
-    }
-    $tg_token = (string)get_setting('telegram_bot_token', '');
-    $tg_chat = (string)get_setting('telegram_chat_id', '');
-    if ($tg_token !== '' && $tg_chat !== '') {
-        $ok = send_webhook_post('https://api.telegram.org/bot' . $tg_token . '/sendMessage',
-            json_encode(['chat_id' => $tg_chat, 'text' => $text, 'parse_mode' => 'Markdown'], JSON_UNESCAPED_UNICODE));
-        bk_log_notification($pdo, null, 'daily_reminder', 'telegram', $tg_chat, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
-        $result['channels'] += $ok ? 1 : 0;
-    }
-    $po_user = (string)get_setting('pushover_user_key', '');
-    $po_token = (string)get_setting('pushover_api_token', '');
-    if ($po_user !== '' && $po_token !== '') {
-        // Priority 0: the reminder is a summary of what is already known, not
-        // a page. The outage itself paged when it happened.
-        $ok = send_pushover_alert($po_user, $po_token, 'Blood Kings: denní připomínka',
-            mb_strimwidth($text, 0, 900, '…', 'UTF-8'), 0);
-        bk_log_notification($pdo, null, 'daily_reminder', 'pushover', null, (bool)$ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
-        $result['channels'] += $ok ? 1 : 0;
-    }
+    // Priority 0 on Pushover: the reminder is a summary of what is already
+    // known, not a page. The outage itself paged when it happened.
+    $shared = bk_send_shared_channels($pdo, 'daily_reminder', 'daily_reminder', $text,
+        'Blood Kings: denní připomínka', 0, true);
+    $result['channels'] += $shared['sent'];
 
     // "Sent" means at least one message really left. Without this the cron
     // would stamp the day as done even when every channel refused, and the
@@ -8464,6 +8435,383 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
     $result['reason'] = $result['sent'] ? 'sent' : 'no_recipient';
 
     return $result;
+}
+
+/**
+ * Sends one text through the shared channels of the global settings -
+ * Discord, Slack, Telegram and Pushover - and logs each attempt with its
+ * delivery result. A channel without settings is skipped, not counted.
+ * $telegram_markdown only for a text written for it: an unpaired "_" (as in
+ * a URL's "public_status") makes Telegram refuse a Markdown message.
+ *
+ * @return array{attempted: int, sent: int, failed: int}
+ */
+function bk_send_shared_channels(PDO $pdo, string $status, string $kind, string $text, string $pushover_title,
+                                 int $pushover_priority, bool $telegram_markdown): array {
+    $count = ['attempted' => 0, 'sent' => 0, 'failed' => 0];
+    $log = function (string $channel, ?string $recipient, bool $ok) use ($pdo, $status, $kind, &$count): void {
+        bk_log_notification($pdo, null, $status, $channel, $recipient, $ok,
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), $kind, delivery: $ok ? 'sent' : 'failed');
+        $count['attempted']++;
+        $count[$ok ? 'sent' : 'failed']++;
+    };
+    $discord = (string)get_setting('discord_webhook_url', '');
+    if ($discord !== '') {
+        $log('discord', null, send_webhook_post($discord, (string)json_encode(['content' => $text], JSON_UNESCAPED_UNICODE)));
+    }
+    $slack = (string)get_setting('slack_webhook_url', '');
+    if ($slack !== '') {
+        $log('slack', null, send_webhook_post($slack, (string)json_encode(['text' => $text], JSON_UNESCAPED_UNICODE)));
+    }
+    $tg_token = (string)get_setting('telegram_bot_token', '');
+    $tg_chat = (string)get_setting('telegram_chat_id', '');
+    if ($tg_token !== '' && $tg_chat !== '') {
+        $tg_body = ['chat_id' => $tg_chat, 'text' => $text] + ($telegram_markdown ? ['parse_mode' => 'Markdown'] : []);
+        $log('telegram', $tg_chat, send_webhook_post('https://api.telegram.org/bot' . $tg_token . '/sendMessage',
+            (string)json_encode($tg_body, JSON_UNESCAPED_UNICODE)));
+    }
+    $po_user = (string)get_setting('pushover_user_key', '');
+    $po_token = (string)get_setting('pushover_api_token', '');
+    if ($po_user !== '' && $po_token !== '') {
+        $log('pushover', null, (bool)send_pushover_alert($po_user, $po_token, $pushover_title,
+            mb_strimwidth($text, 0, 900, '…', 'UTF-8'), $pushover_priority));
+    }
+    return $count;
+}
+
+/**
+ * Tells every administrator one thing about the monitoring itself, through
+ * every channel an alert would use: e-mail and WhatsApp per administrator,
+ * then the shared channels. Each attempt writes its own notification_log row
+ * (kind admin_notice) with sent, unknown or failed - the outgoing-message log
+ * and the /app delivery warning read those rows like any alert's.
+ *
+ * @param callable(): array{0: string, 1: string, 2: string} $render subject,
+ *        HTML body and short text, in the language set when it is called
+ * @return array{attempted: int, sent: int, unknown: int, failed: int}
+ */
+function bk_send_admin_notice(PDO $pdo, string $status, callable $render, int $pushover_priority): array {
+    $count = ['attempted' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0];
+    $default_lang = (string)get_setting('email_lang', 'cs');
+    $rendered = [];
+    $admins = $pdo->query("SELECT email, email_lang, phone, whatsapp_apikey, whatsapp_notifications
+                           FROM users WHERE role = 'admin'")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($admins as $admin) {
+        $lang = in_array($admin['email_lang'] ?? '', ['cs', 'en'], true) ? (string)$admin['email_lang'] : $default_lang;
+        $rendered[$lang] ??= bk_with_email_lang($lang, $render);
+        [$subject, $html, $text] = $rendered[$lang];
+        if (!empty($admin['email'])) {
+            // send_email() writes the row itself; what it knew beyond "not refused" is in the global.
+            $GLOBALS['last_mail_delivery'] = null;
+            $ok = send_email($admin['email'], $subject, $html, [], ['kind' => 'admin_notice', 'status' => $status]);
+            $delivery = $GLOBALS['last_mail_delivery'] ?? null;
+            $delivery = in_array($delivery, ['sent', 'unknown', 'failed'], true) ? $delivery : ($ok ? 'unknown' : 'failed');
+            $count['attempted']++;
+            $count[$delivery]++;
+        }
+        if (!empty($admin['whatsapp_notifications'])) {
+            $wa = bk_send_whatsapp((string)$admin['phone'], mb_strimwidth($text, 0, 900, '…', 'UTF-8'),
+                (string)$admin['whatsapp_apikey']);
+            bk_log_notification($pdo, null, $status, 'whatsapp', $admin['phone'],
+                ok: $wa['delivery'] !== 'failed', error: $wa['reason'], kind: 'admin_notice',
+                delivery: $wa['delivery'], reply: $wa['reply']);
+            $count['attempted']++;
+            $count[$wa['delivery'] === 'sent' ? 'sent' : ($wa['delivery'] === 'unknown' ? 'unknown' : 'failed')]++;
+        }
+    }
+    $rendered[$default_lang] ??= bk_with_email_lang($default_lang, $render);
+    $shared = bk_send_shared_channels($pdo, $status, 'admin_notice', $rendered[$default_lang][2],
+        $rendered[$default_lang][0], $pushover_priority, false);
+    foreach (['attempted', 'sent', 'failed'] as $k) {
+        $count[$k] += $shared[$k];
+    }
+    return $count;
+}
+
+/**
+ * The address of this site's public status API, which the cron self-check
+ * reads the way /app and the public page do. Built from site_url's origin
+ * (/status and /app sit side by side at its root). null without a usable
+ * site_url: the check cannot run, and /app says so.
+ */
+function bk_self_check_url(string $site_url): ?string {
+    $origin = bk_site_origin($site_url);
+    return $origin !== '' ? $origin . '/status/api.php?action=public_status' : null;
+}
+
+/**
+ * One GET of the public status API from outside PHP, as a browser makes it:
+ * TLS verified, up to three redirects, 5 s to connect and 15 s in all. The
+ * extra parameter keeps a proxy in front (Cloudflare) from answering from
+ * its cache. A persistent 403 here usually means the proxy's bot protection
+ * blocks the hosting's own address.
+ *
+ * @return array{code: int, body: string, errno: int, error: string}
+ */
+function bk_self_check_fetch(string $url): array {
+    $ch = curl_init($url . (str_contains($url, '?') ? '&' : '?') . 'selfcheck=' . time());
+    if ($ch === false) {
+        return ['code' => 0, 'body' => '', 'errno' => -1, 'error' => 'curl_init failed'];
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_HTTPHEADER => ['Accept: application/json', 'Cache-Control: no-cache'],
+        CURLOPT_USERAGENT => 'BloodKingsStatus-selfcheck/1.0',
+    ]);
+    $body = curl_exec($ch);
+    return [
+        'code' => (int)curl_getinfo($ch, CURLINFO_HTTP_CODE),
+        'body' => is_string($body) ? $body : '',
+        'errno' => curl_errno($ch),
+        'error' => curl_error($ch),
+    ];
+}
+
+/**
+ * What a person can read of an answer that is not the expected JSON: an HTML
+ * page's title, or else its text without the tags, cut and masked like the
+ * output of config.php (bk_config_output_excerpt()), since it goes out on the
+ * alert channels.
+ */
+function bk_self_check_quote(string $body): string {
+    $text = preg_match('#<title[^>]*>(.*?)</title>#is', $body, $m) === 1 ? $m[1] : strip_tags(str_replace('>', '> ', $body));
+    return bk_config_output_excerpt(trim((string)preg_replace('/\s+/', ' ', $text)));
+}
+
+/**
+ * Whether the public status API answered what /app and the public page need:
+ * HTTP 200 and a JSON object with the keys they read. Anything else fails
+ * with a reason a person can act on; bytes ahead of the JSON are counted and
+ * shown (the 27 Sep 2026 case), a body is quoted by its first 16 bytes only.
+ *
+ * @return array{ok: bool, reason: ?string}
+ */
+function bk_self_check_verdict(int $code, string $body, int $errno, string $error): array {
+    if ($errno !== 0) {
+        return ['ok' => false, 'reason' => 'Not reached: ' . mb_strimwidth($error, 0, 150, '…', 'UTF-8')];
+    }
+    $data = json_decode($body, true);
+    if ($code !== 200) {
+        $said = is_array($data) && is_string($data['error'] ?? null)
+            ? mb_strimwidth($data['error'], 0, 120, '…', 'UTF-8')
+            : bk_self_check_quote($body);
+        return ['ok' => false, 'reason' => "HTTP {$code}" . ($said !== '' ? ": {$said}" : '')];
+    }
+    if (!is_array($data)) {
+        $brace = strpos($body, '{');
+        if ($brace !== false && $brace > 0 && is_array(json_decode(substr($body, $brace), true))) {
+            return ['ok' => false, 'reason' => sprintf('%d bytes before the JSON: "%s"', $brace,
+                bk_config_output_excerpt(substr($body, 0, $brace)))];
+        }
+        if ($body === '') {
+            return ['ok' => false, 'reason' => 'Empty answer'];
+        }
+        if (str_starts_with(ltrim($body), '<')) {
+            $quote = bk_self_check_quote($body);
+            return ['ok' => false, 'reason' => 'Not JSON but an HTML page' . ($quote !== '' ? ": \"{$quote}\"" : '')];
+        }
+        return ['ok' => false, 'reason' => 'Not JSON, starts with "' . bk_config_output_excerpt($body) . '"'];
+    }
+    $missing = array_values(array_diff(
+        ['status', 'totalMonitors', 'downMonitors', 'uptimePercent', 'lastUpdated', 'nodes'], array_keys($data)));
+    if ($missing !== []) {
+        return ['ok' => false, 'reason' => 'JSON without ' . implode(', ', $missing)];
+    }
+    if (!in_array($data['status'], ['healthy', 'degraded', 'down', 'maintenance', 'unknown'], true)
+        || !is_array($data['nodes'])) {
+        return ['ok' => false, 'reason' => 'JSON of an unexpected shape'];
+    }
+    return ['ok' => true, 'reason' => null];
+}
+
+/**
+ * The self-check's latch: one stored state, the new verdict, and whether to
+ * tell anyone. A failure is announced after $confirm failed checks in a row
+ * (a single blip is not an outage), once; an announcement no channel took is
+ * retried after $retry_secs, not every minute. An announced failure is over
+ * after $confirm passing checks in a row, with the state "recovering" in
+ * between: a single pass or a single failure moves nothing, so a notice pair
+ * needs $confirm failed and then $confirm passing checks in a row. A recovery
+ * is announced only when the failure was.
+ *
+ * @param array<string, mixed> $prev the stored state, [] before the first check
+ * @param array{ok: bool, reason: ?string} $verdict
+ * @return array{state: array<string, mixed>, notify: ?string} notify: 'failed', 'restored' or null
+ */
+function bk_self_check_step(array $prev, array $verdict, int $now, int $confirm = 2, int $retry_secs = 3600): array {
+    $at = date('c', $now);
+    $prev_state = $prev['state'] ?? null;
+    // A failure that was announced and not yet announced over.
+    $open = !empty($prev['alerted']) && in_array($prev_state, ['failed', 'recovering'], true);
+    if ($verdict['ok']) {
+        $passes = $prev_state === 'recovering' ? (int)($prev['passes'] ?? 1) + 1 : 1;
+        if ($open && $passes < $confirm) {
+            return ['state' => [
+                'state' => 'recovering',
+                'checkedAt' => $at,
+                'failures' => 0,
+                'passes' => $passes,
+                // Still the open failure's: for the recovery notice, or for a relapse.
+                'since' => $prev['since'] ?? null,
+                'reason' => $prev['reason'] ?? null,
+                'lastOkAt' => $at,
+                'alerted' => true,
+                'alertAttemptAt' => $prev['alertAttemptAt'] ?? null,
+                'alertResult' => $prev['alertResult'] ?? null,
+                'recoveredFrom' => null,
+            ], 'notify' => null];
+        }
+        $notify = $open ? 'restored' : null;
+        return ['state' => [
+            'state' => 'ok',
+            'checkedAt' => $at,
+            'failures' => 0,
+            'since' => null,
+            'reason' => null,
+            'lastOkAt' => $at,
+            'alerted' => false,
+            'alertAttemptAt' => null,
+            'alertResult' => null,
+            // What the recovery message talks about.
+            'recoveredFrom' => $notify !== null ? ['since' => $prev['since'] ?? null, 'reason' => $prev['reason'] ?? null] : null,
+        ], 'notify' => $notify];
+    }
+    $failing = $prev_state === 'failed';
+    // A relapse while recovering continues the announced failure: no new notice.
+    $continues = $failing || $open;
+    $state = [
+        'state' => 'failed',
+        'checkedAt' => $at,
+        'failures' => $failing ? (int)($prev['failures'] ?? 0) + 1 : 1,
+        'since' => $continues ? ($prev['since'] ?? $at) : $at,
+        'reason' => $verdict['reason'],
+        'lastOkAt' => $prev['lastOkAt'] ?? null,
+        'alerted' => $open,
+        'alertAttemptAt' => $continues ? ($prev['alertAttemptAt'] ?? null) : null,
+        'alertResult' => $continues ? ($prev['alertResult'] ?? null) : null,
+        'recoveredFrom' => null,
+    ];
+    $last_try = is_string($state['alertAttemptAt']) ? strtotime($state['alertAttemptAt']) : false;
+    $due = $state['failures'] >= $confirm && !$state['alerted']
+        && ($last_try === false || $now - $last_try >= $retry_secs);
+    return ['state' => $state, 'notify' => $due ? 'failed' : null];
+}
+
+/**
+ * The failure or recovery notice of the self-check, as subject, HTML and short text.
+ *
+ * @param array<string, mixed> $state
+ * @return array{0: string, 1: string, 2: string}
+ */
+function bk_self_check_message(string $event, array $state): array {
+    $url = (string)($state['url'] ?? '');
+    $when = fn ($iso): string => is_string($iso) && strtotime($iso) !== false ? date('j. n. Y H:i', (int)strtotime($iso)) : '?';
+    if ($event === 'failed') {
+        $subject = t('selfcheck_subject_failed');
+        $line = sprintf(t('selfcheck_failed_body'), $url, (int)($state['failures'] ?? 0), $when($state['since'] ?? null),
+            (string)($state['reason'] ?? ''));
+        $hint = t('selfcheck_failed_hint');
+        $color = '#ef233c';
+    } else {
+        $from = is_array($state['recoveredFrom'] ?? null) ? $state['recoveredFrom'] : [];
+        $subject = t('selfcheck_subject_restored');
+        $line = sprintf(t('selfcheck_restored_body'), $url, $when($from['since'] ?? null), (string)($from['reason'] ?? ''));
+        $hint = '';
+        $color = '#1ec773';
+    }
+    $html = render_email_wrapper($subject, $url, $color,
+        '<p style="font-size:14px;">' . htmlspecialchars($line) . '</p>'
+        . ($hint !== '' ? '<p style="color:#888896; font-size:12px;">' . htmlspecialchars($hint) . '</p>' : ''));
+    return [$subject, $html, $subject . "\n" . $line . ($hint !== '' ? "\n" . $hint : '')];
+}
+
+/**
+ * The cron self-check of the site's own public API.
+ *
+ * On 27 Sep 2026 every PHP answer began with two stray bytes for an hour;
+ * /app could not read a thing and the monitoring, busy watching everything
+ * else, did not notice its own site. Every few minutes (every run while it
+ * fails or recovers) this reads the public API over HTTP like /app does, keeps
+ * the result in the setting self_check_state (shown in /app) and tells the
+ * administrators through bk_send_admin_notice() when it fails and when it
+ * recovers - see bk_self_check_step() for when exactly.
+ *
+ * $config_output is what bk_config_output() says. db.php holds those bytes
+ * back, so the API passes while config.php is broken; they fail the check
+ * too, or that fault would reach no channel, only /app and health.php.
+ * $fetch and $notify replace the network and the channels in tests.
+ *
+ * @param array{bytes: int, where: list<string>, excerpt: string}|null $config_output
+ * @return array<string, mixed> the stored state, with 'ran' => whether it checked now
+ */
+function bk_self_check_run(PDO $pdo, ?string $url, int $now, ?array $config_output = null, ?callable $fetch = null,
+                           ?callable $notify = null): array {
+    $read = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'self_check_state'");
+    $read->execute();
+    $prev = json_decode((string)$read->fetchColumn(), true);
+    $prev = is_array($prev) ? $prev : [];
+    $save = function (array $state) use ($pdo): void {
+        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('self_check_state', ?)
+                       ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+            ->execute([json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+    };
+
+    if ($url === null) {
+        $state = ['state' => 'unconfigured', 'checkedAt' => date('c', $now), 'url' => null,
+            'lastOkAt' => $prev['lastOkAt'] ?? null];
+        $save($state);
+        return $state + ['ran' => false];
+    }
+    $interval = in_array($prev['state'] ?? null, ['failed', 'recovering'], true) ? 60 : 240;
+    $last = is_string($prev['checkedAt'] ?? null) ? strtotime($prev['checkedAt']) : false;
+    // 10 s of slack: a cron minute is not exactly 60 s apart.
+    if (($prev['url'] ?? null) === $url && $last !== false && $now - $last < $interval - 10) {
+        return $prev + ['ran' => false];
+    }
+
+    $res = ($fetch ?? 'bk_self_check_fetch')($url);
+    $verdict = bk_self_check_verdict((int)$res['code'], (string)$res['body'], (int)$res['errno'], (string)$res['error']);
+    if ($config_output !== null) {
+        // No excerpt here: this reason goes out on every admin channel, some
+        // of them shared (a Discord channel); /app shows the start to admins.
+        $said = sprintf('config.php prints %d bytes (%s); held back from every answer',
+            $config_output['bytes'], implode(', ', $config_output['where']));
+        $verdict = ['ok' => false, 'reason' => $verdict['ok'] ? $said : $verdict['reason'] . '; ' . $said];
+    }
+    ['state' => $state, 'notify' => $event] = bk_self_check_step(($prev['url'] ?? null) === $url ? $prev : [], $verdict, $now);
+    $state['url'] = $url;
+    if ($event !== null) {
+        try {
+            $sent = ($notify ?? fn (PDO $p, string $e, array $s): array => bk_send_admin_notice($p,
+                $e === 'failed' ? 'self_check_failed' : 'self_check_restored',
+                fn (): array => bk_self_check_message($e, $s), $e === 'failed' ? 1 : 0))($pdo, $event, $state);
+        } catch (Throwable $ex) {
+            // Recorded as a notice nobody took (retried in an hour), not lost:
+            // without the save below the next run would try again every minute.
+            error_log('[self-check] the notice could not be sent: ' . $ex->getMessage());
+            $sent = ['attempted' => 1, 'sent' => 0, 'unknown' => 0, 'failed' => 1];
+        }
+        // "sent" only when a provider confirmed; "unknown" when one took it
+        // unconfirmed; "failed" when every channel refused; "no_channel"
+        // when there was nobody to tell.
+        $result = $sent['sent'] > 0 ? 'sent' : ($sent['unknown'] > 0 ? 'unknown'
+            : ($sent['attempted'] > 0 ? 'failed' : 'no_channel'));
+        if ($event === 'failed') {
+            $state['alertAttemptAt'] = date('c', $now);
+            $state['alertResult'] = $result;
+            $state['alerted'] = $result === 'sent' || $result === 'unknown';
+        } else {
+            $state['recoveryResult'] = $result;
+        }
+    }
+    $save($state);
+    return $state + ['ran' => true];
 }
 
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {

@@ -6671,6 +6671,78 @@ try {
 check('s čistým config.php site_health nic nehlásí', array_key_exists('configOutput', (array)$j) ? $j['configOutput'] : 'x', null);
 
 // =======================================================================
+// The cron self-check of the site's own public API
+//
+// bk_self_check_run() against this server's real public_status, in a child
+// PHP that loads the app the way cron.php does. The channels are replaced by
+// a recorder, so nothing is sent; a failure is a stubbed "Ah{...}" answer on
+// the same URL, because db.php keeps the real API clean now.
+// =======================================================================
+$sc_code = 'require ' . var_export($root . '/functions.php', true) . ';'
+    . '$notes = [];'
+    . '$notify = function (PDO $p, string $e, array $s) use (&$notes): array {'
+    . '    $notes[] = [$e, $s["failures"] ?? null];'
+    . '    return ["attempted" => 2, "sent" => 0, "unknown" => 1, "failed" => 1];'
+    . '};'
+    . '$bad = fn (string $u): array => ["code" => 200, "body" => "Ah{\"status\":\"healthy\"}", "errno" => 0, "error" => ""];'
+    . '$url = ' . var_export($base . '/api.php?action=public_status', true) . ';'
+    . '$pdo->exec("DELETE FROM settings WHERE key_name = \'self_check_state\'");'
+    . '$t = time(); $r = [];'
+    . '$r[] = bk_self_check_run($pdo, $url, $t, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 30, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 300, fetch: $bad, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 360, fetch: $bad, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 420, fetch: $bad, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 480, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 540, notify: $notify);'
+    . '$cfg = ["bytes" => 2, "where" => ["before_open_tag"], "excerpt" => "Ah"];'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 780, $cfg, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 840, $cfg, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, null, $t + 900, notify: $notify);'
+    . 'echo json_encode(["runs" => $r, "notes" => $notes]);';
+$sc_out = [];
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($sc_code) . ' 2>&1', $sc_out, $sc_rc);
+$sc = json_decode((string)end($sc_out), true);
+check('samokontrola proběhla v podřízeném PHP', [$sc_rc, is_array($sc)], [0, true]);
+$sc_runs = $sc['runs'] ?? [];
+check('skutečné veřejné API prochází', [$sc_runs[0]['state'] ?? null, $sc_runs[0]['ran'] ?? null,
+    array_key_exists('reason', $sc_runs[0] ?? []) ? $sc_runs[0]['reason'] : 'chybí'], ['ok', true, null]);
+check('za 30 s se znovu nečte', [$sc_runs[1]['ran'] ?? null, $sc_runs[1]['state'] ?? null], [false, 'ok']);
+check('„Ah{…}": první selhání, zatím nikomu', [$sc_runs[2]['state'] ?? null, $sc_runs[2]['failures'] ?? null, $sc_runs[2]['reason'] ?? null],
+    ['failed', 1, '2 bytes before the JSON: "Ah"']);
+check('druhé: upozornění odešlo, převzetí nepotvrzené', [$sc_runs[3]['failures'] ?? null, $sc_runs[3]['alertResult'] ?? null, $sc_runs[3]['alerted'] ?? null],
+    [2, 'unknown', true]);
+check('třetí už nikomu', $sc_runs[4]['failures'] ?? null, 3);
+// One pass after an announced failure is not a recovery yet: a flapping API
+// would send a failure and a recovery every few minutes.
+check('první úspěch po ohlášeném selhání: zatím se obnova neohlásí', [$sc_runs[5]['state'] ?? null, $sc_runs[5]['ran'] ?? null,
+    $sc_runs[5]['alerted'] ?? null], ['recovering', true, true]);
+check('druhý za sebou: stav ok a výsledek zprávy o obnově', [$sc_runs[6]['state'] ?? null, $sc_runs[6]['recoveryResult'] ?? null], ['ok', 'unknown']);
+// db.php keeps the real API clean while config.php prints something, so the
+// fault fails the check itself, or it would reach no channel.
+check('výstup config.php selže kontrolu i s čistým API', [$sc_runs[7]['state'] ?? null, $sc_runs[7]['failures'] ?? null, $sc_runs[7]['reason'] ?? null],
+    ['failed', 1, 'config.php prints 2 bytes (before_open_tag); held back from every answer']);
+check('a po druhém za sebou jde upozornění stejnou cestou', [$sc_runs[8]['failures'] ?? null, $sc_runs[8]['alertResult'] ?? null,
+    $sc_runs[8]['alerted'] ?? null], [2, 'unknown', true]);
+check('upozornění: selhání API, obnova, selhání kvůli config.php', $sc['notes'] ?? null, [['failed', 2], ['restored', 0], ['failed', 2]]);
+check('bez site_url kontrola neběží a řekne to', [$sc_runs[9]['state'] ?? null, $sc_runs[9]['ran'] ?? null], ['unconfigured', false]);
+[$c, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('site_health nese stav samokontroly', [$c, $j['selfCheck']['state'] ?? null], [200, 'unconfigured']);
+$pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('self_check_state', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+    ->execute([json_encode(['state' => 'failed', 'url' => 'https://example.com/status/api.php?action=public_status',
+        'checkedAt' => '2026-09-27T18:10:00+02:00', 'failures' => 3, 'since' => '2026-09-27T18:00:00+02:00',
+        'reason' => 'HTTP 500', 'lastOkAt' => null, 'alerted' => false, 'alertAttemptAt' => '2026-09-27T18:05:00+02:00',
+        'alertResult' => 'failed', 'recoveredFrom' => null])]);
+[, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('a selhání se vším, co /app ukazuje', $j['selfCheck'] ?? null, ['state' => 'failed',
+    'url' => 'https://example.com/status/api.php?action=public_status', 'checkedAt' => '2026-09-27T18:10:00+02:00',
+    'failures' => 3, 'since' => '2026-09-27T18:00:00+02:00', 'reason' => 'HTTP 500', 'lastOkAt' => null,
+    'alertAttemptAt' => '2026-09-27T18:05:00+02:00', 'alertResult' => 'failed']);
+$pdo->exec("DELETE FROM settings WHERE key_name = 'self_check_state'");
+[, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('před prvním během cronu je selfCheck null', array_key_exists('selfCheck', (array)$j) ? $j['selfCheck'] : 'chybí', null);
+
+// =======================================================================
 // First run: the installer (site W1-5).
 //
 // db.php used to copy config.sample.php over a missing config.php, so a fresh
