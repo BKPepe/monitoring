@@ -1,0 +1,156 @@
+name: Deploy to the hosting (FTP)
+
+# The ONE entry point for everything that goes to the hosting over FTP:
+#   status - apps/status + the agents   (deploy-status.yml)
+#   app    - the app at /app + Go bin/   (deploy-go.yml)
+#   root   - the portal's named files   (deploy-root.yml)
+# Those three are reusable workflows and run only from here, one after another.
+#
+# Why one entry point: the hosting allows only a few FTP logins at a time, so
+# the three used to share the concurrency group ftp-deploy-hosting. But GitHub
+# keeps only ONE pending run per group, and a newer pending run cancels the
+# older one. A push touching all three started one deploy, queued the second,
+# and the third then replaced the queued one: that part was cancelled before
+# it started, silently (4a81b64: deploy-root). A per-part group would stop the
+# cancelling but let different parts log in at the same time again.
+#
+# Now a push makes one run, and the run deploys every part that changed, in
+# sequence, so FTP logins never overlap - within a run (needs:) or between runs
+# (the group). A newer run can still replace a pending one, and that is safe:
+# each run deploys what changed since the last SUCCESSFUL run, not since its
+# own parent commit, so the replacing run inherits the replaced run's work.
+# A failed part is retried by the next run the same way. The first run of this
+# file has no successful predecessor and deploys every part.
+#
+# Every FTPS connection verifies the certificate (curl by default, and
+# FTP-Deploy-Action with `security: strict` - its default is "loose").
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/status/**'
+      # A new agent version = the submodule pointer moved.
+      - 'agents'
+      - 'apps/server/**'
+      - 'apps/monitor/**'
+      - 'root/**'
+      - '.github/workflows/deploy-hosting.yml'
+      - '.github/workflows/deploy-status.yml'
+      - '.github/workflows/deploy-go.yml'
+      - '.github/workflows/deploy-root.yml'
+
+  # Manual run: redeploy without a code change (Actions missed a push, or
+  # web-health.yml asks for a fresh security.txt: parts = root).
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: 'Deploy these parts even when unchanged: status, app, root (comma-separated) or all. Changed parts always go.'
+        required: false
+        default: ''
+
+# cancel-in-progress: false - a killed FTP transfer leaves the server half-written.
+concurrency:
+  group: ftp-deploy-hosting
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Which parts changed since the last successful deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # gh run list: the commit of the last successful run.
+      actions: read
+    outputs:
+      status: ${{ steps.plan.outputs.status }}
+      app: ${{ steps.plan.outputs.app }}
+      root: ${{ steps.plan.outputs.root }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          # The whole history: the diff reaches back to the last deployed commit.
+          fetch-depth: 0
+
+      - name: Decide the parts
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.parts }}
+        run: |
+          set -euo pipefail
+          # Production is main. A manual run from another branch would put that
+          # branch on the server.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::deploys run from main only (this run: $GITHUB_REF)"
+            exit 1
+          fi
+          force=",$(printf '%s' "$FORCE" | tr -d ' '),"
+          all=false
+          [[ "$force" == *",all,"* ]] && all=true
+
+          base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy-hosting.yml --branch main \
+            --status success --limit 1 --json headSha --jq '.[0].headSha // empty') || {
+            echo "::warning::could not read the last successful run - deploying every part"
+            base=''
+          }
+          changed=''
+          if [ -z "$base" ]; then
+            echo "No successful deploy run yet - every part goes."
+            all=true
+          elif [ "$base" != "$GITHUB_SHA" ] && git merge-base --is-ancestor "$GITHUB_SHA" "$base" 2>/dev/null; then
+            # A re-run of an older run: the server already has the newer $base,
+            # and this run would put its old commit back while the next run
+            # still counts from $base. Refuse; a redeploy is a new run from main.
+            echo "::error::this run is for $GITHUB_SHA, older than the last deployed $base (a re-run of an old run?). Refusing to put old code on the server - use Run workflow on main (parts = ...) instead."
+            exit 1
+          elif ! git merge-base --is-ancestor "$base" "$GITHUB_SHA" 2>/dev/null; then
+            echo "::warning::last deployed commit $base is not in this history - deploying every part"
+            all=true
+          else
+            changed=$(git diff --name-only "$base" "$GITHUB_SHA")
+            echo "Last successful deploy: $base. Changed since:"
+            printf '%s\n' "$changed"
+          fi
+
+          # decide <part> <paths regex>: the part goes when forced, when
+          # everything goes, or when one of its paths changed.
+          decide() {
+            local on=false
+            if [ "$all" = true ] || [[ "$force" == *",$1,"* ]] || grep -qE "$2" <<< "$changed"; then
+              on=true
+            fi
+            echo "$1=$on" >> "$GITHUB_OUTPUT"
+            echo "$1: $on"
+          }
+          decide status '^(apps/status/|agents$|\.github/workflows/deploy-status\.yml$)'
+          decide app '^(apps/server/|apps/monitor/|\.github/workflows/deploy-go\.yml$)'
+          decide root '^(root/|\.github/workflows/deploy-root\.yml$)'
+
+  # One part after another. `!cancelled()`: a failed part does not hold back
+  # the others (they are independent, as they were as separate workflows), and
+  # the run stays red, so the next run retries the failed one.
+  status:
+    name: status
+    needs: plan
+    if: ${{ needs.plan.outputs.status == 'true' }}
+    uses: ./.github/workflows/deploy-status.yml
+    secrets: inherit
+
+  app:
+    name: app
+    needs: [plan, status]
+    if: ${{ !cancelled() && needs.plan.outputs.app == 'true' }}
+    uses: ./.github/workflows/deploy-go.yml
+    secrets: inherit
+
+  root:
+    name: root
+    needs: [plan, status, app]
+    if: ${{ !cancelled() && needs.plan.outputs.root == 'true' }}
+    uses: ./.github/workflows/deploy-root.yml
+    secrets: inherit

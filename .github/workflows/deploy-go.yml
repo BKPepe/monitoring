@@ -1,28 +1,11 @@
 name: Deploy Go Backend & Monitor SPA to cPanel
 
+# Runs only from deploy-hosting.yml, which decides what changed and keeps the
+# FTP deploys in one queue (see there). Its own push trigger and concurrency
+# group are gone: a called workflow must not hold the caller's group (GitHub
+# cancels it as a deadlock), and the shared group lost deploys (4a81b64).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'apps/server/**'
-      - 'apps/monitor/**'
-      - '.github/workflows/deploy-go.yml'
-
-  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
-  # Actions zrovna nezareagovaly na push).
-  workflow_dispatch:
-
-
-# Hosting pousti jen hrstku soucasnych FTP prihlaseni. Skupina je zamerne
-# SPOLECNA pro oba deploy workflow: push, ktery sahne na apps/status i na
-# apps/monitor, spousti oba najednou a ty se pak perou o stejne sloty na
-# stejnem uctu - odtud "Timeout (control socket)". Druhy deploy radeji
-# pocka. cancel-in-progress: false, protoze zabity FTP prenos nechava
-# server v polovicnim stavu.
-concurrency:
-  group: ftp-deploy-hosting
-  cancel-in-progress: false
+  workflow_call:
 
 jobs:
   build-and-deploy:
@@ -97,7 +80,9 @@ jobs:
           server-dir: bin/
           protocol: ftps
           timeout: 300000
-          security: loose
+          # Verify the certificate (the action's default is "loose"); the
+          # hosting's certificate is valid for FTP_SERVER.
+          security: strict
 
 
 
@@ -118,7 +103,9 @@ jobs:
           server-dir: public_html/app/
           protocol: ftps
           timeout: 300000
-          security: loose
+          # Verify the certificate (the action's default is "loose"); the
+          # hosting's certificate is valid for FTP_SERVER.
+          security: strict
           exclude: |
             **/.git*
             status/**

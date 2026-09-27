@@ -1,6 +1,7 @@
-// CLI behind .github/workflows/deploy-root.yml and web-health.yml. Each command
-// does its job or exits non-zero with the reason: uploading a guessed file into
-// the game portal's root would be worse than a failed run.
+// CLI behind .github/workflows/deploy-root.yml (run by deploy-hosting.yml) and
+// web-health.yml. Each command does its job or exits non-zero with the reason:
+// uploading a guessed file into the game portal's root would be worse than a
+// failed run.
 //
 //   node root/deploy.mjs build <dir>                 files to upload, one by one
 //   node root/deploy.mjs merge-htaccess <live> <out> prints inserted|updated|unchanged
@@ -133,10 +134,11 @@ async function checkRoot(tag) {
   if (sm.status !== 200) problems.push(`sitemap.xml answered HTTP ${sm.status}`);
   else {
     // The list is built at deploy time. A page made public or hidden since
-    // then shows up here; re-running deploy-root.yml brings it up to date.
+    // then shows up here; a deploy-hosting.yml run with parts = root brings it
+    // up to date.
     const want = await sitemapUrls();
     for (const u of want) {
-      if (!locs.includes(u)) problems.push(`sitemap.xml misses ${u}; re-run deploy-root.yml`);
+      if (!locs.includes(u)) problems.push(`sitemap.xml misses ${u}; run deploy-hosting.yml with parts = root`);
     }
     for (const u of locs) {
       if (!want.includes(u)) problems.push(`sitemap.xml lists ${u}, which is not a live public page`);

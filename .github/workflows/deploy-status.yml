@@ -1,30 +1,11 @@
 name: Deploy Status App to cPanel
 
+# Runs only from deploy-hosting.yml, which decides what changed and keeps the
+# FTP deploys in one queue (see there). Its own push trigger and concurrency
+# group are gone: a called workflow must not hold the caller's group (GitHub
+# cancels it as a deadlock), and the shared group lost deploys (4a81b64).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'apps/status/**'
-      # Zmena verze agenta = posun ukazatele submodulu. Bez tehle cesty by se
-      # novy agent nikdy nenasadil a self-update by stahoval porad tu starou.
-      - 'agents'
-      - '.github/workflows/deploy-status.yml'
-
-  # Rucni spusteni: znovunasazeni bez zmeny kodu (napr. kdyz GitHub
-  # Actions zrovna nezareagovaly na push).
-  workflow_dispatch:
-
-
-# Hosting pousti jen hrstku soucasnych FTP prihlaseni. Skupina je zamerne
-# SPOLECNA pro oba deploy workflow: push, ktery sahne na apps/status i na
-# apps/monitor, spousti oba najednou a ty se pak perou o stejne sloty na
-# stejnem uctu - odtud "Timeout (control socket)". Druhy deploy radeji
-# pocka. cancel-in-progress: false, protoze zabity FTP prenos nechava
-# server v polovicnim stavu.
-concurrency:
-  group: ftp-deploy-hosting
-  cancel-in-progress: false
+  workflow_call:
 
 jobs:
   deploy:
@@ -83,14 +64,34 @@ jobs:
       - name: Inject Status Database Config
         env:
           STATUS_CONFIG_PHP: ${{ secrets.STATUS_CONFIG_PHP || secrets.status_config_php }}
+        # No fallback to config.sample.php: with the web installer (site W1-5)
+        # a config that still holds the sample's placeholder password reads as
+        # "not installed yet", and /app/setup would let any visitor point
+        # production at their own database. Deleting the file is no way out
+        # either - the FTP sync removes it remotely, and a missing config.php
+        # opens the installer too. So a missing or botched secret stops the
+        # deploy before anything is uploaded. Nothing of the secret is printed.
         run: |
-          if [ -n "$STATUS_CONFIG_PHP" ]; then
-            echo "Creating apps/status/config.php from GitHub Actions secret..."
-            printf '%s' "$STATUS_CONFIG_PHP" > apps/status/config.php
-          else
-            echo "STATUS_CONFIG_PHP secret is not set. Using config.sample.php as fallback."
-            cp apps/status/config.sample.php apps/status/config.php
+          if [ -z "$STATUS_CONFIG_PHP" ]; then
+            echo "::error::STATUS_CONFIG_PHP is not set. Refusing to deploy: a placeholder config.php would open /app/setup on production."
+            exit 1
           fi
+          printf '%s' "$STATUS_CONFIG_PHP" > apps/status/config.php
+          # The DB_PASS value only, as the server decides it (bk_config_is_placeholder
+          # in db.php): the same words in a comment of the real config are fine.
+          if grep -Eq "^[[:space:]]*define\([\"']DB_PASS[\"'],[[:space:]]*[\"'](heslo_databaze|database_password)[\"']" apps/status/config.php; then
+            echo "::error::STATUS_CONFIG_PHP still holds the sample's placeholder password. Refusing to deploy."
+            exit 1
+          fi
+          if ! php -l apps/status/config.php > /dev/null 2>&1; then
+            echo "::error::STATUS_CONFIG_PHP is not valid PHP (php -l failed; output hidden, it may quote the file). Refusing to deploy."
+            exit 1
+          fi
+          if ! grep -q "DB_PASS" apps/status/config.php; then
+            echo "::error::STATUS_CONFIG_PHP defines no DB_PASS. Refusing to deploy."
+            exit 1
+          fi
+          echo "apps/status/config.php created from the STATUS_CONFIG_PHP secret."
 
       - name: Generate Version File
         run: |
@@ -114,6 +115,10 @@ jobs:
           local-dir: ./apps/status/
           server-dir: public_html/status/
           protocol: ftps
+          # The action's default is "loose": TLS without a certificate check.
+          # The hosting's certificate is valid for FTP_SERVER (the curl steps
+          # below verify it on every deploy), so nothing justifies skipping it.
+          security: strict
           # Stejny duvod jako v deploy-go.yml: `timeout` je necinnost ridiciho
           # socketu. Po predchozim deployi jeste nejsou uvolnena FTP sezeni a
           # server odpovi az za desitky sekund - v 60 s se to nestihlo.

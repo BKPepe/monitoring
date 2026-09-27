@@ -26,8 +26,9 @@ yet deployed:
 │   └── server/                    # Go + Postgres - future backend replacing apps/status (not deployed)
 ├── agents/                        # git submodule -> BKPepe/monitoring-agent
 ├── .github/
-│   └── workflows/                 # deploy.yml (site+worker), deploy-status.yml (PHP+SPA),
-│                                  # deploy-go.yml, release-agents.yml, codeql.yml
+│   └── workflows/                 # deploy.yml (site+worker), deploy-hosting.yml (FTP:
+│                                  # status, app, root in one queue), release-agents.yml,
+│                                  # codeql.yml
 └── package.json                   # NPM workspaces config (site, worker, monitor)
 ```
 
@@ -93,7 +94,10 @@ stay under rate limits:
 ## 🚀 Deployment (CI/CD)
 
 Deployment runs automatically on every push to `main` via GitHub Actions
-(`.github/workflows/deploy.yml`).
+(`.github/workflows/deploy.yml`). The hosting parts (`status`, `app`, `root`)
+go over FTPS through `.github/workflows/deploy-hosting.yml`: one run per push
+deploys every part changed since the last successful run, one part after
+another, so FTP logins never overlap and no part is dropped from the queue.
 
 ### GitHub secrets required:
 1.  `CLOUDFLARE_API_TOKEN` — API token with Pages and Workers deploy permissions.

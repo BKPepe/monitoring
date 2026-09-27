@@ -5,21 +5,15 @@ name: Deploy bloodkings.eu root files
 # public_html, each uploaded on its own - never a sync of the directory:
 #   errors/{403,404,410,500,503}.html, robots.txt, sitemap.xml,
 #   .well-known/security.txt and the marked block in .htaccess.
+#
+# Runs only from deploy-hosting.yml, which decides what changed and keeps the
+# FTP deploys in one queue (see there); web-health.yml's security.txt renewal
+# is a manual run of that workflow with parts = root. Its own push trigger and
+# concurrency group are gone: a called workflow must not hold the caller's
+# group (GitHub cancels it as a deadlock), and the shared group lost this very
+# deploy on 4a81b64.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'root/**'
-      - '.github/workflows/deploy-root.yml'
-  # Also renews security.txt (Expires = deploy + 11 months) when web-health.yml
-  # says it is getting close.
-  workflow_dispatch:
-
-# Same group as deploy-status.yml and deploy-go.yml: the hosting allows only a
-# few FTP logins at a time, and a killed transfer leaves a half-written file.
-concurrency:
-  group: ftp-deploy-hosting
-  cancel-in-progress: false
+  workflow_call:
 
 permissions:
   contents: read
