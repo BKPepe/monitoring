@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { createBrowserRouter, useLocation, type RouteObject } from 'react-router';
+import { createBrowserRouter, Navigate, useLocation, type RouteObject } from 'react-router';
 import { AppShell } from '@/components/layout/app-shell';
 import { DashboardPage } from '@/pages/dashboard';
 import { NotFoundPage } from '@/pages/not-found';
@@ -27,9 +27,9 @@ const SubscribeConfirmPage = React.lazy(() =>
 const UnsubscribePage = React.lazy(() => import('@/pages/unsubscribe').then((m) => ({ default: m.UnsubscribePage })));
 const SetupPage = React.lazy(() => import('@/pages/setup').then((m) => ({ default: m.SetupPage })));
 const WebsitesPage = React.lazy(() => import('@/pages/websites').then((m) => ({ default: m.WebsitesPage })));
-const ServicesPage = React.lazy(() => import('@/pages/services').then((m) => ({ default: m.ServicesPage })));
 const StatusPagesPage = React.lazy(() => import('@/pages/status-pages').then((m) => ({ default: m.StatusPagesPage })));
 const IncidentsPage = React.lazy(() => import('@/pages/incidents').then((m) => ({ default: m.IncidentsPage })));
+const CheckLogPage = React.lazy(() => import('@/pages/check-log').then((m) => ({ default: m.CheckLogPage })));
 const ReportsPage = React.lazy(() => import('@/pages/reports').then((m) => ({ default: m.ReportsPage })));
 const InsightsPage = React.lazy(() => import('@/pages/insights').then((m) => ({ default: m.InsightsPage })));
 const SettingsPage = React.lazy(() => import('@/pages/settings').then((m) => ({ default: m.SettingsPage })));
@@ -250,9 +250,13 @@ export const routes: RouteObject[] = [
       // it: a router's page also lists the metrics of its agent services.
       { path: 'infrastructure/:id/metric/:monitorId/:metricKey', element: <MetricDetailPage /> },
       { path: 'websites', element: <WebsitesPage /> },
-      { path: 'services', element: <ServicesPage /> },
+      // The Služby page listed two rows the device list already has (owner
+      // decision 5.8); old bookmarks land on that list, narrowed to the same rows.
+      { path: 'services', element: <Navigate to="/infrastructure?type=agent_service" replace /> },
       { path: 'status-pages', element: <StatusPagesPage /> },
       { path: 'incidents', element: <IncidentsPage /> },
+      // The one check log (W2-6); ?monitor= narrows it to a device.
+      { path: 'incidents/checks', element: <CheckLogPage /> },
       { path: 'insights', element: <InsightsPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'settings', element: <SettingsPage /> },

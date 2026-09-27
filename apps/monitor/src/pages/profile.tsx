@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { KeyRound, Link2, Save, UserRound } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { KeyRound, Link2, LockKeyhole, Save, UserRound } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { GithubIcon, GoogleIcon } from '@/components/ui/brand-icons';
@@ -61,7 +61,7 @@ export function ProfilePage() {
 
   if (!session?.authenticated) {
     return (
-      <Card className="grid place-items-center gap-3 p-16 text-center">
+      <Panel bodyClassName="grid place-items-center gap-3 py-12 text-center">
         <div>
           <p className="font-medium">{t('profile.login_required', 'Přihlášení vyžadováno')}</p>
           <p className="text-muted-foreground text-sm">
@@ -71,14 +71,13 @@ export function ProfilePage() {
         <Button variant="primary" size="sm" asChild>
           <a href={resolveUrl(session?.loginUrl ?? 'admin.php')}>{t('settings.go_to_login', 'Přejít na přihlášení')}</a>
         </Button>
-      </Card>
+      </Panel>
     );
   }
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        icon={<UserRound className="size-5 text-primary" />}
         title={t('profile.title', 'Můj účet')}
         subtitle={t('profile.subtitle', 'Kontaktní údaje, heslo, dvoufázové ověření a odběry notifikací.')}
       />
@@ -174,13 +173,16 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
 
   return (
     <form onSubmit={submit} className="contents">
-      <Card className="space-y-4 p-6">
-        <h3 className="border-b border-border pb-3 text-sm font-semibold">
-          {t('profile.contact_title', 'Kontaktní údaje a notifikace')}
-        </h3>
-        <p className="text-muted-foreground text-xs">
-          {t('profile.username_label', 'Uživatelské jméno')}: <strong>{profile.username}</strong>
-        </p>
+      <Panel
+        icon={UserRound}
+        title={t('profile.contact_title', 'Kontaktní údaje a notifikace')}
+        hint={
+          <>
+            {t('profile.username_label', 'Uživatelské jméno')}: <strong>{profile.username}</strong>
+          </>
+        }
+        bodyClassName="space-y-4"
+      >
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label={t('profile.email', 'E-mail')} required>
             <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -205,7 +207,7 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
             <select
               value={emailLang}
               onChange={(e) => setEmailLang(e.target.value)}
-              className="bg-secondary/60 h-9 w-full rounded-md border border-input px-3 text-sm"
+              className="bg-secondary/60 border-input hover:border-border-strong focus-visible:border-ring h-9 w-full rounded-md border px-3 text-sm"
             >
               <option value="">{t('profile.email_lang_default', 'Podle globálního nastavení')}</option>
               <option value="cs">Čeština</option>
@@ -233,15 +235,14 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
             {t('profile.whatsapp_enabled', 'Posílat WhatsApp notifikace')}
           </label>
         </div>
-      </Card>
+      </Panel>
 
-      <Card className="space-y-4 p-6">
-        <h3 className="border-b border-border pb-3 text-sm font-semibold">
-          {t('profile.password_title', 'Změna hesla')}
-        </h3>
-        <p className="text-muted-foreground text-xs">
-          {t('profile.password_hint', 'Vyplňte jen při změně. Vyžaduje stávající heslo.')}
-        </p>
+      <Panel
+        icon={LockKeyhole}
+        title={t('profile.password_title', 'Změna hesla')}
+        hint={t('profile.password_hint', 'Vyplňte jen při změně. Vyžaduje stávající heslo.')}
+        bodyClassName="space-y-4"
+      >
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label={t('profile.old_password', 'Stávající heslo')}>
             <Input
@@ -278,7 +279,7 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
             {saving ? t('common.saving', 'Ukládám…') : t('profile.save_btn', 'Uložit profil')}
           </Button>
         </div>
-      </Card>
+      </Panel>
     </form>
   );
 }
@@ -319,21 +320,16 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
   };
 
   return (
-    <Card className="space-y-3 p-6">
-      <h3 className="flex items-center gap-2 border-b border-border pb-3 text-sm font-semibold">
-        <Link2 className="size-4 text-primary" />
-        {t('profile.oauth_title', 'Přihlašování přes externí účet')}
-      </h3>
-
+    <Panel icon={Link2} title={t('profile.oauth_title', 'Přihlašování přes externí účet')} bodyClassName="space-y-3">
       {error && <ErrorState size="inline" message={error} />}
 
       {profile.oauthProvider ? (
         <div className="space-y-3">
           <p className="flex items-center gap-2 text-sm">
-            <Badge variant="info">
-              <KeyRound className="size-3" />
+            <Pill tone="info">
+              <KeyRound aria-hidden="true" className="size-3" />
               {profile.oauthProvider}
-            </Badge>
+            </Pill>
             {t('profile.oauth_linked', 'Účet je propojený - přihlásíte se i bez hesla.')}
           </p>
           {unlinking ? (
@@ -381,14 +377,14 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
           </div>
         </div>
       )}
-    </Card>
+    </Panel>
   );
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-muted-foreground text-xs font-medium">
+      <span className="micro-label">
         {label}
         {required && <span className="text-down ml-0.5">*</span>}
       </span>

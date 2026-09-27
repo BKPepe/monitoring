@@ -18,6 +18,11 @@
 //    to theme.
 // 3. No opacity modifier on status text (text-warning/80): a token's contrast
 //    is measured at full strength, and 80 % of it is not.
+// 4. No raw colour inside an inline style={{...}} (UX wave 2 guard rail): the
+//    login page was built from 29 style objects with hex sky blue and slate,
+//    and the three class rules above never looked inside them. A colour there
+//    has no dark variant and no measured contrast either. Brand logo colours
+//    are allowed, as in rule 2.
 //
 // The rules test themselves before scanning. A regex quietly loosened by a
 // later edit would otherwise pass every file and look like a clean codebase.
@@ -105,9 +110,53 @@ const MUST_PASS = [
   'text-[#5865F2]',
   'bg-[#fc6d26]/15',
 ];
+/** Rule 4: raw colours inside every style={{...}} block of a file, with their line numbers. */
+const RAW_STYLE_COLOUR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab)\(\s*[\d.]/g;
+function styleColours(text) {
+  const hits = [];
+  let from = 0;
+  for (;;) {
+    const start = text.indexOf('style={{', from);
+    if (start === -1) break;
+    // The block ends where its braces balance; a template literal inside it
+    // (`${pct}%`) opens and closes its own pair.
+    let depth = 0;
+    let end = start + 'style='.length;
+    for (; end < text.length; end++) {
+      if (text[end] === '{') depth++;
+      else if (text[end] === '}' && --depth === 0) break;
+    }
+    const block = text.slice(start, end + 1);
+    for (const m of block.matchAll(RAW_STYLE_COLOUR)) {
+      if (BRAND_COLOURS.has(m[0].toLowerCase())) continue;
+      const line = text.slice(0, start + m.index).split('\n').length;
+      hits.push({ line, hit: m[0] });
+    }
+    from = end + 1;
+  }
+  return hits;
+}
+
+const STYLE_MUST_FLAG = [
+  "<p style={{ color: '#0284c7' }} />",
+  '<div style={{\n  background: "#fff",\n}} />',
+  "<span style={{ borderColor: 'rgb(2, 132, 199)' }} />",
+  "<b style={{ width: `${pct}%`, color: '#334155' }} />",
+];
+const STYLE_MUST_PASS = [
+  '<div style={{ height }} />',
+  "<p style={{ color: 'var(--status-down)' }} />",
+  '<i style={{ width: `${pct}%` }} />',
+  '<i style={{ background: `linear-gradient(to right, ${a}, ${b})` }} />',
+  "<svg style={{ color: '#5865F2' }} />",
+  "<a href='#top' className='x' />",
+];
+
 const selfTest = [
   ...MUST_FLAG.filter((s) => matches(s).length === 0).map((s) => `not flagged: ${s}`),
   ...MUST_PASS.filter((s) => matches(s).length > 0).map((s) => `wrongly flagged: ${s}`),
+  ...STYLE_MUST_FLAG.filter((s) => styleColours(s).length === 0).map((s) => `not flagged: ${s}`),
+  ...STYLE_MUST_PASS.filter((s) => styleColours(s).length > 0).map((s) => `wrongly flagged: ${s}`),
 ];
 if (selfTest.length) {
   console.error('Raw palette lint: the rules failed their own test - fix the regex before trusting a clean run:');
@@ -123,13 +172,34 @@ function* walk(dir) {
   }
 }
 
+/**
+ * Files that still break rule 4, each with the item that rebuilds it. The
+ * list only shrinks: an entry that no longer has a hit fails the run, so it
+ * cannot outlive its fix.
+ */
+const STYLE_BASELINE = new Map();
+
 const hits = [];
+const stale = [];
 for (const file of walk(SRC)) {
-  readFileSync(file, 'utf8')
-    .split('\n')
-    .forEach((line, i) => {
-      for (const hit of matches(line)) hits.push(`${relative(ROOT, file)}:${i + 1}: ${hit}`);
-    });
+  const text = readFileSync(file, 'utf8');
+  const rel = relative(ROOT, file);
+  text.split('\n').forEach((line, i) => {
+    for (const hit of matches(line)) hits.push(`${rel}:${i + 1}: ${hit}`);
+  });
+  if (!file.endsWith('.tsx')) continue;
+  const inline = styleColours(text);
+  if (STYLE_BASELINE.has(rel)) {
+    if (inline.length === 0) stale.push(rel);
+    continue;
+  }
+  for (const { line, hit } of inline) hits.push(`${rel}:${line}: ${hit} in style={{}}`);
+}
+
+if (stale.length) {
+  console.error('Raw palette lint: these files are clean now - remove them from STYLE_BASELINE:');
+  for (const f of stale) console.error(`  ${f}`);
+  process.exit(1);
 }
 
 if (hits.length) {
@@ -137,6 +207,8 @@ if (hits.length) {
   for (const h of hits) console.error(`  ${h}`);
   process.exit(1);
 }
+const cases = MUST_FLAG.length + MUST_PASS.length + STYLE_MUST_FLAG.length + STYLE_MUST_PASS.length;
 console.log(
-  `Raw palette lint: ${MUST_FLAG.length + MUST_PASS.length} self-test cases pass, every colour in the SPA goes through a token.`
+  `Raw palette lint: ${cases} self-test cases pass, every colour in the SPA goes through a token` +
+    (STYLE_BASELINE.size ? ` (inline-style baseline: ${[...STYLE_BASELINE].map(([f, why]) => `${f} - ${why}`).join('; ')}).` : '.')
 );

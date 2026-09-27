@@ -116,7 +116,7 @@ describe('IncidentsPage', () => {
     expect(screen.queryByText('Výpadek: Router - Praha')).toBeNull();
 
     fireEvent.click(notesButton);
-    const card = notesButton.closest('.rounded-lg') as HTMLElement;
+    const card = notesButton.closest('[data-slot="incident-card"]') as HTMLElement;
     expect(within(card).getAllByText(/Incident převzal: admin/).length).toBeGreaterThan(0);
     expect(within(card).getByPlaceholderText(/poznámka do timeline|note/i)).toBeTruthy();
     expect(within(card).getByRole('button', { name: /uzavřít incident|resolve/i })).toBeTruthy();
@@ -144,5 +144,27 @@ describe('IncidentsPage', () => {
     const posted = fetchMock.mock.calls.find((c) => String(c[0]).includes('action=create_incident'));
     expect(posted).toBeTruthy();
     expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({ monitorId: 7, impact: 'major' });
+  });
+
+  it('dlaždice počítají z vypsaných seznamů: probíhá, nepřevzato, vyřešeno', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => Promise.resolve(apiClosedIncident(String(url))))
+    );
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <IncidentsPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    await screen.findByRole('button', { name: /otevřít incident|open an incident/i });
+    // The tile's figure and its word sit together; the word says what is counted.
+    const tile = (word: string) =>
+      screen.getAllByText(word).find((el) => el.classList.contains('micro-label'))?.parentElement as HTMLElement;
+    // One outage still running, nobody took it, and one closed record in the history.
+    expect(tile('Probíhá').querySelector('.figure')?.textContent).toBe('1');
+    expect(tile('Nepřevzato').querySelector('.figure')?.textContent).toBe('1');
+    expect(tile('Vyřešeno').querySelector('.figure')?.textContent).toBe('1');
   });
 });

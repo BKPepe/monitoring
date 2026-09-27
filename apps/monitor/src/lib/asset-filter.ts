@@ -16,6 +16,33 @@ export function parseStatusFilter(raw: string | null | undefined): AssetStatus |
 }
 
 /**
+ * Monitor types the device list can be narrowed to (`?type=`). The removed
+ * Služby page redirects to `?type=agent_service` (owner decision 5.8).
+ */
+const KNOWN_TYPES = [
+  'web',
+  'port',
+  'dns',
+  'vps',
+  'openwrt',
+  'cpanel',
+  'agent_service',
+  'teamspeak',
+  'minecraft',
+  'discord',
+  'heartbeat',
+] as const;
+
+/**
+ * Reads the `?type=` filter. Like the status filter, anything unrecognised is
+ * no filter at all: a typo must not present an empty inventory as the truth.
+ */
+export function parseTypeFilter(raw: string | null | undefined): string | null {
+  const type = (raw ?? '').trim().toLowerCase();
+  return (KNOWN_TYPES as readonly string[]).includes(type) ? type : null;
+}
+
+/**
  * Narrows the device list by free text and/or status.
  *
  * `null` means "no filter is active" - the caller then renders the full

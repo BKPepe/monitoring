@@ -1,28 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router';
-import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge } from '@/components/ui/badge';
-import { Globe, Plus, ExternalLink, ShieldCheck, Activity, Clock, Lock, Server } from 'lucide-react';
+import { usePageChrome } from '@/components/layout/shell-context';
+import { Globe, Plus, ExternalLink, ShieldCheck, Activity, Clock, Lock, Server, CircleX } from 'lucide-react';
 import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { LoadingState, ErrorState } from '@/components/ui/states';
-import { formatPercent } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { NoValue } from '@/components/ui/key-value';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
+import { StatBlock } from '@/components/stat-block';
+import { monitorStatusKey, statusLabel, statusMeta, type StatusKey } from '@/lib/status';
+import { cn, formatPercent, formatPercentValue } from '@/lib/utils';
 
 interface WebMonitor {
   id: number;
   name: string;
   target: string;
   type: string;
-  status: 'up' | 'down' | 'warning' | 'paused';
+  /**
+   * The shared vocabulary (C-11). The page used to fold every state into
+   * up/down and printed "200 OK" for anything that was not down - a site in
+   * maintenance or never checked read as a healthy 200 (honest-14).
+   */
+  statusKey: StatusKey;
   /** null = latency was not measured (no invented 0 ms). */
   response_time: number | null;
   details?: Record<string, any>;
 }
 
 export function WebsitesPage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { session } = useSession();
   const isAuthenticated = Boolean(session?.authenticated);
   // Adding and editing monitors is an admin task; a signed-in user only views.
@@ -30,6 +41,7 @@ export function WebsitesPage() {
   const [websites, setWebsites] = useState<WebMonitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const listFailed = loadError !== null;
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
@@ -45,22 +57,39 @@ export function WebsitesPage() {
         measuredSince: string | null;
         /** How many days of daily-rollup history actually exist. */
         longTermDays?: number;
+        /** The code the latest check recorded; null = it recorded none (W2-10). */
+        httpStatusCode?: number | null;
+        httpCheckedAt?: string | null;
       }
     >
   >({});
+  const [sslAlertDays, setSslAlertDays] = useState(30);
+  // The overview carries SLA and the HTTP codes. Its failure used to leave
+  // both blank without a word, which read as "no history".
+  const [overviewError, setOverviewError] = useState<string | null>(null);
 
   // SLA windows come from the light cached endpoint - sla_report with full
   // outage details takes up to 3.7 s and does not belong here.
   useEffect(() => {
     let active = true;
     fetch('/status/api.php?action=websites_overview', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        // Signed out, the overview is simply not for this visitor - no error.
+        if (r.status === 401 || r.status === 403) return null;
+        const d = await r.json().catch(() => null);
+        if (!r.ok || !d || d.error) throw new Error(d?.message || d?.error || `HTTP ${r.status}`);
+        return d;
+      })
       .then((d) => {
         if (!active || !d) return;
         if (typeof d.slaGoal === 'number') setSlaGoal(d.slaGoal);
+        if (typeof d.sslAlertDays === 'number' && d.sslAlertDays > 0) setSslAlertDays(d.sslAlertDays);
         if (d.monitors && typeof d.monitors === 'object') setSlaByMonitor(d.monitors);
+        setOverviewError(null);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (active) setOverviewError(err instanceof Error ? err.message : String(err));
+      });
     return () => {
       active = false;
     };
@@ -93,13 +122,7 @@ export function WebsitesPage() {
             name: m.name,
             target: m.target,
             type: (m.type || 'HTTPS').toUpperCase(),
-            status: (m.status === 'down'
-              ? 'down'
-              : m.status === 'warning'
-                ? 'warning'
-                : m.status === 'paused'
-                  ? 'paused'
-                  : 'up') as any,
+            statusKey: monitorStatusKey(m),
             response_time: m.responseMs ?? m.response_time ?? null,
             details: m.details,
           }));
@@ -114,6 +137,7 @@ export function WebsitesPage() {
   useEffect(() => {
     loadWebsites();
   }, [loadWebsites]);
+  usePageChrome({ onRefresh: loadWebsites });
 
   const handleAddWebsite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,8 +166,12 @@ export function WebsitesPage() {
     }
   };
 
-  const upCount = websites.filter((w) => w.status === 'up').length;
-  const overallUptimePct = websites.length > 0 ? (upCount / websites.length) * 100 : null;
+  // "Available right now" over the sites with a current verdict: a site in
+  // maintenance, paused or never checked is neither up nor down, and counting
+  // it either way would move the number without a measurement behind it.
+  const measured = websites.filter((w) => ['up', 'warning', 'down'].includes(w.statusKey));
+  const upCount = measured.filter((w) => w.statusKey !== 'down').length;
+  const overallUptimePct = measured.length > 0 ? (upCount / measured.length) * 100 : null;
   const respondingLatencies = websites
     .filter((w) => w.response_time != null && w.response_time > 0)
     .map((w) => w.response_time as number);
@@ -155,279 +183,295 @@ export function WebsitesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={t('websites.title', 'Sledované weby, cPanel & HTTP API')}
+        title={t('websites.page_title', 'Weby & HTTP')}
+        // cPanel statistics appear only where a cPanel token is set, so the
+        // subtitle no longer promises them on every install (W2-10).
         subtitle={t(
-          'websites.subtitle',
-          'Výhradně přehled dostupnosti webových stránek, cPanel statistik, SSL certifikátů a HTTP/HTTPS API.'
+          'websites.page_subtitle',
+          'Dostupnost, HTTP odpověď, SSL certifikát a SLA každého sledovaného webu a HTTP/HTTPS API.'
         )}
         actions={
           isAdmin ? (
-            <button
-              type="button"
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors cursor-pointer"
-            >
-              <Plus className="size-4" /> {t('websites.add_website', 'Přidat nový web')}
-            </button>
+            <Button variant="primary" onClick={() => setShowAddModal(true)} className="gap-2">
+              <Plus aria-hidden="true" /> {t('websites.add_website', 'Přidat nový web')}
+            </Button>
           ) : null
         }
       />
 
       {!isAuthenticated && (
-        <Card className="p-4 bg-warning/10 border-warning/30 flex items-center justify-between">
-          <p className="text-xs text-warning font-medium">
+        <div className="bg-warning/10 border-warning/30 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-3">
+          <p className="text-warning text-xs font-medium">
             {t(
-              'websites.public_notice',
-              'Přehled stavu webů a cPanelu je veřejně přístupný. Pro přidávání nových domén se prosím přihlaste.'
+              'websites.guest_notice',
+              'Přehled stavu webů je veřejně přístupný. Pro přidávání nových domén se prosím přihlaste.'
             )}
           </p>
-          <Link to="/setup" className="text-xs font-semibold text-primary hover:underline">
+          <Link to="/setup" className="text-link text-xs font-semibold hover:underline">
             {t('btn.login', 'Přihlásit se')} →
           </Link>
-        </Card>
+        </div>
       )}
 
-      {/* Global HTTP monitoring statistics */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="p-4 space-y-1">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Activity className="size-4 text-muted-foreground" /> {t('websites.avg_latency', 'Průměrná latence HTTP')}
-          </div>
-          <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-            {avgLatency != null ? `${avgLatency} ms` : '—'}
-          </p>
-          <p className="text-2xs text-muted-foreground">
-            {t(
-              'websites.responding_count',
-              { count: respondingLatencies.length },
-              `Z ${respondingLatencies.length} odpovídajících webů`
-            )}
-          </p>
-        </Card>
-
-        <Card className="p-4 space-y-1">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Globe className="size-4 text-primary" /> {t('websites.current_uptime', 'Aktuální dostupnost webů')}
-          </div>
-          <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-            {formatPercent(overallUptimePct, 1)}
-          </p>
-          <p className="text-2xs text-muted-foreground">
-            {t(
-              'websites.uptime_hint',
-              { up: upCount, total: websites.length },
-              `${upCount} z ${websites.length} dostupných právě teď`
-            )}
-          </p>
-        </Card>
-
-        <Card className="p-4 space-y-1">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Lock className="size-4 text-muted-foreground" /> {t('websites.ssl_valid', 'SSL Certifikáty')}
-          </div>
-          {(() => {
-            // A summary from real data - it used to be a hardcoded "100 % OK".
-            const withSsl = websites.filter((w) => typeof w.details?.ssl_days_remaining === 'number');
-            if (withSsl.length === 0) {
-              return (
-                <>
-                  <p className="text-2xl font-bold tracking-tight tabular-nums text-muted-foreground">—</p>
-                  <p className="text-2xs text-muted-foreground">
-                    {t('websites.ssl_none_read', 'Platnost certifikátů zatím nebyla přečtena')}
-                  </p>
-                </>
-              );
-            }
-            const expiring = withSsl.filter((w) => w.details!.ssl_days_remaining <= 30);
-            const expired = withSsl.filter((w) => w.details!.ssl_days_remaining <= 0);
-            const soonest = Math.min(...withSsl.map((w) => w.details!.ssl_days_remaining as number));
-            if (expired.length > 0) {
-              return (
-                <>
-                  <p className="text-2xl font-bold tracking-tight tabular-nums text-down">
-                    {expired.length}/{withSsl.length}
-                  </p>
-                  <p className="text-2xs text-down">{t('websites.ssl_expired', 'Vypršelé certifikáty!')}</p>
-                </>
-              );
-            }
-            if (expiring.length > 0) {
-              return (
-                <>
-                  <p className="text-2xl font-bold tracking-tight tabular-nums text-warning">
-                    {t('websites.ssl_days_short', { days: soonest }, `${soonest} dní`)}
-                  </p>
-                  <p className="text-2xs text-warning">
-                    {t(
-                      'websites.ssl_expiring_hint',
-                      { count: expiring.length },
-                      `${expiring.length} certifikátů vyprší do 30 dní`
-                    )}
-                  </p>
-                </>
-              );
-            }
+      {/* Global HTTP monitoring statistics. One tile kind (C-1): the number
+          is in the foreground colour and takes a status colour only when it
+          is past a limit. When the list itself failed every tile is a dash:
+          "0 z 0 dostupných" was a count nobody made (V-06). */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatBlock
+          variant="card"
+          icon={Activity}
+          label={t('websites.avg_latency', 'Průměrná latence HTTP')}
+          value={listFailed ? null : avgLatency}
+          secondary={!listFailed && avgLatency != null ? 'ms' : undefined}
+          hint={
+            listFailed
+              ? undefined
+              : t(
+                  'websites.responding_count',
+                  { count: respondingLatencies.length },
+                  `Z ${respondingLatencies.length} odpovídajících webů`
+                )
+          }
+          loading={loading}
+        />
+        <StatBlock
+          variant="card"
+          icon={Globe}
+          label={t('websites.current_uptime', 'Aktuální dostupnost webů')}
+          value={!listFailed && overallUptimePct != null ? formatPercentValue(overallUptimePct, 1, lang) : null}
+          secondary={!listFailed && overallUptimePct != null ? '%' : undefined}
+          tone={!listFailed && upCount < measured.length ? 'down' : null}
+          hint={
+            listFailed
+              ? undefined
+              : t(
+                  'websites.uptime_hint',
+                  { up: upCount, total: measured.length },
+                  `${upCount} z ${measured.length} dostupných právě teď`
+                )
+          }
+          loading={loading}
+        />
+        {(() => {
+          // A summary from real data - it used to be a hardcoded "100 % OK".
+          const withSsl = websites.filter((w) => typeof w.details?.ssl_days_remaining === 'number');
+          const label = t('websites.ssl_valid', 'SSL Certifikáty');
+          if (listFailed) {
+            return <StatBlock variant="card" icon={Lock} label={label} value={null} />;
+          }
+          if (withSsl.length === 0) {
             return (
-              <>
-                <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-                  {withSsl.length}/{withSsl.length} OK
-                </p>
-                <p className="text-2xs text-muted-foreground">
-                  {t('websites.ssl_soonest', { days: soonest }, `Nejbližší expirace za ${soonest} dní`)}
-                </p>
-              </>
+              <StatBlock
+                variant="card"
+                icon={Lock}
+                label={label}
+                value={null}
+                hint={t('websites.ssl_none_read', 'Platnost certifikátů zatím nebyla přečtena')}
+                loading={loading}
+              />
             );
-          })()}
-        </Card>
-
-        <Card className="p-4 space-y-1">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium">
-            <Clock className="size-4 text-primary" /> {t('websites.monitored_count', 'Sledovaných webů')}
-          </div>
-          <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground">{websites.length}</p>
-          <p className="text-2xs text-muted-foreground">
-            {t('websites.check_interval', 'Interval kontrol podle nastavení monitoru')}
-          </p>
-        </Card>
+          }
+          const days = (w: WebMonitor) => w.details!.ssl_days_remaining as number;
+          const expired = withSsl.filter((w) => days(w) <= 0);
+          // The same limit cron alerts at (Settings), not a second one of its own.
+          const expiring = withSsl.filter((w) => days(w) <= sslAlertDays);
+          const soonest = Math.min(...withSsl.map(days));
+          if (expired.length > 0) {
+            return (
+              <StatBlock
+                variant="card"
+                icon={Lock}
+                label={label}
+                value={`${expired.length}/${withSsl.length}`}
+                tone="down"
+                hint={t('websites.ssl_expired', 'Vypršelé certifikáty!')}
+              />
+            );
+          }
+          if (expiring.length > 0) {
+            return (
+              <StatBlock
+                variant="card"
+                icon={Lock}
+                label={label}
+                value={t('websites.ssl_days_short', { days: soonest }, `${soonest} dní`)}
+                tone="warning"
+                hint={t(
+                  'websites.ssl_expiring_soon',
+                  { count: expiring.length, days: sslAlertDays },
+                  `${expiring.length} certifikátů vyprší do ${sslAlertDays} dní`
+                )}
+              />
+            );
+          }
+          return (
+            <StatBlock
+              variant="card"
+              icon={Lock}
+              label={label}
+              value={`${withSsl.length}/${withSsl.length}`}
+              secondary="OK"
+              hint={t('websites.ssl_soonest', { days: soonest }, `Nejbližší expirace za ${soonest} dní`)}
+            />
+          );
+        })()}
+        <StatBlock
+          variant="card"
+          icon={Clock}
+          label={t('websites.monitored_count', 'Sledovaných webů')}
+          value={listFailed ? null : websites.length}
+          hint={t('websites.check_interval', 'Interval kontrol podle nastavení monitoru')}
+          loading={loading}
+        />
       </div>
 
+      {/* "Stav webů níže je aktuální" is only true when the list loaded. */}
+      {overviewError && !listFailed && (
+        <ErrorState
+          tone="warning"
+          message={t(
+            'websites.overview_failed',
+            { error: overviewError },
+            `SLA a HTTP kódy se nepodařilo načíst (${overviewError}). Stav webů níže je aktuální.`
+          )}
+        />
+      )}
       {loadError && <ErrorState message={loadError} />}
 
-      {/* New website modal */}
+      {/* New website form */}
       {showAddModal && isAdmin && (
-        <Card className="p-6 border-primary/50 bg-secondary/40">
-          <h3 className="font-bold text-base mb-3">
-            {t('websites.add_website_modal_title', 'Přidat nový sledovaný web / HTTP API')}
-          </h3>
+        <Panel icon={Plus} title={t('websites.add_website_modal_title', 'Přidat nový sledovaný web / HTTP API')}>
           <form onSubmit={handleAddWebsite} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  {t('websites.name_label', 'Název webu / služby')}
-                </label>
-                <input
+              <label className="block space-y-1">
+                <span className="micro-label">{t('websites.name_label', 'Název webu / služby')}</span>
+                <Input
                   type="text"
                   placeholder={t('websites.name_placeholder', 'např. Moje Doména')}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   required
-                  className="w-full rounded-md bg-background border border-border px-3 py-2 text-sm"
                 />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  {t('websites.url_label', 'URL Adresa (HTTP/HTTPS)')}
-                </label>
-                <input
+              </label>
+              <label className="block space-y-1">
+                <span className="micro-label">{t('websites.url_label', 'URL Adresa (HTTP/HTTPS)')}</span>
+                <Input
                   type="text"
                   placeholder="https://example.com"
                   value={newUrl}
                   onChange={(e) => setNewUrl(e.target.value)}
                   required
-                  className="w-full rounded-md bg-background border border-border px-3 py-2 text-sm"
                 />
-              </div>
+              </label>
             </div>
             <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowAddModal(false)}
-                className="px-4 py-2 rounded-md bg-secondary text-sm font-medium hover:bg-secondary/80"
-              >
+              <Button type="button" variant="outline" onClick={() => setShowAddModal(false)}>
                 {t('common.cancel', 'Zrušit')}
-              </button>
-              <button
-                type="submit"
-                disabled={saving}
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
-              >
+              </Button>
+              <Button type="submit" variant="primary" disabled={saving}>
                 {saving ? t('common.saving', 'Ukládám…') : t('websites.save_btn', 'Uložit a spustit monitoring')}
-              </button>
+              </Button>
             </div>
           </form>
-        </Card>
+        </Panel>
       )}
 
       {loading ? (
         <LoadingState label={t('websites.loading', 'Načítám seznam webů...')} />
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {websites.map((web) => (
-            <Card key={web.id} className="p-5 flex flex-col justify-between hover:border-primary/40 transition-colors">
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                    <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
-                      <Globe className="size-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold text-sm leading-tight truncate">{web.name}</h3>
-                      <a
-                        href={web.target.startsWith('http') ? web.target : `https://${web.target}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-muted-foreground hover:underline inline-flex items-center gap-1 truncate max-w-full"
-                      >
-                        <span className="truncate">{web.target}</span> <ExternalLink className="size-3 shrink-0" />
-                      </a>
-                    </div>
-                  </div>
-                  <Badge variant={web.status === 'up' ? 'up' : 'down'} className="shrink-0">
-                    {web.status === 'up' ? t('common.online', 'Online') : t('common.offline', 'Offline')}
-                  </Badge>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-xs py-2 border-t border-b border-border my-3">
-                  <div>
-                    <span className="text-muted-foreground">{t('websites.http_response', 'Odezva HTTP:')}</span>
-                    <p className="font-semibold">{web.response_time != null ? `${web.response_time} ms` : '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t('websites.http_status', 'Stav HTTP:')}</span>
-                    <p className={`font-semibold ${web.status === 'up' ? 'text-up' : 'text-down'}`}>
-                      {web.status === 'up' ? '200 OK' : 'OFFLINE'}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {websites.map((web) => {
+            const meta = statusMeta(web.statusKey);
+            const sla = slaByMonitor[web.id];
+            const href = web.target.startsWith('http') ? web.target : `https://${web.target}`;
+            return (
+              <Panel
+                key={web.id}
+                icon={Globe}
+                title={web.name}
+                tone={meta.variant === 'down' ? 'down' : meta.variant === 'warning' ? 'warning' : null}
+                hint={
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:text-foreground inline-flex max-w-full items-center gap-1 hover:underline"
+                  >
+                    <span className="truncate">{web.target}</span>
+                    <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
+                  </a>
+                }
+                action={
+                  <Pill tone={PILL_TONE[meta.variant]} dot className={cn(meta.dashed && 'border-dashed')}>
+                    {statusLabel(web.statusKey, t)}
+                  </Pill>
+                }
+                bodyClassName="flex flex-col gap-3"
+              >
+                {/* The two figures of the last check, in one well (NetPulse KPI box). */}
+                <div className="bg-inset grid grid-cols-2 gap-3 rounded-lg border border-border p-3">
+                  <div className="min-w-0">
+                    <p className="micro-label">{t('websites.http_response', 'Odezva HTTP')}</p>
+                    <p className="figure mt-1 text-lg font-semibold">
+                      {web.response_time != null ? (
+                        <>
+                          {web.response_time}
+                          <span className="text-muted-foreground font-sans text-xs font-medium"> ms</span>
+                        </>
+                      ) : (
+                        <NoValue />
+                      )}
                     </p>
                   </div>
+                  <div className="min-w-0">
+                    <p className="micro-label">{t('websites.http_code', 'HTTP kód')}</p>
+                    <HttpCode code={sla?.httpStatusCode ?? null} checkedAt={sla?.httpCheckedAt ?? null} />
+                  </div>
+                </div>
 
-                  {(() => {
-                    const days = web.details?.ssl_days_remaining;
-                    const validTo = web.details?.ssl_valid_to;
-                    const issuer = web.details?.ssl_issuer;
-                    if (typeof days !== 'number') {
-                      return (
-                        <div className="col-span-2 pt-1 border-t border-border/60">
-                          <span className="text-muted-foreground flex items-center gap-1">
-                            <Lock className="size-3" /> {t('websites.ssl_label', 'SSL certifikát:')}
-                          </span>
-                          <p className="text-muted-foreground">{t('websites.ssl_not_read', 'zatím nepřečten')}</p>
-                        </div>
-                      );
-                    }
-                    const cls = days <= 0 ? 'text-down' : days <= 30 ? 'text-warning' : 'text-up';
+                {(() => {
+                  const days = web.details?.ssl_days_remaining;
+                  const validTo = web.details?.ssl_valid_to;
+                  const issuer = web.details?.ssl_issuer;
+                  const label = (
+                    <p className="micro-label flex items-center gap-1">
+                      <Lock aria-hidden="true" className="size-3" /> {t('websites.ssl_label', 'SSL certifikát')}
+                    </p>
+                  );
+                  if (typeof days !== 'number') {
                     return (
-                      <div className="col-span-2 pt-1 border-t border-border/60">
-                        <span className="text-muted-foreground flex items-center gap-1">
-                          <Lock className="size-3" /> {t('websites.ssl_label', 'SSL certifikát:')}
-                        </span>
-                        <p className={`font-semibold ${cls}`}>
-                          {days <= 0
-                            ? t('websites.ssl_state_expired', 'Vypršel!')
-                            : t('websites.ssl_state_valid', { days }, `Platný — vyprší za ${days} dní`)}
-                          {validTo ? (
-                            <span className="text-muted-foreground font-normal">
-                              {' '}
-                              ({new Date(validTo).toLocaleDateString('cs-CZ')}
-                              {issuer ? `, ${issuer}` : ''})
-                            </span>
-                          ) : null}
+                      <div>
+                        {label}
+                        <p className="text-muted-foreground mt-0.5 text-xs">
+                          {t('websites.ssl_not_read', 'zatím nepřečten')}
                         </p>
                       </div>
                     );
-                  })()}
+                  }
+                  // Colour only near the alert limit; a valid certificate is plain text.
+                  const cls = days <= 0 ? 'text-down' : days <= sslAlertDays ? 'text-warning' : 'text-foreground';
+                  return (
+                    <div>
+                      {label}
+                      <p className={cn('mt-0.5 text-xs font-semibold', cls)}>
+                        {days <= 0
+                          ? t('websites.ssl_state_expired', 'Vypršel!')
+                          : t('websites.ssl_state_valid', { days }, `Platný — vyprší za ${days} dní`)}
+                        {validTo ? (
+                          <span className="text-muted-foreground font-normal">
+                            {' '}
+                            ({new Date(validTo).toLocaleDateString(lang === 'en' ? 'en-GB' : 'cs-CZ')}
+                            {issuer ? `, ${issuer}` : ''})
+                          </span>
+                        ) : null}
+                      </p>
+                    </div>
+                  );
+                })()}
 
-                  {(() => {
-                    const sla = slaByMonitor[web.id];
-                    if (!sla) return null;
+                {sla &&
+                  (() => {
                     const cell = (label: string, value: number | null) => {
                       // null = a window without measurements (the monitor is younger) - a dash.
                       const cls =
@@ -437,27 +481,34 @@ export function WebsitesPage() {
                             ? value < 99
                               ? 'text-down'
                               : 'text-warning'
-                            : 'text-up';
+                            : 'text-foreground';
                       return (
-                        <div>
-                          <span className="text-muted-foreground">{label}</span>
-                          <p className={`font-semibold ${cls}`}>
-                            {value == null ? '—' : formatPercent(value, value >= 100 ? 0 : 2)}
+                        <div className="min-w-0">
+                          <p className="text-muted-foreground text-2xs">{label}</p>
+                          <p className={cn('figure text-sm font-semibold', cls)}>
+                            {value == null ? '—' : formatPercent(value, value >= 100 ? 0 : 2, lang)}
                           </p>
                         </div>
                       );
                     };
                     return (
-                      <div className="col-span-2 pt-1 border-t border-border/60">
-                        <span className="text-muted-foreground flex items-center gap-1">
-                          <Activity className="size-3" /> {t('websites.sla_label', 'SLA dostupnost:')}
+                      <div>
+                        <p className="micro-label flex flex-wrap items-center gap-1">
+                          <Activity aria-hidden="true" className="size-3" />
+                          {t('websites.sla_label', 'SLA dostupnost')}
                           {slaGoal != null && (
-                            <span className="text-3xs">
-                              ({t('websites.sla_goal', { goal: slaGoal }, `cíl ${slaGoal} %`)})
+                            <span className="font-normal normal-case tracking-normal">
+                              (
+                              {t(
+                                'websites.sla_goal',
+                                { goal: formatPercentValue(slaGoal, 1, lang) },
+                                `cíl ${slaGoal} %`
+                              )}
+                              )
                             </span>
                           )}
-                        </span>
-                        <div className="grid grid-cols-3 gap-1.5 mt-0.5">
+                        </p>
+                        <div className="mt-1 grid grid-cols-3 gap-2">
                           {cell(t('websites.sla_7d', '7 dní'), sla.sla7)}
                           {cell(t('websites.sla_30d', '30 dní'), sla.sla30)}
                           {/* Until the history exceeds a year, the real range is
@@ -472,23 +523,20 @@ export function WebsitesPage() {
                       </div>
                     );
                   })()}
-                </div>
 
                 {!web.details?.cpanel_stats && web.details?.cpanel_stats_error && (
                   // Collection configured but failing - scream, don't hide the card.
-                  <div
-                    role="alert"
-                    className="p-2.5 rounded-lg bg-down/10 border border-down/40 my-2 text-2xs space-y-0.5"
-                  >
-                    <p className="font-bold text-down">
-                      ⛔ {t('websites.cpanel_error', 'Sběr cPanel statistik selhává')}
+                  <div role="alert" className="bg-down/10 border-down/40 space-y-0.5 rounded-lg border p-2.5 text-2xs">
+                    <p className="text-down flex items-center gap-1 font-bold">
+                      <CircleX className="size-3 shrink-0" aria-hidden="true" />
+                      {t('websites.cpanel_error', 'Sběr cPanel statistik selhává')}
                     </p>
                     <p className="text-down font-mono">{web.details.cpanel_stats_error.error}</p>
                   </div>
                 )}
                 {web.details?.cpanel_stats && (
-                  <div className="p-2.5 rounded-lg bg-secondary/40 border border-border/70 my-2 space-y-1.5 text-2xs">
-                    <div className="flex items-center justify-between text-muted-foreground font-semibold border-b border-border/50 pb-1">
+                  <div className="bg-inset space-y-1.5 rounded-lg border border-border p-2.5 text-2xs">
+                    <div className="text-muted-foreground flex items-center justify-between border-b border-border pb-1 font-semibold">
                       <span
                         className="flex items-center gap-1"
                         title={t(
@@ -496,53 +544,90 @@ export function WebsitesPage() {
                           'cPanel exportér vrací hodnoty celého hostingového účtu, ne jednotlivé domény — proto jsou u všech webů na stejném účtu stejné.'
                         )}
                       >
-                        <Server className="size-3 text-primary" />{' '}
+                        <Server aria-hidden="true" className="size-3" />{' '}
                         {t('websites.cpanel_resources', 'Zdroje hostingu (sdílené účtem):')}
                       </span>
                       <span className="text-up">UAPI OK</span>
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
-                      <div>
-                        <span className="text-muted-foreground">{t('websites.disk_label', 'Disk:')} </span>
-                        <span className="font-mono font-semibold">
-                          {web.details.cpanel_stats.disk?.formatted ?? '—'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">{t('websites.ram_label', 'RAM:')} </span>
-                        <span className="font-mono font-semibold">
-                          {web.details.cpanel_stats.memory?.formatted ?? '—'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">{t('websites.mysql_label', 'MySQL:')} </span>
-                        <span className="font-mono font-semibold">
-                          {web.details.cpanel_stats.database?.formatted ?? '—'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">{t('websites.bandwidth_label', 'Bandwidth:')} </span>
-                        <span className="font-mono font-semibold">
-                          {web.details.cpanel_stats.bandwidth?.formatted ?? '—'}
-                        </span>
-                      </div>
+                      {(
+                        [
+                          ['disk', t('websites.disk_label', 'Disk:'), web.details.cpanel_stats.disk?.formatted],
+                          ['ram', t('websites.ram_label', 'RAM:'), web.details.cpanel_stats.memory?.formatted],
+                          ['db', t('websites.mysql_label', 'MySQL:'), web.details.cpanel_stats.database?.formatted],
+                          [
+                            'bw',
+                            t('websites.bandwidth_label', 'Bandwidth:'),
+                            web.details.cpanel_stats.bandwidth?.formatted,
+                          ],
+                        ] as const
+                      ).map(([key, label, value]) => (
+                        <div key={key}>
+                          <span className="text-muted-foreground">{label} </span>
+                          <span className="figure font-semibold">{value ?? '—'}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
-              </div>
 
-              <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t border-border/50">
-                <span className="flex items-center gap-1">
-                  <ShieldCheck className="size-3.5" /> {web.target.startsWith('https') ? 'HTTPS' : 'HTTP'}
-                </span>
-                <Link to={`/infrastructure/${web.id}`} className="font-semibold text-primary hover:underline">
-                  {t('websites.view_detail', 'Detail webu')} →
-                </Link>
-              </div>
-            </Card>
-          ))}
+                <div className="text-muted-foreground mt-auto flex items-center justify-between border-t border-border pt-2.5 text-xs">
+                  <span className="flex items-center gap-1">
+                    <ShieldCheck aria-hidden="true" className="size-3.5" />{' '}
+                    {web.target.startsWith('https') ? 'HTTPS' : 'HTTP'}
+                  </span>
+                  <Link to={`/infrastructure/${web.id}`} className="text-link font-semibold hover:underline">
+                    {t('websites.view_detail', 'Detail webu')} →
+                  </Link>
+                </div>
+              </Panel>
+            );
+          })}
         </div>
       )}
     </div>
+  );
+}
+
+const PILL_TONE = {
+  up: 'up',
+  warning: 'warning',
+  down: 'down',
+  info: 'info',
+  paused: 'paused',
+  neutral: 'neutral',
+} as const;
+
+/**
+ * The code the latest check recorded, as recorded. The card used to print
+ * "200 OK" for anything that was not down, whatever the server answered; a
+ * check that recorded no code (a timeout, a DNS failure) is a dash.
+ */
+function HttpCode({ code, checkedAt }: { code: number | null; checkedAt: string | null }) {
+  const { t, lang } = useLanguage();
+  if (code == null) {
+    return (
+      <p
+        className="text-muted-foreground figure mt-1 text-lg font-semibold"
+        title={t('websites.http_code_none', 'Poslední kontrola žádný kód nezaznamenala')}
+      >
+        —
+      </p>
+    );
+  }
+  const when = checkedAt ? new Date(checkedAt) : null;
+  const title =
+    when && !Number.isNaN(when.getTime())
+      ? t(
+          'websites.http_code_at',
+          { time: when.toLocaleString(lang === 'en' ? 'en-GB' : 'cs-CZ') },
+          `Zaznamenáno ${when.toLocaleString('cs-CZ')}`
+        )
+      : undefined;
+  // Colour only for an error answer; a 2xx/3xx is the normal case.
+  return (
+    <p className={cn('figure mt-1 text-lg font-semibold', code >= 400 ? 'text-down' : 'text-foreground')} title={title}>
+      {code}
+    </p>
   );
 }

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { AlertOctagon, Mail, RefreshCw, Search } from 'lucide-react';
+import { AlertOctagon, CircleX, RefreshCw, Search, Send, SlidersHorizontal } from 'lucide-react';
 import { appApi } from '@/api/app-api';
 import type { OutgoingMessage, OutgoingMessagePage } from '@/api/types';
 import { useSession } from '@/api/use-session';
@@ -8,7 +8,8 @@ import { PageHeader } from '@/components/layout/page-header';
 import { StatBlock } from '@/components/stat-block';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
+import { usePageChrome } from '@/components/layout/shell-context';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
@@ -39,7 +40,7 @@ function FailureBanner({ failed, exact }: { failed: number; exact: boolean }) {
   const { t } = useLanguage();
   if (failed <= 0) return null;
   return (
-    <div role="alert" className="space-y-1 rounded-lg border-2 border-down/60 bg-down/10 p-4">
+    <div role="alert" className="border-down/50 bg-down/10 space-y-1 rounded-xl border px-4 py-3">
       <div className="flex items-center gap-2">
         <AlertOctagon aria-hidden="true" className="text-down size-5 shrink-0" />
         <h2 className="text-down text-sm font-bold">
@@ -148,6 +149,9 @@ export function OutgoingMessagesPage() {
     void load();
   }, [sessionLoading, load]);
 
+  // The header's refresh reloads the log in place, filters kept.
+  usePageChrome({ onRefresh: () => load() });
+
   const loadMore = async () => {
     if (cursor === null) return;
     const mine = request.current;
@@ -184,7 +188,7 @@ export function OutgoingMessagesPage() {
   if (!session?.authenticated || !isAdmin) {
     // The rows name recipients, so this is not a matter of tidiness.
     return (
-      <Card className="grid place-items-center gap-2 p-16 text-center">
+      <Panel bodyClassName="grid place-items-center gap-2 py-12 text-center">
         <p className="text-lg font-semibold">{t('outgoing.admin_only_title', 'Jen pro administrátora')}</p>
         <p className="text-muted-foreground max-w-md text-sm">
           {t(
@@ -192,14 +196,15 @@ export function OutgoingMessagesPage() {
             'Protokol odchozích zpráv obsahuje adresy příjemců, proto je přístupný pouze účtům s rolí administrátor.'
           )}
         </p>
-      </Card>
+      </Panel>
     );
   }
 
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
   const failed24h = summary ? summary.last24h.failed : fallbackFailed;
   const filtered = kind !== '' || channel !== '' || failedOnly || recipient !== '';
-  const selectCls = 'bg-secondary/60 border-input h-9 rounded-md border px-2 text-xs';
+  const selectCls =
+    'bg-secondary/60 border-input hover:border-border-strong focus-visible:border-ring h-9 rounded-md border px-2 text-xs';
 
   return (
     <div className="space-y-6">
@@ -209,7 +214,6 @@ export function OutgoingMessagesPage() {
           'outgoing.subtitle',
           'Co monitoring odeslal, kterým kanálem a jestli to odešlo. Obsah zpráv se neukládá.'
         )}
-        icon={<Mail aria-hidden="true" className="text-muted-foreground size-5" />}
         actions={
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} className="gap-2">
             <RefreshCw aria-hidden="true" className={loading ? 'animate-spin' : undefined} />
@@ -222,31 +226,39 @@ export function OutgoingMessagesPage() {
 
       {/* A dash, not a zero: without a summary from the server nothing was
           measured here, and "0 sent" would be an invented answer. */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatBlock
+          variant="card"
+          icon={Send}
           label={t('outgoing.stat_24h_total', 'Odesláno za 24 h')}
           value={summary ? summary.last24h.total : null}
         />
         <StatBlock
+          variant="card"
+          icon={CircleX}
           label={t('outgoing.stat_24h_failed', 'Neodesláno za 24 h')}
           value={summary ? summary.last24h.failed : null}
-          className={summary && summary.last24h.failed > 0 ? 'border-down/40 bg-down/10' : undefined}
+          tone={summary && summary.last24h.failed > 0 ? 'down' : null}
         />
         <StatBlock
+          variant="card"
+          icon={Send}
           label={t('outgoing.stat_7d_total', 'Odesláno za 7 dní')}
           value={summary ? summary.last7d.total : null}
         />
         <StatBlock
+          variant="card"
+          icon={CircleX}
           label={t('outgoing.stat_7d_failed', 'Neodesláno za 7 dní')}
           value={summary ? summary.last7d.failed : null}
-          className={summary && summary.last7d.failed > 0 ? 'border-down/40 bg-down/10' : undefined}
+          tone={summary && summary.last7d.failed > 0 ? 'down' : null}
         />
       </div>
 
-      <Card className="space-y-4 p-4">
+      <Panel icon={SlidersHorizontal} title={t('outgoing.log_title', 'Protokol')} bodyClassName="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label htmlFor="outgoing-kind" className="text-muted-foreground mb-1 block text-2xs font-medium">
+            <label htmlFor="outgoing-kind" className="micro-label mb-1.5 block">
               {t('outgoing.filter_kind', 'Druh zprávy')}
             </label>
             <select id="outgoing-kind" value={kind} onChange={(e) => setKind(e.target.value)} className={selectCls}>
@@ -260,7 +272,7 @@ export function OutgoingMessagesPage() {
           </div>
 
           <div>
-            <label htmlFor="outgoing-channel" className="text-muted-foreground mb-1 block text-2xs font-medium">
+            <label htmlFor="outgoing-channel" className="micro-label mb-1.5 block">
               {t('outgoing.filter_channel', 'Kanál')}
             </label>
             <select
@@ -295,7 +307,7 @@ export function OutgoingMessagesPage() {
             }}
           >
             <div>
-              <label htmlFor="outgoing-q" className="text-muted-foreground mb-1 block text-2xs font-medium">
+              <label htmlFor="outgoing-q" className="micro-label mb-1.5 block">
                 {t('outgoing.filter_recipient', 'Příjemce')}
               </label>
               <Input
@@ -353,14 +365,14 @@ export function OutgoingMessagesPage() {
                   // A failed row is tinted as well as badged: in a screenful of
                   // rows the eye finds the colour first and the badge second.
                   <TableRow key={e.id} className={e.ok ? undefined : 'bg-down/10'}>
-                    <TableCell className="text-muted-foreground font-mono whitespace-nowrap">
+                    <TableCell className="text-muted-foreground figure whitespace-nowrap">
                       {new Date(e.atIso).toLocaleString(locale)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{kindLabel(e.kind, t)}</TableCell>
                     <TableCell>
                       <Badge variant="neutral">{channelLabel(e.channel, t)}</Badge>
                     </TableCell>
-                    <TableCell className="max-w-[14rem] truncate font-mono">{e.recipient ?? '—'}</TableCell>
+                    <TableCell className="figure max-w-[14rem] truncate">{e.recipient ?? '—'}</TableCell>
                     <TableCell className="hidden max-w-[18rem] truncate md:table-cell">{e.subject ?? '—'}</TableCell>
                     <TableCell className="whitespace-nowrap">
                       {/* A skipped row is not a delivery: the daily reminder writes one
@@ -399,7 +411,7 @@ export function OutgoingMessagesPage() {
             </div>
           </>
         )}
-      </Card>
+      </Panel>
 
       {/* The detail exists because the interesting part - the whole error from
           the channel - does not fit in a table cell and must not be cut off. */}

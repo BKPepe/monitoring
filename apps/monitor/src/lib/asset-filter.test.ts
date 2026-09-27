@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { orderByStatusChange, filterAssets, parseStatusFilter, type AssetStatus } from './asset-filter';
+import {
+  orderByStatusChange,
+  filterAssets,
+  parseStatusFilter,
+  parseTypeFilter,
+  type AssetStatus,
+} from './asset-filter';
 
 const asset = (name: string, status: AssetStatus, hostname?: string) => ({ name, status, hostname });
 
@@ -78,5 +84,18 @@ describe('orderByStatusChange', () => {
     const rows = [{ since: 10 }, { since: 5 }];
     orderByStatusChange(rows, since);
     expect(rows.map((r) => r.since)).toEqual([10, 5]);
+  });
+});
+
+describe('parseTypeFilter', () => {
+  it('přijme typ, na který přesměrovává zrušená stránka Služby (5.8)', () => {
+    expect(parseTypeFilter('agent_service')).toBe('agent_service');
+    expect(parseTypeFilter(' OpenWrt ')).toBe('openwrt');
+  });
+
+  it('překlep není filtr - prázdný seznam by lhal', () => {
+    expect(parseTypeFilter('agent-service')).toBeNull();
+    expect(parseTypeFilter('')).toBeNull();
+    expect(parseTypeFilter(null)).toBeNull();
   });
 });

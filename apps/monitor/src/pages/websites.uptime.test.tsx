@@ -46,7 +46,7 @@ describe('Weby: SLA okna s pětisekundovým výpadkem', () => {
     );
 
     expect(await screen.findByText('100 %')).toBeTruthy();
-    expect(screen.getAllByText('99.99 %')).toHaveLength(2);
-    expect(screen.queryByText('100.00 %')).toBeNull();
+    expect(screen.getAllByText('99,99 %')).toHaveLength(2);
+    expect(screen.queryByText('100,00 %')).toBeNull();
   });
 });

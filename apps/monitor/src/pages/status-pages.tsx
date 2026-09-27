@@ -1,15 +1,15 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Activity, Plus, Pencil, Trash2, ExternalLink, Eye, EyeOff } from 'lucide-react';
+import { Plus, Pencil, Trash2, ExternalLink, Eye, EyeOff, Globe, Code, Mail, PanelsTopLeft } from 'lucide-react';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
-import { LoadingState, ErrorState } from '@/components/ui/states';
+import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 
 export interface DisplayOptions {
   showRegions: boolean;
@@ -115,8 +115,7 @@ export function StatusPagesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        icon={<Activity className="size-5 text-primary" />}
-        title={t('sp.title', 'Veřejné status stránky')}
+        title={t('sp.title', 'Status Stránky')}
         subtitle={t('sp.subtitle', 'Vyberte, které služby uvidí veřejnost, a pod jakou adresou.')}
         actions={
           isAdmin && (
@@ -133,73 +132,61 @@ export function StatusPagesPage() {
       {/* The main public page always exists - without this link there was no
           click-through to it from the app until one created a custom page
           (and even then only to that one). */}
-      <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">{t('sp.main_page', 'Hlavní veřejná stránka')}</p>
-          <p className="text-muted-foreground text-xs">
-            {t(
-              'sp.main_page_desc',
-              'Služby, které mají v nastavení monitoru zapnuté „Zobrazit na veřejné stavové stránce“ - to, co uvidí návštěvník.'
-            )}
-          </p>
-        </div>
-        <a
-          href="/app/public"
-          target="_blank"
-          rel="noreferrer"
-          className="text-primary inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
-        >
-          /app/public <ExternalLink className="size-3.5" />
-        </a>
-      </Card>
+      <Panel
+        icon={Globe}
+        title={t('sp.main_page', 'Hlavní veřejná stránka')}
+        hint={t(
+          'sp.main_page_desc',
+          'Služby, které mají v nastavení monitoru zapnuté „Zobrazit na veřejné stavové stránce“ - to, co uvidí návštěvník.'
+        )}
+      >
+        <Button size="sm" variant="outline" asChild className="gap-1.5">
+          <a href="/app/public" target="_blank" rel="noreferrer">
+            /app/public <ExternalLink aria-hidden="true" />
+          </a>
+        </Button>
+      </Panel>
 
       {/* The embeddable SVG badge - live status on a foreign site (forum, wiki, README).
           The preview is the very same endpoint, so what is visible here is exactly
           what a foreign page gets. */}
-      <Card className="space-y-2 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">{t('sp.badge_title', 'Vložitelný odznak stavu')}</p>
-            <p className="text-muted-foreground text-xs">
-              {t(
-                'sp.badge_desc',
-                'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.'
-              )}
-            </p>
-          </div>
-          <img src="/status/api.php?action=badge" alt={t('sp.badge_alt', 'Odznak stavu')} className="h-5" />
-        </div>
-        <code className="text-muted-foreground block overflow-x-auto rounded bg-secondary/40 px-2 py-1.5 text-2xs whitespace-nowrap select-all">
+      <Panel
+        icon={Code}
+        title={t('sp.badge_title', 'Vložitelný odznak stavu')}
+        hint={t('sp.badge_desc', 'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.')}
+        bodyClassName="space-y-2"
+      >
+        <img src="/status/api.php?action=badge" alt={t('sp.badge_alt', 'Odznak stavu')} className="h-5" />
+        <code className="bg-inset text-muted-foreground block overflow-x-auto rounded-md border border-border px-2.5 py-2 font-mono text-2xs whitespace-nowrap select-all">
           {`<img src="${window.location.origin}/status/api.php?action=badge" alt="status">`}
         </code>
         <p className="text-muted-foreground text-2xs">
           {t('sp.badge_monitor_hint', 'Odznak jedné služby: přidejte &monitor_id=ID, anglická verze: &lang=en.')}
         </p>
-      </Card>
+      </Panel>
 
       {/* Public e-mail subscribers - the admin must be able to see and remove
           addresses (manual removal requests, GDPR). */}
       {isAdmin && subscribers !== null && (
-        <Card className="space-y-2 p-4">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">{t('sp.subscribers_title', 'Veřejní odběratelé e-mailů')}</p>
-            <p className="text-muted-foreground text-xs">
-              {t(
-                'sp.subscribers_desc',
-                'Návštěvníci přihlášení k upozorněním na výpadky (double opt-in). Smazání = okamžité odhlášení.'
-              )}
-            </p>
-          </div>
+        <Panel
+          icon={Mail}
+          title={t('sp.subscribers_title', 'Veřejní odběratelé e-mailů')}
+          count={subscribers.length}
+          hint={t(
+            'sp.subscribers_desc',
+            'Návštěvníci přihlášení k upozorněním na výpadky (double opt-in). Smazání = okamžité odhlášení.'
+          )}
+        >
           {subscribers.length === 0 ? (
             <p className="text-muted-foreground text-xs">{t('sp.subscribers_none', 'Zatím žádní odběratelé.')}</p>
           ) : (
-            <ul className="space-y-1">
+            <ul className="divide-border divide-y">
               {subscribers.map((sub) => (
-                <li key={sub.id} className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-mono">{sub.email}</span>
-                  <Badge variant={sub.confirmed ? 'up' : 'neutral'}>
+                <li key={sub.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
+                  <span className="figure">{sub.email}</span>
+                  <Pill size="sm" tone={sub.confirmed ? 'up' : 'neutral'}>
                     {sub.confirmed ? 'OK' : t('sp.subscribers_pending', 'čeká na potvrzení')}
-                  </Badge>
+                  </Pill>
                   <span className="text-muted-foreground">{sub.lang}</span>
                   <button
                     type="button"
@@ -213,52 +200,52 @@ export function StatusPagesPage() {
                       loadSubscribers();
                     }}
                     aria-label={t('sp.subscriber_delete', 'Smazat odběratele')}
-                    className="text-muted-foreground hover:text-down ml-auto transition-colors"
+                    className="text-muted-foreground hover:text-down focus-visible:ring-ring ml-auto rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
                   >
-                    <Trash2 className="size-3.5" />
+                    <Trash2 aria-hidden="true" className="size-3.5" />
                   </button>
                 </li>
               ))}
             </ul>
           )}
-        </Card>
+        </Panel>
       )}
 
       {pages === null ? (
         <LoadingState label={t('sp.loading', 'Načítám…')} />
       ) : pages.length === 0 ? (
-        <Card className="space-y-2 p-8 text-center">
-          <p className="text-foreground text-sm font-semibold">{t('sp.empty_title', 'Zatím žádná status stránka')}</p>
-          <p className="text-muted-foreground text-xs">
-            {t(
-              'sp.empty_desc',
-              'Hlavní přehled na /status/ funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.'
-            )}
-          </p>
-        </Card>
+        <EmptyState
+          boxed
+          icon={<PanelsTopLeft />}
+          title={t('sp.empty_title', 'Zatím žádná status stránka')}
+          hint={t(
+            'sp.empty_desc',
+            'Hlavní přehled na /status/ funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.'
+          )}
+        />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {pages.map((p) => (
-            <Card key={p.id} className="space-y-2 p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-sm font-bold">{p.title}</h3>
-                    <Badge variant={p.isPublic ? 'up' : 'neutral'}>
-                      {p.isPublic ? (
-                        <>
-                          <Eye className="size-3" /> {t('sp.public', 'Veřejná')}
-                        </>
-                      ) : (
-                        <>
-                          <EyeOff className="size-3" /> {t('sp.hidden', 'Skrytá')}
-                        </>
-                      )}
-                    </Badge>
-                  </div>
-                  {p.description && <p className="text-muted-foreground mt-0.5 text-xs">{p.description}</p>}
-                </div>
-                {isAdmin && (
+            <Panel
+              key={p.id}
+              icon={PanelsTopLeft}
+              title={p.title}
+              chip={
+                <Pill size="sm" tone={p.isPublic ? 'up' : 'neutral'}>
+                  {p.isPublic ? (
+                    <>
+                      <Eye aria-hidden="true" className="size-3" /> {t('sp.public', 'Veřejná')}
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff aria-hidden="true" className="size-3" /> {t('sp.hidden', 'Skrytá')}
+                    </>
+                  )}
+                </Pill>
+              }
+              hint={p.description || undefined}
+              action={
+                isAdmin && (
                   <div className="flex shrink-0 gap-1">
                     <Button
                       variant="ghost"
@@ -277,9 +264,10 @@ export function StatusPagesPage() {
                       <Trash2 />
                     </Button>
                   </div>
-                )}
-              </div>
-
+                )
+              }
+              bodyClassName="space-y-2"
+            >
               <p className="text-muted-foreground text-2xs">
                 {p.monitorIds.length === 0
                   ? t('sp.all_monitors', 'Zobrazuje všechny monitory')
@@ -290,15 +278,17 @@ export function StatusPagesPage() {
                     )}
               </p>
 
+              {/* The text says where the link goes: the React public page. */}
               <a
                 href={pageUrl(p.slug)}
                 target="_blank"
                 rel="noreferrer"
-                className="text-primary inline-flex items-center gap-1 font-mono text-xs hover:underline"
+                className="text-link inline-flex max-w-full items-center gap-1 font-mono text-xs hover:underline"
               >
-                /status/?page={p.slug} <ExternalLink className="size-3" />
+                <span className="truncate">/app/public?page={p.slug}</span>
+                <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
               </a>
-            </Card>
+            </Panel>
           ))}
         </div>
       )}

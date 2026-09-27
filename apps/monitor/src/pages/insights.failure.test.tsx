@@ -6,16 +6,13 @@ import { LanguageProvider } from '@/context/language-context';
 import { InsightsPage } from './insights';
 
 /**
- * The common check of set A covers /app/insights too: its cards carry static
- * all-clear copy, so a failed monitor list must not reach them.
+ * The common check of set A covers /app/insights too: a failed feed is loud,
+ * with a retry, and never reads as "nothing to act on" (W1-A, W2-8).
  */
 const json = (body: unknown, status = 200) =>
   ({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }) as Response;
 
-const WEB_ALL_OK = 'Všechny webové stránky a HTTP endpointy odpovídají v pořádku.';
-const FAILED = 'Přehled se nepodařilo načíst. Stav serverů a webů teď není známý.';
-
-const MONITORS = [{ id: 1, name: 'E-shop', type: 'web', status: 'up', target: 'https://example.test' }];
+const FAILED = 'Zjištění se nepodařilo načíst. Nevíme, jestli je vše v pořádku.';
 
 function renderPage() {
   return render(
@@ -33,31 +30,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Insights: selhání není „vše v pořádku“ (W1-A)', () => {
-  it('seznam monitorů vrací 500: chyba s opakováním, žádné karty ani „v pořádku“; opakování načte karty', async () => {
+describe('Zjištění: selhání není „vše v pořádku“ (W1-A, W2-8)', () => {
+  it('findings vrací 500: chyba s opakováním, žádné „nic k řešení“; opakování načte seznam', async () => {
     let up = false;
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) =>
         Promise.resolve(
-          String(input).includes('action=monitors') && up
-            ? json({ monitors: MONITORS })
-            : json({ error: 'database_unavailable' }, 500)
+          String(input).includes('action=findings') && up
+            ? json({
+                findings: [],
+                total: 0,
+                offset: 0,
+                counts: { critical: 0, warning: 0, info: 0 },
+                devices: [],
+                monitorsChecked: 3,
+                muted: [],
+                canMute: false,
+                sourceErrors: [],
+                insightsCachedAt: null,
+                generatedAt: '2026-09-23T10:00:00+02:00',
+              })
+            : json({ error: 'findings_unavailable', message: 'x' }, 500)
         )
       )
     );
     renderPage();
 
     const error = await screen.findByText(FAILED);
-    expect(screen.queryByText(WEB_ALL_OK)).toBeNull();
+    expect(screen.queryByText(/Nic k řešení/)).toBeNull();
 
     up = true;
     fireEvent.click(
       within(error.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Zkusit znovu' })
     );
-    expect(
-      await screen.findByText('Žádný sledovaný web není mimo provoz a žádný přečtený certifikát nevypršel.')
-    ).toBeTruthy();
+    expect(await screen.findByText('Nic k řešení - žádné zjištění.')).toBeTruthy();
     expect(screen.queryByText(FAILED)).toBeNull();
   });
 });

@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('Výkazy: SLA s pětisekundovým výpadkem', () => {
-  it('celkem i u monitoru 99.99 %, ne 100.00 %', async () => {
+  it('celkem i u monitoru 99,99 %, ne 100 %', async () => {
     const row = {
       id: 2,
       name: 'E-shop',
@@ -55,7 +55,10 @@ describe('Výkazy: SLA s pětisekundovým výpadkem', () => {
     );
 
     expect((await screen.findAllByText('E-shop')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('99.99 %')).toHaveLength(2);
-    expect(screen.queryByText('100.00 %')).toBeNull();
+    // The overall tile prints the number and its unit apart; the table row as one.
+    expect(screen.getByText('99,99')).toBeTruthy();
+    expect(screen.getByText('99,99 %')).toBeTruthy();
+    expect(screen.queryByText('100')).toBeNull();
+    expect(screen.queryByText('100 %')).toBeNull();
   });
 });

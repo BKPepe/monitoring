@@ -3,89 +3,84 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
-import omnia from '@/api/omnia-router.fixture';
+import type { Finding, FindingsResponse } from '@/api/types';
 import { InsightsPage } from './insights';
 
 /**
- * W1-B6: the Insights page lists what the server measured or computed - a
- * website that is down, a certificate inside the alert window, the
- * dashboard_insights findings (all of them, paged) and each router's weekly
- * recommendations - and none of the old hand-written copy.
+ * W2-8: the Insights page is the server's one findings feed (C-12), grouped
+ * by device, worst first, with the mute on router items - not three lists
+ * assembled in the browser from the monitor list, dashboard_insights and one
+ * request per router.
  */
 const json = (body: unknown, status = 200) =>
   ({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }) as Response;
 
-const MONITORS = [
-  {
-    id: 2,
-    name: 'E-shop',
-    type: 'web',
-    status: 'down',
-    target: 'https://shop.example.test',
-    sinceStatusChangeSeconds: 5400,
-  },
-  {
-    id: 3,
-    name: 'Wiki',
-    type: 'https',
-    status: 'up',
-    target: 'https://wiki.example.test',
-    details: { ssl_days_remaining: 9, ssl_valid_to: '2026-10-02T12:00:00+02:00' },
-  },
-  {
-    id: 4,
-    name: 'Blog',
-    type: 'https',
-    status: 'up',
-    target: 'https://blog.example.test',
-    details: { ssl_days_remaining: 80 },
-  },
-  { id: 6, name: 'Turris', type: 'openwrt', status: 'up', target: 'router', details: { agent_version: '0.1.8' } },
-];
-
-const insight = (i: number) => ({
-  monitorId: 6,
-  monitorName: 'Turris',
-  kind: i === 0 ? 'network' : 'forecast',
-  text: `Zjištění číslo ${i + 1}`,
-  detail: '',
+const finding = (key: string, monitorId: number, name: string, extra: Partial<Finding> = {}): Finding => ({
+  key,
+  source: 'status',
+  kind: 'status_down',
+  severity: 'warning',
+  monitorId,
+  monitorName: name,
+  monitorType: 'web',
+  title: `Nález ${key}`,
+  detail: null,
+  action: null,
+  since: null,
+  ...extra,
 });
 
-interface Options {
-  insightsStatus?: number;
-  total?: number | null;
-  sslAlertDays?: number | null;
-}
+const device = (monitorId: number, monitorName: string, worst: Finding['severity'], total: number) => ({
+  monitorId,
+  monitorName,
+  monitorType: 'web',
+  worst,
+  critical: worst === 'critical' ? total : 0,
+  warning: worst === 'warning' ? total : 0,
+  info: worst === 'info' ? total : 0,
+  total,
+});
 
-function stubApi({ insightsStatus = 200, total = 2, sslAlertDays = 14 }: Options = {}) {
-  const all = Array.from({ length: total ?? 2 }, (_, i) => insight(i));
-  const fetchMock = vi.fn((input: RequestInfo | URL) => {
-    const url = new URL(String(input), 'http://localhost');
-    const action = url.searchParams.get('action');
-    if (action === 'monitors') return Promise.resolve(json({ monitors: MONITORS }));
-    if (action === 'websites_overview') {
-      return Promise.resolve(
-        json(sslAlertDays === null ? { slaGoal: 99.9, monitors: {} } : { slaGoal: 99.9, sslAlertDays, monitors: {} })
-      );
-    }
-    if (action === 'dashboard_insights') {
-      if (insightsStatus !== 200) {
-        return Promise.resolve(json({ error: 'dashboard_insights_unavailable', message: 'x' }, insightsStatus));
-      }
-      const offset = Number(url.searchParams.get('offset') ?? 0);
-      const limit = Number(url.searchParams.get('limit') ?? 4);
-      const page = all.slice(offset, offset + limit);
-      return Promise.resolve(json(total === null ? { insights: page } : { insights: page, total, offset }));
-    }
-    if (action === 'router_recommendations') return Promise.resolve(json(omnia.recommendations));
-    return Promise.resolve(json({}));
-  });
+const FEED: FindingsResponse = {
+  findings: [
+    finding('status:2:status_down', 2, 'E-shop', {
+      severity: 'critical',
+      title: 'Web je mimo provoz',
+      detail: 'HTTP status kód: 502',
+      since: '2026-09-23T08:30:00+02:00',
+    }),
+    finding('certificate:3:ssl_expiring', 3, 'Wiki', {
+      source: 'certificate',
+      kind: 'ssl_expiring',
+      title: 'Certifikát vyprší za 9 dní',
+    }),
+    finding('router:6:wifi_noise', 6, 'Turris', {
+      source: 'router',
+      kind: 'wifi_noise',
+      monitorType: 'openwrt',
+      title: 'Rušení na 2,4 GHz',
+      action: 'Přesuňte kanál',
+      rec: { key: 'wifi_noise', command: null } as Finding['rec'],
+    }),
+  ],
+  total: 3,
+  offset: 0,
+  counts: { critical: 1, warning: 2, info: 0 },
+  devices: [device(2, 'E-shop', 'critical', 1), device(3, 'Wiki', 'warning', 1), device(6, 'Turris', 'warning', 1)],
+  monitorsChecked: 12,
+  muted: [],
+  canMute: true,
+  sourceErrors: [],
+  insightsCachedAt: null,
+  generatedAt: '2026-09-23T10:00:00+02:00',
+};
+
+function stubApi(body: FindingsResponse = FEED) {
+  const fetchMock = vi.fn((input: RequestInfo | URL) =>
+    Promise.resolve(String(input).includes('action=findings') ? json(body) : json({ error: 'unexpected' }, 404))
+  );
   vi.stubGlobal('fetch', fetchMock);
-  const calls = (action: string) =>
-    fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter((u) => u.includes(`action=${action}&`) || u.endsWith(`action=${action}`));
-  return { calls };
+  return { urls: () => fetchMock.mock.calls.map(([u]) => String(u)) };
 }
 
 function renderPage() {
@@ -104,94 +99,94 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Zjištění: jen změřená a spočítaná data (W1-B6)', () => {
-  it('E-shop mimo provoz a certifikát Wiki za 9 dní jsou na seznamu, Blog (80 dní) ne; žádná ruční karta', async () => {
-    stubApi();
+describe('Zjištění: jeden seznam ze serveru, po zařízeních (W2-8)', () => {
+  it('nálezy jsou pod svým zařízením v pořadí serveru, ztlumit jde jen doporučení routeru', async () => {
+    const { urls } = stubApi();
     renderPage();
 
-    const list = await screen.findByTestId('website-findings');
-    const rows = within(list).getAllByRole('listitem');
-    expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain('E-shop');
-    expect(rows[0].textContent).toContain('Web je mimo provoz 1h 30m.');
-    expect(rows[1].textContent).toContain('Wiki');
-    expect(rows[1].textContent).toContain('Certifikát vyprší za 9 dní');
-    expect(within(list).queryByText(/Blog/)).toBeNull();
-    // E-shop (HTTPS) has no certificate read yet: said, in the singular.
-    expect(screen.getByText('U 1 webu s HTTPS kontrola certifikát zatím nepřečetla, proto tu chybí.')).toBeTruthy();
-    expect(within(rows[0]).getByRole('link', { name: 'E-shop' }).getAttribute('href')).toBe('/infrastructure/2');
+    const shop = await screen.findByRole('region', { name: 'E-shop' });
+    expect(within(shop).getByText('Web je mimo provoz')).toBeTruthy();
+    expect(within(shop).getByText('HTTP status kód: 502')).toBeTruthy();
+    expect(within(shop).getByRole('link', { name: 'E-shop' }).getAttribute('href')).toBe('/infrastructure/2');
+    const regions = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
+    expect(regions).toEqual(['E-shop', 'Wiki', 'Turris']);
+    // The mute belongs to router recommendations only - the one advice that has a mute on the server.
+    const mute = screen.getAllByRole('button', { name: /Ztlumit/ });
+    expect(mute).toHaveLength(1);
+    expect(screen.getByRole('region', { name: 'Turris' }).contains(mute[0])).toBe(true);
+    // Twelve looked at, three with findings: the rest is one line, not nine empty cards.
+    expect(screen.getByText('Ostatní zařízení bez nálezů (9)')).toBeTruthy();
 
-    expect(await screen.findByText(/Zjištění číslo 1/)).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Zjištění');
-    // The old cards: a green certificate badge, "TLS 1.3", "Lineární regrese", "AI", "v pořádku".
-    expect(document.body.textContent).not.toMatch(/SSL|TLS 1\.3|Lineární|\bAI\b|v pořádku|optimálním/);
+    // One destination, one name: the sidebar, the phone tab and the bell say "Upozornění" too.
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Upozornění');
+    // One request for the whole page - no monitor list, no per-router calls.
+    expect(urls()).toHaveLength(1);
+    expect(urls()[0]).toContain('action=findings');
+    expect(urls()[0]).toContain('limit=500');
+    expect(urls()[0]).toContain('lang=cs');
   });
 
-  it('bez hranice ze serveru se certifikát za 9 dní nevymýšlí: jen výpadek a poznámka o neznámé hranici', async () => {
-    stubApi({ sslAlertDays: null });
+  it('selhaný zdroj uvnitř odpovědi je hlasitý: seznam se ukáže, ale jako neúplný', async () => {
+    stubApi({ ...FEED, sourceErrors: [{ source: 'insight', monitorId: null, error: 'insights_unavailable' }] });
     renderPage();
 
-    const list = await screen.findByTestId('website-findings');
-    expect(within(list).getAllByRole('listitem')).toHaveLength(1);
-    expect(list.textContent).not.toContain('Wiki');
-    expect(screen.getByText(/Hranici pro upozornění na certifikát se nepodařilo zjistit/)).toBeTruthy();
+    expect(await screen.findByText('Seznam není úplný: trendy a odchylky se nepodařilo načíst.')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'E-shop' })).toBeTruthy();
   });
 
-  it('zjištění serveru se stránkují bez stropu 8: 60 položek = 50 a „Načíst další“ pro zbytek', async () => {
-    const { calls } = stubApi({ total: 60 });
+  it('bez nálezů říká „nic k řešení“ a kolik zařízení prošlo', async () => {
+    stubApi({ ...FEED, findings: [], devices: [], total: 0, counts: { critical: 0, warning: 0, info: 0 } });
     renderPage();
 
-    const list = await screen.findByTestId('server-insights');
-    expect(within(list).getAllByRole('listitem')).toHaveLength(50);
-    expect(calls('dashboard_insights')[0]).toContain('limit=50');
-    expect(calls('dashboard_insights')[0]).toContain('offset=0');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Načíst další (zobrazeno 50 z 60)' }));
-    expect(await screen.findByText(/Zjištění číslo 60$/)).toBeTruthy();
-    expect(within(screen.getByTestId('server-insights')).getAllByRole('listitem')).toHaveLength(60);
-    expect(calls('dashboard_insights')[1]).toContain('offset=50');
-    expect(screen.queryByRole('button', { name: /Načíst další/ })).toBeNull();
+    expect(await screen.findByText('Nic k řešení - žádné zjištění.')).toBeTruthy();
+    expect(screen.getByText('Ostatní zařízení bez nálezů (12)')).toBeTruthy();
   });
 
-  it('dashboard_insights vrací 500: chyba s opakováním, ne „nic nenalezeno“; weby se vykreslí dál', async () => {
-    stubApi({ insightsStatus: 500 });
-    renderPage();
-
-    const error = await screen.findByText('Zjištění serveru se nepodařilo načíst.');
-    expect(
-      within(error.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Zkusit znovu' })
-    ).toBeTruthy();
-    expect(screen.queryByText('V naměřených datech server nic nenašel.')).toBeNull();
-    expect(await screen.findByTestId('website-findings')).toBeTruthy();
-  });
-
-  it('router má svá doporučení (stejný engine jako pondělní e-mail) s odkazem na zařízení', async () => {
-    const { calls } = stubApi();
-    renderPage();
-
-    expect(await screen.findByText(omnia.recommendations.items[0].title as string)).toBeTruthy();
-    const section = screen.getByRole('region', { name: 'Doporučení pro Turris' });
-    expect(within(section).getByRole('link', { name: 'Turris' }).getAttribute('href')).toBe('/infrastructure/6');
-    expect(calls('router_recommendations')[0]).toContain('monitor_id=6');
-    expect(document.getElementById('router-recommendations-6')).not.toBeNull();
-  });
-
-  it('v angličtině jde jazyk do dotazů a texty serveru se zobrazí tak, jak přišly', async () => {
+  it('v angličtině jde jazyk do dotazu a nadpis je anglicky', async () => {
     // The language provider reads the stored choice once, when it mounts.
     vi.stubGlobal('localStorage', {
       getItem: (k: string) => (k === 'bk_lang' ? 'en' : null),
       setItem: () => {},
       removeItem: () => {},
     });
-    const { calls } = stubApi();
+    const { urls } = stubApi();
     renderPage();
 
-    expect(await screen.findByText('Findings', { selector: 'h1' })).toBeTruthy();
-    await screen.findByTestId('server-insights');
-    expect(calls('dashboard_insights')[0]).toContain('lang=en');
-    const list = await screen.findByTestId('website-findings');
-    expect(list.textContent).toContain('The certificate expires in 9 days');
-    await screen.findByText(omnia.recommendations.items[0].title as string);
-    expect(calls('router_recommendations')[0]).toContain('lang=en');
+    expect(await screen.findByText('Alerts', { selector: 'h1' })).toBeTruthy();
+    await screen.findByRole('region', { name: 'E-shop' });
+    expect(urls()[0]).toContain('lang=en');
+  });
+});
+
+describe('Upozornění jako feed (NetPulse): dlaždice, filtry, čas', () => {
+  it('dlaždice ukazují počty serveru; filtr závažnosti jen zúží tentýž seznam, bez nového dotazu', async () => {
+    const { urls } = stubApi();
+    renderPage();
+    await screen.findByRole('region', { name: 'E-shop' });
+
+    const severity = screen.getByRole('group', { name: 'Závažnost' });
+    fireEvent.click(within(severity).getByRole('button', { name: /Kritické/ }));
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['E-shop']);
+    // The critical item says its severity in words, not only by the red rail.
+    expect(
+      within(screen.getByRole('region', { name: 'E-shop' })).getByText('Kritické:', { exact: false })
+    ).toBeTruthy();
+
+    const sources = screen.getByRole('group', { name: 'Zdroj' });
+    fireEvent.click(within(severity).getByRole('button', { name: /Vše/ }));
+    fireEvent.click(within(sources).getByRole('button', { name: /Routery/ }));
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Turris']);
+
+    expect(urls()).toHaveLength(1);
+  });
+
+  it('položka s časem říká, jak dlouho trvá; přesný čas je v titulku', async () => {
+    stubApi();
+    renderPage();
+    const shop = await screen.findByRole('region', { name: 'E-shop' });
+    const time = shop.querySelector('time');
+    expect(time?.getAttribute('dateTime')).toBe('2026-09-23T08:30:00+02:00');
+    expect(time?.textContent).toMatch(/^před /);
+    expect(time?.getAttribute('title')).toMatch(/^trvá od /);
   });
 });

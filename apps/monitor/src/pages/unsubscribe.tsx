@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { BellOff, CheckCircle2 } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';
 import { ErrorState } from '@/components/ui/states';
@@ -40,7 +40,7 @@ export function UnsubscribePage() {
 
   return (
     <div className="grid min-h-screen place-items-center p-4">
-      <Card className="w-full max-w-sm space-y-4 p-6">
+      <Panel className="w-full max-w-sm" bodyClassName="space-y-4 sm:p-6">
         <div className="flex items-center gap-2.5">
           <BellOff className="size-5 text-primary" />
           <h1 className="text-lg font-bold">{t('pubsub.unsub_title', 'Odhlášení odběru')}</h1>
@@ -71,7 +71,7 @@ export function UnsubscribePage() {
             </Button>
           </div>
         )}
-      </Card>
+      </Panel>
     </div>
   );
 }

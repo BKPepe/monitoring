@@ -1,7 +1,14 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { filterAssets, orderByStatusChange, parseStatusFilter } from '@/lib/asset-filter';
-import { isPublicByDefault } from '@/lib/monitor-type';
+import {
+  filterAssets,
+  orderByStatusChange,
+  parseStatusFilter,
+  parseTypeFilter,
+  type AssetStatus,
+} from '@/lib/asset-filter';
+import { isPublicByDefault, monitorTypeLabel, normalizeMonitorType } from '@/lib/monitor-type';
+import { monitorStatusKey, statusKeyOf, statusLabel, type StatusKey } from '@/lib/status';
 import {
   Boxes,
   ChevronDown,
@@ -20,13 +27,18 @@ import {
   Terminal,
   CheckCircle2,
   AlertTriangle,
-  Radar,
+  Info,
   X,
   Archive,
   ArchiveRestore,
+  Bell,
+  Wrench,
+  Plug,
+  HeartPulse,
+  Network,
+  PanelsTopLeft,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -36,7 +48,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge, statusVariant } from '@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
+import { IconTile } from '@/components/ui/icon-tile';
+import { FilterPills, type FilterOption, type FilterTone } from '@/components/filter-pills';
+import { DeviceCard } from '@/components/infrastructure/device-card';
+import { useFleetHealth } from '@/components/infrastructure/use-fleet-health';
+import { usePageChrome } from '@/components/layout/shell-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { appApi, type ApiAsset, type ApiMonitor } from '@/api/app-api';
@@ -44,11 +63,11 @@ import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { AgentInstallSteps } from '@/components/agent-install-steps';
-import { cn, formatRelative, formatUptime } from '@/lib/utils';
-import { LoadingState, ErrorState } from '@/components/ui/states';
+import { cn, formatRelative } from '@/lib/utils';
+import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 
-type AssetNode = ApiAsset;
-type MonitorStatus = ApiAsset['status'];
+/** A list row: the asset fields plus what the row prints and filters on. */
+type AssetNode = ApiAsset & { type: string; statusKey: StatusKey };
 
 const kindIcon: Record<string, LucideIcon> = {
   Router: Router,
@@ -62,12 +81,41 @@ const kindIcon: Record<string, LucideIcon> = {
   'Container host': Container,
 };
 
+/** The filter chips' icons per monitor type (lib/asset-filter KNOWN_TYPES). */
+const TYPE_ICON: Record<string, LucideIcon> = {
+  web: Globe,
+  port: Plug,
+  dns: Network,
+  vps: Server,
+  openwrt: Router,
+  cpanel: PanelsTopLeft,
+  agent_service: Boxes,
+  teamspeak: Mic,
+  minecraft: Gamepad2,
+  discord: MessageSquare,
+  heartbeat: HeartPulse,
+};
+const typeIcon = (type: string): LucideIcon | undefined => TYPE_ICON[type];
+
+/** The order of the state pills: the normal case first, then what needs a look. */
+const STATUS_ORDER: readonly AssetStatus[] = ['up', 'warning', 'down', 'unknown', 'maintenance', 'paused'];
+const STATUS_TONE: Record<AssetStatus, FilterTone> = {
+  up: 'up',
+  warning: 'warning',
+  down: 'down',
+  unknown: 'neutral',
+  maintenance: 'info',
+  paused: 'paused',
+};
+
+/** Cards on a desktop, a column of rows on a phone - the same links either way. */
+const DEVICE_GRID = 'grid gap-3 sm:grid-cols-2 xl:grid-cols-3';
+
 export function InfrastructurePage() {
   const { t, lang } = useLanguage();
-  const { session, isAdmin } = useSession();
+  const { session, isAdmin, loading: sessionLoading } = useSession();
   const [query, setQuery] = React.useState('');
   const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
   // Add/edit monitor modal, with the same full range of settings as PHP admin.php
   const [showAddModal, setShowAddModal] = React.useState(false);
@@ -182,6 +230,12 @@ export function InfrastructurePage() {
   const [addedSuccess, setAddedSuccess] = React.useState(false);
   const [rawMonitors, setRawMonitors] = React.useState<ApiMonitor[]>([]);
   const [monitorsError, setMonitorsError] = React.useState<string | null>(null);
+  // An empty list is only "no monitors yet" once the server said so. The
+  // tree used to be null for both, and a fresh install sat on "Načítám
+  // zařízení…" for ever.
+  const [monitorsLoaded, setMonitorsLoaded] = React.useState(false);
+  const [listVersion, setListVersion] = React.useState(0);
+  const [healthAttempt, setHealthAttempt] = React.useState(0);
 
   const loadMonitors = React.useCallback(() => {
     let active = true;
@@ -191,6 +245,8 @@ export function InfrastructurePage() {
         if (!active) return;
         setRawMonitors(Array.isArray(rows) ? rows : []);
         setMonitorsError(null);
+        setMonitorsLoaded(true);
+        setListVersion((n) => n + 1);
       })
       .catch(() => {
         if (active) setMonitorsError(t('infra.load_error', 'Seznam zařízení se nepodařilo načíst.'));
@@ -204,6 +260,10 @@ export function InfrastructurePage() {
     const cancel = loadMonitors();
     return cancel;
   }, [session, loadMonitors]);
+
+  // The ring on each card: the server's scores, refetched with every reload
+  // of the list (and by the retry of their own failure).
+  const fleetHealth = useFleetHealth(monitorsLoaded, `${listVersion}:${healthAttempt}`);
 
   // The archive is a list of its own: monitors kept for their history and out
   // of everything live - no checks, no alerts, no overviews.
@@ -224,6 +284,15 @@ export function InfrastructurePage() {
   React.useEffect(() => {
     loadArchived();
   }, [session, loadArchived]);
+
+  // The header's refresh reloads the list, the archive and the scores in
+  // place - no remount, so an open filter or search survives it.
+  usePageChrome({
+    onRefresh: () => {
+      loadMonitors();
+      loadArchived();
+    },
+  });
 
   const restoreArchived = async (id: number) => {
     try {
@@ -270,18 +339,32 @@ export function InfrastructurePage() {
   // must run only when the monitors arrive - depending on the handler identity
   // would run it on every render (the handler is not memoised).
   const handleStartEditRef = React.useRef<(id: number) => void>(() => {});
-  // The selected asset is read via a ref in the handler: the variable itself
-  // is created lower (it needs the asset tree) and reading a value before its
-  // declaration is a trap even when the handler only runs from an event.
-  const selectedAssetRef = React.useRef<(typeof allAssets)[number] | null>(null);
+  const handleStartAddRef = React.useRef<() => void>(() => {});
   // Once, when the monitors first arrive. The list now reloads every minute,
   // and a deep link re-run on each reload reopened the editor over whatever
   // the user was doing.
   const editDeepLinkDone = React.useRef(false);
   React.useEffect(() => {
-    if (editDeepLinkDone.current || rawMonitors.length === 0) return;
+    // The session has to be known too: ?add=1 opens only for an admin, and a
+    // list that arrived before the session would have spent the link on a
+    // "not an admin" that was only "not known yet".
+    if (editDeepLinkDone.current || !monitorsLoaded || sessionLoading) return;
     editDeepLinkDone.current = true;
     const params = new URLSearchParams(window.location.search);
+    // ?add=1 from the dashboard's first-run card: the empty add form, once.
+    // The parameter goes, so a reload or the back button does not reopen it.
+    if (params.get('add') === '1') {
+      if (isAdmin) handleStartAddRef.current();
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('add');
+          return next;
+        },
+        { replace: true }
+      );
+      return;
+    }
     const editIdStr = params.get('edit');
     if (editIdStr) {
       const editId = parseInt(editIdStr, 10);
@@ -295,7 +378,7 @@ export function InfrastructurePage() {
         }, 200);
       }
     }
-  }, [rawMonitors]);
+  }, [monitorsLoaded, sessionLoading, isAdmin, setSearchParams]);
 
   const existingCategories = React.useMemo(() => {
     const defaultCats = ['Webové Portály & API', 'Komunikační & Herní Servery', 'Síťová Infrastruktura & Routery'];
@@ -307,98 +390,77 @@ export function InfrastructurePage() {
   // before it exists is (rightly) flagged by the React lint, even though it ran fine.
   const handleStartEdit = (monId: number) => {
     const mon = rawMonitors.find((m) => m.id === monId);
+    // An id that is not in the list (a stale ?edit= link, an archived
+    // monitor) opens nothing: an editor over a monitor that is not there
+    // would save a new one under its number.
+    if (!mon) return;
     setEditingId(monId);
-    if (mon) {
-      setMonitorName(mon.name);
-      setMonitorType((mon.type || 'web').toLowerCase() as any);
-      setCategory(mon.category || 'Webové Portály & API');
+    setMonitorName(mon.name);
+    setMonitorType((mon.type || 'web').toLowerCase() as any);
+    setCategory(mon.category || 'Webové Portály & API');
 
-      const typeLower = (mon.type || '').toLowerCase();
-      const rawT = mon.target || '';
+    const typeLower = (mon.type || '').toLowerCase();
+    const rawT = mon.target || '';
 
-      if (typeLower === 'web' || rawT.startsWith('http')) {
-        setMonitorTarget(rawT);
-        setMonitorPort(mon.port ? String(mon.port) : '');
-      } else if (rawT.includes(':') && !rawT.startsWith('http')) {
-        const lastColon = rawT.lastIndexOf(':');
-        setMonitorTarget(rawT.slice(0, lastColon));
-        setMonitorPort(mon.port ? String(mon.port) : rawT.slice(lastColon + 1));
-      } else {
-        setMonitorTarget(rawT);
-        setMonitorPort(mon.port ? String(mon.port) : '');
-      }
-
-      // The rest of the settings are only sent to a logged-in administrator
-      // (see api.php action=monitors) - fields are left at the monitor's saved
-      // value, not a fixed default, otherwise saving the form would overwrite
-      // the real settings (monitored processes, limits, Remote Actions...)
-      // with that default.
-      setTimeoutVal(mon.timeout != null ? String(mon.timeout) : '5');
-      setEmailNotifications(mon.emailNotifications ?? true);
-      setSmsNotifications(mon.smsNotifications ?? false);
-      setNotes(mon.notes ?? '');
-      setMaintenance(mon.maintenance ?? false);
-      setMaintenanceDescription(mon.maintenanceDescription ?? '');
-      setMaintenanceStart(toLocalInput(mon.maintenanceStart));
-      setMaintenanceEnd(toLocalInput(mon.maintenanceEnd));
-      setCpanelStatsUrl(mon.cpanelStatsUrl ?? '');
-      setBodyKeyword(mon.bodyKeyword ?? '');
-      setSqUsername(mon.sqUsername ?? 'serveradmin');
-      setMonDiscord(mon.discordWebhookUrl ?? '');
-      setMonSlack(mon.slackWebhookUrl ?? '');
-      setMonTelegramToken(mon.telegramBotToken ?? '');
-      setMonTelegramChat(mon.telegramChatId ?? '');
-      setSqPassword('');
-      setSqPasswordPlaceholder(
-        mon.sqPasswordSet
-          ? t('infra.password_saved_placeholder', '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)')
-          : ''
-      );
-      setTs3FiletransferPort(mon.ts3FiletransferPort != null ? String(mon.ts3FiletransferPort) : '30033');
-      setRconPort(mon.rconPort != null ? String(mon.rconPort) : '25575');
-      setRconPassword('');
-      setRconPasswordPlaceholder(
-        mon.rconPasswordSet
-          ? t('infra.password_saved_placeholder', '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)')
-          : ''
-      );
-      setMonitoredProcesses(mon.monitoredProcesses ?? '');
-      setCpuThreshold(mon.cpuThreshold != null ? String(mon.cpuThreshold) : '90');
-      setPresetId(mon.presetId != null ? String(mon.presetId) : '');
-      setLatencyThresholdMs(mon.latencyThresholdMs != null ? String(mon.latencyThresholdMs) : '');
-      setLatencyThresholdMins(mon.latencyThresholdMins != null ? String(mon.latencyThresholdMins) : '5');
-      setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
-      setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
-      setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
-      setLogLinesEnabled(typeof mon.logLinesEnabled === 'boolean' ? mon.logLinesEnabled : null);
-      setReadPublic(typeof mon.isPublic === 'boolean' ? mon.isPublic : null);
-      setPublicChoice(null);
-      setAllowedActions(mon.allowedActions ?? []);
-      setEnabledMetrics(mon.enabledMetrics ?? []);
-    } else if (selectedAssetRef.current) {
-      setReadPublic(null);
-      setPublicChoice(null);
-      setMonitorName(selectedAssetRef.current.name);
-      const k = (selectedAssetRef.current.kind || '').toLowerCase();
-      if (k.includes('discord')) setMonitorType('discord');
-      else if (k.includes('game') || k.includes('minecraft')) setMonitorType('minecraft');
-      else if (k.includes('voice') || k.includes('teamspeak')) setMonitorType('teamspeak');
-      else if (k.includes('router') || k.includes('openwrt')) setMonitorType('openwrt');
-      else setMonitorType('web');
-
-      const h = selectedAssetRef.current.hostname || '';
-      if (h.startsWith('http')) {
-        setMonitorTarget(h);
-        setMonitorPort('');
-      } else if (h.includes(':') && !h.startsWith('http')) {
-        const lastColon = h.lastIndexOf(':');
-        setMonitorTarget(h.slice(0, lastColon));
-        setMonitorPort(h.slice(lastColon + 1));
-      } else {
-        setMonitorTarget(h);
-        setMonitorPort('');
-      }
+    if (typeLower === 'web' || rawT.startsWith('http')) {
+      setMonitorTarget(rawT);
+      setMonitorPort(mon.port ? String(mon.port) : '');
+    } else if (rawT.includes(':') && !rawT.startsWith('http')) {
+      const lastColon = rawT.lastIndexOf(':');
+      setMonitorTarget(rawT.slice(0, lastColon));
+      setMonitorPort(mon.port ? String(mon.port) : rawT.slice(lastColon + 1));
+    } else {
+      setMonitorTarget(rawT);
+      setMonitorPort(mon.port ? String(mon.port) : '');
     }
+
+    // The rest of the settings are only sent to a logged-in administrator
+    // (see api.php action=monitors) - fields are left at the monitor's saved
+    // value, not a fixed default, otherwise saving the form would overwrite
+    // the real settings (monitored processes, limits, Remote Actions...)
+    // with that default.
+    setTimeoutVal(mon.timeout != null ? String(mon.timeout) : '5');
+    setEmailNotifications(mon.emailNotifications ?? true);
+    setSmsNotifications(mon.smsNotifications ?? false);
+    setNotes(mon.notes ?? '');
+    setMaintenance(mon.maintenance ?? false);
+    setMaintenanceDescription(mon.maintenanceDescription ?? '');
+    setMaintenanceStart(toLocalInput(mon.maintenanceStart));
+    setMaintenanceEnd(toLocalInput(mon.maintenanceEnd));
+    setCpanelStatsUrl(mon.cpanelStatsUrl ?? '');
+    setBodyKeyword(mon.bodyKeyword ?? '');
+    setSqUsername(mon.sqUsername ?? 'serveradmin');
+    setMonDiscord(mon.discordWebhookUrl ?? '');
+    setMonSlack(mon.slackWebhookUrl ?? '');
+    setMonTelegramToken(mon.telegramBotToken ?? '');
+    setMonTelegramChat(mon.telegramChatId ?? '');
+    setSqPassword('');
+    setSqPasswordPlaceholder(
+      mon.sqPasswordSet
+        ? t('infra.password_saved_placeholder', '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)')
+        : ''
+    );
+    setTs3FiletransferPort(mon.ts3FiletransferPort != null ? String(mon.ts3FiletransferPort) : '30033');
+    setRconPort(mon.rconPort != null ? String(mon.rconPort) : '25575');
+    setRconPassword('');
+    setRconPasswordPlaceholder(
+      mon.rconPasswordSet
+        ? t('infra.password_saved_placeholder', '•••••••• (uloženo, necháte-li prázdné, zůstane beze změny)')
+        : ''
+    );
+    setMonitoredProcesses(mon.monitoredProcesses ?? '');
+    setCpuThreshold(mon.cpuThreshold != null ? String(mon.cpuThreshold) : '90');
+    setPresetId(mon.presetId != null ? String(mon.presetId) : '');
+    setLatencyThresholdMs(mon.latencyThresholdMs != null ? String(mon.latencyThresholdMs) : '');
+    setLatencyThresholdMins(mon.latencyThresholdMins != null ? String(mon.latencyThresholdMins) : '5');
+    setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
+    setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
+    setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
+    setLogLinesEnabled(typeof mon.logLinesEnabled === 'boolean' ? mon.logLinesEnabled : null);
+    setReadPublic(typeof mon.isPublic === 'boolean' ? mon.isPublic : null);
+    setPublicChoice(null);
+    setAllowedActions(mon.allowedActions ?? []);
+    setEnabledMetrics(mon.enabledMetrics ?? []);
     setShowAddModal(true);
   };
 
@@ -447,6 +509,10 @@ export function InfrastructurePage() {
         // Only evidence of an agent counts - the type alone used to be enough,
         // so a VPS whose agent never ran was shown with an agent.
         hasAgent: m.agentLastSeen != null || Boolean(m.details?.agent_version),
+        type: normalizeMonitorType(m.type),
+        // One vocabulary (C-11): a monitor waiting for its first data is not
+        // a silent agent, and the row must not say it is.
+        statusKey: monitorStatusKey(m),
       };
       if (!groups.has(catName)) {
         groups.set(catName, []);
@@ -576,13 +642,80 @@ export function InfrastructurePage() {
     }, 1000);
   };
 
+  // A fresh form for a new monitor. A function of its own, because the
+  // dashboard's first-run card opens it too (?add=1).
+  const handleStartAdd = () => {
+    setEditingId(null);
+    setMonitorName('');
+    setMonitorTarget('');
+    setMonitorPort('');
+    setTimeoutVal('5');
+    setEmailNotifications(true);
+    setSmsNotifications(false);
+    setNotes('');
+    setMaintenance(false);
+    setMaintenanceDescription('');
+    setCpanelStatsUrl('');
+    setBodyKeyword('');
+    setSqUsername('serveradmin');
+    setMonDiscord('');
+    setMonSlack('');
+    setMonTelegramToken('');
+    setMonTelegramChat('');
+    setSqPassword('');
+    setSqPasswordPlaceholder('••••••••');
+    setTs3FiletransferPort('30033');
+    setRconPort('25575');
+    setRconPassword('');
+    setRconPasswordPlaceholder('••••••••');
+    setMonitoredProcesses('');
+    setCpuThreshold('90');
+    setRamThreshold('95');
+    setHddThreshold('90');
+    setRemoteActionsEnabled(false);
+    setLogLinesEnabled(null);
+    setReadPublic(null);
+    setPublicChoice(null);
+    setAllowedActions([
+      'restart_wan',
+      'restart_wireguard',
+      'reboot_router',
+      'renew_dhcp',
+      'restart_service',
+      'reconnect_pppoe',
+    ]);
+    setEnabledMetrics([
+      'check_pipeline',
+      'response_breakdown',
+      'ssl_card',
+      'headers',
+      'health_score',
+      'process',
+      'service',
+      'clients_chart',
+      'quality',
+      'ports',
+      'license_version',
+    ]);
+    setShowAddModal(true);
+  };
+  React.useEffect(() => {
+    handleStartAddRef.current = handleStartAdd;
+  });
+
   const allAssets = (tree ?? []).flatMap((g) => g.assets);
 
   // `?status=down` arrives from the health ring on the dashboard. Until now
   // that ring was a dead end: it said two devices are offline and left you to
-  // find them yourself.
+  // find them yourself. `?type=` narrows to one monitor type; the removed
+  // Služby page redirects to `?type=agent_service` (owner decision 5.8).
   const activeStatus = parseStatusFilter(searchParams.get('status'));
-  const filteredAssets = filterAssets(allAssets, { query, status: activeStatus });
+  const activeType = parseTypeFilter(searchParams.get('type'));
+  const typedAssets = activeType ? allAssets.filter((a) => a.type === activeType) : allAssets;
+  // null = nothing filters and the grouped tree is shown; a list (possibly
+  // empty) = a flat result.
+  const filteredAssets =
+    filterAssets(typedAssets, { query, status: activeStatus }) ?? (activeType ? typedAssets : null);
   // How long each device has been in its current state - the row shows it,
   // and a list filtered by state is ordered by it (what just broke first).
   const sinceById = React.useMemo(
@@ -592,101 +725,82 @@ export function InfrastructurePage() {
   const sinceFor = (asset: AssetNode) => sinceById.get(asset.monitorId ?? asset.id) ?? null;
   const orderedAssets = filteredAssets && activeStatus ? orderByStatusChange(filteredAssets, sinceFor) : filteredAssets;
 
-  // The detail pane follows the filter that brought the user here. Arriving
-  // from the dashboard's "Offline" ring and landing on a healthy device made
-  // the ring worse than useless: it answered "which ones are down" with one
-  // that is not. Nothing selected and nothing matching stays nothing - an
-  // empty filter result must not fall back to an arbitrary device.
-  // filterAssets returns null when nothing is filtering at all, and a list
-  // (possibly empty) when something is.
-  const visibleAssets = filteredAssets ?? allAssets;
-  const selectedAsset =
-    (selectedId !== null ? allAssets.find((a) => a.id === selectedId) : undefined) ?? visibleAssets[0];
-  // The ref is filled in an effect, not during render - render must not touch refs.
-  React.useEffect(() => {
-    selectedAssetRef.current = selectedAsset ?? null;
-  });
-  const selectedMonitor = selectedAsset
-    ? rawMonitors.find((m) => m.id === (selectedAsset.monitorId ?? selectedAsset.id))
-    : undefined;
+  // A target in a private network fails every check from the hosting. The
+  // detail pane was the only place that offered the fix; with the pane gone
+  // the list says it once, above the rows.
+  const unreachable = rawMonitors.filter((m) => m.unreachableTarget);
 
-  const statusLabel: Record<MonitorStatus, string> = {
-    up: t('common.online', 'Online'),
-    down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Pozastaveno'),
-    maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý'),
+  const setParam = (key: 'status' | 'type', value: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
   };
+  const clearParam = (key: 'status' | 'type') => setParam(key, null);
+
+  // The state words of the filter pills and the summary line: lib/status
+  // for every state, "Neznámý" for the agent-side 'unknown' the filter
+  // matches as one (never reported and gone quiet alike).
+  const statusWord = (status: AssetStatus) =>
+    status === 'unknown' ? t('status.unknown', 'Neznámý') : statusLabel(statusKeyOf(status), t);
+  // Counts of what the list holds right now, per state - after the type
+  // filter, so "Výpadek 1" is what a click on it will show.
+  const statusCounts = new Map<AssetStatus, number>();
+  for (const a of typedAssets) statusCounts.set(a.status, (statusCounts.get(a.status) ?? 0) + 1);
+  const statusOptions: FilterOption<AssetStatus | 'all'>[] = [
+    { value: 'all', label: t('infra.filter_all', 'Vše'), count: typedAssets.length },
+    ...STATUS_ORDER.filter((s) => (statusCounts.get(s) ?? 0) > 0 || s === activeStatus).map((s) => ({
+      value: s,
+      label: statusWord(s),
+      count: statusCounts.get(s) ?? 0,
+      tone: STATUS_TONE[s],
+    })),
+  ];
+  const typeCounts = new Map<string, number>();
+  for (const a of allAssets) {
+    if (parseTypeFilter(a.type)) typeCounts.set(a.type, (typeCounts.get(a.type) ?? 0) + 1);
+  }
+  const typeOptions: FilterOption<string>[] = [
+    { value: 'all', label: t('infra.filter_all', 'Vše'), count: allAssets.length },
+    ...[...typeCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => ({ value: type, label: monitorTypeLabel(type, t), count, icon: typeIcon(type) })),
+  ];
+  // "Zařízení 12 · Online 10 · Výpadek 1": the list in one line under the
+  // title, counted from the answer the cards come from (nothing before it).
+  const summary =
+    monitorsLoaded && !monitorsError && allAssets.length > 0
+      ? [
+          `${t('infra.summary_devices', 'Zařízení')} ${allAssets.length}`,
+          ...STATUS_ORDER.map((s) => [s, allAssets.filter((a) => a.status === s).length] as const)
+            .filter(([, n]) => n > 0)
+            .map(([s, n]) => `${statusWord(s)} ${n}`),
+        ].join(' · ')
+      : null;
+
+  const monitorById = new Map(rawMonitors.map((m) => [m.id, m]));
+  const renderCard = (asset: AssetNode) => (
+    <DeviceCard
+      key={asset.id}
+      asset={asset}
+      icon={kindIcon[asset.kind] ?? Server}
+      typeLabel={monitorTypeLabel(asset.type, t)}
+      since={sinceFor(asset)}
+      monitor={monitorById.get(asset.monitorId)}
+      health={fleetHealth}
+    />
+  );
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={t('infra.title', 'Správa Infrastruktury & Zařízení')}
-        subtitle={t(
-          'infra.subtitle',
-          'Kompletní přehled sledovaných serverů, routerů (OpenWrt), herních portů (Minecraft), hlasových služeb (TeamSpeak) a webů.'
-        )}
+        title={t('infra.title', 'Infrastruktura')}
+        subtitle={
+          summary ?? t('infra.subtitle', 'Servery, routery, weby, herní a hlasové služby - každé sledované zařízení.')
+        }
         actions={
           isAdmin && (
-            <Button
-              onClick={() => {
-                setEditingId(null);
-                setMonitorName('');
-                setMonitorTarget('');
-                setMonitorPort('');
-                setTimeoutVal('5');
-                setEmailNotifications(true);
-                setSmsNotifications(false);
-                setNotes('');
-                setMaintenance(false);
-                setMaintenanceDescription('');
-                setCpanelStatsUrl('');
-                setBodyKeyword('');
-                setSqUsername('serveradmin');
-                setMonDiscord('');
-                setMonSlack('');
-                setMonTelegramToken('');
-                setMonTelegramChat('');
-                setSqPassword('');
-                setSqPasswordPlaceholder('••••••••');
-                setTs3FiletransferPort('30033');
-                setRconPort('25575');
-                setRconPassword('');
-                setRconPasswordPlaceholder('••••••••');
-                setMonitoredProcesses('');
-                setCpuThreshold('90');
-                setRamThreshold('95');
-                setHddThreshold('90');
-                setRemoteActionsEnabled(false);
-                setLogLinesEnabled(null);
-                setReadPublic(null);
-                setPublicChoice(null);
-                setAllowedActions([
-                  'restart_wan',
-                  'restart_wireguard',
-                  'reboot_router',
-                  'renew_dhcp',
-                  'restart_service',
-                  'reconnect_pppoe',
-                ]);
-                setEnabledMetrics([
-                  'check_pipeline',
-                  'response_breakdown',
-                  'ssl_card',
-                  'headers',
-                  'health_score',
-                  'process',
-                  'service',
-                  'clients_chart',
-                  'quality',
-                  'ports',
-                  'license_version',
-                ]);
-                setShowAddModal(true);
-              }}
-              className="gap-2 font-bold text-xs shadow-md"
-            >
+            <Button onClick={handleStartAdd} className="gap-2 text-xs font-semibold">
               <Plus className="size-4" /> {t('infra.add_agent', 'Přidat nový monitor')}
             </Button>
           )
@@ -1102,8 +1216,9 @@ export function InfrastructurePage() {
                     {/* Web: cPanel stats URL & Body Keyword */}
                     {monitorType === 'web' && (
                       <div className="space-y-3 p-4 rounded-xl bg-secondary/30 border border-border text-xs">
-                        <h4 className="font-bold text-foreground text-sm">
-                          🌐 {t('infra.web_settings', 'Nastavení Webu & cPanelu')}
+                        <h4 className="text-foreground flex items-center gap-1.5 text-sm font-bold">
+                          <Globe aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+                          {t('infra.web_settings', 'Nastavení Webu & cPanelu')}
                         </h4>
                         <div>
                           <label className="block text-xs font-medium text-muted-foreground mb-1">
@@ -1145,8 +1260,9 @@ export function InfrastructurePage() {
                     {/* TeamSpeak 3 SQ & FileTransfer */}
                     {monitorType === 'teamspeak' && (
                       <div className="space-y-3 p-4 rounded-xl bg-secondary/30 border border-border text-xs">
-                        <h4 className="font-bold text-foreground text-sm">
-                          🎙️ {t('infra.ts3_settings', 'TeamSpeak 3 ServerQuery & Porty')}
+                        <h4 className="text-foreground flex items-center gap-1.5 text-sm font-bold">
+                          <Mic aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+                          {t('infra.ts3_settings', 'TeamSpeak 3 ServerQuery & Porty')}
                         </h4>
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div>
@@ -1186,8 +1302,9 @@ export function InfrastructurePage() {
                     {/* Minecraft RCON */}
                     {monitorType === 'minecraft' && (
                       <div className="space-y-3 p-4 rounded-xl bg-secondary/30 border border-border text-xs">
-                        <h4 className="font-bold text-foreground text-sm">
-                          🎮 {t('infra.rcon_settings', 'Minecraft RCON Příkazové Rozhraní')}
+                        <h4 className="text-foreground flex items-center gap-1.5 text-sm font-bold">
+                          <Gamepad2 aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+                          {t('infra.rcon_settings', 'Minecraft RCON Příkazové Rozhraní')}
                         </h4>
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div>
@@ -1329,8 +1446,9 @@ export function InfrastructurePage() {
 
                             <div className="flex items-center justify-between border-b border-border pb-3">
                               <div>
-                                <h4 className="font-bold text-foreground text-sm">
-                                  📶 {t('infra.remote_actions_title', 'OpenWrt Remote Actions')}
+                                <h4 className="text-foreground flex items-center gap-1.5 text-sm font-bold">
+                                  <Router aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+                                  {t('infra.remote_actions_title', 'OpenWrt Remote Actions')}
                                 </h4>
                                 <p className="text-2xs text-muted-foreground">
                                   {t(
@@ -1479,8 +1597,9 @@ export function InfrastructurePage() {
                 {activeTab === 'alerts' && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl bg-secondary/30 border border-border text-xs space-y-3">
-                      <h4 className="font-bold text-foreground text-sm">
-                        🔔 {t('infra.notifications_title', 'Notifikace & Výstražné Limity Agenta')}
+                      <h4 className="text-foreground flex items-center gap-1.5 text-sm font-bold">
+                        <Bell aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+                        {t('infra.notifications_title', 'Notifikace & Výstražné Limity Agenta')}
                       </h4>
 
                       <div className="flex items-center gap-6">
@@ -1648,8 +1767,9 @@ export function InfrastructurePage() {
                     </div>
 
                     <div className="p-4 rounded-xl bg-secondary/30 border border-border text-xs space-y-3">
-                      <h4 className="font-bold text-foreground text-sm">
-                        🔧 {t('infra.maintenance_title', 'Režim Údržby & Poznámky')}
+                      <h4 className="text-foreground flex items-center gap-1.5 text-sm font-bold">
+                        <Wrench aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+                        {t('infra.maintenance_title', 'Režim Údržby & Poznámky')}
                       </h4>
                       <label className="flex items-center gap-2.5 cursor-pointer font-semibold text-sm text-warning bg-warning/10 border border-warning/25 rounded-lg px-3 py-2.5">
                         <input
@@ -1758,7 +1878,6 @@ export function InfrastructurePage() {
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
                         setShowAddModal(false);
-                        setSelectedId(null);
                         loadMonitors();
                       } catch (err) {
                         window.alert(
@@ -1830,7 +1949,6 @@ export function InfrastructurePage() {
                         await appApi.archiveMonitor(editingId);
                         setShowAddModal(false);
                         setEditingId(null);
-                        setSelectedId(null);
                         loadMonitors();
                         loadArchived();
                       } catch (err) {
@@ -1860,249 +1978,190 @@ export function InfrastructurePage() {
 
       {isAdmin && <ServiceDiscoveryPanel onImported={loadMonitors} />}
 
-      <div className="grid gap-6 lg:grid-cols-12">
-        {/* Left asset tree */}
-        <Card className="lg:col-span-5 p-4 space-y-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('infra.search_placeholder', 'Hledat router, Minecraft, TeamSpeak nebo web...')}
-              className="pl-9 text-xs"
+      {unreachable.length > 0 && (
+        <Panel
+          tone="warning"
+          icon={AlertTriangle}
+          title={t('infra.unreachable_title', 'Tento cíl není z hostingu dosažitelný')}
+          hint={t(
+            'infra.unreachable_desc',
+            'Cíl leží v privátní síti, takže aktivní kontrola z hostingu bude vždy selhávat a hlásit falešné výpadky. Převeďte monitor na kontrolu agentem — ověří běžící proces přímo na stroji.'
+          )}
+        >
+          <ul className="divide-border divide-y">
+            {unreachable.map((m) => (
+              <li key={m.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
+                <Link to={`/infrastructure/${m.id}`} className="min-w-0 flex-1 truncate font-semibold hover:underline">
+                  {m.name}
+                </Link>
+                {isAdmin && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs font-semibold"
+                    onClick={async () => {
+                      const guess =
+                        (m.monitoredProcesses ?? '').split(',')[0]?.trim() || m.name.toLowerCase().split(' ')[0];
+                      const proc = window.prompt(
+                        t(
+                          'infra.unreachable_prompt',
+                          'Název procesu, který má agent kontrolovat (např. kresd, openvpn, mosquitto):'
+                        ),
+                        guess
+                      );
+                      if (!proc) return;
+                      const res = await fetch('/status/api.php?action=convert_to_agent_check', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: m.id, process: proc.trim() }),
+                      }).catch(() => null);
+                      const data = res ? await res.json().catch(() => ({})) : {};
+                      if (!res || !res.ok || data.error) {
+                        window.alert(
+                          data.error ||
+                            (res
+                              ? `HTTP ${res.status}`
+                              : t('infra.save_failed_network', 'Uložení selhalo - zkontrolujte připojení.'))
+                        );
+                        return;
+                      }
+                      loadMonitors();
+                    }}
+                  >
+                    {t('infra.unreachable_convert', 'Převést na kontrolu agentem')}
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+
+      {/* The filter bar (NetPulse "Clients"): search, the states as one
+          segmented track and the device types as chips, each with how many
+          devices it holds. A filter lives in the address (?status=, ?type=),
+          so a link from the dashboard ring lands on the same pressed pill. */}
+      {monitorsLoaded && rawMonitors.length > 0 && (
+        <Panel padding="sm" bodyClassName="space-y-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="relative lg:w-72 lg:shrink-0">
+              <Search aria-hidden="true" className="text-muted-foreground absolute top-2.5 left-3 size-4" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('infra.search_placeholder', 'Hledat podle názvu nebo adresy…')}
+                aria-label={t('infra.search_placeholder', 'Hledat podle názvu nebo adresy…')}
+                className="pl-9 text-xs"
+              />
+            </div>
+            <FilterPills
+              label={t('infra.filter_status', 'Stav')}
+              value={activeStatus ?? 'all'}
+              options={statusOptions}
+              onChange={(value) => setParam('status', value === 'all' ? null : value)}
             />
           </div>
+          {typeOptions.length > 2 && (
+            <FilterPills
+              variant="chips"
+              label={t('infra.filter_type', 'Typ zařízení')}
+              value={activeType ?? 'all'}
+              options={typeOptions}
+              onChange={(value) => setParam('type', value === 'all' ? null : value)}
+            />
+          )}
 
           {/* A filter arriving from a link has to be visible and removable -
               otherwise the list looks like the whole inventory with devices
               missing. */}
-          {activeStatus && (
-            <div className="flex items-center gap-2 text-xs">
-              <Badge variant={statusVariant[activeStatus]} dot>
-                {statusLabel[activeStatus]}
-              </Badge>
-              <span className="text-muted-foreground">
+          {(activeStatus || activeType) && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {activeStatus && (
+                <FilterChip onClear={() => clearParam('status')} clearLabel={t('infra.clear_filter', 'Zrušit filtr')}>
+                  {statusWord(activeStatus)}
+                </FilterChip>
+              )}
+              {activeType && (
+                <FilterChip onClear={() => clearParam('type')} clearLabel={t('infra.clear_filter', 'Zrušit filtr')}>
+                  {monitorTypeLabel(activeType, t)}
+                </FilterChip>
+              )}
+              <span className="text-muted-foreground figure">
                 {t(
                   'infra.filtered_count',
                   { count: filteredAssets?.length ?? 0 },
                   `${filteredAssets?.length ?? 0} zařízení`
                 )}
               </span>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = new URLSearchParams(searchParams);
-                  next.delete('status');
-                  setSearchParams(next, { replace: true });
-                }}
-                className="text-muted-foreground hover:text-foreground ml-auto inline-flex items-center gap-1 underline"
-              >
-                <X className="size-3" />
-                {t('infra.clear_filter', 'Zrušit filtr')}
-              </button>
             </div>
           )}
+        </Panel>
+      )}
 
-          <div className="space-y-4">
-            {monitorsError ? (
-              <p className="text-muted-foreground text-xs text-center py-6">{monitorsError}</p>
-            ) : !tree ? (
-              <LoadingState size="inline" label={t('infra.loading_devices', 'Načítám zařízení…')} />
-            ) : orderedAssets ? (
-              <div className="space-y-1">
-                {orderedAssets.map((asset) => (
-                  <AssetRow
-                    key={asset.id}
-                    asset={asset}
-                    since={sinceFor(asset)}
-                    isSelected={selectedId === asset.id}
-                    onSelect={() => setSelectedId(asset.id)}
-                  />
-                ))}
-              </div>
-            ) : (
-              tree.map((group) => (
-                <div key={group.name} className="space-y-1.5">
-                  <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider px-2">
-                    {group.name}
-                  </h3>
-                  <div className="space-y-1">
-                    {group.assets.map((asset) => (
-                      <AssetRow
-                        key={asset.id}
-                        asset={asset}
-                        since={sinceFor(asset)}
-                        isSelected={selectedId === asset.id}
-                        onSelect={() => setSelectedId(asset.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ))
+      {/* The scores are the server's. A failed request is said once, here,
+          and the cards then carry no ring - a dash ring would claim "not
+          enough data", which nobody measured. */}
+      {monitorsLoaded && rawMonitors.length > 0 && fleetHealth.status === 'error' && (
+        <ErrorState
+          tone="warning"
+          message={t('infra.health_failed', 'Skóre zdraví se nepodařilo načíst - karty jsou bez něj.')}
+          onRetry={() => setHealthAttempt((n) => n + 1)}
+        />
+      )}
+
+      {monitorsError ? (
+        <ErrorState message={monitorsError} onRetry={loadMonitors} />
+      ) : !monitorsLoaded ? (
+        <LoadingState label={t('infra.loading_devices', 'Načítám zařízení…')} />
+      ) : rawMonitors.length === 0 ? (
+        <Panel>
+          <EmptyState
+            icon={<Server className="size-5" />}
+            title={t('infra.empty_title', 'Zatím tu není žádný monitor')}
+            hint={t(
+              'infra.empty_hint',
+              'Přidejte web, herní server nebo zařízení s agentem - kontrola se spustí při dalším běhu cronu.'
             )}
-          </div>
-        </Card>
-
-        {/* Right detail of the selected asset */}
-        <Card className="lg:col-span-7 p-6 space-y-6">
-          {selectedAsset ? (
-            <>
-              <div className="flex flex-wrap items-start justify-between border-b border-border pb-4 gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-bold">{selectedAsset.name}</h2>
-                    <Badge variant={statusVariant[selectedAsset.status]} dot>
-                      {statusLabel[selectedAsset.status]}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5 font-mono">
-                    {selectedAsset.hostname ?? selectedAsset.name}
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {isAdmin && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleStartEdit(selectedAsset.monitorId ?? selectedAsset.id)}
-                      className="text-xs font-semibold"
-                    >
-                      {t('infra.edit_settings', 'Upravit nastavení')}
-                    </Button>
-                  )}
-                  <Button size="sm" asChild className="gap-1.5 font-semibold text-xs">
-                    <Link to={`/infrastructure/${selectedAsset.monitorId ?? selectedAsset.id}`}>
-                      {t('infra.open_diagnostics', 'Otevřít detailní diagnostiku')} <ChevronRight className="size-4" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
-                  <p className="text-xs text-muted-foreground">{t('infra.device_type', 'Typ zařízení / Protokol')}</p>
-                  <p className="font-bold text-sm text-foreground mt-0.5">{selectedAsset.kind}</p>
-                </div>
-                {selectedMonitor?.unreachableTarget && (
-                  <div className="sm:col-span-2 p-3.5 rounded-lg bg-warning/10 border border-warning/30 space-y-2">
-                    <p className="text-xs font-bold text-warning">
-                      ⚠ {t('infra.unreachable_title', 'Tento cíl není z hostingu dosažitelný')}
-                    </p>
-                    <p className="text-2xs text-warning">
-                      {t(
-                        'infra.unreachable_desc',
-                        'Cíl leží v privátní síti, takže aktivní kontrola z hostingu bude vždy selhávat a hlásit falešné výpadky. Převeďte monitor na kontrolu agentem — ověří běžící proces přímo na stroji.'
-                      )}
-                    </p>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={async () => {
-                        const guess =
-                          (selectedMonitor?.monitoredProcesses ?? '').split(',')[0]?.trim() ||
-                          selectedAsset.name.toLowerCase().split(' ')[0];
-                        const proc = window.prompt(
-                          t(
-                            'infra.unreachable_prompt',
-                            'Název procesu, který má agent kontrolovat (např. kresd, openvpn, mosquitto):'
-                          ),
-                          guess
-                        );
-                        if (!proc) return;
-                        const res = await fetch('/status/api.php?action=convert_to_agent_check', {
-                          method: 'POST',
-                          credentials: 'include',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ id: selectedMonitor.id, process: proc.trim() }),
-                        });
-                        const data = await res.json().catch(() => ({}));
-                        if (!res.ok || data.error) {
-                          setMonitorsError(data.error || `HTTP ${res.status}`);
-                          return;
-                        }
-                        loadMonitors();
-                      }}
-                      className="text-xs font-semibold"
-                    >
-                      {t('infra.unreachable_convert', 'Převést na kontrolu agentem')}
-                    </Button>
-                  </div>
-                )}
-                <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
-                  <p className="text-xs text-muted-foreground">
-                    {t('infra.agent_version', 'Telemetrický Agent & Verze')}
-                  </p>
-                  <p className="font-bold text-sm text-foreground mt-0.5">
-                    {selectedAsset.hasAgent
-                      ? selectedMonitor?.details?.agent_version
-                        ? `v${selectedMonitor.details.agent_version}`
-                        : t('infra.agent_installed', 'Nainstalován')
-                      : // vps/openwrt are checked ONLY by the agent's report - nothing
-                        // pings them, so "Bez agenta (Aktivní Ping)" was a lie.
-                        ['vps', 'openwrt'].includes((selectedMonitor?.type ?? '').toLowerCase())
-                        ? t('infra.agent_never_reported', 'Agent se ještě neozval')
-                        : t('infra.no_agent_ping', 'Bez agenta (Aktivní Ping)')}
-                  </p>
-                  {/* Green only while the agent is inside its reporting timeout - a
-                      report from 3 days ago used to read "Aktivní před 3 dny". */}
-                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && !selectedMonitor.agentSilent && (
-                    <p className="text-3xs font-semibold text-up mt-0.5">
-                      🟢 {t('infra.active_since', 'Aktivní')}{' '}
-                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString(), lang)}
-                    </p>
-                  )}
-                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen != null && selectedMonitor.agentSilent && (
-                    <p className="text-3xs font-semibold text-down mt-0.5">
-                      🔴 {t('infra.agent_silent', 'Agent mlčí, naposledy')}{' '}
-                      {formatRelative(new Date(selectedMonitor.agentLastSeen * 1000).toISOString(), lang)}
-                    </p>
-                  )}
-                  {selectedAsset.hasAgent && selectedMonitor?.agentLastSeen == null && (
-                    <p className="text-3xs text-muted-foreground mt-0.5">
-                      {t('infra.agent_never_reported', 'Agent se ještě neozval')}
-                    </p>
-                  )}
-                </div>
-                <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
-                  <p className="text-xs text-muted-foreground">{t('infra.os', 'Operační systém')}</p>
-                  <p className="font-bold text-sm text-foreground mt-0.5 font-mono">{selectedMonitor?.os ?? '—'}</p>
-                </div>
-                <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
-                  <p className="text-xs text-muted-foreground">
-                    {t('infra.time_since_change', 'Doba od poslední změny stavu')}
-                  </p>
-                  <p className="font-bold text-sm text-foreground mt-0.5">
-                    {/* The label says "since the last status change" - that is
-                        sinceStatusChangeSeconds, whatever the status. uptimeSeconds
-                        is null while down, which used to render as a dash. */}
-                    {selectedMonitor?.sinceStatusChangeSeconds != null
-                      ? formatUptime(selectedMonitor.sinceStatusChangeSeconds)
-                      : selectedMonitor?.uptimeSeconds != null
-                        ? formatUptime(selectedMonitor.uptimeSeconds)
-                        : '—'}
-                  </p>
-                </div>
-              </div>
-            </>
-          ) : (
-            <p className="text-center text-muted-foreground text-sm py-10">
-              {t('infra.select_device', 'Vyberte zařízení ze seznamu vlevo.')}
-            </p>
-          )}
-        </Card>
-      </div>
+            action={
+              isAdmin ? (
+                <Button size="sm" onClick={handleStartAdd} className="gap-1.5 text-xs font-semibold">
+                  <Plus className="size-3.5" /> {t('infra.add_agent', 'Přidat nový monitor')}
+                </Button>
+              ) : undefined
+            }
+          />
+        </Panel>
+      ) : orderedAssets ? (
+        orderedAssets.length === 0 ? (
+          <EmptyState boxed title={t('infra.filter_empty', 'Filtru neodpovídá žádné zařízení.')} />
+        ) : (
+          <div className={DEVICE_GRID}>{orderedAssets.map((asset) => renderCard(asset))}</div>
+        )
+      ) : (
+        (tree ?? []).map((group) => (
+          <section key={group.name} aria-label={group.name} className="space-y-2.5">
+            <h2 className="flex items-center gap-2 px-1">
+              <span className="micro-label">{group.name}</span>
+              <span className="bg-inset text-muted-foreground figure rounded-full px-2 text-2xs">
+                {group.assets.length}
+              </span>
+            </h2>
+            <div className={DEVICE_GRID}>{group.assets.map((asset) => renderCard(asset))}</div>
+          </section>
+        ))
+      )}
 
       {(archivedMonitors.length > 0 || archivedError) && (
-        <Card className="p-4 space-y-3">
+        <Panel padding="sm">
           <button
             type="button"
             onClick={() => setShowArchived((open) => !open)}
             aria-expanded={showArchived}
-            className="flex w-full items-center justify-between gap-2 text-left"
+            className="focus-visible:ring-ring flex w-full items-center justify-between gap-3 rounded-md text-left focus-visible:ring-2 focus-visible:outline-none"
           >
-            <span className="flex items-center gap-2 text-sm font-bold">
-              <Archive className="size-4 text-muted-foreground" aria-hidden="true" />
+            <span className="flex items-center gap-3 text-sm font-semibold">
+              <IconTile icon={Archive} />
               {t(
                 'infra.archived_title',
                 { count: archivedMonitors.length },
@@ -2114,9 +2173,9 @@ export function InfrastructurePage() {
               aria-hidden="true"
             />
           </button>
-          {archivedError && <ErrorState size="inline" message={archivedError} />}
+          {archivedError && <ErrorState size="inline" message={archivedError} className="mt-3" />}
           {showArchived && (
-            <>
+            <div className="mt-3 space-y-2">
               <p className="text-2xs text-muted-foreground">
                 {t(
                   'infra.archived_hint',
@@ -2127,9 +2186,9 @@ export function InfrastructurePage() {
                 {archivedMonitors.map((m) => (
                   <li key={m.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
                     <span className="min-w-0 flex-1 truncate font-medium">{m.name}</span>
-                    <Badge variant="paused" className="text-3xs">
-                      {m.type}
-                    </Badge>
+                    <Pill tone="paused" size="sm">
+                      {monitorTypeLabel(normalizeMonitorType(m.type), t)}
+                    </Pill>
                     {m.archivedAt && (
                       <span className="text-muted-foreground">
                         {t(
@@ -2166,66 +2225,37 @@ export function InfrastructurePage() {
                   </li>
                 ))}
               </ul>
-            </>
+            </div>
           )}
-        </Card>
+        </Panel>
       )}
     </div>
   );
 }
 
-function AssetRow({
-  asset,
-  since,
-  isSelected,
-  onSelect,
+/** A filter that came in through the address: visible, and one click removes it. */
+function FilterChip({
+  children,
+  onClear,
+  clearLabel,
 }: {
-  asset: AssetNode;
-  /** Seconds in the current state; null when the server does not know. */
-  since: number | null;
-  isSelected: boolean;
-  onSelect: () => void;
+  children: React.ReactNode;
+  onClear: () => void;
+  clearLabel: string;
 }) {
-  const { t } = useLanguage();
-  const statusLabel: Record<MonitorStatus, string> = {
-    up: t('common.online', 'Online'),
-    down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Pozastaveno'),
-    maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý'),
-  };
-  const Icon = kindIcon[asset.kind] ?? Server;
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        'w-full flex items-center justify-between p-2.5 rounded-lg text-left transition-colors cursor-pointer',
-        isSelected
-          ? 'bg-primary/15 border border-primary/40 font-semibold'
-          : 'hover:bg-muted/50 border border-transparent'
-      )}
-    >
-      <div className="flex items-center gap-2.5 min-w-0">
-        <span className="p-1.5 rounded-md bg-secondary text-primary shrink-0">
-          <Icon className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <p className="text-xs truncate font-medium text-foreground">{asset.name}</p>
-          <p className="text-3xs text-muted-foreground truncate">{asset.hostname}</p>
-        </div>
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-0.5">
-        <Badge variant={statusVariant[asset.status]} dot className="shrink-0 text-3xs">
-          {statusLabel[asset.status]}
-        </Badge>
-        {/* How long it has been like this. Without it a list of offline
-            devices had no order a reader could see, and no way to tell the
-            outage of a minute from the one of a week. */}
-        {since != null && <span className="text-muted-foreground text-3xs tabular-nums">{formatUptime(since)}</span>}
-      </div>
-    </button>
+    <span className="bg-primary/12 text-link border-primary/40 inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2.5 font-medium">
+      {children}
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label={clearLabel}
+        title={clearLabel}
+        className="hover:bg-primary/15 focus-visible:ring-ring rounded-full p-0.5 focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <X className="size-3" />
+      </button>
+    </span>
   );
 }
 
@@ -2265,16 +2295,24 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
   const [dismissed, setDismissed] = React.useState(false);
   const [importingKey, setImportingKey] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
 
   const load = React.useCallback(() => {
     fetch('/status/api.php?action=discovered_services', { credentials: 'include' })
-      .then((res) => res.json().catch(() => ({})))
-      .then((data) => {
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        // A failed read used to look exactly like "the agents found nothing".
+        if (!res.ok || data.error) throw new Error(data.message || data.error || `HTTP ${res.status}`);
         setServices(Array.isArray(data.services) ? data.services : []);
+        setLoadError(null);
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        setLoadError(
+          err instanceof Error ? err.message : t('discovery.load_failed', 'Objevené služby se nepodařilo načíst.')
+        );
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [t]);
 
   React.useEffect(() => {
     load();
@@ -2310,40 +2348,41 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
     }
   };
 
-  if (loading || dismissed || services.length === 0) return null;
+  if (loading || dismissed) return null;
+  if (loadError) {
+    return (
+      <ErrorState
+        tone="warning"
+        message={`${t('discovery.load_failed', 'Objevené služby se nepodařilo načíst.')} ${loadError}`}
+        onRetry={load}
+      />
+    );
+  }
+  if (services.length === 0) return null;
 
+  // A proposal, not an alarm (W2-9): neutral card and an info icon. The brand
+  // tint under the red collection banner read as a second warning.
   return (
-    <Card className="p-5 border-primary/30 bg-primary/5 space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
-            <Radar className="size-5" />
-          </div>
-          <div>
-            <h3 className="font-bold text-sm flex items-center gap-2">
-              {t('discovery.title', 'Objevené služby')}
-              <Badge variant="info" className="text-3xs">
-                {services.length}
-              </Badge>
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t(
-                'discovery.subtitle',
-                'Agenti zjistili tyto běžící služby, které se zatím nesledují. Import vytvoří nový monitor ve stejném assetu.'
-              )}
-            </p>
-          </div>
-        </div>
+    <Panel
+      icon={Info}
+      title={t('discovery.title', 'Objevené služby')}
+      count={services.length}
+      hint={t(
+        'discovery.subtitle',
+        'Agenti zjistili tyto běžící služby, které se zatím nesledují. Import vytvoří nový monitor ve stejném assetu.'
+      )}
+      action={
         <button
           type="button"
           onClick={() => setDismissed(true)}
-          className="text-muted-foreground hover:text-foreground shrink-0"
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring shrink-0 rounded-md p-1 focus-visible:ring-2 focus-visible:outline-none"
           aria-label={t('common.close', 'Zavřít')}
         >
           <X className="size-4" />
         </button>
-      </div>
-
+      }
+      bodyClassName="space-y-3"
+    >
       {error && <ErrorState message={error} />}
 
       <div className="flex flex-col gap-3">
@@ -2362,7 +2401,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
         ).map(([sourceId, group]) => {
           const isOpen = expandedAgents.has(sourceId);
           return (
-            <div key={sourceId} className="rounded-lg border border-border overflow-hidden">
+            <div key={sourceId} className="bg-inset overflow-hidden rounded-lg border border-border">
               {/* The group is collapsible - with several agents an expanded list
                 turned the page into an endless noodle (user feedback). */}
               <button
@@ -2376,7 +2415,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                   })
                 }
                 aria-expanded={isOpen}
-                className="w-full text-left bg-secondary/60 px-3 py-2 hover:bg-secondary/80 transition-colors flex items-center justify-between gap-2"
+                className="hover:bg-raised focus-visible:ring-ring flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset"
               >
                 <span className="min-w-0">
                   <span className="text-xs font-bold block">
@@ -2418,17 +2457,15 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                           ? 'text-warning'
                           : 'text-muted-foreground';
                     return (
-                      <div key={key} className="flex flex-wrap items-center gap-3 bg-secondary/20 px-3 py-2.5">
+                      <div key={key} className="bg-card flex flex-wrap items-center gap-3 px-3 py-2.5">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-semibold text-sm">{svc.name}</span>
                             {svc.port != null && (
                               <span className="text-xs text-muted-foreground font-mono">:{svc.port}</span>
                             )}
-                            <span className="text-3xs uppercase tracking-wide text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
-                              {svc.type}
-                            </span>
-                            <span className={cn('text-xs font-bold', confColor)}>{svc.confidence}%</span>
+                            <Pill size="sm">{svc.type}</Pill>
+                            <span className={cn('figure text-xs font-semibold', confColor)}>{svc.confidence} %</span>
                             {svc.target && (
                               <span
                                 className="text-2xs text-muted-foreground font-mono truncate"
@@ -2449,8 +2486,9 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
                           )}
                         </div>
                         {svc.importBlocked ? (
-                          <span className="shrink-0 max-w-[260px] text-2xs font-medium text-warning bg-warning/10 border border-warning/25 rounded-md px-2 py-1">
-                            ⚠️ {svc.importBlocked}
+                          <span className="text-warning bg-warning/10 border-warning/25 flex max-w-[260px] shrink-0 items-start gap-1.5 rounded-md border px-2 py-1 text-2xs font-medium">
+                            <AlertTriangle aria-hidden="true" className="mt-px size-3 shrink-0" />
+                            {svc.importBlocked}
                           </span>
                         ) : (
                           <Button
@@ -2485,7 +2523,7 @@ function ServiceDiscoveryPanel({ onImported }: { onImported: () => void }) {
           );
         })}
       </div>
-    </Card>
+    </Panel>
   );
 }
 

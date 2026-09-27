@@ -7,7 +7,6 @@ import { LanguageProvider } from '@/context/language-context';
 import { DashboardPage } from './dashboard';
 import { WebsitesPage } from './websites';
 import { IncidentsPage } from './incidents';
-import { ServicesPage } from './services';
 import { InfrastructurePage } from './infrastructure';
 import { InsightsPage } from './insights';
 import { ReportsPage } from './reports';
@@ -92,7 +91,6 @@ const pages: [string, () => React.ReactElement][] = [
   ['Dashboard', () => <DashboardPage />],
   ['Websites', () => <WebsitesPage />],
   ['Incidents', () => <IncidentsPage />],
-  ['Services', () => <ServicesPage />],
   ['Infrastructure', () => <InfrastructurePage />],
   ['Insights', () => <InsightsPage />],
   ['Reports', () => <ReportsPage />],

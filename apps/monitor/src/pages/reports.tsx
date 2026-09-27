@@ -1,97 +1,54 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Card } from '@/components/ui/card';
+import { CircleCheck, CircleX, Download, FileText, TableProperties, Target, Timer } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
+import { FilterPills } from '@/components/filter-pills';
+import { usePageChrome } from '@/components/layout/shell-context';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import {
-  BarChart3,
-  Download,
-  FileText,
-  CheckCircle2,
-  ShieldCheck,
-  Clock,
-  TrendingUp,
-  ArrowRight,
-  Server,
-  ChevronDown,
-  ChevronUp,
-  RefreshCw,
-  HelpCircle,
-  ExternalLink,
-  Copy,
-  Check,
-  Key,
-  Settings,
-} from 'lucide-react';
+import { StatBlock } from '@/components/stat-block';
+import { DigestCard } from '@/components/digest-card';
+import type { MonitorSla } from '@/components/reports/sla-detail';
+import { SlaTable, type StripsState } from '@/components/reports/sla-table';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
-import { LoadingState, ErrorState } from '@/components/ui/states';
+import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
+import { formatDuration, formatNumber, localeFor } from '@/lib/metric-format';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
-import { formatPercent } from '@/lib/utils';
+import { formatPercentValue } from '@/lib/utils';
 
 const API_BASE = '/status/api.php';
 
-interface OutageDetail {
-  start: string;
-  end: string | null;
-  durationSec: number;
-  reason: string;
-  resolved: boolean;
+interface SlaReport {
+  slaGoal: number;
+  overallUptime: number | null;
+  totalOutageMinutes: number;
+  overallMttrSec: number | null;
+  monitors: MonitorSla[];
+  since?: string | null;
+  windowStart?: string | null;
+  siteTitle?: string;
+  customLogoUrl?: string;
 }
 
-interface MonitorSLA {
-  id: number;
-  name: string;
-  target: string;
-  type: string;
-  currentStatus: string;
-  /** null = no measured check in the window (nobody measured the SLA). */
-  uptimePercent: number | null;
-  outageMinutes: number;
-  totalChecks: number;
-  lastOutage: OutageDetail | null;
-  mttrSec: number | null;
-  p50Ms?: number | null;
-  p95Ms?: number | null;
-  p99Ms?: number | null;
-  lastStatusChange: string | null;
-}
+type ReportState =
+  { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; report: SlaReport };
 
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds} s`;
-  const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  if (h < 24) return `${h}h ${rm}min`;
-  const d = Math.floor(h / 24);
-  const rh = h % 24;
-  return `${d}d ${rh}h ${rm}min`;
-}
-
+/**
+ * The SLA report (W2-7): four figures, one table worst first, the digest.
+ *
+ * A failed request is an error with a retry - it used to be the hint "no
+ * data yet, check that cron runs", and a failed switch to another period
+ * left the previous period's numbers standing under it (correctness-18).
+ * Now nothing from another period stays on screen.
+ */
 export function ReportsPage() {
   const { t, lang } = useLanguage();
   const { isAdmin } = useSession();
-  const [monitors, setMonitors] = useState<MonitorSLA[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [slaGoal, setSlaGoal] = useState(99.95);
-  const [overallUptime, setOverallUptime] = useState<number | null>(null);
-  const [totalOutage, setTotalOutage] = useState(0);
-  const [overallMttr, setOverallMttr] = useState<number | null>(null);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [metricsToken, setMetricsToken] = useState<string>('');
-  const [siteTitle, setSiteTitle] = useState<string>('Blood Kings Monitoring');
-  const [customLogoUrl, setCustomLogoUrl] = useState<string>('');
-  const [generatingToken, setGeneratingToken] = useState<boolean>(false);
-  const [tokenError, setTokenError] = useState<string | null>(null);
-  const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
-  // Report period - month/quarter/year (user request for longer windows).
   const [days, setDays] = useState<30 | 90 | 365>(30);
-  /** The first day with data when it is later than the period's first day (W1-B2); null = the period is covered. */
-  const [coveredFrom, setCoveredFrom] = useState<string | null>(null);
+  const [state, setState] = useState<ReportState>({ status: 'loading' });
+  const [attempt, setAttempt] = useState(0);
+  const [strips, setStrips] = useState<StripsState>({ status: 'loading' });
   const periodLabel =
     days === 30
       ? t('reports.period_30', '30 dní')
@@ -101,79 +58,62 @@ export function ReportsPage() {
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError(null);
-    setCoveredFrom(null);
-
     fetch(`${API_BASE}?action=sla_report&days=${days}`, { credentials: 'include' })
-      .then((res) => res.json())
-      .then((data) => {
-        if (!active) return;
-        if (data.monitors && data.monitors.length > 0) {
-          setMonitors(data.monitors);
-          setCoveredFrom(coverageStart(data.since, data.windowStart));
-          setSlaGoal(data.slaGoal ?? 99.95);
-          setOverallUptime(data.overallUptime ?? null);
-          setTotalOutage(data.totalOutageMinutes ?? 0);
-          setOverallMttr(data.overallMttrSec ?? null);
-          setMetricsToken(data.metricsToken ?? '');
-          setSiteTitle(data.siteTitle || 'Blood Kings Monitoring');
-          setCustomLogoUrl(data.customLogoUrl || '');
-        } else {
-          setError(
-            t(
-              'reports.no_api_data',
-              'Žádná data z API. Zkontrolujte, že cron.php běží a monitor_logs obsahuje záznamy.'
-            )
-          );
+      .then(async (res) => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || !Array.isArray(data.monitors)) {
+          throw new Error(data && typeof data.message === 'string' ? data.message : `HTTP ${res.status}`);
         }
+        if (active) setState({ status: 'ready', report: data });
       })
-      .catch(() => {
-        if (active) setError(t('reports.load_error', 'Nepodařilo se načíst SLA data.'));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+      .catch((e: unknown) => {
+        if (active) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) });
       });
-
     return () => {
       active = false;
     };
-  }, [t, days]);
+  }, [days, attempt]);
 
-  const handleGenerateMetricsToken = async () => {
-    setGeneratingToken(true);
-    setTokenError(null);
-    try {
-      const res = await fetch(`${API_BASE}?action=generate_metrics_token`, {
-        method: 'POST',
-        credentials: 'include',
+  // The day strips are always the last 30 days, whatever the period: 365
+  // cells in a table row would say nothing. Their failure is said once.
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}?action=daily_uptime&days=30&lang=${lang}`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => {
+        if (!active) return;
+        setStrips(
+          data && data.series && typeof data.series === 'object'
+            ? { status: 'ready', series: data.series }
+            : { status: 'error' }
+        );
+      })
+      .catch(() => {
+        if (active) setStrips({ status: 'error' });
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-      if (data.metricsToken) {
-        setMetricsToken(data.metricsToken);
-      }
-    } catch (err) {
-      setTokenError(
-        err instanceof Error ? err.message : t('reports.generate_token_failed', 'Token se nepodařilo vygenerovat.')
-      );
-    } finally {
-      setGeneratingToken(false);
-    }
+    return () => {
+      active = false;
+    };
+  }, [lang, attempt]);
+
+  const pickPeriod = (d: 30 | 90 | 365) => {
+    setState({ status: 'loading' });
+    setDays(d);
+  };
+  const retry = () => {
+    setState({ status: 'loading' });
+    setAttempt((n) => n + 1);
   };
 
-  const handleCopyMetricsUrl = () => {
-    const fullUrl = `${window.location.origin}/status/metrics.php?token=${metricsToken}`;
-    navigator.clipboard.writeText(fullUrl);
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 3000);
-  };
+  usePageChrome({ onRefresh: retry });
 
-  if (loading) {
-    return <LoadingState size="page" label={t('reports.loading', 'Načítám SLA metriky z databáze…')} />;
-  }
+  const report = state.status === 'ready' ? state.report : null;
+  const monitors = report?.monitors ?? [];
+  const slaGoal = report?.slaGoal ?? 99.95;
+  const coveredFrom = report ? coverageStart(report.since, report.windowStart) : null;
 
   const handleExportCSV = () => {
+    const quote = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const headers = [
       'ID',
       t('common.name', 'Název'),
@@ -182,581 +122,236 @@ export function ReportsPage() {
       t('common.status', 'Stav'),
       t('reports.csv_uptime', 'Uptime SLA (%)'),
       t('reports.csv_outage_min', 'Celkový výpadek (min)'),
+      t('reports.csv_budget_min', 'Rozpočet výpadku (min)'),
+      t('reports.csv_measured_min', 'Změřeno (min)'),
+      t('reports.csv_incidents', 'Incidenty'),
       t('reports.csv_total_checks', 'Celkem kontrol'),
       t('reports.csv_mttr', 'MTTR (s)'),
       'p50 (ms)',
       'p95 (ms)',
       'p99 (ms)',
     ];
+    // An empty cell means "unmeasured" - a zero would claim a perfect SLA or
+    // an instant recovery that never happened.
     const rows = monitors.map((m) => [
       m.id,
-      `"${m.name.replace(/"/g, '""')}"`,
-      `"${m.target.replace(/"/g, '""')}"`,
+      quote(m.name),
+      quote(m.target),
       m.type,
       m.currentStatus,
-      // An empty cell means "unmeasured" - a zero would claim perfect SLA /
-      // instant recovery in the export that never happened.
       m.uptimePercent != null ? m.uptimePercent.toFixed(3) : '',
       m.outageMinutes,
+      m.budgetMinutes ?? '',
+      m.measuredMinutes ?? '',
+      m.incidentCount ?? '',
       m.totalChecks,
       m.mttrSec ?? '',
       m.p50Ms ?? '',
       m.p95Ms ?? '',
       m.p99Ms ?? '',
     ]);
-
-    const csvContent =
-      'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csv = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', encodeURI(csv));
     link.setAttribute('download', `SLA_Report_BloodKings_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const handlePrintPDF = () => {
-    window.print();
-  };
-
   return (
     <div className="space-y-6 print:space-y-4">
-      {/* Official header for PDF export and print (only shown when printing) */}
-      <div className="hidden print:flex items-center justify-between border-b-2 border-primary/80 pb-4 mb-4">
-        <div className="flex items-center gap-3">
-          {/* The custom logo from settings wins; otherwise the repo's Blood Kings
-              logo (the dark-text variant - PDFs print on white). */}
-          <img
-            src={customLogoUrl || '/status/assets/bk-logo.svg'}
-            alt={siteTitle}
-            className="h-12 max-w-[240px] object-contain"
-          />
-          <div>
-            <h2 className="font-extrabold text-2xl tracking-tight text-foreground">{siteTitle}</h2>
-            <p className="text-xs text-muted-foreground font-medium mt-0.5">
-              {t('reports.pdf_header_subtitle', 'Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz')}
-            </p>
-          </div>
-        </div>
-
-        <div className="text-right text-xs text-muted-foreground space-y-0.5 shrink-0 ml-4">
-          <p className="font-semibold text-foreground text-sm">{t('reports.pdf_audit_report', 'SLA Audit Report')}</p>
-          <p className="font-mono text-2xs whitespace-nowrap">
-            {t(
-              'reports.pdf_generated_at',
-              {
-                date: new Date().toLocaleDateString('cs-CZ'),
-                time: new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }),
-              },
-              `Vygenerováno: ${new Date().toLocaleDateString('cs-CZ')} ${new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}`
-            )}
-          </p>
-          <p className="text-3xs text-muted-foreground whitespace-nowrap">
-            {t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}
-          </p>
-        </div>
-      </div>
+      {report && <PrintHeader siteTitle={report.siteTitle} logo={report.customLogoUrl} lang={lang} />}
 
       <PageHeader
-        title={t('reports.title', 'SLA Výkaz & Statistika Dle Serverů')}
+        title={t('reports.title', 'SLA Výkazy')}
         subtitle={t(
           'reports.subtitle',
           'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.'
         )}
         actions={
-          <div className="flex items-center gap-2 print:hidden">
-            <div className="flex items-center rounded-md border border-border bg-secondary/50 p-0.5 text-xs font-semibold mr-1">
-              {([30, 90, 365] as const).map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setDays(d)}
-                  className={`px-2.5 py-1 rounded transition-colors ${days === d ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  {d === 30
-                    ? t('reports.period_30', '30 dní')
-                    : d === 90
-                      ? t('reports.period_90', 'Kvartál')
-                      : t('reports.period_365', 'Rok')}
-                </button>
-              ))}
-            </div>
-            <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2 font-semibold">
-              <Download className="size-4 text-muted-foreground" /> {t('reports.export_csv', 'Exportovat CSV')}
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
+            <FilterPills
+              label={t('reports.period_label', 'Období')}
+              value={String(days) as '30' | '90' | '365'}
+              options={[
+                { value: '30', label: t('reports.period_30', '30 dní') },
+                { value: '90', label: t('reports.period_90', 'Kvartál') },
+                { value: '365', label: t('reports.period_365', 'Rok') },
+              ]}
+              onChange={(v) => pickPeriod(Number(v) as 30 | 90 | 365)}
+            />
+            <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={!report} className="gap-2">
+              <Download className="text-muted-foreground size-4" /> {t('reports.export_csv', 'Exportovat CSV')}
             </Button>
-            <Button variant="outline" size="sm" onClick={handlePrintPDF} className="gap-2 font-semibold">
-              <FileText className="size-4 text-muted-foreground" /> {t('reports.export_pdf', 'Tisknout / PDF')}
+            <Button variant="outline" size="sm" onClick={() => window.print()} disabled={!report} className="gap-2">
+              <FileText className="text-muted-foreground size-4" /> {t('reports.export_pdf', 'Tisknout / PDF')}
             </Button>
           </div>
         }
       />
 
-      {error && <ErrorState tone="warning" message={error} />}
+      {state.status === 'loading' ? (
+        <LoadingState size="page" label={t('reports.loading', 'Načítám SLA metriky z databáze…')} />
+      ) : state.status === 'error' ? (
+        <ErrorState
+          message={t(
+            'reports.load_failed',
+            { period: periodLabel, error: state.message },
+            `SLA výkaz za období ${periodLabel} se nepodařilo sestavit (${state.message}). Čísla za toto období teď nejsou známá.`
+          )}
+          onRetry={retry}
+        />
+      ) : monitors.length === 0 ? (
+        <EmptyState
+          boxed
+          title={t('reports.no_monitors', 'Žádné monitory k zobrazení.')}
+          hint={t('reports.no_monitors_hint', 'Výkaz se naplní, jakmile budou monitory a první kontroly.')}
+          action={
+            <Link to="/infrastructure" className="text-link text-xs font-semibold hover:underline">
+              {t('reports.to_infrastructure', 'Infrastruktura')} →
+            </Link>
+          }
+        />
+      ) : (
+        <ReportBody
+          report={state.report}
+          days={days}
+          periodLabel={periodLabel}
+          coveredFrom={coveredFrom}
+          strips={strips}
+          slaGoal={slaGoal}
+        />
+      )}
 
+      {isAdmin && <DigestCard />}
+    </div>
+  );
+}
+
+/** The four figures and the table of a loaded report. */
+function ReportBody({
+  report,
+  days,
+  periodLabel,
+  coveredFrom,
+  strips,
+  slaGoal,
+}: {
+  report: SlaReport;
+  days: number;
+  periodLabel: string;
+  coveredFrom: string | null;
+  strips: StripsState;
+  slaGoal: number;
+}) {
+  const { t, lang } = useLanguage();
+  const monitors = report.monitors;
+  const measured = monitors.filter((m) => m.uptimePercent != null);
+  const compliant = measured.filter((m) => (m.uptimePercent as number) >= slaGoal).length;
+  const unmeasured = monitors.length - measured.length;
+  const overall = report.overallUptime;
+  const goal = `${formatNumber(slaGoal, lang, 3)} %`;
+
+  return (
+    <>
       {/* A quarter or a year over a shorter history: the numbers below cover
           only the days that were measured, and the period label must say so. */}
-      {!error && coveredFrom && (
+      {coveredFrom && (
         <p className="text-muted-foreground text-xs" data-testid="reports-coverage">
           {t(
             'reports.coverage',
-            {
-              period: periodLabel,
-              date: formatCoverageDay(coveredFrom, lang),
-            },
+            { period: periodLabel, date: formatCoverageDay(coveredFrom, lang) },
             `${periodLabel} (data od ${formatCoverageDay(coveredFrom, lang)}): starší dny v databázi nejsou, čísla níže pokrývají jen změřenou dobu.`
           )}
         </p>
       )}
 
-      {/* KPI cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-up/10 text-up">
-            <ShieldCheck className="size-6" />
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t('reports.overall_sla', 'Celkové plnění SLA')}</p>
-            <p
-              className={`text-xl font-bold tabular-nums ${overallUptime == null ? 'text-muted-foreground' : overallUptime >= slaGoal ? 'text-up' : 'text-down'}`}
-            >
-              {formatPercent(overallUptime, 2)}
-            </p>
-            <p className="text-3xs text-muted-foreground">
-              {t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
-            </p>
-          </div>
-        </Card>
-
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-primary/10 text-primary">
-            <TrendingUp className="size-6" />
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t('reports.monitored_count', 'Sledované servery/weby')}</p>
-            <p className="text-xl font-bold tabular-nums">
-              {t('reports.total_count', { count: monitors.length }, `${monitors.length} celkem`)}
-            </p>
-            <p
-              className={`text-3xs font-medium ${monitors.every((m) => m.uptimePercent != null && m.uptimePercent >= slaGoal) ? 'text-up' : 'text-warning'}`}
-            >
-              {t(
-                'reports.sla_compliant_count',
-                {
-                  ok: monitors.filter((m) => m.uptimePercent != null && m.uptimePercent >= slaGoal).length,
-                  total: monitors.length,
-                },
-                `${monitors.filter((m) => m.uptimePercent != null && m.uptimePercent >= slaGoal).length} / ${monitors.length} splňuje SLA`
-              )}
-            </p>
-          </div>
-        </Card>
-
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-warning/10 text-warning">
-            <Clock className="size-6" />
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">
-              {t('reports.total_outage_30d', { days }, `Celkový výpadek (${days} d)`)}
-            </p>
-            <p className="text-xl font-bold tabular-nums">{totalOutage} min</p>
-            <p className="text-3xs text-muted-foreground">{t('reports.outage_sum_hint', 'Suma výpadků všech cílů')}</p>
-          </div>
-        </Card>
-
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-3 rounded-lg bg-up/10 text-up">
-            <CheckCircle2 className="size-6" />
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t('reports.mttr', 'Průměrná doba obnovení (MTTR)')}</p>
-            <p className="text-xl font-bold tabular-nums">{overallMttr !== null ? formatDuration(overallMttr) : '—'}</p>
-            <p className="text-3xs text-muted-foreground">{t('reports.mttr_hint', 'Automatické obnovení (down→up)')}</p>
-          </div>
-        </Card>
+      {/* Neutral figures (C-1): a value takes a colour only when it misses the goal. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatBlock
+          variant="card"
+          icon={Target}
+          label={t('reports.overall_sla', 'Celkové plnění SLA')}
+          value={overall != null ? formatNumber(Number(formatPercentValue(overall, 2)), lang, 2) : null}
+          secondary="%"
+          hint={t('reports.sla_target_value', { goal }, `SLA cíl: ${goal}`)}
+          tone={overall != null && overall < slaGoal ? 'down' : null}
+        />
+        <StatBlock
+          variant="card"
+          icon={CircleCheck}
+          label={t('reports.kpi_compliant', 'Splňuje SLA')}
+          value={measured.length > 0 ? compliant : null}
+          secondary={`/ ${measured.length}`}
+          hint={
+            unmeasured > 0
+              ? t('reports.kpi_unmeasured', { n: unmeasured }, `${unmeasured} bez měření`)
+              : t('reports.kpi_compliant_hint', 'monitorů v cíli')
+          }
+          tone={compliant < measured.length ? 'warning' : null}
+        />
+        <StatBlock
+          variant="card"
+          icon={CircleX}
+          label={t('reports.total_outage_30d', { days }, `Celkový výpadek (${days} d)`)}
+          value={formatDuration(report.totalOutageMinutes * 60, lang)}
+          hint={t('reports.outage_sum_hint', 'Suma výpadků všech cílů')}
+        />
+        <StatBlock
+          variant="card"
+          icon={Timer}
+          label={t('reports.mttr', 'Průměrná doba obnovení (MTTR)')}
+          value={report.overallMttrSec != null ? formatDuration(report.overallMttrSec, lang) : null}
+          hint={t('reports.mttr_hint', 'Automatické obnovení (down→up)')}
+        />
       </div>
 
-      {/* SLA per monitor. In print the card must not be an unbreakable box - it
-          would move whole to page two leaving page one half-empty; the card
-          visuals switch off in print and rows break per monitor. */}
-      <Card className="p-6 space-y-5 print:border-0 print:bg-transparent print:shadow-none print:p-0 print:break-inside-auto">
-        <div className="flex items-center justify-between border-b border-border pb-3">
-          <div>
-            <h3 className="font-bold text-base">
-              {t('reports.sla_per_monitor_title', 'Plnění SLA garancí po jednotlivých serverech a webech')}
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              {t(
-                'reports.sla_per_monitor_desc',
-                { days },
-                `Reálná dostupnost z databáze za posledních ${days} dní. Klikněte na řádek pro detail výpadku.`
-              )}
-            </p>
-          </div>
-          <Badge variant="up" className="px-3 py-1">
-            {t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
-          </Badge>
-        </div>
-
-        {monitors.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t('reports.no_monitors', 'Žádné monitory k zobrazení.')}</p>
-        ) : (
-          <div className="space-y-3 pt-2">
-            {monitors.map((item) => {
-              const measured = item.uptimePercent != null;
-              const isOk = measured && (item.uptimePercent as number) >= slaGoal;
-              // The old scale was truncated AND floored: everything at or below
-              // 90.5 % drew the same 5 % stub, so 90 % and 42 % looked alike,
-              // while 99.0 and 99.9 were indistinguishable at the top. The bar
-              // now runs linearly over the last ten points of availability,
-              // anything below 90 % is a full-width bad bar, and a monitor with
-              // no measurement gets no fill at all.
-              const uptime = item.uptimePercent as number;
-              const fillPct = measured ? (uptime <= 90 ? 100 : Math.min(100, (uptime - 90) * 10)) : 0;
-              const goalPct = Math.max(0, Math.min(100, (slaGoal - 90) * 10));
-              const isExpanded = expandedId === item.id;
-
-              return (
-                <div
-                  key={item.id}
-                  className="rounded-lg bg-secondary/30 border border-border overflow-hidden print:border-border print:bg-white print:break-inside-avoid"
-                >
-                  {/* Main row */}
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setExpandedId(isExpanded ? null : item.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setExpandedId(isExpanded ? null : item.id);
-                      }
-                    }}
-                    className="w-full p-3.5 text-left flex items-center justify-between gap-2 hover:bg-secondary/50 transition-colors cursor-pointer print:hover:bg-transparent"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Server className="size-4 text-primary shrink-0 print:text-foreground" />
-                      <span className="font-bold text-sm text-foreground truncate print:text-base print:text-black">
-                        {item.name}
-                      </span>
-                      <span className="text-xs text-muted-foreground font-mono truncate print:text-xs print:text-muted-foreground">
-                        ({item.target})
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      {item.outageMinutes > 0 && (
-                        <span className="text-3xs text-muted-foreground font-mono">
-                          {t(
-                            'reports.outage_minutes_inline',
-                            { min: item.outageMinutes },
-                            `Výpadek: ${item.outageMinutes} min`
-                          )}
-                        </span>
-                      )}
-                      <Badge variant={!measured ? 'paused' : isOk ? 'up' : 'down'} className="text-3xs">
-                        {formatPercent(item.uptimePercent, 2)}
-                      </Badge>
-                      {isExpanded ? (
-                        <ChevronUp className="size-3.5 text-muted-foreground print:hidden" />
-                      ) : (
-                        <ChevronDown className="size-3.5 text-muted-foreground print:hidden" />
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Availability on a stated scale (90-100 %), with the SLA goal
-                      marked on it. Without the scale and the tick the bar said
-                      nothing a reader could act on. */}
-                  <div className="px-3.5 pb-2">
-                    <div className="bg-secondary/80 relative h-1.5 w-full overflow-hidden rounded-full">
-                      {measured ? (
-                        <div
-                          className={`h-full rounded-full transition-all ${isOk ? 'bg-up' : uptime <= 90 ? 'bg-down' : 'bg-warning'}`}
-                          style={{ width: `${fillPct}%` }}
-                        />
-                      ) : (
-                        <div className="bg-muted-foreground/20 h-full w-full rounded-full" />
-                      )}
-                      {/* print:hidden on purpose: the print stylesheet forces
-                          position:static on every div, so the absolute tick would
-                          lose its containing block and draw a rule down the whole
-                          page. The printed report states the goal in its header
-                          and the exact figure in the badge. */}
-                      <span
-                        aria-hidden
-                        title={t('reports.sla_target_value', { goal: slaGoal }, `SLA Cíl: ${slaGoal} %`)}
-                        className="bg-foreground/60 absolute top-0 h-full w-px print:hidden"
-                        style={{ left: `${goalPct}%` }}
-                      />
-                    </div>
-                    <div className="text-muted-foreground mt-0.5 flex justify-between text-3xs">
-                      <span>{measured ? '90 %' : t('reports.not_measured', 'Bez měření')}</span>
-                      <span>100 %</span>
-                    </div>
-                  </div>
-
-                  {/* Expanded detail (Visible on click on screen, always printed in PDF) */}
-                  <div
-                    className={`px-3.5 pb-3.5 pt-1 border-t border-border/50 space-y-3 animate-in fade-in-50 slide-in-from-top-1 duration-200 ${isExpanded ? 'block' : 'hidden print:block'}`}
-                  >
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
-                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-3xs">{t('common.type', 'Typ')}</p>
-                        <p className="font-semibold">{item.type}</p>
-                      </div>
-                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-3xs">
-                          {t('reports.total_checks_30d', { days }, `Celkem kontrol (${days} d)`)}
-                        </p>
-                        <p className="font-semibold">{item.totalChecks.toLocaleString('cs-CZ')}</p>
-                      </div>
-                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-3xs">
-                          {t('reports.mttr_label', 'MTTR (doba obnovení)')}
-                        </p>
-                        <p className="font-semibold">
-                          {item.mttrSec !== null ? formatDuration(item.mttrSec) : t('reports.no_outage', 'Bez výpadku')}
-                        </p>
-                      </div>
-                      <div className="p-2.5 rounded-md bg-background/50 border border-border/50">
-                        <p className="text-muted-foreground text-3xs">{t('reports.current_status', 'Aktuální stav')}</p>
-                        <p
-                          className={`font-semibold ${item.currentStatus === 'up' ? 'text-up' : item.currentStatus === 'down' ? 'text-down' : 'text-warning'}`}
-                        >
-                          {item.currentStatus === 'up'
-                            ? `🟢 ${t('common.online', 'Online')}`
-                            : item.currentStatus === 'down'
-                              ? `🔴 ${t('common.offline', 'Offline')}`
-                              : '⚠️ ' + item.currentStatus}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Response latency percentiles (p50 / p95 / p99) */}
-                    <div className="p-3 rounded-md bg-background/60 border border-border/60 space-y-1">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-muted-foreground text-2xs font-semibold">
-                          {t('reports.percentile_title', 'Percentilové Rozložení Latence (p50 / p95 / p99)')}
-                        </p>
-                        <Tooltip>
-                          <TooltipTrigger asChild className="print:hidden">
-                            <button
-                              type="button"
-                              className="text-muted-foreground hover:text-foreground cursor-help print:hidden"
-                              aria-label={t('reports.percentile_aria', 'Co znamenají percentily odezvy')}
-                            >
-                              <HelpCircle className="size-3.5" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="font-semibold mb-1">
-                              {t('reports.percentile_tooltip_title', 'Co percentily znamenají')}
-                            </p>
-                            <p>
-                              <strong className="text-foreground">{t('reports.p50_label', 'p50 (medián):')}</strong>{' '}
-                              {t(
-                                'reports.p50_desc',
-                                'polovina kontrol byla rychlejší, polovina pomalejší — nejlépe vystihuje typickou odezvu.'
-                              )}
-                            </p>
-                            <p className="mt-1">
-                              <strong className="text-foreground">{t('reports.p95_label', 'p95:')}</strong>{' '}
-                              {t(
-                                'reports.p95_desc',
-                                '95 % kontrol bylo rychlejších; zbylých 5 % jsou špičky (dočasné zpomalení, zátěž).'
-                              )}
-                            </p>
-                            <p className="mt-1">
-                              <strong className="text-foreground">{t('reports.p99_label', 'p99:')}</strong>{' '}
-                              {t(
-                                'reports.p99_desc',
-                                'jen 1 % kontrol bylo pomalejších — ojedinělé extrémní špičky, často síťový problém nebo přetížený server.'
-                              )}
-                            </p>
-                            <p className="mt-1.5 pt-1.5 border-t border-border/60 text-muted-foreground">
-                              {t(
-                                'reports.percentile_hint',
-                                'Vysoké p95/p99 při nízkém p50 = nekonzistentní výkon. Hledejte příčinu v době těch špiček (log serveru, zátěž), ne v průměru.'
-                              )}
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-4 font-mono text-xs pt-0.5">
-                        <span className="bg-secondary border border-border px-2 py-0.5 rounded">
-                          {t('reports.p50_value_label', 'p50 (Medián):')}{' '}
-                          <strong className="text-foreground">{item.p50Ms != null ? `${item.p50Ms} ms` : '—'}</strong>
-                        </span>
-                        <span className="bg-secondary border border-border px-2 py-0.5 rounded">
-                          {t('reports.p95_value_label', 'p95 (Špičky):')}{' '}
-                          <strong className="text-foreground">{item.p95Ms != null ? `${item.p95Ms} ms` : '—'}</strong>
-                        </span>
-                        <span className="bg-secondary border border-border px-2 py-0.5 rounded">
-                          {t('reports.p99_value_label', 'p99 (Kritické špičky):')}{' '}
-                          <strong className="text-foreground">{item.p99Ms != null ? `${item.p99Ms} ms` : '—'}</strong>
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Last outage detail */}
-                    {item.lastOutage ? (
-                      <div className="p-3 rounded-lg bg-down/5 border border-down/20 space-y-1.5 text-xs">
-                        <p className="font-bold text-destructive text-2xs">
-                          📋 {t('reports.last_outage_title', 'Poslední výpadek')}
-                        </p>
-                        <div className="grid gap-1 sm:grid-cols-2">
-                          <p>
-                            <span className="text-muted-foreground">{t('reports.outage_field_start', 'Začátek:')}</span>{' '}
-                            <span className="font-mono">{item.lastOutage.start}</span>
-                          </p>
-                          <p>
-                            <span className="text-muted-foreground">{t('reports.outage_field_end', 'Konec:')}</span>{' '}
-                            <span className="font-mono">
-                              {item.lastOutage.end ?? t('reports.outage_ongoing', 'Stále probíhá ⚠️')}
-                            </span>
-                          </p>
-                          <p>
-                            <span className="text-muted-foreground">
-                              {t('reports.outage_field_duration', 'Trvání:')}
-                            </span>{' '}
-                            <span className="font-bold">{formatDuration(item.lastOutage.durationSec)}</span>
-                          </p>
-                          <p>
-                            <span className="text-muted-foreground">{t('reports.outage_field_status', 'Stav:')}</span>{' '}
-                            <Badge variant={item.lastOutage.resolved ? 'up' : 'down'} className="text-3xs ml-1">
-                              {item.lastOutage.resolved
-                                ? t('reports.resolved_badge', 'Vyřešeno')
-                                : t('reports.ongoing_badge', 'Probíhá')}
-                            </Badge>
-                          </p>
-                        </div>
-                        <p className="pt-1 border-t border-down/10">
-                          <span className="text-muted-foreground">{t('reports.reason_label', 'Důvod:')}</span>{' '}
-                          <span className="font-mono text-destructive">{item.lastOutage.reason}</span>
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="p-3 rounded-lg bg-up/10 border border-up/25 text-xs font-medium text-up">
-                        ✅ {t('reports.no_outage_30d', { days }, `Žádný výpadek za posledních ${days} dní.`)}
-                      </div>
-                    )}
-
-                    <div className="flex justify-end print:hidden">
-                      <Link
-                        to={`/infrastructure/${item.id}`}
-                        className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline print:hidden"
-                      >
-                        {t('reports.view_detail', 'Otevřít detail')} <ArrowRight className="size-3" />
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+      {/* In print the card must not be an unbreakable box: it would move
+          whole to page two and leave page one half-empty. */}
+      <Panel
+        icon={TableProperties}
+        title={t('reports.sla_per_monitor_title', 'Plnění SLA garancí po jednotlivých serverech a webech')}
+        hint={t(
+          'reports.sla_per_monitor_desc',
+          { days },
+          `Za posledních ${days} dní, nejhorší nahoře. Výpadek se měří proti rozpočtu, který cíl SLA dovoluje za změřenou dobu. Název otevře podrobnosti.`
         )}
-      </Card>
+        className="print:border-0 print:bg-transparent print:shadow-none"
+        bodyClassName="print:p-0"
+      >
+        <SlaTable rows={monitors} slaGoal={slaGoal} days={days} strips={strips} />
+      </Panel>
+    </>
+  );
+}
 
-      {/* Exports. A second CSV export (report.php) used to sit here - the same
-          data as the header button, just confusing duplication (user report). */}
-      <div className="grid gap-4 md:grid-cols-2 print:hidden">
-        {/* The Prometheus token is admin-only configuration: the backend only
-            includes metricsToken in sla_report for an admin session, and
-            generate_metrics_token rejects everyone else with 403 - so for
-            non-admins this card would only ever show a misleading "requires
-            token" state with a button that can't work. Hidden entirely. */}
-        {isAdmin &&
-          (metricsToken ? (
-            <Card className="p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-up/10 text-up">
-                    <BarChart3 className="size-6" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-base">
-                        {t('reports.prometheus_title', 'Prometheus Exportér Metrik')}
-                      </h3>
-                      <Badge variant="up" className="text-3xs">
-                        🟢 {t('reports.prometheus_active', 'Aktivní')}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground font-mono truncate max-w-[260px] sm:max-w-none">
-                      /status/metrics.php?token={metricsToken.slice(0, 6)}••••
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {t(
-                  'reports.prometheus_desc_active',
-                  'Integrační rozhraní pro napojení externích systémů, Grafany nebo Prometheus serveru s vaším přístupovým tokenem.'
-                )}
-              </p>
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <a
-                  href={`/status/metrics.php?token=${encodeURIComponent(metricsToken)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 text-sm font-semibold transition-colors shadow-sm"
-                >
-                  <ExternalLink className="size-4" /> {t('reports.prometheus_btn', 'Otevřít Prometheus výstup')}
-                </a>
-                <Button variant="outline" size="sm" onClick={handleCopyMetricsUrl} className="gap-2 text-xs">
-                  {copiedUrl ? <Check className="size-3.5 text-up" /> : <Copy className="size-3.5" />}
-                  {copiedUrl ? t('common.copied', 'Zkopírováno!') : t('reports.copy_url', 'Kopírovat URL metrik')}
-                </Button>
-              </div>
-            </Card>
-          ) : (
-            <Card className="p-6 space-y-4 border-warning/30 bg-warning/10">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-warning/15 text-warning">
-                    <BarChart3 className="size-6" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-base">
-                        {t('reports.prometheus_title', 'Prometheus Exportér Metrik')}
-                      </h3>
-                      <Badge variant="down" className="text-3xs bg-warning/15 text-warning border-warning/30">
-                        ⚠️ {t('reports.prometheus_inactive', 'Vyžaduje token')}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground font-mono">/status/metrics.php</p>
-                  </div>
-                </div>
-              </div>
-              <p className="text-sm font-medium text-warning">
-                {t(
-                  'reports.prometheus_inactive_desc',
-                  'Metriky jsou chráněny proti neautorizovanému přístupu. Vygenerujte přístupový token pro aktivaci endpointu.'
-                )}
-              </p>
-              {tokenError && <ErrorState size="inline" message={tokenError} />}
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <Button
-                  onClick={handleGenerateMetricsToken}
-                  disabled={generatingToken}
-                  className="gap-2 font-semibold bg-warning text-warning-foreground hover:bg-warning/90 shadow-sm"
-                >
-                  {generatingToken ? <RefreshCw className="size-4 animate-spin" /> : <Key className="size-4" />}
-                  {t('reports.generate_token_btn', 'Aktivovat Prometheus token (1-klik)')}
-                </Button>
-                <Link
-                  to="/settings"
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/80 px-3 py-2 text-xs font-semibold text-foreground hover:bg-secondary transition-colors"
-                >
-                  <Settings className="size-3.5" />
-                  {t('reports.manage_in_settings', 'Spravovat v Nastavení')}
-                </Link>
-              </div>
-            </Card>
-          ))}
+/** The letterhead of the printed report (only shown when printing). */
+function PrintHeader({ siteTitle, logo, lang }: { siteTitle?: string; logo?: string; lang: string }) {
+  const { t } = useLanguage();
+  const title = siteTitle || 'Blood Kings Monitoring';
+  const now = new Date();
+  const date = now.toLocaleDateString(localeFor(lang));
+  const time = now.toLocaleTimeString(localeFor(lang), { hour: '2-digit', minute: '2-digit' });
+  return (
+    <div className="border-primary/80 mb-4 hidden items-center justify-between border-b-2 pb-4 print:flex">
+      <div className="flex items-center gap-3">
+        {/* The custom logo from settings wins; otherwise the repo's logo (the
+            dark-text variant - PDFs print on white). */}
+        <img src={logo || '/status/assets/bk-logo.svg'} alt={title} className="h-12 max-w-[240px] object-contain" />
+        <div>
+          <h2 className="text-foreground text-2xl font-extrabold tracking-tight">{title}</h2>
+          <p className="text-muted-foreground mt-0.5 text-xs font-medium">
+            {t('reports.pdf_header_subtitle', 'Oficiální Garance Uptime, Výpadky & SLA Auditní Výkaz')}
+          </p>
+        </div>
+      </div>
+      <div className="text-muted-foreground ml-4 shrink-0 space-y-0.5 text-right text-xs">
+        <p className="text-foreground text-sm font-semibold">{t('reports.pdf_audit_report', 'SLA Audit Report')}</p>
+        <p className="text-2xs whitespace-nowrap tabular-nums">
+          {t('reports.pdf_generated_at', { date, time }, `Vygenerováno: ${date} ${time}`)}
+        </p>
+        <p className="text-3xs whitespace-nowrap">{t('reports.pdf_source', 'Zdroj: bloodkings.eu / status API')}</p>
       </div>
     </div>
   );

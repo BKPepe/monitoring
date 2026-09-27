@@ -943,28 +943,6 @@ export interface OutgoingMessagePage {
   summary: { last24h: OutgoingMessageWindow; last7d: OutgoingMessageWindow } | null;
 }
 
-/*
- * The server's findings across every monitor the viewer sees
- * (`api.php?action=dashboard_insights`, W1-B6): disk/RAM forecasts, latency
- * anomalies and network notes, worded by the server in the request language.
- */
-export interface DashboardInsight {
-  monitorId: number;
-  monitorName: string;
-  kind: 'network' | 'anomaly' | 'forecast' | 'trend' | string;
-  text: string;
-  detail: string;
-}
-
-export interface DashboardInsightsResponse {
-  insights: DashboardInsight[];
-  /** Every finding there is; absent on a server older than the paged answer (then the page cannot ask for more). */
-  total?: number;
-  offset?: number;
-  /** Unix seconds the cached list was built; absent when it was computed for this request. */
-  cachedAt?: number;
-}
-
 /** The part of `api.php?action=websites_overview` outside the per-monitor SLA map. */
 export interface WebsitesOverviewResponse {
   slaGoal?: number;

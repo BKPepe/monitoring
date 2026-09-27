@@ -27,6 +27,18 @@ function serve(forgot: () => Promise<Response>) {
 }
 
 function renderLogin() {
+  // The page applies the stored or the system theme; jsdom has neither
+  // matchMedia nor, under this Node, a working localStorage.
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+  );
   render(
     <LanguageProvider>
       <SetupPage />
@@ -35,7 +47,8 @@ function renderLogin() {
 }
 
 async function askForReset() {
-  fireEvent.click(screen.getByText('Zapomenuté heslo?'));
+  // The form appears once install_status has answered (an older server's {} = installed).
+  fireEvent.click(await screen.findByText('Zapomenuté heslo?'));
   fireEvent.change(screen.getByPlaceholderText('Váš e-mail'), { target: { value: 'nekdo@example.test' } });
   fireEvent.click(screen.getByRole('button', { name: 'Odeslat' }));
 }
@@ -46,10 +59,10 @@ afterEach(() => {
 });
 
 describe('Přihlášení bez známého výchozího účtu (W1-H2)', () => {
-  it('pole uživatelského jména začíná prázdné, ne „admin“', () => {
+  it('pole uživatelského jména začíná prázdné, ne „admin“', async () => {
     serve(() => Promise.resolve(json(200, { success: true })));
     renderLogin();
-    const name = screen.getByPlaceholderText('Např. admin') as HTMLInputElement;
+    const name = (await screen.findByPlaceholderText('Např. admin')) as HTMLInputElement;
     expect(name.value).toBe('');
   });
 

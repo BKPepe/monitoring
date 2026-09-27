@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { CheckCircle2, KeyRound } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/context/language-context';
@@ -59,7 +59,7 @@ export function SetPasswordPage() {
 
   return (
     <div className="grid min-h-screen place-items-center p-4">
-      <Card className="w-full max-w-sm space-y-4 p-6">
+      <Panel className="w-full max-w-sm" bodyClassName="space-y-4 sm:p-6">
         <div className="flex items-center gap-2.5">
           <KeyRound className="size-5 text-primary" />
           <h1 className="text-lg font-bold">{t('setpw.title', 'Nastavení hesla')}</h1>
@@ -110,7 +110,7 @@ export function SetPasswordPage() {
             </Button>
           </form>
         )}
-      </Card>
+      </Panel>
     </div>
   );
 }

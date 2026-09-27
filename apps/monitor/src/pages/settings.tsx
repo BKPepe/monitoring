@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState, useEffect, useCallback, useId } from 'react';
+import { Panel } from '@/components/ui/panel';
+import { FilterPills } from '@/components/filter-pills';
+import { IconTile } from '@/components/ui/icon-tile';
+import { Pill } from '@/components/ui/pill';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Settings,
@@ -25,33 +27,31 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
-  FileBarChart,
-  ExternalLink,
   Layers,
+  CircleHelp,
+  ChevronDown,
+  Siren,
+  SlidersHorizontal,
+  Download,
+  type LucideIcon,
 } from 'lucide-react';
 import { useSession } from '@/api/use-session';
 import { appApi } from '@/api/app-api';
 import { useLanguage } from '@/context/language-context';
 import { PresetManager } from '@/components/preset-manager';
+import { MetricsTokenActions } from '@/components/metrics-token-actions';
 import { GithubIcon, GoogleIcon } from '@/components/ui/brand-icons';
 import { Link } from 'react-router';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
 const API_BASE = '/status/api.php';
 
-const tabClass = (active: boolean) =>
-  `px-4 py-2.5 text-xs font-bold rounded-t-lg border-b-2 transition-all duration-200 cursor-pointer select-none ${
-    active
-      ? 'border-primary text-primary bg-primary/5'
-      : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-  }`;
-
 const inputCls =
-  'w-full rounded-md bg-background border border-border px-3 py-2 text-xs focus:ring-1 focus:ring-primary/40 focus:border-primary transition-colors';
+  'w-full rounded-md bg-secondary/60 border border-input px-3 py-2 text-xs placeholder:text-muted-foreground hover:border-border-strong focus-visible:border-ring transition-colors';
 const selectCls = inputCls;
-const labelCls = 'block text-2xs font-medium text-muted-foreground mb-1';
-const hintCls = 'text-3xs text-muted-foreground/70 mt-0.5';
-const sectionTitle = 'text-xs font-bold uppercase tracking-wider text-primary mb-3';
+const labelCls = 'block micro-label mb-1.5';
+// Full muted colour at 11 px: the 70 % tint at 10 px was 2.65:1 in light (PA-6).
+const hintCls = 'text-2xs text-muted-foreground mt-0.5';
 
 function DiscordIcon({ className }: { className?: string }) {
   return (
@@ -135,17 +135,18 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testSent, setTestSent] = useState<{ channel: string; ok: boolean; message: string } | null>(null);
+  const [testSent, setTestSent] = useState<{ channel: ChannelId; ok: boolean; message: string } | null>(null);
+  const [openChannel, setOpenChannel] = useState<ChannelId | null>(null);
   const [locBusy, setLocBusy] = useState(false);
   const [locResult, setLocResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<SettingsMap>({});
+  // What the server holds: the channel rows say "Nastaveno" from this, not
+  // from a half-typed field, because Test sends with the saved values.
+  const [savedSettings, setSavedSettings] = useState<SettingsMap>({});
   const [envLocked, setEnvLocked] = useState<string[]>([]);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
-
-  const [digestSending, setDigestSending] = useState<string | null>(null);
-  const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -154,6 +155,7 @@ export function SettingsPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setSettings(data.settings ?? {});
+      setSavedSettings(data.settings ?? {});
       setEnvLocked(data.envLocked ?? []);
     } catch {
       setError(t('settings.load_error', 'Nepodařilo se načíst nastavení z API.'));
@@ -238,39 +240,16 @@ export function SettingsPage() {
   // A real round trip: the server sends through the channel with the SAVED
   // settings and reports whether it went. A green banner on a dead webhook
   // was worse than no button.
-  const handleSendTest = async (channel: 'email' | 'discord' | 'telegram' | 'slack', channelName: string) => {
+  const handleSendTest = async (channel: 'email' | 'discord' | 'telegram' | 'slack') => {
     setTesting(channel);
     setTestSent(null);
     try {
       const res = await appApi.testNotification(channel);
-      setTestSent({ channel: channelName, ok: !!res.ok, message: res.message ?? '' });
+      setTestSent({ channel, ok: !!res.ok, message: res.message ?? '' });
     } catch (err) {
-      setTestSent({ channel: channelName, ok: false, message: err instanceof Error ? err.message : String(err) });
+      setTestSent({ channel, ok: false, message: err instanceof Error ? err.message : String(err) });
     } finally {
       setTesting(null);
-    }
-  };
-
-  const handleSendDigest = async (period: 'weekly' | 'monthly') => {
-    setDigestSending(period);
-    setDigestResult(null);
-    try {
-      const res = await fetch(`${API_BASE}?action=send_digest`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ period }),
-      });
-      const data = await res.json();
-      setDigestResult({
-        ok: data.success === true,
-        msg: data.message || data.error || t('settings.digest_unknown_result', 'Neznámý výsledek.'),
-      });
-    } catch {
-      setDigestResult({ ok: false, msg: t('settings.digest_comm_error', 'Chyba při komunikaci se serverem.') });
-    } finally {
-      setDigestSending(null);
-      setTimeout(() => setDigestResult(null), 5000);
     }
   };
 
@@ -280,7 +259,7 @@ export function SettingsPage() {
   // --- Access control ---
   if (!session?.authenticated) {
     return (
-      <Card className="grid place-items-center gap-4 p-16 text-center">
+      <Panel bodyClassName="grid place-items-center gap-4 py-12 text-center">
         <div className="space-y-1">
           <p className="font-semibold text-lg">{t('settings.login_required_title', 'Přihlášení vyžadováno')}</p>
           <p className="text-muted-foreground text-sm max-w-md">
@@ -293,13 +272,13 @@ export function SettingsPage() {
         >
           {t('settings.go_to_login', 'Přejít na přihlášení')}
         </Link>
-      </Card>
+      </Panel>
     );
   }
 
   if (session.user?.role !== 'admin') {
     return (
-      <Card className="grid place-items-center gap-4 p-16 text-center">
+      <Panel bodyClassName="grid place-items-center gap-4 py-12 text-center">
         <Shield className="size-12 text-muted-foreground/40" />
         <p className="font-semibold text-lg">{t('settings.insufficient_perms_title', 'Nedostatečná oprávnění')}</p>
         <p className="text-muted-foreground text-sm max-w-md">
@@ -309,7 +288,7 @@ export function SettingsPage() {
           )}{' '}
           <strong>{t('settings.role_admin', 'administrátor')}</strong>.
         </p>
-      </Card>
+      </Panel>
     );
   }
 
@@ -334,27 +313,33 @@ export function SettingsPage() {
     envLockedTitle: t('settings.env_locked_title', 'Definováno v config.php / prostředí'),
   };
 
+  // The props every channel row shares; `test` names the server's test for
+  // the channels it can send a test through.
+  const channelRow = (id: ChannelId, test?: 'email' | 'discord' | 'slack' | 'telegram') => ({
+    state: channelState(id, savedSettings, isLocked),
+    open: openChannel === id,
+    onToggle: () => setOpenChannel((current) => (current === id ? null : id)),
+    onTest: test ? () => handleSendTest(test) : undefined,
+    testing: testing !== null,
+    result: testSent?.channel === id ? { ok: testSent.ok, message: testSent.message } : null,
+  });
+
   const tabs = [
-    { id: 'obecne' as const, label: t('settings.tab_general', 'Obecné'), icon: <Settings className="size-3.5" /> },
-    {
-      id: 'notifikace' as const,
-      label: t('settings.tab_notifications', 'Notifikace'),
-      icon: <Bell className="size-3.5" />,
-    },
-    {
-      id: 'integrace' as const,
-      label: t('settings.tab_integrations', 'Integrace'),
-      icon: <Plug className="size-3.5" />,
-    },
-    { id: 'vzhled' as const, label: t('settings.tab_appearance', 'Vzhled'), icon: <Palette className="size-3.5" /> },
-    { id: 'presety' as const, label: t('settings.tab_presets', 'Presety'), icon: <Layers className="size-3.5" /> },
+    { value: 'obecne' as const, label: t('settings.tab_general', 'Obecné'), icon: Settings },
+    { value: 'notifikace' as const, label: t('settings.tab_notifications', 'Notifikace'), icon: Bell },
+    { value: 'integrace' as const, label: t('settings.tab_integrations', 'Integrace'), icon: Plug },
+    { value: 'vzhled' as const, label: t('settings.tab_appearance', 'Vzhled'), icon: Palette },
+    { value: 'presety' as const, label: t('settings.tab_presets', 'Presety'), icon: Layers },
   ];
+  // The hairline label over a tab's panels (NetPulse settings): says which
+  // part of the configuration this is when the tab row has scrolled away.
+  const sectionLabel = tabs.find((tab) => tab.value === activeTab)?.label ?? '';
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <PageHeader
-        title={t('settings.title', 'Nastavení Systému & Notifikací')}
+        title={t('settings.title', 'Nastavení')}
         subtitle={t(
           'settings.subtitle',
           'Správa parametrů platformy, notifikačních kanálů, OAuth integrací a brandingu.'
@@ -363,517 +348,350 @@ export function SettingsPage() {
 
       {/* Notifications */}
       {error && <ErrorState message={error} />}
-      {testSent && (
-        <div
-          role="status"
-          className={
-            testSent.ok
-              ? 'p-3 rounded-lg bg-up/10 border border-up/30 text-up text-xs font-semibold flex items-center justify-between gap-3 animate-in fade-in-50'
-              : 'p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold flex items-center justify-between gap-3 animate-in fade-in-50'
-          }
-        >
-          <span>
-            {testSent.ok ? '✅ ' : '⛔ '}
-            {/* A failure must not open with "odeslána" - that is the claim under test. */}
-            {testSent.ok
-              ? t(
-                  'settings.test_sent',
-                  { channel: testSent.channel },
-                  `Testovací notifikace odeslána na kanál: ${testSent.channel}`
-                )
-              : t('settings.test_failed_on', { channel: testSent.channel }, `Test kanálu ${testSent.channel} selhal`)}
-            {testSent.message ? ` — ${testSent.message}` : ''}
-            {!testSent.ok && (
-              <span className="text-muted-foreground ml-2 font-normal">
-                {t(
-                  'settings.test_uses_saved',
-                  'Test používá uložené nastavení, neuložené změny se do něj nepromítnou.'
-                )}
-              </span>
-            )}
-          </span>
-          <Badge variant={testSent.ok ? 'up' : 'down'}>
-            {testSent.ok ? t('settings.test_ok', 'Test OK') : t('settings.test_failed', 'Test selhal')}
-          </Badge>
-        </div>
-      )}
-
       <form onSubmit={handleSave} className="space-y-0">
-        {/* Tab bar */}
-        <div className="flex gap-1 border-b border-border mb-6">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setActiveTab(t.id)}
-              className={tabClass(activeTab === t.id)}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                {t.icon}
-                {t.label}
-              </span>
-            </button>
-          ))}
+        {/* Tab bar: one segmented row of the configuration's parts. */}
+        <FilterPills
+          label={t('settings.tabs_label', 'Části nastavení')}
+          value={activeTab}
+          options={tabs}
+          onChange={setActiveTab}
+          className="mb-5"
+        />
+        <div className="mb-4 flex items-center gap-3" aria-hidden="true">
+          <span className="micro-label">{sectionLabel}</span>
+          <span className="bg-border h-px flex-1" />
         </div>
 
         {/* TAB: General */}
         {activeTab === 'obecne' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t('settings.general_section', 'Obecné nastavení')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="site_title"
-                    label={t('settings.site_title_label', 'Název status stránky')}
-                    placeholder="Blood Kings | Status Monitoring"
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="site_url"
-                    label={t('settings.site_url_label', 'Veřejná URL status stránky (bez lomítka na konci)')}
-                    placeholder="https://status.vasedomena.cz"
-                    hint={t(
-                      'settings.site_url_hint',
-                      'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů; cesta za doménou se ignoruje.'
-                    )}
-                  />
-                </div>
+            <Panel
+              icon={SlidersHorizontal}
+              title={t('settings.general_section', 'Obecné nastavení')}
+              bodyClassName="space-y-5"
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="site_title"
+                  label={t('settings.site_title_label', 'Název status stránky')}
+                  placeholder="Blood Kings | Status Monitoring"
+                />
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="site_url"
+                  label={t('settings.site_url_label', 'Veřejná URL status stránky (bez lomítka na konci)')}
+                  placeholder="https://status.vasedomena.cz"
+                  hint={t(
+                    'settings.site_url_hint',
+                    'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů; cesta za doménou se ignoruje.'
+                  )}
+                />
+              </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <FieldInput
-                      ctx={fieldCtx}
-                      k="cron_key"
-                      label={t('settings.cron_key_label', 'Cron Bezpečnostní Klíč (URL parametr ?key=...)')}
-                      placeholder={t('settings.cron_key_placeholder', 'Např. secure123key')}
-                    />
-                    {settings.cron_key && (
-                      <p className="text-3xs text-muted-foreground/60 mt-1 font-mono break-all">
-                        {t('settings.cron_url_label', 'Cron URL:')}{' '}
-                        <code className="text-primary/80">{`${siteOrigin(settings.site_url)}/status/cron.php?key=${settings.cron_key}`}</code>
-                      </p>
-                    )}
-                  </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
                   <FieldInput
                     ctx={fieldCtx}
-                    k="cron_location"
-                    label={t('settings.cron_location_label', 'Lokace hlavního serveru')}
-                    placeholder={t(
-                      'settings.cron_location_placeholder',
-                      'Necháte prázdné pro AUTO detekci nebo např. 🇩🇪 Frankfurt, DE'
-                    )}
-                    hint={t('settings.cron_location_hint', 'Prázdné nebo AUTO = automaticky zjištěno dle IP hostingu.')}
+                    k="cron_key"
+                    label={t('settings.cron_key_label', 'Cron Bezpečnostní Klíč (URL parametr ?key=...)')}
+                    placeholder={t('settings.cron_key_placeholder', 'Např. secure123key')}
                   />
-                  {/* The detected location is cached in a setting and every check
+                  {settings.cron_key && (
+                    <p className="text-3xs text-muted-foreground/60 mt-1 font-mono break-all">
+                      {t('settings.cron_url_label', 'Cron URL:')}{' '}
+                      <code className="text-primary/80">{`${siteOrigin(settings.site_url)}/status/cron.php?key=${settings.cron_key}`}</code>
+                    </p>
+                  )}
+                </div>
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="cron_location"
+                  label={t('settings.cron_location_label', 'Lokace hlavního serveru')}
+                  placeholder={t(
+                    'settings.cron_location_placeholder',
+                    'Necháte prázdné pro AUTO detekci nebo např. 🇩🇪 Frankfurt, DE'
+                  )}
+                  hint={t('settings.cron_location_hint', 'Prázdné nebo AUTO = automaticky zjištěno dle IP hostingu.')}
+                />
+                {/* The detected location is cached in a setting and every check
                       writes it into its log row, so a wrong one follows the data
                       around until somebody forces a new lookup. Until now that
                       button existed only in the legacy administration. */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={locBusy}
-                      onClick={redetectLocation}
-                      className="gap-1.5"
-                    >
-                      <RefreshCw className="size-3.5" />
-                      {t('settings.redetect_location', 'Zjistit lokalitu znovu')}
-                    </Button>
-                    {locResult && (
-                      <span className={locResult.ok ? 'text-up text-xs' : 'text-down text-xs'}>{locResult.msg}</span>
-                    )}
-                  </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" disabled={locBusy} onClick={redetectLocation} className="gap-1.5">
+                    <RefreshCw className="size-3.5" />
+                    {t('settings.redetect_location', 'Zjistit lokalitu znovu')}
+                  </Button>
+                  {locResult && (
+                    <span className={locResult.ok ? 'text-up text-xs' : 'text-down text-xs'}>{locResult.msg}</span>
+                  )}
                 </div>
+              </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="sla_goal_pct"
-                    label={t('settings.sla_goal_label', 'Cílová dostupnost SLA (%)')}
-                    placeholder="99.95"
-                    hint={t('settings.sla_goal_hint', 'Používá se v měsíčním infrastructure reportu.')}
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="ssl_alert_days"
-                    label={t('settings.ssl_alert_label', 'Varování před vypršením SSL (dní)')}
-                    placeholder="14"
-                  />
-                </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="sla_goal_pct"
+                  label={t('settings.sla_goal_label', 'Cílová dostupnost SLA (%)')}
+                  placeholder="99.95"
+                  hint={t('settings.sla_goal_hint', 'Používá se v měsíčním infrastructure reportu.')}
+                />
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="ssl_alert_days"
+                  label={t('settings.ssl_alert_label', 'Varování před vypršením SSL (dní)')}
+                  placeholder="14"
+                />
+              </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="collection_max_age_secs"
-                    type="number"
-                    label={t('settings.collection_max_age_label', 'Limit stáří sběru dat (sekundy)')}
-                    placeholder="900"
-                    hint={t(
-                      'settings.collection_max_age_hint',
-                      'Když poslední dokončený běh cronu zestárne nad tuhle hodnotu, ohlásí to hlídač běžící mimo tenhle server. Výchozí 900 s = 15 minut.'
-                    )}
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="ts3_latest_version"
-                    label={t('settings.ts3_version_label', 'Poslední známá verze TeamSpeak serveru')}
-                    placeholder="3.13.7"
-                    hint={t('settings.ts3_version_hint', 'Volitelné. Podle toho se pozná, že běžící server je pozadu.')}
-                  />
-                </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="collection_max_age_secs"
+                  type="number"
+                  label={t('settings.collection_max_age_label', 'Limit stáří sběru dat (sekundy)')}
+                  placeholder="900"
+                  hint={t(
+                    'settings.collection_max_age_hint',
+                    'Když poslední dokončený běh cronu zestárne nad tuhle hodnotu, ohlásí to hlídač běžící mimo tenhle server. Výchozí 900 s = 15 minut.'
+                  )}
+                />
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="ts3_latest_version"
+                  label={t('settings.ts3_version_label', 'Poslední známá verze TeamSpeak serveru')}
+                  placeholder="3.13.7"
+                  hint={t('settings.ts3_version_hint', 'Volitelné. Podle toho se pozná, že běžící server je pozadu.')}
+                />
+              </div>
 
-                {/* Process history grows fastest of all tables (ten rows per
+              {/* Process history grows fastest of all tables (ten rows per
                     monitor per minute), so the retention is configurable rather
                     than fixed. Measured on 1.7M rows: the lookup takes 0.089 ms
                     thanks to the covering index, so length costs disk, not speed. */}
-                <div className="grid gap-4 md:grid-cols-3">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="process_history_days"
-                    type="number"
-                    label={t('settings.proc_days_label', 'Historie procesů (dní)')}
-                    placeholder="30"
-                    hint={t(
-                      'settings.proc_days_hint',
-                      'Jak dlouho držet, kdo kdy žral CPU a paměť. 0 = nesbírat vůbec a smazat, co je uložené. Čtyři agenti za 30 dní zaberou zhruba 250 MB.'
-                    )}
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="process_history_peak_after_days"
-                    type="number"
-                    label={t('settings.proc_peak_after_label', 'Prořezat na špičky po (dnech)')}
-                    placeholder="0"
-                    hint={t(
-                      'settings.proc_peak_after_hint',
-                      'Po téhle době zůstanou jen vzorky ze špiček. 0 = neprořezávat, držet vše po celou dobu.'
-                    )}
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="process_history_peak_pct"
-                    type="number"
-                    label={t('settings.proc_peak_pct_label', 'Co je špička (% CPU / MB RAM)')}
-                    placeholder="50"
-                    hint={t('settings.proc_peak_pct_hint', 'Použije se jen při prořezávání.')}
-                  />
-                </div>
-
-                {/* Trusted proxies change what is believed about the visitor's IP
-                    address - which belongs together with what gets written to the log. */}
+              <div className="grid gap-4 md:grid-cols-3">
                 <FieldInput
                   ctx={fieldCtx}
-                  k="trusted_proxies"
-                  label={t('settings.trusted_proxies_label', 'Důvěryhodné proxy (CIDR, oddělené čárkou)')}
-                  placeholder="10.0.0.0/8, 2001:db8::/32"
+                  k="process_history_days"
+                  type="number"
+                  label={t('settings.proc_days_label', 'Historie procesů (dní)')}
+                  placeholder="30"
                   hint={t(
-                    'settings.trusted_proxies_hint',
-                    'Jen pro vlastní reverzní proxy (nginx, HAProxy) - rozsahy Cloudflare jsou zabudované. Z těchto adres se věří hlavičce s IP návštěvníka; odkudkoli jinam by si každý mohl do protokolu zapsat cizí adresu a obejít zamykání účtu. Prázdné = důvěřuje se jen Cloudflare.'
+                    'settings.proc_days_hint',
+                    'Jak dlouho držet, kdo kdy žral CPU a paměť. 0 = nesbírat vůbec a smazat, co je uložené. Čtyři agenti za 30 dní zaberou zhruba 250 MB.'
                   )}
                 />
-              </CardContent>
-            </Card>
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="process_history_peak_after_days"
+                  type="number"
+                  label={t('settings.proc_peak_after_label', 'Prořezat na špičky po (dnech)')}
+                  placeholder="0"
+                  hint={t(
+                    'settings.proc_peak_after_hint',
+                    'Po téhle době zůstanou jen vzorky ze špiček. 0 = neprořezávat, držet vše po celou dobu.'
+                  )}
+                />
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="process_history_peak_pct"
+                  type="number"
+                  label={t('settings.proc_peak_pct_label', 'Co je špička (% CPU / MB RAM)')}
+                  placeholder="50"
+                  hint={t('settings.proc_peak_pct_hint', 'Použije se jen při prořezávání.')}
+                />
+              </div>
+
+              {/* Trusted proxies change what is believed about the visitor's IP
+                    address - which belongs together with what gets written to the log. */}
+              <FieldInput
+                ctx={fieldCtx}
+                k="trusted_proxies"
+                label={t('settings.trusted_proxies_label', 'Důvěryhodné proxy (CIDR, oddělené čárkou)')}
+                placeholder="10.0.0.0/8, 2001:db8::/32"
+                hint={t(
+                  'settings.trusted_proxies_hint',
+                  'Jen pro vlastní reverzní proxy (nginx, HAProxy) - rozsahy Cloudflare jsou zabudované. Z těchto adres se věří hlavičce s IP návštěvníka; odkudkoli jinam by si každý mohl do protokolu zapsat cizí adresu a obejít zamykání účtu. Prázdné = důvěřuje se jen Cloudflare.'
+                )}
+              />
+            </Panel>
+            {/* Agents (W2-11): the offline limit and the registration token
+                configure agents, so they left the notification tab. */}
+            <Panel icon={Server} title={t('settings.agents_title', 'Agenti')} bodyClassName="grid gap-4 md:grid-cols-2">
+              <FieldInput
+                ctx={fieldCtx}
+                k="agent_offline_timeout"
+                label={t(
+                  'settings.agent_offline_timeout_label',
+                  'Časový limit pro označení agenta za offline (minuty)'
+                )}
+                placeholder="50"
+                hint={t(
+                  'settings.agent_offline_timeout_hint',
+                  'Doba neaktivity, po které bude agent považován za odpojeného. 0 = detekce neaktivity vypnuta.'
+                )}
+              />
+              <FieldInput
+                ctx={fieldCtx}
+                k="agent_registration_token"
+                label={t('settings.agent_token_label', 'Token pro auto-registraci agentů')}
+                type="password"
+                placeholder="TajnyRegistracniToken123"
+                hint={t('settings.agent_token_hint', 'Prázdné = agenti se registrují cron klíčem.')}
+              />
+            </Panel>
           </div>
         )}
 
         {/* TAB: Notifikace */}
         {activeTab === 'notifikace' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
-            {/* SMTP */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Mail aria-hidden="true" className="text-muted-foreground size-5" />
-                <div>
-                  <CardTitle>{t('settings.smtp_title', 'E-mailové Notifikace (SMTP)')}</CardTitle>
-                  <CardDescription>
-                    {t(
-                      'settings.smtp_desc',
-                      'SMTP připojení pro odesílání notifikací. Prázdný SMTP server = výchozí PHP mail().'
-                    )}
-                  </CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {isLocked('smtp_host') ? (
-                  <div className="p-3 rounded-lg bg-info/8 border border-info/25 text-xs text-info flex items-center gap-2">
-                    <Lock className="size-4 shrink-0" />
-                    {t('settings.smtp_locked', 'SMTP je nastaveno pevně v')}{' '}
-                    <code className="mx-1 font-mono">config.php</code>{' '}
-                    {t('settings.smtp_locked_suffix', 'a nelze ho změnit odsud.')}
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div>
-                        <label className={labelCls}>{t('settings.email_lang_label', 'Jazyk odchozích e-mailů')}</label>
-                        <select
-                          value={settings.email_lang ?? 'cs'}
-                          onChange={(e) => set('email_lang', e.target.value)}
-                          className={selectCls}
-                        >
-                          <option value="cs">{t('settings.lang_cs', 'Čeština')}</option>
-                          <option value="en">English</option>
-                        </select>
+            {/* Channels (W2-11): one row each, the fields behind a click. */}
+            <Panel
+              icon={Bell}
+              title={t('settings.channels_title', 'Kanály upozornění')}
+              hint={t('settings.channels_desc', 'Kam odcházejí výstrahy. Kliknutím na kanál otevřete jeho nastavení.')}
+            >
+              <ul className="divide-border divide-y">
+                <ChannelRow
+                  icon={Mail}
+                  name={t('settings.channel_email', 'E-mail (SMTP)')}
+                  {...channelRow('email', 'email')}
+                >
+                  {isLocked('smtp_host') ? (
+                    <div className="p-3 rounded-lg bg-info/8 border border-info/25 text-xs text-info flex items-center gap-2">
+                      <Lock className="size-4 shrink-0" />
+                      {t('settings.smtp_locked', 'SMTP je nastaveno pevně v')}{' '}
+                      <code className="mx-1 font-mono">config.php</code>{' '}
+                      {t('settings.smtp_locked_suffix', 'a nelze ho změnit odsud.')}
+                    </div>
+                  ) : (
+                    <>
+                      <HelpHint
+                        text={t(
+                          'settings.smtp_desc',
+                          'SMTP připojení pro odesílání notifikací. Prázdný SMTP server = výchozí PHP mail().'
+                        )}
+                      />
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <label className={labelCls}>
+                            {t('settings.email_lang_label', 'Jazyk odchozích e-mailů')}
+                          </label>
+                          <select
+                            value={settings.email_lang ?? 'cs'}
+                            onChange={(e) => set('email_lang', e.target.value)}
+                            className={selectCls}
+                          >
+                            <option value="cs">{t('settings.lang_cs', 'Čeština')}</option>
+                            <option value="en">English</option>
+                          </select>
+                        </div>
+                        <FieldInput
+                          ctx={fieldCtx}
+                          k="smtp_user"
+                          label={t('settings.smtp_user_label', 'Odesílatel zpráv (From E-mail)')}
+                          placeholder="status@vasedomena.cz"
+                        />
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <FieldInput
+                          ctx={fieldCtx}
+                          k="smtp_host"
+                          label={t('settings.smtp_host_label', 'SMTP Server (Host)')}
+                          placeholder="smtp.vasedomena.cz"
+                        />
+                        <FieldInput ctx={fieldCtx} k="smtp_port" label="SMTP Port" placeholder="465" />
+                        <div>
+                          <label className={labelCls}>{t('settings.smtp_secure_label', 'SMTP Zabezpečení')}</label>
+                          <select
+                            value={settings.smtp_secure ?? 'ssl'}
+                            onChange={(e) => set('smtp_secure', e.target.value)}
+                            className={selectCls}
+                          >
+                            <option value="ssl">SSL (Port 465)</option>
+                            <option value="tls">TLS (Port 587)</option>
+                            <option value="none">{t('settings.smtp_secure_none', 'Bez zabezpečení')}</option>
+                          </select>
+                        </div>
                       </div>
                       <FieldInput
                         ctx={fieldCtx}
-                        k="smtp_user"
-                        label={t('settings.smtp_user_label', 'Odesílatel zpráv (From E-mail)')}
-                        placeholder="status@vasedomena.cz"
+                        k="smtp_pass"
+                        label={t('settings.smtp_pass_label', 'SMTP Heslo')}
+                        type="password"
+                        placeholder={t('settings.smtp_pass_placeholder', 'Heslo k e-mailové schránce')}
                       />
-                    </div>
+                    </>
+                  )}
+                </ChannelRow>
 
+                <ChannelRow
+                  icon={Phone}
+                  name={t('settings.sms_title', 'SMS Gateway Notifikace')}
+                  {...channelRow('sms')}
+                >
+                  <div className="max-w-xs">
+                    <label className={labelCls}>{t('settings.sms_gateway_label', 'Placená SMS brána')}</label>
+                    <select
+                      value={settings.sms_gateway_type ?? ''}
+                      onChange={(e) => set('sms_gateway_type', e.target.value)}
+                      className={selectCls}
+                    >
+                      <option value="">{t('settings.sms_gateway_none', 'Žádná (SMS notifikace vypnuty)')}</option>
+                      <option value="twilio">Twilio</option>
+                      <option value="smsbrana">SMSbrana.cz</option>
+                    </select>
+                  </div>
+                  {settings.sms_gateway_type === 'twilio' && (
                     <div className="grid gap-4 md:grid-cols-3">
+                      <FieldInput ctx={fieldCtx} k="twilio_sid" label="Twilio Account SID" />
+                      <FieldInput ctx={fieldCtx} k="twilio_token" label="Twilio Auth Token" type="password" />
                       <FieldInput
                         ctx={fieldCtx}
-                        k="smtp_host"
-                        label={t('settings.smtp_host_label', 'SMTP Server (Host)')}
-                        placeholder="smtp.vasedomena.cz"
+                        k="twilio_from"
+                        label={t('settings.twilio_from_label', 'Twilio Odesílací číslo (From)')}
+                        placeholder="+1234567890"
                       />
-                      <FieldInput ctx={fieldCtx} k="smtp_port" label="SMTP Port" placeholder="465" />
-                      <div>
-                        <label className={labelCls}>{t('settings.smtp_secure_label', 'SMTP Zabezpečení')}</label>
-                        <select
-                          value={settings.smtp_secure ?? 'ssl'}
-                          onChange={(e) => set('smtp_secure', e.target.value)}
-                          className={selectCls}
-                        >
-                          <option value="ssl">SSL (Port 465)</option>
-                          <option value="tls">TLS (Port 587)</option>
-                          <option value="none">{t('settings.smtp_secure_none', 'Bez zabezpečení')}</option>
-                        </select>
-                      </div>
                     </div>
-
-                    <FieldInput
-                      ctx={fieldCtx}
-                      k="smtp_pass"
-                      label={t('settings.smtp_pass_label', 'SMTP Heslo')}
-                      type="password"
-                      placeholder={t('settings.smtp_pass_placeholder', 'Heslo k e-mailové schránce')}
-                    />
-
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        disabled={testing !== null}
-                        onClick={() => handleSendTest('email', t('settings.channel_email', 'E-mail (SMTP)'))}
-                        className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-secondary text-secondary-foreground hover:bg-secondary/80 text-xs font-semibold shadow-sm transition-colors"
-                      >
-                        <Send className="size-3.5" /> {t('settings.send_test_email', 'Odeslat testovací e-mail')}
-                      </button>
+                  )}
+                  {settings.sms_gateway_type === 'smsbrana' && (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <FieldInput
+                        ctx={fieldCtx}
+                        k="smsbrana_user"
+                        label={t('settings.smsbrana_user_label', 'SMS Brána - Přihlašovací jméno (API)')}
+                      />
+                      <FieldInput
+                        ctx={fieldCtx}
+                        k="smsbrana_password"
+                        label={t('settings.smsbrana_pass_label', 'SMS Brána - Heslo (API)')}
+                        type="password"
+                      />
                     </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* SMS Gateway */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Phone aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>{t('settings.sms_title', 'SMS Gateway Notifikace')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="max-w-xs">
-                  <label className={labelCls}>{t('settings.sms_gateway_label', 'Placená SMS brána')}</label>
-                  <select
-                    value={settings.sms_gateway_type ?? ''}
-                    onChange={(e) => set('sms_gateway_type', e.target.value)}
-                    className={selectCls}
-                  >
-                    <option value="">{t('settings.sms_gateway_none', 'Žádná (SMS notifikace vypnuty)')}</option>
-                    <option value="twilio">Twilio</option>
-                    <option value="smsbrana">SMSbrana.cz</option>
-                  </select>
-                </div>
-
-                {settings.sms_gateway_type === 'twilio' && (
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <FieldInput ctx={fieldCtx} k="twilio_sid" label="Twilio Account SID" />
-                    <FieldInput ctx={fieldCtx} k="twilio_token" label="Twilio Auth Token" type="password" />
-                    <FieldInput
-                      ctx={fieldCtx}
-                      k="twilio_from"
-                      label={t('settings.twilio_from_label', 'Twilio Odesílací číslo (From)')}
-                      placeholder="+1234567890"
-                    />
-                  </div>
-                )}
-
-                {settings.sms_gateway_type === 'smsbrana' && (
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <FieldInput
-                      ctx={fieldCtx}
-                      k="smsbrana_user"
-                      label={t('settings.smsbrana_user_label', 'SMS Brána - Přihlašovací jméno (API)')}
-                    />
-                    <FieldInput
-                      ctx={fieldCtx}
-                      k="smsbrana_password"
-                      label={t('settings.smsbrana_pass_label', 'SMS Brána - Heslo (API)')}
-                      type="password"
-                    />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* VPS Agent */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Server aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>{t('settings.vps_agent_title', 'VPS Agent Nastavení')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="alert_confirm_failures"
-                  label={t('settings.confirm_failures_label', 'Potvrdit výpadek až po N neúspěšných kontrolách')}
-                  placeholder="1"
-                  hint={t(
-                    'settings.confirm_failures_hint',
-                    'Jedna neúspěšná kontrola je jedna neúspěšná kontrola: zopakované spojení, pomalá odpověď DNS, zahozený paket. 1 = hlásit hned při první (dosavadní chování). Každá neúspěšná kontrola se zapíše do historie i tak, čeká jen verdikt.'
                   )}
-                  className="max-w-xs"
-                />
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="agent_offline_timeout"
-                  label={t(
-                    'settings.agent_offline_timeout_label',
-                    'Časový limit pro označení agenta za offline (minuty)'
-                  )}
-                  placeholder="50"
-                  hint={t(
-                    'settings.agent_offline_timeout_hint',
-                    'Doba neaktivity, po které bude agent považován za odpojeného. 0 = detekce neaktivity vypnuta.'
-                  )}
-                  className="max-w-xs"
-                />
+                </ChannelRow>
 
-                {/*
-                  There used to be a fourth toggle here, "Send email warnings when
-                  an outdated agent version is detected", on by default. It was
-                  never stored (the API did not know that key) and, more to the
-                  point, no code sends an email about an outdated agent. Promising
-                  protection that does not exist is worse than not having it - the
-                  system does detect an outdated version and shows a badge on the
-                  monitor, nothing more.
-                */}
-                <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-2.5">
-                  <label className="flex items-center gap-2 text-xs cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={switchOn(settings, 'agent_notifications_enabled')}
-                      onChange={(e) => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
-                      className="rounded border-border"
-                    />
-                    {/* One switch silences every agent-measured alert (functions.php
-                        $bk_agent_statuses), not only the CPU/RAM/HDD limits the old
-                        label named - switching it off also mutes WAN and LTE loss. */}
-                    <span>
-                      {t(
-                        'settings.agent_alerts_label',
-                        'Upozornění z agentů: WAN, LTE, disky, firewall, DNS a limity CPU/RAM/HDD'
-                      )}
-                    </span>
-                  </label>
-                  <label className="flex items-center gap-2 text-xs cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={switchOn(settings, 'agent_notify_admin_only')}
-                      onChange={(e) => set('agent_notify_admin_only', e.target.checked ? '1' : '0')}
-                      className="rounded border-border"
-                    />
-                    <span>
-                      {t('settings.agent_admin_only_label', 'Upozornění z agentů doručovat pouze administrátorům')}
-                    </span>
-                  </label>
-                  <p className={hintCls}>
-                    {t(
-                      'settings.agent_outdated_hint',
-                      'Zastaralou verzi agenta systém pozná a označí u monitoru; e-mail o ní neposílá.'
-                    )}
-                  </p>
-                </div>
-
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="agent_registration_token"
-                  label={t('settings.agent_token_label', 'Token pro auto-registraci agentů')}
-                  type="password"
-                  placeholder="TajnyRegistracniToken123"
-                  className="max-w-md"
-                />
-              </CardContent>
-            </Card>
-
-            {/* Webhooks and external notifications */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <MessageSquare aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>{t('settings.webhooks_title', 'Webhooky & Externí Notifikace')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {/* Discord */}
-                <div className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
-                  <div className="flex items-center gap-2.5">
-                    <MessageSquare className="size-4 text-muted-foreground" />
-                    <span className="font-bold text-xs">Discord Webhook</span>
-                  </div>
+                <ChannelRow icon={MessageSquare} name="Discord Webhook" {...channelRow('discord', 'discord')}>
                   <FieldInput
                     ctx={fieldCtx}
                     k="discord_webhook_url"
                     label="Discord Webhook URL"
                     placeholder="https://discord.com/api/webhooks/..."
                   />
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      disabled={testing !== null}
-                      onClick={() => handleSendTest('discord', 'Discord Webhook')}
-                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-secondary text-secondary-foreground hover:bg-secondary/80 text-xs font-semibold shadow-sm transition-colors"
-                    >
-                      <Send className="size-3.5" /> {t('settings.test_discord', 'Test Discord')}
-                    </button>
-                  </div>
-                </div>
+                </ChannelRow>
 
-                {/* Slack */}
-                <div className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
-                  <div className="flex items-center gap-2.5">
-                    <MessageCircle className="size-4 text-muted-foreground" />
-                    <span className="font-bold text-xs">Slack Webhook</span>
-                  </div>
+                <ChannelRow icon={MessageCircle} name="Slack Webhook" {...channelRow('slack', 'slack')}>
                   <FieldInput
                     ctx={fieldCtx}
                     k="slack_webhook_url"
                     label="Slack Incoming Webhook URL"
                     placeholder="https://hooks.slack.com/services/..."
                   />
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      disabled={testing !== null}
-                      onClick={() => handleSendTest('slack', 'Slack Webhook')}
-                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-secondary text-secondary-foreground hover:bg-secondary/80 text-xs font-semibold shadow-sm transition-colors"
-                    >
-                      <Send className="size-3.5" /> {t('settings.test_slack', 'Test Slack')}
-                    </button>
-                  </div>
-                </div>
+                </ChannelRow>
 
-                {/* Telegram */}
-                <div className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
-                  <div className="flex items-center gap-2.5">
-                    <SendHorizontal className="size-4 text-muted-foreground" />
-                    <span className="font-bold text-xs">Telegram Bot</span>
-                  </div>
+                <ChannelRow icon={SendHorizontal} name="Telegram Bot" {...channelRow('telegram', 'telegram')}>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <FieldInput
                       ctx={fieldCtx}
@@ -888,19 +706,93 @@ export function SettingsPage() {
                       placeholder="-1001987654321"
                     />
                   </div>
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      disabled={testing !== null}
-                      onClick={() => handleSendTest('telegram', 'Telegram Bot')}
-                      className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 bg-secondary text-secondary-foreground hover:bg-secondary/80 text-xs font-semibold shadow-sm transition-colors"
-                    >
-                      <Send className="size-3.5" /> {t('settings.test_telegram', 'Test Telegram')}
-                    </button>
+                </ChannelRow>
+
+                <ChannelRow icon={Bell} name="Pushover" {...channelRow('pushover')}>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <FieldInput
+                      ctx={fieldCtx}
+                      k="pushover_user_key"
+                      label="Pushover User Key"
+                      placeholder="uQiROw1C4K3Y..."
+                    />
+                    <FieldInput ctx={fieldCtx} k="pushover_api_token" label="Pushover API Token" type="password" />
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                </ChannelRow>
+
+                <ChannelRow icon={Siren} name="PagerDuty" {...channelRow('pagerduty')}>
+                  <FieldInput
+                    ctx={fieldCtx}
+                    k="pagerduty_routing_key"
+                    label="PagerDuty Integration / Routing Key"
+                    type="password"
+                    className="max-w-md"
+                  />
+                </ChannelRow>
+              </ul>
+            </Panel>
+
+            {/* Rules that decide when an alert goes out at all. The agent
+                offline limit and the registration token moved to Obecné
+                (W2-11): they configure agents, not notifications. */}
+            <Panel icon={Server} title={t('settings.alert_rules_title', 'Kdy upozornit')} bodyClassName="space-y-5">
+              <FieldInput
+                ctx={fieldCtx}
+                k="alert_confirm_failures"
+                label={t('settings.confirm_failures_label', 'Potvrdit výpadek až po N neúspěšných kontrolách')}
+                placeholder="1"
+                hint={t(
+                  'settings.confirm_failures_hint',
+                  'Jedna neúspěšná kontrola je jedna neúspěšná kontrola: zopakované spojení, pomalá odpověď DNS, zahozený paket. 1 = hlásit hned při první (dosavadní chování). Každá neúspěšná kontrola se zapíše do historie i tak, čeká jen verdikt.'
+                )}
+                className="max-w-xs"
+              />
+              {/*
+                  There used to be a fourth toggle here, "Send email warnings when
+                  an outdated agent version is detected", on by default. It was
+                  never stored (the API did not know that key) and, more to the
+                  point, no code sends an email about an outdated agent. Promising
+                  protection that does not exist is worse than not having it - the
+                  system does detect an outdated version and shows a badge on the
+                  monitor, nothing more.
+                */}
+              <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-2.5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={switchOn(settings, 'agent_notifications_enabled')}
+                    onChange={(e) => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
+                    className="rounded border-border"
+                  />
+                  {/* One switch silences every agent-measured alert (functions.php
+                        $bk_agent_statuses), not only the CPU/RAM/HDD limits the old
+                        label named - switching it off also mutes WAN and LTE loss. */}
+                  <span>
+                    {t(
+                      'settings.agent_alerts_label',
+                      'Upozornění z agentů: WAN, LTE, disky, firewall, DNS a limity CPU/RAM/HDD'
+                    )}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={switchOn(settings, 'agent_notify_admin_only')}
+                    onChange={(e) => set('agent_notify_admin_only', e.target.checked ? '1' : '0')}
+                    className="rounded border-border"
+                  />
+                  <span>
+                    {t('settings.agent_admin_only_label', 'Upozornění z agentů doručovat pouze administrátorům')}
+                  </span>
+                </label>
+                <p className={hintCls}>
+                  {t(
+                    'settings.agent_outdated_hint',
+                    'Zastaralou verzi agenta systém pozná a označí u monitoru; e-mail o ní neposílá.'
+                  )}
+                </p>
+              </div>
+            </Panel>
 
             {/*
               Escalation: the backstop for an alert nobody saw.
@@ -908,67 +800,65 @@ export function SettingsPage() {
               anyone using /app did not know about it - while it silently kept
               running on values that could not even be read from here.
             */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <AlertTriangle aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>{t('settings.escalation_title', 'Eskalace nepřevzatých výpadků')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <label className="flex items-start gap-2 text-xs cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={switchOn(settings, 'escalation_enabled')}
-                    onChange={(e) => set('escalation_enabled', e.target.checked ? '1' : '0')}
-                    className="mt-0.5 rounded border-border"
-                  />
-                  <span>
-                    <span className="font-medium text-foreground">
-                      {t('settings.escalation_enabled_label', 'Zapnout eskalaci')}
-                    </span>
-                    <span className={hintCls + ' block'}>
-                      {t(
-                        'settings.escalation_enabled_hint',
-                        'Když výpadek nikdo nepřevezme (tlačítko Převzít u incidentu) do nastavené doby, ohlásí se ještě jednou na jiný kanál. Každý incident eskaluje nejvýš jednou.'
-                      )}
-                    </span>
-                  </span>
-                </label>
+            <Panel
+              icon={AlertTriangle}
+              title={t('settings.escalation_title', 'Eskalace nepřevzatých výpadků')}
+              bodyClassName="space-y-5"
+            >
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={switchOn(settings, 'escalation_enabled')}
+                  onChange={(e) => set('escalation_enabled', e.target.checked ? '1' : '0')}
+                  className="mt-0.5 rounded border-border"
+                />
+                <span className="font-medium text-foreground">
+                  {t('settings.escalation_enabled_label', 'Zapnout eskalaci')}
+                </span>
+              </label>
+              {/* Outside the label: the help button inside it would also toggle the box. */}
+              <HelpHint
+                className="-mt-4 pl-6"
+                text={t(
+                  'settings.escalation_enabled_hint',
+                  'Když výpadek nikdo nepřevezme (tlačítko Převzít u incidentu) do nastavené doby, ohlásí se ještě jednou na jiný kanál. Každý incident eskaluje nejvýš jednou.'
+                )}
+              />
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="escalation_after_mins"
-                    type="number"
-                    label={t('settings.escalation_after_label', 'Lhůta na převzetí (minuty)')}
-                    placeholder="15"
-                    hint={t('settings.escalation_after_hint', 'Počítá se od vzniku incidentu. Výchozí 15 minut.')}
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="escalation_webhook_url"
-                    label={t('settings.escalation_webhook_label', 'Eskalační webhook (Discord/Slack)')}
-                    placeholder="https://discord.com/api/webhooks/..."
-                    hint={t(
-                      'settings.escalation_webhook_hint',
-                      'Záměrně jiný kanál než běžná upozornění - eskalace má smysl tam, kde první zpráva zapadla.'
-                    )}
-                  />
-                </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="escalation_after_mins"
+                  type="number"
+                  label={t('settings.escalation_after_label', 'Lhůta na převzetí (minuty)')}
+                  placeholder="15"
+                  hint={t('settings.escalation_after_hint', 'Počítá se od vzniku incidentu. Výchozí 15 minut.')}
+                />
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="escalation_webhook_url"
+                  label={t('settings.escalation_webhook_label', 'Eskalační webhook (Discord/Slack)')}
+                  placeholder="https://discord.com/api/webhooks/..."
+                  hint={t(
+                    'settings.escalation_webhook_hint',
+                    'Záměrně jiný kanál než běžná upozornění - eskalace má smysl tam, kde první zpráva zapadla.'
+                  )}
+                />
+              </div>
 
-                {/* Escalation enabled without a channel reports nowhere. Incidents
+              {/* Escalation enabled without a channel reports nowhere. Incidents
                     keep waiting for it (no stamp is written), but nobody finds out -
                     which is why it has to be visible here, not only in the server log. */}
-                {switchOn(settings, 'escalation_enabled') && !settings.escalation_webhook_url?.trim() && (
-                  <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-2xs text-warning">
-                    <AlertTriangle className="mt-px size-3.5 shrink-0" />
-                    {t(
-                      'settings.escalation_no_channel',
-                      'Eskalace je zapnutá, ale nemá kam hlásit. Bez vyplněného webhooku se nic neodešle a incidenty na eskalaci čekají dál.'
-                    )}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+              {switchOn(settings, 'escalation_enabled') && !settings.escalation_webhook_url?.trim() && (
+                <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-2xs text-warning">
+                  <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                  {t(
+                    'settings.escalation_no_channel',
+                    'Eskalace je zapnutá, ale nemá kam hlásit. Bez vyplněného webhooku se nic neodešle a incidenty na eskalaci čekají dál.'
+                  )}
+                </p>
+              )}
+            </Panel>
 
             {/*
               The daily reminder. An alert fires on a CHANGE of state, so a
@@ -976,108 +866,72 @@ export function SettingsPage() {
               of the week - which is exactly how a four-day outage went
               unnoticed. This one speaks up while something is still broken.
             */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Bell aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>{t('settings.reminder_title', 'Denní připomínka rozbitých věcí')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <label className="flex cursor-pointer items-start gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    /* The server default is on (1). A value that was never saved
+            <Panel
+              icon={Bell}
+              title={t('settings.reminder_title', 'Denní připomínka rozbitých věcí')}
+              bodyClassName="space-y-5"
+            >
+              <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  /* The server default is on (1). A value that was never saved
                        must therefore read as on here, or the page would show the
                        reminder as off while the cron keeps sending it. */
-                    checked={switchOn(settings, 'daily_reminder_enabled')}
-                    onChange={(e) => set('daily_reminder_enabled', e.target.checked ? '1' : '0')}
-                    className="border-border mt-0.5 rounded"
-                  />
-                  <span>
-                    <span className="text-foreground font-medium">
-                      {t('settings.reminder_enabled_label', 'Posílat denní připomínku')}
-                    </span>
-                    <span className={hintCls + ' block'}>
-                      {t(
-                        'settings.reminder_enabled_hint',
-                        'Výstraha odejde jen při změně stavu, takže dlouhý výpadek zůstane po první zprávě potichu. Připomínka se ozve každý den, dokud je něco rozbité — a jen tehdy. Když je všechno v pořádku, neodešle se nic.'
-                      )}
-                    </span>
-                  </span>
-                </label>
+                  checked={switchOn(settings, 'daily_reminder_enabled')}
+                  onChange={(e) => set('daily_reminder_enabled', e.target.checked ? '1' : '0')}
+                  className="border-border mt-0.5 rounded"
+                />
+                <span className="text-foreground font-medium">
+                  {t('settings.reminder_enabled_label', 'Posílat denní připomínku')}
+                </span>
+              </label>
+              <HelpHint
+                className="-mt-4 pl-6"
+                text={t(
+                  'settings.reminder_enabled_hint',
+                  'Výstraha odejde jen při změně stavu, takže dlouhý výpadek zůstane po první zprávě potichu. Připomínka se ozve každý den, dokud je něco rozbité — a jen tehdy. Když je všechno v pořádku, neodešle se nic.'
+                )}
+              />
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="daily_reminder_hour"
-                    type="number"
-                    label={t('settings.reminder_hour_label', 'Hodina odeslání (0–23)')}
-                    placeholder="8"
-                    hint={t(
-                      'settings.reminder_hour_hint',
-                      'Čas serveru. Připomínka odejde při prvním běhu cronu od této hodiny, nejvýš jednou denně. Výchozí 8:00.'
-                    )}
-                  />
-                </div>
-
-                <p className={hintCls}>
-                  {t(
-                    'settings.reminder_log_hint',
-                    'Každé odeslání i rozhodnutí neposílat nic je vidět v protokolu odchozích zpráv.'
+              <div className="grid gap-4 md:grid-cols-2">
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="daily_reminder_hour"
+                  type="number"
+                  label={t('settings.reminder_hour_label', 'Hodina odeslání (0–23)')}
+                  placeholder="8"
+                  hint={t(
+                    'settings.reminder_hour_hint',
+                    'Čas serveru. Připomínka odejde při prvním běhu cronu od této hodiny, nejvýš jednou denně. Výchozí 8:00.'
                   )}
-                </p>
-              </CardContent>
-            </Card>
+                />
+              </div>
+
+              <p className={hintCls}>
+                {t(
+                  'settings.reminder_log_hint',
+                  'Každé odeslání i rozhodnutí neposílat nic je vidět v protokolu odchozích zpráv.'
+                )}
+              </p>
+            </Panel>
 
             {/* The log lives on its own page; this is the signpost, next to the
                 settings that decide what ends up in it. */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Mail aria-hidden="true" className="text-muted-foreground size-5" />
-                <div>
-                  <CardTitle>{t('settings.outgoing_link_title', 'Protokol odchozích zpráv')}</CardTitle>
-                  <CardDescription>
-                    {t(
-                      'settings.outgoing_link_desc',
-                      'Kdy co odešlo, komu a jestli to kanál přijal — včetně neúspěchů. Odpoví na otázku „odešel ten e-mail?“.'
-                    )}
-                  </CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <Button asChild variant="outline" size="sm">
-                  <Link to="/outgoing-messages" className="gap-2">
-                    <Mail aria-hidden="true" />
-                    {t('settings.outgoing_link_btn', 'Otevřít protokol')}
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Pushover & PagerDuty */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Bell aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>Pushover & PagerDuty</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="pushover_user_key"
-                    label="Pushover User Key"
-                    placeholder="uQiROw1C4K3Y..."
-                  />
-                  <FieldInput ctx={fieldCtx} k="pushover_api_token" label="Pushover API Token" type="password" />
-                </div>
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="pagerduty_routing_key"
-                  label="PagerDuty Integration / Routing Key"
-                  type="password"
-                  className="max-w-md"
-                />
-              </CardContent>
-            </Card>
+            <Panel
+              icon={Mail}
+              title={t('settings.outgoing_link_title', 'Protokol odchozích zpráv')}
+              hint={t(
+                'settings.outgoing_link_desc',
+                'Kdy co odešlo, komu a jestli to kanál přijal — včetně neúspěchů. Odpoví na otázku „odešel ten e-mail?“.'
+              )}
+            >
+              <Button asChild variant="outline" size="sm">
+                <Link to="/outgoing-messages" className="gap-2">
+                  <Mail aria-hidden="true" />
+                  {t('settings.outgoing_link_btn', 'Otevřít protokol')}
+                </Link>
+              </Button>
+            </Panel>
 
             {/* The WhatsApp Business Gateway card was deleted 2026-08-17: three fields
                 (endpoint/token/number) were read by no line of server code - WhatsApp
@@ -1085,98 +939,8 @@ export function SettingsPage() {
                 the "Test" button only showed a toast without calling the server.
                 A form that does nothing is a lie. */}
 
-            {/* Digest reporty */}
-            <Card className="border-info/40 bg-info/5">
-              <CardHeader className="items-center justify-start">
-                <FileBarChart aria-hidden="true" className="text-muted-foreground size-5" />
-                <div>
-                  <CardTitle>{t('settings.digest_title', 'Týdenní & Měsíční Digest Report')}</CardTitle>
-                  <CardDescription>
-                    {t(
-                      'settings.digest_desc',
-                      'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.'
-                    )}
-                  </CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {digestResult && (
-                  <div
-                    className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${digestResult.ok ? 'bg-up/10 border border-up/30 text-up' : 'bg-destructive/10 border border-destructive/30 text-destructive'}`}
-                  >
-                    {digestResult.ok ? '✅' : '❌'} {digestResult.msg}
-                  </div>
-                )}
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="p-4 rounded-xl bg-background border border-border space-y-3">
-                    <h4 className="font-bold text-xs text-foreground flex items-center gap-2">
-                      📅 {t('settings.weekly_digest_title', 'Týdenní Souhrn (Weekly Digest)')}
-                    </h4>
-                    <p className="text-2xs text-muted-foreground">
-                      {t(
-                        'settings.weekly_digest_desc',
-                        'Souhrnný e-mail se statistikami SLA, incidenty a průměrnou latencí za posledních 7 dnů.'
-                      )}
-                    </p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => handleSendDigest('weekly')}
-                        disabled={digestSending !== null}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-xs transition-colors disabled:opacity-50 shadow cursor-pointer"
-                      >
-                        <Send className="size-3.5" />
-                        {digestSending === 'weekly'
-                          ? t('settings.sending', 'Odesílám…')
-                          : t('settings.send_weekly_digest', 'Odeslat Týdenní Digest')}
-                      </button>
-                      <a
-                        href="/status/admin.php?action=preview_weekly_digest"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 bg-secondary text-secondary-foreground text-xs font-semibold hover:bg-secondary/80 transition-colors"
-                      >
-                        <ExternalLink className="size-3.5" /> {t('settings.preview', 'Náhled')}
-                      </a>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-background border border-border space-y-3">
-                    <h4 className="font-bold text-xs text-foreground flex items-center gap-2">
-                      📊 {t('settings.monthly_digest_title', 'Měsíční Souhrn (Monthly Digest)')}
-                    </h4>
-                    <p className="text-2xs text-muted-foreground">
-                      {t(
-                        'settings.monthly_digest_desc',
-                        'Kompletní měsíční auditní zpráva pro vedení se všemi výpadky, MTTR a plněním SLA.'
-                      )}
-                    </p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => handleSendDigest('monthly')}
-                        disabled={digestSending !== null}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-xs transition-colors disabled:opacity-50 shadow cursor-pointer"
-                      >
-                        <Send className="size-3.5" />
-                        {digestSending === 'monthly'
-                          ? t('settings.sending', 'Odesílám…')
-                          : t('settings.send_monthly_digest', 'Odeslat Měsíční Digest')}
-                      </button>
-                      <a
-                        href="/status/admin.php?action=preview_monthly_digest"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 bg-secondary text-secondary-foreground text-xs font-semibold hover:bg-secondary/80 transition-colors"
-                      >
-                        <ExternalLink className="size-3.5" /> {t('settings.preview', 'Náhled')}
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            {/* The digest send/preview buttons moved to the SLA report (W2-7):
+                they send a report, not configure a channel. */}
 
             {/* Notification subscriptions moved to /app/profile - they are
                 settings of MY account, not the system. */}
@@ -1187,93 +951,86 @@ export function SettingsPage() {
         {activeTab === 'integrace' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
             {/* Prometheus */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Globe aria-hidden="true" className="text-muted-foreground size-5" />
-                <CardTitle>Prometheus Exporter</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <FieldInput
-                  ctx={fieldCtx}
-                  k="metrics_token"
-                  label={t('settings.metrics_token_label', 'Přístupový token pro /status/metrics.php')}
-                  type="password"
-                  placeholder={t('settings.metrics_token_placeholder', 'Prázdné = endpoint vypnutý')}
-                  hint={t(
-                    'settings.metrics_token_hint',
-                    'Scraper předává token jako ?token=... nebo hlavičkou Authorization: Bearer. Vygenerujte např. openssl rand -hex 24.'
-                  )}
-                  className="max-w-lg"
-                />
-              </CardContent>
-            </Card>
+            <Panel icon={Globe} title="Prometheus Exporter" bodyClassName="space-y-5">
+              <FieldInput
+                ctx={fieldCtx}
+                k="metrics_token"
+                label={t('settings.metrics_token_label', 'Přístupový token pro /status/metrics.php')}
+                type="password"
+                placeholder={t('settings.metrics_token_placeholder', 'Prázdné = endpoint vypnutý')}
+                hint={t(
+                  'settings.metrics_token_hint',
+                  'Scraper předává token jako ?token=... nebo hlavičkou Authorization: Bearer. Vygenerujte např. openssl rand -hex 24.'
+                )}
+                className="max-w-lg"
+              />
+              {/* The server masks the stored token as "••••••" + its last four
+                    characters; the form shows a new one the same way, so saving
+                    the form afterwards does not store the mask. */}
+              <MetricsTokenActions
+                configured={Boolean(settings.metrics_token)}
+                onGenerated={(token) => set('metrics_token', `••••••${token.slice(-4)}`)}
+              />
+            </Panel>
 
             {/* OAuth SSO */}
-            <Card>
-              <CardHeader className="items-center justify-start">
-                <Key aria-hidden="true" className="text-muted-foreground size-5" />
-                <div>
-                  <CardTitle>{t('settings.oauth_title', 'Přihlášení přes OAuth (SSO)')}</CardTitle>
-                  <CardDescription>
-                    {t(
-                      'settings.oauth_desc_prefix',
-                      'OAuth přihlášení funguje jen pro účty, které si ho samy propojily v Profilu. Jako Authorization/Redirect callback URL u každého poskytovatele zadejte URL vaší'
-                    )}{' '}
-                    <code className="font-mono">admin.php</code>.
-                  </CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {OAUTH_PROVIDERS.map((op) => {
-                  const Icon = op.icon;
-                  return (
-                    <div key={op.key} className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className={`size-7 rounded-lg flex items-center justify-center ${op.bg} p-1.5 shadow-sm`}>
-                          <Icon className={`size-4 ${op.color}`} />
-                        </div>
-                        <span className="font-bold text-xs">{op.label}</span>
+            <Panel
+              icon={Key}
+              title={t('settings.oauth_title', 'Přihlášení přes OAuth (SSO)')}
+              hint={
+                <>
+                  {t(
+                    'settings.oauth_desc_prefix',
+                    'OAuth přihlášení funguje jen pro účty, které si ho samy propojily v Profilu. Jako Authorization/Redirect callback URL u každého poskytovatele zadejte URL vaší'
+                  )}{' '}
+                  <code className="font-mono">admin.php</code>.
+                </>
+              }
+              bodyClassName="space-y-5"
+            >
+              {OAUTH_PROVIDERS.map((op) => {
+                const Icon = op.icon;
+                return (
+                  <div key={op.key} className="p-4 rounded-xl bg-secondary/30 border border-border space-y-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`size-7 rounded-lg flex items-center justify-center ${op.bg} p-1.5 shadow-sm`}>
+                        <Icon className={`size-4 ${op.color}`} />
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <FieldInput ctx={fieldCtx} k={`oauth_${op.key}_client_id`} label={`${op.label} Client ID`} />
-                        <FieldInput
-                          ctx={fieldCtx}
-                          k={`oauth_${op.key}_client_secret`}
-                          label={`${op.label} Client Secret`}
-                          type="password"
-                        />
-                      </div>
+                      <span className="font-bold text-xs">{op.label}</span>
                     </div>
-                  );
-                })}
-              </CardContent>
-            </Card>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FieldInput ctx={fieldCtx} k={`oauth_${op.key}_client_id`} label={`${op.label} Client ID`} />
+                      <FieldInput
+                        ctx={fieldCtx}
+                        k={`oauth_${op.key}_client_secret`}
+                        label={`${op.label} Client Secret`}
+                        type="password"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </Panel>
           </div>
         )}
 
         {/* TAB: Backups and export */}
         {activeTab === 'presety' && (
-          <div className="mb-6">
-            <Card className="p-6 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className={sectionTitle}>{t('settings.export_title', 'Export konfigurace')}</h3>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-xl leading-relaxed">
-                    {t(
-                      'settings.export_desc',
-                      'Stáhne monitory, presety, status stránky a nastavení jako JSON. Hesla, tokeny, klíče agentů ani naměřená data v souboru nejsou — záloha ke stažení není místo na tajemství.'
-                    )}
-                  </p>
-                </div>
-                <a
-                  href="/status/api.php?action=export_config"
-                  className="shrink-0 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-                >
-                  {t('settings.export_btn', 'Stáhnout zálohu')}
-                </a>
-              </div>
-            </Card>
-          </div>
+          <Panel
+            icon={Download}
+            title={t('settings.export_title', 'Export konfigurace')}
+            hint={t(
+              'settings.export_desc',
+              'Stáhne monitory, presety, status stránky a nastavení jako JSON. Hesla, tokeny, klíče agentů ani naměřená data v souboru nejsou — záloha ke stažení není místo na tajemství.'
+            )}
+            action={
+              <Button asChild variant="primary" size="sm">
+                <a href="/status/api.php?action=export_config">{t('settings.export_btn', 'Stáhnout zálohu')}</a>
+              </Button>
+            }
+            padding="sm"
+            className="mb-6"
+          />
         )}
 
         {/* TAB: Presety metrik */}
@@ -1286,100 +1043,95 @@ export function SettingsPage() {
         {/* TAB: Vzhled */}
         {activeTab === 'vzhled' && (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t('settings.branding_title', 'Vlastní branding (Custom Branding)')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="custom_logo_url"
-                    label={t('settings.logo_url_label', 'Adresa loga (Logo URL)')}
-                    placeholder="https://example.com/logo.png"
-                  />
-                  <FieldInput
-                    ctx={fieldCtx}
-                    k="custom_color_theme"
-                    label={t('settings.accent_color_label', 'Akcentová barva (Hex Color)')}
-                    placeholder="#b00020"
-                  />
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="inline-flex items-center gap-2 rounded-md border border-border bg-secondary/50 px-3 py-2 text-xs font-semibold cursor-pointer hover:bg-secondary transition-colors">
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      className="hidden"
-                      disabled={logoUploading}
-                      onChange={(e) => {
-                        handleLogoUpload(e.target.files?.[0] ?? null);
-                        e.target.value = '';
-                      }}
-                    />
-                    {logoUploading
-                      ? t('settings.logo_uploading', 'Nahrávám…')
-                      : t('settings.logo_upload_btn', '📤 Nahrát logo (PNG/JPG/WebP, max 2 MB)')}
-                  </label>
-                  {settings.custom_logo_url && (
-                    <img
-                      src={settings.custom_logo_url}
-                      alt={t('settings.logo_preview_alt', 'Náhled loga')}
-                      className="h-10 max-w-[180px] object-contain rounded bg-white/90 p-1 border border-border"
-                    />
-                  )}
-                  {logoError && <ErrorState size="inline" message={logoError} />}
-                </div>
-                <p className={hintCls}>
-                  {t(
-                    'settings.logo_upload_hint',
-                    'Nahrané logo se uloží do /status/uploads/ a adresa se vyplní automaticky. SVG nejde nahrát (může nést skripty) — na SVG vložte URL ručně, např. /status/assets/bk-logo.svg.'
-                  )}
-                </p>
-
-                <div>
-                  <label className={labelCls}>
-                    {t('settings.nav_links_label', 'Vlastní odkazy v menu (JSON formát)')}
-                  </label>
-                  <textarea
-                    value={settings.custom_nav_links ?? ''}
-                    onChange={(e) => set('custom_nav_links', e.target.value)}
-                    className={`${inputCls} font-mono`}
-                    rows={2}
-                    placeholder='[{"name": "Hlavní Web", "url": "https://example.com"}]'
-                  />
-                  <p className={hintCls}>
-                    {t('settings.nav_links_hint', 'Zadejte pole objektů: [{"name": "Nápověda", "url": "..."}]')}
-                  </p>
-                </div>
-
+            <Panel
+              icon={Palette}
+              title={t('settings.branding_title', 'Vlastní branding (Custom Branding)')}
+              bodyClassName="space-y-5"
+            >
+              <div className="grid gap-4 md:grid-cols-2">
                 <FieldInput
                   ctx={fieldCtx}
-                  k="portal_url"
-                  label={t('settings.portal_url_label', 'Odkaz na nadřazený portál (nepovinné)')}
-                  placeholder="https://vas-hlavni-web.cz"
-                  hint={t('settings.portal_url_hint', "Zobrazí se v menu jako 'Portál'. Prázdné = odkaz se nezobrazí.")}
+                  k="custom_logo_url"
+                  label={t('settings.logo_url_label', 'Adresa loga (Logo URL)')}
+                  placeholder="https://example.com/logo.png"
                 />
-              </CardContent>
-            </Card>
+                <FieldInput
+                  ctx={fieldCtx}
+                  k="custom_color_theme"
+                  label={t('settings.accent_color_label', 'Akcentová barva (Hex Color)')}
+                  placeholder="#b00020"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 rounded-md border border-border bg-secondary/50 px-3 py-2 text-xs font-semibold cursor-pointer hover:bg-secondary transition-colors">
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    disabled={logoUploading}
+                    onChange={(e) => {
+                      handleLogoUpload(e.target.files?.[0] ?? null);
+                      e.target.value = '';
+                    }}
+                  />
+                  {logoUploading
+                    ? t('settings.logo_uploading', 'Nahrávám…')
+                    : t('settings.logo_upload_btn', '📤 Nahrát logo (PNG/JPG/WebP, max 2 MB)')}
+                </label>
+                {settings.custom_logo_url && (
+                  <img
+                    src={settings.custom_logo_url}
+                    alt={t('settings.logo_preview_alt', 'Náhled loga')}
+                    className="h-10 max-w-[180px] object-contain rounded bg-white/90 p-1 border border-border"
+                  />
+                )}
+                {logoError && <ErrorState size="inline" message={logoError} />}
+              </div>
+              <p className={hintCls}>
+                {t(
+                  'settings.logo_upload_hint',
+                  'Nahrané logo se uloží do /status/uploads/ a adresa se vyplní automaticky. SVG nejde nahrát (může nést skripty) — na SVG vložte URL ručně, např. /status/assets/bk-logo.svg.'
+                )}
+              </p>
+
+              <div>
+                <label className={labelCls}>
+                  {t('settings.nav_links_label', 'Vlastní odkazy v menu (JSON formát)')}
+                </label>
+                <textarea
+                  value={settings.custom_nav_links ?? ''}
+                  onChange={(e) => set('custom_nav_links', e.target.value)}
+                  className={`${inputCls} font-mono`}
+                  rows={2}
+                  placeholder='[{"name": "Hlavní Web", "url": "https://example.com"}]'
+                />
+                <p className={hintCls}>
+                  {t('settings.nav_links_hint', 'Zadejte pole objektů: [{"name": "Nápověda", "url": "..."}]')}
+                </p>
+              </div>
+
+              <FieldInput
+                ctx={fieldCtx}
+                k="portal_url"
+                label={t('settings.portal_url_label', 'Odkaz na nadřazený portál (nepovinné)')}
+                placeholder="https://vas-hlavni-web.cz"
+                hint={t('settings.portal_url_hint', "Zobrazí se v menu jako 'Portál'. Prázdné = odkaz se nezobrazí.")}
+              />
+            </Panel>
           </div>
         )}
 
         {/* Bottom save button */}
         <div className="flex justify-end pt-6">
-          <button
-            type="submit"
-            disabled={saving}
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground shadow-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {saved ? <Check className="size-4 text-up" /> : <Save className="size-4" />}
+          <Button type="submit" variant="primary" disabled={saving} className="gap-2 px-6">
+            {saved ? <Check aria-hidden="true" /> : <Save aria-hidden="true" />}
             {saving
               ? t('settings.saving', 'Ukládání…')
               : saved
                 ? t('settings.saved', 'Uloženo!')
                 : t('settings.save_all', 'Uložit všechna nastavení')}
-          </button>
+          </Button>
         </div>
       </form>
     </div>
@@ -1497,7 +1249,178 @@ function SettingsField({
           </button>
         )}
       </div>
-      {hint && <p className={hintCls}>{hint}</p>}
+      {hint && <HelpHint text={hint} />}
     </div>
+  );
+}
+
+/**
+ * A hint in one line (W2-11): the first sentence stays in view, the rest opens
+ * behind the help icon. Paragraph-long hints under every field turned the
+ * notification tab into a wall of grey text that nobody read.
+ */
+function HelpHint({ text, className }: { text: string; className?: string }) {
+  const { t } = useLanguage();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  // A sentence ends at . ! ? followed by a capital or a digit, so "např. x"
+  // and "3.13.7" stay inside their sentence.
+  const m = /^(.+?[.!?])\s+(?=[\p{Lu}\d])/u.exec(text);
+  const first = m ? m[1] : text;
+  const rest = m ? text.slice(m[0].length) : '';
+  return (
+    <div className={className}>
+      <p className={`${hintCls} flex items-start gap-1`}>
+        <span>{first}</span>
+        {rest && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-controls={id}
+            // Named after its own hint, so a screen reader's list of buttons
+            // is not N identical "Víc o tomto nastavení" (PA-6).
+            aria-label={`${t('settings.hint_more', 'Víc o tomto nastavení')}: ${first}`}
+            title={t('settings.hint_more', 'Víc o tomto nastavení')}
+            // 24 × 24 px target around the 12 px icon (WCAG 2.5.8), without
+            // pushing the line apart.
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -my-1.5 -mr-1.5 shrink-0 rounded-full p-1.5 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            <CircleHelp className="size-3" aria-hidden="true" />
+          </button>
+        )}
+      </p>
+      {rest && open && (
+        <p id={id} className={hintCls}>
+          {rest}
+        </p>
+      )}
+    </div>
+  );
+}
+
+type ChannelId = 'email' | 'sms' | 'discord' | 'slack' | 'telegram' | 'pushover' | 'pagerduty';
+
+/**
+ * Whether a channel is set up, read from the SAVED settings: the Test button
+ * sends with what is saved, so "Nastaveno" has to mean the same thing.
+ * Secrets arrive masked, which is still non-empty when one is stored.
+ */
+function channelState(
+  id: ChannelId,
+  saved: SettingsMap,
+  locked: (key: string) => boolean
+): 'set' | 'unset' | 'default' {
+  const has = (...keys: string[]) => keys.every((k) => (saved[k] ?? '').trim() !== '');
+  switch (id) {
+    case 'email':
+      // An empty SMTP host is not "off": the server falls back to PHP mail().
+      return locked('smtp_host') || has('smtp_host') ? 'set' : 'default';
+    case 'sms':
+      // The gateway type alone is seeded ('twilio') on every install; only
+      // its credentials make the channel work (V-04).
+      return (saved.sms_gateway_type ?? '').trim() === 'smsbrana'
+        ? has('smsbrana_user', 'smsbrana_password')
+          ? 'set'
+          : 'unset'
+        : has('twilio_sid', 'twilio_token', 'twilio_from')
+          ? 'set'
+          : 'unset';
+    case 'discord':
+      return has('discord_webhook_url') ? 'set' : 'unset';
+    case 'slack':
+      return has('slack_webhook_url') ? 'set' : 'unset';
+    case 'telegram':
+      return has('telegram_bot_token', 'telegram_chat_id') ? 'set' : 'unset';
+    case 'pushover':
+      return has('pushover_user_key', 'pushover_api_token') ? 'set' : 'unset';
+    case 'pagerduty':
+      return has('pagerduty_routing_key') ? 'set' : 'unset';
+  }
+}
+
+/**
+ * One notification channel as one row (W2-11): its name, whether it is set
+ * up, a Test button, and the fields only after a click. Seven always-open
+ * cards made the tab a long form where the one channel in use was hard to find.
+ */
+function ChannelRow({
+  icon: Icon,
+  name,
+  state,
+  open,
+  onToggle,
+  onTest,
+  testing,
+  result,
+  children,
+}: {
+  icon: LucideIcon;
+  name: string;
+  state: 'set' | 'unset' | 'default';
+  open: boolean;
+  onToggle: () => void;
+  /** Present for the channels the server can test; it sends with the saved settings. */
+  onTest?: () => void;
+  testing: boolean;
+  result: { ok: boolean; message: string } | null;
+  children: React.ReactNode;
+}) {
+  const { t } = useLanguage();
+  const panelId = useId();
+  return (
+    <li className="py-1">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={panelId}
+          className="hover:bg-raised focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2 py-2 text-left focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <IconTile icon={Icon} size="sm" />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{name}</span>
+          {state === 'set' ? (
+            <Pill tone="up" size="sm" dot>
+              {t('settings.channel_set', 'Nastaveno')}
+            </Pill>
+          ) : state === 'default' ? (
+            <Pill size="sm">{t('settings.channel_default_mail', 'Výchozí PHP mail()')}</Pill>
+          ) : (
+            <span className="text-muted-foreground text-xs">{t('settings.channel_unset', 'Nenastaveno')}</span>
+          )}
+          <ChevronDown
+            className={`text-muted-foreground size-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+            aria-hidden="true"
+          />
+        </button>
+        {onTest && state !== 'unset' && (
+          <Button type="button" size="sm" variant="outline" disabled={testing} onClick={onTest} className="gap-1.5">
+            <Send className="size-3.5" aria-hidden="true" />
+            {t('settings.channel_test', 'Test')}
+          </Button>
+        )}
+      </div>
+      {/* The answer of the round trip sits on the row it tested, not at the top
+          of a long page where it scrolled out of view. */}
+      {result && (
+        <p role="status" className={`px-2 pt-1 text-xs font-semibold ${result.ok ? 'text-foreground' : 'text-down'}`}>
+          {result.ok
+            ? t('settings.channel_test_ok', 'Test odeslán, kanál ho přijal.')
+            : t('settings.channel_test_failed', 'Test selhal.')}
+          {result.message ? ` ${result.message}` : ''}
+          {!result.ok && (
+            <span className="text-muted-foreground ml-1 font-normal">
+              {t('settings.test_uses_saved', 'Test používá uložené nastavení, neuložené změny se do něj nepromítnou.')}
+            </span>
+          )}
+        </p>
+      )}
+      {open && (
+        <div id={panelId} className="space-y-4 px-2 pt-2 pb-4 sm:pl-9">
+          {children}
+        </div>
+      )}
+    </li>
   );
 }

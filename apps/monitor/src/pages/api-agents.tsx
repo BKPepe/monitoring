@@ -1,6 +1,8 @@
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
+import { IconTile } from '@/components/ui/icon-tile';
+import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge } from '@/components/ui/badge';
 import {
   Terminal,
   Copy,
@@ -14,18 +16,20 @@ import {
   Container,
   AlertTriangle,
   RefreshCw,
+  Lightbulb,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { appApi } from '@/api/app-api';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { cn } from '@/lib/utils';
-import { LoadingState } from '@/components/ui/states';
+import { EmptyState, LoadingState } from '@/components/ui/states';
 import { AgentInstallSteps } from '@/components/agent-install-steps';
 import type { AgentPlatform } from '@/lib/agent-install';
 
 type PlatformId = 'linux' | 'openwrt' | 'windows' | 'cpanel' | 'docker';
+const PLATFORM_IDS: readonly PlatformId[] = ['linux', 'openwrt', 'windows', 'cpanel', 'docker'];
 
 interface PlatformInstaller {
   id: PlatformId;
@@ -43,7 +47,13 @@ interface PlatformInstaller {
 export function ApiAgentsPage() {
   const { t } = useLanguage();
   const { session } = useSession();
-  const [selectedPlatform, setSelectedPlatform] = useState<PlatformId>('linux');
+  // ?platform= preselects a card: the dashboard's first-run "Připojit router"
+  // lands on OpenWrt (site W1-5 conv-12). Anything unknown keeps the default.
+  const [searchParams] = useSearchParams();
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformId>(() => {
+    const asked = searchParams.get('platform');
+    return (PLATFORM_IDS as readonly string[]).includes(asked ?? '') ? (asked as PlatformId) : 'linux';
+  });
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,7 +87,7 @@ export function ApiAgentsPage() {
 
   if (!session?.authenticated) {
     return (
-      <Card className="grid place-items-center gap-4 p-16 text-center">
+      <Panel bodyClassName="grid place-items-center gap-4 py-12 text-center">
         <div className="space-y-1">
           <p className="font-semibold text-lg">{t('api_agents.login_required_title', 'Přihlášení vyžadováno')}</p>
           <p className="text-muted-foreground text-sm max-w-md">
@@ -93,7 +103,7 @@ export function ApiAgentsPage() {
         >
           {t('settings.go_to_login', 'Přejít na přihlášení')}
         </Link>
-      </Card>
+      </Panel>
     );
   }
 
@@ -182,10 +192,14 @@ export function ApiAgentsPage() {
     return au === 0 || au === '0' || au === false;
   });
 
+  // "All current" only when every agent said its version: an agent that never
+  // reported one is not known to be current (it may not run at all).
+  const unreported = agents.filter((a) => !a.details?.agent_version).length;
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title={t('api_agents.title', 'API Klíče, Bezpečnost & Správa Agentů')}
+        title={t('api_agents.title', 'API & Agenti')}
         subtitle={t(
           'api_agents.subtitle',
           'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.'
@@ -193,24 +207,15 @@ export function ApiAgentsPage() {
       />
 
       {/* Quick agent installation by platform */}
-      <Card className="p-6 space-y-5">
-        <div className="flex items-center justify-between border-b border-border pb-3 flex-wrap gap-2">
-          <div className="flex items-center gap-3">
-            <Terminal className="size-5 text-primary" />
-            <div>
-              <h3 className="font-bold text-base">
-                {t('api_agents.install_scripts_title', 'Instalační skripty agentů dle platformy')}
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                {t(
-                  'api_agents.install_scripts_desc',
-                  'Vyberte váš cílový systém pro zobrazení správného příkazu a postupu instalace'
-                )}
-              </p>
-            </div>
-          </div>
-        </div>
-
+      <Panel
+        icon={Terminal}
+        title={t('api_agents.install_scripts_title', 'Instalační skripty agentů dle platformy')}
+        hint={t(
+          'api_agents.install_scripts_desc',
+          'Vyberte váš cílový systém pro zobrazení správného příkazu a postupu instalace'
+        )}
+        bodyClassName="space-y-4"
+      >
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           {platforms.map((p) => {
             const Icon = p.icon;
@@ -219,21 +224,18 @@ export function ApiAgentsPage() {
               <button
                 key={p.id}
                 type="button"
+                aria-pressed={isSelected}
                 onClick={() => setSelectedPlatform(p.id)}
                 className={cn(
-                  'flex flex-col items-start p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1.5',
+                  'focus-visible:ring-ring flex flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none',
                   isSelected
-                    ? 'border-primary bg-primary/10 text-foreground ring-1 ring-primary shadow-sm'
-                    : 'border-border bg-secondary/30 text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+                    ? 'border-primary/40 bg-primary/12 text-foreground'
+                    : 'bg-inset text-muted-foreground hover:text-foreground hover:border-border-strong border-border'
                 )}
               >
-                <div className="flex items-center justify-between w-full">
-                  <Icon className={cn('size-4', isSelected ? 'text-primary' : 'text-muted-foreground')} />
-                  <Badge variant="info" className="text-3xs px-1.5 py-0">
-                    {p.badge}
-                  </Badge>
-                </div>
-                <p className="font-bold text-xs leading-tight">{p.name}</p>
+                <IconTile icon={Icon} size="sm" tone={isSelected ? 'primary' : 'neutral'} />
+                <p className="text-xs leading-tight font-semibold">{p.name}</p>
+                <span className="text-muted-foreground figure text-2xs">{p.badge}</span>
               </button>
             );
           })}
@@ -241,81 +243,81 @@ export function ApiAgentsPage() {
 
         {/* The container respects the theme; only the terminal block with the
             command stays dark (a dark background is convention there, not an accident). */}
-        <div className="p-4 rounded-xl bg-secondary/40 border border-border space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <currentPlatform.icon className="size-5 text-primary" />
-              <h4 className="font-bold text-sm text-foreground">{currentPlatform.name}</h4>
-              <Badge variant="up" className="text-3xs">
-                {currentPlatform.badge}
-              </Badge>
+        <div className="bg-inset space-y-3 rounded-lg border border-border p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <IconTile icon={currentPlatform.icon} />
+              <h3 className="text-sm font-semibold">{currentPlatform.name}</h3>
+              <Pill size="sm">{currentPlatform.badge}</Pill>
             </div>
             {currentPlatform.command && (
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={() => handleCopy(currentPlatform.id, currentPlatform.command ?? '')}
-                className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 bg-primary/20 text-primary text-xs font-semibold hover:bg-primary/30 transition-colors cursor-pointer border border-primary/40"
               >
-                {copiedKey === currentPlatform.id ? (
-                  <Check className="size-3.5 text-up" />
-                ) : (
-                  <Copy className="size-3.5" />
-                )}
+                {copiedKey === currentPlatform.id ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
                 {copiedKey === currentPlatform.id
                   ? t('common.copied', 'Zkopírováno!')
                   : t('api_agents.copy_cmd', 'Kopírovat příkaz')}
-              </button>
+              </Button>
             )}
           </div>
 
           <p className="text-xs text-muted-foreground leading-relaxed">{currentPlatform.desc}</p>
 
           {currentPlatform.command && (
-            <div className="p-3 rounded-lg bg-muted font-mono text-xs text-foreground flex items-center justify-between overflow-x-auto border border-border break-all select-all">
+            <div className="bg-card flex items-center justify-between overflow-x-auto rounded-lg border border-border p-3 font-mono text-xs break-all select-all">
               <code>{currentPlatform.command}</code>
             </div>
           )}
           {currentPlatform.steps && <AgentInstallSteps key={currentPlatform.id} platforms={currentPlatform.steps} />}
 
           {currentPlatform.extraNote && (
-            <p className="text-2xs text-warning bg-warning/10 p-2.5 rounded-md border border-warning/30 font-mono">
-              💡 <strong>{t('api_agents.setup_note_label', 'Poznámka k nastavení:')}</strong>{' '}
-              {currentPlatform.extraNote}
+            <p className="text-warning bg-warning/10 border-warning/30 flex items-start gap-2 rounded-md border p-2.5 text-2xs">
+              <Lightbulb aria-hidden="true" className="mt-px size-3.5 shrink-0" />
+              <span>
+                <strong>{t('api_agents.setup_note_label', 'Poznámka k nastavení:')}</strong>{' '}
+                <span className="font-mono">{currentPlatform.extraNote}</span>
+              </span>
             </p>
           )}
         </div>
-      </Card>
+      </Panel>
 
       {/* Agent version status and automatic updates */}
-      <Card className="p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-border pb-3 flex-wrap gap-2">
-          <div className="flex items-center gap-2.5">
-            <Cpu className="size-5 text-primary" />
-            <div>
-              <h3 className="font-bold text-base">
-                {t(
-                  'api_agents.version_status_title',
-                  { count: agents.length },
-                  `Stav verzí & Automatické aktualizace agentů (${agents.length})`
-                )}
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                {t(
-                  'api_agents.recommended_version_hint',
-                  'Doporučená verze se určuje podle skriptu agenta nasazeného na serveru.'
-                )}
-              </p>
-            </div>
-          </div>
-          <Badge variant={hasOutdatedAgent ? 'down' : hasDisabledAutoUpdate ? 'warning' : 'up'}>
-            {hasOutdatedAgent
-              ? t('api_agents.status_outdated', '🔴 Zjištěna neaktuální verze agenta!')
-              : hasDisabledAutoUpdate
-                ? t('api_agents.status_auto_update_off', '⚠️ U některých agentů vypnuty auto-updates')
-                : t('api_agents.status_all_ok', 'Všichni agenti aktuální & auto-updates OK ✅')}
-          </Badge>
-        </div>
-
+      <Panel
+        icon={Cpu}
+        title={t(
+          'api_agents.version_status_title',
+          { count: agents.length },
+          `Stav verzí & Automatické aktualizace agentů (${agents.length})`
+        )}
+        hint={t(
+          'api_agents.recommended_version_hint',
+          'Doporučená verze se určuje podle skriptu agenta nasazeného na serveru.'
+        )}
+        chip={
+          !loading && agents.length > 0 ? (
+            <Pill
+              tone={hasOutdatedAgent ? 'down' : hasDisabledAutoUpdate ? 'warning' : unreported > 0 ? 'neutral' : 'up'}
+              dot
+            >
+              {hasOutdatedAgent
+                ? t('api_agents.status_outdated', 'Zjištěna neaktuální verze agenta')
+                : hasDisabledAutoUpdate
+                  ? t('api_agents.status_auto_update_off', 'U některých agentů vypnuty auto-updates')
+                  : unreported > 0
+                    ? t(
+                        'api_agents.status_unreported',
+                        { n: unreported, total: agents.length },
+                        `Verze nehlášena: ${unreported} z ${agents.length}`
+                      )
+                    : t('api_agents.status_all_ok', 'Všichni agenti aktuální, auto-updates OK')}
+            </Pill>
+          ) : undefined
+        }
+      >
         {/*
           There used to be a toggle here, "Send email warnings when an outdated
           agent version is detected", with a badge reading "email alerts on 📧".
@@ -334,9 +336,11 @@ export function ApiAgentsPage() {
           {loading ? (
             <LoadingState size="inline" label={t('api_agents.loading', 'Načítám agenty…')} />
           ) : agents.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">
-              {t('api_agents.no_agents', 'Žádní registrovaní agenti v databázi.')}
-            </p>
+            <EmptyState
+              boxed
+              size="inline"
+              title={t('api_agents.no_agents', 'Žádní registrovaní agenti v databázi.')}
+            />
           ) : (
             agents.map((a) => {
               // The agent's version - never details.version (that is the SERVICE's, e.g. TS3).
@@ -351,23 +355,21 @@ export function ApiAgentsPage() {
                 <div
                   key={a.id}
                   className={cn(
-                    'p-4 rounded-xl border transition-colors space-y-2 text-xs',
+                    'bg-inset space-y-2 rounded-lg border border-l-2 border-border p-3.5 text-xs',
                     isOutdated
-                      ? 'bg-down/10 border-down/40'
+                      ? 'border-l-down'
                       : autoUpdateKnown && !autoUpdateEnabled
-                        ? 'bg-warning/10 border-warning/30'
-                        : 'bg-secondary/30 border-border'
+                        ? 'border-l-warning'
+                        : 'border-l-transparent'
                   )}
                 >
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <p className="font-bold text-foreground text-sm">{a.name}</p>
-                      <Badge variant="info" className="font-mono text-3xs">
-                        {a.type.toUpperCase()}
-                      </Badge>
-                      <Badge variant={a.status === 'up' ? 'up' : 'down'}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold">{a.name}</p>
+                      <Pill size="sm">{a.type}</Pill>
+                      <Pill size="sm" dot tone={a.status === 'up' ? 'up' : 'down'}>
                         {a.status === 'up' ? t('infra.active_since', 'Aktivní') : t('api_agents.inactive', 'Neaktivní')}
-                      </Badge>
+                      </Pill>
                     </div>
 
                     {/* The chips sit on the plain page ground, not on a tint of their own
@@ -375,31 +377,31 @@ export function ApiAgentsPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       {version ? (
                         isOutdated ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-background text-down border border-down/50 shadow-sm animate-pulse">
+                          <span className="figure text-down border-down/40 bg-card inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-2xs font-semibold">
                             {t(
                               'api_agents.version_outdated',
                               { version, latest: latestVersion ?? '' },
-                              `🔴 v${version} (Neaktuální — Doporučeno v${latestVersion})`
+                              `v${version} (Neaktuální — Doporučeno v${latestVersion})`
                             )}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-xs bg-background text-up border border-up/40 shadow-sm">
-                            {t('api_agents.version_current', { version }, `🟢 v${version} (Aktuální verze)`)}
+                          <span className="figure text-up border-up/40 bg-card inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-2xs font-semibold">
+                            {t('api_agents.version_current', { version }, `v${version} (Aktuální verze)`)}
                           </span>
                         )
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-muted-foreground text-xs bg-secondary">
+                        <span className="figure text-muted-foreground bg-card inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-2xs">
                           {t('api_agents.version_unreported', 'Verze nehlášena')}
                         </span>
                       )}
 
                       {/* Auto-update status indicator */}
                       {autoUpdateEnabled ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-background text-up border border-up/30">
+                        <span className="figure text-up border-up/30 bg-card inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-2xs font-semibold">
                           <RefreshCw className="size-3" /> {t('api_agents.auto_update_on', 'Auto-updates: Zapnuto')}
                         </span>
                       ) : autoUpdateKnown ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-2xs font-semibold bg-background text-warning border border-warning/40">
+                        <span className="figure text-warning border-warning/40 bg-card inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-2xs font-semibold">
                           <AlertTriangle className="size-3" />{' '}
                           {t('api_agents.auto_update_off', 'Auto-updates: VYPNUTO')}
                         </span>
@@ -407,7 +409,7 @@ export function ApiAgentsPage() {
                     </div>
                   </div>
 
-                  <p className="text-muted-foreground font-mono text-2xs">
+                  <p className="text-muted-foreground figure text-2xs">
                     OS: <span className="text-foreground font-semibold">{a.os || '—'}</span> ·{' '}
                     {t('common.target', 'Cíl')}: <span className="text-foreground">{a.target}</span>
                   </p>
@@ -451,45 +453,35 @@ export function ApiAgentsPage() {
             })
           )}
         </div>
-      </Card>
+      </Panel>
 
       {/* Security & Privacy */}
       <div className="grid gap-4 md:grid-cols-2">
-        <Card className="p-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <Lock className="size-5 text-primary" />
-              <h4 className="font-semibold text-sm">
-                {t('api_agents.privacy_title', 'Záruka Soukromí & Zero Telemetry')}
-              </h4>
-            </div>
-            <Badge variant="up">100% Private</Badge>
-          </div>
-          <p className="text-xs text-muted-foreground leading-relaxed">
+        <Panel
+          icon={Lock}
+          title={t('api_agents.privacy_title', 'Záruka Soukromí & Zero Telemetry')}
+          chip={<Pill tone="up">100% Private</Pill>}
+        >
+          <p className="text-muted-foreground text-xs leading-relaxed">
             {t(
               'api_agents.privacy_desc',
               '0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně ve vaší MySQL/PostgreSQL databázi pod vaší plnou kontrolou.'
             )}
           </p>
-        </Card>
+        </Panel>
 
-        <Card className="p-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <ShieldCheck className="size-5 text-primary" />
-              <h4 className="font-semibold text-sm">
-                {t('api_agents.auth_title', 'Autentizace agentů & Notifikace verze')}
-              </h4>
-            </div>
-            <Badge variant="up">{t('api_agents.key_hmac_badge', 'Klíč + HMAC-SHA256')}</Badge>
-          </div>
-          <p className="text-xs text-muted-foreground leading-relaxed">
+        <Panel
+          icon={ShieldCheck}
+          title={t('api_agents.auth_title', 'Autentizace agentů & Notifikace verze')}
+          chip={<Pill tone="up">{t('api_agents.key_hmac_badge', 'Klíč + HMAC-SHA256')}</Pill>}
+        >
+          <p className="text-muted-foreground text-xs leading-relaxed">
             {t(
               'api_agents.auth_desc',
               'Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.'
             )}
           </p>
-        </Card>
+        </Panel>
       </div>
     </div>
   );

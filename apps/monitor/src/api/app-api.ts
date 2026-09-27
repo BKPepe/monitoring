@@ -1,7 +1,6 @@
 import { STATUS_API } from './http-source';
 import { requestSessionRecheck } from './session-recheck';
 import type {
-  DashboardInsightsResponse,
   FindingsResponse,
   OutgoingMessagePage,
   RouterRecommendationMuteResponse,
@@ -331,15 +330,6 @@ export const appApi = {
   getRouterRecommendations: (monitorId: number, lang: string) =>
     request<RouterRecommendationsResponse>(
       'router_recommendations' + `&monitor_id=${monitorId}&lang=${encodeURIComponent(lang)}`
-    ),
-
-  /**
-   * The old insights list (W1-B6), read by the Insights page until it moves
-   * to the findings feed in the pages commit.
-   */
-  getDashboardInsights: (lang: string, limit: number, offset = 0) =>
-    request<DashboardInsightsResponse>(
-      'dashboard_insights' + `&limit=${limit}&offset=${offset}&lang=${encodeURIComponent(lang)}`
     ),
 
   /**

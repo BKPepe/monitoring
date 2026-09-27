@@ -124,7 +124,7 @@ describe('Incidenty: selhání není „bez výpadků“ (W1-A3)', () => {
     renderPage();
 
     const heading = await screen.findByRole('heading', { name: 'Místa měření' });
-    const section = heading.closest('[data-slot="card"], .p-6') as HTMLElement;
+    const section = heading.closest('section') as HTMLElement;
     const rows = await within(section).findAllByRole('listitem');
     expect(rows.map((r) => r.querySelector('p')?.textContent)).toEqual(['prague', 'frankfurt', '🇩🇪 Frankfurt, DE']);
     // A monitor of type node is not a place.

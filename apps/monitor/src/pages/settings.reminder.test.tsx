@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { SettingsPage } from './settings';
@@ -82,7 +82,13 @@ describe('Nastavení: denní připomínka', () => {
     await openNotifications();
 
     expect(await screen.findByText('Posílat denní připomínku')).toBeTruthy();
-    expect(screen.getByText(/Výstraha odejde jen při změně stavu/)).toBeTruthy();
+    // W2-11: the first sentence stays in view, the rest opens behind the help icon.
+    const why = screen.getByText(/Výstraha odejde jen při změně stavu/);
+    expect(screen.queryByText(/Když je všechno v pořádku, neodešle se nic/)).toBeNull();
+    // Each toggle is named after its own hint (PA-6), not N identical buttons.
+    fireEvent.click(
+      within(why.parentElement!).getByRole('button', { name: /^Víc o tomto nastavení: Výstraha odejde/ })
+    );
     expect(screen.getByText(/Když je všechno v pořádku, neodešle se nic/)).toBeTruthy();
 
     // SettingsField renders every non-secret field as a text input (it only
@@ -90,6 +96,8 @@ describe('Nastavení: denní připomínka', () => {
     // exactly like the escalation minutes next to it.
     expect(screen.getByDisplayValue('8')).toBeTruthy();
     expect(screen.getByText('Hodina odeslání (0–23)')).toBeTruthy();
+    const hour = screen.getByText('Čas serveru.');
+    fireEvent.click(within(hour.parentElement!).getByRole('button', { name: 'Víc o tomto nastavení: Čas serveru.' }));
     expect(screen.getByText(/nejvýš jednou denně/)).toBeTruthy();
   });
 

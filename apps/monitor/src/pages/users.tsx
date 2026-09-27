@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { KeyRound, Pencil, Plus, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { KeyRound, Pencil, Plus, Trash2, UserPlus, Users } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
 import { PageHeader } from '@/components/layout/page-header';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -18,7 +18,6 @@ import { appApi, ApiError, type ApiMonitor, type ApiUser } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
-import { AuditLogTable } from '@/components/audit-log-table';
 import { UserAuditLog } from '@/components/user-audit-log';
 import { LoadingState, EmptyState, ErrorState } from '@/components/ui/states';
 
@@ -67,94 +66,98 @@ export function UsersPage() {
       {notice && <div className="border-up/30 bg-up/12 text-up rounded-lg border px-3 py-2 text-sm">{notice}</div>}
       {error && <ErrorState message={error} />}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('users.account_list', 'Seznam účtů')}</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0 pb-0">
-          {users === null ? (
-            <LoadingState label={t('users.loading', 'Načítám…')} />
-          ) : users.length === 0 ? (
-            <EmptyState title={t('users.none', 'Žádní uživatelé.')} />
-          ) : (
-            <>
-              {/* Mobil: karty misto tabulky - ctyri sloupce s akcemi se na
+      <Panel
+        icon={Users}
+        title={t('users.account_list', 'Seznam účtů')}
+        count={users?.length}
+        padding="none"
+        bodyClassName="pb-1"
+      >
+        {users === null ? (
+          <LoadingState label={t('users.loading', 'Načítám…')} />
+        ) : users.length === 0 ? (
+          <EmptyState title={t('users.none', 'Žádní uživatelé.')} />
+        ) : (
+          <>
+            {/* Mobil: karty misto tabulky - ctyri sloupce s akcemi se na
                   uzkem displeji nedaji obsluhovat. */}
-              <div className="flex flex-col gap-2 px-4 pb-4 md:hidden">
-                {users.map((user) => (
-                  <div key={user.id} className="rounded-lg border border-border p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 leading-tight">
-                        <p className="truncate text-sm font-semibold">
-                          {user.username}
-                          {user.isSelf && (
-                            <span className="text-muted-foreground ml-2 text-xs">{t('users.you_suffix', '(vy)')}</span>
-                          )}
-                        </p>
-                        <p className="text-muted-foreground truncate text-xs">{user.email}</p>
-                      </div>
-                      <Badge variant={user.role === 'admin' ? 'primary' : 'neutral'}>
-                        {user.role === 'admin'
-                          ? t('users.role_admin', 'Administrátor')
-                          : t('users.role_user', 'Uživatel')}
-                      </Badge>
+            <div className="flex flex-col gap-2 px-4 pb-4 md:hidden">
+              {users.map((user) => (
+                <div key={user.id} className="bg-inset rounded-lg border border-border p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <Avatar name={user.username} />
+                    <div className="min-w-0 flex-1 leading-tight">
+                      <p className="truncate text-sm font-semibold">
+                        {user.username}
+                        {user.isSelf && (
+                          <span className="text-muted-foreground ml-2 text-xs">{t('users.you_suffix', '(vy)')}</span>
+                        )}
+                      </p>
+                      <p className="text-muted-foreground truncate text-xs">{user.email}</p>
                     </div>
+                    <Pill tone={user.role === 'admin' ? 'primary' : 'neutral'}>
+                      {user.role === 'admin'
+                        ? t('users.role_admin', 'Administrátor')
+                        : t('users.role_user', 'Uživatel')}
+                    </Pill>
+                  </div>
 
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      {user.totpEnabled && (
-                        <Badge variant="up">
-                          <ShieldCheck className="size-3" />
-                          2FA
-                        </Badge>
-                      )}
-                      {user.oauthProvider && (
-                        <Badge variant="info">
-                          <KeyRound className="size-3" />
-                          {user.oauthProvider}
-                        </Badge>
-                      )}
-                      {!user.totpEnabled && !user.oauthProvider && (
-                        <span className="text-muted-foreground text-xs">{t('users.password_only', 'jen heslo')}</span>
-                      )}
-                      <div className="ml-auto flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditing(user)}
-                          aria-label={t('users.edit_aria', { name: user.username }, `Upravit ${user.username}`)}
-                        >
-                          <Pencil />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={user.isSelf}
-                          onClick={() => setDeleting(user)}
-                          aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
-                        >
-                          <Trash2 />
-                        </Button>
-                      </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {user.totpEnabled && (
+                      <Pill tone="up" size="sm" srLabel={t('users.totp_sr', 'Dvoufázové ověření zapnuto')}>
+                        2FA
+                      </Pill>
+                    )}
+                    {user.oauthProvider && (
+                      <Pill tone="info" size="sm">
+                        <KeyRound aria-hidden="true" className="size-3" />
+                        {user.oauthProvider}
+                      </Pill>
+                    )}
+                    {!user.totpEnabled && !user.oauthProvider && (
+                      <span className="text-muted-foreground text-xs">{t('users.password_only', 'jen heslo')}</span>
+                    )}
+                    <div className="ml-auto flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditing(user)}
+                        aria-label={t('users.edit_aria', { name: user.username }, `Upravit ${user.username}`)}
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={user.isSelf}
+                        onClick={() => setDeleting(user)}
+                        aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
+                      >
+                        <Trash2 />
+                      </Button>
                     </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
+            </div>
 
-              <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="pl-5">{t('users.col_user', 'Uživatel')}</TableHead>
-                      <TableHead>{t('users.col_role', 'Role')}</TableHead>
-                      <TableHead>{t('users.col_security', 'Zabezpečení')}</TableHead>
-                      <TableHead className="pr-5 text-right">{t('users.col_actions', 'Akce')}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {users.map((user) => (
-                      <TableRow key={user.id}>
-                        <TableCell className="pl-5">
-                          <div className="leading-tight">
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-5">{t('users.col_user', 'Uživatel')}</TableHead>
+                    <TableHead>{t('users.col_role', 'Role')}</TableHead>
+                    <TableHead>{t('users.col_security', 'Zabezpečení')}</TableHead>
+                    <TableHead className="pr-5 text-right">{t('users.col_actions', 'Akce')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {users.map((user) => (
+                    <TableRow key={user.id}>
+                      <TableCell className="pl-5">
+                        <div className="flex items-center gap-3 leading-tight">
+                          <Avatar name={user.username} />
+                          <div className="min-w-0">
                             <p className="font-medium">
                               {user.username}
                               {user.isSelf && (
@@ -165,67 +168,66 @@ export function UsersPage() {
                             </p>
                             <p className="text-muted-foreground text-xs">{user.email}</p>
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={user.role === 'admin' ? 'primary' : 'neutral'}>
-                            {user.role === 'admin'
-                              ? t('users.role_admin', 'Administrátor')
-                              : t('users.role_user', 'Uživatel')}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {user.totpEnabled && (
-                              <Badge variant="up">
-                                <ShieldCheck className="size-3" />
-                                2FA
-                              </Badge>
-                            )}
-                            {user.oauthProvider && (
-                              <Badge variant="info">
-                                <KeyRound className="size-3" />
-                                {user.oauthProvider}
-                              </Badge>
-                            )}
-                            {!user.totpEnabled && !user.oauthProvider && (
-                              <span className="text-muted-foreground text-xs">
-                                {t('users.password_only', 'jen heslo')}
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="pr-5">
-                          <div className="flex justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setEditing(user)}
-                              aria-label={t('users.edit_aria', { name: user.username }, `Upravit ${user.username}`)}
-                            >
-                              <Pencil />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              // A self-account cannot be deleted - the server rejects it
-                              // anyway, this button just signals that upfront.
-                              disabled={user.isSelf}
-                              onClick={() => setDeleting(user)}
-                              aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
-                            >
-                              <Trash2 />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Pill tone={user.role === 'admin' ? 'primary' : 'neutral'}>
+                          {user.role === 'admin'
+                            ? t('users.role_admin', 'Administrátor')
+                            : t('users.role_user', 'Uživatel')}
+                        </Pill>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {user.totpEnabled && (
+                            <Pill tone="up" size="sm" srLabel={t('users.totp_sr', 'Dvoufázové ověření zapnuto')}>
+                              2FA
+                            </Pill>
+                          )}
+                          {user.oauthProvider && (
+                            <Pill tone="info" size="sm">
+                              <KeyRound aria-hidden="true" className="size-3" />
+                              {user.oauthProvider}
+                            </Pill>
+                          )}
+                          {!user.totpEnabled && !user.oauthProvider && (
+                            <span className="text-muted-foreground text-xs">
+                              {t('users.password_only', 'jen heslo')}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="pr-5">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setEditing(user)}
+                            aria-label={t('users.edit_aria', { name: user.username }, `Upravit ${user.username}`)}
+                          >
+                            <Pencil />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            // A self-account cannot be deleted - the server rejects it
+                            // anyway, this button just signals that upfront.
+                            disabled={user.isSelf}
+                            onClick={() => setDeleting(user)}
+                            aria-label={t('users.delete_aria', { name: user.username }, `Smazat ${user.username}`)}
+                          >
+                            <Trash2 />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
+      </Panel>
 
       {editing && (
         <UserDialog
@@ -255,8 +257,9 @@ export function UsersPage() {
       )}
 
       {/* System Audit Log */}
+      {/* The account audit trail only. The monitor check log that sat here as
+          an "audit log" (it read monitor_logs) lives in Protokol kontrol (W2-6). */}
       <UserAuditLog />
-      <AuditLogTable />
     </div>
   );
 }
@@ -555,7 +558,7 @@ function Field({ label, required, children }: { label: string; required?: boolea
 function LoginRequired({ loginUrl }: { loginUrl: string }) {
   const { t } = useLanguage();
   return (
-    <Card className="grid place-items-center gap-3 p-16 text-center">
+    <Panel bodyClassName="grid place-items-center gap-3 py-12 text-center">
       <div>
         <p className="font-medium">{t('users.login_required_title', 'Přihlášení vyžadováno')}</p>
         <p className="text-muted-foreground text-sm">
@@ -565,18 +568,30 @@ function LoginRequired({ loginUrl }: { loginUrl: string }) {
       <Button variant="primary" size="sm" asChild>
         <a href={resolveUrl(loginUrl)}>{t('settings.go_to_login', 'Přejít na přihlášení')}</a>
       </Button>
-    </Card>
+    </Panel>
   );
 }
 
 function AdminRequired() {
   const { t } = useLanguage();
   return (
-    <Card className="grid place-items-center gap-2 p-16 text-center">
+    <Panel bodyClassName="grid place-items-center gap-2 py-12 text-center">
       <p className="font-medium">{t('users.insufficient_perms_title', 'Nedostatečná oprávnění')}</p>
       <p className="text-muted-foreground text-sm">
         {t('users.insufficient_perms_desc', 'Správu uživatelů může otevřít jen administrátor.')}
       </p>
-    </Card>
+    </Panel>
+  );
+}
+
+/** The initial in a circle (NetPulse "My profile"): decoration, the name is written next to it. */
+function Avatar({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="bg-primary/12 text-link grid size-9 shrink-0 place-items-center rounded-full text-sm font-semibold uppercase"
+    >
+      {name.slice(0, 1)}
+    </span>
   );
 }
