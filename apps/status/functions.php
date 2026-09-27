@@ -7045,8 +7045,8 @@ function send_email($to, $subject, $html_body, array $extra_headers = [], array 
         // NULL when nothing confirmed a route - that is what a failed attempt
         // honestly knows, and the row must not claim 'smtp' because SMTP was tried.
         $GLOBALS['last_mail_method'] ?? null,
-        is_string($delivery) ? $delivery : null,
-        $GLOBALS['last_mail_reply'] ?? null
+        delivery: is_string($delivery) ? $delivery : null,
+        reply: $GLOBALS['last_mail_reply'] ?? null
     );
 
     return $ok;
@@ -7232,6 +7232,9 @@ function bk_mail_missing_settings(string $host, string $user, string $pass, bool
  */
 function send_sms($phone, $message) {
     $gateway = get_setting('sms_gateway_type', '');
+    // Why it failed, for the log. Both gateways used to be logged with no
+    // reason at all, so a refused SMS read "the channel did not take it".
+    $GLOBALS['last_sms_error'] = null;
     
     if ($gateway === 'twilio') {
         $sid = get_setting('twilio_sid');
@@ -7239,6 +7242,7 @@ function send_sms($phone, $message) {
         $from = get_setting('twilio_from');
         
         if (empty($sid) || empty($token) || empty($from)) {
+            $GLOBALS['last_sms_error'] = 'Twilio is not configured (twilio_sid, twilio_token, twilio_from).';
             return false;
         }
         
@@ -7259,15 +7263,29 @@ function send_sms($phone, $message) {
         
         $response = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($ch);
         curl_close($ch);
         
-        return ($code >= 200 && $code < 300);
+        $ok = ($code >= 200 && $code < 300);
+        if (!$ok) {
+            // Twilio's error body is JSON with a readable "message". It can
+            // quote the number ("The 'To' number ... is not valid"), and the
+            // log keeps no phone digits outside the recipient column.
+            $twilio = is_string($response) ? json_decode($response, true) : null;
+            $twilio_msg = is_array($twilio) && isset($twilio['message'])
+                ? (string)preg_replace('/\+?\d(?:[ \-]?\d){6,}/', '•••', (string)$twilio['message']) : '';
+            $GLOBALS['last_sms_error'] = $response === false
+                ? 'Twilio could not be reached: ' . $curl_error
+                : 'Twilio HTTP ' . $code . ($twilio_msg !== '' ? ': ' . mb_strimwidth($twilio_msg, 0, 200, '…', 'UTF-8') : '');
+        }
+        return $ok;
     } 
     elseif ($gateway === 'smsbrana') {
         $user = get_setting('smsbrana_user');
         $password = get_setting('smsbrana_password');
         
         if (empty($user) || empty($password)) {
+            $GLOBALS['last_sms_error'] = 'SMSbrana is not configured (smsbrana_user, smsbrana_password).';
             return false;
         }
         
@@ -7296,11 +7314,22 @@ function send_sms($phone, $message) {
         
         $response = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($ch);
         curl_close($ch);
         
-        return ($code === 200 && strpos($response, '<err>0</err>') !== false);
+        $ok = ($code === 200 && is_string($response) && strpos($response, '<err>0</err>') !== false);
+        if (!$ok) {
+            // SMSbrana answers 200 with <err>N</err>; a non-zero N is its refusal.
+            $GLOBALS['last_sms_error'] = $response === false
+                ? 'SMSbrana could not be reached: ' . $curl_error
+                : (preg_match('~<err>(-?\d+)</err>~', (string)$response, $err_m)
+                    ? 'SMSbrana err ' . $err_m[1]
+                    : 'SMSbrana HTTP ' . $code . ', no <err> in the reply');
+        }
+        return $ok;
     }
     
+    $GLOBALS['last_sms_error'] = 'No SMS gateway is configured.';
     return false;
 }
 
@@ -8197,7 +8226,8 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
             null,
             'daily_reminder',
             bk_with_email_lang($default_lang, fn (): string => t('reminder_skipped')),
-            null
+            null,
+            delivery: 'skipped'
         );
         return $result;
     }
@@ -8248,14 +8278,14 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
     if ($discord !== '') {
         $ok = send_webhook_post($discord, json_encode(['content' => $text], JSON_UNESCAPED_UNICODE));
         bk_log_notification($pdo, null, 'daily_reminder', 'discord', null, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder');
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
         $result['channels'] += $ok ? 1 : 0;
     }
     $slack = (string)get_setting('slack_webhook_url', '');
     if ($slack !== '') {
         $ok = send_webhook_post($slack, json_encode(['text' => $text], JSON_UNESCAPED_UNICODE));
         bk_log_notification($pdo, null, 'daily_reminder', 'slack', null, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder');
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
         $result['channels'] += $ok ? 1 : 0;
     }
     $tg_token = (string)get_setting('telegram_bot_token', '');
@@ -8264,7 +8294,7 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
         $ok = send_webhook_post('https://api.telegram.org/bot' . $tg_token . '/sendMessage',
             json_encode(['chat_id' => $tg_chat, 'text' => $text, 'parse_mode' => 'Markdown'], JSON_UNESCAPED_UNICODE));
         bk_log_notification($pdo, null, 'daily_reminder', 'telegram', $tg_chat, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder');
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
         $result['channels'] += $ok ? 1 : 0;
     }
     $po_user = (string)get_setting('pushover_user_key', '');
@@ -8274,7 +8304,8 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
         // a page. The outage itself paged when it happened.
         $ok = send_pushover_alert($po_user, $po_token, 'Blood Kings: denní připomínka',
             mb_strimwidth($text, 0, 900, '…', 'UTF-8'), 0);
-        bk_log_notification($pdo, null, 'daily_reminder', 'pushover', null, (bool)$ok, null, 'daily_reminder');
+        bk_log_notification($pdo, null, 'daily_reminder', 'pushover', null, (bool)$ok,
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'daily_reminder', delivery: $ok ? 'sent' : 'failed');
         $result['channels'] += $ok ? 1 : 0;
     }
 
@@ -8572,7 +8603,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         if ($rec['sms_notifications'] && !empty($rec['phone'])) {
             if ($gateway_type === 'twilio' || $gateway_type === 'smsbrana') {
                 $sms_ok = send_sms($rec['phone'], $sms_body);
-                bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'sms', $rec['phone'], (bool)$sms_ok, null, 'alert');
+                bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'sms', $rec['phone'], (bool)$sms_ok,
+                    $sms_ok ? null : ($GLOBALS['last_sms_error'] ?? null), 'alert', delivery: $sms_ok ? 'sent' : 'failed');
             }
         }
 
@@ -8622,7 +8654,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             null,
             $discord_ok,
             $discord_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
-            'alert'
+            'alert',
+            delivery: $discord_ok ? 'sent' : 'failed'
         );
     }
 
@@ -8637,7 +8670,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             null,
             $slack_ok,
             $slack_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
-            'alert'
+            'alert',
+            delivery: $slack_ok ? 'sent' : 'failed'
         );
     }
 
@@ -8658,7 +8692,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             $telegram_chat,
             $tg_ok,
             $tg_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
-            'alert'
+            'alert',
+            delivery: $tg_ok ? 'sent' : 'failed'
         );
     }
 
@@ -8668,7 +8703,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     if (!empty($po_user) && !empty($po_token)) {
         $po_prio = ($new_status === 'down') ? 1 : 0;
         $po_ok = send_pushover_alert($po_user, $po_token, "Blood Kings Alert: $name", "$emoji Monitor $name je $status_text. $error_msg", $po_prio);
-        bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'pushover', null, (bool)$po_ok, null, 'alert');
+        bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'pushover', null, (bool)$po_ok,
+            $po_ok ? null : ($GLOBALS['last_webhook_error'] ?? null), 'alert', delivery: $po_ok ? 'sent' : 'failed');
     }
 
     // PagerDuty notifikace
@@ -8695,7 +8731,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
                 $pd_action,
                 (bool)$pd_ok,
                 $pd_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
-                'alert'
+                'alert',
+                delivery: $pd_ok ? 'sent' : 'failed'
             );
         }
     }

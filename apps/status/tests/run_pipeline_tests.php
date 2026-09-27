@@ -788,6 +788,80 @@ if (function_exists('bk_notification_kinds')) {
         array_values(array_diff(array_keys($kinds_used), $kinds)), []);
 }
 
+// Every logged attempt says what is known about it: sent, failed, unknown or
+// skipped. A call without it leaves delivery NULL, which reads back as a
+// guess from ok - the guess that logged a refused CallMeBot message as sent.
+// Tokens, not a regex: the calls span lines, carry comments and nest parens.
+$delivery_gaps = [];
+$delivery_calls = 0;
+foreach (['functions.php', 'api.php', 'admin.php', 'cron.php', 'agent_api.php'] as $log_file) {
+    $tokens = token_get_all((string)file_get_contents(__DIR__ . '/../' . $log_file));
+    $n = count($tokens);
+    for ($i = 0; $i < $n; $i++) {
+        if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_STRING || $tokens[$i][1] !== 'bk_log_notification') {
+            continue;
+        }
+        $prev = $i - 1;
+        while ($prev >= 0 && is_array($tokens[$prev]) && $tokens[$prev][0] === T_WHITESPACE) {
+            $prev--;
+        }
+        if ($prev >= 0 && is_array($tokens[$prev]) && $tokens[$prev][0] === T_FUNCTION) {
+            continue;
+        }
+        $j = $i + 1;
+        while ($j < $n && is_array($tokens[$j]) && $tokens[$j][0] === T_WHITESPACE) {
+            $j++;
+        }
+        if (($tokens[$j] ?? null) !== '(') {
+            continue;
+        }
+        $delivery_calls++;
+        $depth = 0;
+        $named = false;
+        for (; $j < $n; $j++) {
+            $tok = $tokens[$j];
+            if ($tok === '(') {
+                $depth++;
+            } elseif ($tok === ')') {
+                if (--$depth === 0) {
+                    break;
+                }
+            } elseif ($depth === 1 && is_array($tok) && $tok[0] === T_STRING && $tok[1] === 'delivery') {
+                $k = $j + 1;
+                while ($k < $n && is_array($tokens[$k]) && $tokens[$k][0] === T_WHITESPACE) {
+                    $k++;
+                }
+                $named = $named || ($tokens[$k] ?? null) === ':';
+            }
+        }
+        if (!$named) {
+            $delivery_gaps[] = $log_file . ':' . $tokens[$i][2];
+        }
+    }
+}
+// Hard-coded like the send_email() count above: a new call has to be noticed
+// here, where somebody decides what its row may claim.
+check('kontrola našla všech 14 volání protokolu', $delivery_calls, 14);
+check('každé volání protokolu uvádí výsledek doručení (delivery:)', $delivery_gaps, []);
+
+// SMS: a refusal says why. Only the paths that stop before any request are
+// run here; nothing in this suite may reach a gateway.
+bk_test_load_functions(__DIR__ . '/../functions.php', ['send_sms']);
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
+if (function_exists('send_sms') && function_exists('get_setting')) {
+    $sms_saved = $GLOBALS['system_settings'] ?? null;
+    $GLOBALS['system_settings'] = ['sms_gateway_type' => ''];
+    check('bez brány SMS neodejde', send_sms('+420777123456', 'x'), false);
+    check('a řekne proč', $GLOBALS['last_sms_error'] ?? null, 'No SMS gateway is configured.');
+    $GLOBALS['system_settings'] = ['sms_gateway_type' => 'twilio'];
+    check('nenastavené Twilio neodešle', send_sms('+420777123456', 'x'), false);
+    check_true('a jmenuje, co chybí', str_contains((string)($GLOBALS['last_sms_error'] ?? ''), 'twilio_sid'));
+    $GLOBALS['system_settings'] = ['sms_gateway_type' => 'smsbrana'];
+    check('nenastavená SMSbrána neodešle', send_sms('+420777123456', 'x'), false);
+    check_true('a jmenuje, co chybí', str_contains((string)($GLOBALS['last_sms_error'] ?? ''), 'smsbrana_user'));
+    $GLOBALS['system_settings'] = $sms_saved;
+}
+
 // =======================================================================
 // E-mail - what the row may claim
 //
