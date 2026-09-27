@@ -4,10 +4,10 @@
  *
  * Usage:  $not_metrics = require __DIR__ . '/fixtures/agent_not_metrics.php';
  *
- * Read by run_agent_metric_lint.php (the keys in the agents' sources) and
- * run_tests.php (the Omnia fixture). One list, so they cannot drift apart.
- * Pure data on purpose, like omnia_router.php: find_dead_code.php does not
- * read this directory.
+ * Read by run_agent_metric_lint.php (the keys in the agents' sources),
+ * run_tests.php (the Omnia fixture) and run_api_tests.php (the agents' golden
+ * payloads). One list, so they cannot drift apart. Pure data on purpose, like
+ * omnia_router.php: find_dead_code.php does not read this directory.
  *
  * Not "unfinished" - these are values that are not a time series.
  * A new one belongs here with an explanation, not silently.

@@ -210,7 +210,11 @@ jobs:
           --health-timeout=5s
           --health-retries=20
     steps:
+      # The agent contract section posts the agents' golden payloads
+      # (agents/tests/golden) to agent_api.php; without the submodule it fails.
       - uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - uses: shivammathur/setup-php@v2
         with:

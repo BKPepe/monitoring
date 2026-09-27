@@ -6868,6 +6868,258 @@ $pdo->exec("DELETE FROM settings WHERE key_name = 'self_check_state'");
 check('před prvním během cronu je selfCheck null', array_key_exists('selfCheck', (array)$j) ? $j['selfCheck'] : 'chybí', null);
 
 // =======================================================================
+// Agent contract: the agents' own golden payloads (agents/tests/golden).
+//
+// Every report above is written on this side of the wire. The agents repo
+// keeps one normalised dry-run payload per agent, and its CI fails when the
+// agent's output drifts from it (tests/README.md, "Golden payloads"). Here
+// those files go through the real agent_api.php, twice, so the second report
+// takes the "previous report" paths too. Each must be accepted with nothing in
+// ingest_issues or details_dropped, and every key the agent sends must land
+// in last_details or in a column, or be on the short list below that says
+// where else it goes. A value the agent measured must not come out as null.
+// A key the server drops is then a red test on the gitlink bump that brings
+// it, instead of a value that quietly never shows up.
+// =======================================================================
+$ac_dir = $root . '/../../agents/tests/golden';
+// File => the agent_type inside it, so a file mixed up with another cannot pass.
+$ac_files = ['openwrt' => 'openwrt', 'linux-bash' => 'bash', 'linux-python' => 'python'];
+// Keys that are deliberately NOT in last_details or a column, and where they go.
+$ac_elsewhere = [
+    'agent_key' => 'the credential: checked, never stored',
+    'speedtests' => 'rows in speedtest_results, counted below',
+];
+// Ingest issues a golden payload is KNOWN to raise, pinned exactly: a new one
+// fails, and so does an entry here once its cause is gone (then delete it).
+// openwrt: the stub librespeed files of the agents' tests/openwrt-stubs carry
+// byte counts that do not fit 15 s at the stated rate (1850.23 Mbit/s with
+// 2531000000 B), so the server rightly flags the items as a unit error. The
+// fix belongs to that stub fixture, not to the server.
+$ac_known_issues = [
+    'openwrt' => [
+        ['type' => 'unit_mismatch', 'key' => '2026-09-20T05:23:41+02:00', 'bytes' => null],
+        ['type' => 'unit_mismatch', 'key' => '2026-09-20T05:41:02+02:00', 'bytes' => null],
+        ['type' => 'unit_mismatch', 'key' => '2026-09-20T06:02:00+02:00', 'bytes' => null],
+    ],
+];
+$ac_not_metrics = require __DIR__ . '/fixtures/agent_not_metrics.php';
+
+$ac_golden = [];
+foreach ($ac_files as $ac_name => $ac_type) {
+    $ac_raw = is_file("{$ac_dir}/{$ac_name}.json") ? file_get_contents("{$ac_dir}/{$ac_name}.json") : false;
+    $ac_pl = is_string($ac_raw) ? json_decode($ac_raw, true) : null;
+    $ac_ok = is_array($ac_pl) && ($ac_pl['agent_type'] ?? null) === $ac_type;
+    // Never a skip: a green section over zero payloads would verify nothing,
+    // exactly like a run without the submodule used to.
+    check("kontrakt: agents/tests/golden/{$ac_name}.json je hlášení agenta {$ac_type}", $ac_ok, true);
+    if ($ac_ok) {
+        $ac_golden[$ac_name] = $ac_pl;
+    } else {
+        fwrite(STDERR, "  {$ac_dir}/{$ac_name}.json chybí nebo není platný. Chybí submodul `agents`?\n"
+            . "  Spusťte: git submodule update --init (gitlink agents musí obsahovat tests/golden/)\n");
+    }
+}
+
+// Which agent key feeds which vps_metrics column, read from $metric_row the
+// way run_agent_metric_lint.php reads it. A column is 1:1 when its value is
+// bk_agent_num/int($data, 'key') or one variable assigned from exactly one
+// key. Composite values ($swap ?? $ow_swap_pct, band totals, WAN steps) count
+// their keys as stored, but are not compared value by value.
+$ac_api_src = (string)file_get_contents($root . '/agent_api.php');
+$ac_col_of = [];
+$ac_stored = [];
+$ac_cols = [];
+preg_match('/\$metric_row = \[(.*?)\n        \];/s', $ac_api_src, $ac_row_m);
+preg_match_all("/^\s*'([a-z0-9_]+)' => (.+),\s*$/m", $ac_row_m[1] ?? '', $ac_rows, PREG_SET_ORDER);
+foreach ($ac_rows as [, $ac_col, $ac_expr]) {
+    $ac_cols[] = $ac_col;
+    $ac_keys = [];
+    if (preg_match("/^bk_agent_(?:num|int)\(\\\$data, '([a-z0-9_]+)'\)$/", $ac_expr, $ac_direct)) {
+        $ac_keys = [$ac_direct[1]];
+    } else {
+        preg_match_all('/\$(\w+)/', $ac_expr, $ac_vars);
+        foreach (array_unique($ac_vars[1]) as $ac_var) {
+            if (preg_match('/\$' . preg_quote($ac_var, '/') . '\s*=(?!=)([^;]*);/', $ac_api_src, $ac_assign)) {
+                preg_match_all("/\\\$data\['([a-z0-9_]+)'\]|bk_agent_(?:num|int|str|bool)\(\\\$data, '([a-z0-9_]+)'/", $ac_assign[1], $ac_km, PREG_SET_ORDER);
+                foreach ($ac_km as $ac_k) {
+                    $ac_keys[] = ($ac_k[2] ?? '') !== '' ? $ac_k[2] : $ac_k[1];
+                }
+            }
+        }
+        $ac_keys = array_values(array_unique($ac_keys));
+        if (!preg_match('/^\$\w+$/', $ac_expr) || count($ac_keys) !== 1) {
+            foreach ($ac_keys as $ac_k) {
+                $ac_stored[$ac_k] = true;
+            }
+            continue;
+        }
+    }
+    $ac_stored[$ac_keys[0]] = true;
+    $ac_col_of[$ac_keys[0]] = $ac_col;
+}
+// The reading is tried on known rows first: a pattern that stopped matching
+// would otherwise report every key as "fine" for ever.
+check('kontrakt: mapa $metric_row se z agent_api.php přečte (vzorky)', [
+    $ac_col_of['cpu'] ?? null, $ac_col_of['entropy'] ?? null, $ac_col_of['fw_accepted'] ?? null,
+    $ac_col_of['cpu_core_max_pct'] ?? null, isset($ac_col_of['swap']), isset($ac_stored['swap_pct']),
+    isset($ac_col_of['wan_rx_errors']), count($ac_cols) >= 80,
+], ['cpu_usage', 'entropy_avail', 'fw_accepted', 'cpu_core_max', false, true, false, true]);
+
+// The payload goes out exactly as the agent printed it; only the key and the
+// router's clock (the stored metric is its distance from ours) are replaced.
+$ac_post = function (array $body) use ($base): array {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $raw = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($raw, true), $raw];
+};
+$ac_details = function (int $id) use ($pdo): array {
+    $st = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
+    $st->execute([$id]);
+    $d = json_decode((string)$st->fetchColumn(), true);
+    return is_array($d) ? $d : [];
+};
+$ac_metrics = function (int $id) use ($pdo): array {
+    $st = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+    $st->execute([$id]);
+    return $st->fetch() ?: [];
+};
+// What one report left behind: [code, success, ingest_issues, details_dropped].
+$ac_outcome = function (array $resp, int $code, string $raw, array $d): array {
+    return [$code, $resp['success'] ?? substr($raw, 0, 300),
+        array_key_exists('ingest_issues', $d) ? $d['ingest_issues'] : 'chybí', $d['details_dropped'] ?? []];
+};
+// Every object key path inside a value: 'wifi_radios[].noise', 'wan_path.sqm[].iface'.
+$ac_paths = function ($v, string $prefix) use (&$ac_paths): array {
+    $out = [];
+    if (!is_array($v)) {
+        return $out;
+    }
+    $list = array_is_list($v);
+    foreach ($v as $k => $item) {
+        $p = $list ? $prefix . '[]' : $prefix . '.' . $k;
+        if (!$list) {
+            $out[$p] = true;
+        }
+        $out += $ac_paths($item, $p);
+    }
+    return $out;
+};
+$ac_ids = [];
+$ac_new_monitor = function (string $name, string $agent_type) use ($pdo, &$ac_ids): array {
+    $id = 9301 + count($ac_ids);
+    $key = bin2hex(random_bytes(16));
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (?, ?, ?, '', 'unknown', 'Kontrakt', ?)")
+        ->execute([$id, $name, $agent_type === 'openwrt' ? 'openwrt' : 'vps', $key]);
+    $ac_ids[] = $id;
+    return [$id, $key];
+};
+
+try {
+    $ac_seen = [];
+    foreach ($ac_golden as $ac_name => $ac_pl) {
+        $ac_seen = array_merge($ac_seen, array_keys($ac_pl));
+        [$ac_id, $ac_key] = $ac_new_monitor("Kontrakt {$ac_name}", $ac_pl['agent_type']);
+        $ac_body = array_merge($ac_pl, ['agent_key' => $ac_key]);
+        if (array_key_exists('agent_time', $ac_pl)) {
+            $ac_body['agent_time'] = time();
+        }
+        foreach ([1, 2] as $ac_n) {
+            [$ac_code, $ac_resp, $ac_raw] = $ac_post($ac_body);
+            check("kontrakt {$ac_name}, hlášení {$ac_n}: přijato (200, success) a nic se neztratí (ingest_issues, details_dropped)",
+                $ac_outcome(is_array($ac_resp) ? $ac_resp : [], $ac_code, $ac_raw, $ac_details($ac_id)),
+                [200, true, $ac_known_issues[$ac_name] ?? [], []]);
+        }
+
+        $ac_d = $ac_details($ac_id);
+        $ac_row = $ac_metrics($ac_id);
+        $ac_lost = [];
+        foreach ($ac_pl as $ac_k => $ac_v) {
+            if (isset($ac_elsewhere[$ac_k])) {
+                continue;
+            }
+            $ac_in_details = array_key_exists($ac_k, $ac_d);
+            $ac_col = $ac_col_of[$ac_k] ?? null;
+            if (!$ac_in_details && !isset($ac_stored[$ac_k])) {
+                $ac_lost[] = "{$ac_k}: zahozený potichu, není v last_details ani ve sloupci";
+                continue;
+            }
+            if ($ac_v === null) {
+                continue;
+            }
+            if ($ac_in_details && $ac_d[$ac_k] === null) {
+                $ac_lost[] = "{$ac_k}: agent poslal hodnotu, v last_details je null";
+            }
+            if ($ac_col !== null && (is_int($ac_v) || is_float($ac_v)) && ($ac_row[$ac_col] ?? null) === null) {
+                $ac_lost[] = "{$ac_k}: agent poslal číslo, sloupec {$ac_col} je NULL";
+            }
+        }
+        check("kontrakt {$ac_name}: každý klíč agenta se uloží a změřená hodnota nezmizí", $ac_lost, []);
+
+        // The sanitizers (wifi_radios, storage_disks, wan_path, lan_ports) keep
+        // an allow-list of nested keys, and drop the rest on purpose: that is
+        // where a new key of the agent would vanish without a trace. Today
+        // they keep every key the agents send; a new one fails here.
+        $ac_nested = [];
+        foreach ($ac_pl as $ac_k => $ac_v) {
+            if (is_array($ac_v) && is_array($ac_d[$ac_k] ?? null)) {
+                $ac_nested = array_merge($ac_nested,
+                    array_keys(array_diff_key($ac_paths($ac_v, $ac_k), $ac_paths($ac_d[$ac_k], $ac_k))));
+            }
+        }
+        check("kontrakt {$ac_name}: ani vnořený klíč agenta se v last_details neztratí", $ac_nested, []);
+
+        $ac_st = $pdo->prepare("SELECT COUNT(*) FROM speedtest_results WHERE monitor_id = ?");
+        $ac_st->execute([$ac_id]);
+        check("kontrakt {$ac_name}: každý speedtest je řádek speedtest_results, i po druhém hlášení jen jednou",
+            (int)$ac_st->fetchColumn(), is_array($ac_pl['speedtests'] ?? null) ? count($ac_pl['speedtests']) : 0);
+
+        // The lint reads the agents' sources with a regex; agent.py and keys
+        // composed at run time slip past it. The golden payload does not.
+        $ac_unlisted = [];
+        foreach ($ac_pl as $ac_k => $ac_v) {
+            if ((is_int($ac_v) || is_float($ac_v)) && !isset($ac_stored[$ac_k]) && !in_array($ac_k, $ac_not_metrics, true)) {
+                $ac_unlisted[] = $ac_k;
+            }
+        }
+        check("kontrakt {$ac_name}: číselný klíč je ukládaná metrika, nebo výjimka v fixtures/agent_not_metrics.php", $ac_unlisted, []);
+
+        // A brand-new router's first report: nothing measured yet. Accepted,
+        // nothing lost, and no column may make a number up.
+        [$ac_id0, $ac_key0] = $ac_new_monitor("Kontrakt {$ac_name} (vše null)", $ac_pl['agent_type']);
+        $ac_nulls = array_merge(array_fill_keys(array_keys($ac_pl), null),
+            ['agent_key' => $ac_key0, 'agent_type' => $ac_pl['agent_type'], 'version' => $ac_pl['version'] ?? null]);
+        [$ac_code, $ac_resp, $ac_raw] = $ac_post($ac_nulls);
+        check("kontrakt {$ac_name}, vše null: přijato a nic se neztratí",
+            $ac_outcome(is_array($ac_resp) ? $ac_resp : [], $ac_code, $ac_raw, $ac_details($ac_id0)), [200, true, [], []]);
+        $ac_row0 = $ac_metrics($ac_id0);
+        check("kontrakt {$ac_name}, vše null: žádný sloupec vps_metrics si hodnotu nevymyslí",
+            array_keys(array_filter(array_intersect_key($ac_row0, array_flip($ac_cols)), fn ($v) => $v !== null)), []);
+        check_true("kontrakt {$ac_name}, vše null: řádek metrik vznikl", $ac_row0 !== []);
+    }
+    // An entry no golden payload carries any more is stale and would hide the
+    // next key of that name.
+    if ($ac_golden !== []) {
+        check('kontrakt: seznam klíčů mimo last_details nemá zastaralé položky', array_values(array_diff(array_keys($ac_elsewhere), $ac_seen)), []);
+    }
+} finally {
+    if ($ac_ids !== []) {
+        $ac_in = implode(', ', array_map('intval', $ac_ids));
+        $ac_tables = $pdo->query("SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'monitor_id'")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($ac_tables as $ac_table) {
+            $pdo->exec("DELETE FROM `{$ac_table}` WHERE monitor_id IN ({$ac_in})");
+        }
+        $pdo->exec("DELETE FROM monitors WHERE id IN ({$ac_in})");
+    }
+}
+
+// =======================================================================
 // First run: the installer (site W1-5).
 //
 // db.php used to copy config.sample.php over a missing config.php, so a fresh

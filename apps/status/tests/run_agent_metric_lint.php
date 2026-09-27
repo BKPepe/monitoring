@@ -48,7 +48,7 @@ if ($agent_src === '' || $api_src === false || $fn_src === false) {
 }
 
 // Keys that do not belong in the metrics table, each with the reason. Shared
-// with run_tests.php, so the list lives in one file.
+// with run_tests.php and run_api_tests.php, so the list lives in one file.
 $not_metrics = require __DIR__ . '/fixtures/agent_not_metrics.php';
 
 // Keys the agents send.
