@@ -961,6 +961,38 @@ export interface OutgoingMessageWindow {
   byChannel: { channel: string; total: number; sent?: number; unknown?: number; failed: number }[];
 }
 
+/**
+ * One channel that has stopped reaching one recipient (`action=notification_health`).
+ * The latest attempt of the last 7 days decides; a later confirmed send clears it.
+ */
+export interface NotificationProblem {
+  channel: string;
+  /** Masked: the last three digits of a number, or the first letter and domain of an address. `null` for a webhook. */
+  recipient: string | null;
+  /** The account the address belongs to, when one does. */
+  username: string | null;
+  /** `failed` = refused or unreachable; `unknown` = nobody confirmed (incl. a CallMeBot quota at 0). */
+  state: 'failed' | 'unknown';
+  /** The first attempt after the last confirmed one. */
+  sinceIso: string;
+  lastAtIso: string;
+  /** Attempts since the last confirmed one. */
+  count: number;
+  lastReason: string | null;
+  /** The last confirmed send in the window; `null` = none in 7 days. */
+  lastSentAtIso: string | null;
+  /** Derived from a row that predates recording the provider's reply. */
+  legacy: boolean;
+}
+
+/** What `action=notification_health` returns. */
+export interface NotificationHealth {
+  problems: NotificationProblem[];
+  windowDays: number;
+  /** Only the newest 5000 attempts were read. */
+  truncated: boolean;
+}
+
 /** A page of the log plus the values the filters offer. */
 export interface OutgoingMessagePage {
   entries: OutgoingMessage[];

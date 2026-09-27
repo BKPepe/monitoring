@@ -2107,6 +2107,86 @@ if ($action === 'notification_log') {
     exit;
 }
 
+// Which channel has stopped reaching whom (the /app warning). Admin only:
+// even masked, it says who is not being notified.
+if ($action === 'notification_health') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $nh_limit = 5000;
+    try {
+        // The messages that exist to reach a person about the monitoring.
+        // Invitations, resets and tests are one-offs, not a channel's health.
+        $nh_delivery = bk_notification_delivery_sql('n');
+        $stmt = $pdo->prepare("
+            SELECT n.id, n.channel, n.recipient, n.error_message, n.provider_reply, n.created_at,
+                   {$nh_delivery} AS delivery_read, n.delivery AS delivery_stored
+            FROM notification_log n
+            WHERE n.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+              AND n.kind IN ('alert', 'daily_reminder', 'digest', 'admin_notice')
+              AND {$nh_delivery} <> 'skipped'
+            ORDER BY n.id DESC
+            LIMIT " . ($nh_limit + 1));
+        $stmt->execute();
+        $nh_fetched = $stmt->fetchAll();
+        // Newest first, so a cut drops the oldest rows - never the latest
+        // attempt, which is the one that decides.
+        $nh_truncated = count($nh_fetched) > $nh_limit;
+        if ($nh_truncated) {
+            array_pop($nh_fetched);
+        }
+        $nh_rows = [];
+        foreach (array_reverse($nh_fetched) as $r) {
+            $nh_rows[] = [
+                'channel' => (string)$r['channel'],
+                'recipient' => $r['recipient'],
+                'delivery' => (string)$r['delivery_read'],
+                'recorded' => $r['delivery_stored'] !== null,
+                'reply' => $r['provider_reply'],
+                'reason' => $r['error_message'],
+                'at' => (string)$r['created_at'],
+            ];
+        }
+        $nh_users = $pdo->query("SELECT username, email, phone FROM users")->fetchAll();
+        $nh_out = [];
+        foreach (bk_notification_problems($nh_rows) as $p) {
+            $who = bk_mask_recipient($p['recipient'], $nh_users);
+            // An older reason may still quote the address (a refused RCPT
+            // logged before the reason was cleaned); the answer never does.
+            $nh_reason = $p['lastReason'];
+            if ($nh_reason !== null && $p['recipient'] !== null && $p['recipient'] !== '') {
+                $nh_reason = str_ireplace($p['recipient'], '<recipient>', $nh_reason);
+            }
+            $nh_out[] = [
+                'channel' => $p['channel'],
+                'recipient' => $who['masked'],
+                'username' => $who['username'],
+                'state' => $p['state'],
+                'sinceIso' => date('c', strtotime($p['since'])),
+                'lastAtIso' => date('c', strtotime($p['lastAt'])),
+                'count' => $p['count'],
+                'lastReason' => $nh_reason,
+                'lastSentAtIso' => $p['lastSentAt'] !== null ? date('c', strtotime($p['lastSentAt'])) : null,
+                'legacy' => $p['legacy'],
+            ];
+        }
+        echo json_encode([
+            'problems' => $nh_out,
+            'windowDays' => 7,
+            'truncated' => $nh_truncated,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=notification_health] ' . $e->getMessage());
+        // 500, never an empty list: "no problems" from a query that died is
+        // the one answer this endpoint must not give.
+        http_response_code(500);
+        echo json_encode(['error' => 'Stav doručování zpráv se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if ($action === 'test_notification') {
     if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
         http_response_code(403);

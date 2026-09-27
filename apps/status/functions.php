@@ -7759,6 +7759,124 @@ function bk_notification_summary(PDO $pdo, int $hours): array {
 }
 
 /**
+ * Which channel has stopped reaching whom.
+ *
+ * The owner's WhatsApp ran out of quota and his e-mail went through an
+ * unauthenticated mail(): every row said ok, nothing arrived, and nothing in
+ * /app said a word. This turns the log into that word.
+ *
+ * Pure: $rows are the attempts of the last days, oldest first, each with
+ * channel, recipient, delivery (already derived), recorded (bool), reply,
+ * reason and at (Y-m-d H:i:s). For every (channel, recipient) pair the LATEST
+ * attempt decides - a channel that failed on Monday and delivered on Tuesday
+ * is fine again. A latest CallMeBot acceptance that says "0 messages left" is
+ * unknown too: the quota is spent and the next message will not go.
+ *
+ * @return list<array{channel: string, recipient: ?string, state: string, since: string, lastAt: string,
+ *                    count: int, lastReason: ?string, lastSentAt: ?string, legacy: bool}>
+ */
+function bk_notification_problems(array $rows): array {
+    $pairs = [];
+    foreach ($rows as $r) {
+        $key = (string)($r['channel'] ?? '') . "\n" . (string)($r['recipient'] ?? '');
+        $pairs[$key][] = $r;
+    }
+    $problems = [];
+    foreach ($pairs as $list) {
+        $last = $list[count($list) - 1];
+        $delivery = (string)($last['delivery'] ?? '');
+        $reason = $last['reason'] ?? null;
+        $quota_spent = $delivery === 'sent' && ($last['channel'] ?? '') === 'whatsapp'
+            && preg_match('/\b0 messages? left\b/i', (string)($last['reply'] ?? ''));
+        if ($quota_spent) {
+            $state = 'unknown';
+            $reason = 'CallMeBot quota at 0: ' . (string)$last['reply'];
+        } elseif ($delivery === 'failed' || $delivery === 'unknown') {
+            $state = $delivery;
+        } else {
+            continue;
+        }
+        // The run of attempts since the last confirmed one. The quota case
+        // starts at that very acceptance: it is the last one that will go.
+        $last_sent_at = null;
+        $since = null;
+        $count = 0;
+        foreach ($list as $r) {
+            if (($r['delivery'] ?? '') === 'sent') {
+                $last_sent_at = (string)$r['at'];
+                $since = $quota_spent ? (string)$r['at'] : null;
+                $count = $quota_spent ? 1 : 0;
+                continue;
+            }
+            $since = $since ?? (string)$r['at'];
+            $count++;
+        }
+        $problems[] = [
+            'channel' => (string)$last['channel'],
+            'recipient' => isset($last['recipient']) ? (string)$last['recipient'] : null,
+            'state' => $state,
+            'since' => (string)$since,
+            'lastAt' => (string)$last['at'],
+            'count' => $count,
+            'lastReason' => $reason !== null && $reason !== '' ? (string)$reason : null,
+            'lastSentAt' => $last_sent_at,
+            // Derived from ok, not reported by the provider: the page says so.
+            'legacy' => empty($last['recorded']),
+        ];
+    }
+    usort($problems, fn (array $a, array $b): int => strcmp($b['lastAt'], $a['lastAt']));
+    return $problems;
+}
+
+/**
+ * A recipient as the warning may show it: never the whole address.
+ *
+ * A number or a chat id becomes ••• and its last three digits, an e-mail its
+ * first letter and the domain. The account's username is looked up (by the
+ * e-mail, or by the last nine digits of the phone), so the administrator
+ * still knows who is not being reached.
+ *
+ * @param list<array{username: string, email: ?string, phone: ?string}> $users
+ * @return array{masked: ?string, username: ?string}
+ */
+function bk_mask_recipient(?string $recipient, array $users): array {
+    if ($recipient === null || trim($recipient) === '') {
+        return ['masked' => null, 'username' => null];
+    }
+    $recipient = trim($recipient);
+    $username = null;
+    // Not an address at all: PagerDuty logs its action ('trigger', 'resolve')
+    // there, a Telegram channel its @handle. A label is shown as it is; "•••"
+    // would read like a hidden phone number.
+    if (str_starts_with($recipient, '@') || !preg_match('/\d|@/', $recipient)) {
+        return ['masked' => $recipient, 'username' => null];
+    }
+    if (str_contains($recipient, '@')) {
+        [$local, $domain] = explode('@', $recipient, 2);
+        $masked = mb_substr($local, 0, 1, 'UTF-8') . '…@' . $domain;
+        foreach ($users as $u) {
+            if (strcasecmp((string)($u['email'] ?? ''), $recipient) === 0) {
+                $username = (string)$u['username'];
+                break;
+            }
+        }
+        return ['masked' => $masked, 'username' => $username];
+    }
+    $digits = (string)preg_replace('/\D/', '', $recipient);
+    $masked = '•••' . ($digits !== '' ? substr($digits, -3) : '');
+    if (strlen($digits) >= 9) {
+        foreach ($users as $u) {
+            $u_digits = (string)preg_replace('/\D/', '', (string)($u['phone'] ?? ''));
+            if (strlen($u_digits) >= 9 && substr($u_digits, -9) === substr($digits, -9)) {
+                $username = (string)$u['username'];
+                break;
+            }
+        }
+    }
+    return ['masked' => $masked, 'username' => $username];
+}
+
+/**
  * Is the daily reminder due on this cron run?
  *
  * Pure, because the whole feature rests on this guard: a router's cron runs

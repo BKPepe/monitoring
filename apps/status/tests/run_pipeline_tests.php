@@ -1098,6 +1098,71 @@ if (function_exists('bk_log_notification') && in_array('sqlite', PDO::getAvailab
 }
 
 // =======================================================================
+// Which channel stopped reaching whom - the /app warning
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_notification_problems', 'bk_mask_recipient']);
+if (function_exists('bk_notification_problems')) {
+    $np_row = fn (string $ch, ?string $to, string $d, string $at, ?string $reply = null, ?string $reason = null, bool $rec = true): array
+        => ['channel' => $ch, 'recipient' => $to, 'delivery' => $d, 'recorded' => $rec, 'reply' => $reply, 'reason' => $reason, 'at' => $at];
+    // The owner's week: WhatsApp confirmed until the quota hit zero, then
+    // refused; the e-mail went through mail() and nobody confirmed any of it.
+    $np = bk_notification_problems([
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-25 08:00:00', 'Message queued. You have 1 Messages left'),
+        $np_row('email', 'owner@example.com', 'unknown', '2026-09-25 08:00:01', null, "Handed to the hosting's mail()"),
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-26 08:00:00', 'Message queued. You have 0 Messages left'),
+        $np_row('whatsapp', '+420777123456', 'failed', '2026-09-27 06:15:07', null, 'CallMeBot 209: Quota exceeded or banned'),
+        $np_row('email', 'owner@example.com', 'unknown', '2026-09-27 09:25:07', null, "Handed to the hosting's mail()"),
+        $np_row('whatsapp', '+420777123456', 'failed', '2026-09-27 09:25:07', null, 'CallMeBot 209: Quota exceeded or banned'),
+        $np_row('discord', null, 'failed', '2026-09-26 10:00:00', null, 'HTTP 404'),
+        $np_row('discord', null, 'sent', '2026-09-27 10:00:00'),
+    ]);
+    $np_by = array_column($np, null, 'channel');
+    check('WhatsApp, který odmítá: neodesláno', $np_by['whatsapp']['state'] ?? null, 'failed');
+    check('od prvního odmítnutí po posledním potvrzení', [$np_by['whatsapp']['since'] ?? null, $np_by['whatsapp']['count'] ?? null],
+        ['2026-09-27 06:15:07', 2]);
+    check('s posledním důvodem a posledním potvrzeným odesláním',
+        [$np_by['whatsapp']['lastReason'] ?? null, $np_by['whatsapp']['lastSentAt'] ?? null],
+        ['CallMeBot 209: Quota exceeded or banned', '2026-09-26 08:00:00']);
+    check('e-mail přes mail(): nepotvrzeno, celý týden', [$np_by['email']['state'] ?? null, $np_by['email']['count'] ?? null],
+        ['unknown', 2]);
+    check_true('a nic z toho nikdo nepotvrdil',
+        array_key_exists('lastSentAt', $np_by['email'] ?? []) && $np_by['email']['lastSentAt'] === null);
+    check('kanál, který po selhání zase doručil, problém nemá', isset($np_by['discord']), false);
+    check('nejčerstvější problém je první', $np[0]['lastAt'] ?? null, '2026-09-27 09:25:07');
+
+    $np = bk_notification_problems([
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-27 08:00:00', 'Message queued. You have 0 Messages left'),
+    ]);
+    check('přijato s „0 messages left" je varování: další zpráva už nepůjde',
+        [$np[0]['state'] ?? null, str_starts_with((string)($np[0]['lastReason'] ?? ''), 'CallMeBot quota at 0')], ['unknown', true]);
+    check('10 zbývajících zpráv problém není', bk_notification_problems([
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-27 08:00:00', 'Message queued. You have 10 Messages left'),
+    ]), []);
+    $np = bk_notification_problems([$np_row('whatsapp', '+420777123456', 'unknown', '2026-09-27 08:00:00', null, null, false)]);
+    check('odvozený (starší) řádek se tak označí', $np[0]['legacy'] ?? null, true);
+    check('dva příjemci na jednom kanálu jsou dva problémy', count(bk_notification_problems([
+        $np_row('email', 'a@example.com', 'failed', '2026-09-27 08:00:00'),
+        $np_row('email', 'b@example.com', 'failed', '2026-09-27 08:00:00'),
+        $np_row('email', 'c@example.com', 'sent', '2026-09-27 08:00:00'),
+    ])), 2);
+
+    $np_users = [
+        ['username' => 'spravce', 'email' => 'Owner@Example.com', 'phone' => '777 123 456'],
+        ['username' => 'druhy', 'email' => 'druhy@example.com', 'phone' => null],
+    ];
+    check('telefon: jen poslední tři číslice a jméno účtu podle posledních devíti',
+        bk_mask_recipient('+420777123456', $np_users), ['masked' => '•••456', 'username' => 'spravce']);
+    check('e-mail: první znak a doména, účet podle adresy bez ohledu na velikost',
+        bk_mask_recipient('owner@example.com', $np_users), ['masked' => 'o…@example.com', 'username' => 'spravce']);
+    check('neznámý příjemce zůstane bez jména', bk_mask_recipient('-100123456789', $np_users),
+        ['masked' => '•••789', 'username' => null]);
+    check('webhook bez příjemce', bk_mask_recipient(null, $np_users), ['masked' => null, 'username' => null]);
+    check('akce PagerDuty není číslo, zůstane čitelná', bk_mask_recipient('trigger', $np_users),
+        ['masked' => 'trigger', 'username' => null]);
+    check('kanál Telegramu taky', bk_mask_recipient('@provoz', $np_users), ['masked' => '@provoz', 'username' => null]);
+}
+
+// =======================================================================
 // Daily reminder - the whole path from the database to the message
 //
 // The rule that counts ("what is broken") is tested in run_tests.php without

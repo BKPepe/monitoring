@@ -43,6 +43,7 @@ import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { DataSourceBanner } from '@/components/data-source-banner';
 import { CollectorHealthBanner } from '@/components/collector-health-banner';
+import { NotificationHealthBanner } from '@/components/notification-health-banner';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { usePageChrome } from '@/components/layout/shell-context';
 import { usePublicStatus } from '@/api/use-asset-charts';
@@ -943,6 +944,10 @@ export function DashboardPage() {
       {/* Louder than any single monitor: when cron stops, every number below is
           stale and the page would otherwise look calm. */}
       <CollectorHealthBanner />
+
+      {/* Just as loud: an alert that no longer reaches anybody is an outage
+          nobody hears about. Admin only. */}
+      <NotificationHealthBanner />
 
       <CollectionIssuesBanner monitors={monitors} />
 

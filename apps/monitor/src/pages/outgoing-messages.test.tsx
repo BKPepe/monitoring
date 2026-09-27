@@ -69,6 +69,11 @@ function serve(answer: (url: string) => Response | Promise<Response>) {
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
+      // The delivery banner on this page asks on its own and says so loudly
+      // when its answer is wrong; here every channel delivers.
+      if (url.includes('action=notification_health')) {
+        return Promise.resolve(json({ problems: [], windowDays: 7, truncated: false }));
+      }
       return Promise.resolve(answer(url));
     })
   );

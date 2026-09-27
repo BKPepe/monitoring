@@ -4754,6 +4754,49 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.tabs_label': { cs: 'Části nastavení', en: 'Settings sections' },
   'users.totp_sr': { cs: 'Dvoufázové ověření zapnuto', en: 'Two-factor authentication on' },
   'outgoing.log_title': { cs: 'Protokol', en: 'Log' },
+  'notifhealth.title_failed': { cs: 'Upozornění někomu nedoráží', en: 'Alerts are not reaching someone' },
+  'notifhealth.probe_failed': {
+    cs: 'Stav doručování zpráv nelze zjistit',
+    en: 'Cannot tell whether messages are being delivered',
+  },
+  'probe.failed_http': { cs: 'Kontrola skončila chybou HTTP {status}.', en: 'The check failed with HTTP {status}.' },
+  'probe.failed_network': {
+    cs: 'Kontrola se k serveru nedostala: síť nebo server neodpovídá.',
+    en: 'The check did not reach the server: the network or the server is not answering.',
+  },
+  'probe.failed_not_json': {
+    cs: 'Server neodpověděl platným JSONem. Podívejte se na surovou odpověď API (curl … | od -c).',
+    en: 'The server did not answer with valid JSON. Look at the raw API response (curl … | od -c).',
+  },
+  'probe.failed_shape': {
+    cs: 'Server odpověděl něčím jiným, než kontrola čeká.',
+    en: 'The server answered something the check does not expect.',
+  },
+  'probe.failed_hint': {
+    cs: 'Dokud kontrola neprojde, tahle stránka na problém neupozorní.',
+    en: 'Until the check works, this page cannot warn you about the problem.',
+  },
+  'notifhealth.title_unknown': {
+    cs: 'Doručení upozornění nikdo nepotvrdil',
+    en: 'Nobody confirmed that the alerts arrived',
+  },
+  'notifhealth.since': { cs: 'od {since}, {n}× za sebou', en: 'since {since}, {n} in a row' },
+  'notifhealth.last_reason': { cs: 'Poslední důvod', en: 'Last reason' },
+  'notifhealth.last_sent': { cs: 'Naposledy potvrzeno', en: 'Last confirmed' },
+  'notifhealth.never_sent': { cs: 'Za posledních 7 dní nic nepotvrzeno.', en: 'Nothing confirmed in the last 7 days.' },
+  'notifhealth.legacy': {
+    cs: '(podle starších záznamů bez odpovědi poskytovatele)',
+    en: '(from older rows without the provider’s reply)',
+  },
+  'notifhealth.hint': {
+    cs: 'Výpadek, o kterém tímhle kanálem nepřijde zpráva, se tihle příjemci nemusí vůbec dozvědět.',
+    en: 'An outage announced only through this channel may never reach these recipients.',
+  },
+  'notifhealth.link': { cs: 'Otevřít odchozí zprávy', en: 'Open outgoing messages' },
+  'notifhealth.truncated': {
+    cs: 'Přečteno jen posledních 5000 zpráv.',
+    en: 'Only the latest 5000 messages were read.',
+  },
   'api_agents.status_unreported': { cs: 'Verze nehlášena: {n} z {total}', en: 'Version not reported: {n} of {total}' },
 };
 

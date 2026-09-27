@@ -720,6 +720,8 @@ foreach ([
     'notification_log se souhrnem' => 'action=notification_log&summary=1&kind=alert&ok=0',
     'export_config' => 'action=export_config',
     'audit_logs' => 'action=audit_logs',
+    // Even masked, it says who is not being reached.
+    'notification_health' => 'action=notification_health',
 ] as $ra_name => $ra_query) {
     [$ra_code] = api_get_auth($base, $ra_query, $jar3);
     check("běžný uživatel nedostane {$ra_name}", $ra_code, 403);
@@ -3279,6 +3281,52 @@ if ($logged_in) {
     check('kanál jen s přeskočenými řádky v rozpadu není', isset($nl_dv_ch['none']), false);
     check('WhatsApp v rozpadu', $nl_dv_ch['whatsapp'] ?? null,
         ['channel' => 'whatsapp', 'total' => 5, 'sent' => 1, 'unknown' => 2, 'failed' => 2]);
+    $pdo->exec("DELETE FROM notification_log");
+
+    // --- notification_health: the /app warning ----------------------------
+    // The owner's day: WhatsApp refused (quota), the e-mail went through
+    // mail() and nobody confirmed it. Both must be named, neither address shown.
+    [$nh_anon] = api_get($base, 'action=notification_health');
+    check('anonym stav doručování nedostane', $nh_anon, 403);
+    $pdo->prepare("UPDATE users SET phone = ? WHERE username = ?")->execute(['777 123 456', 'admin']);
+    $nh_ins = $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, delivery,
+                                 error_message, provider_reply, method, created_at)
+                             VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    $nh_ins->execute(['storage_warning', 'whatsapp', '+420777123456', 1, 'alert', 'sent', null, 'Message queued. You have 2 Messages left', null, 600]);
+    $nh_ins->execute(['lte_backup_restored', 'whatsapp', '+420777123456', 0, 'alert', 'failed', 'CallMeBot 209: Quota exceeded or banned', null, null, 200]);
+    $nh_ins->execute(['storage_recovered', 'whatsapp', '+420777123456', 0, 'alert', 'failed', 'CallMeBot 209: Quota exceeded or banned', null, null, 10]);
+    $nh_ins->execute(['storage_recovered', 'email', 'nh-owner@example.com', 1, 'alert', 'unknown',
+        "Handed to the hosting's mail(); nothing confirmed delivery. SMTP not configured: missing smtp_host.", null, 'fallback', 10]);
+    // A one-off invitation that failed is not a channel's health.
+    $nh_ins->execute(['invitation', 'email', 'pozvany@example.com', 0, 'invitation', 'failed', 'SMTP Error', null, null, 5]);
+    // An old row whose reason still quotes the address.
+    $nh_ins->execute(['down', 'email', 'stary@example.com', 0, 'alert', null, 'SMTP Error: The following recipients failed: stary@example.com', null, null, 30]);
+    [$nh_code, $nh, $nh_raw] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    check('notification_health vrací 200', $nh_code, 200);
+    $nh_by = [];
+    foreach ($nh['problems'] ?? [] as $p) {
+        $nh_by[$p['channel'] . ':' . ($p['recipient'] ?? '')] = $p;
+    }
+    check('WhatsApp, který odmítá, je jmenovaný jako neodesláno', $nh_by['whatsapp:•••456']['state'] ?? null, 'failed');
+    check('i s účtem, kterému nic nechodí', $nh_by['whatsapp:•••456']['username'] ?? null, 'admin');
+    check('a počtem pokusů od posledního potvrzení', $nh_by['whatsapp:•••456']['count'] ?? null, 2);
+    check_true('a kdy naposledy něco prošlo', ($nh_by['whatsapp:•••456']['lastSentAtIso'] ?? null) !== null);
+    check('e-mail přes mail() je nepotvrzený', $nh_by['email:n…@example.com']['state'] ?? null, 'unknown');
+    check('jednorázová pozvánka do stavu kanálů nepatří', isset($nh_by['email:p…@example.com']), false);
+    check('starý řádek bez výsledku se odvodí a označí', [$nh_by['email:s…@example.com']['state'] ?? null, $nh_by['email:s…@example.com']['legacy'] ?? null], ['failed', true]);
+    foreach (['+420777123456', '777123456', 'nh-owner@example.com', 'stary@example.com', 'pozvany@example.com'] as $nh_secret) {
+        check_false("odpověď neobsahuje {$nh_secret}", str_contains((string)$nh_raw, $nh_secret)
+            || str_contains((string)$nh_raw, json_encode($nh_secret)));
+    }
+    check('neořezáno', $nh['truncated'] ?? null, false);
+
+    // A later confirmed send clears the channel: it reaches the owner again.
+    $nh_ins->execute(['storage_recovered', 'whatsapp', '+420777123456', 1, 'alert', 'sent', null, 'Message queued. You have 30 Messages left', null, 1]);
+    [, $nh2] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    $nh2_channels = array_map(fn ($p) => $p['channel'] . ':' . ($p['recipient'] ?? ''), $nh2['problems'] ?? []);
+    check_false('potvrzené odeslání problém WhatsAppu ukončí', in_array('whatsapp:•••456', $nh2_channels, true));
+    check_true('e-mail pořád nepotvrzený', in_array('email:n…@example.com', $nh2_channels, true));
+    $pdo->prepare("UPDATE users SET phone = NULL WHERE username = ?")->execute(['admin']);
     $pdo->exec("DELETE FROM notification_log");
 
     // Every status change is stored as kind 'alert', so the kind alone named

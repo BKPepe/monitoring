@@ -5,6 +5,7 @@ import type { Delivery, OutgoingMessage, OutgoingMessagePage } from '@/api/types
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { PageHeader } from '@/components/layout/page-header';
+import { NotificationHealthBanner } from '@/components/notification-health-banner';
 import { StatBlock } from '@/components/stat-block';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -230,6 +231,8 @@ export function OutgoingMessagesPage() {
           </Button>
         }
       />
+
+      <NotificationHealthBanner />
 
       <FailureBanner failed={failed24h} exact={summary !== null} />
 
