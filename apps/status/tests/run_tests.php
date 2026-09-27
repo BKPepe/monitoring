@@ -1342,11 +1342,10 @@ if (function_exists('bk_metric_column_map')) {
     // X9: a top-level key of the report is either stored as a metric or a
     // deliberate exemption of run_agent_metric_lint.php - otherwise the lint
     // turns red the day the agent really sends it.
-    preg_match('/\$not_metrics = \[(.*?)\n\];/s', (string)file_get_contents(__DIR__ . '/run_agent_metric_lint.php'), $nm);
-    preg_match_all("/'([a-z_0-9]+)'/", (string)preg_replace('#^\s*//.*$#m', '', $nm[1] ?? ''), $nm_keys);
+    $nm_list = require __DIR__ . '/fixtures/agent_not_metrics.php';
     $stored_by_contract = ['wifi_clients_count', 'wan_link_mbit', 'conntrack_count', 'conntrack_pct', 'cpu_core_max_pct', 'cpu_core_max_softirq_pct', 'wan_rx_mbps', 'wan_tx_mbps', 'agent_run_ms', 'agent_prev_cpu_ms'];
-    check('Omnia: každý klíč hlášení je ukládaná metrika, nebo vědomá výjimka lintu', array_values(array_diff(array_keys($omnia_p), $nm_keys[1], $stored_by_contract)), []);
-    check('Omnia: ukládané klíče mezi výjimkami lintu nejsou', array_values(array_intersect($stored_by_contract, $nm_keys[1])), []);
+    check('Omnia: každý klíč hlášení je ukládaná metrika, nebo vědomá výjimka lintu', array_values(array_diff(array_keys($omnia_p), $nm_list, $stored_by_contract)), []);
+    check('Omnia: ukládané klíče mezi výjimkami lintu nejsou', array_values(array_intersect($stored_by_contract, $nm_list)), []);
 }
 
 
