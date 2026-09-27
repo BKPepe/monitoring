@@ -4372,6 +4372,65 @@ foreach (['BK_HEALTH_COMPONENTS', 'BK_HEALTH_ROUTER_LATCHES'] as $hs_name) {
         [bk_location_country(BK_CF_EDGE_UNKNOWN), bk_location_country('Main Server'), bk_location_country('Agent'), bk_location_country(null), bk_location_country('')], [null, null, null, null, null]);
 }
 
+// =======================================================================
+// config.php that prints something (27 Sep 2026)
+//
+// A hand edit left "Ah" before <?php: every JSON answer began with it and
+// /app could not read any of them. db.php now holds such output back and
+// describes it; these are the descriptions, from real PHP includes.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_config_output_issue', 'bk_config_output_excerpt']);
+$co_include = function (string $source): string {
+    $file = tempnam(sys_get_temp_dir(), 'bk_cfg_out');
+    file_put_contents($file, $source);
+    ob_start();
+    try {
+        include $file;
+    } finally {
+        $printed = (string)ob_get_clean();
+        unlink($file);
+    }
+    return $printed;
+};
+$co_case = function (string $source) use ($co_include): ?array {
+    $printed = $co_include($source);
+    return $printed === '' ? null : bk_config_output_issue($printed, $source);
+};
+check('config.php: "Ah" před <?php = 2 bajty před značkou',
+    $co_case("Ah<?php\n\$bk_co_1 = 1;\n"), ['bytes' => 2, 'where' => ['before_open_tag'], 'excerpt' => 'Ah']);
+check('config.php: BOM = 3 bajty před značkou, v úryvku vidět',
+    $co_case("\xEF\xBB\xBF<?php\n\$bk_co_2 = 1;\n"), ['bytes' => 3, 'where' => ['before_open_tag'], 'excerpt' => '\\xEF\\xBB\\xBF']);
+// PHP swallows the one newline right after the closing tag, LF or CRLF: the
+// classic ending prints nothing and must not raise a false alarm. (No closing
+// tag in a line comment here: it would end PHP mode.)
+check('config.php: klasické ?> a jeden konec řádku nevypíše nic', $co_case("<?php\n\$bk_co_3 = 1;\n?>\n"), null);
+check('config.php: ?> a CRLF taky nic', $co_case("<?php\r\n\$bk_co_4 = 1;\r\n?>\r\n"), null);
+check('config.php: prázdný řádek navíc za ?> = 1 bajt za značkou',
+    $co_case("<?php\n\$bk_co_5 = 1;\n?>\n\n"), ['bytes' => 1, 'where' => ['after_close_tag'], 'excerpt' => '\\n']);
+check('config.php: obojí najednou',
+    $co_case("Ah<?php\n?>\n \n")['where'] ?? null, ['before_open_tag', 'after_close_tag']);
+check('config.php: echo uvnitř souboru = z kódu',
+    $co_case("<?php echo 'debug';\n")['where'] ?? null, ['inside']);
+$co_secret = $co_case("define('DB_PASS', 'hunter2x');<?php\n");
+check_false('úryvek je nanejvýš 16 bajtů a heslo v něm není', str_contains((string)($co_secret['excerpt'] ?? 'hunter2x'), 'hunter2x'));
+check('úryvek: 16 bajtů a výpustka', bk_config_output_excerpt(str_repeat('a b ', 10)), 'a b a b a b a b …');
+check('úryvek: token s číslicí se zamaskuje, obyčejné slovo ne', bk_config_output_excerpt('Ahoj k3y9Zq'), 'Ahoj •••');
+// What a hand edit can leave before <?php: a password from the clipboard. Its
+// symbols must not split it into short harmless-looking runs, and a token
+// that crosses byte 16 must not show its first bytes.
+check('úryvek: heslo se symboly celé zamaskované, nic z něj', array_map('bk_config_output_excerpt', [
+    'xK#9pL!mQ2&vR7', 'Tr0ub4dor&3!xyz', "DB_PASS','Heslo", 'xKpLmQrT', "\xEF\xBB\xBFHeslo",
+]), ['•••', '•••', '•••', '•••', '•••']);
+check('úryvek: token přes 16. bajt bez začátku', array_map('bk_config_output_excerpt', [
+    'Ahoj sk_live_ABCDEF', 'Ahoj Ahoj sk_live_ABCDEFGHIJ', 'Ahoj abcdefghijklmnop', 'xxxxxxxxxx 9f3kQzP8Lm2',
+    'password: abcdefgh1234', 'Ah <?php x SECRETPASSWORD',
+]), ['Ahoj •••', 'Ahoj Ahoj •••', 'Ahoj •••', 'xxxxxxxxxx •••', '••• •••', 'Ah <?php x •••']);
+// The limit of it: a lone word of 6 to 11 small letters reads like any other
+// word, so a password that is one stays visible.
+check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_config_output_excerpt', [
+    'Ah', 'Warning', "Ahoj\n", 'pw=hunter hunter',
+]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
+
 $failed = bk_test_report('čisté funkce');
 // Under the coverage runner the process does not exit - the report would never generate.
 if (!defined('BK_COVERAGE_RUN')) {

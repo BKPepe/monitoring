@@ -993,6 +993,20 @@ export interface NotificationHealth {
   truncated: boolean;
 }
 
+/** What config.php printed while it loaded; the server holds these bytes back from every response. */
+export interface ConfigOutput {
+  bytes: number;
+  /** `before_open_tag`, `after_close_tag` and/or `inside` (an echo or a displayed PHP notice). */
+  where: string[];
+  /** The first 16 bytes, control bytes escaped, anything token-like masked. */
+  excerpt: string;
+}
+
+/** What `action=site_health` returns. */
+export interface SiteHealth {
+  configOutput: ConfigOutput | null;
+}
+
 /** A page of the log plus the values the filters offer. */
 export interface OutgoingMessagePage {
   entries: OutgoingMessage[];

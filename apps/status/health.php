@@ -43,6 +43,15 @@ function add_check(&$checks, &$all_ok, $name, $ok, $detail = '') {
 // 1. DB connection
 add_check($checks, $all_ok, 'DB connection', true, 'PDO connected');
 
+// 1b. config.php prints nothing. db.php holds such bytes back from every
+// response, so the site works - which is exactly why this check has to fail:
+// the file was edited by hand and nothing else would say so.
+$bk_cfg_out = bk_config_output();
+add_check($checks, $all_ok, 'config.php output', $bk_cfg_out === null, $bk_cfg_out === null
+    ? 'prints nothing'
+    : sprintf('prints %d bytes (%s), starting "%s"; held back from responses, remove them from the file',
+        $bk_cfg_out['bytes'], implode(', ', $bk_cfg_out['where']), $bk_cfg_out['excerpt']));
+
 // 2. Required tables
 $required_tables = ['monitors', 'monitor_logs', 'vps_metrics', 'settings', 'users', 'monitor_events', 'agent_actions'];
 $stmt = $pdo->query("SHOW TABLES");
@@ -123,7 +132,8 @@ if ($is_cli) {
         $icon = $c['ok'] ? '✓' : '✗';
         echo "  $icon {$c['name']}" . ($c['detail'] ? " — {$c['detail']}" : '') . "\n";
     }
-    echo "\n" . ($all_ok ? 'ALL OK' : 'ISSUES FOUND - import schema.sql') . "\n";
+    // Not every failed check is the schema any more (config.php output).
+    echo "\n" . ($all_ok ? 'ALL OK' : 'ISSUES FOUND - see the ✗ lines above') . "\n";
     exit;
 }
 
@@ -166,7 +176,7 @@ try {
             </div>
             <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
                 <?php echo $result['checks_passed']; ?>/<?php echo $result['checks_total']; ?> kontrol prošlo &middot; <?php echo date('j.n.Y H:i'); ?>
-                <?php if (!$all_ok): ?> &middot; <strong style="color: var(--color-red);">Zkontrolujte databázové schéma</strong><?php endif; ?>
+                <?php if (!$all_ok): ?> &middot; <strong style="color: var(--color-red);">Opravte neprošlé kontroly níže</strong><?php endif; ?>
             </div>
         </div>
     </div>

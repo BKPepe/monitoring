@@ -2107,6 +2107,20 @@ if ($action === 'notification_log') {
     exit;
 }
 
+// The site's own faults that no data path reports (the /app warning). Admin
+// only: an excerpt of a hand-edited config.php is not for everyone.
+// configOutput: what config.php prints while it loads (db.php holds it back
+// from every response), or null.
+if ($action === 'site_health') {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    echo json_encode(['configOutput' => bk_config_output()], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // Which channel has stopped reaching whom (the /app warning). Admin only:
 // even masked, it says who is not being notified.
 if ($action === 'notification_health') {

@@ -722,6 +722,8 @@ foreach ([
     'audit_logs' => 'action=audit_logs',
     // Even masked, it says who is not being reached.
     'notification_health' => 'action=notification_health',
+    // An excerpt of config.php.
+    'site_health' => 'action=site_health',
 ] as $ra_name => $ra_query) {
     [$ra_code] = api_get_auth($base, $ra_query, $jar3);
     check("běžný uživatel nedostane {$ra_name}", $ra_code, 403);
@@ -6616,6 +6618,57 @@ try {
         $pdo->exec("DELETE FROM monitors WHERE id = {$w2m_mid}");
     }
 }
+
+// =======================================================================
+// config.php that prints something (27 Sep 2026)
+//
+// A hand edit on the server left "Ah" before <?php. Every endpoint that loads
+// config.php answered "Ah{...}", /app could not parse a single answer for an
+// hour, and the monitoring noticed nothing. db.php now holds such output
+// back: the machine endpoints answer exactly as before, health.php fails its
+// check and site_health tells an admin what the file prints.
+// =======================================================================
+$co_clean = (string)file_get_contents($config_path);
+[, $co_ps_clean] = api_get($base, 'action=public_status');
+try {
+    bk_test_put_config($config_path, 'Ah' . $co_clean);
+    [$c, $j, $b] = api_get($base, 'action=public_status');
+    check('config.php s „Ah": veřejné API odpoví čistým JSONem', [$c, substr($b, 0, 1), is_array($j)], [200, '{', true]);
+    check('se stejnými klíči jako s čistým souborem', array_keys((array)$j), array_keys((array)$co_ps_clean));
+    [$c, , $b] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], '{"agent_key":"neexistujici"}');
+    check_true('příjem od agenta odpoví JSONem bez „Ah"', is_array(json_decode($b, true)) && !str_starts_with($b, 'Ah'));
+    [$c, , $b] = hb_ping($base, str_repeat('b', 48));
+    check_true('heartbeat taky', is_array(json_decode($b, true)) && !str_starts_with($b, 'Ah'));
+    [$c, $j, $b] = api_get_auth($base, 'action=site_health', $cookie_jar);
+    check('site_health adminovi řekne 2 bajty před <?php a jaké',
+        [$c, $j['configOutput'] ?? null], [200, ['bytes' => 2, 'where' => ['before_open_tag'], 'excerpt' => 'Ah']]);
+    check('a sám začíná JSONem', substr($b, 0, 1), '{');
+    [$c] = api_get($base, 'action=site_health');
+    check('anonym site_health nedostane', $c, 403);
+    [$c, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    $co_health = json_decode($b, true);
+    $co_check = array_values(array_filter($co_health['checks'] ?? [], fn ($x) => ($x['name'] ?? '') === 'config.php output'))[0] ?? [];
+    check('health.php to hlásí jako chybu', [$c, $co_health['success'] ?? null, $co_check['ok'] ?? null], [200, false, false]);
+    check_true('s počtem bajtů a úryvkem', str_contains((string)($co_check['detail'] ?? ''), 'prints 2 bytes')
+        && str_contains((string)($co_check['detail'] ?? ''), '"Ah"'));
+
+    // The classic ending: PHP swallows the one newline after the closing tag.
+    bk_test_put_config($config_path, $co_clean . "?>\n");
+    [$c, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+    check('klasické ukončení značkou a koncem řádku nic nevypisuje',
+        [$c, array_key_exists('configOutput', (array)$j) ? $j['configOutput'] : 'chybí'], [200, null]);
+    [, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    $co_check = array_values(array_filter(json_decode($b, true)['checks'] ?? [], fn ($x) => ($x['name'] ?? '') === 'config.php output'))[0] ?? [];
+    check('a health.php ho nechá projít', $co_check['ok'] ?? null, true);
+    bk_test_put_config($config_path, $co_clean . "?>\n\n");
+    [, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+    check('prázdný řádek navíc za koncovou značkou je 1 bajt za ní',
+        $j['configOutput'] ?? null, ['bytes' => 1, 'where' => ['after_close_tag'], 'excerpt' => '\\n']);
+} finally {
+    bk_test_put_config($config_path, $co_clean);
+}
+[, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('s čistým config.php site_health nic nehlásí', array_key_exists('configOutput', (array)$j) ? $j['configOutput'] : 'x', null);
 
 // =======================================================================
 // First run: the installer (site W1-5).

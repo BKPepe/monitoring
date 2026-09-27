@@ -56,8 +56,30 @@ $bk_setup_reason = null;
 // over it. A fresh upload then died on the sample's placeholder credentials
 // with a Czech 500 page quoting the raw PDO error. Now it is a first run: the
 // app's installer (/app/setup) writes config.php after testing the connection.
+//
+// Whatever config.php prints while it loads is held back. On 27 Sep 2026 a
+// hand edit left "Ah" before <?php: every JSON answer began with those two
+// bytes, /app could not parse any of them for an hour, and nothing said why.
+// The bytes never reach a response now, and they are not dropped either:
+// bk_config_output() keeps what they were for health.php and /app.
+$GLOBALS['bk_config_output'] = null;
 if (is_file(__DIR__ . '/config.php')) {
-    require_once __DIR__ . '/config.php';
+    $bk_config_ob_level = ob_get_level();
+    ob_start();
+    try {
+        require_once __DIR__ . '/config.php';
+    } finally {
+        // Every buffer above ours too, in case config.php opened one of its own.
+        $bk_config_printed = '';
+        while (ob_get_level() > $bk_config_ob_level) {
+            $bk_config_printed = (string)ob_get_clean() . $bk_config_printed;
+        }
+    }
+    if ($bk_config_printed !== '') {
+        $GLOBALS['bk_config_output'] = bk_config_output_issue($bk_config_printed,
+            (string)@file_get_contents(__DIR__ . '/config.php'));
+        bk_config_output_log($GLOBALS['bk_config_output']);
+    }
 } else {
     $bk_setup_reason = 'config_missing';
 }
@@ -263,6 +285,116 @@ function bk_needs_setup(string $reason): never {
     }
     echo "needs_setup\n";
     exit;
+}
+
+/**
+ * What config.php printed while it loaded, or null when it printed nothing.
+ *
+ * @return array{bytes: int, where: list<string>, excerpt: string}|null
+ */
+function bk_config_output(): ?array {
+    $issue = $GLOBALS['bk_config_output'] ?? null;
+    return is_array($issue) ? $issue : null;
+}
+
+/**
+ * Describes output that config.php printed: how many bytes, where in the file
+ * they come from, and a short excerpt that is safe to show.
+ *
+ * where: before_open_tag (text or a BOM ahead of "<?php"), after_close_tag
+ * (text after the last "?>"; PHP swallows the one newline right after it, so
+ * the classic "?>\n" prints nothing) and inside (what neither explains: an
+ * echo, or a notice PHP displayed while the file ran).
+ *
+ * @return array{bytes: int, where: list<string>, excerpt: string}
+ */
+function bk_config_output_issue(string $printed, string $source): array {
+    $where = [];
+    $explained = 0;
+    $open = stripos($source, '<?php');
+    if ($open === false) {
+        $open = strpos($source, '<?');
+    }
+    if ($open !== false && $open > 0 && str_starts_with($printed, substr($source, 0, $open))) {
+        $where[] = 'before_open_tag';
+        $explained += $open;
+    }
+    $close = strrpos($source, '?>');
+    if ($close !== false && strpos($source, '<?', $close) === false) {
+        $trail = (string)preg_replace('/^(\r\n|\n|\r)/', '', substr($source, $close + 2));
+        if ($trail !== '' && strlen($printed) - $explained >= strlen($trail) && str_ends_with($printed, $trail)) {
+            $where[] = 'after_close_tag';
+            $explained += strlen($trail);
+        }
+    }
+    if ($explained < strlen($printed)) {
+        $where[] = 'inside';
+    }
+    return ['bytes' => strlen($printed), 'where' => $where, 'excerpt' => bk_config_output_excerpt($printed)];
+}
+
+/**
+ * The first 16 bytes of the stray output, safe to show. The output of
+ * config.php can be a line of the file itself, a password included, so no
+ * more than this is kept and anything that looks like a secret is masked.
+ *
+ * Masking comes first and judges each whole run of non-blank bytes: cut
+ * first, and the start of a long token would pass for a short word. A run is
+ * masked when it is 12 bytes or longer, or 6 or longer with anything but
+ * letters in it (a digit, a symbol, a byte outside ASCII) or a capital after
+ * a small letter. Short words and plain words stay readable; a masked run
+ * that crosses byte 16 shows as its mask, never as its first bytes. The rest
+ * becomes printable ASCII: control bytes and anything outside ASCII as \n,
+ * \r, \t or \xNN (a BOM stays visible).
+ */
+function bk_config_output_excerpt(string $printed): string {
+    $out = '';
+    $used = 0;
+    preg_match_all('/[ \t\n\r\x0B\x0C]+|[^ \t\n\r\x0B\x0C]+/', $printed, $runs);
+    foreach ($runs[0] as $run) {
+        if ($used >= 16) {
+            break;
+        }
+        $len = strlen($run);
+        if ($len >= 6 && !str_contains(" \t\n\r\x0B\x0C", $run[0])
+            && ($len >= 12 || preg_match('/[^A-Za-z]|[a-z][A-Z]/', $run) === 1)) {
+            $out .= '•••';
+            $used += $len;
+            continue;
+        }
+        for ($i = 0; $i < $len && $used < 16; $i++, $used++) {
+            $c = $run[$i];
+            $o = ord($c);
+            $out .= match (true) {
+                $c === "\n" => '\n',
+                $c === "\r" => '\r',
+                $c === "\t" => '\t',
+                $o >= 0x20 && $o < 0x7F => $c,
+                default => sprintf('\x%02X', $o),
+            };
+        }
+    }
+    return strlen($printed) > $used ? $out . '…' : $out;
+}
+
+/**
+ * One line in the PHP error log about the stray output: when it first shows
+ * up, when it changes, and then once an hour - not on every request.
+ * Without a writable stamp file it logs every time (loud beats silent).
+ *
+ * @param array{bytes: int, where: list<string>, excerpt: string} $issue
+ */
+function bk_config_output_log(array $issue): void {
+    // Only a hash on disk: even masked, the excerpt has no business in a file.
+    $signature = md5($issue['bytes'] . '|' . implode(',', $issue['where']) . '|' . $issue['excerpt']);
+    $dir = is_dir(__DIR__ . '/cache') && is_writable(__DIR__ . '/cache') ? __DIR__ . '/cache' : sys_get_temp_dir();
+    $stamp = $dir . '/bk_config_output_' . md5(__DIR__) . '.txt';
+    if (is_file($stamp) && (string)@file_get_contents($stamp) === $signature && time() - (int)@filemtime($stamp) < 3600) {
+        return;
+    }
+    @file_put_contents($stamp, $signature);
+    error_log('[db] config.php prints ' . $issue['bytes'] . ' bytes (' . implode(', ', $issue['where'])
+        . '), starting "' . $issue['excerpt'] . '". They are held back from every response; remove them from the file.');
 }
 
 /**

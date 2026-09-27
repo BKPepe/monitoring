@@ -4754,6 +4754,19 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.tabs_label': { cs: 'Části nastavení', en: 'Settings sections' },
   'users.totp_sr': { cs: 'Dvoufázové ověření zapnuto', en: 'Two-factor authentication on' },
   'outgoing.log_title': { cs: 'Protokol', en: 'Log' },
+  'sitehealth.probe_failed': { cs: 'Kontrola serveru se nepovedla', en: 'The server check failed' },
+  'sitehealth.config_title': {
+    cs: 'config.php vypisuje {bytes} B ({where}): opravte soubor',
+    en: 'config.php prints {bytes} bytes ({where}): fix the file',
+  },
+  'sitehealth.where_before': { cs: 'před <?php', en: 'before <?php' },
+  'sitehealth.where_after': { cs: 'za ?>', en: 'after ?>' },
+  'sitehealth.where_inside': { cs: 'z kódu souboru', en: 'from the code in the file' },
+  'sitehealth.config_excerpt': { cs: 'Začíná takhle', en: 'It starts with' },
+  'sitehealth.config_hint': {
+    cs: 'Server tyhle bajty ze všech odpovědí vynechává, takže API i aplikace fungují. Soubor ale někdo upravil ručně: smažte vše před <?php, a je-li na konci ?>, i všechno za ním (nebo ?> smažte).',
+    en: 'The server holds these bytes back from every response, so the API and the app work. The file was edited by hand, though: delete everything before <?php and, if it ends with ?>, everything after it (or delete the ?>).',
+  },
   'notifhealth.title_failed': { cs: 'Upozornění někomu nedoráží', en: 'Alerts are not reaching someone' },
   'notifhealth.probe_failed': {
     cs: 'Stav doručování zpráv nelze zjistit',
