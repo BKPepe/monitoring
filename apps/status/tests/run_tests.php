@@ -2275,6 +2275,8 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_rec_days_with_data', 'bk_router_rec_window', 'bk_rec_rules_wan_week', 'bk_rec_rules_wan_tests',
     // The weekly rules cut W out of the thirty loaded days with it.
     'bk_rec_metrics_of',
+    // What the WAN port's own counters measured, and the texts built from it.
+    'bk_rec_wan_port_cause', 'bk_rec_wan_port_texts', 'bk_rec_wan_counters_cmd',
     'bk_rec_rules_gap', 'bk_rec_dir_label', 'bk_router_rec_render', 'bk_rec_area_of',
     // The aggregate rules ARE the classifier's consumer, so it is loaded here
     // too; the block below re-loads it for its own tests.
@@ -2373,8 +2375,9 @@ if (function_exists('bk_rec_rules_wan_week')) {
     check('výpadky přes restart routeru se nepočítají (krok je null)',
         bk_rec_rules_wan_week($rw_in($rw_step('wan_link_flaps', [])), [])['not_evaluated']['wan_link_flaps'] ?? null,
         'wan_link_flaps');
+    // wan_link_below_plan, wan_link_flaps and the three keys of wan_port_errors.
     check('méně než 4 dny dat týdenní pravidla nevyhodnotí',
-        count(bk_rec_rules_wan_week($rw_in($rw_series('cpu', [10.0, 10.0, 10.0])), [])['not_evaluated']), 3);
+        count(bk_rec_rules_wan_week($rw_in($rw_series('cpu', [10.0, 10.0, 10.0])), [])['not_evaluated']), 5);
 }
 
 // --- The weekly WAN and clock rules read only W --------------------------------
@@ -2437,6 +2440,248 @@ if (function_exists('bk_rec_rules_wan_week') && function_exists('bk_rec_rules_ga
         array_fill_keys($w1_win['days30'], 40.0))), [])['items'], fn (array $i): bool => $i['id'] === 'wan_port_errors'));
     check('chyby portu WAN: měsíc chyb dá v textu 7 dní a součet týdne',
         [$w1_month[0]['params']['days'] ?? null, $w1_month[0]['params']['errors'] ?? null], [7, 280.0]);
+}
+
+// --- The WAN port finding names the measured cause ------------------------------
+// On mvneta rx_errors mixes damaged frames from the line with frames the router
+// could not take in, so the finding used to blame "the SFP module, the fibre or
+// its connector" whatever happened. With the port's own counters (agent
+// 0.1.13) it names what was measured; without them it says it cannot tell and
+// gives the command that can. A line fault and an MTU mismatch are items of
+// their own, so a mute of today's unexplained finding never hides them.
+if (function_exists('bk_rec_wan_port_cause')) {
+    bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_router_rec_split']);
+    $pe_win = bk_router_rec_window(date('Y-m-d'));
+    $pe_days = $pe_win['days'];
+    // The day before W: the split covers a day only when it also has a
+    // reading from the day before (the upgrade day holds older errors).
+    $pe_before = $pe_win['days30'][22];
+    $pe_step = function (string $key, array $totals): array {
+        $out = [];
+        foreach ($totals as $day => $total) {
+            $out[$day] = ['min' => 0.0, 'avg' => $total / 24.0, 'max' => $total, 'samples' => 24];
+        }
+        return [$key => $out];
+    };
+    $pe_split_keys = ['crc' => 'wan_crc_errors', 'mac_rx' => 'wan_mac_rx_errors', 'overrun' => 'wan_rx_overrun',
+        'discard' => 'wan_rx_discard', 'refill' => 'wan_refill_errors', 'oversize' => 'wan_oversize'];
+    // $errors: the W days' error totals; $split: counter => total on the FIRST
+    // W day, every other covered day reads 0. $cover: the days the split has rows.
+    $pe_in = function (array $errors, ?array $split, array $over = [], ?array $cover = null)
+        use ($rw_in, $pe_win, $pe_days, $pe_before, $pe_step, $pe_split_keys): array {
+        $metrics = $pe_step('wan_errors', array_combine(array_slice($pe_days, 0, count($errors)), $errors));
+        if ($split !== null) {
+            $cover ??= array_merge([$pe_before], $pe_days);
+            foreach ($pe_split_keys as $name => $metric) {
+                $totals = array_fill_keys($cover, 0.0);
+                if (in_array($pe_days[0], $cover, true)) {
+                    $totals[$pe_days[0]] = (float)($split[$name] ?? 0);
+                }
+                $metrics += $pe_step($metric, $totals);
+            }
+        }
+        $in = $rw_in($metrics, $over);
+        $in['window']['days30'] = $pe_win['days30'];
+        // rw_in adds its cpu days for W only; the day before needs no cpu row.
+        return $in;
+    };
+    $pe_item = function (array $in, array $state = []): ?array {
+        foreach (bk_rec_rules_wan_week($in, $state)['items'] as $item) {
+            if ($item['id'] === 'wan_port_errors') {
+                return $item;
+            }
+        }
+        return null;
+    };
+    $pe_shape = fn (?array $i): array => $i === null ? [] : [$i['key'], $i['severity'], $i['params']['cause'], $i['params']['branch']];
+    // `??` cannot tell a missing param from an honest null.
+    $pe_param = fn (?array $i, string $k) => is_array($i) && array_key_exists($k, $i['params']) ? $i['params'][$k] : 'chybí';
+    $pe_text = fn (string $lang, ?array $i, string $part): string => $i === null ? '' : (string)bk_with_email_lang($lang,
+        fn (): array => bk_router_rec_render($i))[$part];
+    $pe_120 = [40.0, 40.0, 40.0];
+
+    check('příčina: CRC nad prahem = závada linky pod vlastním klíčem, varování',
+        $pe_shape($pe_item($pe_in($pe_120, ['crc' => 8, 'mac_rx' => 4]))),
+        ['wan_port_errors:line', 'warning', 'physical', 'errors']);
+    // The floor is max(10, 10 % of the week's errors): 100 errors -> 10, 200 -> 20.
+    $pe_cause = fn (array $errors, array $split): ?string => $pe_item($pe_in($errors, $split))['params']['cause'] ?? null;
+    check('příčina: práh linky je max(10, 10 % chyb) - 9 a 10 ze 100, 19 a 24 ze 200',
+        [$pe_cause([40.0, 40.0, 20.0], ['crc' => 9]), $pe_cause([40.0, 40.0, 20.0], ['crc' => 10]),
+            $pe_cause([80.0, 80.0, 40.0], ['crc' => 19]), $pe_cause([80.0, 80.0, 40.0], ['crc' => 24])],
+        ['unknown', 'physical', 'unknown', 'physical']);
+    // Router load needs the same bar as a line fault: some rx_errors sources
+    // have no counter at all, so a single overrun explains nothing.
+    check('příčina: přetečení FIFO a nedoplněné buffery nad prahem = zátěž routeru, jen informace; pod prahem neznámá',
+        [$pe_shape($pe_item($pe_in($pe_120, ['overrun' => 50]))), $pe_cause($pe_120, ['refill' => 3, 'crc' => 11]),
+            $pe_cause($pe_120, ['overrun' => 11]), $pe_cause($pe_120, ['overrun' => 12]), $pe_cause($pe_120, ['overrun' => 6, 'refill' => 6]),
+            $pe_cause([400.0, 400.0, 200.0], ['crc' => 90, 'overrun' => 1])],
+        [['wan_port_errors', 'info', 'capacity', 'errors'], 'unknown', 'unknown', 'capacity', 'capacity', 'unknown']);
+    // A step sum read back from a FLOAT column: 10 CRC over 22 hourly rows is
+    // 22 x 0.454545 = 9.99999, and it still meets the floor of 10.
+    $pe_float = $pe_in([40.0, 40.0, 20.0], ['crc' => 10]);
+    $pe_float['window']['metrics']['wan_crc_errors'][$pe_days[0]] = ['min' => 0.0, 'avg' => 0.454545, 'max' => 1.0, 'samples' => 22];
+    check('příčina: součet kroků z FLOAT se zaokrouhlí na celé číslo, 9,99999 CRC splní práh 10',
+        [$pe_item($pe_float)['params']['cause'] ?? null, $pe_item($pe_float)['params']['crc'] ?? null], ['physical', 10.0]);
+    check('příčina: příliš dlouhé rámce = nesoulad MTU pod vlastním klíčem',
+        $pe_shape($pe_item($pe_in($pe_120, ['oversize' => 30, 'overrun' => 5]))),
+        ['wan_port_errors:mtu', 'warning', 'config', 'errors']);
+    check('příčina: počítadla, která nic nevysvětlí, = neznámá, varování jako dřív',
+        $pe_shape($pe_item($pe_in($pe_120, ['discard' => 400]))), ['wan_port_errors', 'warning', 'unknown', 'errors']);
+    // Coverage: an error day without a reading, or the day of the upgrade.
+    $pe_gap = $pe_in($pe_120, ['crc' => 30], [], array_merge([$pe_before], [$pe_days[0], $pe_days[1]]));
+    $pe_upgrade = $pe_in($pe_120, ['crc' => 30], [], $pe_days);
+    check('příčina: den s chybami bez čtení počítadel nebo den nasazení = neznámá, bez rozpadu',
+        [$pe_shape($pe_item($pe_gap)), $pe_param($pe_item($pe_gap), 'crc'), $pe_param($pe_item($pe_upgrade), 'cause')],
+        [['wan_port_errors', 'warning', 'unknown', 'errors'], null, 'unknown']);
+    check('starší agent bez počítadel: neznámá příčina, varování, rozpad null',
+        [$pe_shape($pe_item($pe_in($pe_120, null))), $pe_param($pe_item($pe_in($pe_120, null)), 'overrun')],
+        [['wan_port_errors', 'warning', 'unknown', 'errors'], null]);
+
+    // Hysteresis spans the three keys: a finding that moves from "unknown" to
+    // a line fault holds at the hold threshold instead of starting over.
+    check('trvající :line drží 60 chyb ve 2 dnech, neaktivní ne',
+        [$pe_item($pe_in([30.0, 30.0], ['crc' => 20]), ['wan_port_errors:line' => ['active' => 1]])['key'] ?? null,
+            $pe_item($pe_in([30.0, 30.0], ['crc' => 20]), ['wan_port_errors' => ['active' => 1]])['key'] ?? null,
+            $pe_item($pe_in([30.0, 30.0], ['crc' => 20]))],
+        ['wan_port_errors:line', 'wan_port_errors:line', null]);
+    check('nevyhodnocený týden nechá na pokoji všechny tři klíče',
+        array_keys(array_filter(bk_rec_rules_wan_week($rw_in($rw_series('cpu', [10.0, 10.0, 10.0])), [])['not_evaluated'],
+            fn ($rule) => $rule === 'wan_port_errors')),
+        ['wan_port_errors', 'wan_port_errors:line', 'wan_port_errors:mtu']);
+
+    // A mute of today's unexplained finding covers its own key only.
+    $pe_muted = ['wan_port_errors' => ['active' => 1, 'muted_at' => '2026-09-20 10:00:00', 'muted_severity' => 'warning']];
+    $pe_split_of = fn (?array $i): array => array_map(fn (array $x): string => $x['key'],
+        bk_router_rec_split([$i], $pe_muted)['items']);
+    check('ztlumení neznámé příčiny neschová pozdější závadu linky',
+        [$pe_split_of($pe_item($pe_in($pe_120, ['crc' => 30]))), $pe_split_of($pe_item($pe_in($pe_120, null)))],
+        [['wan_port_errors:line'], []]);
+
+    // The ring branch alone: a share of the week's packets, and only a
+    // MEASURED overrun may say "could not keep up".
+    $pe_ring = function (?array $split) use ($pe_in, $pe_days, $pe_step, $rw_in, $pe_win, $pe_before, $pe_split_keys): array {
+        $in = $pe_in([1.0], $split, ['rx_packets' => array_fill_keys($pe_days, 1000000.0 / 7.0)]);
+        $in['window']['metrics'] += $pe_step('wan_ring_drops', [$pe_days[0] => 700.0, $pe_days[1] => 700.0]);
+        return $in;
+    };
+    $pe_r_old = $pe_item($pe_ring(null));
+    $pe_r_ovr = $pe_item($pe_ring(['overrun' => 200, 'discard' => 1200]));
+    $pe_r_one = $pe_item($pe_ring(['overrun' => 1, 'discard' => 1399]));
+    check('jen fronta: bez rozpadu neznámá, s přetečením nad prahem zátěž, vždy jen informace',
+        [$pe_shape($pe_r_old), $pe_shape($pe_r_ovr), $pe_r_old['params']['days'] ?? null],
+        [['wan_port_errors', 'info', 'unknown', 'ring'], ['wan_port_errors', 'info', 'capacity', 'ring'], 2]);
+    // The ring's floor is max(10, 10 % of the week's ring drops): 140 of 1400.
+    check('jen fronta: práh přetečení je 10 % zahozených - 139 ne, 140 ano, 1 z 1400 neznámá s příkazem',
+        [$pe_item($pe_ring(['overrun' => 139, 'discard' => 1261]))['params']['cause'] ?? null,
+            $pe_item($pe_ring(['overrun' => 140, 'discard' => 1260]))['params']['cause'] ?? null,
+            $pe_shape($pe_r_one), str_contains($pe_text('en', $pe_r_one, 'action'), 'ethtool -S eth2')],
+        ['unknown', 'capacity', ['wan_port_errors', 'info', 'unknown', 'ring'], true]);
+    check_true('jen fronta ze starých řádků: "zahozeno (filtr adres…)", nikdy "nestíhal"',
+        str_contains($pe_text('en', $pe_r_old, 'measured'), 'discarded 1400 received frames')
+        && !preg_match('/keep up|could not take frames/', $pe_text('en', $pe_r_old, 'measured'))
+        && !str_contains($pe_text('cs', $pe_r_old, 'measured'), 'nestíhal')
+        && str_contains($pe_text('en', $pe_r_old, 'action'), 'harmless filtering'));
+    check_true('jen fronta s rozpadem: zahozené a ztracené rámce zvlášť, nestíhání jen u naměřeného přetečení',
+        str_contains($pe_text('en', $pe_r_ovr, 'measured'), 'The port discarded 1200 frames (address filter or lack of room). Frames lost to a full receive FIFO: 200; the router could not keep up')
+        && str_contains($pe_text('cs', $pe_r_ovr, 'measured'), 'plné přijímací frontě FIFO: 200; router nestíhal'));
+    check_true('chyby se starou frontou: zahozené rámce bez tvrzení o přetečení',
+        str_contains($pe_text('en', $pe_item($pe_in($pe_120, null, [])), 'measured'), 'logged 120 receive errors on 3 of the last 7 days')
+        && !str_contains($pe_text('en', $pe_item($pe_in($pe_120, null)), 'measured'), 'dropped packets'));
+
+    // Texts by cause. Fibre is never claimed; copper only on proof.
+    $pe_phys = $pe_item($pe_in($pe_120, ['crc' => 30, 'overrun' => 4]));
+    $pe_copper = $pe_item($pe_in($pe_120, ['crc' => 30], ['details' => ['wan_link_dev' => 'eth2',
+        'wan_path' => ['sfp_phy_hwmon' => true, 'sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000,
+            'sfp_rx_power_uw' => 350, 'sfp_rx_power_min_uw' => 50]]]));
+    $pe_optic = $pe_item($pe_in($pe_120, ['crc' => 30], ['details' => ['wan_link_dev' => 'eth2',
+        'wan_path' => ['sfp_phy_hwmon' => false, 'sfp_rx_power_uw' => 350, 'sfp_rx_power_min_uw' => 50]]]));
+    check_true('závada linky: rozpad počítadel ve větě, akce jmenuje optiku i metaliku',
+        str_contains($pe_text('en', $pe_phys, 'measured'), "The port's own counters: 30 CRC errors, 0 MAC receive errors, 4 receive FIFO overruns")
+        && str_contains($pe_text('en', $pe_phys, 'action'), 'fibre or cable'));
+    check_true('metalický modul: akce bez optiky, s teplotou modulu proti jeho vlastní mezi, bez dBm',
+        !preg_match('/fibre|optick/i', $pe_text('en', $pe_copper, 'action') . $pe_text('cs', $pe_copper, 'action'))
+        && str_contains($pe_text('en', $pe_copper, 'action'), 'copper (RJ45)')
+        // The port sees its link to the module, so the module comes first.
+        && str_contains($pe_text('en', $pe_copper, 'action'), 'reseat the module and watch its temperature first, then replace the patch cable')
+        && str_contains($pe_text('cs', $pe_copper, 'action'), 'nejdřív znovu zasuňte modul')
+        && str_contains($pe_text('en', $pe_copper, 'measured'), 'The SFP module reads 49 °C; its own warning limit is 70 °C.')
+        && !str_contains($pe_text('en', $pe_copper, 'measured'), 'dBm'));
+    check('modul bez PHY: výkon v dBm proti vlastní spodní mezi, optika se netvrdí',
+        [$pe_optic['params']['module'], $pe_optic['params']['sfp_rx_dbm'], $pe_optic['params']['sfp_rx_min_dbm'],
+            str_contains($pe_text('en', $pe_optic, 'measured'), 'The module receives -4.6 dBm; its own low warning is -13.0 dBm.')],
+        [null, -4.6, -13.0, true]);
+    check_true('nesoulad MTU a zátěž: vlastní akce, žádná výměna hardwaru',
+        str_contains($pe_text('en', $pe_item($pe_in($pe_120, ['oversize' => 30])), 'action'), 'MTU')
+        && str_contains($pe_text('en', $pe_item($pe_in($pe_120, ['overrun' => 30])), 'action'), 'Nothing needs replacing'));
+    $pe_unknown = $pe_item($pe_in($pe_120, null));
+    check('neznámá příčina: příkaz v akci i v bloku stránky, známá příčina příkaz nemá',
+        [bk_rec_command($pe_unknown), str_contains($pe_text('en', $pe_unknown, 'action'), (string)bk_rec_command($pe_unknown)),
+            bk_rec_command($pe_phys)],
+        ["ethtool -S eth2 | grep -E 'bad_crc_event|mac_receive_error|oversize_received|rx_overrun|rx_discard|refill_errors'", true, null]);
+
+    // Speed-test minutes: the scan's own numbers; NULL flags are "not recorded".
+    $pe_st = fn (?array $minutes): string => $pe_text('en', $pe_item($pe_in($pe_120, null, ['wan_error_minutes' => $minutes])), 'measured');
+    check('test rychlosti: věty z vlastních čísel minutového průchodu',
+        [str_contains($pe_st(['errors' => 130, 'during' => 90, 'unknown' => 10]), 'Of the 130 errors counted minute by minute, 90 fell in minutes with a speed test running or just finished. For 10 of them it is not recorded'),
+            str_contains($pe_st(['errors' => 120, 'during' => 0, 'unknown' => 120]), 'For the 120 errors counted minute by minute it is not recorded whether a speed test was running.'),
+            str_contains($pe_st(['errors' => 120, 'during' => 0, 'unknown' => 120]), 'Of the'),
+            str_contains($pe_st(null), 'speed test')],
+        [true, true, false, false]);
+
+    // Speed tests are advised against only where the minute scan put errors
+    // in them; the ring text shows no scan numbers and never advises it.
+    $pe_cap = fn (?array $minutes): ?array => $pe_item($pe_in($pe_120, ['overrun' => 30], ['wan_error_minutes' => $minutes]));
+    $pe_cap_st = $pe_cap(['errors' => 120, 'during' => 90, 'unknown' => 0]);
+    $pe_cap_none = $pe_cap(['errors' => 120, 'during' => 0, 'unknown' => 0]);
+    check('zátěž: rada o testech rychlosti jen s chybami v minutách testu, jinak a u fronty bez ní',
+        [str_contains($pe_text('en', $pe_cap_st, 'action'), 'fewer or shorter speed tests lower the part counted in speed-test minutes'),
+            str_contains($pe_text('cs', $pe_cap_st, 'action'), 'méně nebo kratší testy'),
+            (bool)preg_match('/speed.test/i', $pe_text('en', $pe_cap_none, 'action')), str_contains($pe_text('cs', $pe_cap_none, 'action'), 'test'),
+            (bool)preg_match('/speed.test/i', $pe_text('en', $pe_cap(null), 'action')),
+            (bool)preg_match('/speed.test/i', $pe_text('en', $pe_r_ovr, 'action')), str_contains($pe_text('cs', $pe_r_ovr, 'action'), 'test'),
+            str_contains($pe_text('en', $pe_cap_none, 'action'), 'Nothing needs replacing.')],
+        [true, true, false, false, false, false, false, true]);
+
+    // What a mute of an unexplained finding does: with the counters a later
+    // line fault gets its own key once they cover the week; without them it
+    // stays under the muted key, and the text must not promise otherwise.
+    $pe_unknown_split = $pe_item($pe_in($pe_120, ['discard' => 400]));
+    $pe_no_flag = fn (string $lang): string => (string)bk_with_email_lang($lang, fn (): array => bk_rec_wan_port_texts(
+        ['name' => 'eth2', 'branch' => 'errors', 'cause' => 'unknown', 'errors' => 120.0, 'days' => 3], 'eth2'))[1];
+    check('neznámá příčina: slib o ztlumení jen s počítadly, bez nich varování, bez příznaku nic',
+        [$pe_unknown_split['params']['line_counters'] ?? null, $pe_unknown['params']['line_counters'] ?? null,
+            str_contains($pe_text('en', $pe_unknown_split, 'action'), "Once the port's counters cover the whole week, a line fault they show clearly is reported as its own item even if you mute this one; a weaker one stays under this item."),
+            str_contains($pe_text('en', $pe_unknown_split, 'action'), 'has not sent'),
+            str_contains($pe_text('en', $pe_unknown, 'action'), 'has not sent the counters that tell a line fault apart'),
+            str_contains($pe_text('en', $pe_unknown, 'action'), 'its own item'),
+            str_contains($pe_text('cs', $pe_unknown, 'action'), 'by schovalo i pozdější závadu linky'),
+            (bool)preg_match('/its own item|has not sent/', $pe_no_flag('en')), (bool)preg_match('/samostatná|neposlal/', $pe_no_flag('cs'))],
+        [true, false, true, false, true, false, true, false, false]);
+
+    // Every variant in both languages: no placeholder left, no double space,
+    // and the two languages differ.
+    $pe_variants = ['physical' => $pe_phys, 'copper' => $pe_copper, 'optic' => $pe_optic, 'unknown' => $pe_unknown,
+        'unknown_split' => $pe_unknown_split,
+        'config' => $pe_item($pe_in($pe_120, ['oversize' => 30])), 'capacity' => $pe_item($pe_in($pe_120, ['overrun' => 30])),
+        'capacity_st' => $pe_cap_st, 'capacity_none' => $pe_cap_none,
+        'ring_old' => $pe_r_old, 'ring_overrun' => $pe_r_ovr, 'ring_one' => $pe_r_one,
+        'speedtest' => $pe_item($pe_in($pe_120, null, ['wan_error_minutes' => ['errors' => 130, 'during' => 90, 'unknown' => 10]])),
+        'no_dev' => $pe_item($pe_in($pe_120, null, ['details' => []]))];
+    $pe_bad = [];
+    foreach ($pe_variants as $pe_name => $pe_v) {
+        foreach (['measured', 'action'] as $pe_part) {
+            foreach (['cs', 'en'] as $pe_lang) {
+                $pe_t = $pe_text($pe_lang, $pe_v, $pe_part);
+                if ($pe_t === '' || preg_match('/%\d*\$?[sd]/', $pe_t) || str_contains($pe_t, '  ') || str_starts_with($pe_t, 'rr_')) {
+                    $pe_bad[] = "{$pe_lang}:{$pe_name}:{$pe_part}";
+                }
+            }
+            if ($pe_text('cs', $pe_v, $pe_part) === $pe_text('en', $pe_v, $pe_part)) {
+                $pe_bad[] = "same:{$pe_name}:{$pe_part}";
+            }
+        }
+    }
+    check('každá varianta nálezu na portu WAN je v obou jazycích celá', $pe_bad, []);
 }
 
 

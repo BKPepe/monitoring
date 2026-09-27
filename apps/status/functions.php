@@ -16130,7 +16130,12 @@ function bk_router_rec_thresholds(): array {
         // The WAN and gap rules of the release contract's rule sheet 2.1.
         'wan_link_below_plan' => ['enter' => 6, 'hold' => 5],
         'wan_port_errors' => ['enter' => 100.0, 'enter_days' => 3, 'hold' => 50.0, 'hold_days' => 2,
-            'ring_enter' => 0.1, 'ring_enter_days' => 2, 'ring_hold' => 0.05, 'ring_hold_days' => 1],
+            'ring_enter' => 0.1, 'ring_enter_days' => 2, 'ring_hold' => 0.05, 'ring_hold_days' => 1,
+            // A line fault needs CRC + MAC receive errors of at least
+            // max(phys_min, phys_share x the week's errors): on mvneta the
+            // error count mixes damaged frames with ones the router could
+            // not take in, so a handful of CRC errors must not decide.
+            'phys_min' => 10, 'phys_share' => 0.1],
         'wan_link_flaps' => ['enter' => 3, 'hold' => 2],
         'wan_forwarding_core_saturated' => ['enter' => 10, 'hold' => 5,
             'core_pct' => 95.0, 'softirq_pct' => 85.0, 'wan_mbps' => 300.0],
@@ -16332,6 +16337,10 @@ function bk_rec_command(array $item): ?string {
             return $dev === '' ? null : 'smartctl -t short /dev/' . $dev;
         case 'pkg_librespeed_cli':
             return bk_rec_install_cmd(is_string($p['pkg_manager'] ?? null) ? $p['pkg_manager'] : null, 'librespeed-cli');
+        case 'wan_port_errors':
+            // Only where the cause is not measured: the counters then say it.
+            $known = in_array($p['cause'] ?? null, ['physical', 'config', 'capacity'], true);
+            return ($dev === '' || $known) ? null : bk_rec_wan_counters_cmd($dev);
         default:
             return null;
     }
@@ -17242,6 +17251,84 @@ function bk_rec_rules_wifi(array $in, array $state): array {
 
 
 /**
+ * What the WAN port's own counters (agent 0.1.13) measured behind a week of
+ * `wan_port_errors`, and the cause that names.
+ *
+ * `split` holds the week's sums of the six counters, or null when they do not
+ * cover every day on which the firing branch counted something: an older
+ * agent, a driver without the counter, or the first days after the upgrade.
+ * A day is covered when the counter has a daily row on that day AND on the day
+ * before - the day of the upgrade itself holds errors from before the first
+ * reading, and a split of half a day would name a cause for all of it.
+ *
+ * The cause, in the order the finding trusts it. On mvneta rx_errors mixes
+ * damaged frames with frames the router could not take in, and some of its
+ * sources have no counter at all (skb or build_skb failures, a mid-frame
+ * resource error, jabber), so every cause needs the same bar: its counters
+ * must reach max(phys_min, phys_share x the branch's own weekly total).
+ *   physical - CRC + MAC receive errors over the floor
+ *   config   - oversize frames over the floor: an MTU mismatch
+ *   capacity - FIFO overruns + failed buffer refills over the floor
+ *   unknown  - no complete split, or nothing measured reaches the floor
+ * The ring branch knows only capacity (overruns over the floor of the week's
+ * ring drops) and unknown: rx_discard alone may be harmless address filtering.
+ * A reboot leaves about an hour of errors outside the split (the agent keeps
+ * its counter cache in /tmp); the floor absorbs that.
+ *
+ * @param array $window the whole window: the coverage test reads the day before W
+ * @param array $w      the W slice of its metrics (bk_rec_metrics_of)
+ * @return array{cause: string, split: ?array<string, ?float>}
+ */
+function bk_rec_wan_port_cause(array $window, array $w, string $branch, ?float $errors): array {
+    $th = bk_router_rec_thresholds()['wan_port_errors'];
+    $base = bk_rec_week_stat($w, $branch === 'ring' ? 'wan_ring_drops' : 'wan_errors');
+    $metrics = is_array($window['metrics'] ?? null) ? $window['metrics'] : [];
+    $probe = $metrics[$branch === 'ring' ? 'wan_rx_overrun' : 'wan_crc_errors'] ?? [];
+    foreach ($base['daily'] as $day => $row) {
+        $before = date('Y-m-d', (int)strtotime($day . ' -1 day'));
+        if ($row['sum'] > 0.0 && (!isset($probe[$day]) || !isset($probe[$before]))) {
+            return ['cause' => 'unknown', 'split' => null];
+        }
+    }
+    // A step sum is a whole number, but avg_val is a FLOAT: avg x samples
+    // comes back as 9.99999 and would miss a floor of 10 it meets.
+    $whole = fn (?float $v): ?float => $v === null ? null : round($v);
+    $split = [];
+    foreach (['crc' => 'wan_crc_errors', 'mac_rx' => 'wan_mac_rx_errors', 'overrun' => 'wan_rx_overrun',
+            'discard' => 'wan_rx_discard', 'refill' => 'wan_refill_errors', 'oversize' => 'wan_oversize'] as $name => $metric) {
+        $split[$name] = $whole(bk_rec_week_stat($w, $metric)['sum']);
+    }
+    // A counter the driver does not print is null: nothing for the sums, and
+    // still a dash in the text.
+    $sum = fn (string $name): float => $split[$name] === null ? 0.0 : $split[$name];
+    $total = $whole($branch === 'ring' ? $base['sum'] : $errors);
+    $floor = max((float)$th['phys_min'], (float)$th['phys_share'] * ($total === null ? 0.0 : $total));
+    if ($branch === 'ring') {
+        return ['cause' => $sum('overrun') >= $floor ? 'capacity' : 'unknown', 'split' => $split];
+    }
+    if ($sum('crc') + $sum('mac_rx') >= $floor) {
+        $cause = 'physical';
+    } elseif ($sum('oversize') >= $floor) {
+        $cause = 'config';
+    } elseif ($sum('overrun') + $sum('refill') >= $floor) {
+        $cause = 'capacity';
+    } else {
+        $cause = 'unknown';
+    }
+    return ['cause' => $cause, 'split' => $split];
+}
+
+/**
+ * The router command that splits the WAN port's error counters - the prose of
+ * the finding and the page's code block (bk_rec_command) carry the same text.
+ */
+function bk_rec_wan_counters_cmd(string $dev): string {
+    $dev = preg_match('/^[a-z0-9]{1,16}$/', $dev) ? $dev : t('rr_wan_port_dev_unknown');
+    return 'ethtool -S ' . $dev . " | grep -E 'bad_crc_event|mac_receive_error|oversize_received|rx_overrun|rx_discard|refill_errors'";
+}
+
+
+/**
  * The WAN rules that read the WEEK (rule sheet 2.1, WAN 3.4 "static and
  * passive rules").
  *
@@ -17297,17 +17384,28 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
         }
     }
 
-    // R-W9. Two independent branches: receive errors, and a receive queue that
-    // overflowed. The sysfs drop counter is evidence only - on mvneta it
-    // counts junk frames of protocols nobody asked for (WAN 3.1.3).
+    // R-W9. Two independent branches: receive errors, and frames the port
+    // discarded (the ring). The sysfs drop counter is evidence only - on
+    // mvneta it counts junk frames of protocols nobody asked for (WAN 3.1.3).
+    // The item names the cause the port's own counters measured
+    // (bk_rec_wan_port_cause). A line fault and an MTU mismatch get keys of
+    // their own: a mute of today's unexplained finding covers only its key,
+    // so once the counters cover the week a line fault arrives as a new item.
+    // Without them it stays under the muted key, and the text says so.
     $key = 'wan_port_errors';
-    if (!$enough) {
-        $skip[$key] = $key;
+    $cause_keys = ['unknown' => $key, 'capacity' => $key, 'physical' => $key . ':line', 'config' => $key . ':mtu'];
+    $active = false;
+    foreach (array_unique($cause_keys) as $cause_key) {
+        $active = $active || bk_rec_state_active($state, $cause_key);
+    }
+    $errors = bk_rec_week_stat($w, 'wan_errors');
+    $ring = bk_rec_week_stat($w, 'wan_ring_drops');
+    if (!$enough || ($errors['sum'] === null && $ring['sum'] === null)) {
+        foreach (array_unique($cause_keys) as $cause_key) {
+            $skip[$cause_key] = $key;
+        }
     } else {
-        $errors = bk_rec_week_stat($w, 'wan_errors');
         $drops = bk_rec_week_stat($w, 'wan_drops');
-        $ring = bk_rec_week_stat($w, 'wan_ring_drops');
-        $active = bk_rec_state_active($state, $key);
         $err_days = bk_rec_days_over($errors, 0.0);
         $err_hit = $errors['sum'] !== null && ($active
             ? ($errors['sum'] >= $th[$key]['hold'] && $err_days >= $th[$key]['hold_days'])
@@ -17323,15 +17421,49 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
         $ring_hit = $ring_share !== null && ($active
             ? ($ring_share >= $th[$key]['ring_hold'] && $ring_days >= $th[$key]['ring_hold_days'])
             : ($ring_share >= $th[$key]['ring_enter'] && $ring_days >= $th[$key]['ring_enter_days']));
-        if ($errors['sum'] === null && $ring['sum'] === null) {
-            $skip[$key] = $key;
-        } elseif ($err_hit || $ring_hit) {
-            $items[] = bk_rec_item($key, $key, 'wan', 'warning', ['kind' => 'wan'],
-                ['name' => $dev, 'errors' => $errors['sum'], 'drops' => $drops['sum'],
-                    'days' => max($err_days, $ring_days),
-                    // Only a ring counter that really grew may claim "could not
-                    // keep up"; null is not zero and gets no sentence at all.
-                    'ring' => ($ring['sum'] !== null && $ring['sum'] > 0.0) ? $ring['sum'] : null]);
+        if ($err_hit || $ring_hit) {
+            $branch = $err_hit ? 'errors' : 'ring';
+            $found = bk_rec_wan_port_cause($window, $w, $branch, $errors['sum']);
+            $cause = $found['cause'];
+            $split = $found['split'];
+            // Router load and a ring of discards (filtered or overflowed) are
+            // worth knowing, not a fault to act on this month.
+            $severity = ($branch === 'ring' || $cause === 'capacity') ? 'info' : 'warning';
+            $minutes = is_array($in['wan_error_minutes'] ?? null) ? $in['wan_error_minutes'] : [];
+            $path = is_array($details['wan_path'] ?? null) ? $details['wan_path'] : [];
+            $int = fn ($v): ?int => is_numeric($v) ? (int)$v : null;
+            $celsius = fn ($mc): ?float => is_numeric($mc) ? round((float)$mc / 1000.0, 1) : null;
+            // Kernel µW; 0 µW has no dBm (no light at all) and gets no number.
+            $dbm = fn ($uw): ?float => (is_numeric($uw) && (float)$uw > 0.0) ? round(10.0 * log10((float)$uw / 1000.0), 1) : null;
+            $items[] = bk_rec_item($key, $cause_keys[$cause], 'wan', $severity, ['kind' => 'wan'], [
+                'name' => $dev, 'branch' => $branch, 'cause' => $cause,
+                'errors' => $errors['sum'], 'drops' => $drops['sum'],
+                // Days of the branch that fired, not the larger of the two.
+                'days' => $branch === 'errors' ? $err_days : $ring_days,
+                'err_days' => $err_days, 'ring_days' => $ring_days,
+                // Only a ring counter that really grew gets a sentence; null
+                // is not zero.
+                'ring' => ($ring['sum'] !== null && $ring['sum'] > 0.0) ? $ring['sum'] : null,
+                'ring_pct' => $ring_share,
+                // The port's own counters, null unless they cover the week.
+                'crc' => $split['crc'] ?? null, 'mac_rx' => $split['mac_rx'] ?? null,
+                'overrun' => $split['overrun'] ?? null, 'discard' => $split['discard'] ?? null,
+                'refill' => $split['refill'] ?? null, 'oversize' => $split['oversize'] ?? null,
+                // The minute scan's own numbers (null = not scanned).
+                'st_errors' => $int($minutes['errors'] ?? null), 'st_during' => $int($minutes['during'] ?? null),
+                'st_unknown' => $int($minutes['unknown'] ?? null),
+                // Whether the router sends the counters that set a line fault
+                // apart at all (a row in the loaded window): only then can a
+                // later line fault escape a mute of this key.
+                'line_counters' => !empty($window['metrics']['wan_crc_errors']) || !empty($window['metrics']['wan_mac_rx_errors']),
+                // Copper only on proof: a PHY inside the module has a hwmon.
+                // Its absence proves nothing, so fibre is never claimed.
+                'module' => ($path['sfp_phy_hwmon'] ?? null) === true ? 'copper' : null,
+                'sfp_temp_c' => $celsius($path['sfp_temp_mc'] ?? null),
+                'sfp_temp_max_c' => $celsius($path['sfp_temp_max_mc'] ?? null),
+                'sfp_rx_dbm' => $dbm($path['sfp_rx_power_uw'] ?? null),
+                'sfp_rx_min_dbm' => $dbm($path['sfp_rx_power_min_uw'] ?? null),
+            ]);
         }
     }
 
@@ -17710,7 +17842,8 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
     $out = [];
     foreach ($ids as $id) {
         $out[$id] = ['window' => $window, 'disks' => [], 'state' => [], 'speedtests' => [],
-            'events' => [], 'rx_packets' => [], 'forwarding_minutes' => null, 'conntrack_days' => null, 'server_max' => []];
+            'events' => [], 'rx_packets' => [], 'forwarding_minutes' => null, 'conntrack_days' => null, 'server_max' => [],
+            'wan_error_minutes' => null];
     }
     $in_list = implode(',', array_fill(0, count($ids), '?'));
     $id_list = array_values($ids);
@@ -17934,6 +18067,28 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
                     ['drops' => (float)$row['drops'], 'pct' => (float)$row['pct']];
             }
         }
+        // How many of the week's WAN port errors fell into speed-test
+        // minutes - only for a router whose week can carry the finding at
+        // all (the hold threshold). The minute rows answer with their own
+        // total, so the sentence can never say "130 of 120" when the daily
+        // rollup lags; `unknown` counts minutes with no flag (every row from
+        // before schema r022), which are never read as "outside a test".
+        $w_errors = bk_rec_week_stat(bk_rec_metrics_of($out[$id]['window'], 'days'), 'wan_errors');
+        if ($w_errors['sum'] !== null && $w_errors['sum'] >= $th['wan_port_errors']['hold']) {
+            $stmt = $pdo->prepare(
+                "SELECT SUM(wan_errors) AS errors,
+                        SUM(CASE WHEN speedtest_active = 1 THEN wan_errors ELSE 0 END) AS during,
+                        SUM(CASE WHEN speedtest_active IS NULL THEN wan_errors ELSE 0 END) AS unknown
+                   FROM vps_metrics
+                  WHERE monitor_id = ? AND checked_at BETWEEN ? AND ? AND wan_errors > 0"
+            );
+            $stmt->execute([$id, $w_from, $w_to]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($row) && $row['errors'] !== null) {
+                $out[$id]['wan_error_minutes'] = ['errors' => (int)$row['errors'],
+                    'during' => (int)$row['during'], 'unknown' => (int)$row['unknown']];
+            }
+        }
     }
 
     return $out;
@@ -18142,6 +18297,103 @@ function bk_router_rec_split(array $items, array $state): array {
 }
 
 /**
+ * The measured sentence and the action of `wan_port_errors`, by what the
+ * port's own counters measured (bk_rec_wan_port_cause).
+ *
+ * Every sentence appears only when its numbers exist. "Could not keep up" is
+ * said only of a MEASURED receive FIFO overrun: rx_discard also counts frames
+ * the address filter threw away, so a summed ring (every row from before the
+ * split) is "discarded at the port", never an overflow. Fibre is never
+ * claimed; copper only when the module's own PHY hwmon proves it. The sysfs
+ * drop count stays in the params and out of the text: it is never physical.
+ *
+ * @param array<string, mixed> $p the item's params
+ * @return array{0: string, 1: string} [measured, action]
+ */
+function bk_rec_wan_port_texts(array $p, string $name): array {
+    $branch = ($p['branch'] ?? null) === 'ring' ? 'ring' : 'errors';
+    $cause = in_array($p['cause'] ?? null, ['physical', 'config', 'capacity'], true) ? (string)$p['cause'] : 'unknown';
+    $port = $name === '' ? '—' : $name;
+    $val = fn (string $k): ?float => isset($p[$k]) && is_numeric($p[$k]) ? (float)$p[$k] : null;
+    $parts = [];
+    $parts[] = $branch === 'ring'
+        ? sprintf(t('rr_wan_port_errors_measured_ring'), $port, bk_rec_num($val('ring')), (int)($p['days'] ?? 0),
+            bk_rec_num($val('ring_pct'), 2))
+        : sprintf(t('rr_wan_port_errors_measured'), $port, bk_rec_num($val('errors')), (int)($p['days'] ?? 0));
+    $has_split = false;
+    foreach (['crc', 'mac_rx', 'overrun', 'discard', 'refill', 'oversize'] as $k) {
+        $has_split = $has_split || $val($k) !== null;
+    }
+    if ($has_split) {
+        $parts[] = sprintf(t('rr_wan_port_errors_split'), bk_rec_num($val('crc')), bk_rec_num($val('mac_rx')),
+            bk_rec_num($val('overrun')), bk_rec_num($val('refill')), bk_rec_num($val('oversize')));
+    }
+    if ($branch === 'ring') {
+        // With the split the ring is its two parts, each stated as measured.
+        if ($has_split && ($val('discard') ?? 0.0) > 0.0) {
+            $parts[] = sprintf(t('rr_wan_port_errors_ring_discard'), bk_rec_num($val('discard')));
+        }
+        if ($has_split && ($val('overrun') ?? 0.0) > 0.0) {
+            $parts[] = sprintf(t('rr_wan_port_errors_ring_overrun'), bk_rec_num($val('overrun')));
+        }
+    } else {
+        $discard = $has_split ? $val('discard') : $val('ring');
+        if ($discard !== null && $discard > 0.0) {
+            $parts[] = sprintf(t('rr_wan_port_errors_ring_discard'), bk_rec_num($discard));
+        }
+        // The minute scan's own numbers, never the rollup's.
+        $st_errors = $val('st_errors');
+        if ($st_errors !== null && $st_errors > 0.0) {
+            $st_unknown = $val('st_unknown') ?? 0.0;
+            if ($st_unknown >= $st_errors) {
+                $parts[] = sprintf(t('rr_wan_port_errors_speedtest_unrecorded'), bk_rec_num($st_errors));
+            } else {
+                $parts[] = sprintf(t('rr_wan_port_errors_speedtest'), bk_rec_num($val('st_during') ?? 0.0), bk_rec_num($st_errors));
+                if ($st_unknown > 0.0) {
+                    $parts[] = sprintf(t('rr_wan_port_errors_speedtest_unknown'), bk_rec_num($st_unknown));
+                }
+            }
+        }
+        // The module's own readings against its own limits - only where the
+        // module is a suspect.
+        if ($cause === 'physical' || $cause === 'unknown') {
+            if ($val('sfp_temp_c') !== null && $val('sfp_temp_max_c') !== null) {
+                $parts[] = sprintf(t('rr_wan_port_errors_module_temp'), bk_rec_num($val('sfp_temp_c')),
+                    bk_rec_num($val('sfp_temp_max_c')));
+            }
+            if (($p['module'] ?? null) !== 'copper' && $val('sfp_rx_dbm') !== null && $val('sfp_rx_min_dbm') !== null) {
+                $parts[] = sprintf(t('rr_wan_port_errors_module_rx'), bk_rec_num($val('sfp_rx_dbm'), 1),
+                    bk_rec_num($val('sfp_rx_min_dbm'), 1));
+            }
+        }
+    }
+
+    $cmd = bk_rec_wan_counters_cmd($name);
+    if ($branch === 'ring') {
+        // The ring text shows no speed-test numbers, so it advises no test.
+        $action = $cause === 'capacity' ? t('rr_wan_port_errors_action_ring_overrun')
+            : sprintf(t('rr_wan_port_errors_action_ring'), $cmd);
+    } elseif ($cause === 'physical') {
+        $action = t(($p['module'] ?? null) === 'copper' ? 'rr_wan_port_errors_action_physical_copper' : 'rr_wan_port_errors_action_physical');
+    } elseif ($cause === 'config') {
+        $action = t('rr_wan_port_errors_action_config');
+    } elseif ($cause === 'capacity') {
+        // Speed tests are named only when the minute scan put errors in them.
+        $action = ($val('st_during') ?? 0.0) > 0.0 ? t('rr_wan_port_errors_action_capacity_speedtest')
+            : t('rr_wan_port_errors_action_capacity');
+    } else {
+        $action = sprintf(t('rr_wan_port_errors_action'), $cmd);
+        // What a mute does depends on whether a line fault can ever get its
+        // own key here; an item without the flag makes no promise either way.
+        $lc = $p['line_counters'] ?? null;
+        if ($lc === true || $lc === false) {
+            $action .= ' ' . t($lc ? 'rr_wan_port_errors_mute_split' : 'rr_wan_port_errors_mute_nosplit');
+        }
+    }
+    return [implode(' ', $parts), $action];
+}
+
+/**
  * The human sentences of one item, in the language that is active RIGHT NOW.
  *
  * Rendering is deliberately separate from evaluating: the same stored item is
@@ -18337,14 +18589,7 @@ function bk_router_rec_render(array $item): array {
                 bk_rec_num($p['mbit'] ?? null), bk_rec_num($p['plan'] ?? null));
             break;
         case 'wan_port_errors':
-            // The "could not keep up" sentence needs the HARDWARE counters:
-            // sysfs drops count unhandled-protocol junk on mvneta and would
-            // blame the router for frames it was right to throw away.
-            $ring = isset($p['ring']) && $p['ring'] !== null
-                ? ' ' . sprintf(t('rr_wan_port_errors_ring'), bk_rec_num($p['ring'])) : '';
-            $measured = sprintf(t('rr_wan_port_errors_measured'), $name === '' ? '—' : $name,
-                bk_rec_num($p['errors'] ?? null), bk_rec_num($p['drops'] ?? null),
-                (int)($p['days'] ?? 0)) . $ring;
+            [$measured, $action] = bk_rec_wan_port_texts($p, $name);
             break;
         case 'wan_link_flaps':
             $measured = sprintf(t('rr_wan_link_flaps_measured'), $name === '' ? '—' : $name,

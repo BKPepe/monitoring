@@ -4852,6 +4852,72 @@ if (function_exists('bk_digest_router_facts')) {
 }
 
 
+// --- The WAN port finding over the wire: measured cause and speed-test minutes --
+//
+// A router of its own (id 9500), so the seeded days cannot collide with what
+// the blocks above left on monitor 2. The daily rows say what the week held;
+// the raw minutes carry the speed-test flag (1 / 0 / NULL) the finding counts.
+if ($logged_in && function_exists('bk_router_rec_window')) {
+    $wp_id = 9500;
+    $wp_win = bk_router_rec_window(date('Y-m-d'));
+    $wp_days = $wp_win['days'];
+    $wp_before = $wp_win['days30'][22];
+    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$wp_id]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ?")->execute([$wp_id]);
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, 'WAN port router', 'openwrt', '10.9.5.1', 'up', 'Síť', ?)")
+        ->execute([$wp_id, json_encode(['agent_version' => '0.1.13', 'agent_last_seen' => time(), 'wan_up' => true,
+            'wan_link_dev' => 'eth2', 'wan_path' => ['sfp_phy_hwmon' => true, 'sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000]])]);
+    $wp_daily = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (?, ?, ?, 0, ?, ?, ?)");
+    foreach ($wp_days as $wp_day) {
+        $wp_daily->execute([$wp_id, $wp_day, 'cpu', 10, 20, 1440]);
+    }
+    foreach (array_slice($wp_days, 0, 3) as $wp_day) {
+        $wp_daily->execute([$wp_id, $wp_day, 'wan_errors', 40 / 1440, 40, 1440]);
+    }
+    $wp_split = ['wan_crc_errors', 'wan_mac_rx_errors', 'wan_rx_overrun', 'wan_rx_discard', 'wan_refill_errors', 'wan_oversize'];
+    foreach (array_merge([$wp_before], $wp_days) as $wp_day) {
+        foreach ($wp_split as $wp_key) {
+            $wp_total = ($wp_day === $wp_days[0] && $wp_key === 'wan_crc_errors') ? 30 : 0;
+            $wp_daily->execute([$wp_id, $wp_day, $wp_key, $wp_total / 24, $wp_total, 24]);
+        }
+    }
+    $wp_min = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, wan_errors, speedtest_active, checked_at) VALUES (?, ?, ?, ?)");
+    $wp_min->execute([$wp_id, 20, 1, "{$wp_days[0]} 03:10:00"]);
+    $wp_min->execute([$wp_id, 5, 0, "{$wp_days[1]} 12:00:00"]);
+    $wp_min->execute([$wp_id, 7, null, "{$wp_days[2]} 12:00:00"]);
+    $wp_min->execute([$wp_id, 0, 1, "{$wp_days[2]} 12:01:00"]);
+    $wp_of = function () use ($base, $cookie_jar, $wp_id): ?array {
+        [, $res] = api_get_auth($base, 'action=router_recommendations&lang=en&monitor_id=' . $wp_id, $cookie_jar);
+        foreach ($res['items'] ?? [] as $item) {
+            if (($item['id'] ?? '') === 'wan_port_errors') {
+                return $item;
+            }
+        }
+        return null;
+    };
+    $wp_item = $wp_of();
+    check('port WAN: CRC nad prahem přijde pod klíčem závady linky, s počty z minut',
+        [$wp_item['key'] ?? null, $wp_item['severity'] ?? null, $wp_item['params']['cause'] ?? null,
+            $wp_item['params']['st_errors'] ?? null, $wp_item['params']['st_during'] ?? null, $wp_item['params']['st_unknown'] ?? null,
+            $wp_item['params']['module'] ?? null, is_array($wp_item) && array_key_exists('command', $wp_item) ? $wp_item['command'] : 'chybí'],
+        ['wan_port_errors:line', 'warning', 'physical', 32, 20, 7, 'copper', null]);
+    check_true('port WAN: text jmenuje metalický modul a netvrdí optiku',
+        str_contains((string)($wp_item['action'] ?? ''), 'copper (RJ45)') && !str_contains((string)($wp_item['action'] ?? ''), 'fibre')
+        && str_contains((string)($wp_item['measured'] ?? ''), 'Of the 32 errors counted minute by minute, 20 fell in minutes with a speed test'));
+    // Without the split the cause is unknown, and the command is the answer.
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ? AND metric_key LIKE 'wan\\_%' AND metric_key <> 'wan_errors'")->execute([$wp_id]);
+    $wp_item = $wp_of();
+    check('port WAN: bez vlastních počítadel neznámá příčina, varování a příkaz, který ji zjistí',
+        [$wp_item['key'] ?? null, $wp_item['severity'] ?? null, $wp_item['params']['cause'] ?? null, $wp_item['command'] ?? null],
+        ['wan_port_errors', 'warning', 'unknown', "ethtool -S eth2 | grep -E 'bad_crc_event|mac_receive_error|oversize_received|rx_overrun|rx_discard|refill_errors'"]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ?")->execute([$wp_id]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$wp_id]);
+    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$wp_id]);
+    check('port WAN: testovací router po sobě uklidí',
+        (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = {$wp_id}")->fetchColumn(), 0);
+}
+
+
 // --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
 //
 // They are read-only except the mute, and the mute is the only place where a
