@@ -705,6 +705,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.services_few': { cs: '{count} služby', en: '{count} services' },
   'public.services_other': { cs: '{count} služeb', en: '{count} services' },
   'public.degraded': { cs: '{services} mimo provoz', en: '{services} down' },
+  // One service down: the headline names it. "Řešíme" only when an open
+  // incident covers every service that is down.
+  'public.down_named': { cs: '{name} mimo provoz', en: '{name} is down' },
+  'public.down_named_handled': { cs: '{name} mimo provoz - řešíme', en: '{name} is down - we are on it' },
+  'public.handled_suffix': { cs: '{text} - řešíme', en: '{text} - we are on it' },
   'public.load_error': { cs: 'Data se nepodařilo načíst.', en: 'Could not load the data.' },
   // W1-A1: a failed request is its own verdict, never "all online".
   'public.state_unknown': { cs: 'Stav se nepodařilo zjistit', en: 'Could not determine the status' },
@@ -727,6 +732,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.maintenance': { cs: 'Údržba', en: 'Maintenance' },
   'public.rss': { cs: 'RSS kanál výpadků', en: 'Outage RSS feed' },
   'public.no_history': { cs: 'Historie zatím není k dispozici', en: 'No history available yet' },
+  'public.history_failed': {
+    cs: 'Denní historii dostupnosti se nepodařilo načíst.',
+    en: 'Could not load the daily availability history.',
+  },
   'public.uptime_strip_aria': {
     cs: 'Dostupnost po dnech, posledních {days} dní',
     en: 'Daily availability, last {days} days',
@@ -887,7 +896,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'uaudit.page': { cs: 'Strana {page} / {pages}', en: 'Page {page} / {pages}' },
   'uaudit.prev': { cs: 'Předchozí', en: 'Previous' },
   'uaudit.next': { cs: 'Další', en: 'Next' },
-  'public.theme_toggle': { cs: 'Přepnout motiv', en: 'Toggle theme' },
   'public.disk': { cs: 'Disk', en: 'Disk' },
   'public.hosting_limits': { cs: 'Čerpání limitů hostingu', en: 'Hosting limit usage' },
   'public.show_more_events': { cs: 'Zobrazit další ({n})', en: 'Show more ({n})' },
@@ -984,6 +992,33 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Tato status stránka neexistuje nebo není veřejná.',
     en: 'This status page does not exist or is not public.',
   },
+  // NetPulse redesign of the public page (w2m): the services heading with its
+  // period switch, the row figures, the public services score, the probe places.
+  'public.services': { cs: 'Služby', en: 'Services' },
+  'public.history_range': { cs: 'Období historie', en: 'History period' },
+  'public.range_30d': { cs: 'Posledních 30 dní', en: 'Last 30 days' },
+  'public.range_90d': { cs: 'Posledních 90 dní', en: 'Last 90 days' },
+  'public.history_range_failed': {
+    cs: 'Historii za {days} dní se nepodařilo načíst, zobrazeno posledních {shown} dní.',
+    en: 'Could not load the {days}-day history; showing the last {shown} days.',
+  },
+  'public.uptime_90d': { cs: 'Dostupnost 90 dní', en: 'Availability, 90 days' },
+  'public.response': { cs: 'Odezva', en: 'Response time' },
+  'public.latency_90d': { cs: 'Odezva 90 dní', en: 'Latency 90 days' },
+  'public.past_incidents': { cs: 'Historie incidentů', en: 'Incident history' },
+  'public.maintenance_from': { cs: 'od {from}', en: 'from {from}' },
+  // The score of the public set only (availability, latency, alerts, data
+  // freshness) - named so, not as the health of the whole network.
+  'public.health_caption': { cs: 'Skóre veřejných služeb', en: 'Public services score' },
+  'public.health_failed': { cs: 'Skóre se nepodařilo načíst.', en: 'Could not load the score.' },
+  'public.health_stale': {
+    cs: 'Obnovení skóre selhalo, platí poslední známé.',
+    en: 'The score could not be refreshed; this is the last known one.',
+  },
+  'public.health_scored': { cs: 'Hodnoceno služeb: {scored} z {total}', en: 'Services scored: {scored} of {total}' },
+  'public.health_deductions': { cs: 'Co ubírá body', en: 'What costs points' },
+  'public.location_unknown': { cs: 'Místo neuvedeno', en: 'Location not reported' },
+  'public.region_rate': { cs: 'Úspěšné kontroly za 30 dní', en: 'Successful checks, 30 days' },
   'dashboard.title': { cs: 'Přehled stavu', en: 'Status Overview' },
   'dashboard.total_monitors': { cs: 'Monitorů celkem', en: 'Total Monitors' },
   'dashboard.monitors_hint': { cs: '{healthy} běží · mimo provoz {down}', en: '{healthy} running · {down} down' },

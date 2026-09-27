@@ -1,47 +1,38 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import {
-  Activity,
-  BellRing,
-  CheckCircle2,
-  CloudOff,
-  History,
-  Moon,
-  Radio,
-  Rss,
-  Siren,
-  Sun,
-  Wrench,
-} from 'lucide-react';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Activity, CheckCircle2, CloudOff, History, Siren, TriangleAlert, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { PublicMonitorCard, typeIcon, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
+import { PublicHeader } from '@/components/public/public-header';
+import { PublicHealthScore } from '@/components/public/public-health';
+import { IncidentList, type PublicIncident as Incident } from '@/components/public/incident-list';
+import { ProbeLocations, type ProbeRegion as Region } from '@/components/public/probe-locations';
+import { SubscribePanel } from '@/components/public/subscribe-panel';
+import { Panel } from '@/components/ui/panel';
+import { IconTile, type IconTileTone } from '@/components/ui/icon-tile';
 import { SectionTitle } from '@/components/ui/section-title';
+import { StatBlock, StatRow } from '@/components/stat-block';
+import { RangePills } from '@/components/charts/range-pills';
 import { FreshnessPill } from '@/components/freshness-pill';
-import { Timeline } from '@/components/timeline';
+import { DayStripLegend } from '@/components/day-strip';
+import { CollapsedTimeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
+import { collapseRuns } from '@/lib/timeline-collapse';
 import type { UptimeDay } from '@/components/public/uptime-strip';
 import { useLanguage } from '@/context/language-context';
-import { useTheme } from '@/lib/use-theme';
 import { versionCommitUrl } from '@/lib/version';
-import { cn } from '@/lib/utils';
+import { formatPercentValue } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { pluralForm } from '@/lib/plural';
 import { syncPublicCanonical } from '@/lib/public-head';
-import { outageDurationText, outageResolution, type OutageFacts } from '@/lib/public-events';
+import { parsePublicHealth, type PublicHealth } from '@/lib/public-health';
+import { outageDurationText, outageEpisode, outageResolutions, type MonitorOutageFacts } from '@/lib/public-events';
 
-interface Region {
-  location: string;
-  checks: number;
-  successRate: number | null;
-  avgResponseMs: number | null;
-}
-
-interface PublicEvent extends OutageFacts {
+interface PublicEvent extends MonitorOutageFacts {
   time: string;
-  monitorId: number;
+  /** The same moment machine-readable: a collapsed run's span and the gap that ends it. */
+  timeIso?: string | null;
   monitorName: string;
   rawStatus: string;
   errorMsg: string | null;
@@ -50,26 +41,9 @@ interface PublicEvent extends OutageFacts {
   responseTime: number | null;
 }
 
-interface IncidentUpdate {
-  status: string;
-  message: string;
-  at: string;
-}
-
-interface Incident {
-  id: number;
-  title: string;
-  /** 'open' | 'investigating' | 'resolved' - the state decides, not a guess. */
-  status: string;
-  impact: string | null;
-  createdAt: string;
-  resolvedAt: string | null;
-  durationText: string | null;
-  /** Resolution progress (investigating -> identified -> ...) from incident_updates. */
-  updates?: IncidentUpdate[];
-  /** The post-resolution summary - the admin writes it precisely for the public. */
-  postmortem?: string | null;
-}
+/** The periods the day strips can show; 30 is the light default, 90 is asked for. */
+const HISTORY_RANGES = ['30d', '90d'] as const;
+type HistoryRange = (typeof HISTORY_RANGES)[number];
 
 /**
  * The public status page - what a visitor without an account sees.
@@ -92,7 +66,6 @@ const REFRESH_MS = 60_000;
 
 export function PublicStatusPage() {
   const { t, lang, setLang } = useLanguage();
-  const { theme, toggle: toggleTheme } = useTheme();
   const [params] = useSearchParams();
   // A status page left open on a wall monitor has to stay true without F5.
   const { data: status, error, reload: reloadStatus } = usePublicStatus(REFRESH_MS, 'public');
@@ -165,8 +138,30 @@ export function PublicStatusPage() {
   // When the list last arrived intact - what a failed refresh names as the
   // time of the data still on screen.
   const [okAt, setOkAt] = React.useState<number | null>(null);
-  const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]>>({});
+  // null = the strips' first answer has not come yet; the cards hold their row.
+  const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]> | null>(null);
+  // The latest strips request failed. The last known strips stay; without
+  // any, the page says the history is missing instead of silently dropping it.
+  const [uptimeFailed, setUptimeFailed] = React.useState(false);
+  // The period of the strips ON SCREEN. It lags the switch while the longer
+  // answer is on the way (or when it failed), and the row figures follow it,
+  // so a 90-day share never sits beside a 30-day strip.
+  const [uptimeDays, setUptimeDays] = React.useState<30 | 90 | null>(null);
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
+  // The first incidents answer (or its failure) is in. The service list waits
+  // for it: an ongoing incident pinned above services already on screen
+  // pushed the whole list down under the visitor's eyes (layout shift).
+  const [incidentsSettled, setIncidentsSettled] = React.useState(false);
+  const haveMonitors = monitors !== null;
+  // ...but not for ever: an incidents request that hangs (an overloaded
+  // database, a proxy timeout - just when visitors come) must not keep the
+  // services off the page. After a moment the list comes without it, and the
+  // incident, if it arrives, shifts the page as it did before.
+  React.useEffect(() => {
+    if (incidentsSettled || !haveMonitors) return;
+    const id = window.setTimeout(() => setIncidentsSettled(true), 2500);
+    return () => window.clearTimeout(id);
+  }, [incidentsSettled, haveMonitors]);
   const [regions, setRegions] = React.useState<Region[] | null>(null);
   const [branding, setBranding] = React.useState<{
     siteTitle: string;
@@ -178,6 +173,13 @@ export function PublicStatusPage() {
   /** First day of the 90-day window, for the "data od" line of a younger monitor (W1-B2). */
   const [windowStart90, setWindowStart90] = React.useState<string | null>(null);
   const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
+  // The strips' period. 90 days is asked for only when the visitor picks it:
+  // three times the rows on every anonymous page load for a view few open.
+  const [range, setRange] = React.useState<HistoryRange>('30d');
+  const days = range === '90d' ? 90 : 30;
+  // The public services score; null = not answered yet (or failed before any answer).
+  const [health, setHealth] = React.useState<PublicHealth | null>(null);
+  const [healthFailed, setHealthFailed] = React.useState(false);
 
   // Auto-refresh for everything the page shows, not just the headline stats:
   // the tick re-runs the whole fetch effect. Failed refreshes keep the last
@@ -221,13 +223,6 @@ export function PublicStatusPage() {
       .catch(() => {
         if (active) setMonitorsError(true);
       });
-    // The 30-day strips - one request for every monitor at once, keyed by id.
-    fetch('/status/api.php?action=daily_uptime&days=30&scope=public')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => {
-        if (active && d.series && typeof d.series === 'object') setUptime(d.series);
-      })
-      .catch(() => {});
     // Per-monitor availability for 24 h / 7 d / 30 d / 90 d in one request -
     // the 30 d value sits next to the strip (same as the legacy card), the
     // rest fills the expanded detail. null stays null and renders as a dash,
@@ -280,33 +275,88 @@ export function PublicStatusPage() {
       .then((d) => {
         if (active && Array.isArray(d.manualIncidents)) setIncidents(d.manualIncidents);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (active) setIncidentsSettled(true);
+      });
     return () => {
       active = false;
     };
   }, [refreshTick]);
 
+  // The day strips - one request for every monitor at once, keyed by id.
+  // Its own effect because it follows the language too: the server words
+  // each day's sentence, and without ?lang an English visitor who never set
+  // the language cookie read those sentences in Czech. A switch to 90 days
+  // keeps the 30-day strips on screen until the longer answer lands: back to
+  // "pending" would blank every row and shift the page twice.
+  React.useEffect(() => {
+    let active = true;
+    fetch(`/status/api.php?action=daily_uptime&days=${days}&scope=public&lang=${lang}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (!active) return;
+        if (d.series && typeof d.series === 'object') {
+          setUptime(d.series);
+          setUptimeDays(days);
+          setUptimeFailed(false);
+        } else setUptimeFailed(true);
+      })
+      .catch(() => {
+        if (active) setUptimeFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshTick, lang, days]);
+
+  // The public services score (action=health). The whole public set, never a
+  // custom page's selection, so a ?page= page does not ask for it at all. A
+  // failed refresh keeps the last score and says so; a failed first answer
+  // is a failure in the ring's place, never an empty "—" ring.
+  React.useEffect(() => {
+    if (pageSlug) return;
+    let active = true;
+    fetch(`/status/api.php?action=health&scope=public&lang=${lang}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (!active) return;
+        setHealth(parsePublicHealth(d));
+        setHealthFailed(false);
+      })
+      .catch(() => {
+        if (active) setHealthFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshTick, lang, pageSlug]);
+
+  // A custom page's selection; null = the whole public set.
+  const allowed = React.useMemo(
+    () => (pageMeta && pageMeta.monitorIds.length > 0 ? new Set(pageMeta.monitorIds) : null),
+    [pageMeta]
+  );
+
   // Grouped by category, in the order the categories first appear - the legacy
   // page did the same, so an existing page keeps its familiar layout.
   const categories = React.useMemo(() => {
     const groups = new Map<string, PublicMonitor[]>();
-    const allowed = pageMeta && pageMeta.monitorIds.length > 0 ? new Set(pageMeta.monitorIds) : null;
     for (const m of monitors ?? []) {
       if (allowed && !allowed.has(m.id)) continue;
       const key = m.category?.trim() || t('public.uncategorised', 'Ostatní');
       groups.set(key, [...(groups.get(key) ?? []), m]);
     }
     return [...groups.entries()];
-  }, [monitors, t, pageMeta]);
+  }, [monitors, t, allowed]);
 
   // On a filtered page the verdict and counts must describe the SELECTION,
   // not the whole fleet - "all systems online" about services the page does
   // not even show would be a lie told by an accurate number.
   const visibleMonitors = React.useMemo(() => {
-    const allowed = pageMeta && pageMeta.monitorIds.length > 0 ? new Set(pageMeta.monitorIds) : null;
     if (!allowed) return monitors;
     return (monitors ?? []).filter((m) => allowed.has(m.id));
-  }, [monitors, pageMeta]);
+  }, [monitors, allowed]);
 
   const filtered = pageMeta !== null && pageMeta.monitorIds.length > 0;
   const opts = pageMeta?.displayOptions ?? {
@@ -316,37 +366,95 @@ export function PublicStatusPage() {
     showUptime: true,
     detailLevel: 'full' as const,
   };
+  // The cards hold the strip's row until the first answer; a failed first
+  // answer releases it and says so once below the services.
+  const stripsPending = opts.showUptime && uptime === null && !uptimeFailed;
+  const stripsMissing = opts.showUptime && uptime === null && uptimeFailed;
   // Pagination by ten. The endpoint returns up to 200 recent checks; after
   // filtering to outages and degradations anywhere from zero to dozens may
   // remain - showing all at once would be fine on a calm fleet and a wall
   // after a hectic week.
   const [eventsShown, setEventsShown] = React.useState(10);
-  const [subEmail, setSubEmail] = React.useState('');
-  const [subState, setSubState] = React.useState<'idle' | 'busy' | 'done'>('idle');
-  const [subError, setSubError] = React.useState<string | null>(null);
-  const allFailureEvents = React.useMemo(
-    () => (events ?? []).filter((e) => e.isDown || e.rawStatus === 'warning'),
-    [events]
+  // The incidents of this page: a custom page shows those of its selection
+  // plus the ones announced for no one monitor, which concern everybody.
+  // Another service's incident under a verdict about the selection made the
+  // page contradict itself.
+  const showIncidents = opts.showIncidents;
+  const scopedIncidents = React.useMemo(
+    () =>
+      showIncidents
+        ? (incidents ?? []).filter((inc) => allowed === null || inc.monitorId == null || allowed.has(inc.monitorId))
+        : [],
+    [incidents, allowed, showIncidents]
   );
-  const publicTimeline = React.useMemo<TimelineEvent[]>(() => {
+  // "Ongoing" derives from the STATE, not from a missing field. The first
+  // version read resolved_at (snake_case) while the API sends resolvedAt - a
+  // resolved incident from 8 Aug thus showed as ongoing. Open and resolved
+  // split BEFORE the cap of ten: the API orders by id, so an incident still
+  // open behind ten newer resolved ones fell off the page entirely. Only the
+  // resolved history is capped.
+  const openIncidents = React.useMemo(() => scopedIncidents.filter((i) => i.status !== 'resolved'), [scopedIncidents]);
+  const pastIncidents = React.useMemo(
+    () => scopedIncidents.filter((i) => i.status === 'resolved').slice(0, 10),
+    [scopedIncidents]
+  );
+  // Monitors an open incident on this page speaks for.
+  const coveredIds = React.useMemo(
+    () => new Set(openIncidents.map((i) => i.monitorId).filter((id): id is number => typeof id === 'number')),
+    [openIncidents]
+  );
+
+  const allFailureEvents = React.useMemo(
+    () =>
+      (events ?? []).filter(
+        (e) =>
+          (e.isDown || e.rawStatus === 'warning') &&
+          // A custom page lists the failures of its own selection only.
+          (allowed === null || (e.monitorId != null && allowed.has(e.monitorId))) &&
+          // The running outage of a monitor an open incident covers is that
+          // incident's story, pinned under the verdict; its failed checks
+          // told it a second time, each with its own "Probíhá". Ended
+          // outages of the same monitor are other facts and stay.
+          !(e.isDown && !e.outageEnd && e.monitorId != null && coveredIds.has(e.monitorId))
+      ),
+    [events, allowed, coveredIds]
+  );
+  const timelineEvents = React.useMemo<TimelineEvent[]>(() => {
     // The monitor's status right now, for failures whose end is not recorded.
     // The whole public list, not the page's filtered view: an event names
     // its monitor whichever page shows it.
     const statusById = new Map((monitors ?? []).map((m) => [m.id, m.status]));
-    return allFailureEvents.slice(0, eventsShown).map((e, i) => ({
+    // Over the whole list, not the shown page of it: "Probíhá" belongs to
+    // the newest check of a running outage whichever page of ten shows it.
+    const resolutions = outageResolutions(allFailureEvents, (id) => statusById.get(id) ?? null);
+    return allFailureEvents.map((e, i) => ({
       id: i,
       title: e.monitorName,
       detail:
         (e.errorMsg || (e.isDown ? t('public.event_down', 'Výpadek') : t('public.event_warn', 'Zhoršení'))) +
         outageDurationText(e, t),
       at: e.time,
+      atIso: e.timeIso ?? null,
       severity: e.isDown ? ('down' as const) : ('warning' as const),
-      resolution: outageResolution(e, statusById.get(e.monitorId) ?? null),
+      resolution: resolutions[i],
+      // The outage a check belongs to: a collapsed run never crosses it, so
+      // two outages of one service days apart stay two rows (V-01).
+      episode: outageEpisode(e),
+      // Proven running (no recorded end, the monitor down now), on the
+      // newest check of the outage only.
+      ongoing: resolutions[i] === 'Open',
       location: e.location ?? undefined,
       method: e.type ?? undefined,
       responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
     }));
-  }, [allFailureEvents, eventsShown, monitors, t]);
+  }, [allFailureEvents, monitors, t]);
+  // Paged by what the visitor sees: a run of twenty failed checks is one row
+  // (C-10), so "show more" never adds ten checks that fold into nothing.
+  const eventItems = React.useMemo(() => collapseRuns(timelineEvents), [timelineEvents]);
+  const publicTimeline = React.useMemo(
+    () => eventItems.slice(0, eventsShown).flatMap((item) => (item.kind === 'run' ? item.events : [item.event])),
+    [eventItems, eventsShown]
+  );
 
   // null = not known yet or the request failed. `?? 0` here once turned "the
   // API did not answer" into "nothing is down".
@@ -406,7 +514,24 @@ export function PublicStatusPage() {
       few: t('public.services_few', { count: n }, `${n} služby`),
       other: t('public.services_other', { count: n }, `${n} služeb`),
     })[pluralForm(lang, n)];
-  const downText = t('public.degraded', { services: services(down ?? 0) }, `${services(down ?? 0)} mimo provoz`);
+  // One service down: the headline names it ("E-shop mimo provoz"), so the
+  // visitor learns WHAT is broken without scrolling. The name only when the
+  // page's own list holds exactly that one: mid-refresh the fleet count and
+  // the list can disagree, and then the count is what is known. "Řešíme"
+  // only when an open incident covers every service that is down - the page
+  // does not promise work nobody has announced.
+  const downList = (visibleMonitors ?? []).filter((m) => m.status === 'down');
+  const handled = downList.length > 0 && downList.length === down && downList.every((m) => coveredIds.has(m.id));
+  const downText = (() => {
+    if (down === 1 && downList.length === 1) {
+      const name = downList[0].name;
+      return handled
+        ? t('public.down_named_handled', { name }, `${name} mimo provoz - řešíme`)
+        : t('public.down_named', { name }, `${name} mimo provoz`);
+    }
+    const counted = t('public.degraded', { services: services(down ?? 0) }, `${services(down ?? 0)} mimo provoz`);
+    return handled ? t('public.handled_suffix', { text: counted }, `${counted} - řešíme`) : counted;
+  })();
   const partialText = t(
     'public.partial_desc',
     { services: services(partial) },
@@ -436,508 +561,412 @@ export function PublicStatusPage() {
       m.maintenanceStart != null &&
       new Date(m.maintenanceStart.replace(' ', 'T')).getTime() > nowTs
   );
-  // "Ongoing" derives from the STATE, not from a missing field. The first
-  // version read resolved_at (snake_case) while the API sends resolvedAt - a
-  // resolved incident from 8 Aug thus showed as ongoing.
-  const shownIncidents = opts.showIncidents ? (incidents ?? []).slice(0, 10) : [];
-  const openIncidents = shownIncidents.filter((i) => i.status !== 'resolved');
-  const pastIncidents = shownIncidents.filter((i) => i.status === 'resolved');
   const updatedMs = updatedDate && !Number.isNaN(updatedDate.getTime()) ? updatedDate.getTime() : null;
 
-  const incidentItem = (inc: Incident) => (
-    <li key={inc.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
-      {/* A badge with a word instead of a dot: a green circle next to
-          "Outage: ..." read as a contradiction - now it literally says
-          "Resolved" or "Ongoing". */}
-      <span className="flex items-center gap-2 font-medium">
-        <Badge variant={inc.status === 'resolved' ? 'up' : 'down'} dot>
-          {inc.status === 'resolved' ? t('public.incident_resolved', 'Vyřešeno') : t('public.incident_open', 'Probíhá')}
-        </Badge>
-        {inc.title}
-      </span>
-      {/* Without seconds: with them the range wrapped mid-time on a narrow
-          display. Minute precision is enough here - the duration is stated
-          by durationText. */}
-      <span className="text-muted-foreground font-mono tabular-nums">
-        {noSeconds(inc.createdAt)}
-        {inc.status === 'resolved' && inc.resolvedAt
-          ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
-          : ''}
-      </span>
-      {/* Resolution progress - the same timeline the admin sees. A status
-          page that can only say "broken/fixed" makes people ask on Discord;
-          this is that answer. */}
-      {(inc.updates ?? []).length > 0 && (
-        <ul className="w-full space-y-1 border-l border-border pl-3">
-          {(inc.updates ?? []).map((u, i) => (
-            <li key={i} className="text-muted-foreground text-xs">
-              <span className="text-foreground font-medium">{updateStatusLabel(u.status, t)}</span>
-              {u.message ? ` — ${u.message}` : ''}
-              <span className="ml-1 font-mono tabular-nums">({noSeconds(u.at)})</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {/* The postmortem after resolution: the admin UI could always write it,
-          but the public never saw it - though it is written precisely for them. */}
-      {inc.status === 'resolved' && inc.postmortem && (
-        <div className="bg-muted/40 w-full rounded-md border border-border p-2.5">
-          <p className="text-foreground mb-1 text-2xs font-semibold">
-            {t('public.postmortem', 'Co se stalo (postmortem)')}
-          </p>
-          <p className="text-muted-foreground text-xs whitespace-pre-wrap">{inc.postmortem}</p>
-        </div>
-      )}
-    </li>
-  );
+  // The score describes the whole public set: a custom page, which shows a
+  // selection, leaves it out rather than put a number beside services it
+  // does not list.
+  const showHealth = !pageSlug;
+  // Everything that stacks above and in the service list arrives in one
+  // paint: the list, the pinned incidents and the maintenance ahead.
+  const listReady = monitors !== null && incidentsSettled;
+  // The list failed: say so at once, with whatever incidents are known.
+  const listFailed = monitors === null && monitorsError;
+  // The asked period failed and an older one is still drawn: said, not
+  // silently left at the other period under a pressed "90d".
+  const rangeMissing = opts.showUptime && uptimeFailed && uptime !== null && uptimeDays !== null && uptimeDays !== days;
+  const verdictText =
+    verdict === 'error'
+      ? t('public.state_unknown', 'Stav se nepodařilo zjistit')
+      : verdict === 'loading'
+        ? t('public.loading', 'Zjišťuji stav…')
+        : verdict === 'down'
+          ? downText
+          : verdict === 'partial'
+            ? t('public.partial', 'Provoz je částečně omezen')
+            : verdict === 'maintenance'
+              ? maintenanceText
+              : t('public.all_ok', 'Všechny systémy jsou online');
+  const verdictLook: { icon: typeof Activity; tone: IconTileTone } =
+    verdict === 'ok'
+      ? { icon: CheckCircle2, tone: 'up' }
+      : verdict === 'down'
+        ? { icon: Activity, tone: 'down' }
+        : verdict === 'partial'
+          ? { icon: TriangleAlert, tone: 'warning' }
+          : verdict === 'maintenance'
+            ? { icon: Wrench, tone: 'info' }
+            : verdict === 'error'
+              ? { icon: CloudOff, tone: 'neutral' }
+              : { icon: Activity, tone: 'neutral' };
+  const rssHref = pageSlug ? `/status/rss.php?page=${encodeURIComponent(pageSlug)}` : '/status/rss.php';
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 px-4 py-6 sm:py-8">
+    <div className="bg-background text-foreground min-h-dvh">
       <title>{docTitle}</title>
       {/* A custom page that does not exist (or is not public) must not be
           indexed as an empty status page; it answers 200 like every route. */}
       {pageError && <meta name="robots" content="noindex" />}
-      <header className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          {branding?.customLogoUrl && (
-            <img src={branding.customLogoUrl} alt="" className="size-10 shrink-0 rounded-md object-contain" />
-          )}
-          <div className="min-w-0 space-y-1">
-            <h1 className="truncate text-2xl font-bold tracking-tight">
-              {pageMeta?.title || branding?.siteTitle || t('public.title', 'Stav služeb')}
-            </h1>
-            {updatedAt && (
-              <p className="text-muted-foreground text-xs">
-                {t('public.updated', { at: updatedAt }, `Aktualizováno ${updatedAt}`)}
-                {' · '}
-                {t('public.auto_refresh', 'obnovuje se každou minutu')}
-              </p>
-            )}
-          </div>
-        </div>
-        {/* Language and theme toggles - the two things an anonymous visitor
-            may actually need from a header. */}
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setLang(lang === 'cs' ? 'en' : 'cs')}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            {lang === 'cs' ? 'EN' : 'CS'}
-          </button>
-          <button
-            type="button"
-            onClick={toggleTheme}
-            aria-label={t('public.theme_toggle', 'Přepnout motiv')}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-md border border-border p-1.5 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
-          </button>
-        </div>
-      </header>
+      <PublicHeader
+        siteTitle={branding === null ? null : branding.siteTitle || 'Blood Kings'}
+        logoUrl={branding?.customLogoUrl ?? ''}
+        portalUrl={branding?.portalUrl ?? ''}
+      />
 
-      {/* An unknown or hidden page is indistinguishable from a missing one -
-          the server already made that decision; here it just gets a face. */}
-      {pageError && (
-        <Card className="p-6 text-center">
-          <p className="text-sm font-semibold">{t('public.page_not_found', 'Stránka nenalezena')}</p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            {t('public.page_not_found_desc', 'Tato status stránka neexistuje nebo není veřejná.')}
-          </p>
-        </Card>
-      )}
-
-      {/* The headline verdict, in strict precedence: a failed request, then an
-          outage, then a partial problem, then maintenance, and only then all
-          online. An unknown state must never read as a green light. */}
-      <Card
-        className={cn(
-          'flex flex-wrap items-center gap-4 p-5 sm:p-6',
-          verdict === 'ok'
-            ? 'border-up/30 bg-up/5'
-            : verdict === 'down'
-              ? 'border-down/30 bg-down/5'
-              : verdict === 'partial' || verdict === 'maintenance'
-                ? 'border-warning/30 bg-warning/5'
-                : verdict === 'error'
-                  ? 'bg-muted/40'
-                  : ''
-        )}
-      >
-        {verdict === 'ok' ? (
-          <CheckCircle2 className="text-up size-8 shrink-0" />
-        ) : verdict === 'maintenance' ? (
-          <Wrench className="text-warning size-8 shrink-0" />
-        ) : verdict === 'error' ? (
-          <CloudOff className="text-muted-foreground size-8 shrink-0" />
-        ) : (
-          <Activity
-            className={cn(
-              'size-8 shrink-0',
-              verdict === 'down' ? 'text-down' : verdict === 'partial' ? 'text-warning' : 'text-muted-foreground'
-            )}
-          />
-        )}
-        <div className="min-w-0 flex-1">
-          <p className="text-lg font-bold tracking-tight" role={verdict === 'error' ? 'alert' : undefined}>
-            {verdict === 'error'
-              ? t('public.state_unknown', 'Stav se nepodařilo zjistit')
-              : verdict === 'loading'
-                ? t('public.loading', 'Zjišťuji stav…')
-                : verdict === 'down'
-                  ? downText
-                  : verdict === 'partial'
-                    ? t('public.partial', 'Provoz je částečně omezen')
-                    : verdict === 'maintenance'
-                      ? maintenanceText
-                      : t('public.all_ok', 'Všechny systémy jsou online')}
-          </p>
-          {verdict === 'partial' && <p className="text-muted-foreground text-xs">{partialText}</p>}
-          {verdict === 'error' && (
-            <p className="text-muted-foreground text-xs">
-              {monitors !== null
-                ? t('public.state_unknown_stale', 'Níže je poslední známý stav. Další pokus proběhne za minutu.')
-                : t('public.load_error', 'Data se nepodařilo načíst.')}
+      <main className="mx-auto max-w-6xl space-y-5 px-4 py-5 sm:space-y-6 sm:px-6 sm:py-8">
+        {/* An unknown or hidden page is indistinguishable from a missing one -
+            the server already made that decision; here it just gets a face. */}
+        {pageError && (
+          <Panel className="text-center">
+            <p className="text-sm font-semibold">{t('public.page_not_found', 'Stránka nenalezena')}</p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              {t('public.page_not_found_desc', 'Tato status stránka neexistuje nebo není veřejná.')}
             </p>
-          )}
-        </div>
-        {/* How old the verdict is, from the newest check the server holds -
-            a wall display left open must not look live after cron or the
-            API stopped. Cron writes every 1-5 minutes, hence 300 s. */}
-        <FreshnessPill at={updatedMs} intervalSecs={300} failed={failed} okAt={okAt} />
-        {verdict === 'error' && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setRefreshTick((n) => n + 1);
-              reloadStatus();
-            }}
-          >
-            {t('common.retry', 'Zkusit znovu')}
-          </Button>
+          </Panel>
         )}
-      </Card>
 
-      {/* What is being done about it comes right under the verdict: an
-          ongoing incident sat below every service card and the whole event
-          log, a long scroll away from the visitor who came because of it. */}
-      {openIncidents.length > 0 && (
-        <Card className="border-down/30 space-y-4 p-5">
-          <SectionTitle icon={Siren} title={t('public.incidents', 'Incidenty')} count={openIncidents.length} />
-          <ul className="space-y-3">{openIncidents.map(incidentItem)}</ul>
-        </Card>
-      )}
-
-      {/* Announced future maintenance: the visitor should learn about a
-          planned window ahead of time, not when the service disappears.
-          Running maintenance is in the verdict and on the card. */}
-      {upcoming.length > 0 && (
-        <Card className="border-warning/30 space-y-4 p-5">
-          <SectionTitle icon={Wrench} title={t('public.upcoming_maintenance', 'Plánovaná údržba')} />
-          <ul className="space-y-1.5">
-            {upcoming.map((m) => (
-              <li key={m.id} className="text-xs">
-                <span className="font-medium">{m.name}</span>
-                {m.maintenanceDescription ? ` — ${m.maintenanceDescription}` : ''}
-                <span className="text-muted-foreground ml-1 font-mono tabular-nums">
-                  {fmtWindow(m.maintenanceStart, m.maintenanceEnd)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {/* Two tiles a row on a phone: four full-width tiles pushed the
-          services a whole screen down. */}
-      <div className="grid grid-cols-2 gap-3 *:min-w-0 lg:grid-cols-4">
-        {/* "Online 6" next to "Agents online 6/6" read like the same thing twice and
-            "agent" is internal jargon - the fourth tile now says from how many
-            PLACES measurements run, which actually tells the visitor something. */}
-        {/* A green dash still reads as "fine"; unknown stays neutral. */}
-        <Stat label={t('public.stat_online', 'Online')} value={online} tone={online !== null ? 'up' : undefined} />
-        <Stat
-          label={t('public.stat_down', 'Mimo provoz')}
-          value={down}
-          tone={down !== null && down > 0 ? 'down' : undefined}
-        />
-        <Stat label={t('public.stat_uptime', 'Dostupnost 30 dní')} value={status?.uptimePercent ?? null} suffix=" %" />
-        <Stat label={t('public.stat_regions', 'Míst měření')} value={regions === null ? null : regions.length} />
-      </div>
-
-      {monitors === null ? (
-        monitorsError ? (
-          <ErrorState message={t('public.services_failed', 'Seznam služeb se nepodařilo načíst.')} />
-        ) : (
-          <LoadingState label={t('public.loading_services', 'Načítám služby…')} />
-        )
-      ) : (
-        categories.map(([category, items]) => (
-          <Card key={category} className="space-y-2 p-5">
-            {/* The category names are the admin's free text; the icon is that
-                of the first service in it, so "Herní servery" gets a gamepad
-                without the page guessing from the name. */}
-            <SectionTitle icon={typeIcon(items[0].type)} title={category} count={items.length} />
-            <ul>
-              {items.map((m) => (
-                <PublicMonitorCard
-                  key={m.id}
-                  monitor={m}
-                  uptime={opts.showUptime ? (uptime[String(m.id)] ?? []) : []}
-                  uptimePct={windowsById[m.id]?.d30 ?? null}
-                  windows={windowsById[m.id] ?? null}
-                  windowStart90={windowStart90}
-                  statusOnly={opts.detailLevel === 'status'}
-                />
-              ))}
-            </ul>
-          </Card>
-        ))
-      )}
-
-      {/* Recent events - the same Timeline the device detail uses (day groups,
-          severity dots, location), not a bare text list. Only failures and
-          degradations: a wall of "check passed" rows tells a visitor nothing. */}
-      {opts.showEvents && publicTimeline.length > 0 && (
-        <Card className="space-y-4 p-5">
-          <SectionTitle icon={History} title={t('public.recent_events', 'Poslední události')} />
-          <Timeline events={publicTimeline} />
-          {allFailureEvents.length > eventsShown && (
-            <button
-              type="button"
-              onClick={() => setEventsShown((n) => n + 10)}
-              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring w-full rounded-md border border-border py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-            >
-              {t(
-                'public.show_more_events',
-                { n: allFailureEvents.length - eventsShown },
-                `Zobrazit další (${allFailureEvents.length - eventsShown})`
-              )}
-            </button>
-          )}
-        </Card>
-      )}
-
-      {pastIncidents.length > 0 && (
-        <Card className="space-y-4 p-5">
-          <SectionTitle icon={Siren} title={t('public.incidents', 'Incidenty')} />
-          <ul className="space-y-3">{pastIncidents.map(incidentItem)}</ul>
-        </Card>
-      )}
-
-      {/* The measurement locations - where the checks come FROM. This answers
-          "is the service down, or can one vantage point just not see it". */}
-      {opts.showRegions && regions !== null && regions.length > 0 && !filtered && (
-        <Card className="space-y-4 p-5">
-          <SectionTitle icon={Radio} title={t('public.regions', 'Místa měření')} />
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {regions.slice(0, 9).map((r) => (
-              <div
-                key={r.location}
-                className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs"
-              >
-                <span className="truncate font-medium" title={r.location}>
-                  {r.location}
-                </span>
-                <span className="text-muted-foreground shrink-0 font-mono tabular-nums">
-                  {r.successRate === null ? '—' : `${r.successRate} %`}
-                </span>
+        {/* The headline verdict, in strict precedence: a failed request, then an
+            outage, then a partial problem, then maintenance, and only then all
+            online. An unknown state must never read as a green light. The
+            panel itself stays untinted: the icon, the sentence and the
+            freshness pill carry the state (no tint on tint). */}
+        <Panel padding="none" className="overflow-hidden">
+          <div
+            className={
+              showHealth
+                ? 'grid gap-8 p-5 sm:p-7 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-center'
+                : 'grid gap-8 p-5 sm:p-7'
+            }
+          >
+            <div className="min-w-0 space-y-5">
+              <h1 className="text-2xl font-semibold tracking-tight break-words sm:text-3xl">{pageName}</h1>
+              <div className="flex items-start gap-4">
+                <IconTile icon={verdictLook.icon} tone={verdictLook.tone} size="lg" />
+                <div className="min-w-0 flex-1 space-y-1 pt-1">
+                  <p
+                    className="text-lg font-semibold tracking-tight sm:text-xl"
+                    role={verdict === 'error' ? 'alert' : undefined}
+                  >
+                    {verdictText}
+                  </p>
+                  {verdict === 'partial' && <p className="text-muted-foreground text-sm">{partialText}</p>}
+                  {verdict === 'error' && (
+                    <p className="text-muted-foreground text-sm">
+                      {monitors !== null
+                        ? t(
+                            'public.state_unknown_stale',
+                            'Níže je poslední známý stav. Další pokus proběhne za minutu.'
+                          )
+                        : t('public.load_error', 'Data se nepodařilo načíst.')}
+                    </p>
+                  )}
+                </div>
               </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {/* E-mail subscription for visitors without accounts. Double opt-in on
-          the server; the honest emailSent flag distinguishes "check your
-          inbox" from "stored, but the mail failed - try again later". */}
-      <Card className="space-y-3 p-5">
-        <SectionTitle icon={BellRing} title={t('pubsub.box_title', 'Upozornění na výpadky e-mailem')} />
-        {subState === 'done' ? (
-          // One message for every outcome. The server deliberately no longer
-          // reports whether a mail went out: only a not-yet-subscribed address
-          // triggers a send, so any delivery signal would tell an anonymous
-          // caller who is already subscribed. This wording stays true whether
-          // the address is new, already confirmed, or within the resend
-          // cooldown - it promises nothing that did not happen.
-          <p className="text-up text-xs font-medium">
-            {t(
-              'pubsub.box_check_inbox',
-              'Hotovo. Pokud adresa ještě odběr nemá, přišel na ni potvrzovací e-mail - odběr začne až po kliknutí na odkaz v něm.'
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                {/* How old the verdict is, from the newest check the server holds -
+                    a wall display left open must not look live after cron or the
+                    API stopped. Cron writes every 1-5 minutes, hence 300 s. */}
+                <FreshnessPill at={updatedMs} intervalSecs={300} failed={failed} okAt={okAt} />
+                {updatedAt && (
+                  <p className="text-muted-foreground text-xs">
+                    {t('public.updated', { at: updatedAt }, `Aktualizováno ${updatedAt}`)}
+                    {' · '}
+                    {t('public.auto_refresh', 'obnovuje se každou minutu')}
+                  </p>
+                )}
+                {verdict === 'error' && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setRefreshTick((n) => n + 1);
+                      reloadStatus();
+                    }}
+                  >
+                    {t('common.retry', 'Zkusit znovu')}
+                  </Button>
+                )}
+              </div>
+              {/* The figures under the verdict (NetPulse KPI strip). Unknown is a
+                  dash, never a 0, and only a count of services down takes a
+                  colour: a green "Online 6" read as a second verdict. */}
+              <StatRow cols={4} className="border-t border-border pt-5">
+                <StatBlock variant="plain" size="xs" label={t('public.stat_online', 'Online')} value={online} />
+                <StatBlock
+                  variant="plain"
+                  size="xs"
+                  label={t('public.stat_down', 'Mimo provoz')}
+                  value={down}
+                  tone={down !== null && down > 0 ? 'down' : null}
+                />
+                <StatBlock
+                  variant="plain"
+                  size="xs"
+                  label={t('public.stat_uptime', 'Dostupnost 30 dní')}
+                  value={status?.uptimePercent != null ? formatPercentValue(status.uptimePercent, 2, lang) : null}
+                  secondary="%"
+                />
+                <StatBlock
+                  variant="plain"
+                  size="xs"
+                  label={t('public.stat_regions', 'Míst měření')}
+                  value={regions === null ? null : regions.length}
+                />
+              </StatRow>
+            </div>
+            {showHealth && (
+              <div className="flex justify-center border-t border-border pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-8">
+                <PublicHealthScore health={health} failed={healthFailed} />
+              </div>
             )}
-          </p>
+          </div>
+        </Panel>
+
+        {listReady || listFailed ? (
+          <>
+            {/* What is being done about it comes right under the verdict: an
+              ongoing incident sat below every service card and the whole event
+              log, a long scroll away from the visitor who came because of it. */}
+            {openIncidents.length > 0 && (
+              <Panel icon={Siren} title={t('public.incidents', 'Incidenty')} count={openIncidents.length}>
+                <IncidentList incidents={openIncidents} />
+              </Panel>
+            )}
+
+            {/* Announced future maintenance: the visitor should learn about a
+              planned window ahead of time, not when the service disappears.
+              Running maintenance is in the verdict and on the card. */}
+            {upcoming.length > 0 && (
+              <Panel icon={Wrench} title={t('public.upcoming_maintenance', 'Plánovaná údržba')} count={upcoming.length}>
+                <ul className="flex flex-col gap-2">
+                  {upcoming.map((m) => (
+                    <li key={m.id} className="bg-raised border-l-info flex gap-3 rounded-lg border-l-2 px-3 py-2.5">
+                      <IconTile icon={Wrench} tone="info" size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium">
+                          {m.name}
+                          {m.maintenanceDescription ? (
+                            <span className="text-muted-foreground font-normal"> — {m.maintenanceDescription}</span>
+                          ) : null}
+                        </p>
+                        <p className="figure text-muted-foreground text-xs">
+                          {fmtWindow(m.maintenanceStart, m.maintenanceEnd, t)}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            )}
+
+            {/* The services, one card per category, under one heading that holds
+              the period switch for every strip on the page. */}
+            <section className="space-y-3" aria-labelledby="public-services-heading">
+              <SectionTitle
+                headingId="public-services-heading"
+                title={t('public.services', 'Služby')}
+                count={visibleMonitors === null ? undefined : visibleMonitors.length}
+                action={
+                  opts.showUptime ? (
+                    <RangePills
+                      value={range}
+                      options={HISTORY_RANGES}
+                      onChange={setRange}
+                      label={t('public.history_range', 'Období historie')}
+                      titles={{
+                        '30d': t('public.range_30d', 'Posledních 30 dní'),
+                        '90d': t('public.range_90d', 'Posledních 90 dní'),
+                      }}
+                    />
+                  ) : undefined
+                }
+              />
+              {monitors === null ? (
+                <Panel>
+                  <ErrorState message={t('public.services_failed', 'Seznam služeb se nepodařilo načíst.')} />
+                </Panel>
+              ) : (
+                categories.map(([category, items]) => (
+                  // The category names are the admin's free text; the icon is that
+                  // of the first service in it, so "Herní servery" gets a gamepad
+                  // without the page guessing from the name.
+                  <Panel
+                    key={category}
+                    icon={typeIcon(items[0].type)}
+                    title={category}
+                    count={items.length}
+                    headingLevel={3}
+                    padding="none"
+                  >
+                    <ul className="divide-y divide-border border-t border-border">
+                      {items.map((m) => (
+                        <PublicMonitorCard
+                          key={m.id}
+                          monitor={m}
+                          uptime={!opts.showUptime ? [] : stripsPending ? null : (uptime?.[String(m.id)] ?? [])}
+                          uptimePct={windowsById[m.id]?.d30 ?? null}
+                          windows={windowsById[m.id] ?? null}
+                          windowStart90={windowStart90}
+                          days={uptimeDays ?? days}
+                          statusOnly={opts.detailLevel === 'status'}
+                        />
+                      ))}
+                    </ul>
+                  </Panel>
+                ))
+              )}
+              {/* One legend for every strip on the page (C-7): amber, blue, hatched
+                and dashed days mean something, and a phone cannot hover. It comes
+                with the service list, whose held strip rows it explains, not after
+                the strips answer - a second late arrival would shift the page again. */}
+              {monitors !== null &&
+                opts.showUptime &&
+                !stripsMissing &&
+                (uptime === null || Object.keys(uptime).length > 0) && <DayStripLegend className="px-1" />}
+              {monitors !== null && stripsMissing && (
+                <ErrorState
+                  size="inline"
+                  tone="warning"
+                  className="px-1"
+                  message={t('public.history_failed', 'Denní historii dostupnosti se nepodařilo načíst.')}
+                />
+              )}
+              {monitors !== null && rangeMissing && (
+                <ErrorState
+                  size="inline"
+                  tone="warning"
+                  className="px-1"
+                  message={t(
+                    'public.history_range_failed',
+                    { days, shown: uptimeDays ?? 30 },
+                    `Historii za ${days} dní se nepodařilo načíst, zobrazeno posledních ${uptimeDays ?? 30} dní.`
+                  )}
+                />
+              )}
+            </section>
+          </>
         ) : (
-          <form
-            className="flex flex-wrap gap-2"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setSubState('busy');
-              setSubError(null);
-              try {
-                const res = await fetch('/status/api.php?action=public_subscribe', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ email: subEmail, lang }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-                setSubState('done');
-              } catch (err) {
-                setSubState('idle');
-                setSubError(err instanceof Error ? err.message : t('pubsub.failed', 'Odběr se nepodařilo založit.'));
-              }
-            }}
-          >
-            <input
-              type="email"
-              required
-              value={subEmail}
-              onChange={(e) => setSubEmail(e.target.value)}
-              placeholder={t('pubsub.box_placeholder', 'vas@email.cz')}
-              aria-label={t('pubsub.box_title', 'Upozornění na výpadky e-mailem')}
-              className="bg-secondary/60 focus-visible:ring-ring h-9 min-w-0 flex-1 rounded-md border border-input px-3 text-sm focus-visible:ring-2 focus-visible:outline-none"
-            />
-            <button
-              type="submit"
-              disabled={subState === 'busy'}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring h-9 shrink-0 rounded-md px-4 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-60"
-            >
-              {subState === 'busy' ? t('pubsub.box_sending', 'Odesílám…') : t('pubsub.box_subscribe', 'Odebírat')}
-            </button>
-          </form>
+          // One placeholder for everything the first answers fill in, as tall
+          // as a screen: the pinned incident, the maintenance and the list then
+          // arrive in one paint, and what sits below is off screen before and
+          // after - nothing already visible jumps (layout shift on the indexed page).
+          <Panel className="min-h-[70vh]">
+            <LoadingState label={t('public.loading_services', 'Načítám služby…')} />
+          </Panel>
         )}
-        {subError && <ErrorState size="inline" message={subError} />}
-        <p className="text-muted-foreground text-2xs">
-          {t('pubsub.box_hint', 'Pošleme jen výpadky a jejich obnovení. Odhlášení jedním klikem v každém e-mailu.')}
-        </p>
-      </Card>
+
+        {/* Recent events - the same timeline the device detail uses (severity
+            dots, location, repeats folded into one run), not a bare text list.
+            Only failures and degradations: a wall of "check passed" rows tells
+            a visitor nothing. */}
+        {opts.showEvents && publicTimeline.length > 0 && (
+          <Panel icon={History} title={t('public.recent_events', 'Poslední události')}>
+            <div className="space-y-4">
+              <CollapsedTimeline events={publicTimeline} />
+              {eventItems.length > eventsShown && (
+                <button
+                  type="button"
+                  onClick={() => setEventsShown((n) => n + 10)}
+                  className="text-muted-foreground hover:text-foreground hover:bg-raised focus-visible:ring-ring w-full rounded-lg border border-border py-2 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  {t(
+                    'public.show_more_events',
+                    { n: eventItems.length - eventsShown },
+                    `Zobrazit další (${eventItems.length - eventsShown})`
+                  )}
+                </button>
+              )}
+            </div>
+          </Panel>
+        )}
+
+        {pastIncidents.length > 0 && (
+          <Panel icon={Siren} title={t('public.past_incidents', 'Historie incidentů')}>
+            <IncidentList incidents={pastIncidents} />
+          </Panel>
+        )}
+
+        {opts.showRegions && regions !== null && regions.length > 0 && !filtered && (
+          <ProbeLocations regions={regions} />
+        )}
+
+        <SubscribePanel rssHref={rssHref} />
+      </main>
 
       {/* The same footer the legacy page had: © + portal link, custom links
-          from the admin settings, RSS, and who runs the monitoring. */}
-      <footer className="text-muted-foreground space-y-2 border-t border-border pt-4 text-xs">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <a
-            href={pageSlug ? `/status/rss.php?page=${encodeURIComponent(pageSlug)}` : '/status/rss.php'}
-            className="hover:text-foreground inline-flex items-center gap-1.5 transition-colors"
-          >
-            <Rss className="size-3.5" /> {t('public.rss', 'RSS kanál výpadků')}
-          </a>
-          {(branding?.customNavLinks ?? []).map((l) => (
+          from the admin settings, and who runs the monitoring. */}
+      <footer className="text-muted-foreground mx-auto max-w-6xl space-y-2 px-4 pt-2 pb-8 text-xs sm:px-6">
+        <div className="space-y-2 border-t border-border pt-4">
+          {(branding?.customNavLinks ?? []).length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              {(branding?.customNavLinks ?? []).map((l) => (
+                <a
+                  key={l.url}
+                  href={l.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  {l.name}
+                </a>
+              ))}
+            </div>
+          )}
+          <p>
+            © {new Date().getFullYear()}{' '}
+            {branding?.portalUrl ? (
+              <a href={branding.portalUrl} className="hover:text-foreground transition-colors">
+                {branding.siteTitle || 'Blood Kings'}
+              </a>
+            ) : (
+              (branding?.siteTitle ?? '')
+            )}
+            . {t('public.footer_rights', 'Všechna práva vyhrazena.')}{' '}
+            {/* Product attribution only where the instance's own title does not
+                already name the product - "© Blood Kings | Status Monitoring ...
+                Poháněno Blood Kings Monitoring" read the same name twice in one
+                line (reported by the user). Foreign deployments keep the credit. */}
+            {!(branding?.siteTitle ?? '').toLowerCase().includes('blood kings') && (
+              <>
+                · {t('public.powered_by', 'Poháněno')}{' '}
+                <a
+                  href="https://monitoring.bloodkings.eu"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline transition-colors hover:text-foreground"
+                >
+                  Blood Kings Monitoring
+                </a>
+              </>
+            )}{' '}
+            ·{' '}
+            {/* The exact deployed version, linking to its commit - the same
+                transparency the app footer has had; the public page gets it too
+                (open-source project, the repo is public anyway). */}
             <a
-              key={l.url}
-              href={l.url}
+              href={versionCommitUrl(__APP_VERSION__)}
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-foreground transition-colors"
+              className="figure decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
+              title={t('footer.version_link_title', 'Otevřít zdrojový kód této verze na GitHubu')}
             >
-              {l.name}
+              v{__APP_VERSION__}
             </a>
-          ))}
+          </p>
         </div>
-        <p>
-          © {new Date().getFullYear()}{' '}
-          {branding?.portalUrl ? (
-            <a href={branding.portalUrl} className="hover:text-foreground transition-colors">
-              {branding.siteTitle || 'Blood Kings'}
-            </a>
-          ) : (
-            (branding?.siteTitle ?? '')
-          )}
-          . {t('public.footer_rights', 'Všechna práva vyhrazena.')}{' '}
-          {/* Product attribution only where the instance's own title does not
-              already name the product - "© Blood Kings | Status Monitoring ...
-              Poháněno Blood Kings Monitoring" read the same name twice in one
-              line (reported by the user). Foreign deployments keep the credit. */}
-          {!(branding?.siteTitle ?? '').toLowerCase().includes('blood kings') && (
-            <>
-              · {t('public.powered_by', 'Poháněno')}{' '}
-              <a
-                href="https://monitoring.bloodkings.eu"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline transition-colors hover:text-foreground"
-              >
-                Blood Kings Monitoring
-              </a>
-            </>
-          )}{' '}
-          ·{' '}
-          {/* The exact deployed version, linking to its commit - the same
-              transparency the app footer has had; the public page gets it too
-              (open-source project, the repo is public anyway). */}
-          <a
-            href={versionCommitUrl(__APP_VERSION__)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
-            title={t('footer.version_link_title', 'Otevřít zdrojový kód této verze na GitHubu')}
-          >
-            v{__APP_VERSION__}
-          </a>
-        </p>
       </footer>
     </div>
   );
 }
 
 /** The maintenance window "from – to" without seconds; a missing end = an open interval. */
-function fmtWindow(start: string | null | undefined, end: string | null | undefined): string {
-  const f = (v: string) => v.replace('T', ' ').slice(0, 16);
-  if (start && end) return `(${f(start)} – ${f(end)})`;
-  if (start) return `(od ${f(start)})`;
-  return '';
-}
-
-/** States from incident_updates - enumerated, so a missing translation cannot leak into EN. */
-function updateStatusLabel(
-  status: string,
+function fmtWindow(
+  start: string | null | undefined,
+  end: string | null | undefined,
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
 ): string {
-  switch (status) {
-    case 'open':
-      return t('public.upd_open', 'Nahlášeno');
-    case 'investigating':
-      return t('public.upd_investigating', 'Vyšetřuje se');
-    case 'identified':
-      return t('public.upd_identified', 'Příčina nalezena');
-    case 'monitoring':
-      return t('public.upd_monitoring', 'Sledujeme');
-    case 'resolved':
-      return t('public.upd_resolved', 'Vyřešeno');
-    default:
-      return status;
-  }
-}
-
-/** "08.08.2026 00:21:11" -> "08.08.2026 00:21" - seconds add wrap, not meaning. */
-function noSeconds(v: string): string {
-  return v.replace(/(\d{1,2}:\d{2}):\d{2}/, '$1');
-}
-
-function Stat({
-  label,
-  value,
-  suffix = '',
-  tone,
-}: {
-  label: string;
-  value: number | null;
-  suffix?: string;
-  tone?: 'up' | 'down';
-}) {
-  return (
-    <Card className="p-4">
-      <p className="text-muted-foreground truncate text-2xs font-semibold tracking-wider uppercase">{label}</p>
-      {/* Unknown renders as a dash. A zero here would claim a measurement. */}
-      <p
-        className={cn(
-          'mt-1 font-mono text-2xl font-semibold tracking-tight tabular-nums',
-          tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : ''
-        )}
-      >
-        {value === null ? '—' : `${value}${suffix}`}
-      </p>
-    </Card>
-  );
+  const f = (v: string) => v.replace('T', ' ').slice(0, 16);
+  if (start && end) return `${f(start)} – ${f(end)}`;
+  if (start) return t('public.maintenance_from', { from: f(start) }, `od ${f(start)}`);
+  return '';
 }

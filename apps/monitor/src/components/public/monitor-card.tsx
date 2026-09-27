@@ -16,9 +16,17 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router';
 import { useSession } from '@/api/use-session';
-import { Badge, StatusDot, statusVariant, type MonitorState } from '@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
+import { IconTile } from '@/components/ui/icon-tile';
+import { KeyValueList, type KeyValueRow } from '@/components/ui/key-value';
+import { Pill } from '@/components/ui/pill';
+import { Sparkline } from '@/components/sparkline';
+import { StatBlock, StatRow } from '@/components/stat-block';
 import { UptimeStrip, type UptimeDay } from './uptime-strip';
 import { useLanguage } from '@/context/language-context';
+import { formatNumber } from '@/lib/metric-format';
+import type { SparkSample } from '@/lib/sparkline-segments';
+import { monitorStatusKey, statusLabel, statusMeta, type StatusKey } from '@/lib/status';
 import { cn, formatPercent } from '@/lib/utils';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
 
@@ -27,6 +35,8 @@ export interface PublicMonitor {
   name: string;
   type: string;
   status: string;
+  /** The shared status key (C-11); an older server does not send it and it is derived. */
+  statusKey?: string | null;
   category: string | null;
   responseMs: number | null;
   lastCheck: string | null;
@@ -72,15 +82,19 @@ export function PublicMonitorCard({
   uptimePct,
   windows,
   windowStart90 = null,
+  days = 30,
   statusOnly = false,
 }: {
   monitor: PublicMonitor;
-  uptime: UptimeDay[];
+  /** The day strip; null = its answer is still on the way (the row is held for it). */
+  uptime: UptimeDay[] | null;
   /** 30-day availability; null = unmeasured yet -> a dash. */
   uptimePct: number | null;
   windows?: UptimeWindows | null;
   /** The first calendar day of the 90-day window, as the server counted it. */
   windowStart90?: string | null;
+  /** The period the page shows (the strip and the row's figure). */
+  days?: 30 | 90;
   /** A page with detailLevel 'status': no expanding, just state and numbers. */
   statusOnly?: boolean;
 }) {
@@ -88,154 +102,184 @@ export function PublicMonitorCard({
   const { session } = useSession();
   const signedIn = !!session?.authenticated;
   const [open, setOpen] = React.useState(false);
+  const detailId = React.useId();
   const d = (monitor.details ?? {}) as Record<string, any>;
 
-  const rows = buildRows(monitor, d, t);
-  // The word for the state rides on the dot for screen readers and on hover:
-  // the dot alone was colour only, and a paused service read as a warning.
-  const stateWord = {
-    up: t('common.online', 'Online'),
-    down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Varování'),
-    maintenance: t('common.maintenance', 'Údržba'),
-    paused: t('common.paused', 'Pozastaveno'),
-    unknown: t('status.unknown', 'Neznámý'),
-  }[monitor.status as MonitorState];
+  const rows = buildRows(monitor, d, t, lang);
+  const statusKey = publicStatusKey(monitor);
+  const meta = statusMeta(statusKey);
+  // The row's figure follows the period on screen: "99,98 %" beside a 90-day
+  // strip must be the 90-day share, not the 30-day one.
+  const pct = days === 90 ? (windows?.d90 ?? null) : uptimePct;
+  const pctLabel =
+    days === 90 ? t('public.uptime_90d', 'Dostupnost 90 dní') : t('public.stat_uptime', 'Dostupnost 30 dní');
+  const samples = React.useMemo(() => responseSamples(uptime ?? []), [uptime]);
 
   return (
-    <li className="border-b border-border/50 py-3 last:border-0">
+    <li className="px-4 py-3.5 sm:px-5" data-status={statusKey}>
       {/* Hlavicka je DIV, ne button: jmeno je odkaz na plny detail a <a>
           uvnitr <button> je stejne neplatne HTML jako ty vnorene buttony,
           ktere odhalil prohlizec u pasu dostupnosti. Rozbaleni ma vlastni
           tlacitko - sipku. */}
-      <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <span className="flex min-w-0 items-center gap-2.5">
-          <StatusDot
-            variant={statusVariant[monitor.status as MonitorState] ?? 'warning'}
-            label={stateWord ?? monitor.status}
-            className="size-2.5"
-          />
-          <TypeIcon type={monitor.type} />
-          {/* The detail lives in the app, which needs a login and shows a user only
-              the monitors assigned to them - an anonymous visitor gets the name alone. */}
-          {signedIn ? (
-            <Link
-              to={`/infrastructure/${monitor.id}`}
-              className="truncate text-sm font-medium hover:underline"
-              title={t('public.open_detail', 'Otevřít detail služby')}
-            >
-              {monitor.name}
-            </Link>
-          ) : (
-            <span className="truncate text-sm font-medium">{monitor.name}</span>
-          )}
-          {liveBadge(monitor, d, t)}
-          {/* Maintenance is unavailability too - just an announced one. The visitor should see
-              THAT it is down, WHY, and until when - not just an orange dot with no explanation. */}
-          {monitor.status === 'maintenance' && (
-            <Badge variant="warning">
-              <Wrench className="mr-1 size-3" />
-              {t('public.maintenance', 'Údržba')}
-            </Badge>
-          )}
-        </span>
-        {/* Below sm the strip takes the whole second line and its cells
-            shrink with it; a fixed 300 px strip pushed the percentage off a
-            390 px screen. */}
-        <span className="flex w-full items-center gap-3 sm:w-auto">
-          {uptime.length > 0 && <UptimeStrip days={uptime} />}
-          {/* Colour by level: below 99 % already deserves attention, below 95 % is
-              a problem - the same thresholds as the legacy uptime-pct classes. */}
-          <span
-            className={cn(
-              'ml-auto w-16 shrink-0 text-right font-mono text-xs font-semibold tabular-nums',
-              uptimePct === null
-                ? 'text-muted-foreground'
-                : uptimePct >= 99
-                  ? 'text-up'
-                  : uptimePct >= 95
-                    ? 'text-warning'
-                    : 'text-down'
+      {/* One line per service on a desktop - name, day strip, figures - like
+          the NetPulse lists; below lg the strip takes a full second line, so
+          30 or 90 cells never squeeze the name or push the figures off a
+          390 px screen. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 lg:flex-nowrap lg:gap-x-5">
+        <div className="flex min-w-0 flex-1 items-center gap-3 lg:w-72 lg:flex-none">
+          <IconTile icon={typeIcon(monitor.type)} size="sm" />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              {/* The detail lives in the app, which needs a login and shows a user only
+                  the monitors assigned to them - an anonymous visitor gets the name alone. */}
+              {signedIn ? (
+                <Link
+                  to={`/infrastructure/${monitor.id}`}
+                  className="text-link focus-visible:ring-ring min-w-0 truncate rounded-sm text-sm font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                  title={t('public.open_detail', 'Otevřít detail služby')}
+                >
+                  {monitor.name}
+                </Link>
+              ) : (
+                <span className="min-w-0 truncate text-sm font-medium">{monitor.name}</span>
+              )}
+              {/* The one status vocabulary (C-11) as a word, not a lone dot.
+                  Maintenance is blue like its day cells; "waiting for the
+                  first data" is a dashed grey chip, not the amber of an agent
+                  gone silent - one amber for both read as a problem the
+                  visitor could not name. */}
+              <Pill
+                size="sm"
+                dot
+                tone={meta.variant}
+                data-status={statusKey}
+                className={cn(meta.dashed && 'border-dashed')}
+              >
+                {statusLabel(statusKey, t)}
+              </Pill>
+              {liveBadge(monitor, d, t)}
+            </div>
+            {/* Maintenance is unavailability too - just an announced one. The visitor should see
+                WHY and until when, not only the blue chip. */}
+            {monitor.status === 'maintenance' && (monitor.maintenanceDescription || monitor.maintenanceEnd) && (
+              <p className="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-xs">
+                <Wrench aria-hidden="true" className="text-info size-3 shrink-0" />
+                <span className="min-w-0">
+                  {monitor.maintenanceDescription || t('public.maintenance', 'Údržba')}
+                  {monitor.maintenanceEnd
+                    ? ' ' +
+                      t(
+                        'public.maintenance_until',
+                        { until: fmtWindowTime(monitor.maintenanceEnd) },
+                        `(do ${fmtWindowTime(monitor.maintenanceEnd)})`
+                      )
+                    : ''}
+                </span>
+              </p>
             )}
+          </div>
+        </div>
+        {uptime === null || uptime.length > 0 ? (
+          <div className="order-last w-full min-w-0 lg:order-none lg:w-auto lg:flex-1">
+            {uptime === null ? (
+              // The strip's row is held while daily_uptime is on the way: every
+              // card grew by a strip when it answered, and the whole indexed
+              // page jumped under the visitor's eyes (PA-10, layout shift).
+              <div aria-hidden="true" data-strip-pending="">
+                <span className="bg-muted/60 block h-7 rounded-[2px] motion-safe:animate-pulse" />
+                <span className="mt-1 block h-4" />
+              </div>
+            ) : (
+              <UptimeStrip days={uptime} />
+            )}
+          </div>
+        ) : (
+          // No history (a new monitor, or a page without strips): the figures
+          // stay in their column on a desktop.
+          <span aria-hidden="true" className="hidden lg:block lg:flex-1" />
+        )}
+        {/* The daily response as a small glowing curve (the chart look of
+            components/sparkline.tsx); decoration beside the figure, so a
+            phone, where it would squeeze the name, leaves it out. */}
+        <span className="hidden w-24 shrink-0 md:block" aria-hidden="true">
+          <Sparkline points={samples.points} window={samples.window} tone="latency" unit="ms" />
+        </span>
+        <span className="flex shrink-0 items-center gap-3 text-right">
+          <span
+            className="figure text-muted-foreground hidden w-16 text-xs sm:inline"
+            title={t('public.response', 'Odezva')}
           >
-            {formatPercent(uptimePct, 2)}
+            <span className="sr-only">{t('public.response', 'Odezva')}: </span>
+            {monitor.responseMs === null ? '—' : `${formatNumber(monitor.responseMs, lang, 0)} ms`}
           </span>
-          <span className="text-muted-foreground w-14 shrink-0 text-right font-mono text-xs tabular-nums">
-            {monitor.responseMs === null ? '—' : `${monitor.responseMs} ms`}
+          {/* Colour only below a limit: 99 % already deserves attention, below 95 %
+              is a problem - the thresholds of the legacy uptime-pct classes. */}
+          <span
+            title={pctLabel}
+            className={cn('figure w-16 text-xs font-semibold', pct === null ? 'text-muted-foreground' : pctClass(pct))}
+          >
+            <span className="sr-only">{pctLabel}: </span>
+            {formatPercent(pct, 2, lang)}
           </span>
           {!statusOnly && (
             <button
               type="button"
               onClick={() => setOpen((o) => !o)}
               aria-expanded={open}
+              aria-controls={open ? detailId : undefined}
               aria-label={t('public.toggle_detail', 'Rozbalit detail')}
-              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -m-1 shrink-0 rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              className="text-muted-foreground hover:text-foreground hover:bg-raised focus-visible:ring-ring grid size-7 shrink-0 place-items-center rounded-md border border-border transition-colors focus-visible:ring-2 focus-visible:outline-none"
             >
-              <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
+              <ChevronDown
+                aria-hidden="true"
+                className={cn('size-4 transition-transform motion-reduce:transition-none', open && 'rotate-180')}
+              />
             </button>
           )}
         </span>
       </div>
 
-      {monitor.status === 'maintenance' && (monitor.maintenanceDescription || monitor.maintenanceEnd) && (
-        <p className="text-warning mt-1.5 pl-5 text-xs">
-          {monitor.maintenanceDescription || t('public.maintenance', 'Údržba')}
-          {monitor.maintenanceEnd
-            ? ' ' +
-              t(
-                'public.maintenance_until',
-                { until: fmtWindowTime(monitor.maintenanceEnd) },
-                `(do ${fmtWindowTime(monitor.maintenanceEnd)})`
-              )
-            : ''}
-        </p>
-      )}
-
       {open && !statusOnly && (
-        <div className="mt-3 space-y-2.5 pl-5">
+        <div id={detailId} className="bg-inset mt-3 space-y-4 rounded-lg border border-border p-4">
           {/* Availability over several windows - like HetrixTools. An unmeasured window is
               a dash: a fresh monitor has no "100 % over 90 days". */}
           {windows && (
-            <div className="grid max-w-md grid-cols-4 gap-2">
-              {(
-                [
-                  ['d1', t('public.win_24h', '24 h')],
-                  ['d7', t('public.win_7d', '7 dní')],
-                  ['d30', t('public.win_30d', '30 dní')],
-                  ['d90', t('public.win_90d', '90 dní')],
-                ] as const
-              ).map(([key, label]) => (
-                <div key={key} className="rounded-md border border-border/60 px-2 py-1.5 text-center">
-                  <p className="text-muted-foreground text-3xs font-medium">{label}</p>
-                  <p
-                    className={cn(
-                      'font-mono text-xs font-semibold tabular-nums',
-                      windows[key] === null
-                        ? 'text-muted-foreground'
-                        : windows[key]! >= 99
-                          ? 'text-up'
-                          : windows[key]! >= 95
-                            ? 'text-warning'
-                            : 'text-down'
-                    )}
-                  >
-                    {windows[key] === null ? '—' : `${windows[key]} %`}
-                  </p>
-                </div>
-              ))}
+            <div className="space-y-1.5">
+              <StatRow cols={4}>
+                {(
+                  [
+                    ['d1', t('public.win_24h', '24 h')],
+                    ['d7', t('public.win_7d', '7 dní')],
+                    ['d30', t('public.win_30d', '30 dní')],
+                    ['d90', t('public.win_90d', '90 dní')],
+                  ] as const
+                ).map(([key, label]) => (
+                  <StatBlock
+                    key={key}
+                    variant="plain"
+                    size="xs"
+                    label={label}
+                    // Through the floor-safe formatter in the page language: printed
+                    // raw it read "99.983 %" on a Czech page, and a window with
+                    // a failure in it could round up to 100.
+                    value={windows[key] === null ? null : formatPercent(windows[key], 2, lang)}
+                    tone={windows[key] === null ? null : pctTone(windows[key] as number)}
+                  />
+                ))}
+              </StatRow>
+              {coverageStart(windows.since, windowStart90) && (
+                // A monitor younger than 90 days: the long windows cover only its history.
+                <p className="text-muted-foreground text-2xs">
+                  {t(
+                    'public.win_since',
+                    { date: formatCoverageDay(coverageStart(windows.since, windowStart90)!, lang) },
+                    `Data od ${formatCoverageDay(coverageStart(windows.since, windowStart90)!, lang)}, delší okna pokrývají jen tuto dobu.`
+                  )}
+                </p>
+              )}
             </div>
           )}
-          {windows && coverageStart(windows.since, windowStart90) && (
-            // A monitor younger than 90 days: the long windows cover only its history.
-            <p className="text-muted-foreground text-3xs">
-              {t(
-                'public.win_since',
-                { date: formatCoverageDay(coverageStart(windows.since, windowStart90)!, lang) },
-                `Data od ${formatCoverageDay(coverageStart(windows.since, windowStart90)!, lang)}, delší okna pokrývají jen tuto dobu.`
-              )}
-            </p>
-          )}
-          <LatencySparkline days={uptime} t={t} />
+          <ResponseCurve samples={samples} days={days} />
           {/* Server load - only where an agent measures. */}
           {(monitor.cpu !== null || monitor.ram !== null || monitor.hdd !== null) && (
             <div className="space-y-1.5">
@@ -254,25 +298,14 @@ export function PublicMonitorCard({
             if (bars.length === 0) return null;
             return (
               <div className="space-y-1.5">
-                <p className="text-muted-foreground text-2xs font-medium">
-                  {t('public.hosting_limits', 'Čerpání limitů hostingu')}
-                </p>
+                <p className="micro-label">{t('public.hosting_limits', 'Čerpání limitů hostingu')}</p>
                 {bars.map(([k, label]) => (
                   <UsageBar key={k} label={label} percent={cp[k].percent} detail={cp[k].formatted} />
                 ))}
               </div>
             );
           })()}
-          {rows.length > 0 && (
-            <dl className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-              {rows.map(([label, value]) => (
-                <div key={label} className="flex items-baseline justify-between gap-3 text-xs">
-                  <dt className="text-muted-foreground shrink-0">{label}</dt>
-                  <dd className="truncate text-right font-medium">{value}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
+          {rows.length > 0 && <KeyValueList dense rows={rows} />}
           {/* Charts live in the app's metric detail; the link only appears
               where an agent actually reports metrics (cpu !== null), so it
               never leads into an empty page. Verified: monitors 4 and 5 have
@@ -280,15 +313,83 @@ export function PublicMonitorCard({
           {monitor.cpu !== null && signedIn && (
             <Link
               to={`/infrastructure/${monitor.id}/metric/${monitor.id}/cpu`}
-              className="text-primary inline-flex items-center gap-1.5 text-xs font-medium hover:underline"
+              className="text-link inline-flex items-center gap-1.5 text-xs font-medium hover:underline"
             >
-              <LineChart className="size-3.5" />
+              <LineChart aria-hidden="true" className="size-3.5" />
               {t('public.view_charts', 'Zobrazit grafy metrik')}
             </Link>
           )}
         </div>
       )}
     </li>
+  );
+}
+
+/** The availability colour by the legacy thresholds; healthy stays the foreground. */
+function pctClass(pct: number): string {
+  return pct >= 99 ? '' : pct >= 95 ? 'text-warning' : 'text-down';
+}
+
+function pctTone(pct: number): 'warning' | 'down' | null {
+  return pct >= 99 ? null : pct >= 95 ? 'warning' : 'down';
+}
+
+interface ResponseSamples {
+  points: SparkSample[];
+  window: { from: number; to: number } | null;
+  measured: number[];
+}
+
+/**
+ * The strip's days as a time series of their average response. x is the
+ * middle of each day and the window runs to the end of the last one (today),
+ * so a day nobody measured - today before its first check included - is a
+ * gap, never a line drawn across it. An older server without the day key
+ * gets the days spaced by their position.
+ */
+function responseSamples(days: readonly UptimeDay[]): ResponseSamples {
+  const DAY = 86_400_000;
+  const at = (day: UptimeDay, i: number) => {
+    const t = day.day ? Date.parse(`${day.day}T12:00:00`) : NaN;
+    return Number.isFinite(t) ? t : i * DAY;
+  };
+  const points = days.map((day, i) => ({
+    t: at(day, i),
+    v: typeof day.avgMs === 'number' && Number.isFinite(day.avgMs) ? day.avgMs : null,
+  }));
+  const measured = points.map((p) => p.v).filter((v): v is number => v !== null);
+  const window = points.length > 0 ? { from: points[0].t - DAY / 2, to: points[points.length - 1].t + DAY / 2 } : null;
+  return { points, window, measured };
+}
+
+/**
+ * The daily response over the strip's period, larger in the expanded detail:
+ * the curve, the best-worst day beside it and a visible caption, because a
+ * tooltip does not exist on touch and an unexplained squiggle says nothing.
+ * Fewer than two measured days draw nothing - a single point is no trend.
+ */
+function ResponseCurve({ samples, days }: { samples: ResponseSamples; days: 30 | 90 }) {
+  const { t, lang } = useLanguage();
+  if (samples.measured.length < 2) return null;
+  const min = Math.min(...samples.measured);
+  const max = Math.max(...samples.measured);
+  const range =
+    min === max ? `${formatNumber(max, lang, 0)} ms` : `${formatNumber(min, lang, 0)}–${formatNumber(max, lang, 0)} ms`;
+  const label = days === 90 ? t('public.latency_90d', 'Odezva 90 dní') : t('public.latency_30d', 'Odezva 30 dní');
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="micro-label">{label}</p>
+        <p className="figure text-muted-foreground text-xs">{range}</p>
+      </div>
+      <Sparkline points={samples.points} window={samples.window} tone="latency" unit="ms" className="h-12" />
+      <p className="text-muted-foreground text-2xs">
+        {t(
+          'public.latency_hint',
+          'Každý bod je denní průměr odezvy; rozsah vpravo je nejlepší–nejhorší den. Mezera = den bez měření.'
+        )}
+      </p>
+    </div>
   );
 }
 
@@ -315,9 +416,15 @@ export function typeIcon(type: string): typeof Globe {
   return TYPE_ICONS[type] ?? Activity;
 }
 
-function TypeIcon({ type }: { type: string }) {
-  const Icon = TYPE_ICONS[type] ?? Activity;
-  return <Icon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />;
+/**
+ * The card's status key. An agent past its offline timeout keeps the last
+ * status it reported, which is no longer known: the verdict above already
+ * counts it as "unknown state", and a green dot next to that verdict
+ * contradicted it. A worse status (down, maintenance) stays - it says more.
+ */
+function publicStatusKey(monitor: PublicMonitor): StatusKey {
+  const key = monitorStatusKey(monitor);
+  return monitor.agentSilent === true && (key === 'up' || key === 'warning') ? 'unknown_stale' : key;
 }
 
 /** The one live number worth showing collapsed - players online, people in voice. */
@@ -358,11 +465,12 @@ function liveBadge(
  * pretending to be a measured zero.
  */
 function UsageBar({ label, percent, detail }: { label: string; percent: number | null; detail?: string }) {
+  const { lang } = useLanguage();
   if (percent === null || percent === undefined || !Number.isFinite(percent)) return null;
   const clamped = Math.min(100, Math.max(0, percent));
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-muted-foreground w-20 shrink-0">{label}</span>
+    <div className="flex items-center gap-3 text-xs">
+      <span className="micro-label w-20 shrink-0">{label}</span>
       <span className="bg-muted h-1.5 min-w-0 flex-1 overflow-hidden rounded-full">
         <span
           className={cn(
@@ -375,71 +483,9 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
       {/* nowrap: "39.01 GB / 124.4 GB" did not fit the fixed width and wrapped
           onto two lines - the value takes what it needs and the bar shrinks,
           not the legibility. */}
-      <span className="shrink-0 text-right font-mono whitespace-nowrap tabular-nums" title={detail}>
-        {detail ?? `${percent} %`}
+      <span className="figure shrink-0 text-right whitespace-nowrap" title={detail}>
+        {detail ?? `${formatNumber(percent, lang, 1)} %`}
       </span>
-    </div>
-  );
-}
-
-/**
- * Daily latency averages over 30 days as a tiny line - netdata-style charts belong
- * to the metric detail, this is just the shape of the trend. Unmeasured days tear
- * the line into segments; a continuous line across a gap would claim measurements that do not exist.
- */
-function LatencySparkline({
-  days,
-  t,
-}: {
-  days: UptimeDay[];
-  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
-}) {
-  const vals = days.map((d) => (typeof d.avgMs === 'number' ? d.avgMs : null));
-  const measured = vals.filter((v): v is number => v !== null);
-  if (measured.length < 2) return null;
-  const max = Math.max(...measured);
-  const min = Math.min(...measured);
-  const W = 160;
-  const H = 28;
-  const PAD = 2;
-  const x = (i: number) => PAD + (i / Math.max(1, vals.length - 1)) * (W - 2 * PAD);
-  const y = (v: number) => (max === min ? H / 2 : PAD + (1 - (v - min) / (max - min)) * (H - 2 * PAD));
-
-  const segments: string[] = [];
-  let current: string[] = [];
-  vals.forEach((v, i) => {
-    if (v === null) {
-      if (current.length > 1) segments.push(current.join(' '));
-      current = [];
-      return;
-    }
-    current.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-  });
-  if (current.length > 1) segments.push(current.join(' '));
-  if (segments.length === 0) return null;
-
-  return (
-    <div className="space-y-0.5">
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-muted-foreground w-20 shrink-0">{t('public.latency_30d', 'Odezva 30 dní')}</span>
-        <svg width={W} height={H} className="shrink-0" role="img" aria-label={t('public.latency_30d', 'Odezva 30 dní')}>
-          {segments.map((pts, i) => (
-            <polyline key={i} points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-info" />
-          ))}
-        </svg>
-        <span className="text-muted-foreground shrink-0 whitespace-nowrap tabular-nums">
-          {min === max ? `${max} ms` : `${min}–${max} ms`}
-        </span>
-      </div>
-      {/* A visible caption, not a title= tooltip - tooltips do not exist on touch
-          (the same lesson as the availability strip). Without an explanation
-          it is an anonymous squiggle: what is the axis, what does a gap mean? */}
-      <p className="text-muted-foreground/70 pl-[5.5rem] text-3xs">
-        {t(
-          'public.latency_hint',
-          'Každý bod je denní průměr odezvy; rozsah vpravo je nejlepší–nejhorší den. Mezera = den bez měření.'
-        )}
-      </p>
     </div>
   );
 }
@@ -455,28 +501,27 @@ const CPANEL_KEYS: [string, string][] = [
   ['cpu', 'CPU'],
 ];
 
-type Row = [string, string];
-
 function buildRows(
   monitor: PublicMonitor,
   d: Record<string, any>,
-  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
-): Row[] {
-  const rows: Row[] = [];
-  const add = (label: string, value: unknown) => {
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string,
+  lang: string
+): KeyValueRow[] {
+  const rows: KeyValueRow[] = [];
+  const add = (label: string, value: unknown, mono = true) => {
     if (value === null || value === undefined || value === '') return;
     // Jen skalary. `members` z Discordu je POLE OBJEKTU a String() z nej
     // udela "[object Object],[object Object]" - presne to se ukazalo na
     // produkci. Objekt, ktery neumime zobrazit, radek proste nevytvori.
     if (typeof value === 'object') return;
-    rows.push([label, String(value)]);
+    rows.push({ label, value: String(value), mono });
   };
 
   // Type-specific fields first - they are why someone expands the card.
   switch (monitor.type) {
     case 'minecraft':
       add(t('public.f_version', 'Verze'), d.version);
-      add(t('public.f_motd', 'Popis (MOTD)'), d.motd);
+      add(t('public.f_motd', 'Popis (MOTD)'), d.motd, false);
       break;
     case 'teamspeak': {
       add(t('public.f_version', 'Verze'), d.version);
@@ -500,7 +545,7 @@ function buildRows(
       break;
     case 'openwrt':
       add(t('public.f_model', 'Model'), d.model);
-      add(t('public.f_os', 'Systém'), d.os);
+      add(t('public.f_os', 'Systém'), d.os, false);
       // Radios: the agent reports an empty array on a router without wireless
       // hardware - that is an answer, not a gap, so no row appears.
       if (Array.isArray(d.wifi_radios) && d.wifi_radios.length > 0) {
@@ -509,9 +554,22 @@ function buildRows(
       break;
   }
 
-  add(t('public.f_last_check', 'Poslední kontrola'), monitor.lastCheck);
-  add(t('public.f_last_change', 'Poslední změna stavu'), monitor.lastStatusChange);
+  add(t('public.f_last_check', 'Poslední kontrola'), fmtStamp(monitor.lastCheck, lang));
+  add(t('public.f_last_change', 'Poslední změna stavu'), fmtStamp(monitor.lastStatusChange, lang));
   return rows;
+}
+
+/**
+ * A server timestamp ("2026-09-23 10:00:00" or ISO) in the page language and
+ * the visitor's time zone, like the update time above; an unparseable value
+ * is shown as sent rather than as "Invalid Date".
+ */
+function fmtStamp(v: string | null, lang: string): string | null {
+  if (!v) return null;
+  const at = new Date(v.includes('T') ? v : v.replace(' ', 'T'));
+  return Number.isNaN(at.getTime())
+    ? v
+    : at.toLocaleString(lang === 'en' ? 'en-GB' : 'cs-CZ', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 /** "2026-08-17 12:00:00" / ISO -> "2026-08-17 12:00" - drop seconds, keep both source formats. */

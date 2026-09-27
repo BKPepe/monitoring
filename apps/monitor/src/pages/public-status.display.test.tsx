@@ -145,6 +145,37 @@ describe('Poslední události: probíhá jen výpadek, který opravdu trvá (ext
     expect(screen.getAllByText('Probíhá')).toHaveLength(1);
   });
 
+  it('tři kontroly jednoho běžícího výpadku: „Probíhá“ jednou, u nejnovější; skončený výpadek dál „Vyřešeno“ (PUB-07)', async () => {
+    const api = answering(
+      [monitor(1, 'E-shop', 'up'), monitor(2, 'Wiki', 'down')],
+      [
+        failure(2, 'Wiki', 'Třetí kontrola', null, null),
+        failure(2, 'Wiki', 'Druhá kontrola', null, null),
+        failure(2, 'Wiki', 'První kontrola', null, null),
+        failure(1, 'E-shop', 'Časový limit vypršel', '20.09.2026 03:14:20', 20),
+      ]
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage();
+
+    await screen.findByText('Poslední události');
+    // The three checks fold into one run; its summary carries the one chip.
+    const run = await waitFor(() => {
+      const el = document.querySelector('[data-run]');
+      if (!el) throw new Error('no run yet');
+      return el as HTMLElement;
+    });
+    expect(run.getAttribute('data-run')).toBe('3');
+    expect(within(run.querySelector('summary') as HTMLElement).getByText('Probíhá')).toBeTruthy();
+    expect(within(eventRow('Druhá kontrola')).queryByText('Probíhá')).toBeNull();
+    expect(within(eventRow('První kontrola')).queryByText('Probíhá')).toBeNull();
+    expect(screen.getAllByText('Probíhá')).toHaveLength(1);
+    expect(within(eventRow('Časový limit vypršel')).getByText('Vyřešeno')).toBeTruthy();
+  });
+
   it('bez známého stavu služby a bez konce stránka nic netvrdí', async () => {
     const api = answering([monitor(1, 'E-shop', 'up')], [failure(9, 'Stará služba', 'Chyba DNS', null, null)]);
     vi.stubGlobal(
@@ -183,7 +214,7 @@ describe('Čas aktualizace v jazyce stránky (extra-app-4)', () => {
 });
 
 describe('Počty služeb v nadpisu v českých tvarech (extra-app-3)', () => {
-  it('1 služba, 2–4 služby, 5 a více služeb; anglicky 1 service / 2 services', async () => {
+  it('1 služba, 2–4 služby, 5 a více služeb; anglicky jméno jediné služby / 2 services', async () => {
     const fleet = (n: number, status: string) =>
       Array.from({ length: n }, (_, i) => monitor(i + 1, `Web ${i + 1}`, status));
     const show = async (monitors: unknown[], text: string, path = '/public') => {
@@ -204,7 +235,8 @@ describe('Počty služeb v nadpisu v českých tvarech (extra-app-3)', () => {
     await show(fleet(5, 'warning'), '5 služeb hlásí zhoršení nebo neznámý stav');
     await show([...fleet(1, 'maintenance'), monitor(9, 'E-shop', 'up')], '1 služba v plánované údržbě');
     await show(fleet(2, 'maintenance'), '2 služby v plánované údržbě');
-    await show(fleet(1, 'down'), '1 service down', '/public?lang=en');
+    // One service down is named, not counted (PUB-01).
+    await show(fleet(1, 'down'), 'Web 1 is down', '/public?lang=en');
     await show(fleet(2, 'down'), '2 services down', '/public?lang=en');
   });
 });

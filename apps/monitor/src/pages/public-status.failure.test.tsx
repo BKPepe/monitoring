@@ -85,10 +85,14 @@ function renderPage() {
   );
 }
 
-/** The tile whose label is `label` - its value sits in the same card. */
+/** The figure under the verdict whose micro-label is `label` (a StatBlock of the hero's strip). */
+function tileValueEl(label: string): HTMLElement | null {
+  const labelEl = screen.getByText(label, { selector: '[data-slot="stat-block"] .micro-label span' });
+  return labelEl.closest<HTMLElement>('[data-slot="stat-block"]')?.querySelector<HTMLElement>('p > span') ?? null;
+}
+
 function tileValue(label: string): string {
-  const labelEl = screen.getByText(label, { selector: 'p' });
-  return labelEl.parentElement?.querySelectorAll('p')[1]?.textContent ?? '';
+  return tileValueEl(label)?.textContent ?? '';
 }
 
 describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', () => {
@@ -103,8 +107,7 @@ describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', (
     expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
     expect(tileValue('Online')).toBe('—');
     // A green dash would still read as "fine".
-    const onlineValue = screen.getByText('Online', { selector: 'p' }).parentElement?.querySelectorAll('p')[1];
-    expect(onlineValue?.className).not.toContain('text-up');
+    expect(tileValueEl('Online')?.className).not.toContain('text-up');
     expect(tileValue('Míst měření')).toBe('—');
     expect(tileValue('Mimo provoz')).toBe('—');
     expect(screen.getByText('Seznam služeb se nepodařilo načíst.')).toBeTruthy();
@@ -146,7 +149,7 @@ describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', (
     expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
   });
 
-  it('výpadek má přednost před zhoršením', async () => {
+  it('výpadek má přednost před zhoršením; jediná služba mimo provoz je v nadpisu jménem', async () => {
     const api = answering([monitor(1, 'E-shop', 'down'), monitor(3, 'Discord', 'warning')]);
     vi.stubGlobal(
       'fetch',
@@ -154,8 +157,21 @@ describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', (
     );
     renderPage();
 
-    expect(await screen.findByText('1 služba mimo provoz')).toBeTruthy();
+    expect(await screen.findByText('E-shop mimo provoz')).toBeTruthy();
     expect(screen.queryByText('Provoz je částečně omezen')).toBeNull();
+  });
+
+  it('dostupnost za 30 dní a úspěšnost míst měření česky s desetinnou čárkou (PUB-14)', async () => {
+    const api = answering([monitor(1, 'E-shop', 'up')]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage();
+
+    await screen.findByText('Všechny systémy jsou online');
+    await waitFor(() => expect(tileValue('Dostupnost 30 dní')).toBe('99,90 %'));
+    expect(await screen.findByText('100,00 %')).toBeTruthy();
   });
 
   it('jen neznámý stav (nikdy nehlášeno) také není „všechny online“', async () => {

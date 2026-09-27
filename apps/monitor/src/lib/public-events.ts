@@ -32,6 +32,46 @@ export function outageResolution(e: OutageFacts, currentStatus: string | null): 
   return undefined;
 }
 
+/** A failed check with the monitor it belongs to, as `action=events` sends it. */
+export interface MonitorOutageFacts extends OutageFacts {
+  monitorId: number | null;
+}
+
+/**
+ * Which outage a failed check belongs to, or null for a degradation.
+ *
+ * Every failed check of one outage shares its end - the first passing check
+ * after it, or none while the outage lasts - so monitor + end names the
+ * outage. Two outages of one service days apart never share a key, because
+ * the first one has an end the second one does not.
+ */
+export function outageEpisode(e: MonitorOutageFacts): string | null {
+  if (!e.isDown) return null;
+  return `${e.monitorId ?? ''}:${e.outageEnd ?? 'open'}`;
+}
+
+/**
+ * The resolution chip of every failed check, with "Open" said once per
+ * running outage: on its newest check. `events` comes newest first, as the
+ * API sends it. A running outage of twenty failed checks used to print
+ * twenty "Probíhá" chips; the older checks of it now claim nothing, because
+ * the newest one already says the outage is still on.
+ */
+export function outageResolutions(
+  events: MonitorOutageFacts[],
+  statusOf: (monitorId: number) => string | null
+): TimelineEvent['resolution'][] {
+  const seen = new Set<string>();
+  return events.map((e) => {
+    const resolution = outageResolution(e, e.monitorId == null ? null : statusOf(e.monitorId));
+    if (resolution !== 'Open') return resolution;
+    const episode = outageEpisode(e) ?? '';
+    if (seen.has(episode)) return undefined;
+    seen.add(episode);
+    return 'Open';
+  });
+}
+
 /**
  * " (trvání 5 min)", only for an outage whose end was recorded: a duration
  * without an end is a number from nowhere. Under a minute reads "< 1 min" -
