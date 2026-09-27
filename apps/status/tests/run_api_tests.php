@@ -4785,6 +4785,31 @@ if (function_exists('bk_router_rec_inputs_batch')) {
 }
 
 
+// --- The digest's week figures read only W ------------------------------------
+//
+// The facts line prints each radio's noise and airtime "this week". The batch
+// loads thirty days, so a reading from twenty days ago must not move them.
+if (function_exists('bk_digest_router_facts')) {
+    $wk_days = bk_router_rec_window(date('Y-m-d'))['days'];
+    $wk_old = date('Y-m-d', (int)strtotime(date('Y-m-d') . ' -20 days'));
+    $wk_keep = (string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
+    $wk_details = json_decode($wk_keep, true) ?: [];
+    $wk_details['wifi_radios'] = [['radio' => 'phy0-ap0', 'mode' => 'ap', 'band' => '5GHz', 'channel' => 36]];
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($wk_details)]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
+    $wk_ins = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, ?, ?, ?, 1440)");
+    $wk_ins->execute([$wk_days[2], 'wifi_noise_5g', -92, -92, -92]);
+    $wk_ins->execute([$wk_old, 'wifi_noise_5g', -60, -60, -60]);
+    $wk_ins->execute([$wk_days[2], 'wifi_busy_5g', 10, 10, 10]);
+    $wk_ins->execute([$wk_old, 'wifi_busy_5g', 90, 90, 90]);
+    $wk_radio = bk_digest_router_facts($pdo, [['id' => 2, 'applicable' => true]])[0]['facts']['radios'][0] ?? [];
+    check('Digest: šum a vytížení kanálu za týden jsou jen ze sedmi dní',
+        [$wk_radio['noise_week'] ?? null, $wk_radio['busy_week'] ?? null], [-92.0, 10.0]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([$wk_keep]);
+}
+
+
 // --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
 //
 // They are read-only except the mute, and the mute is the only place where a

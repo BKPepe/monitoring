@@ -2208,6 +2208,8 @@ if (function_exists('bk_rec_rules_wifi')) {
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_rec_week_stat', 'bk_rec_over', 'bk_rec_above', 'bk_rec_state_active', 'bk_rec_days_over',
     'bk_rec_days_with_data', 'bk_router_rec_window', 'bk_rec_rules_wan_week', 'bk_rec_rules_wan_tests',
+    // The weekly rules cut W out of the thirty loaded days with it.
+    'bk_rec_metrics_of',
     'bk_rec_rules_gap', 'bk_rec_dir_label', 'bk_router_rec_render', 'bk_rec_area_of',
     // The aggregate rules ARE the classifier's consumer, so it is loaded here
     // too; the block below re-loads it for its own tests.
@@ -2308,6 +2310,68 @@ if (function_exists('bk_rec_rules_wan_week')) {
         'wan_link_flaps');
     check('méně než 4 dny dat týdenní pravidla nevyhodnotí',
         count(bk_rec_rules_wan_week($rw_in($rw_series('cpu', [10.0, 10.0, 10.0])), [])['not_evaluated']), 3);
+}
+
+// --- The weekly WAN and clock rules read only W --------------------------------
+// The inputs batch loads thirty days (the disk wear trend reads that far) and
+// bk_rec_week_stat sums whatever it is handed. Each case puts the same numbers
+// once inside W (fires) and once on days30 outside W with W itself quiet
+// (must not fire): "on N of the last 7 days" has to be true.
+if (function_exists('bk_rec_rules_wan_week') && function_exists('bk_rec_rules_gap')) {
+    $w1_win = bk_router_rec_window(date('Y-m-d'));
+    $w1_out = array_values(array_diff($w1_win['days30'], $w1_win['days']));
+    // A step metric's day: avg * samples = the day's total.
+    $w1_step = function (string $key, array $totals): array {
+        $out = [];
+        foreach ($totals as $day => $total) {
+            $out[$day] = ['min' => 0.0, 'avg' => $total / 1440.0, 'max' => $total, 'samples' => 1440];
+        }
+        return [$key => $out];
+    };
+    $w1_quiet = array_fill_keys($w1_win['days'], 0.0);
+    $w1_in = function (array $metrics, array $over = []) use ($rw_in, $w1_win): array {
+        $in = $rw_in($metrics, $over);
+        $in['window']['days30'] = $w1_win['days30'];
+        return $in;
+    };
+    $w1_fires = fn (string $id, array $res): bool => in_array($id, $rw_ids($res), true);
+    $w1_three_in = array_fill_keys(array_slice($w1_win['days'], 0, 3), 40.0) + $w1_quiet;
+    $w1_three_out = array_fill_keys(array_slice($w1_out, 0, 3), 40.0) + $w1_quiet;
+    check('chyby portu WAN: 3 × 40 v týdnu = doporučení, tytéž dny mimo týden ne',
+        [$w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_in($w1_step('wan_errors', $w1_three_in)), [])),
+            $w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_in($w1_step('wan_errors', $w1_three_out)), []))],
+        [true, false]);
+    // The ring share divides by the week's packets; 1,200 drops on two days
+    // outside W used to be divided by the packets of W alone.
+    $w1_ring = fn (array $totals): array => $w1_in($w1_step('wan_ring_drops', $totals),
+        ['rx_packets' => array_fill_keys($w1_win['days'], 1000000.0 / 7.0)]);
+    check('zahozené rámce portu: 2 × 1200 v týdnu = doporučení, mimo týden ne',
+        [$w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_ring(array_fill_keys(array_slice($w1_win['days'], 0, 2), 1200.0) + $w1_quiet), [])),
+            $w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_ring(array_fill_keys(array_slice($w1_out, 0, 2), 1200.0) + $w1_quiet), []))],
+        [true, false]);
+    check('výpadky linky: 3 v týdnu = doporučení, mimo týden ne',
+        [$w1_fires('wan_link_flaps', bk_rec_rules_wan_week($w1_in($w1_step('wan_link_flaps',
+            array_fill_keys(array_slice($w1_win['days'], 0, 3), 1.0) + $w1_quiet)), [])),
+            $w1_fires('wan_link_flaps', bk_rec_rules_wan_week($w1_in($w1_step('wan_link_flaps',
+                array_fill_keys(array_slice($w1_out, 0, 3), 1.0) + $w1_quiet)), []))],
+        [true, false]);
+    // Clock: 30 s on the 23 days before W and 5 s in W. A month's mean would
+    // be 24 s and fire; the week's is 5 s.
+    $w1_skew = [];
+    foreach ($w1_win['days30'] as $day) {
+        $secs = in_array($day, $w1_win['days'], true) ? 5.0 : 30.0;
+        $w1_skew[$day] = ['min' => $secs, 'avg' => $secs, 'max' => $secs, 'samples' => 1440];
+    }
+    $w1_gap = fn (array $skew): array => bk_rec_rules_gap(['window' => $w1_in(['clock_skew_s' => $skew])['window'],
+        'details' => ['wan_up' => true], 'monitor' => [], 'events' => [], 'now' => time()], []);
+    check('hodiny: 30 s před týdnem a 5 s v něm doporučení nevydá, 30 s v týdnu ano',
+        [$w1_fires('clock_skew', $w1_gap($w1_skew)),
+            $w1_fires('clock_skew', $w1_gap(array_map(fn (array $r): array => ['min' => 30.0, 'avg' => 30.0, 'max' => 30.0, 'samples' => 1440], $w1_skew)))],
+        [false, true]);
+    $w1_month = array_values(array_filter(bk_rec_rules_wan_week($w1_in($w1_step('wan_errors',
+        array_fill_keys($w1_win['days30'], 40.0))), [])['items'], fn (array $i): bool => $i['id'] === 'wan_port_errors'));
+    check('chyby portu WAN: měsíc chyb dá v textu 7 dní a součet týdne',
+        [$w1_month[0]['params']['days'] ?? null, $w1_month[0]['params']['errors'] ?? null], [7, 280.0]);
 }
 
 

@@ -13400,7 +13400,8 @@ function bk_digest_router_facts(PDO $pdo, array $routers): array {
             continue;
         }
         $d = $details[$id];
-        $window = $inputs[$id]['window'] ?? ['metrics' => []];
+        // The week's noise and airtime: W only, the batch loads a month.
+        $week = bk_rec_metrics_of($inputs[$id]['window'] ?? [], 'days');
         $radios = [];
         foreach (is_array($d['wifi_radios'] ?? null) ? $d['wifi_radios'] : [] as $radio) {
             if (!is_array($radio)) {
@@ -13408,8 +13409,8 @@ function bk_digest_router_facts(PDO $pdo, array $routers): array {
             }
             $band = is_string($radio['band'] ?? null) ? $radio['band'] : null;
             $suffix = $band_key[$band] ?? null;
-            $noise = $suffix !== null ? bk_rec_week_stat($window['metrics'] ?? [], 'wifi_noise_' . $suffix) : null;
-            $busy = $suffix !== null ? bk_rec_week_stat($window['metrics'] ?? [], 'wifi_busy_' . $suffix) : null;
+            $noise = $suffix !== null ? bk_rec_week_stat($week, 'wifi_noise_' . $suffix) : null;
+            $busy = $suffix !== null ? bk_rec_week_stat($week, 'wifi_busy_' . $suffix) : null;
             // The agent sends `htmode`, not a generation: HE80 is Wi-Fi 6 on
             // 80 MHz. One helper decides that for the card, the rules and here.
             $profile = bk_wifi_radio_profile($radio);
@@ -17198,6 +17199,8 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
     $details = is_array($in['details'] ?? null) ? $in['details'] : [];
     $monitor = is_array($in['monitor'] ?? null) ? $in['monitor'] : [];
     $enough = bk_rec_days_with_data($window) >= $th['min_days'];
+    // The batch loads thirty days; every sum below is a week's (W) sum.
+    $w = bk_rec_metrics_of($window, 'days');
     $dev = is_string($details['wan_link_dev'] ?? null) ? $details['wan_link_dev'] : null;
     $plan_down = isset($monitor['wan_plan_down_mbit']) && is_numeric($monitor['wan_plan_down_mbit'])
         ? (float)$monitor['wan_plan_down_mbit'] : null;
@@ -17239,9 +17242,9 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
     if (!$enough) {
         $skip[$key] = $key;
     } else {
-        $errors = bk_rec_week_stat($window['metrics'] ?? [], 'wan_errors');
-        $drops = bk_rec_week_stat($window['metrics'] ?? [], 'wan_drops');
-        $ring = bk_rec_week_stat($window['metrics'] ?? [], 'wan_ring_drops');
+        $errors = bk_rec_week_stat($w, 'wan_errors');
+        $drops = bk_rec_week_stat($w, 'wan_drops');
+        $ring = bk_rec_week_stat($w, 'wan_ring_drops');
         $active = bk_rec_state_active($state, $key);
         $err_days = bk_rec_days_over($errors, 0.0);
         $err_hit = $errors['sum'] !== null && ($active
@@ -17274,7 +17277,7 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
     // (`bk_counter_step`), which IS the condition "while the router did not
     // restart" - no separate uptime test is needed here.
     $key = 'wan_link_flaps';
-    $flaps = bk_rec_week_stat($window['metrics'] ?? [], 'wan_link_flaps');
+    $flaps = bk_rec_week_stat($w, 'wan_link_flaps');
     if (!$enough || $flaps['sum'] === null) {
         $skip[$key] = $key;
     } elseif (bk_rec_over($flaps['sum'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
@@ -17537,9 +17540,9 @@ function bk_rec_rules_gap(array $in, array $state): array {
 
     // R-S2. The column stores the ABSOLUTE skew (2.1 decision 3), so a
     // weighted mean of it is a real average distance, not a signed one that
-    // would cancel itself out over a week.
+    // would cancel itself out over a week. W only: the batch loads a month.
     $key = 'clock_skew';
-    $skew = bk_rec_week_stat($window['metrics'] ?? [], 'clock_skew_s');
+    $skew = bk_rec_week_stat(bk_rec_metrics_of($window, 'days'), 'clock_skew_s');
     if (!$enough || $skew['value'] === null) {
         $skip[$key] = $key;
     } elseif (bk_rec_above($skew['value'], (float)$th[$key]['enter'], (float)$th[$key]['hold'],
