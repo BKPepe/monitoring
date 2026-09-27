@@ -50,6 +50,49 @@ if (!function_exists('bk_test_report')) {
         }
     }
 
+    /**
+     * bk_test_load_functions() on a pinned clock: the functions are evaluated
+     * as copies in the namespace BkTestClock, where time(), date() and
+     * strtotime() read $GLOBALS['bk_test_now'] (unset = the wall clock).
+     * Returns the prefix to call the copies by: $fn = $ns . 'name'; $fn(...).
+     *
+     * A fixture that reaches "30 minutes back" means something else at 00:15
+     * than at noon, and a suite only ever runs at the time CI picks. Pinned,
+     * the midnight case runs on every run. MySQL's NOW() is pinned apart from
+     * this, with SET timestamp on the connection the copies are given.
+     *
+     * Only the named functions are copied; what they call resolves to the
+     * global originals, so every function that reads the clock must be named.
+     * A copy that reads it any other way would get the wall clock unnoticed,
+     * so that is refused.
+     */
+    function bk_test_load_pinned(string $source_file, array $names): string {
+        $ns = 'BkTestClock';
+        if (!function_exists($ns . '\time')) {
+            eval(<<<'PHP'
+                namespace BkTestClock;
+                function time(): int { return $GLOBALS['bk_test_now'] ?? \time(); }
+                function date(string $format, ?int $timestamp = null): string { return \date($format, $timestamp ?? time()); }
+                function strtotime(string $datetime, ?int $base = null): int|false { return \strtotime($datetime, $base ?? time()); }
+                PHP);
+        }
+        $src = (string)file_get_contents($source_file);
+        $base = var_export(realpath(dirname($source_file)), true);
+        foreach ($names as $fn) {
+            if (function_exists($ns . '\\' . $fn)) {
+                continue;
+            }
+            if (!preg_match('/\nfunction ' . preg_quote($fn, '/') . '\s*\(.*?\n\}/s', $src, $m)) {
+                throw new RuntimeException("bk_test_load_pinned: {$fn}() is not in {$source_file}");
+            }
+            if (preg_match('/\b(?:microtime|hrtime|mktime|gmmktime|gmdate|idate|getdate|localtime|date_create\w*|DateTime\w*)\b/', $m[0], $clock)) {
+                throw new RuntimeException("bk_test_load_pinned: {$fn}() reads the clock through {$clock[0]}, which the pin does not cover");
+            }
+            eval('namespace ' . $ns . '; use PDO, PDOException, Throwable; ' . str_replace('__DIR__', $base, $m[0]));
+        }
+        return $ns . '\\';
+    }
+
     function bk_test_report(string $suite): int {
         $passed = $GLOBALS['bk_test_passed'];
         $failed = $GLOBALS['bk_test_failed'];

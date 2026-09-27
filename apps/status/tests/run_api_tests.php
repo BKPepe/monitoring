@@ -97,12 +97,30 @@ $pdo->exec("UPDATE monitors SET last_details = '" . json_encode([
     'ssl_issuer' => 'Test CA',
 ]) . "' WHERE id = 1");
 
-for ($i = 0; $i < 10; $i++) {
-    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
-                VALUES (1, 'up', 120, DATE_SUB(NOW(), INTERVAL {$i} MINUTE))");
+/**
+ * The website's checks that the SLA of section 4 reads: ten 'up' rows a
+ * minute apart up to NOW() and one 'down' row 30 minutes back. From 00:00 to
+ * 00:30 that 'down' row is yesterday's; the pinned block after the digest
+ * runs this at 00:15.
+ */
+function bk_test_seed_sla_logs(PDO $pdo, int $monitor_id): void {
+    $ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+                          VALUES (?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    for ($i = 0; $i < 10; $i++) {
+        $ins->execute([$monitor_id, 'up', 120, $i]);
+    }
+    $ins->execute([$monitor_id, 'down', null, 30]);
 }
-$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
-            VALUES (1, 'down', NULL, DATE_SUB(NOW(), INTERVAL 30 MINUTE))");
+
+/**
+ * $seconds before $now, but not before Monday 00:00 of $iso_week ('o-\WW'),
+ * as a DATETIME value. Half an hour before 00:15 on a Monday is last week.
+ */
+function bk_test_back_in_week(string $iso_week, int $now, int $seconds): string {
+    return date('Y-m-d H:i:s', max($now - $seconds, (int)strtotime($iso_week)));
+}
+
+bk_test_seed_sla_logs($pdo, 1);
 // The agent reports it is alive but measured no metrics - the response must hold null.
 $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
             VALUES (2, NULL, NULL, NULL, NOW())");
@@ -524,6 +542,15 @@ foreach (($data['catalog'] ?? []) as $entry) {
 // =======================================================================
 // 4. websites_overview - the SLA windows for the websites page
 // =======================================================================
+// The 7-day window reads every day but today from uptime_daily, which cron's
+// time rollup writes every ten minutes. Between 00:00 and 00:30 the seed's
+// 'down' row is yesterday's, and without that rollup it was in no window at
+// all: the run that started at 00:14 Prague time got 100. So the rollup runs
+// first, in a PHP that loads the app the way cron.php does.
+$ro_out = [];
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('require ' . var_export($root . '/functions.php', true) . ';'
+    . ' echo json_encode(bk_rollup_daily_uptime_time($pdo, 2));') . ' 2>&1', $ro_out, $ro_rc);
+check_true('časový souhrn dnů proběhl jako v cronu (' . implode(' ', $ro_out) . ')', $ro_rc === 0 && (int)end($ro_out) > 0);
 [$code, $data] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
 check('websites_overview vrací HTTP 200', $code, 200);
 check_true('vrací mapu monitorů', isset($data['monitors']) && is_array($data['monitors']));
@@ -4443,8 +4470,6 @@ if (function_exists('bk_digest_routers')) {
         [count($dg_in[2]['disks']), count($dg_in[2]['disks']['digestdiskaaaaaa']['daily'] ?? [])], [1, 2]);
     // A column the reading never filled has to come back NULL: the counter
     // rules ask "did it grow", and a zero would be an answer nobody measured.
-    // (The day keys come from the database, whose date may be a timezone away
-    // from PHP's, so the newest key is read rather than computed here.)
     $dg_daily = $dg_in[2]['disks']['digestdiskaaaaaa']['daily'];
     $dg_newest = $dg_daily[max(array_keys($dg_daily))] ?? [];
     check('Digest: den bez záznamu zůstane nezměřený, ne nulový',
@@ -4460,8 +4485,11 @@ if (function_exists('bk_digest_routers')) {
         [1, 1, 'warning', $dg_week, null]);
 
     // Back-date last_seen inside the SAME week: a retry between 08:00 and
-    // 12:00 must leave the row completely alone.
-    $pdo->exec("UPDATE router_rec_state SET last_seen = DATE_SUB(NOW(), INTERVAL 30 MINUTE) WHERE monitor_id = 2");
+    // 12:00 must leave the row completely alone. The build's week, not a
+    // plain half hour: at 00:15 on a Monday that is last week, which
+    // re-stamps the row by design (the pinned block below runs that case).
+    $pdo->prepare("UPDATE router_rec_state SET last_seen = ? WHERE monitor_id = 2")
+        ->execute([bk_test_back_in_week($dg_week, time(), 1800)]);
     $before = $dg_state()[0]['seen'];
     $state_now = [];
     foreach ($dg_state() as $r) {
@@ -4584,6 +4612,96 @@ if (function_exists('bk_digest_routers')) {
     }
     $pdo->prepare("UPDATE monitors SET hdd_threshold = ? WHERE id = 2")->execute([$dg_thr]);
     $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+}
+
+// --- The SLA and digest fixtures just after midnight, on a pinned clock -------
+//
+// Quality Gate run 36354545459 started at 22:14 UTC on a Sunday, which is
+// 00:14 on Monday in Prague, the application's zone. Two checks failed that
+// pass the rest of the day: their fixtures reach 30 minutes back, and that was
+// yesterday and last ISO week. Here that case does not wait for CI to hit it.
+// The same fixtures and production functions run at fixed instants, with PHP's
+// clock pinned by bk_test_load_pinned() and MySQL's by SET timestamp. They run
+// on a scratch database, because the rollup writes every monitor it finds.
+$clk_ns = bk_test_load_pinned($root . '/functions.php', ['bk_rollup_daily_uptime_time', 'bk_uptime_day_windows']);
+$clk_rollup = $clk_ns . 'bk_rollup_daily_uptime_time';
+$clk_windows = $clk_ns . 'bk_uptime_day_windows';
+$clk_date = $clk_ns . 'date';
+$clk_db = $db_name . '_clock';
+$clk_tables = ['monitors', 'monitor_logs', 'uptime_daily', 'router_rec_state'];
+$pdo->exec("DROP DATABASE IF EXISTS `{$clk_db}`");
+$pdo->exec("CREATE DATABASE `{$clk_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+try {
+    foreach ($clk_tables as $clk_table) {
+        $pdo->exec("CREATE TABLE `{$clk_db}`.`{$clk_table}` LIKE `{$db_name}`.`{$clk_table}`");
+    }
+    $clk = new PDO("mysql:host={$db_host};port={$db_port};dbname={$clk_db};charset=utf8mb4", $db_user, $db_pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    $clk_seen = fn (): int => (int)$clk->query("SELECT UNIX_TIMESTAMP(last_seen) FROM router_rec_state")->fetchColumn();
+    // The state the digest reads before it saves, as the suite builds it above.
+    $clk_state = function () use ($clk): array {
+        $out = [];
+        foreach ($clk->query("SELECT rec_key, active, severity, first_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state")->fetchAll() as $r) {
+            $out[$r['rec_key']] = ['active' => (int)$r['active'], 'severity' => $r['severity'],
+                'first_digest_week' => $r['first_digest_week'], 'last_seen' => date('Y-m-d H:i:s', (int)$r['seen'])];
+        }
+        return $out;
+    };
+    $clk_item = ['id' => 'disk_temp_warm', 'key' => 'disk_temp_warm:d:a', 'severity' => 'warning'];
+    foreach ([
+        // The failed run: a new day and a new ISO week in Prague, still Sunday in UTC.
+        ['Po 00:15 v Praze = Ne 22:15 UTC', '2026-09-28 00:15:00', '2026-09-27 22:15:00', true],
+        // An ordinary midnight: a new day in the same week.
+        ['Út 00:15, jen nový den', '2026-09-29 00:15:00', '2026-09-28 22:15:00', false],
+    ] as [$clk_label, $clk_at, $clk_utc, $clk_new_week]) {
+        $clk_now = (int)strtotime($clk_at);
+        $GLOBALS['bk_test_now'] = $clk_now;
+        foreach ($clk_tables as $clk_table) {
+            $clk->exec("DELETE FROM `{$clk_table}`");
+        }
+        // The offset AT the pinned instant, not today's: a run in winter would
+        // read this summer instant an hour off.
+        $clk->prepare('SET time_zone = ?')->execute([date('P', $clk_now)]);
+        $clk->exec('SET timestamp = ' . $clk_now);
+        $clk_sql = $clk->query('SELECT NOW() AS now, UTC_TIMESTAMP() AS utc')->fetch();
+        check("{$clk_label}: PHP i MySQL stojí na připnutém čase",
+            [$clk_date('Y-m-d H:i:s'), $clk_sql['now'], gmdate('Y-m-d H:i:s', $clk_now), $clk_sql['utc']],
+            [$clk_at, $clk_at, $clk_utc, $clk_utc]);
+
+        // Section 4: the seed, cron's rollup, the 7-day window. The 'down'
+        // row stands for 150 s (2.5 one-minute intervals) and the up rows for
+        // 540 s; two days, because the outage is yesterday's.
+        $clk->exec("INSERT INTO monitors (id, name, type, target, port, status, category)
+                    VALUES (1, 'Testovací web', 'web', 'https://example.com', 443, 'up', 'Weby')");
+        bk_test_seed_sla_logs($clk, 1);
+        check("{$clk_label}: výpadek ze seedu je ještě včerejší",
+            (int)$clk->query("SELECT COUNT(*) FROM monitor_logs WHERE status = 'down' AND checked_at < CURDATE()")->fetchColumn(), 1);
+        $clk_rollup($clk, 2);
+        $clk_w = $clk_windows($clk, [1], [7])[1][7] ?? [];
+        check("{$clk_label}: SLA 7 dní drží včerejší výpadek",
+            [$clk_w['down'] ?? null, $clk_w['up'] ?? null, $clk_w['days'] ?? null], [150, 540, 2]);
+        check_true("{$clk_label}: a vyjde jako v sekci 4 (dostal " . json_encode($clk_w['pct'] ?? null) . ')',
+            is_numeric($clk_w['pct'] ?? null) && $clk_w['pct'] > 75 && $clk_w['pct'] < 85);
+
+        // The digest: a retry in the build's week leaves the row alone.
+        $clk_week = $clk_date('o-\WW');
+        bk_router_rec_state_save($clk, 2, [$clk_item], $clk_week, [], []);
+        $clk->prepare("UPDATE router_rec_state SET last_seen = ?")->execute([bk_test_back_in_week($clk_week, $clk_now, 1800)]);
+        $clk_before = $clk_seen();
+        bk_router_rec_state_save($clk, 2, [$clk_item], $clk_week, [], $clk_state());
+        check("{$clk_label}: digest - opakované sestavení ve stejném týdnu nic nepřepíše", $clk_seen(), $clk_before);
+        // A row last seen 30 minutes ago is re-stamped exactly when that was
+        // last week, which is why the fixture stays in the build's week.
+        $clk->prepare("UPDATE router_rec_state SET last_seen = ?")->execute([date('Y-m-d H:i:s', $clk_now - 1800)]);
+        bk_router_rec_state_save($clk, 2, [$clk_item], $clk_week, [], $clk_state());
+        check("{$clk_label}: řádek z minulého týdne se přepíše, z tohoto ne", $clk_seen() === $clk_now, $clk_new_week);
+    }
+} finally {
+    // The closures hold the connection too; all of it goes before the drop.
+    unset($GLOBALS['bk_test_now'], $clk, $clk_seen, $clk_state);
+    $pdo->exec("DROP DATABASE IF EXISTS `{$clk_db}`");
 }
 
 
@@ -5262,7 +5380,11 @@ try {
     check_true('CSV report za měsíc bez dat má řádky monitorů', count($b1_old) >= 2);
     check('měsíc bez jediné kontroly: dostupnost i SLA „bez dat“, ne 100 % a ANO',
         array_values(array_unique(array_map(fn ($r) => ($r[7] ?? '?') . '|' . ($r[9] ?? '?'), $b1_old))), ['bez dat|bez dat']);
-    [, $b1_now] = $b1_csv((int)date('Y'), (int)date('n'));
+    // The month four hours back: the silence began almost eight hours ago, so
+    // that month holds hours of it even on the 1st just after midnight, when
+    // this month would hold a minute.
+    $b1_month = time() - 4 * 3600;
+    [, $b1_now] = $b1_csv((int)date('Y', $b1_month), (int)date('n', $b1_month));
     $b1_router_row = $b1_now['160'] ?? [];
     check_true('report měsíce: mlčící router pod 100 % (dostal ' . json_encode($b1_router_row[7] ?? null) . ')', is_numeric($b1_router_row[7] ?? null) && (float)$b1_router_row[7] < 100);
     check('report měsíce: SLA mlčícího routeru nesplněno', $b1_router_row[9] ?? null, 'NE');
@@ -5795,8 +5917,11 @@ $b2_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_total
 for ($b2_ago = 40; $b2_ago <= 60; $b2_ago++) {
     $b2_ins->execute([$b2_day($b2_ago), 100 + $b2_ago]);
 }
+// Today's checks stay on today: at 00:05 "ten minutes ago" is yesterday, a
+// day with no rollup row, and the year's count below lost a check.
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
-    (170, 'up', 90, DATE_SUB(NOW(), INTERVAL 10 MINUTE)), (170, 'up', 95, DATE_SUB(NOW(), INTERVAL 5 MINUTE)), (170, 'up', 99, NOW())");
+    (170, 'up', 90, GREATEST(DATE_SUB(NOW(), INTERVAL 10 MINUTE), TIMESTAMP(CURDATE()))),
+    (170, 'up', 95, GREATEST(DATE_SUB(NOW(), INTERVAL 5 MINUTE), TIMESTAMP(CURDATE()))), (170, 'up', 99, NOW())");
 try {
     [, $b2_uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
     $b2_row = $b2_uw['windows']['170'] ?? ($b2_uw['windows'][170] ?? []);
