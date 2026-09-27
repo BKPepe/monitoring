@@ -601,6 +601,56 @@
     font-size: var(--text-xs);
     line-height: 1.7;
   }
+
+  /* A code block that scrolls sideways is focusable (tabindex="0"), so a
+     keyboard user can scroll it too; the ring shows where focus went. */
+  .code-block:focus-visible {
+    outline: 2px solid var(--brand-500);
+    outline-offset: 2px;
+  }
+
+  /* Copy button that lib/copy-code.ts adds to a code block. Global because
+     the button is created at runtime and carries no Astro scope attribute.
+     The block keeps a strip at the top for it, so it never covers code.
+     Colours are fixed, not light-dark(): code blocks are dark in both themes. */
+  .has-copy {
+    position: relative;
+    padding-top: 2.75rem;
+  }
+
+  .copy-code-btn {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    padding: 0.25rem 0.7rem;
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--code-text);
+    background: rgb(255 255 255 / 0.06);
+    border: 1px solid rgb(255 255 255 / 0.18);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .copy-code-btn:hover {
+    border-color: rgb(255 255 255 / 0.4);
+  }
+
+  .copy-code-btn:focus-visible {
+    outline: 2px solid #ff6b6b;
+    outline-offset: 2px;
+  }
+
+  .copy-code-btn[data-state='copied'] {
+    color: #4ade80;
+    border-color: #4ade80;
+  }
+
+  .copy-code-btn[data-state='failed'] {
+    color: #f87171;
+    border-color: #f87171;
+  }
 }
 
 /* ==========================================================================
@@ -641,9 +691,14 @@
   }
 
   /* Skrývání přes třídu, ne přes style="display:none" — inline styl by
-     strict CSP (style-src bez 'unsafe-inline') zablokovala. */
-  .is-hidden {
-    display: none;
+     strict CSP (style-src bez 'unsafe-inline') zablokovala.
+     !important is load-bearing: this layer loses to every unlayered scoped
+     rule, so a component's own `display:flex` or `display:grid` won and the
+     changelog and about spinners never went away. An important declaration
+     in a layer beats any normal one, whatever its specificity. */
+  .is-hidden,
+  [hidden] {
+    display: none !important;
   }
 
   .visually-hidden {

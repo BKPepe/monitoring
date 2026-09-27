@@ -1,24 +1,37 @@
 ---
 // AgentSelector.astro - agent install tabs.
 //
-// Every command here is one the scripts really accept. The install steps
-// mirror the app's own install guide (apps/monitor/src/lib/agent-install.ts):
-// `agent.sh --register TOKEN API_URL` for the shell agents, agent.cfg for
-// PowerShell, and the served docker-compose.agent.yml (python:3-alpine) for
-// Docker. The uninstall steps undo exactly what the install steps did.
+// The install steps are the app's own (apps/monitor/src/lib/agent-install.ts,
+// through lib/agent-install.ts): the same commands and texts the app's "Add
+// New Monitor" dialog prints, here with https://YOUR-DOMAIN and
+// YOUR_AGENT_KEY in place of the reader's address and key. A hand-written
+// copy stood here and drifted: it downloaded from and registered against the
+// author's own server. The uninstall steps undo exactly what the install
+// steps did.
+//
+// variant="full" (download page) adds registration with a token and the
+// troubleshooting checks; "compact" (home page) links to them instead.
 //
 // Versions come from the worker's /api/agents, which reads the published
 // scripts; until it answers, and when it fails, the badge shows a dash.
+import { AGENTS_SOURCE_URL } from '../config';
 import type { Lang } from '../i18n';
+import {
+  AGENT_OFFLINE_DEFAULT_MINUTES,
+  APP_LABELS,
+  registerCommand,
+  siteInstallSteps,
+  type AgentPlatform,
+} from '../lib/agent-install';
 
 interface Props {
   lang: Lang;
+  variant?: 'full' | 'compact';
 }
-const { lang } = Astro.props;
+const { lang, variant = 'full' } = Astro.props;
 const cs = lang === 'cs';
-
-const BASE = 'https://bloodkings.eu/status';
-const API_URL = `${BASE}/agent_api.php`;
+const prefix = cs ? '/cs' : '';
+const app = (key: keyof typeof APP_LABELS) => APP_LABELS[key][lang];
 
 const t = cs
   ? {
@@ -32,16 +45,31 @@ const t = cs
       copy: 'Kopírovat',
       copied: 'Zkopírováno do schránky',
       copyFailed: 'Kopírování se nepodařilo, označte text ručně',
-      linux: 'Bash agent bez závislostí kromě curl. --register ho přihlásí registračním tokenem a klíč uloží do agent.cfg vedle skriptu; cron ho pak spouští každých 5 minut.',
-      linuxNeeds: 'Bash, curl a cron; práva roota pro /opt.',
-      openwrt: 'Skript v POSIX sh pro OpenWrt a Turris OS, bez bashe a Pythonu. Registrace uloží klíč do agent_openwrt.cfg; cron ho spouští každou minutu a skript po běhu skončí.',
+      inApp: `Nejsnáz z vlastní aplikace: ${app('nav.infrastructure')} → ${app('infra.add_agent')} → ${app('infra.type_openwrt')} nebo ${app('infra.type_vps')} a uložit. Dialog pak vypíše tytéž kroky s vaší adresou a klíčem monitoru. Níže je zastupují https://YOUR-DOMAIN a YOUR_AGENT_KEY.`,
+      linux: 'Bash agent. Adresu serveru a svůj klíč čte z agent.cfg vedle skriptu a hlásí přes HTTPS; cron ho spouští každých 5 minut.',
+      linuxNeeds: 'Bash, cron a wget; curl pro registraci tokenem. Práva roota pro /opt.',
+      openwrt: 'Skript v POSIX sh pro OpenWrt a Turris OS, bez bashe a Pythonu. Adresu serveru a svůj klíč čte z agent_openwrt.cfg vedle skriptu; cron ho spouští každou minutu a skript po běhu skončí.',
       openwrtNeeds: 'OpenWrt nebo Turris OS s cronem a ubus; curl, uclient-fetch nebo wget. Volitelně iw (vytížení kanálu) a smartmontools (SMART).',
       windows: 'PowerShell agent. Nemá registrační příkaz: klíč agenta z přehledu uložte do agent.cfg a Plánovač úloh ho spouští každých 5 minut.',
       windowsNeeds: 'Windows PowerShell 5.1 nebo novější, spuštěný jako správce.',
       docker: 'Python agent v kontejneru python:3-alpine. Doplňte klíč agenta z přehledu.',
       dockerNeeds: 'Docker s pluginem compose. Kontejner používá pid: host a network_mode: host a připojí / jen pro čtení, takže hlásí hostitele, ne sebe.',
       raspberry: 'Stejný Bash agent jako na Linuxu.',
-      raspberryNeeds: 'Raspberry Pi OS (ARMv7 nebo ARM64) s curl a cronem.',
+      raspberryNeeds: 'Raspberry Pi OS (ARMv7 nebo ARM64) s cronem a wget; curl pro registraci tokenem.',
+      registerTitle: 'Víc strojů: registrace tokenem',
+      registerText: 'Agent pro Bash a pro OpenWrt si umí monitor založit sám. Stáhněte skript (první krok na jeho kartě) a místo zápisu konfigurace spusťte řádek níže: server odpoví novým klíčem a agent ho uloží do agent.cfg (na routeru agent_openwrt.cfg) vedle skriptu. Pak pokračujte ručním spuštěním a cronem. Oba argumenty jsou poziční; bez adresy se agent registruje proti výchozímu localhost.',
+      registerToken: `Token je v aplikaci v ${app('nav.settings')} → ${app('settings.agent_token_label')}. Dokud je prázdný, server místo něj přijme klíč cronu (CRON_KEY), takže kdo má klíč cronu, může přidávat monitory. Agenti pro Python, PowerShell a Docker registrační příkaz nemají.`,
+      registerShell: 'Bash (Linux, Raspberry Pi)',
+      registerOpenwrt: 'OpenWrt / Turris',
+      troubleTitle: 'Agent se v aplikaci neukáže',
+      troubleText: 'Pro každou platformu tři kontroly v tomto pořadí: je agent naplánovaný, co vypíše jeden ruční běh a co je na konci jeho logu.',
+      troubleLinux: 'Linux / Raspberry Pi',
+      troubleOpenwrt: 'OpenWrt / Turris',
+      troubleWindows: 'Windows (PowerShell jako správce)',
+      troubleDocker: 'Docker (výpis kontejneru)',
+      troubleSilent: `Server označí monitor agenta za nedostupný po ${AGENT_OFFLINE_DEFAULT_MINUTES} minutách bez hlášení. Limit je v ${app('nav.settings')} → ${app('settings.agent_offline_timeout_label')}; 0 kontrolu vypne.`,
+      compactMore: 'Registrace více strojů jedním tokenem a co zkontrolovat, když se agent neukáže:',
+      compactLink: 'na stránce ke stažení',
     }
   : {
       tabs: 'Agent platform',
@@ -54,29 +82,36 @@ const t = cs
       copy: 'Copy',
       copied: 'Copied to the clipboard',
       copyFailed: 'Copying failed; select the text by hand',
-      linux: 'A Bash agent with no dependency beyond curl. --register enrols it with the registration token and stores its key in agent.cfg next to the script; cron then runs it every 5 minutes.',
-      linuxNeeds: 'Bash, curl and cron; root for /opt.',
-      openwrt: 'A POSIX sh script for OpenWrt and Turris OS, no bash or Python. Registration stores its key in agent_openwrt.cfg; cron starts it every minute and it exits after each run.',
+      inApp: `Easiest from your own app: ${app('nav.infrastructure')} → ${app('infra.add_agent')} → ${app('infra.type_openwrt')} or ${app('infra.type_vps')}, then save. The dialog prints these steps with your address and the monitor’s key filled in. Below, https://YOUR-DOMAIN and YOUR_AGENT_KEY stand in for them.`,
+      linux: 'A Bash agent. It reads the server address and its key from agent.cfg next to the script and reports over HTTPS; cron runs it every 5 minutes.',
+      linuxNeeds: 'Bash, cron and wget; curl for registration with a token. Root for /opt.',
+      openwrt: 'A POSIX sh script for OpenWrt and Turris OS, no bash or Python. It reads the server address and its key from agent_openwrt.cfg next to the script; cron starts it every minute and it exits after each run.',
       openwrtNeeds: 'OpenWrt or Turris OS with cron and ubus; curl, uclient-fetch or wget. Optional: iw (channel load) and smartmontools (SMART).',
       windows: 'A PowerShell agent. It has no register command: put the agent key from the dashboard into agent.cfg, and the Task Scheduler runs it every 5 minutes.',
       windowsNeeds: 'Windows PowerShell 5.1 or newer, run as administrator.',
       docker: 'The Python agent in a python:3-alpine container. Fill in the agent key from the dashboard.',
       dockerNeeds: 'Docker with the compose plugin. The container uses pid: host and network_mode: host and mounts / read-only, so it reports the host, not itself.',
       raspberry: 'The same Bash agent as on Linux.',
-      raspberryNeeds: 'Raspberry Pi OS (ARMv7 or ARM64) with curl and cron.',
+      raspberryNeeds: 'Raspberry Pi OS (ARMv7 or ARM64) with cron and wget; curl for registration with a token.',
+      registerTitle: 'Many machines: register with a token',
+      registerText: 'The Bash and OpenWrt agents can create their own monitor. Download the script (the first step on its tab), then run the line below instead of writing the config: the server answers with a new key, and the agent stores it in agent.cfg (agent_openwrt.cfg on a router) next to the script. Then continue with the test run and cron. Both arguments are positional; without the address the agent registers against its localhost default.',
+      registerToken: `The token is in your app under ${app('nav.settings')} → ${app('settings.agent_token_label')}. While it is empty, the server accepts the cron key (CRON_KEY) in its place, so whoever has the cron key can add monitors. The Python, PowerShell and Docker agents have no register command.`,
+      registerShell: 'Bash (Linux, Raspberry Pi)',
+      registerOpenwrt: 'OpenWrt / Turris',
+      troubleTitle: 'The agent does not show up in the app',
+      troubleText: 'Three checks per platform, in this order: is the agent scheduled, what does one run by hand print, and what is at the end of its log.',
+      troubleLinux: 'Linux / Raspberry Pi',
+      troubleOpenwrt: 'OpenWrt / Turris',
+      troubleWindows: 'Windows (PowerShell as administrator)',
+      troubleDocker: 'Docker (the container output)',
+      troubleSilent: `The server marks an agent monitor down after ${AGENT_OFFLINE_DEFAULT_MINUTES} minutes without a report. The limit is in ${app('nav.settings')} → ${app('settings.agent_offline_timeout_label')}; 0 turns the check off.`,
+      compactMore: 'Registering many machines with one token, and what to check when an agent does not show up:',
+      compactLink: 'on the download page',
     };
 
-// The same crontab idiom as the app: through `crontab`, never by appending
-// to /etc/crontabs/root, which Turris OS (cronie) ignores. The mkdir is for
-// cronie's backup directory, which does not exist on a Turris. `|| true`
-// keeps the new line when there is no crontab yet and the steps run under
-// `set -e`: without it the subshell stops at the failing `crontab -l` and an
-// EMPTY crontab is installed without a word.
-const shellSteps = [
-  `mkdir -p /opt/bk-agent && curl -fsSL -o /opt/bk-agent/agent.sh ${BASE}/agent.sh && chmod +x /opt/bk-agent/agent.sh`,
-  `/opt/bk-agent/agent.sh --register YOUR_REGISTRATION_TOKEN ${API_URL}`,
-  `( crontab -l 2>/dev/null || true; echo '*/5 * * * * /opt/bk-agent/agent.sh >/dev/null 2>&1' ) | crontab -`,
-].join('\n');
+// The uninstall steps: the same crontab idiom as the install, through
+// `crontab`, never by editing /etc/crontabs/root, which Turris OS (cronie)
+// ignores. `|| true` keeps the pipeline going when there is no crontab.
 const shellRemove = [
   `( crontab -l 2>/dev/null | grep -v /opt/bk-agent/agent.sh || true ) | crontab -`,
   'rm -rf /opt/bk-agent',
@@ -90,31 +125,41 @@ const ICONS = {
   chip: 'M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4',
 };
 
-const panels = [
+// "Read the script first" opens the source in the agents repository, not a
+// copy served by somebody's instance.
+const source = (file: string) => ({ name: file, href: `${AGENTS_SOURCE_URL}/${file}` });
+
+const panels: {
+  id: string;
+  platform: AgentPlatform;
+  icon: string;
+  label: string;
+  agent: string;
+  desc: string;
+  needs: string;
+  scripts: { name: string; href: string }[];
+  remove: string;
+}[] = [
   {
     id: 'linux',
+    platform: 'shell',
     icon: ICONS.terminal,
     label: 'Linux / VPS',
     agent: 'bash',
     desc: t.linux,
     needs: t.linuxNeeds,
-    scripts: [{ name: 'agent.sh', href: `${BASE}/agent.sh` }],
-    code: shellSteps,
+    scripts: [source('agent.sh')],
     remove: shellRemove,
   },
   {
     id: 'openwrt',
+    platform: 'openwrt',
     icon: ICONS.router,
     label: 'OpenWrt / Turris',
     agent: 'openwrt',
     desc: t.openwrt,
     needs: t.openwrtNeeds,
-    scripts: [{ name: 'agent_openwrt.sh', href: `${BASE}/agent_openwrt.sh` }],
-    code: [
-      `wget -O /usr/bin/agent_openwrt.sh ${BASE}/agent_openwrt.sh && chmod +x /usr/bin/agent_openwrt.sh`,
-      `/usr/bin/agent_openwrt.sh --register YOUR_REGISTRATION_TOKEN ${API_URL}`,
-      `mkdir -p "\${HOME:-/root}/.cache/crontab" && ( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true; echo '* * * * * /usr/bin/agent_openwrt.sh >/dev/null 2>&1' ) | crontab -`,
-    ].join('\n'),
+    scripts: [source('agent_openwrt.sh')],
     remove: [
       `( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true ) | crontab -`,
       'rm -f /usr/bin/agent_openwrt.sh /usr/bin/agent_openwrt.cfg',
@@ -123,56 +168,84 @@ const panels = [
   },
   {
     id: 'windows',
+    platform: 'windows',
     icon: ICONS.windows,
     label: 'Windows',
     agent: 'powershell',
     desc: t.windows,
     needs: t.windowsNeeds,
-    scripts: [{ name: 'agent.ps1', href: `${BASE}/agent.ps1` }],
-    code: [
-      `New-Item -ItemType Directory -Force C:\\bloodkings | Out-Null; Invoke-WebRequest -Uri "${BASE}/agent.ps1" -OutFile C:\\bloodkings\\agent.ps1`,
-      `Set-Content -Path C:\\bloodkings\\agent.cfg -Value @('API_URL="${API_URL}"', 'AGENT_KEY="YOUR_AGENT_KEY"')`,
-      `$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-ExecutionPolicy Bypass -File "C:\\bloodkings\\agent.ps1"'`,
-      '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)',
-      'Register-ScheduledTask -TaskName "BloodKingsAgent" -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest',
-    ].join('\n'),
+    scripts: [source('agent.ps1')],
     remove: ['Unregister-ScheduledTask -TaskName "BloodKingsAgent" -Confirm:$false', 'Remove-Item -Recurse -Force C:\\bloodkings'].join(
       '\n'
     ),
   },
   {
     id: 'docker',
+    platform: 'docker',
     icon: ICONS.box,
     label: 'Docker',
     agent: 'python',
     desc: t.docker,
     needs: t.dockerNeeds,
-    scripts: [
-      { name: 'agent.py', href: `${BASE}/agent.py` },
-      { name: 'docker-compose.agent.yml', href: `${BASE}/docker-compose.agent.yml` },
-    ],
-    code: [
-      `mkdir -p /opt/bk-agent && cd /opt/bk-agent && curl -fsSL -o agent.py ${BASE}/agent.py && curl -fsSL -o docker-compose.agent.yml ${BASE}/docker-compose.agent.yml`,
-      `sed -i 's|STATUS_API_URL: .*|STATUS_API_URL: "${API_URL}"|; s|STATUS_AGENT_KEY: .*|STATUS_AGENT_KEY: "YOUR_AGENT_KEY"|' docker-compose.agent.yml`,
-      'docker compose -f docker-compose.agent.yml up -d',
-    ].join('\n'),
+    scripts: [source('agent.py'), source('docker-compose.agent.yml')],
     remove: ['cd /opt/bk-agent && docker compose -f docker-compose.agent.yml down', 'rm -rf /opt/bk-agent'].join('\n'),
   },
   {
     id: 'raspberry',
+    platform: 'shell',
     icon: ICONS.chip,
     label: 'Raspberry Pi',
     agent: 'bash',
     desc: t.raspberry,
     needs: t.raspberryNeeds,
-    scripts: [{ name: 'agent.sh', href: `${BASE}/agent.sh` }],
-    code: shellSteps,
+    scripts: [source('agent.sh')],
     remove: shellRemove,
+  },
+];
+
+const stepsOf = (platform: AgentPlatform) => siteInstallSteps(platform, lang);
+
+const register = [
+  { id: 'shell', label: t.registerShell, command: registerCommand('shell') },
+  { id: 'openwrt', label: t.registerOpenwrt, command: registerCommand('openwrt') },
+];
+
+const trouble = [
+  {
+    id: 'linux',
+    label: t.troubleLinux,
+    command: ['crontab -l | grep agent.sh', '/opt/bk-agent/agent.sh --verbose', 'tail -n 50 /opt/bk-agent/agent.log'].join(
+      '\n'
+    ),
+  },
+  {
+    id: 'openwrt',
+    label: t.troubleOpenwrt,
+    command: [
+      'crontab -l | grep agent_openwrt.sh',
+      '/usr/bin/agent_openwrt.sh --verbose',
+      'tail -n 50 /tmp/status-agent-openwrt.log; logread | grep -i agent | tail -n 20',
+    ].join('\n'),
+  },
+  {
+    id: 'windows',
+    label: t.troubleWindows,
+    command: [
+      'Get-ScheduledTask -TaskName "BloodKingsAgent"',
+      'powershell.exe -ExecutionPolicy Bypass -File C:\\bloodkings\\agent.ps1 -Verbose',
+      'Get-Content C:\\bloodkings\\agent.log -Tail 50',
+    ].join('\n'),
+  },
+  {
+    id: 'docker',
+    label: t.troubleDocker,
+    command: 'cd /opt/bk-agent && docker compose -f docker-compose.agent.yml logs --tail 50',
   },
 ];
 ---
 
 <div class="installer" id="install-guide" data-copied={t.copied} data-copy-failed={t.copyFailed}>
+  <p class="inst-lead">{t.inApp}</p>
   <div class="inst-tabs" role="tablist" aria-label={t.tabs}>
     {
       panels.map((p, i) => (
@@ -201,6 +274,7 @@ const panels = [
         role="tabpanel"
         id={`panel-${p.id}`}
         aria-labelledby={`tab-${p.id}`}
+        data-platform={p.platform}
         tabindex="0"
         hidden={i !== 0}
       >
@@ -231,16 +305,35 @@ const panels = [
         </div>
 
         <div class="inst-code">
-          <div class="code-head">
-            <span>{t.install}</span>
-            <button type="button" class="copy-btn" data-target={`code-${p.id}`}>
-              {t.copy}
-            </button>
-          </div>
-          <pre><code id={`code-${p.id}`}>{p.code}</code></pre>
+          <p class="code-head">{t.install}</p>
+          <ol class="inst-steps">
+            {stepsOf(p.platform).map((s) => (
+              <li class="inst-step" data-step-id={s.id}>
+                <div class="step-head">
+                  <p class="step-title" data-step-title>
+                    {s.title}
+                  </p>
+                  <button
+                    type="button"
+                    class="copy-btn"
+                    data-target={`step-${p.id}-${s.id}`}
+                    aria-label={`${t.copy}: ${s.title}`}
+                  >
+                    {t.copy}
+                  </button>
+                </div>
+                <pre><code id={`step-${p.id}-${s.id}`} data-step-command>{s.command}</code></pre>
+                {s.note && (
+                  <p class="inst-note" data-step-note>
+                    {s.note}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
           <div class="code-head">
             <span>{t.uninstall}</span>
-            <button type="button" class="copy-btn" data-target={`remove-${p.id}`}>
+            <button type="button" class="copy-btn" data-target={`remove-${p.id}`} aria-label={`${t.copy}: ${t.uninstall}`}>
               {t.copy}
             </button>
           </div>
@@ -249,6 +342,50 @@ const panels = [
         </div>
       </div>
     ))
+  }
+
+  {
+    variant === 'full' ? (
+      <div class="inst-extra">
+        <section class="inst-block" id="agent-register" aria-labelledby="agent-register-title">
+          <h3 id="agent-register-title">{t.registerTitle}</h3>
+          <p>{t.registerText}</p>
+          {register.map((r) => (
+            <div class="inst-labelled">
+              <div class="code-head">
+                <span>{r.label}</span>
+                <button type="button" class="copy-btn" data-target={`register-${r.id}`} aria-label={`${t.copy}: ${r.label}`}>
+                  {t.copy}
+                </button>
+              </div>
+              <pre><code id={`register-${r.id}`}>{r.command}</code></pre>
+            </div>
+          ))}
+          <p class="inst-note">{t.registerToken}</p>
+        </section>
+
+        <section class="inst-block" id="agent-trouble" aria-labelledby="agent-trouble-title">
+          <h3 id="agent-trouble-title">{t.troubleTitle}</h3>
+          <p>{t.troubleText}</p>
+          {trouble.map((r) => (
+            <div class="inst-labelled">
+              <div class="code-head">
+                <span>{r.label}</span>
+                <button type="button" class="copy-btn" data-target={`trouble-${r.id}`} aria-label={`${t.copy}: ${r.label}`}>
+                  {t.copy}
+                </button>
+              </div>
+              <pre><code id={`trouble-${r.id}`}>{r.command}</code></pre>
+            </div>
+          ))}
+          <p class="inst-note">{t.troubleSilent}</p>
+        </section>
+      </div>
+    ) : (
+      <p class="inst-more">
+        {t.compactMore} <a href={`${prefix}/download/#agent-register`}>{t.compactLink} →</a>
+      </p>
+    )
   }
   <p class="visually-hidden" id="copy-status" aria-live="polite"></p>
 </div>
@@ -329,6 +466,15 @@ const panels = [
     border-radius: var(--radius-lg);
     background: var(--surface-1);
     overflow: hidden;
+  }
+
+  /* --text-mid for body-size text: dark --text-low on --surface-1 is
+     3.8:1, under WCAG's 4.5:1 (PA-3). */
+  .inst-lead {
+    padding: 1rem clamp(1.25rem, 1rem + 1.5vw, 2rem);
+    border-bottom: 1px solid var(--border);
+    font-size: var(--text-sm);
+    color: var(--text-mid);
   }
 
   .inst-tabs {
@@ -499,7 +645,84 @@ const panels = [
 
   .inst-note {
     font-size: var(--text-xs);
-    color: var(--text-low);
+    color: var(--text-mid);
+  }
+
+  .inst-steps {
+    list-style: none;
+    counter-reset: step;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .inst-step {
+    counter-increment: step;
+    display: grid;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  .step-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .step-title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+
+  .step-title::before {
+    content: counter(step) '. ';
+    font-family: var(--font-mono);
+    color: var(--brand-500);
+  }
+
+  .inst-extra {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    gap: clamp(1.25rem, 1rem + 2vw, 2.5rem);
+    padding: clamp(1.25rem, 1rem + 1.5vw, 2rem);
+    border-top: 1px solid var(--border);
+  }
+
+  .inst-block {
+    display: grid;
+    align-content: start;
+    gap: 0.6rem;
+    min-width: 0;
+    scroll-margin-top: calc(var(--header-height) + 1rem);
+  }
+
+  .inst-block h3 {
+    font-size: var(--text-lg);
+    font-weight: 600;
+  }
+
+  .inst-block > p {
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .inst-labelled {
+    display: grid;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  .inst-more {
+    padding: 1rem clamp(1.25rem, 1rem + 1.5vw, 2rem);
+    border-top: 1px solid var(--border);
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .inst-more a {
+    font-weight: 600;
+    color: var(--brand-500);
   }
 
   @media (max-width: 860px) {

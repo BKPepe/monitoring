@@ -1,90 +1,38 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import AgentSelector from '../components/AgentSelector.astro';
+import InstallServer from '../components/InstallServer.astro';
 ---
 
-<Layout title="Download & Setup | Blood Kings Monitoring" description="Download central Blood Kings Monitoring server or deploy remote probing agents for Linux, OpenWrt, Windows and Docker.">
+<Layout title="Download & Setup | Blood Kings Monitoring" description="Install Blood Kings Monitoring on PHP hosting with MySQL and a cron job, then add agents for Linux, OpenWrt routers, Windows and Docker.">
   <section class="page-header section">
     <div class="container text-center">
       <span class="badge badge-accent">Download Center</span>
       <h1>Deploy Blood Kings Monitoring</h1>
-      <p class="section-subtitle">Download the central monitoring server or install lightweight agents on your target nodes in seconds.</p>
+      <p class="section-subtitle">Install the central server on your PHP hosting, then add lightweight agents to the machines and routers you want to watch.</p>
     </div>
   </section>
 
-  <!-- Server Deployment Panel -->
-  <section class="section bg-dim">
+  <!-- Server Deployment Panel; every "Install" CTA lands on #server. -->
+  <section class="section bg-dim" id="server">
     <div class="container">
       <div class="download-section-header">
-        <h2>1. Central Server Setup</h2>
-        <p>The central server coordinates probing requests, aggregates metrics from remote agents, executes alerts, and serves public status views.</p>
+        <h2>1. Install the server</h2>
+        <p>The server runs the checks, collects what the agents send, sends the alerts and serves the status pages. It is plain PHP with a MySQL database: no image to pull and nothing to build on the hosting.</p>
       </div>
 
-      <div class="grid-2 deploy-modes-grid">
-        {/* Web hosting: the real install path (apps/status/README.md). The
-            Docker card that stood here named a server image that was never
-            published, so its very first command failed. */}
-        <div class="card card-glow deploy-card">
-          <div class="deploy-header-box">
-            <span class="d-icon">🐘</span>
-            <div>
-              <h3>Web Hosting (PHP + MySQL)</h3>
-              <p>The server is plain PHP: no image, no build step. It runs on shared hosting as well as on a VPS.</p>
-            </div>
-          </div>
-          <div class="deploy-steps">
-            <p>1. Download the code, create <code>config.php</code> and fill in <code>DB_HOST</code>, <code>DB_NAME</code>, <code>DB_USER</code> and <code>DB_PASS</code>, then import the schema:</p>
-          </div>
-          <div class="code-box">
-            <pre><code id="srv-install">git clone https://github.com/BKPepe/monitoring.git && cd monitoring/apps/status
-cp config.sample.php config.php
-mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
-            <button class="copy-btn-sm" data-target="srv-install">Copy</button>
-          </div>
-          <div class="deploy-steps">
-            <p>2. Upload the contents of <code>apps/status/</code> to <code>public_html/status/</code>.</p>
-            <p>3. Run the collector every minute from cron:</p>
-          </div>
-          <div class="code-box">
-            <pre><code id="srv-cron">* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
-            <button class="copy-btn-sm" data-target="srv-cron">Copy</button>
-          </div>
-        </div>
-
-        <!-- Manual PHP Apache -->
-        <div class="card deploy-card">
-          <div class="deploy-header-box">
-            <span class="d-icon">🐘</span>
-            <div>
-              <h3>What You Need</h3>
-              <p>What the host must provide, and the code as a ZIP if you do not use git.</p>
-            </div>
-          </div>
-          <div class="deploy-steps manual-steps">
-            <h4>System Requirements:</h4>
-            <ul>
-              <li>PHP 8.2 or higher</li>
-              <li>MySQL or MariaDB database</li>
-              <li>Apache <code>mod_rewrite</code> enabled (with <code>.htaccess</code>)</li>
-            </ul>
-            <a href="https://github.com/BKPepe/monitoring/archive/refs/heads/main.zip" class="btn btn-secondary btn-full">
-              📥 Download Source ZIP Archive
-            </a>
-            <p class="manual-note">The database connection is set in <code>config.php</code>, not in the browser, and the tables come from <code>schema.sql</code>. The first administrator account is then created in the setup wizard at <code>/app/setup</code>. Details are in <a href="https://github.com/BKPepe/monitoring/tree/main/apps/status#readme" target="_blank" rel="noopener">apps/status/README.md</a>.</p>
-          </div>
-        </div>
-      </div>
+      <InstallServer lang="en" />
     </div>
   </section>
 
-  <!-- Agent Deployment Section -->
-  <section class="section">
+  <!-- Agent Deployment Section; the server guide's last step links #agents. -->
+  <section class="section" id="agents">
     <div class="container">
       <div class="download-section-header">
-        <h2>2. Remote Telemetry Agents</h2>
-        <p>To measure internal OS statistics (CPU usage, RAM space, local disk logs) or localized ping latency, deploy remote agents.</p>
+        <h2>2. Agents on your machines and routers</h2>
+        <p>To see what happens inside a machine (CPU, memory, disks, network) or on a router (Wi-Fi, WAN, connected clients), install an agent on it.</p>
       </div>
-      <AgentSelector />
+      <AgentSelector lang="en" />
     </div>
   </section>
 
@@ -106,31 +54,6 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
     </div>
   </section>
 
-  <script>
-    // Copy buttons logic
-    const copyBtns = document.querySelectorAll('.copy-btn-sm');
-    copyBtns.forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const targetId = btn.getAttribute('data-target');
-        const codeElement = document.getElementById(targetId);
-        if (!codeElement) return;
-
-        try {
-          await navigator.clipboard.writeText(codeElement.textContent);
-          btn.textContent = 'Copied!';
-          btn.style.borderColor = 'var(--up)';
-          btn.style.color = 'var(--up)';
-          setTimeout(() => {
-            btn.textContent = 'Copy';
-            btn.style.borderColor = '';
-            btn.style.color = '';
-          }, 2000);
-        } catch (err) {
-          console.error(err);
-        }
-      });
-    });
-  </script>
 </Layout>
 
 <style>
@@ -161,147 +84,6 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
     margin-top: 0.3rem;
   }
 
-  .deploy-modes-grid {
-    align-items: stretch;
-  }
-
-  .deploy-card {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    height: 100%;
-  }
-
-  .deploy-header-box {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-  }
-
-  .d-icon {
-    font-size: 2.2rem;
-    background: var(--surface-2);
-    width: 50px;
-    height: 50px;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-  }
-
-  .deploy-header-box h3 {
-    font-size: 1.15rem;
-    font-weight: 700;
-  }
-
-  .deploy-header-box p {
-    font-size: 0.85rem;
-    color: var(--text-low);
-  }
-
-  /* Code container inside card */
-  .code-box {
-    position: relative;
-    background: #09090b;
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: var(--radius-sm);
-    padding: 1.2rem;
-  }
-
-  .code-box pre {
-    margin: 0;
-    overflow-x: auto;
-  }
-
-  .code-box code {
-    color: #f4f4f5;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-  }
-
-  .copy-btn-sm {
-    position: absolute;
-    right: 1rem;
-    top: 1rem;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.1);
-    color: #a1a1aa;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all var(--transition-fast);
-  }
-
-  .copy-btn-sm:hover {
-    color: #ffffff;
-    background: rgba(255,255,255,0.12);
-  }
-
-  .deploy-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    font-size: 0.9rem;
-    color: var(--text-mid);
-  }
-
-  .deploy-steps code {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.8rem;
-    font-family: var(--font-mono);
-    color: var(--text-hi);
-  }
-
-  /* LAMP manual styles */
-  .manual-steps {
-    gap: 0.8rem;
-  }
-
-  .manual-steps h4 {
-    font-size: 0.95rem;
-    font-weight: 700;
-  }
-
-  .manual-steps ul {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .manual-steps li {
-    font-size: 0.9rem;
-    padding-left: 1.2rem;
-    position: relative;
-    color: var(--text-mid);
-  }
-
-  .manual-steps li::before {
-    content: '•';
-    position: absolute;
-    left: 0;
-    color: var(--brand-500);
-    font-weight: 800;
-  }
-
-  .btn-full {
-    width: 100%;
-    margin-top: 0.5rem;
-  }
-
-  .manual-note {
-    font-size: 0.8rem;
-    color: var(--text-low);
-    text-align: center;
-  }
-
-  /* GitHub callout card */
   .github-cta-card {
     max-width: 900px;
     margin: 0 auto;
@@ -328,9 +110,6 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
   @media (max-width: 768px) {
     .page-header h1 {
       font-size: 2.25rem;
-    }
-    .grid-2 {
-      grid-template-columns: 1fr;
     }
   }
 </style>

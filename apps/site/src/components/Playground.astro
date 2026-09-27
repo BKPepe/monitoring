@@ -4,7 +4,8 @@
 // The worker's /api/test fetches the address once (redirects are reported,
 // not followed; private and local targets are refused) and measures only the
 // total time until the response arrived. So this panel shows exactly that:
-// the HTTP status, the round trip and when it ran. It used to stage a
+// the HTTP status, the round trip, when it ran and, for a 3xx, where the
+// Location header points. It used to stage a
 // DNS/TCP/TLS animation and an "IP address" field the worker never filled.
 import type { Lang } from '../i18n';
 
@@ -28,6 +29,8 @@ const t =
         checkedAt: 'Změřeno',
         ok: 'Server odpověděl.',
         failed: 'Server neodpověděl úspěšně:',
+        clientError: 'Server je dosažitelný a odpověděl chybou klienta HTTP',
+        redirect: 'Přesměrovává na',
         refused: 'Worker požadavek odmítl:',
         unreachable: 'Worker se z vašeho prohlížeče nepodařilo zastihnout, takže žádný výsledek není.',
         note: 'Měří se jen celková doba do přijetí odpovědi z místa, kde worker právě běží. Rozpad na DNS, TCP a TLS worker změřit neumí, a tak ho neukazujeme.',
@@ -45,6 +48,8 @@ const t =
         checkedAt: 'Measured at',
         ok: 'The server answered.',
         failed: 'The server did not answer successfully:',
+        clientError: 'The server is reachable and answered with client error HTTP',
+        redirect: 'Redirects to',
         refused: 'The worker refused the request:',
         unreachable: 'The worker could not be reached from your browser, so there is no result.',
         note: 'Only the total time until the response arrived is measured, from wherever the worker runs at that moment. A worker cannot time DNS, TCP and TLS separately, so no such breakdown is shown.',
@@ -61,6 +66,7 @@ const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
   data-sending={t.sending}
   data-ok={t.ok}
   data-failed={t.failed}
+  data-client-error={t.clientError}
   data-refused={t.refused}
   data-unreachable={t.unreachable}
 >
@@ -105,6 +111,10 @@ const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
         <dt>{t.checkedAt}</dt>
         <dd id="probe-time">—</dd>
       </div>
+      <div class="probe-wide" id="probe-redirect-row" hidden>
+        <dt>{t.redirect}</dt>
+        <dd id="probe-redirect">—</dd>
+      </div>
     </dl>
   </div>
 
@@ -120,6 +130,7 @@ const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
     status?: number;
     statusText?: string;
     latencyMs?: number;
+    redirectTo?: string | null;
     error?: string;
     timestamp?: string;
   }
@@ -139,7 +150,11 @@ const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
     el.textContent = text;
     el.dataset.tone = tone;
   };
-  const clear = () => ['probe-host', 'probe-status', 'probe-rtt', 'probe-time'].forEach((id) => set(id, '—'));
+  const redirectRow = document.getElementById('probe-redirect-row');
+  const clear = () => {
+    ['probe-host', 'probe-status', 'probe-rtt', 'probe-time', 'probe-redirect'].forEach((id) => set(id, '—'));
+    if (redirectRow) redirectRow.hidden = true;
+  };
 
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -185,8 +200,18 @@ const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
         ? new Intl.DateTimeFormat(words.locale, { timeStyle: 'medium' }).format(at)
         : '—'
     );
+    // Only a 3xx carries a target; the row stays hidden otherwise rather than
+    // showing a dash that reads like "no redirect measured".
+    if (data.redirectTo) {
+      set('probe-redirect', data.redirectTo);
+      if (redirectRow) redirectRow.hidden = false;
+    }
+    const status = typeof data.status === 'number' ? data.status : 0;
     if (data.success) line(words.ok ?? '', 'ok');
-    else line(`${words.failed ?? ''} ${data.error || data.statusText || ''}`.trim(), 'bad');
+    // A 404 or 403 proves the host is up and answering; calling it "did not
+    // answer successfully" in red read like an outage.
+    else if (status >= 400 && status < 500) line(`${words.clientError ?? ''} ${status}.`, 'none');
+    else line(`${words.failed ?? ''} ${data.error || data.statusText || (status ? `HTTP ${status}` : '')}`.trim(), 'bad');
   });
 </script>
 
@@ -291,6 +316,10 @@ const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
     padding: 0.8rem 0.9rem;
     background: var(--surface-1);
     min-width: 0;
+  }
+
+  .probe-grid .probe-wide {
+    grid-column: 1 / -1;
   }
 
   .probe-grid dt {

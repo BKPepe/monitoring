@@ -71,6 +71,25 @@ async function withCache(cacheKey: string, ttlSeconds: number, fetcher: () => Pr
   }
 }
 
+/** Like fetchGitHub, but a 404 is an answer (null: "there is none"), not an error. */
+async function fetchGitHubOrNull(path: string, token?: string): Promise<any> {
+  try {
+    return await fetchGitHub(path, token);
+  } catch (err) {
+    if (err instanceof GitHubError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+class GitHubError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string
+  ) {
+    super(`GitHub API error: ${status} ${statusText}`);
+  }
+}
+
 // GitHub API Fetcher wrapper with headers and authentication
 async function fetchGitHub(path: string, token?: string): Promise<any> {
   const headers: HeadersInit = {
@@ -83,7 +102,7 @@ async function fetchGitHub(path: string, token?: string): Promise<any> {
 
   const res = await fetch(`https://api.github.com${path}`, { headers });
   if (!res.ok) {
-    throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+    throw new GitHubError(res.status, res.statusText);
   }
   return await res.json();
 }
@@ -127,51 +146,34 @@ app.get('/api/stats', async (c) => {
 });
 
 // 2. GET /api/versions - Latest release of the monitoring server (agents: /api/agents)
+//
+// The site's live panel ("Latest server release") and the install guide's
+// release line read this. "Latest" is GitHub's releases/latest, the same
+// release that releases/latest/download/bloodkings-monitoring.zip serves, so
+// the site never names a version the download button cannot fetch. A bare tag without a
+// release used to count too; it has no ZIP, so it no longer does.
+//   200 { monitoring: "v0.3.0-alpha", latestReleaseDate: "2026-09-24" }
+//   200 { monitoring: null, latestReleaseDate: null }  - no release published yet
+//   503 { error }                                        - GitHub did not answer
 app.get('/api/versions', async (c) => {
   const token = c.env?.GITHUB_TOKEN;
 
   try {
-    const versions = await withCache('github-versions', 1800, async () => {
-      let latestTag: string | null = null;
-      let publishedAt: string | null = null;
-
-      try {
-        const latestRelease = await fetchGitHub('/repos/BKPepe/monitoring/releases/latest', token);
-        latestTag = latestRelease.tag_name ?? null;
-        publishedAt = latestRelease.published_at
-          ? new Date(latestRelease.published_at).toISOString().split('T')[0]
-          : null;
-      } catch {
-        // Fallback to tags if no official release yet
-        try {
-          const tags = await fetchGitHub('/repos/BKPepe/monitoring/tags', token);
-          if (tags && tags.length > 0) {
-            latestTag = tags[0].name;
-          }
-        } catch (tagErr) {
-          console.error('Error fetching tags:', tagErr);
-        }
-      }
-
-      // Without a real tag there is nothing truthful to serve - fail the
-      // request instead of inventing a version string and today's date.
-      if (!latestTag) {
-        throw new Error('No release or tag found on GitHub');
-      }
-
-      // No `agents` map here any more: it copied the server's release tag
-      // onto every platform, but the agents are versioned on their own
-      // (0.1.x in BKPepe/monitoring-agent). /api/agents reads the real ones.
+    const versions = await withCache('github-versions-v2', 1800, async () => {
+      const latest = await fetchGitHubOrNull('/repos/BKPepe/monitoring/releases/latest', token);
+      if (!latest) return { monitoring: null, latestReleaseDate: null };
+      // No agents map here: the agents are versioned on their own (0.1.x in
+      // BKPepe/monitoring-agent), and /api/agents reads the real ones.
       return {
-        monitoring: latestTag,
-        latestReleaseDate: publishedAt,
+        monitoring: typeof latest.tag_name === 'string' ? latest.tag_name : null,
+        latestReleaseDate: latest.published_at ? new Date(latest.published_at).toISOString().split('T')[0] : null,
       };
     });
 
     return c.json(versions);
   } catch (err: any) {
-    // No invented version numbers: the download page keeps its build-time
-    // values and the caller sees an honest failure.
+    // No invented version numbers: the caller shows a dash and says the
+    // version could not be read.
     return c.json({ error: err.message }, 503);
   }
 });
@@ -205,8 +207,8 @@ app.get('/api/changelog', async (c) => {
 
     return c.json(changelog);
   } catch (err: any) {
-    // The site has its own static fallback card for this case; serving a
-    // fabricated release list from here would just hide the outage.
+    // The changelog page says the list could not be loaded and links GitHub;
+    // serving a fabricated release list from here would just hide the outage.
     return c.json({ error: err.message }, 503);
   }
 });
@@ -353,6 +355,9 @@ app.get('/api/test', async (c) => {
   const startTime = performance.now();
   let status = 0;
   let statusText = '';
+  // Where a 3xx points. The check does not follow redirects (see below), so
+  // this is the one "final URL" fact the playground can show without guessing.
+  let redirectTo: string | null = null;
   // Bez pocatecni hodnoty: prirazuje se v try i v catch, takze inicializace
   // na false byla mrtva (a lint na ni upozornil).
   let success: boolean;
@@ -379,6 +384,14 @@ app.get('/api/test', async (c) => {
     clearTimeout(timeoutId);
     status = response.status;
     statusText = response.statusText;
+    const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null;
+    if (location) {
+      try {
+        redirectTo = new URL(location, parsedUrl).toString();
+      } catch {
+        redirectTo = null;
+      }
+    }
     success = response.status >= 200 && response.status < 400;
   } catch (err: any) {
     success = false;
@@ -396,8 +409,11 @@ app.get('/api/test', async (c) => {
     host: parsedUrl.hostname,
     success,
     status,
-    statusText: statusText || (success ? 'OK' : 'Failed'),
+    // HTTP/2 answers carry no reason phrase. An empty one stays empty: a
+    // made-up "Failed" next to a 404 read as an outage in the playground.
+    statusText: statusText || (status ? '' : 'Failed'),
     latencyMs,
+    redirectTo,
     error: errorMessage,
     timestamp: new Date().toISOString(),
   });

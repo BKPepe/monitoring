@@ -16,8 +16,10 @@ import Layout from '../../layouts/Layout.astro';
     <div class="container roadmap-grid-container">
       
       <!-- Milestone 0.1 -->
+      <!-- "Built", not "Released": the code is there, but no version has been published
+           yet, and the changelog and the download page say so. -->
       <div class="roadmap-milestone card completed">
-        <div class="milestone-status-tag tag-done">Uvolněno</div>
+        <div class="milestone-status-tag tag-done">Hotovo</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.1.0-alpha</span>
           <h2>Základní Monitoring</h2>
@@ -28,7 +30,7 @@ import Layout from '../../layouts/Layout.astro';
             <span class="check-box">✓</span>
             <div class="task-info">
               <strong>Centrální PHP Server</strong>
-              <span>Webová administrace, SQLite/MySQL úložiště incidentů.</span>
+              <span>Webová administrace, úložiště incidentů v MySQL/MariaDB.</span>
             </div>
           </li>
           <li class="checked">
@@ -57,7 +59,7 @@ import Layout from '../../layouts/Layout.astro';
 
       <!-- Milestone 0.2 -->
       <div class="roadmap-milestone card completed">
-        <div class="milestone-status-tag tag-done">Uvolněno</div>
+        <div class="milestone-status-tag tag-done">Hotovo</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.2.0</span>
           <h2>Pokročilé Metriky</h2>
@@ -154,15 +156,15 @@ import Layout from '../../layouts/Layout.astro';
         <div class="milestone-status-tag tag-planned">Budoucnost</div>
         <div class="milestone-header">
           <span class="milestone-ver">v1.0.0</span>
-          <h2>Stabilní Verze (LTS)</h2>
-          <p>Připraveno pro nejnáročnější enterprise nasazení.</p>
+          <h2>Stabilní verze</h2>
+          <p>První vydání, které slibuje kompatibilitu mezi verzemi.</p>
         </div>
         <ul class="roadmap-checklist">
           <li>
             <span class="check-box">○</span>
             <div class="task-info">
-              <strong>Dlouhodobá podpora (LTS)</strong>
-              <span>Stabilní API a garantovaná podpora oprav chyb po dobu 2 let.</span>
+              <strong>Stabilní API a přechod mezi verzemi</strong>
+              <span>Stabilní API a popsaný postup přechodu z jedné verze na další.</span>
             </div>
           </li>
           <li>

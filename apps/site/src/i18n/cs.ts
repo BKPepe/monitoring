@@ -7,10 +7,8 @@
  * Czech typesetting rule. It skips links and code, where a changed space
  * would change the meaning.
  */
-import { GITHUB_REPO_URL } from '../config';
+import { AGENTS_SOURCE_URL, GITHUB_REPO_URL } from '../config';
 import type { Dict } from './en';
-
-const AGENT_BASE = 'https://bloodkings.eu/status';
 
 const SKIP_KEYS = new Set(['href', 'code', 'lang', 'locale', 'ogLocale', 'icon', 'status']);
 const ONE_LETTER = /(^|[\s(„])([vkszouaiVKSZOUAI]) /g;
@@ -107,7 +105,7 @@ const raw: Dict = {
 
     facts: [
       { label: 'Na hlídaném stroji žádný příchozí port', href: '/cs/docs/#architecture' },
-      { label: 'Agent v POSIX sh pro OpenWrt a Turris', href: `${AGENT_BASE}/agent_openwrt.sh` },
+      { label: 'Agent v POSIX sh pro OpenWrt a Turris', href: `${AGENTS_SOURCE_URL}/agent_openwrt.sh` },
       { label: 'Server na PHP + MySQL', href: '/cs/docs/#requirements' },
       { label: 'Licence MIT', href: `${GITHUB_REPO_URL}/blob/main/LICENSE` },
       { label: 'Česky i anglicky', href: '/' },
@@ -258,13 +256,13 @@ const raw: Dict = {
       steps: [
         {
           title: 'Server na PHP hosting',
-          body: 'PHP 8.2+ (CI projektu běží na 8.4) s MySQL nebo MariaDB a cron, který každou minutu spustí cron.php. Stačí sdílený hosting, server nepotřebuje žádný kontejner. Node.js je potřeba jen jednou, k sestavení přehledu /app.',
-          code: 'git clone https://github.com/BKPepe/monitoring.git && cd monitoring\ncp apps/status/config.sample.php apps/status/config.php   # DB_HOST, DB_NAME, DB_USER, DB_PASS\nmysql -u USER -p DB_NAME < apps/status/schema.sql\nnpm ci && npm run build:monitor   # přehled /app\n# nahrajte apps/status/ do /status/ a apps/monitor/dist/ do /app/\n# crontab:\n* * * * * php -q /path/to/status/cron.php',
-          after: 'Pak na své doméně otevřete /app/setup a založte prvního administrátora.',
+          body: 'PHP 8.2+ (CI projektu běží na 8.4) s MySQL nebo MariaDB a cron, který každou minutu spustí cron.php. Stačí sdílený hosting, server nepotřebuje žádný kontejner. ZIP vydání už obsahuje sestavený přehled /app, takže Node.js potřebuje jen sestavení ze zdrojů.',
+          code: '',
+          after: '',
         },
         {
           title: 'Zaregistrujte agenta',
-          body: 'V přehledu vytvořte registrační token a spusťte instalaci pro svou platformu níže. Agent posílá hlášení ven přes HTTPS; na stroji nic nenaslouchá.',
+          body: 'Přidejte stroj ve své aplikaci (Infrastruktura → Přidat nový monitor) a spusťte příkazy, které vypíše s vaší adresou a klíčem, nebo zaregistrujte více strojů jedním tokenem. Agent posílá hlášení ven přes HTTPS; na stroji nic nenaslouchá.',
           code: '',
           after: '',
         },
@@ -281,7 +279,7 @@ const raw: Dict = {
     install: {
       eyebrow: 'Instalace agenta',
       title: 'Vyberte platformu, přečtěte si skript, spusťte příkazy.',
-      lead: 'Adresy míří na server bloodkings.eu, na vlastní instanci použijte její adresu. Registrační token a klíče agentů najdete v přehledu.',
+      lead: 'Místo https://YOUR-DOMAIN doplňte adresu svého serveru a místo YOUR_AGENT_KEY klíč monitoru. Vaše aplikace vypíše tytéž příkazy s oběma hodnotami už vyplněnými.',
     },
 
     limits: {
@@ -309,7 +307,7 @@ const raw: Dict = {
         },
         {
           q: 'Co potřebuje server?',
-          a: 'Webhosting s PHP 8.2 nebo novějším, MySQL nebo MariaDB a cron, který každou minutu spustí cron.php. Sdílený hosting stačí, server nepotřebuje Docker. Node.js je potřeba jen jednou, k sestavení přehledu /app.',
+          a: 'Webhosting s PHP 8.2 nebo novějším, MySQL nebo MariaDB a cron, který každou minutu spustí cron.php. Sdílený hosting stačí, server nepotřebuje Docker. ZIP vydání už obsahuje sestavený přehled /app; Node.js potřebuje jen sestavení ze zdrojů.',
         },
         {
           q: 'Musím na routeru otevřít port?',
@@ -348,6 +346,86 @@ const raw: Dict = {
       link: 'Více o projektu',
       markLabel: 'nezměřeno',
     },
+  },
+
+  server: {
+    copy: 'Kopírovat',
+    copied: 'Zkopírováno',
+    copyFailed: 'Kopírování selhalo',
+    time: 'Změřená doba instalace',
+    timeUnmeasured: 'zatím nezměřeno; pomlčku nahradí čas z instalace na čistý hosting',
+    timeMeasured:
+      'od ZIPu vydání po první běh sběru dat na čistém serveru s PHP 8.2 a MySQL, podle tohoto návodu; nahrávání přes FTP a klikání v administraci hostingu jde navíc',
+    fullGuide: 'Všech sedm kroků na stránce ke stažení',
+    summaryLabel: 'Instalace serveru ve čtyřech krocích',
+    summary: [
+      {
+        title: 'Stažení',
+        text: 'bloodkings-monitoring.zip z posledního vydání. Složky status/ a app/ nahrajte na hosting.',
+      },
+      {
+        title: 'Prázdná databáze',
+        text: 'V administraci hostingu založte databázi a jejího uživatele. Nic neimportujete.',
+      },
+      {
+        title: 'Instalátor',
+        text: 'Otevřete /app/setup: zapíše config.php, založí tabulky i první účet.',
+      },
+      { title: 'Cron každou minutu', text: 'Přidejte řádek, který instalátor ukáže. Po prvním běhu zezelená.' },
+    ],
+    req: {
+      title: 'Ověřte, co hosting nabízí',
+      items: [
+        'PHP 8.2 nebo novější s rozšířeními PDO MySQL, cURL a mbstring',
+        'Databáze MySQL nebo MariaDB',
+        'Cron každou minutu (stačí Cron Jobs v cPanelu)',
+        'Apache s .htaccess a mod_rewrite, jako na většině sdílených hostingů',
+        'Jedna doména nebo subdoména, v jejímž kořeni leží /status i /app: aplikace mluví s /status na stejném hostu',
+        'Odchozí HTTP a HTTPS z hostingu, pro kontroly',
+      ],
+      where: 'Umístěte ho mimo síť, kterou hlídáte. Server doma spadne s domácí linkou a pak už vám to nemá kdo říct.',
+    },
+    upload: {
+      title: 'Stáhněte a nahrajte',
+      button: 'Stáhnout bloodkings-monitoring.zip',
+      line: 'Poslední vydání:',
+      lineNone:
+        'Zatím nevyšlo žádné vydání, takže tlačítko nemá co stáhnout. Do prvního vydání sestavte obě složky ze zdrojů podle postupu níže.',
+      lineError: 'Poslední verzi se nepodařilo načíst. Tlačítko přesto stáhne poslední vydání, pokud nějaké je.',
+      text: 'Rozbalte ho a nahrajte status/ do public_html/status/ a app/ do public_html/app/. Soubor app/.htaccess nevynechávejte: bez něj skončí obnovení stránky uvnitř aplikace chybou 404. Stažený soubor ověříte proti zveřejněnému kontrolnímu součtu tak, že SHA256SUMS uložíte vedle ZIPu a spustíte:',
+      sourceTitle: 'Ještě žádné vydání? Sestavte obě složky ze zdrojů',
+      sourceText: 'S gitem a Node.js 22 na svém počítači:',
+      sourceAfter:
+        'Pak nahrajte apps/status/ (bez složky tests/) jako status/ a apps/monitor/dist/ (i s jeho .htaccess) jako app/. Agenti patří vedle agent_api.php: odtud se stahují a odtud se i sami aktualizují.',
+    },
+    db: {
+      title: 'Založte prázdnou databázi',
+      text: 'Založte databázi MySQL nebo MariaDB a uživatele se všemi právy k ní (v cPanelu: MySQL Databases) a poznamenejte si název, uživatele a heslo. Nechte ji prázdnou: tabulky založí instalátor. Jen když chcete všechno udělat ručně, naimportujte status/schema.sql sami:',
+    },
+    config: {
+      title: 'Spusťte instalátor',
+      text: 'Otevřete https://YOUR-DOMAIN/app/setup. Zkontroluje PHP, vyzkouší přihlášení k databázi, zapíše status/config.php (nebo soubor ukáže k nahrání, když do složky PHP zapisovat nesmí), založí tabulky a pak prvního správce. Žádný výchozí účet ani heslo neexistuje a jakmile účet je, instalátor se znovu nespustí. Ručně místo toho: ve složce status/ zkopírujte config.sample.php na config.php a vyplňte připojení:',
+      optional:
+        'Volitelné klíče patří do stejného souboru jako konstanty velkými písmeny, nebo později do aplikace v Nastavení: CRON_KEY, AGENT_REGISTRATION_TOKEN a METRICS_TOKEN. Instalátor dá každé nové instalaci vlastní CRON_KEY. Při ruční cestě zůstane prázdný, dokud ho nenastavíte, a dokud je prázdný, spustí sběr dat kdokoli, kdo zná adresu cron.php.',
+      keep: 'config.php obsahuje heslo k databázi. V ZIPu není a nahrání nového vydání ho nepřepíše.',
+    },
+    cron: {
+      title: 'Spouštějte sběr dat každou minutu',
+      text: 'Všechny kontroly spouští jeden cron. Poslední krok instalátoru ukáže tenhle řádek se skutečnou cestou k PHP a k cron.php na vašem serveru. V cPanelu otevřete Cron Jobs, zvolte Once Per Minute (* * * * *) a příkaz vložte do pole Command. USER je váš účet na hostingu; domovskou složku ukazuje cPanel na hlavní stránce.',
+      crontab: 'Bez cPanelu je to stejná úloha jako řádek pro crontab -e:',
+    },
+    admin: {
+      title: 'Přihlaste se',
+      text: 'Přihlaste se na https://YOUR-DOMAIN/app/ účtem, který založil instalátor. Po ruční cestě ten první účet místo toho založí /app/setup.',
+    },
+    check: {
+      title: 'Ověřte, že běží',
+      text: 'Instalátor na první běh sběru dat počká a po něm zezelená, do minuty od přidání cronu. Později, nebo po ruční cestě, to ověříte takhle (adresa se dá otevřít i v prohlížeči):',
+      after:
+        'Hledejte čas v lastRunAt a "stale": false. "stale": true s lastRunAt null znamená, že sběr ještě nikdy neběžel: zkontrolujte řádek cronu a cestu v něm.',
+    },
+    next: 'Dál: v aplikaci přidejte monitory a na stroje a routery, do kterých chcete vidět, agenty.',
+    nextLink: 'Instalace agenta',
   },
 };
 

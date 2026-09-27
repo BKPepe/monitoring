@@ -8,9 +8,7 @@
  * appear with their source; live values are filled in by the page scripts
  * and stay a dash until a real answer arrives.
  */
-import { GITHUB_REPO_URL } from '../config';
-
-const AGENT_BASE = 'https://bloodkings.eu/status';
+import { AGENTS_SOURCE_URL, GITHUB_REPO_URL } from '../config';
 
 export const en = {
   lang: 'en',
@@ -92,7 +90,7 @@ export const en = {
 
     facts: [
       { label: 'No inbound port on monitored machines', href: '/docs/#architecture' },
-      { label: 'POSIX sh agent for OpenWrt & Turris', href: `${AGENT_BASE}/agent_openwrt.sh` },
+      { label: 'POSIX sh agent for OpenWrt & Turris', href: `${AGENTS_SOURCE_URL}/agent_openwrt.sh` },
       { label: 'Server: PHP + MySQL', href: '/docs/#requirements' },
       { label: 'MIT licence', href: `${GITHUB_REPO_URL}/blob/main/LICENSE` },
       { label: 'English & Czech', href: '/cs/' },
@@ -243,13 +241,15 @@ export const en = {
       steps: [
         {
           title: 'Put the server on a PHP host',
-          body: 'PHP 8.2+ (the project’s CI runs 8.4) with MySQL or MariaDB, and cron running cron.php every minute. Shared hosting is enough; the server needs no container. Node.js is only needed once, to build the /app dashboard.',
-          code: 'git clone https://github.com/BKPepe/monitoring.git && cd monitoring\ncp apps/status/config.sample.php apps/status/config.php   # DB_HOST, DB_NAME, DB_USER, DB_PASS\nmysql -u USER -p DB_NAME < apps/status/schema.sql\nnpm ci && npm run build:monitor   # the /app dashboard\n# upload apps/status/ to /status/ and apps/monitor/dist/ to /app/\n# crontab:\n* * * * * php -q /path/to/status/cron.php',
-          after: 'Then open /app/setup on your domain and create the first administrator.',
+          body: 'PHP 8.2+ (the project’s CI runs 8.4) with MySQL or MariaDB, and cron running cron.php every minute. Shared hosting is enough; the server needs no container. The release ZIP carries the built /app dashboard, so only a build from source needs Node.js.',
+          // Step 1 shows the install summary (components/InstallServer.astro)
+          // instead of commands of its own: the guide exists once.
+          code: '',
+          after: '',
         },
         {
           title: 'Register an agent',
-          body: 'Create a registration token in the dashboard and run the installer for your platform below. The agent sends its report out over HTTPS; nothing on the machine listens for connections.',
+          body: 'Add the machine in your app (Infrastructure → Add New Monitor) and run the commands it prints with your address and key, or register many machines with one token. The agent sends its report out over HTTPS; nothing on the machine listens for connections.',
           code: '',
           after: '',
         },
@@ -266,7 +266,7 @@ export const en = {
     install: {
       eyebrow: 'Install an agent',
       title: 'Pick a platform, read the script, run the commands.',
-      lead: 'The addresses point at the bloodkings.eu server; on your own instance, use its address. The registration token and agent keys are in the dashboard.',
+      lead: 'Replace https://YOUR-DOMAIN with the address of your own server and YOUR_AGENT_KEY with the key of the monitor. Your app prints the same commands with both filled in.',
     },
 
     limits: {
@@ -294,7 +294,7 @@ export const en = {
         },
         {
           q: 'What does the server need?',
-          a: 'A web host with PHP 8.2 or newer, MySQL or MariaDB, and cron to run cron.php every minute. Shared hosting works; the server needs no Docker. Node.js is needed once, to build the /app dashboard.',
+          a: 'A web host with PHP 8.2 or newer, MySQL or MariaDB, and cron to run cron.php every minute. Shared hosting works; the server needs no Docker. The release ZIP already carries the built /app dashboard; only a build from source needs Node.js.',
         },
         {
           q: 'Does my router need an open port?',
@@ -333,6 +333,89 @@ export const en = {
       link: 'More about the project',
       markLabel: 'not measured',
     },
+  },
+
+  // The one server install guide (components/InstallServer.astro): in full on
+  // /download/#server and as the docs Quick Start, as a four-step summary in
+  // the home page's "How it works". Commands live in the component; they are
+  // the same in both languages.
+  server: {
+    copy: 'Copy',
+    copied: 'Copied',
+    copyFailed: 'Copy failed',
+    time: 'Measured install time',
+    timeUnmeasured: 'not timed yet; the figure from a timed clean install will replace the dash',
+    timeMeasured:
+      'from the release ZIP to the first collector run on a clean PHP 8.2 and MySQL server, following this guide; uploading over FTP and clicking through your hosting panel come on top',
+    fullGuide: 'All seven steps on the download page',
+    summaryLabel: 'The server install in four steps',
+    summary: [
+      {
+        title: 'Download',
+        text: 'bloodkings-monitoring.zip from the latest release. Upload status/ and app/ to your hosting.',
+      },
+      { title: 'Empty database', text: 'Create a database and its user in your hosting panel. Nothing to import.' },
+      {
+        title: 'Installer',
+        text: 'Open /app/setup: it writes config.php, creates the tables and the first account.',
+      },
+      { title: 'Cron every minute', text: 'Add the line the installer shows. It turns green at the first run.' },
+    ],
+    req: {
+      title: 'Check what the hosting offers',
+      items: [
+        'PHP 8.2 or newer with the PDO MySQL, cURL and mbstring extensions',
+        'A MySQL or MariaDB database',
+        "A cron job every minute (cPanel's Cron Jobs is enough)",
+        'Apache with .htaccess and mod_rewrite, as on most shared hosting',
+        'One domain or subdomain whose root holds both /status and /app: the app talks to /status on its own host',
+        'Outbound HTTP and HTTPS from the hosting, for the checks',
+      ],
+      where:
+        'Put it outside the network you watch. A server at home goes down with the home line, and then nothing is left to tell you.',
+    },
+    upload: {
+      title: 'Download and upload',
+      button: 'Download bloodkings-monitoring.zip',
+      line: 'Latest release:',
+      lineNone:
+        'No release has been published yet, so the button has nothing to download. Until the first one, build the two folders from the source as shown below.',
+      lineError:
+        'The latest version could not be loaded. The button still downloads the latest release, if there is one.',
+      text: 'Unzip it and upload status/ into public_html/status/ and app/ into public_html/app/. Keep app/.htaccess: without it, reloading a page inside the app answers 404. To check the download against the published checksum, save SHA256SUMS next to the ZIP and run:',
+      sourceTitle: 'No release yet? Build the same two folders from the source',
+      sourceText: 'With git and Node.js 22 on your computer:',
+      sourceAfter:
+        'Then upload apps/status/ (without its tests/ folder) as status/ and apps/monitor/dist/ (with its .htaccess) as app/. The agents belong next to agent_api.php: that is where they download from and update themselves from.',
+    },
+    db: {
+      title: 'Create an empty database',
+      text: 'Create a MySQL or MariaDB database and a user with all privileges on it (in cPanel: MySQL Databases), and note the name, the user and the password. Leave it empty: the installer creates the tables. Only if you prefer to do everything by hand, import status/schema.sql yourself:',
+    },
+    config: {
+      title: 'Run the installer',
+      text: 'Open https://YOUR-DOMAIN/app/setup. It checks PHP, tests the database login, writes status/config.php (or shows the file to upload when PHP may not write there), creates the tables and then the first administrator. There is no default account or password, and the installer refuses to run again once an account exists. By hand instead: copy config.sample.php to config.php in status/ and fill in the connection:',
+      optional:
+        'Optional keys go into the same file as constants, in capitals, or later into the app under Settings: CRON_KEY, AGENT_REGISTRATION_TOKEN and METRICS_TOKEN. The installer gives every new install its own CRON_KEY. On the manual path it stays empty until you set one, and while it is empty anyone who knows the address of cron.php can start a collection run.',
+      keep: 'config.php holds the database password. It is not in the ZIP, and uploading a new release does not overwrite it.',
+    },
+    cron: {
+      title: 'Run the collector every minute',
+      text: "One cron job runs every check. The installer's last step shows this line with your server's real path to PHP and to cron.php. In cPanel open Cron Jobs, choose Once Per Minute (* * * * *) and put the command into the Command field. USER is your hosting account; cPanel shows the home directory on its main page.",
+      crontab: 'Without cPanel, the same job as a line for crontab -e:',
+    },
+    admin: {
+      title: 'Log in',
+      text: 'Log in at https://YOUR-DOMAIN/app/ with the account the installer created. After the manual path, /app/setup creates that first account instead.',
+    },
+    check: {
+      title: 'Check that it runs',
+      text: 'The installer waits for the first collector run and turns green when it lands, within a minute of adding the cron job. To check it later, or after the manual path (the address also opens in a browser):',
+      after:
+        'Look for a lastRunAt time and "stale": false. "stale": true with lastRunAt null means the collector has never run: check the cron line and its path.',
+    },
+    next: 'Next: add monitors in the app, and agents on the machines and routers you want to see inside.',
+    nextLink: 'Install an agent',
   },
 };
 

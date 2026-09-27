@@ -1,90 +1,38 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import AgentSelector from '../../components/AgentSelector.astro';
+import InstallServer from '../../components/InstallServer.astro';
 ---
 
-<Layout title="Download & Instalace | Blood Kings Monitoring" description="Stáhněte si centrální server Blood Kings Monitoring nebo nainstalujte vzdálené agenty pro Linux, Windows a Docker.">
+<Layout title="Download & Instalace | Blood Kings Monitoring" description="Nainstalujte Blood Kings Monitoring na PHP hosting s MySQL a cronem a přidejte agenty pro Linux, routery s OpenWrt, Windows a Docker.">
   <section class="page-header section">
     <div class="container text-center">
       <span class="badge badge-accent">Download centrum</span>
       <h1>Spusťte Blood Kings Monitoring</h1>
-      <p class="section-subtitle">Stáhněte si centrální monitorovací server nebo nasaďte agenty na koncová zařízení během několika sekund.</p>
+      <p class="section-subtitle">Nainstalujte centrální server na svůj PHP hosting a pak přidejte lehké agenty na stroje a routery, které chcete hlídat.</p>
     </div>
   </section>
 
-  <!-- Server Deployment Panel -->
-  <section class="section bg-dim">
+  <!-- Server Deployment Panel; every "Install" CTA lands on #server. -->
+  <section class="section bg-dim" id="server">
     <div class="container">
       <div class="download-section-header">
-        <h2>1. Nasazení Centrálního Serveru</h2>
-        <p>Centrální server shromažďuje data od agentů, spouští kontroly, spravuje notifikace a zobrazuje status stránky.</p>
+        <h2>1. Instalace serveru</h2>
+        <p>Server spouští kontroly, přijímá data od agentů, posílá upozornění a zobrazuje stavové stránky. Je to obyčejné PHP s databází MySQL: žádný obraz ke stažení a na hostingu se nic nesestavuje.</p>
       </div>
 
-      <div class="grid-2 deploy-modes-grid">
-        {/* Web hosting: the real install path (apps/status/README.md). The
-            Docker card that stood here named a server image that was never
-            published, so its very first command failed. */}
-        <div class="card card-glow deploy-card">
-          <div class="deploy-header-box">
-            <span class="d-icon">🐘</span>
-            <div>
-              <h3>Webhosting (PHP + MySQL)</h3>
-              <p>Server je čisté PHP: žádný obraz, žádný build. Běží na sdíleném webhostingu i na VPS.</p>
-            </div>
-          </div>
-          <div class="deploy-steps">
-            <p>1. Stáhněte kód, vytvořte <code>config.php</code> a doplňte <code>DB_HOST</code>, <code>DB_NAME</code>, <code>DB_USER</code> a <code>DB_PASS</code>, pak naimportujte schéma:</p>
-          </div>
-          <div class="code-box">
-            <pre><code id="srv-install">git clone https://github.com/BKPepe/monitoring.git && cd monitoring/apps/status
-cp config.sample.php config.php
-mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
-            <button class="copy-btn-sm" data-target="srv-install">Kopírovat</button>
-          </div>
-          <div class="deploy-steps">
-            <p>2. Nahrajte obsah <code>apps/status/</code> do <code>public_html/status/</code>.</p>
-            <p>3. Spouštějte sběr dat z cronu každou minutu:</p>
-          </div>
-          <div class="code-box">
-            <pre><code id="srv-cron">* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
-            <button class="copy-btn-sm" data-target="srv-cron">Kopírovat</button>
-          </div>
-        </div>
-
-        <!-- Manual PHP Apache -->
-        <div class="card deploy-card">
-          <div class="deploy-header-box">
-            <span class="d-icon">🐘</span>
-            <div>
-              <h3>Co budete potřebovat</h3>
-              <p>Co musí hosting umět, a kód jako ZIP, pokud nepoužíváte git.</p>
-            </div>
-          </div>
-          <div class="deploy-steps manual-steps">
-            <h4>Požadavky:</h4>
-            <ul>
-              <li>PHP 8.2 nebo novější</li>
-              <li>MySQL/MariaDB databáze</li>
-              <li>Podpora Apache <code>.htaccess</code> (mod_rewrite)</li>
-            </ul>
-            <a href="https://github.com/BKPepe/monitoring/archive/refs/heads/main.zip" class="btn btn-secondary btn-full">
-              📥 Stáhnout ZIP zdrojové kódy
-            </a>
-            <p class="manual-note">Připojení k databázi se nastavuje v <code>config.php</code>, ne v prohlížeči, a tabulky vytvoří <code>schema.sql</code>. Prvního administrátora pak založí průvodce na <code>/app/setup</code>. Podrobnosti jsou v <a href="https://github.com/BKPepe/monitoring/tree/main/apps/status#readme" target="_blank" rel="noopener">apps/status/README.md</a>.</p>
-          </div>
-        </div>
-      </div>
+      <InstallServer lang="cs" />
     </div>
   </section>
 
-  <!-- Agent Deployment Section -->
-  <section class="section">
+  <!-- Agent Deployment Section; the server guide's last step links #agents. -->
+  <section class="section" id="agents">
     <div class="container">
       <div class="download-section-header">
-        <h2>2. Nasazení Vzdálených Agentů</h2>
-        <p>Pro měření lokálních prostředků (CPU, RAM, Disky) nebo lokální síťové odezvy nainstalujte agenty.</p>
+        <h2>2. Agenti na strojích a routerech</h2>
+        <p>Chcete-li vidět, co se děje uvnitř stroje (CPU, paměť, disky, síť) nebo na routeru (Wi-Fi, WAN, připojení klienti), nainstalujte na něj agenta.</p>
       </div>
-      <AgentSelector />
+      <AgentSelector lang="cs" />
     </div>
   </section>
 
@@ -106,31 +54,6 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
     </div>
   </section>
 
-  <script>
-    // Copy buttons logic
-    const copyBtns = document.querySelectorAll('.copy-btn-sm');
-    copyBtns.forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const targetId = btn.getAttribute('data-target');
-        const codeElement = document.getElementById(targetId);
-        if (!codeElement) return;
-
-        try {
-          await navigator.clipboard.writeText(codeElement.textContent);
-          btn.textContent = 'Zkopírováno!';
-          btn.style.borderColor = 'var(--up)';
-          btn.style.color = 'var(--up)';
-          setTimeout(() => {
-            btn.textContent = 'Kopírovat';
-            btn.style.borderColor = '';
-            btn.style.color = '';
-          }, 2000);
-        } catch (err) {
-          console.error(err);
-        }
-      });
-    });
-  </script>
 </Layout>
 
 <style>
@@ -161,147 +84,6 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
     margin-top: 0.3rem;
   }
 
-  .deploy-modes-grid {
-    align-items: stretch;
-  }
-
-  .deploy-card {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    height: 100%;
-  }
-
-  .deploy-header-box {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-  }
-
-  .d-icon {
-    font-size: 2.2rem;
-    background: var(--surface-2);
-    width: 50px;
-    height: 50px;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-  }
-
-  .deploy-header-box h3 {
-    font-size: 1.15rem;
-    font-weight: 700;
-  }
-
-  .deploy-header-box p {
-    font-size: 0.85rem;
-    color: var(--text-low);
-  }
-
-  /* Code container inside card */
-  .code-box {
-    position: relative;
-    background: #09090b;
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: var(--radius-sm);
-    padding: 1.2rem;
-  }
-
-  .code-box pre {
-    margin: 0;
-    overflow-x: auto;
-  }
-
-  .code-box code {
-    color: #f4f4f5;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-  }
-
-  .copy-btn-sm {
-    position: absolute;
-    right: 1rem;
-    top: 1rem;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.1);
-    color: #a1a1aa;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all var(--transition-fast);
-  }
-
-  .copy-btn-sm:hover {
-    color: #ffffff;
-    background: rgba(255,255,255,0.12);
-  }
-
-  .deploy-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    font-size: 0.9rem;
-    color: var(--text-mid);
-  }
-
-  .deploy-steps code {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.8rem;
-    font-family: var(--font-mono);
-    color: var(--text-hi);
-  }
-
-  /* LAMP manual styles */
-  .manual-steps {
-    gap: 0.8rem;
-  }
-
-  .manual-steps h4 {
-    font-size: 0.95rem;
-    font-weight: 700;
-  }
-
-  .manual-steps ul {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .manual-steps li {
-    font-size: 0.9rem;
-    padding-left: 1.2rem;
-    position: relative;
-    color: var(--text-mid);
-  }
-
-  .manual-steps li::before {
-    content: '•';
-    position: absolute;
-    left: 0;
-    color: var(--brand-500);
-    font-weight: 800;
-  }
-
-  .btn-full {
-    width: 100%;
-    margin-top: 0.5rem;
-  }
-
-  .manual-note {
-    font-size: 0.8rem;
-    color: var(--text-low);
-    text-align: center;
-  }
-
-  /* GitHub callout card */
   .github-cta-card {
     max-width: 900px;
     margin: 0 auto;
@@ -328,9 +110,6 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
   @media (max-width: 768px) {
     .page-header h1 {
       font-size: 2.25rem;
-    }
-    .grid-2 {
-      grid-template-columns: 1fr;
     }
   }
 </style>

@@ -117,6 +117,19 @@ jen vyberou jazyk. Pořadí sekcí:
    ARIA taby, odkaz na skript, odinstalace), **Co (zatím) neumí**, **FAQ**
    (details + FAQPage JSON-LD ze stejného slovníku), **Proč vznikl**.
 
+Instalace existuje jednou:
+
+- **Server** — `InstallServer.astro` (texty ve slovníku, klíč `server`): celý
+  návod na `/download/#server` a jako Rychlý start v dokumentaci, souhrn ve
+  čtyřech krocích v prvním kroku „Jak to funguje". Každé tlačítko Install vede
+  na `/download/#server`. Tvrzení o PHP a o instalátoru hlídá
+  `lib/install-server.test.ts`.
+- **Agenti** — kroky v `AgentSelector.astro` jsou kroky aplikace
+  (`apps/monitor/src/lib/agent-install.ts` přes `lib/agent-install.ts`) s
+  `https://YOUR-DOMAIN` a `YOUR_AGENT_KEY`; nic se nestahuje ze serveru autora.
+  Registrace tokenem a řešení potíží jen na stránce ke stažení
+  (`#agent-register`, `#agent-trouble`), na homepage odkaz.
+
 Screenshoty aplikace zatím záměrně nejsou; sekce jsou navržené tak, aby bez nich
 fungovaly, a nic nekreslí aplikaci s vymyšlenými čísly.
 

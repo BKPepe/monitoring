@@ -1,0 +1,358 @@
+---
+// InstallServer.astro - the one install guide for the central server.
+//
+// Home, /download/ and the docs used to give three different installs, none
+// of them complete (no /app, no release, the schema by hand). This component
+// is the only copy: variant="full" on /download/#server and as the docs Quick
+// Start, "summary" (four steps and a link to the full guide) in the home
+// page's "How it works". The words are in src/i18n (server), the commands
+// here: they are the same in both languages.
+//
+// The facts it states, each tied to the PHP by lib/install-server.test.ts:
+// config keys are read upper-case (get_setting in db.php), an empty CRON_KEY
+// leaves cron.php open over HTTP and the installer sets one, schema.sql
+// creates no account and the installer locks once one exists, and
+// collection_health answers lastRunAt and stale (api.php). The release ZIP
+// comes from .github/workflows/release.yml.
+import { MEASURED_INSTALL_MINUTES, RELEASE_SUMS_URL, RELEASE_ZIP_URL } from '../config';
+import { dicts, type Lang } from '../i18n';
+
+interface Props {
+  lang: Lang;
+  variant?: 'full' | 'summary';
+  /** The level of the step headings: 3 under an h2 (download, docs), 4 inside a card. */
+  headingLevel?: 3 | 4;
+}
+
+const { lang, variant = 'full', headingLevel = 3 } = Astro.props;
+const t = dicts[lang].server;
+const prefix = lang === 'cs' ? '/cs' : '';
+const Heading = `h${headingLevel}` as 'h3' | 'h4';
+
+const measured = MEASURED_INSTALL_MINUTES === null ? '—' : `${MEASURED_INSTALL_MINUTES} min`;
+const measuredNote = MEASURED_INSTALL_MINUTES === null ? t.timeUnmeasured : t.timeMeasured;
+
+// --recursive: the agents are a submodule, and the server serves them to
+// the routers from status/ (the https URL in .gitmodules needs no SSH key).
+const sourceBuild = [
+  'git clone --recursive https://github.com/BKPepe/monitoring.git',
+  'cd monitoring',
+  'npm ci',
+  'npm run build -w apps/monitor',
+  'cp agents/vps-agent/agent.sh agents/vps-agent/agent.py agents/vps-agent/agent.ps1 \\',
+  '   agents/vps-agent/agent_openwrt.sh agents/vps-agent/docker-compose.agent.yml apps/status/',
+].join('\n');
+
+const cronCommand = 'php -q /home/USER/public_html/status/cron.php >/dev/null 2>&1';
+
+// The five connection constants of config.sample.php, nothing invented.
+const configLines = [
+  "define('DB_HOST', 'localhost');",
+  "define('DB_PORT', 3306);",
+  "define('DB_NAME', 'YOUR_DB_NAME');",
+  "define('DB_USER', 'YOUR_DB_USER');",
+  "define('DB_PASS', 'YOUR_DB_PASSWORD');",
+].join('\n');
+---
+
+{
+  variant === 'summary' ? (
+    <div class="install-summary">
+      <ol class="summary-list" aria-label={t.summaryLabel}>
+        {t.summary.map((step) => (
+          <li>
+            <Heading>{step.title}</Heading>
+            <p>{step.text}</p>
+          </li>
+        ))}
+      </ol>
+      <p class="install-time">
+        {t.time}: <strong>{measured}</strong> <span>({measuredNote})</span>
+      </p>
+      <a class="summary-link" href={`${prefix}/download/#server`}>
+        {t.fullGuide} →
+      </a>
+    </div>
+  ) : (
+    <div class="install-server" data-copy={t.copy} data-copied={t.copied} data-copy-failed={t.copyFailed}>
+      <p class="install-time">
+        {t.time}: <strong>{measured}</strong> <span>({measuredNote})</span>
+      </p>
+      <ol class="install-steps">
+        <li>
+          <Heading>{t.req.title}</Heading>
+          <ul class="install-req">
+            {t.req.items.map((item) => (
+              <li>{item}</li>
+            ))}
+          </ul>
+          <p class="install-note">{t.req.where}</p>
+        </li>
+
+        <li>
+          <Heading>{t.upload.title}</Heading>
+          <div class="install-download">
+            <a class="btn btn-primary" href={RELEASE_ZIP_URL} data-release="download">
+              {t.upload.button}
+            </a>
+            <a class="install-sums" href={RELEASE_SUMS_URL}>
+              SHA256SUMS
+            </a>
+          </div>
+          <p
+            class="release-line"
+            data-release="line"
+            data-lang={lang}
+            data-word-line={t.upload.line}
+            data-word-none={t.upload.lineNone}
+            data-word-error={t.upload.lineError}
+            aria-live="polite"
+          >
+            {t.upload.line} —
+          </p>
+          <p>{t.upload.text}</p>
+          <div class="install-code"><pre tabindex="0"><code>sha256sum -c SHA256SUMS --ignore-missing</code></pre></div>
+          <p class="install-subhead">{t.upload.sourceTitle}</p>
+          <p>{t.upload.sourceText}</p>
+          <div class="install-code"><pre tabindex="0"><code>{sourceBuild}</code></pre></div>
+          <p>{t.upload.sourceAfter}</p>
+        </li>
+
+        <li>
+          <Heading>{t.db.title}</Heading>
+          <p>{t.db.text}</p>
+          <div class="install-code"><pre tabindex="0"><code>mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre></div>
+        </li>
+
+        <li>
+          <Heading>{t.config.title}</Heading>
+          <p>{t.config.text}</p>
+          <div class="install-code"><pre tabindex="0"><code>{configLines}</code></pre></div>
+          <p>{t.config.optional}</p>
+          <p class="install-note">{t.config.keep}</p>
+        </li>
+
+        <li>
+          <Heading>{t.cron.title}</Heading>
+          <p>{t.cron.text}</p>
+          {/* cPanel's Command field takes the command alone: the five stars
+              come from the schedule picker, and pasted in front they break it. */}
+          <div class="install-code"><pre tabindex="0"><code>{cronCommand}</code></pre></div>
+          <p>{t.cron.crontab}</p>
+          <div class="install-code"><pre tabindex="0"><code>{`* * * * * ${cronCommand}`}</code></pre></div>
+        </li>
+
+        <li>
+          <Heading>{t.admin.title}</Heading>
+          <p>{t.admin.text}</p>
+        </li>
+
+        <li>
+          <Heading>{t.check.title}</Heading>
+          <p>{t.check.text}</p>
+          <div class="install-code"><pre tabindex="0"><code>curl -s "https://YOUR-DOMAIN/status/api.php?action=collection_health"</code></pre></div>
+          <p>{t.check.after}</p>
+          <p>
+            {t.next} <a href={`${prefix}/download/#agents`}>{t.nextLink} →</a>
+          </p>
+        </li>
+      </ol>
+    </div>
+  )
+}
+
+<script>
+  import { addCopyButtons } from '../lib/copy-code';
+  import { fillReleaseInfo } from '../lib/release';
+
+  for (const guide of document.querySelectorAll<HTMLElement>('.install-server')) {
+    const { copy = 'Copy', copied = 'Copied', copyFailed = 'Copy failed' } = guide.dataset;
+    addCopyButtons(guide, '.install-code', { copy, copied, failed: copyFailed });
+  }
+  // The line under the download button: the latest release, "none yet", or
+  // "could not be loaded" - never a version written into the page.
+  if (document.querySelector('[data-release]')) fillReleaseInfo();
+</script>
+
+<style>
+  /* A download that does not exist yet is no call to action (V-21). */
+  .btn.is-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+    cursor: default;
+  }
+
+  /* --text-mid, not --text-low, for body-size text: dark --text-low on a
+     card is 3.8:1, under the 4.5:1 WCAG asks for (PA-3). */
+  .install-time {
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .install-time strong {
+    font-family: var(--font-mono);
+    color: var(--text-hi);
+  }
+
+  .install-steps {
+    list-style: decimal;
+    padding-left: 1.5rem;
+    display: grid;
+    gap: 2rem;
+    margin-top: 1.5rem;
+  }
+
+  .install-steps > li {
+    min-width: 0;
+  }
+
+  .install-steps > li::marker {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--brand-500);
+  }
+
+  .install-steps h3,
+  .install-steps h4 {
+    font-size: var(--text-lg);
+    font-weight: 700;
+    margin-bottom: 0.6rem;
+  }
+
+  .install-steps p {
+    margin-block: 0.6rem;
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .install-req {
+    list-style: disc;
+    padding-left: 1.25rem;
+    display: grid;
+    gap: 0.3rem;
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .install-note {
+    color: var(--text-mid);
+  }
+
+  .install-subhead {
+    font-weight: 700;
+    color: var(--text-hi) !important;
+    margin-top: 1.25rem !important;
+  }
+
+  .install-download {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+    margin-block: 0.5rem;
+  }
+
+  .install-sums {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: var(--text-sm);
+    color: var(--brand-500);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .release-line[data-state='none'],
+  .release-line[data-state='error'] {
+    border-left: 3px solid var(--warning);
+    padding-left: 0.75rem;
+  }
+
+  /* The <pre> scrolls, not this box: the copy button (lib/copy-code.ts)
+     sits in the box and must not scroll away with a long command. Dark in
+     both themes, like every code block (--surface-inset). */
+  .install-code {
+    position: relative;
+    margin-block: 0.6rem;
+    padding: 1rem 1.1rem;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  /* Room for the copy button; this scoped padding would otherwise beat the
+     layered .has-copy rule in global.css. */
+  .install-code:global(.has-copy) {
+    padding-top: 2.75rem;
+  }
+
+  .install-code pre {
+    overflow-x: auto;
+  }
+
+  .install-code pre:focus-visible {
+    outline: 2px solid var(--brand-500);
+    outline-offset: 2px;
+  }
+
+  .install-code code {
+    display: block;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    color: var(--code-text);
+    white-space: pre;
+  }
+
+  /* Summary: four short steps inside the home page's step card. */
+  .install-summary {
+    display: grid;
+    gap: 0.9rem;
+  }
+
+  .summary-list {
+    list-style: none;
+    counter-reset: summary;
+    display: grid;
+    gap: 0.75rem;
+    padding: 0;
+  }
+
+  .summary-list li {
+    counter-increment: summary;
+    display: grid;
+    grid-template-columns: 1.75rem minmax(0, 1fr);
+    column-gap: 0.6rem;
+  }
+
+  .summary-list li::before {
+    content: counter(summary);
+    grid-row: span 2;
+    display: grid;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-strong);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--brand-500);
+  }
+
+  .summary-list h3,
+  .summary-list h4 {
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+
+  .summary-list p {
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .summary-link {
+    width: fit-content;
+    font-weight: 600;
+    font-size: var(--text-sm);
+    color: var(--brand-500);
+  }
+</style>

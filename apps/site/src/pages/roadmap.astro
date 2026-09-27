@@ -16,8 +16,10 @@ import Layout from '../layouts/Layout.astro';
     <div class="container roadmap-grid-container">
       
       <!-- Milestone 0.1 -->
+      <!-- "Built", not "Released": the code is there, but no version has been published
+           yet, and the changelog and the download page say so. -->
       <div class="roadmap-milestone card completed">
-        <div class="milestone-status-tag tag-done">Released</div>
+        <div class="milestone-status-tag tag-done">Built</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.1.0-alpha</span>
           <h2>Base Monitoring Core</h2>
@@ -28,7 +30,7 @@ import Layout from '../layouts/Layout.astro';
             <span class="check-box">✓</span>
             <div class="task-info">
               <strong>Central PHP Server</strong>
-              <span>Web administration, SQLite/MySQL data schema, incident logging.</span>
+              <span>Web administration, MySQL/MariaDB data schema, incident logging.</span>
             </div>
           </li>
           <li class="checked">
@@ -57,7 +59,7 @@ import Layout from '../layouts/Layout.astro';
 
       <!-- Milestone 0.2 -->
       <div class="roadmap-milestone card completed">
-        <div class="milestone-status-tag tag-done">Released</div>
+        <div class="milestone-status-tag tag-done">Built</div>
         <div class="milestone-header">
           <span class="milestone-ver">v0.2.0</span>
           <h2>Advanced Metrics</h2>
@@ -154,15 +156,15 @@ import Layout from '../layouts/Layout.astro';
         <div class="milestone-status-tag tag-planned">Future</div>
         <div class="milestone-header">
           <span class="milestone-ver">v1.0.0</span>
-          <h2>Stable LTS Release</h2>
-          <p>Optimized and battle-tested for enterprise workloads.</p>
+          <h2>Stable Release</h2>
+          <p>The first release that promises compatibility between versions.</p>
         </div>
         <ul class="roadmap-checklist">
           <li>
             <span class="check-box">○</span>
             <div class="task-info">
-              <strong>Long-Term Support (LTS)</strong>
-              <span>Guaranteed stable APIs and security maintenance updates for 2 years.</span>
+              <strong>Stable API and Upgrade Path</strong>
+              <span>A stable API and a documented upgrade path from one release to the next.</span>
             </div>
           </li>
           <li>

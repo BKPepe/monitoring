@@ -38,13 +38,13 @@ import Layout from '../layouts/Layout.astro';
       try {
         const releases = await fetchReleases();
         if (releases.length === 0) {
-          showFallback();
+          showState('none');
         } else {
           renderTimeline(releases);
         }
       } catch (e) {
-        console.warn('Could not load changelog, falling back to static release info.', e);
-        showFallback();
+        console.warn('Could not load the changelog.', e);
+        showState('error');
       } finally {
         loader?.classList.add('is-hidden');
         timeline?.classList.remove('is-hidden');
@@ -92,37 +92,36 @@ import Layout from '../layouts/Layout.astro';
       });
     }
 
-    function showFallback() {
+    // No release yet, or the list could not be loaded: two different answers,
+    // and neither invents a version. A made-up "v0.1.0-alpha" card with a date
+    // stood here; no such release ever existed (site W1-4). Static strings
+    // only, so innerHTML carries nothing from the network.
+    function showState(kind: 'none' | 'error') {
       const timeline = document.getElementById('changelog-timeline');
       if (!timeline) return;
+      const text =
+        kind === 'none'
+          ? {
+              title: 'No release yet',
+              body: 'No version has been released yet. The code is developed in the open, and the first release will appear here with its notes.',
+              link: 'See the commits on GitHub',
+              href: 'https://github.com/BKPepe/monitoring/commits/main',
+            }
+          : {
+              title: 'The release list could not be loaded',
+              body: 'The server that reads the releases from GitHub did not answer, so this page cannot say what was released. The releases themselves are on GitHub.',
+              link: 'Open the releases on GitHub',
+              href: 'https://github.com/BKPepe/monitoring/releases',
+            };
 
       timeline.innerHTML = `
-        <div class="timeline-item">
-          <div class="timeline-badge" aria-hidden="true">🔥</div>
-          <div class="timeline-card card">
-            <div class="release-header">
-              <span class="badge badge-accent">v0.1.0-alpha</span>
-              <h2>Initial Alpha Release</h2>
-              <span class="release-date">July 16, 2026</span>
-            </div>
-            <div class="release-body">
-              <p>Initial public release of Blood Kings Monitoring.</p>
-              <ul>
-                <li>Self-hosted monitoring server with a rapid setup process.</li>
-                <li>Remote probing daemons for Linux, Windows, and Docker.</li>
-                <li>Public status pages leveraging caching for isolated load pools.</li>
-                <li>SMTP Email and Discord webhook alerts on outage thresholds.</li>
-                <li>Full IPv4 and IPv6 network stack support.</li>
-              </ul>
-            </div>
+        <div class="timeline-item" data-state="${kind}">
+          <div class="timeline-badge" aria-hidden="true">${kind === 'none' ? '🕓' : '⚠️'}</div>
+          <div class="timeline-card card" role="${kind === 'none' ? 'status' : 'alert'}">
+            <div class="release-header"><h2>${text.title}</h2></div>
+            <div class="release-body"><p>${text.body}</p></div>
             <div class="release-footer">
-              <div class="author-info">
-                <span class="author-avatar" aria-hidden="true">BK</span>
-                <span>Released by <strong>BKPepe</strong></span>
-              </div>
-              <a href="https://github.com/BKPepe/monitoring" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
-                View on GitHub
-              </a>
+              <a href="${text.href}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">${text.link}</a>
             </div>
           </div>
         </div>
@@ -134,6 +133,10 @@ import Layout from '../layouts/Layout.astro';
 </Layout>
 
 <style>
+  /* The cards and the no-release/error state are written by the script with
+     innerHTML, so they carry no scoped-style attribute: scoped rules missed
+     them, and the state card sat off the rail with a display-size heading
+     (V-21). The rules reach them through the scoped list instead. */
   .page-header {
     background: radial-gradient(circle at 50% 100%, var(--surface-1) 0%, transparent 60%);
     border-bottom: 1px solid var(--border);
@@ -194,12 +197,12 @@ import Layout from '../layouts/Layout.astro';
     gap: 3rem;
   }
 
-  .timeline-item {
+  .changelog-timeline-list :global(.timeline-item) {
     position: relative;
   }
 
   /* Timeline badge circle */
-  .timeline-badge {
+  .changelog-timeline-list :global(.timeline-badge) {
     position: absolute;
     left: -2.5rem;
     top: 1.5rem;
@@ -217,14 +220,14 @@ import Layout from '../layouts/Layout.astro';
     box-shadow: var(--shadow-sm);
   }
 
-  .timeline-card {
+  .changelog-timeline-list :global(.timeline-card) {
     background: var(--surface-1);
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
   }
 
-  .release-header {
+  .changelog-timeline-list :global(.release-header) {
     border-bottom: 1px solid var(--border);
     padding-bottom: 1.2rem;
     display: flex;
@@ -232,18 +235,18 @@ import Layout from '../layouts/Layout.astro';
     gap: 0.5rem;
   }
 
-  .release-header h2 {
+  .changelog-timeline-list :global(.release-header h2) {
     font-size: 1.6rem;
     font-weight: 800;
   }
 
-  .release-date {
+  .changelog-timeline-list :global(.release-date) {
     font-size: 0.85rem;
     color: var(--text-low);
   }
 
   /* Markdown body parsing display styles */
-  .release-body {
+  .changelog-timeline-list :global(.release-body) {
     font-size: 0.95rem;
     color: var(--text-mid);
     line-height: 1.7;
@@ -252,23 +255,23 @@ import Layout from '../layouts/Layout.astro';
     gap: 0.8rem;
   }
 
-  .release-body :global(ul) {
+  .changelog-timeline-list :global(.release-body ul) {
     padding-left: 1.5rem;
     margin: 0.5rem 0;
   }
 
-  .release-body :global(li) {
+  .changelog-timeline-list :global(.release-body li) {
     margin-bottom: 0.4rem;
   }
 
-  .release-body :global(h3) {
+  .changelog-timeline-list :global(.release-body h3) {
     font-size: 1.1rem;
     color: var(--text-hi);
     margin-top: 1rem;
   }
 
   /* Card footer author and links */
-  .release-footer {
+  .changelog-timeline-list :global(.release-footer) {
     border-top: 1px solid var(--border);
     padding-top: 1.2rem;
     display: flex;
@@ -278,7 +281,7 @@ import Layout from '../layouts/Layout.astro';
     gap: 1rem;
   }
 
-  .author-info {
+  .changelog-timeline-list :global(.author-info) {
     display: flex;
     align-items: center;
     gap: 0.6rem;
@@ -287,7 +290,7 @@ import Layout from '../layouts/Layout.astro';
   }
 
   /* Monogram místo avataru z GitHubu — žádný externí obrázek. */
-  .author-avatar {
+  .changelog-timeline-list :global(.author-avatar) {
     display: grid;
     place-items: center;
     width: 28px;
@@ -300,7 +303,7 @@ import Layout from '../layouts/Layout.astro';
     color: var(--text-mid);
   }
 
-  .author-info strong a {
+  .changelog-timeline-list :global(.author-info strong a) {
     color: var(--text-hi);
   }
 
@@ -311,7 +314,7 @@ import Layout from '../layouts/Layout.astro';
     .timeline-container::before {
       display: none;
     }
-    .timeline-badge {
+    .changelog-timeline-list :global(.timeline-badge) {
       display: none;
     }
   }

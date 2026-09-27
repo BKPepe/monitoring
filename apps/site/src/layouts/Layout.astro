@@ -1,7 +1,7 @@
 ---
 import Logo from '../components/Logo.astro';
 import ThemeScript from '../components/ThemeScript.astro';
-import { GITHUB_REPO_URL } from '../config';
+import { demoUrl, GITHUB_REPO_URL } from '../config';
 import { alternates, dicts, langFromPath, withSlash } from '../i18n';
 import { BUILD } from '../lib/build-info';
 import '../styles/global.css';
@@ -49,8 +49,10 @@ const nav = [
 const isCurrent = (href: string) => !href.includes('#') && withSlash(href) === currentPath;
 
 const home = `${prefix}/`;
-const install = `${prefix}/#install`;
-const LIVE_STATUS_URL = 'https://bloodkings.eu/app/public';
+// The full install guide, server first (the agent tabs alone left it out).
+const install = `${prefix}/download/#server`;
+// ?lang: the app reads it on the first visit, so the demo opens in the page's language.
+const LIVE_STATUS_URL = demoUrl(lang);
 
 // "</script>" inside a string would end the element early.
 const graph =

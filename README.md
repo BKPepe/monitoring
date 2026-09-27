@@ -44,6 +44,16 @@ admin panel: monitors, notifications (email/SMS/WhatsApp/Discord/Slack/Telegram)
 VPS agents, and a Prometheus exporter. Installation guide in
 [apps/status/README.md](apps/status/README.md).
 
+**Install on your own hosting:** PHP 8.2+, MySQL/MariaDB and a cron job every
+minute. The step-by-step guide is at
+[monitoring.bloodkings.eu/download/#server](https://monitoring.bloodkings.eu/download/#server)
+(the same guide as the site's docs Quick Start: one component,
+`apps/site/src/components/InstallServer.astro`, with its words in
+`apps/site/src/i18n`). Each release attaches
+`bloodkings-monitoring.zip` (`status/` with the agents + the built `app/`, no
+`config.php`) and `SHA256SUMS`; the newest one is always at
+`https://github.com/BKPepe/monitoring/releases/latest/download/bloodkings-monitoring.zip`.
+
 **Language:** the public landing page (`apps/site`) ships in English and Czech
 (`/cs/`). The self-hosted dashboard (`apps/status`) and the React app
 (`apps/monitor`) are fully bilingual too — Czech and English (`?lang=cs|en` on
@@ -82,11 +92,11 @@ The worker aggregates, filters and caches (1 hour) requests to the GitHub API to
 stay under rate limits:
 
 *   `GET /api/stats` — Aggregated repo stats (stars, forks, contributors, issues).
-*   `GET /api/versions` — Latest release of the monitoring server.
+*   `GET /api/versions` — Latest release of the monitoring server (`monitoring: null` before the first release).
 *   `GET /api/agents` — Agent versions read from the published scripts (null + 503 when unreadable).
 *   `GET /api/changelog` — Version history formatted for a timeline.
 *   `GET /api/status` — Proxies status and response times of the main monitoring nodes.
-*   `GET /api/test?url=<url>` — Real speed test (ping) of a given address from the Cloudflare network (used by the Playground).
+*   `GET /api/test?url=<url>` — One HTTP GET to the given address from Cloudflare's edge: status code, response time and redirect target (used by the Playground).
 
 ---
 
@@ -154,7 +164,7 @@ psalm --taint-analysis --no-cache
 ## 📈 Design goals
 *   **Performance:** 100/100 on Lighthouse metrics via static Astro compilation with no heavy client-side JS framework, responsive from 360px to 4K.
 *   **Premium design:** minimal, dark-mode-first, red used only as an accent, smooth Vercel-style animations.
-*   **Interactive elements:** a dashboard widget fed by live data from the status API (with an honest error state when the API is unreachable), an interactive SVG agent map, and a working ping-test console (Playground) that measures a real round-trip from the Cloudflare network.
+*   **Interactive elements:** a dashboard widget fed by live data from the status API (with an honest error state when the API is unreachable), an interactive SVG agent map, and a playground that runs one real HTTP check from Cloudflare's edge and shows only what it measured (status, time, redirect target).
 
 ## License
 

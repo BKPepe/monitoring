@@ -10,10 +10,11 @@ import Layout from '../../layouts/Layout.astro';
 import AgentSelector from '../AgentSelector.astro';
 import Dashboard from '../Dashboard.astro';
 import Icon from '../Icon.astro';
+import InstallServer from '../InstallServer.astro';
 import Map from '../Map.astro';
 import Playground from '../Playground.astro';
 import RouterDiagram from './RouterDiagram.astro';
-import { GITHUB_REPO_URL } from '../../config';
+import { demoUrl, GITHUB_REPO_URL } from '../../config';
 import { dicts, type Lang } from '../../i18n';
 import type { IconName } from '../../lib/icons';
 
@@ -24,7 +25,10 @@ const { lang } = Astro.props;
 const t = dicts[lang].home;
 const prefix = lang === 'cs' ? '/cs' : '';
 const SITE = 'https://monitoring.bloodkings.eu';
-const LIVE_STATUS_URL = 'https://bloodkings.eu/app/public';
+const LIVE_STATUS_URL = demoUrl(lang);
+// Every "Install" button opens the full guide, server first; the agents come
+// after it on the same page (the agent tabs alone left the server out).
+const INSTALL_URL = `${prefix}/download/#server`;
 const AGENTS_README = 'https://github.com/BKPepe/monitoring-agent#what-019-made-lighter-openwrt';
 
 const pageUrl = `${SITE}${prefix}/`;
@@ -75,7 +79,7 @@ const pill = { available: t.watches.available, partial: t.watches.partial, plann
         </h1>
         <p class="lead">{t.hero.sub}</p>
         <div class="hero-ctas">
-          <a href="#install" class="btn btn-primary btn-lg">{t.hero.ctaInstall}</a>
+          <a href={INSTALL_URL} class="btn btn-primary btn-lg">{t.hero.ctaInstall}</a>
           <a href={LIVE_STATUS_URL} class="btn btn-secondary btn-lg" rel="noopener">{t.hero.ctaLive}</a>
           <a href={GITHUB_REPO_URL} class="btn btn-ghost btn-lg" rel="noopener">{t.hero.ctaGithub}</a>
         </div>
@@ -215,12 +219,15 @@ const pill = { available: t.watches.available, partial: t.watches.partial, plann
       <ol class="steps">
         {
           t.how.steps.map((s, i) => (
-            <li class:list={['step', { 'step-wide': s.code }]}>
+            <li class:list={['step', { 'step-wide': i === 0 || s.code }]}>
               <span class="step-num" aria-hidden="true">
                 {String(i + 1).padStart(2, '0')}
               </span>
               <h3>{s.title}</h3>
               <p>{s.body}</p>
+              {/* The server step is the install guide's summary: the one guide,
+                  not a second copy of its commands. */}
+              {i === 0 && <InstallServer lang={lang} variant="summary" headingLevel={4} />}
               {s.code && (
                 <pre><code>{s.code}</code></pre>
               )}
@@ -244,7 +251,7 @@ const pill = { available: t.watches.available, partial: t.watches.partial, plann
         <h2 id="install-title">{t.install.title}</h2>
         <p class="lead">{t.install.lead}</p>
       </div>
-      <AgentSelector lang={lang} />
+      <AgentSelector lang={lang} variant="compact" />
     </div>
   </section>
 
@@ -296,7 +303,7 @@ const pill = { available: t.watches.available, partial: t.watches.partial, plann
           <h2 id="story-title">{t.story.title}</h2>
           {t.story.body.map((p) => <p>{p}</p>)}
           <div class="story-ctas">
-            <a class="btn btn-primary" href="#install">{t.hero.ctaInstall}</a>
+            <a class="btn btn-primary" href={INSTALL_URL}>{t.hero.ctaInstall}</a>
             <a class="btn btn-ghost" href={`${prefix}/about/`}>{t.story.link}</a>
           </div>
         </div>

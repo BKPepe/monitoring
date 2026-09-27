@@ -1,84 +1,80 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import DocsNav from '../components/DocsNav.astro';
+import InstallServer from '../components/InstallServer.astro';
+
+const groups = [
+  {
+    title: 'Getting Started',
+    links: [
+      { href: '#quickstart', label: 'Quick Start' },
+      { href: '#requirements', label: 'Requirements' },
+      { href: '#architecture', label: 'Architecture' },
+    ],
+  },
+  {
+    title: 'Central Server',
+    links: [
+      { href: '#server-config', label: 'Database Config' },
+      { href: '#server-env', label: 'Keys & Tokens' },
+      { href: '#server-status', label: 'Status Pages' },
+    ],
+  },
+  {
+    title: 'Reliability',
+    links: [
+      { href: '#heartbeat', label: 'Heartbeat Monitors' },
+      { href: '#watchdog', label: 'Watchdog' },
+    ],
+  },
+  {
+    title: 'Agents',
+    links: [
+      { href: '#agent-install', label: 'Agent Registration' },
+      { href: '#agent-config', label: 'Interval Tweaks' },
+      { href: '#agent-trouble', label: 'Troubleshooting' },
+    ],
+  },
+];
 ---
 
 <Layout title="Documentation | Blood Kings Monitoring" description="Official documentation for installing, configuring, and managing Blood Kings Monitoring server and remote probing agents.">
   <div class="docs-layout-container container">
-    <!-- Sidebar Doc Links -->
-    <aside class="docs-sidebar">
-      <div class="docs-sidebar-section">
-        <p class="sidebar-heading">Getting Started</p>
-        <a href="#quickstart" class="sidebar-link active">Quick Start</a>
-        <a href="#requirements" class="sidebar-link">Requirements</a>
-        <a href="#architecture" class="sidebar-link">Architecture</a>
-      </div>
-      <div class="docs-sidebar-section">
-        <p class="sidebar-heading">Central Server</p>
-        <a href="#server-config" class="sidebar-link">Database Config</a>
-        <a href="#server-env" class="sidebar-link">Environment Vars</a>
-        <a href="#server-status" class="sidebar-link">Status Pages</a>
-      </div>
-      <div class="docs-sidebar-section">
-        <p class="sidebar-heading">Reliability</p>
-        <a href="#heartbeat" class="sidebar-link">Heartbeat Monitors</a>
-        <a href="#watchdog" class="sidebar-link">Watchdog</a>
-      </div>
-      <div class="docs-sidebar-section">
-        <p class="sidebar-heading">Agents</p>
-        <a href="#agent-install" class="sidebar-link">Agent Registration</a>
-        <a href="#agent-config" class="sidebar-link">Interval Tweaks</a>
-        <a href="#agent-trouble" class="sidebar-link">Troubleshooting</a>
-      </div>
-    </aside>
+    <DocsNav groups={groups} label="On this page" />
 
     <!-- Docs Content Area -->
-    <div class="docs-main-content">
+    <div class="docs-main-content" data-copy="Copy" data-copied="Copied" data-copy-failed="Copy failed">
       <header class="docs-head">
         <h1>Documentation</h1>
         <p class="docs-intro">Install the server, add monitors and connect agents.</p>
       </header>
-      <!-- Section 1 -->
+      <!-- Section 1: the one install guide (components/InstallServer.astro), the same as /download/#server. -->
       <section id="quickstart" class="docs-section">
         <span class="badge badge-accent">Developer Guide</span>
         <h2>Quick Start</h2>
-        <p>This guide takes you from an empty PHP host to a running Blood Kings Monitoring server.</p>
-        
-        <h3>Step 1: Start Central Server</h3>
-        <p>The server is plain PHP with a MySQL or MariaDB database - there is no image to pull. Download the code, fill in the database connection and import the schema:</p>
-        <div class="docs-code-wrapper">
-          <pre><code>git clone https://github.com/BKPepe/monitoring.git &amp;&amp; cd monitoring/apps/status
-cp config.sample.php config.php    # DB_HOST, DB_NAME, DB_USER, DB_PASS
-mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
-        </div>
-        <p>Upload the contents of <code>apps/status/</code> to <code>public_html/status/</code> and run the collector from cron every minute:</p>
-        <div class="docs-code-wrapper">
-          <pre><code>* * * * * php -q /path/to/status/cron.php &gt;/dev/null 2&gt;&amp;1</code></pre>
-        </div>
-        <p>The dashboard at <code>/app</code> is a separate front end: build it once with <code>npm ci &amp;&amp; npm run build:monitor</code> and upload <code>apps/monitor/dist/</code> to <code>public_html/app/</code>. Then open <code>/app/setup</code> on your domain and create the first administrator account.</p>
+        <p>This sets up the central server on ordinary PHP web hosting. It is the same guide as on the <a href="/download/#server">download page</a>.</p>
+        <InstallServer lang="en" />
 
-        <h3>Step 2: Add Your First Monitor</h3>
-        <p>Log in to your admin panel and use the <strong>Add monitor</strong> button above the monitors table. You can track URLs (HTTPS), TCP ports, Minecraft/TeamSpeak/Discord servers, VPS host metrics, or <a href="#heartbeat">heartbeats</a> from jobs that report in on their own. Note: the legacy PHP admin (<code>admin.php</code>) is mostly Czech; the <code>/app</code> dashboard is in English and Czech.</p>
+        <h3>Then: your first monitor</h3>
+        <p>In the app, open <strong>Infrastructure → Add New Monitor</strong>. You can track websites (HTTP/HTTPS), TCP ports, Minecraft, TeamSpeak and Discord servers, servers and OpenWrt routers with an agent, or <a href="#heartbeat">heartbeats</a> from jobs that report in on their own. The legacy PHP admin (<code>admin.php</code>) is mostly Czech; the <code>/app</code> dashboard is in English and Czech.</p>
       </section>
 
       <!-- Section 2 -->
       <section id="requirements" class="docs-section">
         <hr class="docs-divider" />
         <h2>System Requirements</h2>
-        <p>Blood Kings is built to run on lightweight hardware profiles (e.g. Raspberry Pis, micro cloud nodes).</p>
-        
+        <p>The central server is plain PHP and runs on ordinary shared web hosting; a VPS works too. What the hosting must offer is step 1 of the <a href="#quickstart">Quick Start</a>.</p>
+
         <h4>Central Server:</h4>
         <ul>
-          <li><strong>CPU:</strong> 1 vCPU (x86_64 or ARM64)</li>
-          <li><strong>Memory:</strong> 128 MB RAM (256 MB recommended)</li>
           <li><strong>Storage:</strong> the application plus a MySQL/MariaDB database that grows with your check history</li>
-          <li><strong>Software:</strong> PHP 8.2+ (CI runs 8.4), Apache or Nginx with URL rewriting, and MySQL or MariaDB. The server runs without Docker; only the Python agent has a Docker option.</li>
+          <li><strong>Software:</strong> PHP 8.2+ (CI runs 8.4), Apache with <code>.htaccess</code> and <code>mod_rewrite</code>, and MySQL or MariaDB. The server runs without Docker; only the Python agent has a Docker option.</li>
         </ul>
 
         <h4>Remote Agent:</h4>
         <ul>
-          <li><strong>OS:</strong> Linux (any system with Bash and Curl), Windows 10/11/Server, OpenWrt/Turris OS, or Raspberry Pi OS</li>
-          <li><strong>Memory:</strong> Under 10 MB RAM footprint</li>
-          <li><strong>Network:</strong> Outgoing HTTPS access (port 443) targeting your central server URL</li>
+          <li><strong>OS:</strong> Linux (any system with Bash, or Python 3), Windows 10/11/Server, OpenWrt/Turris OS, or Raspberry Pi OS</li>
+          <li><strong>Network:</strong> Outgoing HTTPS access (port 443) to your central server; nothing inbound</li>
         </ul>
       </section>
 
@@ -86,22 +82,22 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
       <section id="architecture" class="docs-section">
         <hr class="docs-divider" />
         <h2>Architecture Overview</h2>
-        <p>Blood Kings combines active pings (server-side polling) and passive telemetry reports (pushed from agents).</p>
-        
+        <p>Blood Kings combines active checks run by the server and reports that agents push to it.</p>
+
         <div class="architecture-diagram card">
           <div class="arch-block">
             <strong>Remote Agent</strong>
-            <span>(Linux/Windows/Docker)</span>
+            <span>(Linux, OpenWrt, Windows, Docker)</span>
             <span class="arrow">↓ HTTPS POST (Metrics)</span>
           </div>
           <div class="arch-block highlight">
             <strong>Central Server</strong>
             <span>(PHP / MySQL or MariaDB)</span>
-            <span class="arrow">↓ Render Static API</span>
+            <span class="arrow">↓ JSON API</span>
           </div>
           <div class="arch-block">
             <strong>Public Status Page</strong>
-            <span>(HTML / cached JSON)</span>
+            <span>(the app at /app/public)</span>
           </div>
         </div>
 
@@ -113,37 +109,35 @@ mysql -u YOUR_DB_USER -p YOUR_DB_NAME &lt; schema.sql</code></pre>
         </p>
       </section>
 
-      <!-- Central Server Sections -->
+      <!-- Central Server Sections. The connection itself is written once, in the Quick Start. -->
       <section id="server-config" class="docs-section">
         <hr class="docs-divider" />
         <h2>Central Server Database Config</h2>
-        <p>Blood Kings Monitoring connects to standard MySQL or MariaDB database servers using PDO. Configure your database details inside <code>status/config.php</code>:</p>
+        <p>The server connects to MySQL or MariaDB through PDO. The installer at <code>/app/setup</code> writes the connection into <code>status/config.php</code> (step 4 of the <a href="#quickstart">Quick Start</a>, which also shows the manual way). <code>config.sample.php</code> explains every other constant; the one most installs change is the time zone, which PHP and the database session then share:</p>
         <div class="docs-code-wrapper">
-          <pre><code>define('DB_HOST', '127.0.0.1');
-define('DB_NAME', 'bloodkings_status');
-define('DB_USER', 'bloodkings_user');
-define('DB_PASS', 'YourStrongPassword123!');
-define('TIMEZONE', 'Europe/Prague');</code></pre>
+          <pre tabindex="0"><code>define('TIMEZONE', 'Europe/Prague');</code></pre>
         </div>
       </section>
 
       <section id="server-env" class="docs-section">
         <hr class="docs-divider" />
-        <h2>Environment Variables & Tokens</h2>
-        <p>Essential security keys can be configured directly in <code>config.php</code> or via environment variables:</p>
+        <h2>Keys & Tokens</h2>
+        <p>Three optional keys. Each is read as a constant in <code>config.php</code> (in capitals), then as an environment variable, then from the app's <strong>Settings</strong>; the first one found wins.</p>
         <ul>
-          <li><code>cron_key</code>: Secret key authorizing <code>cron.php</code> execution from external webhooks or timers.</li>
-          <li><code>agent_registration_token</code>: Shared secret authorizing automatic agent auto-registration.</li>
-          <li><code>metrics_token</code>: Bearer token protecting Prometheus <code>metrics.php</code> endpoint.</li>
+          <li><code>CRON_KEY</code>: the key <code>cron.php</code> asks for when it is called over HTTP (<code>?key=...</code>). While it is empty, anyone who knows the address can start a collection run; the command-line cron needs no key. The installer gives every new install its own.</li>
+          <li><code>AGENT_REGISTRATION_TOKEN</code>: lets the Bash and OpenWrt agents register themselves (<code>--register</code>). While it is empty, the server accepts <code>CRON_KEY</code> in its place.</li>
+          <li><code>METRICS_TOKEN</code>: the bearer token for the Prometheus endpoint <code>metrics.php</code>. While it is empty, the endpoint is off.</li>
         </ul>
+        <div class="docs-code-wrapper">
+          <pre tabindex="0"><code>define('CRON_KEY', 'a-long-random-string');</code></pre>
+        </div>
       </section>
 
       <section id="server-status" class="docs-section">
         <hr class="docs-divider" />
-        <h2>Public Status Pages & Branding</h2>
-        <p>Customize public status pages directly inside the Admin Panel (Settings -> Branding). You can upload a custom logo, set accent color themes, and configure 24h / 7d / 30d SLA aggregation caching.</p>
+        <h2>Public Status Pages</h2>
+        <p>Create status pages in the app under <strong>Status Pages</strong>: each has its own title, address (<code>/app/public?page=…</code>) and set of monitors, and can be hidden from the public. Visitors can subscribe to incident updates by e-mail there, and each page has an SVG badge to embed.</p>
       </section>
-
       <!-- Agent Sections -->
       <section id="heartbeat" class="docs-section">
         <hr class="docs-divider" />
@@ -180,17 +174,18 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
       <section id="agent-install" class="docs-section">
         <hr class="docs-divider" />
         <h2>Agent Registration & Setup</h2>
-        <p>Agents are self-contained scripts for Bash, Python, PowerShell and OpenWrt routers. The Bash and OpenWrt agents register themselves: pass the registration token from the admin settings and the address of your server's <code>agent_api.php</code>. The agent stores the key it receives in <code>agent.cfg</code> next to the script (<code>agent_openwrt.cfg</code> on a router).</p>
+        <p>Agents are self-contained scripts for Bash, Python, PowerShell and OpenWrt routers. The <a href="/download/#agents">download page</a> has the steps for every platform: the same ones the app prints when you add a monitor, there with your address and key filled in.</p>
+        <p>For many machines, the Bash and OpenWrt agents can register themselves with the registration token (see <a href="#server-env">Keys & Tokens</a>). Both arguments are positional, and the second one is your server's <code>agent_api.php</code>:</p>
         <div class="docs-code-wrapper">
-          <pre><code>./agent.sh --register YOUR_REGISTRATION_TOKEN https://bloodkings.eu/status/agent_api.php</code></pre>
+          <pre tabindex="0"><code>/opt/bk-agent/agent.sh --register YOUR_REGISTRATION_TOKEN https://YOUR-DOMAIN/status/agent_api.php</code></pre>
         </div>
-        <p>Both arguments are positional; without the address the agent registers against its <code>localhost</code> default. The Python and PowerShell agents have no register command: put <code>API_URL</code> and the <code>AGENT_KEY</code> from the monitor's settings into <code>agent.cfg</code>. The <a href="/download#install-guide">download page</a> has the full steps for every platform.</p>
+        <p>Without the address the agent registers against its <code>localhost</code> default. It stores the key it receives in <code>agent.cfg</code> next to the script (<code>agent_openwrt.cfg</code> on a router). The Python and PowerShell agents have no register command: they take <code>API_URL</code> and the <code>AGENT_KEY</code> from the monitor's settings in <code>agent.cfg</code>. <a href="/download/#agent-register">More on registration</a>.</p>
       </section>
 
       <section id="agent-config" class="docs-section">
         <hr class="docs-divider" />
         <h2>Agent Intervals & Remote Actions</h2>
-        <p>Agents run from cron: every 5 minutes on servers, every minute on OpenWrt routers. For OpenWrt routers, opt-in HMAC-signed Remote Actions can be enabled by setting <code>REMOTE_ACTIONS_ENABLED=1</code> in the agent script.</p>
+        <p>Agents run from cron: every 5 minutes on servers, every minute on OpenWrt routers. For OpenWrt routers, opt-in HMAC-signed Remote Actions can be enabled by setting <code>REMOTE_ACTIONS_ENABLED=1</code> in <code>agent_openwrt.cfg</code> next to the script.</p>
       </section>
 
       <section id="agent-trouble" class="docs-section">
@@ -198,13 +193,23 @@ define('TIMEZONE', 'Europe/Prague');</code></pre>
         <h2>Agent Troubleshooting</h2>
         <p>If an agent stops reporting telemetry, verify outgoing HTTPS access to port 443, then run it by hand and read its log (it sits next to the script):</p>
         <div class="docs-code-wrapper">
-          <pre><code># One run with the full trace, then the last lines of the log
-/opt/bk-agent/agent.sh --verbose
+          <pre tabindex="0"><code>/opt/bk-agent/agent.sh --verbose
 tail -n 50 /opt/bk-agent/agent.log</code></pre>
         </div>
+        <p>The <a href="/download/#agent-trouble">download page</a> has the same checks for OpenWrt, Windows and Docker.</p>
       </section>
     </div>
   </div>
+
+  <script>
+    import { addCopyButtons } from '../lib/copy-code';
+
+    const docs = document.querySelector<HTMLElement>('.docs-main-content');
+    if (docs) {
+      const { copy = 'Copy', copied = 'Copied', copyFailed = 'Copy failed' } = docs.dataset;
+      addCopyButtons(docs, '.docs-code-wrapper', { copy, copied, failed: copyFailed });
+    }
+  </script>
 </Layout>
 
 <style>
@@ -214,50 +219,6 @@ tail -n 50 /opt/bk-agent/agent.log</code></pre>
     gap: 4rem;
     padding-top: 4rem;
     padding-bottom: 6rem;
-  }
-
-  /* Sidebar Links */
-  .docs-sidebar {
-    position: sticky;
-    top: calc(var(--header-height) + 2rem);
-    height: fit-content;
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-  }
-
-  .docs-sidebar-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .docs-sidebar-section .sidebar-heading {
-    font-size: 0.85rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-hi);
-    margin-bottom: 0.5rem;
-  }
-
-  .sidebar-link {
-    font-size: 0.9rem;
-    color: var(--text-mid);
-    padding: 0.25rem 0;
-    border-left: 2px solid transparent;
-    padding-left: 1rem;
-    margin-left: -2px;
-  }
-
-  .sidebar-link:hover {
-    color: var(--text-hi);
-  }
-
-  .sidebar-link.active {
-    color: var(--brand-500);
-    font-weight: 600;
-    border-color: var(--brand-500);
   }
 
   /* Content styles */
@@ -320,18 +281,35 @@ tail -n 50 /opt/bk-agent/agent.log</code></pre>
     margin-bottom: 4rem;
   }
 
-  /* Code wraps */
+  /* Code wraps. The <pre> scrolls, not the wrapper: the copy button
+     (lib/copy-code.ts) sits in the wrapper and must not scroll away with a
+     long command. Dark in both themes, like every code block. */
   .docs-code-wrapper {
-    background: #09090b;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    position: relative;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
     padding: 1.2rem;
     border-radius: var(--radius-sm);
     margin: 1rem 0;
+  }
+
+  /* Room for the copy button; this scoped padding would otherwise beat the
+     layered .has-copy rule in global.css. */
+  .docs-code-wrapper:global(.has-copy) {
+    padding-top: 2.75rem;
+  }
+
+  .docs-code-wrapper pre {
     overflow-x: auto;
   }
 
+  .docs-code-wrapper pre:focus-visible {
+    outline: 2px solid var(--brand-500);
+    outline-offset: 2px;
+  }
+
   .docs-code-wrapper code {
-    color: #f4f4f5;
+    color: var(--code-text);
     font-family: var(--font-mono);
     font-size: 0.8rem;
   }
@@ -383,13 +361,11 @@ tail -n 50 /opt/bk-agent/agent.log</code></pre>
     font-weight: 600;
   }
 
+  /* Below 992 px DocsNav swaps the sidebar for an "On this page" menu. */
   @media (max-width: 992px) {
     .docs-layout-container {
       grid-template-columns: minmax(0, 1fr);
-      gap: 2.5rem;
-    }
-    .docs-sidebar {
-      display: none;
+      gap: 2rem;
     }
   }
 </style>
