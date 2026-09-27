@@ -3191,8 +3191,14 @@ if ($logged_in) {
     foreach ($nl_sum['summary']['last24h']['byChannel'] ?? [] as $c) {
         $nl_by[$c['channel']] = $c;
     }
-    check('souhrn rozpadá 24 h po kanálech', $nl_by['email'] ?? null, ['channel' => 'email', 'total' => 3, 'failed' => 1]);
-    check('včetně kanálu, kde selhalo všechno', $nl_by['discord'] ?? null, ['channel' => 'discord', 'total' => 1, 'failed' => 1]);
+    // The invitation went through mail() (fallback): handed over, nobody
+    // confirmed it, so it is unknown - neither sent nor failed.
+    check('souhrn rozpadá 24 h po kanálech', $nl_by['email'] ?? null,
+        ['channel' => 'email', 'total' => 3, 'sent' => 1, 'unknown' => 1, 'failed' => 1]);
+    check('včetně kanálu, kde selhalo všechno', $nl_by['discord'] ?? null,
+        ['channel' => 'discord', 'total' => 1, 'sent' => 0, 'unknown' => 0, 'failed' => 1]);
+    check('souhrn za 24 h rozliší potvrzené od nepotvrzeného',
+        [$nl_sum['summary']['last24h']['sent'] ?? null, $nl_sum['summary']['last24h']['unknown'] ?? null], [1, 1]);
     [, $nl_sum_f] = api_get_auth($base, 'action=notification_log&summary=1&kind=invitation', $cookie_jar);
     check('filtr zúží tabulku', count($nl_sum_f['entries'] ?? []), 1);
     check('ale souhrn ne - jinak by pruh mlčel kvůli filtru', $nl_sum_f['summary']['last24h']['failed'] ?? null, 2);
@@ -3215,6 +3221,64 @@ if ($logged_in) {
     [, $nl_day] = api_get_auth($base, 'action=notification_log&from=2026-01-15&to=2026-01-15', $cookie_jar);
     check('holé datum v to znamená celý den', count($nl_day['entries'] ?? []), 1);
     check('a je to ten řádek', $nl_day['entries'][0]['recipient'] ?? null, 'historik@example.com');
+    $pdo->exec("DELETE FROM notification_log");
+
+    // --- Delivery: what a row may claim ------------------------------------
+    // ok = 1 used to be "sent" whatever it meant. Rows from before the
+    // delivery column are derived when read, never better than they proved:
+    // WhatsApp's ok was any HTTP 2xx and mail() fallback only a hand-off.
+    // [kanál, ok, způsob, stav, uložené delivery, odpověď, očekávané delivery]
+    $nl_dv_cases = [
+        'wa_legacy_ok' => ['whatsapp', 1, null, 'down', null, null, 'unknown'],
+        'wa_legacy_fail' => ['whatsapp', 0, null, 'down', null, null, 'failed'],
+        'mail_legacy_smtp' => ['email', 1, 'smtp', 'digest', null, null, 'sent'],
+        'mail_legacy_fallback' => ['email', 1, 'fallback', 'digest', null, null, 'unknown'],
+        'mail_legacy_nomethod' => ['email', 1, null, 'digest', null, null, 'unknown'],
+        'discord_legacy_ok' => ['discord', 1, null, 'down', null, null, 'sent'],
+        'reminder_skipped' => ['none', 1, null, 'skipped', null, null, 'skipped'],
+        'wa_recorded_sent' => ['whatsapp', 1, null, 'up', 'sent', 'Message queued. You have 0 Messages left', 'sent'],
+        'wa_recorded_unknown' => ['whatsapp', 1, null, 'up', 'unknown', null, 'unknown'],
+        'wa_recorded_failed' => ['whatsapp', 0, null, 'up', 'failed', 'Your Account is Paused', 'failed'],
+    ];
+    foreach ($nl_dv_cases as $nl_dv_key => $c) {
+        $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, method, delivery, provider_reply, subject)
+                       VALUES (NULL, ?, ?, NULL, ?, 'alert', ?, ?, ?, ?)")
+            ->execute([$c[3], $c[0], $c[1], $c[2], $c[4], $c[5], $nl_dv_key]);
+    }
+    [, $nl_dv] = api_get_auth($base, 'action=notification_log&limit=50', $cookie_jar);
+    $nl_dv_by = [];
+    foreach ($nl_dv['entries'] ?? [] as $e) {
+        $nl_dv_by[(string)$e['subject']] = $e;
+    }
+    foreach ($nl_dv_cases as $nl_dv_key => $c) {
+        check("delivery {$nl_dv_key}", $nl_dv_by[$nl_dv_key]['delivery'] ?? null, $c[6]);
+        check("deliveryRecorded {$nl_dv_key}", $nl_dv_by[$nl_dv_key]['deliveryRecorded'] ?? null, $c[4] !== null);
+    }
+    check('řádek nese slova poskytovatele', $nl_dv_by['wa_recorded_failed']['providerReply'] ?? null, 'Your Account is Paused');
+    check_true('a starý řádek žádná nemá',
+        array_key_exists('providerReply', $nl_dv_by['wa_legacy_ok'] ?? []) && $nl_dv_by['wa_legacy_ok']['providerReply'] === null);
+
+    [, $nl_dvf] = api_get_auth($base, 'action=notification_log&limit=50&delivery=' . rawurlencode('failed,unknown'), $cookie_jar);
+    $nl_dvf_keys = array_map(fn ($e) => (string)$e['subject'], $nl_dvf['entries'] ?? []);
+    sort($nl_dvf_keys);
+    check('filtr delivery=failed,unknown bere i odvozené hodnoty', $nl_dvf_keys,
+        ['mail_legacy_fallback', 'mail_legacy_nomethod', 'wa_legacy_fail', 'wa_legacy_ok', 'wa_recorded_failed', 'wa_recorded_unknown']);
+    [, $nl_dvs] = api_get_auth($base, 'action=notification_log&limit=50&delivery=sent', $cookie_jar);
+    check('delivery=sent vrátí jen potvrzené', count($nl_dvs['entries'] ?? []), 3);
+    [$nl_dv_bad] = api_get_auth($base, 'action=notification_log&delivery=' . rawurlencode('sent,delivered'), $cookie_jar);
+    check('neznámá hodnota delivery je 400, ne tiše širší odpověď', $nl_dv_bad, 400);
+    [$nl_dv_inj] = api_get_auth($base, 'action=notification_log&delivery=' . rawurlencode("sent') OR 1=1 -- "), $cookie_jar);
+    check('a podvržený SQL v delivery taky', $nl_dv_inj, 400);
+
+    [, $nl_dv_sum] = api_get_auth($base, 'action=notification_log&summary=1', $cookie_jar);
+    $nl_dv_24 = $nl_dv_sum['summary']['last24h'] ?? [];
+    check('souhrn: tichý den připomínky není pokus o odeslání',
+        [$nl_dv_24['total'] ?? null, $nl_dv_24['sent'] ?? null, $nl_dv_24['unknown'] ?? null, $nl_dv_24['failed'] ?? null],
+        [9, 3, 4, 2]);
+    $nl_dv_ch = array_column($nl_dv_24['byChannel'] ?? [], null, 'channel');
+    check('kanál jen s přeskočenými řádky v rozpadu není', isset($nl_dv_ch['none']), false);
+    check('WhatsApp v rozpadu', $nl_dv_ch['whatsapp'] ?? null,
+        ['channel' => 'whatsapp', 'total' => 5, 'sent' => 1, 'unknown' => 2, 'failed' => 2]);
     $pdo->exec("DELETE FROM notification_log");
 
     // Every status change is stored as kind 'alert', so the kind alone named

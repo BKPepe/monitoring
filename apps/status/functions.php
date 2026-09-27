@@ -7687,6 +7687,26 @@ function bk_notification_kinds(): array {
 }
 
 /**
+ * The delivery result of a notification_log row as SQL, for rows of every age.
+ *
+ * Rows written before the delivery column have NULL there. They are never
+ * backfilled; the answer is derived when read, and it may not claim more than
+ * those rows proved: ok = 1 on WhatsApp was any HTTP 2xx and on e-mail without
+ * SMTP a mail() that returned true, so both read as unknown, never as sent.
+ * One helper, so the list, its filter and the counts cannot disagree.
+ */
+function bk_notification_delivery_sql(string $alias): string {
+    $a = preg_match('/^[a-z_][a-z0-9_]*$/i', $alias) ? $alias . '.' : '';
+    return "COALESCE({$a}delivery, CASE
+        WHEN {$a}status = 'skipped' THEN 'skipped'
+        WHEN {$a}ok = 0 THEN 'failed'
+        WHEN {$a}channel = 'whatsapp' THEN 'unknown'
+        WHEN {$a}channel = 'email' AND ({$a}method IS NULL OR {$a}method = 'fallback') THEN 'unknown'
+        ELSE 'sent'
+    END)";
+}
+
+/**
  * How much went out over the last $hours and how much of it failed, per channel.
  *
  * A function of its own so the suite can call it with known rows, and because
@@ -7703,26 +7723,36 @@ function bk_notification_kinds(): array {
  */
 function bk_notification_summary(PDO $pdo, int $hours): array {
     $hours = max(1, $hours);
-    $result = ['total' => 0, 'failed' => 0, 'byChannel' => []];
+    $result = ['total' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0, 'byChannel' => []];
 
+    // total counts attempts, so the reminder's quiet-day rows (skipped) stay
+    // out: nothing was attempted. sent is only what a provider confirmed.
+    $delivery = bk_notification_delivery_sql('n');
     $stmt = $pdo->prepare("
-        SELECT channel, COUNT(*) AS total, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed
-        FROM notification_log
-        WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+        SELECT channel,
+               SUM(CASE WHEN d <> 'skipped' THEN 1 ELSE 0 END) AS total,
+               SUM(CASE WHEN d = 'sent' THEN 1 ELSE 0 END) AS sent,
+               SUM(CASE WHEN d = 'unknown' THEN 1 ELSE 0 END) AS unknown,
+               SUM(CASE WHEN d = 'failed' THEN 1 ELSE 0 END) AS failed
+        FROM (
+            SELECT n.channel, {$delivery} AS d
+            FROM notification_log n
+            WHERE n.created_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+        ) x
         GROUP BY channel
         ORDER BY total DESC, channel ASC
     ");
     $stmt->execute([$hours]);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $total = (int)$row['total'];
-        $failed = (int)$row['failed'];
-        $result['total'] += $total;
-        $result['failed'] += $failed;
-        $result['byChannel'][] = [
-            'channel' => (string)$row['channel'],
-            'total' => $total,
-            'failed' => $failed,
-        ];
+        $counts = [];
+        foreach (['total', 'sent', 'unknown', 'failed'] as $k) {
+            $counts[$k] = (int)$row[$k];
+            $result[$k] += $counts[$k];
+        }
+        if ($counts['total'] === 0) {
+            continue;
+        }
+        $result['byChannel'][] = ['channel' => (string)$row['channel']] + $counts;
     }
 
     return $result;

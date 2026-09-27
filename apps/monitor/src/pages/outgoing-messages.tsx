@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { AlertOctagon, CircleX, RefreshCw, Search, Send, SlidersHorizontal } from 'lucide-react';
+import { AlertOctagon, CircleHelp, CircleX, RefreshCw, Search, Send, SlidersHorizontal } from 'lucide-react';
 import { appApi } from '@/api/app-api';
-import type { OutgoingMessage, OutgoingMessagePage } from '@/api/types';
+import type { Delivery, OutgoingMessage, OutgoingMessagePage } from '@/api/types';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { PageHeader } from '@/components/layout/page-header';
@@ -14,7 +14,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { channelLabel, kindLabel, methodLabel } from '@/lib/outgoing-message';
+import { channelLabel, deliveryLabel, deliveryOf, kindLabel, methodLabel } from '@/lib/outgoing-message';
+import { cn } from '@/lib/utils';
+
+/** Badge colour per result. Unconfirmed is amber: nobody knows it arrived, and green would say it did. */
+const DELIVERY_BADGE: Record<Delivery, 'up' | 'warning' | 'down' | 'neutral'> = {
+  sent: 'up',
+  unknown: 'warning',
+  failed: 'down',
+  skipped: 'neutral',
+};
 
 /** One screen of the log. Enough to cover a busy day without a second request. */
 const PAGE_SIZE = 50;
@@ -26,7 +35,7 @@ const PAGE_SIZE = 50;
  */
 function failuresInLastDay(entries: OutgoingMessage[]): number {
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  return entries.filter((e) => !e.ok && new Date(e.atIso).getTime() >= dayAgo).length;
+  return entries.filter((e) => deliveryOf(e) === 'failed' && new Date(e.atIso).getTime() >= dayAgo).length;
 }
 
 /**
@@ -227,11 +236,21 @@ export function OutgoingMessagesPage() {
       {/* A dash, not a zero: without a summary from the server nothing was
           measured here, and "0 sent" would be an invented answer. */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {/* Sent is what a provider confirmed; unconfirmed has a tile of its own
+            instead of hiding among them. An older server sends neither, and
+            then the tiles show a dash. */}
         <StatBlock
           variant="card"
           icon={Send}
-          label={t('outgoing.stat_24h_total', 'Odesláno za 24 h')}
-          value={summary ? summary.last24h.total : null}
+          label={t('outgoing.stat_24h_sent', 'Odesláno za 24 h')}
+          value={summary?.last24h.sent ?? null}
+        />
+        <StatBlock
+          variant="card"
+          icon={CircleHelp}
+          label={t('outgoing.stat_24h_unknown', 'Nepotvrzeno za 24 h')}
+          value={summary?.last24h.unknown ?? null}
+          tone={(summary?.last24h.unknown ?? 0) > 0 ? 'warning' : null}
         />
         <StatBlock
           variant="card"
@@ -239,12 +258,6 @@ export function OutgoingMessagesPage() {
           label={t('outgoing.stat_24h_failed', 'Neodesláno za 24 h')}
           value={summary ? summary.last24h.failed : null}
           tone={summary && summary.last24h.failed > 0 ? 'down' : null}
-        />
-        <StatBlock
-          variant="card"
-          icon={Send}
-          label={t('outgoing.stat_7d_total', 'Odesláno za 7 dní')}
-          value={summary ? summary.last7d.total : null}
         />
         <StatBlock
           variant="card"
@@ -296,7 +309,7 @@ export function OutgoingMessagesPage() {
             aria-pressed={failedOnly}
             onClick={() => setFailedOnly((v) => !v)}
           >
-            {t('outgoing.filter_failed_only', 'Jen neodeslané')}
+            {t('outgoing.filter_failed_only', 'Jen neodeslané a nepotvrzené')}
           </Button>
 
           <form
@@ -361,41 +374,46 @@ export function OutgoingMessagesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {entries.map((e) => (
-                  // A failed row is tinted as well as badged: in a screenful of
-                  // rows the eye finds the colour first and the badge second.
-                  <TableRow key={e.id} className={e.ok ? undefined : 'bg-down/10'}>
-                    <TableCell className="text-muted-foreground figure whitespace-nowrap">
-                      {new Date(e.atIso).toLocaleString(locale)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">{kindLabel(e.kind, t, e.alertTone, e.status)}</TableCell>
-                    <TableCell>
-                      <Badge variant="neutral">{channelLabel(e.channel, t)}</Badge>
-                    </TableCell>
-                    <TableCell className="figure max-w-[14rem] truncate">{e.recipient ?? '—'}</TableCell>
-                    <TableCell className="hidden max-w-[18rem] truncate md:table-cell">{e.subject ?? '—'}</TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {/* A skipped row is not a delivery: the daily reminder writes one
+                {entries.map((e) => {
+                  const d = deliveryOf(e);
+                  return (
+                    // A failed or unconfirmed row is tinted as well as badged: in a
+                    // screenful of rows the eye finds the colour first.
+                    <TableRow
+                      key={e.id}
+                      className={d === 'failed' ? 'bg-down/10' : d === 'unknown' ? 'bg-warning/10' : undefined}
+                    >
+                      <TableCell className="text-muted-foreground figure whitespace-nowrap">
+                        {new Date(e.atIso).toLocaleString(locale)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">{kindLabel(e.kind, t, e.alertTone, e.status)}</TableCell>
+                      <TableCell>
+                        <Badge variant="neutral">{channelLabel(e.channel, t)}</Badge>
+                      </TableCell>
+                      <TableCell className="figure max-w-[14rem] truncate">{e.recipient ?? '—'}</TableCell>
+                      <TableCell className="hidden max-w-[18rem] truncate md:table-cell">{e.subject ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {/* A skipped row is not a delivery: the daily reminder writes one
                           every quiet day so the silence is provable. Painting it green
                           "Odesláno" would claim a message nobody ever received. */}
-                      <Badge variant={e.status === 'skipped' ? 'neutral' : e.ok ? 'up' : 'down'}>
-                        {e.status === 'skipped'
-                          ? t('outgoing.result_skipped', 'Neodesláno, nebylo co hlásit')
-                          : e.ok
-                            ? t('outgoing.result_sent', 'Odesláno')
-                            : t('outgoing.result_failed', 'Neodesláno')}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-down hidden max-w-[16rem] truncate lg:table-cell">
-                      {e.ok ? '' : (e.error ?? t('outgoing.no_error_text', 'kanál zprávu nepřijal'))}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => setDetail(e)}>
-                        {t('outgoing.detail', 'Detail')}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                        <Badge variant={DELIVERY_BADGE[d]}>{deliveryLabel(d, t)}</Badge>
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          d === 'failed' ? 'text-down' : 'text-warning',
+                          'hidden max-w-[16rem] truncate lg:table-cell'
+                        )}
+                      >
+                        {d === 'failed' || d === 'unknown' ? <DeliveryReason entry={e} delivery={d} /> : ''}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="sm" onClick={() => setDetail(e)}>
+                          {t('outgoing.detail', 'Detail')}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
 
@@ -432,20 +450,36 @@ export function OutgoingMessagesPage() {
               <div className="flex gap-2">
                 <dt className="text-muted-foreground w-40 shrink-0">{t('outgoing.col_result', 'VÝSLEDEK')}</dt>
                 <dd>
-                  <Badge variant={detail.ok ? 'up' : 'down'}>
-                    {detail.ok ? t('outgoing.result_sent', 'Odesláno') : t('outgoing.result_failed', 'Neodesláno')}
-                  </Badge>
+                  <Badge variant={DELIVERY_BADGE[deliveryOf(detail)]}>{deliveryLabel(deliveryOf(detail), t)}</Badge>
                 </dd>
               </div>
-              {!detail.ok && (
+              {(deliveryOf(detail) === 'failed' || deliveryOf(detail) === 'unknown') && (
                 <div className="flex gap-2">
-                  <dt className="text-muted-foreground w-40 shrink-0">{t('outgoing.col_error', 'CHYBA')}</dt>
-                  <dd className="text-down break-words">
-                    {detail.error ?? t('outgoing.no_error_text', 'kanál zprávu nepřijal')}
+                  <dt className="text-muted-foreground w-40 shrink-0">{t('outgoing.detail_reason', 'DŮVOD')}</dt>
+                  <dd className={cn(deliveryOf(detail) === 'failed' ? 'text-down' : 'text-warning', 'break-words')}>
+                    <DeliveryReason entry={detail} delivery={deliveryOf(detail)} />
                   </dd>
                 </div>
               )}
+              <DetailRow
+                label={t('outgoing.detail_reply', 'ODPOVĚĎ POSKYTOVATELE')}
+                value={detail.providerReply ?? null}
+              />
               <p className="text-muted-foreground pt-2 text-2xs">
+                {t(
+                  'outgoing.detail_sent_means',
+                  'Odesláno = poskytovatel převzetí potvrdil; doručení do telefonu či schránky nepotvrzuje.'
+                )}
+              </p>
+              {deliveryOf(detail) !== 'skipped' && detail.deliveryRecorded !== true && (
+                <p className="text-muted-foreground text-2xs">
+                  {t(
+                    'outgoing.detail_legacy',
+                    'Záznam je starší než ukládání odpovědi poskytovatele: výsledek je odvozený z toho, zda kanál zprávu odmítl, a ze způsobu odeslání; slova poskytovatele se u něj neuložila.'
+                  )}
+                </p>
+              )}
+              <p className="text-muted-foreground text-2xs">
                 {t('outgoing.detail_no_body', 'Obsah zprávy se neukládá, protokol drží jen předmět a výsledek.')}
               </p>
             </dl>
@@ -453,6 +487,19 @@ export function OutgoingMessagesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** Why a row failed or is unconfirmed; a row with no recorded reason still says which of the two it is. */
+function DeliveryReason({ entry, delivery }: { entry: OutgoingMessage; delivery: Delivery }) {
+  const { t } = useLanguage();
+  if (entry.error) return <>{entry.error}</>;
+  return (
+    <>
+      {delivery === 'failed'
+        ? t('outgoing.no_error_text', 'kanál zprávu nepřijal')
+        : t('outgoing.no_reason_unknown', 'nikdo převzetí nepotvrdil')}
+    </>
   );
 }
 

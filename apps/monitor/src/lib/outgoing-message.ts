@@ -4,7 +4,7 @@
  * Shared by the log page and the per-monitor card on a monitor's detail, so
  * the same kind cannot be called two different things in two places.
  */
-import type { AlertTone } from '@/api/types';
+import type { AlertTone, Delivery } from '@/api/types';
 
 /**
  * What the message was, in two words.
@@ -67,4 +67,25 @@ export function methodLabel(method: string | null, t: (key: string, fallback?: s
   if (method === 'smtp') return t('outgoing.method_smtp', 'ověřené SMTP');
   if (method === 'fallback') return t('outgoing.method_fallback', 'místní doručovatel');
   return method;
+}
+
+/**
+ * What is known about a row's delivery.
+ *
+ * The quiet reminder day is `skipped` whatever else it says. A server that
+ * sends no `delivery` (an older deploy) knows only `ok`, which covered an
+ * unconfirmed hand-off too - so it reads as unknown or failed, never as sent.
+ */
+export function deliveryOf(e: { status: string | null; ok: boolean; delivery?: Delivery }): Delivery {
+  if (e.status === 'skipped') return 'skipped';
+  if (e.delivery) return e.delivery;
+  return e.ok ? 'unknown' : 'failed';
+}
+
+/** The result in words: what the badge on the page and the detail say. */
+export function deliveryLabel(d: Delivery, t: (key: string, fallback?: string) => string): string {
+  if (d === 'sent') return t('outgoing.result_sent', 'Odesláno');
+  if (d === 'unknown') return t('outgoing.result_unknown', 'Nepotvrzeno');
+  if (d === 'skipped') return t('outgoing.result_skipped', 'Neodesláno, nebylo co hlásit');
+  return t('outgoing.result_failed', 'Neodesláno');
 }

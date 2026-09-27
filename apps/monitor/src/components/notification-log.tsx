@@ -4,8 +4,16 @@ import { Panel } from '@/components/ui/panel';
 import { Pill } from '@/components/ui/pill';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
-import type { AlertTone } from '@/api/types';
-import { kindLabel } from '@/lib/outgoing-message';
+import type { AlertTone, Delivery } from '@/api/types';
+import { deliveryLabel, deliveryOf, kindLabel } from '@/lib/outgoing-message';
+
+/** Pill colour per result. Unconfirmed is amber: nobody knows it arrived, and green would say it did. */
+const DELIVERY_TONE: Record<Delivery, 'up' | 'warning' | 'down' | 'neutral'> = {
+  sent: 'up',
+  unknown: 'warning',
+  failed: 'down',
+  skipped: 'neutral',
+};
 
 interface Entry {
   id: number;
@@ -17,6 +25,8 @@ interface Entry {
   channel: string;
   recipient: string | null;
   ok: boolean;
+  /** Missing from an older server; `ok` is then read as unknown or failed, never as sent. */
+  delivery?: Delivery;
   error: string | null;
   atIso: string;
 }
@@ -56,7 +66,8 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
   if (!isAdmin || entries === null) return null;
 
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
-  const failed = entries.filter((e) => !e.ok).length;
+  const failed = entries.filter((e) => deliveryOf(e) === 'failed').length;
+  const unconfirmed = entries.filter((e) => deliveryOf(e) === 'unknown').length;
 
   return (
     <Panel
@@ -64,10 +75,19 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
       title={t('notif.title', 'Odeslané notifikace')}
       hint={t('notif.desc', 'Co o tomhle monitoru odešlo, kterým kanálem a jestli to kanál přijal.')}
       chip={
-        failed > 0 ? (
-          <Pill tone="down" dot>
-            {t('notif.failed', { n: failed }, `${failed} neodesláno`)}
-          </Pill>
+        failed > 0 || unconfirmed > 0 ? (
+          <span className="flex flex-wrap gap-1.5">
+            {failed > 0 && (
+              <Pill tone="down" dot>
+                {t('notif.failed', { n: failed }, `${failed} neodesláno`)}
+              </Pill>
+            )}
+            {unconfirmed > 0 && (
+              <Pill tone="warning" dot>
+                {t('notif.unconfirmed', { n: unconfirmed }, `${unconfirmed} nepotvrzeno`)}
+              </Pill>
+            )}
+          </span>
         ) : undefined
       }
       bodyClassName="space-y-3"
@@ -78,36 +98,48 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
         </p>
       ) : (
         <ul className="flex flex-col">
-          {entries.map((e) => (
-            <li
-              key={e.id}
-              className="border-border flex flex-wrap items-center gap-x-3 gap-y-1 border-b py-2 text-xs last:border-0"
-            >
-              <span className="text-muted-foreground figure w-36 shrink-0 text-2xs">
-                {new Date(e.atIso).toLocaleString(locale)}
-              </span>
-              <Pill tone={e.ok ? 'up' : 'down'} size="sm">
-                {e.channel}
-              </Pill>
-              {/* What kind of message it was. Alerts are no longer the only
+          {entries.map((e) => {
+            const d = deliveryOf(e);
+            return (
+              <li
+                key={e.id}
+                className="border-border flex flex-wrap items-center gap-x-3 gap-y-1 border-b py-2 text-xs last:border-0"
+              >
+                <span className="text-muted-foreground figure w-36 shrink-0 text-2xs">
+                  {new Date(e.atIso).toLocaleString(locale)}
+                </span>
+                {/* The colour repeats the result; the words are in the pill's label. */}
+                <Pill tone={DELIVERY_TONE[d]} size="sm" srLabel={`${e.channel}: ${deliveryLabel(d, t)}`}>
+                  {e.channel}
+                </Pill>
+                {/* What kind of message it was. Alerts are no longer the only
                   thing logged, so "down" alone stopped being the whole story;
                   a row written before the kind existed simply has none. */}
-              {e.kind && (
-                <span className="text-muted-foreground shrink-0 text-2xs">
-                  {kindLabel(e.kind, t, e.alertTone, e.status)}
+                {e.kind && (
+                  <span className="text-muted-foreground shrink-0 text-2xs">
+                    {kindLabel(e.kind, t, e.alertTone, e.status)}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 truncate">
+                  {e.status}
+                  {e.recipient ? <span className="text-muted-foreground font-mono"> · {e.recipient}</span> : null}
                 </span>
-              )}
-              <span className="min-w-0 flex-1 truncate">
-                {e.status}
-                {e.recipient ? <span className="text-muted-foreground font-mono"> · {e.recipient}</span> : null}
-              </span>
-              {!e.ok && (
-                <span className="text-down text-2xs">
-                  {e.error ?? t('notif.not_delivered', 'kanál zprávu nepřijal')}
-                </span>
-              )}
-            </li>
-          ))}
+                {d === 'failed' && (
+                  <span className="text-down text-2xs">
+                    {e.error ?? t('notif.not_delivered', 'kanál zprávu nepřijal')}
+                  </span>
+                )}
+                {/* A 2xx from CallMeBot or a mail() hand-off used to show green here
+                  while nothing arrived. Unconfirmed says so, and why. */}
+                {d === 'unknown' && (
+                  <span className="text-warning text-2xs">
+                    {deliveryLabel(d, t)}
+                    {e.error ? `: ${e.error}` : ''}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </Panel>

@@ -908,6 +908,14 @@ export interface SpeedtestMeasurement {
 /** Severity class of an alert row, derived from its status by the server (`bk_alert_color_class`). */
 export type AlertTone = 'good' | 'warn' | 'bad';
 
+/**
+ * What is known about one delivery. `sent` = the provider confirmed it took the
+ * message (not that it reached the phone or the mailbox), `failed` = refused
+ * or unreachable, `unknown` = nobody confirmed anything, `skipped` = nothing
+ * was due (the daily reminder's quiet day).
+ */
+export type Delivery = 'sent' | 'failed' | 'unknown' | 'skipped';
+
 export interface OutgoingMessage {
   id: number;
   /** `null` for messages that are not about one monitor (invitation, digest). */
@@ -928,16 +936,29 @@ export interface OutgoingMessage {
   subject: string | null;
   /** E-mail only: `smtp` = a server acknowledged it, `fallback` = handed to the local mailer. */
   method: string | null;
+  /** Not refused. It is NOT "sent": a hand-off nobody confirmed is ok too - see `delivery`. */
   ok: boolean;
+  /** Missing from an older server; the page then reads `ok` as unknown or failed, never as sent. */
+  delivery?: Delivery;
+  /** False for a row written before the result was recorded: its `delivery` is derived, not reported. */
+  deliveryRecorded?: boolean;
+  /** The provider's own words (CallMeBot's reply, the SMTP queue id), without the message itself. */
+  providerReply?: string | null;
+  /** Why it failed, or why it is unconfirmed. */
   error: string | null;
   atIso: string;
 }
 
 /** Counts over one time window, as the log's `summary` returns them. */
 export interface OutgoingMessageWindow {
+  /** Attempts; the reminder's quiet-day rows are not counted. */
   total: number;
+  /** Confirmed by the provider. Missing from an older server. */
+  sent?: number;
+  /** Nobody confirmed them. Missing from an older server. */
+  unknown?: number;
   failed: number;
-  byChannel: { channel: string; total: number; failed: number }[];
+  byChannel: { channel: string; total: number; sent?: number; unknown?: number; failed: number }[];
 }
 
 /** A page of the log plus the values the filters offer. */

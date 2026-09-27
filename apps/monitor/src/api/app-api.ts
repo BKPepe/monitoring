@@ -403,9 +403,10 @@ export const appApi = {
     if (params.monitorId) q.set('monitor_id', String(params.monitorId));
     if (params.kind) q.set('kind', params.kind);
     if (params.channel) q.set('channel', params.channel);
-    // Only "failures only" is a filter; "successes only" answers no question
-    // anybody asks of this page.
-    if (params.failedOnly) q.set('ok', '0');
+    // Only "not confirmed" is a filter; "successes only" answers no question
+    // anybody asks of this page. Unknown belongs with failed: nobody knows
+    // that message arrived either.
+    if (params.failedOnly) q.set('delivery', 'failed,unknown');
     if (params.q) q.set('q', params.q);
     if (params.beforeId) q.set('before_id', String(params.beforeId));
     if (params.limit) q.set('limit', String(params.limit));

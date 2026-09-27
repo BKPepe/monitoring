@@ -1942,6 +1942,23 @@ if ($action === 'notification_log') {
         exit;
     }
 
+    // delivery=failed,unknown - the known results only. A value outside them
+    // is a 400: a filter that dropped it silently would answer a wider
+    // question than the one asked. Only the whitelist's own strings are bound.
+    $nl_delivery_known = ['sent', 'failed', 'unknown', 'skipped'];
+    $nl_delivery = [];
+    $nl_delivery_raw = trim((string)($_GET['delivery'] ?? ''));
+    if ($nl_delivery_raw !== '') {
+        $nl_delivery_asked = array_map('trim', explode(',', $nl_delivery_raw));
+        if (array_diff($nl_delivery_asked, $nl_delivery_known) !== []) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Parametr delivery smí obsahovat jen sent, failed, unknown a skipped.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $nl_delivery = array_values(array_intersect($nl_delivery_known, $nl_delivery_asked));
+    }
+    $nl_delivery_sql = bk_notification_delivery_sql('n');
+
     // A time bound that cannot be parsed must not quietly become "no bound":
     // the answer would then hold more rows than the administrator asked for
     // and still look like the complete one.
@@ -1983,6 +2000,10 @@ if ($action === 'notification_log') {
         $nl_where[] = 'n.ok = ?';
         $nl_params[] = (int)$nl_ok;
     }
+    if ($nl_delivery !== []) {
+        $nl_where[] = "{$nl_delivery_sql} IN (" . implode(', ', array_fill(0, count($nl_delivery), '?')) . ')';
+        array_push($nl_params, ...$nl_delivery);
+    }
     if ($nl_range['from'] !== null) {
         $nl_where[] = 'n.created_at >= ?';
         $nl_params[] = $nl_range['from'];
@@ -2010,6 +2031,7 @@ if ($action === 'notification_log') {
         $stmt = $pdo->prepare("
             SELECT n.id, n.monitor_id, n.kind, n.status, n.channel, n.recipient, n.subject,
                    n.method, n.ok, n.error_message, n.created_at,
+                   {$nl_delivery_sql} AS delivery_read, n.delivery AS delivery_stored, n.provider_reply,
                    m.name AS monitor_name
             FROM notification_log n
             LEFT JOIN monitors m ON m.id = n.monitor_id
@@ -2043,7 +2065,14 @@ if ($action === 'notification_log') {
                 // The subject is the only part of a message ever stored.
                 'subject' => $r['subject'],
                 'method' => $r['method'],
+                // ok = not refused; delivery says how much is known beyond
+                // that. A row from before delivery was recorded gets it derived
+                // (deliveryRecorded false), and never better than unknown for
+                // channels that could not confirm anything then.
                 'ok' => (bool)$r['ok'],
+                'delivery' => (string)$r['delivery_read'],
+                'deliveryRecorded' => $r['delivery_stored'] !== null,
+                'providerReply' => $r['provider_reply'],
                 'error' => $r['error_message'],
                 'atIso' => date('c', strtotime((string)$r['created_at'])),
             ];

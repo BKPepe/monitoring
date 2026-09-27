@@ -40,6 +40,9 @@ const row = (over: Partial<OutgoingMessage> = {}): OutgoingMessage => ({
   subject: 'Výpadek: Router - Praha',
   method: 'smtp',
   ok: true,
+  delivery: 'sent',
+  deliveryRecorded: true,
+  providerReply: '250 queued as 4ABC123',
   error: null,
   atIso: new Date().toISOString(),
   ...over,
@@ -51,8 +54,8 @@ const page = (over: Partial<OutgoingMessagePage> = {}): OutgoingMessagePage => (
   kinds: ['alert', 'daily_reminder'],
   channels: ['email', 'discord'],
   summary: {
-    last24h: { total: 1, failed: 0, byChannel: [{ channel: 'email', total: 1, failed: 0 }] },
-    last7d: { total: 9, failed: 0, byChannel: [{ channel: 'email', total: 9, failed: 0 }] },
+    last24h: { total: 1, sent: 1, unknown: 0, failed: 0, byChannel: [{ channel: 'email', total: 1, failed: 0 }] },
+    last7d: { total: 9, sent: 9, unknown: 0, failed: 0, byChannel: [{ channel: 'email', total: 9, failed: 0 }] },
   },
   ...over,
 });
@@ -135,7 +138,7 @@ describe('Odchozí zprávy', () => {
     serve(() =>
       json(
         page({
-          entries: [row({ id: 2, ok: false, error: 'SMTP connect() failed', channel: 'email' })],
+          entries: [row({ id: 2, ok: false, delivery: 'failed', error: 'SMTP connect() failed', channel: 'email' })],
           summary: {
             last24h: { total: 3, failed: 1, byChannel: [{ channel: 'email', total: 3, failed: 1 }] },
             last7d: { total: 20, failed: 1, byChannel: [{ channel: 'email', total: 20, failed: 1 }] },
@@ -155,7 +158,9 @@ describe('Odchozí zprávy', () => {
   it('bez souhrnu ze serveru pruh přizná, že je to jen dolní odhad', async () => {
     // An older deploy without the summary: the page may count only the rows it
     // holds, so it must not present that number as the whole truth.
-    serve(() => json(page({ entries: [row({ id: 3, ok: false, error: 'timeout' })], summary: null })));
+    serve(() =>
+      json(page({ entries: [row({ id: 3, ok: false, delivery: 'failed', error: 'timeout' })], summary: null }))
+    );
     renderPage();
 
     const banner = await screen.findByRole('alert');
@@ -190,15 +195,16 @@ describe('Odchozí zprávy', () => {
     fireEvent.change(screen.getByLabelText('Kanál'), { target: { value: 'discord' } });
     await waitFor(() => expect(urls.some((u) => u.includes('channel=discord'))).toBe(true));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Jen neodeslané' }));
-    await waitFor(() => expect(urls.some((u) => u.includes('ok=0'))).toBe(true));
+    // Unconfirmed belongs with failed: nobody knows that message arrived either.
+    fireEvent.click(screen.getByRole('button', { name: 'Jen neodeslané a nepotvrzené' }));
+    await waitFor(() => expect(urls.some((u) => u.includes('delivery=failed%2Cunknown'))).toBe(true));
 
     // The narrowed request carries all three at once - a filter must not
     // silently drop the previous one.
     const last = urls[urls.length - 1];
     expect(last).toContain('kind=daily_reminder');
     expect(last).toContain('channel=discord');
-    expect(last).toContain('ok=0');
+    expect(last).toContain('delivery=failed%2Cunknown');
   });
 
   it('filtr bez výsledku neříká, že se nikdy nic neodeslalo', async () => {
@@ -279,7 +285,9 @@ describe('Odchozí zprávy', () => {
 
   it('detail ukáže celou chybu a připomene, že obsah zprávy se neukládá', async () => {
     const longError = 'SMTP 550 5.7.1 Message rejected by the receiving server for policy reasons';
-    serve(() => json(page({ entries: [row({ id: 4, ok: false, error: longError, method: 'fallback' })] })));
+    serve(() =>
+      json(page({ entries: [row({ id: 4, ok: false, delivery: 'failed', error: longError, method: 'fallback' })] }))
+    );
     renderPage();
     await screen.findByText('Neodesláno');
 
@@ -289,5 +297,79 @@ describe('Odchozí zprávy', () => {
     expect(dialog.textContent).toContain(longError);
     expect(dialog.textContent).toContain('místní doručovatel');
     expect(dialog.textContent).toContain('Obsah zprávy se neukládá');
+  });
+  it('nepotvrzená zpráva není odeslaná: jantarový štítek a důvod', async () => {
+    // The owner's case: mail() took the message and CallMeBot answered 2xx, the
+    // log said "Odesláno", and nothing arrived.
+    const why = "Handed to the hosting's mail(); nothing confirmed delivery. SMTP not configured: missing smtp_host.";
+    serve(() =>
+      json(
+        page({
+          entries: [row({ id: 8, delivery: 'unknown', method: 'fallback', error: why, providerReply: null })],
+          summary: {
+            last24h: { total: 1, sent: 0, unknown: 1, failed: 0, byChannel: [] },
+            last7d: { total: 1, sent: 0, unknown: 1, failed: 0, byChannel: [] },
+          },
+        })
+      )
+    );
+    renderPage();
+
+    const table = within(await screen.findByRole('table'));
+    expect(table.getByText('Nepotvrzeno')).toBeTruthy();
+    expect(table.queryByText('Odesláno')).toBeNull();
+    expect(table.getByText(why)).toBeTruthy();
+    expect(screen.getByText('Nepotvrzeno za 24 h')).toBeTruthy();
+  });
+
+  it('řádek ze staršího serveru bez výsledku doručení se nikdy netváří jako odeslaný', async () => {
+    const legacy = row({ id: 9, ok: true, error: null });
+    delete legacy.delivery;
+    delete legacy.deliveryRecorded;
+    delete legacy.providerReply;
+    serve(() => json(page({ entries: [legacy] })));
+    renderPage();
+
+    const table = within(await screen.findByRole('table'));
+    expect(table.getByText('Nepotvrzeno')).toBeTruthy();
+    expect(table.queryByText('Odesláno')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detail' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('odvozený');
+  });
+
+  it('starý řádek odvozený jako odeslaný si v detailu neprotiřečí', async () => {
+    // An old SMTP row reads as sent (a 250 was needed for ok=1); the note
+    // under the green badge used to say its confirmation was missing.
+    serve(() =>
+      json(
+        page({
+          entries: [row({ id: 10, delivery: 'sent', deliveryRecorded: false, method: 'smtp', providerReply: null })],
+        })
+      )
+    );
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detail' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Odesláno')).toBeTruthy();
+    expect(dialog.textContent).toContain('ze způsobu odeslání');
+    expect(dialog.textContent).not.toContain('potvrzení u něj chybí');
+  });
+
+  it('detail ukáže odpověď poskytovatele a řekne, co „Odesláno“ znamená', async () => {
+    serve(() => json(page()));
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detail' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('ODPOVĚĎ POSKYTOVATELE');
+    expect(dialog.textContent).toContain('250 queued as 4ABC123');
+    expect(dialog.textContent).toContain('doručení do telefonu či schránky nepotvrzuje');
+    // A recorded row is not the legacy one.
+    expect(dialog.textContent).not.toContain('odvozený');
   });
 });
