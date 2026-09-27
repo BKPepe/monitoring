@@ -51,7 +51,9 @@ ErrorDocument 503 /status/error.php?code=503
 # ochrany: i kdyby se PHP interpret pro tuto cestu někdy přestal spouštět
 # (špatná konfigurace, migrace na jiný webserver...), soubor se stejně nikdy
 # neposlouží jako čistý text s DB heslem uvnitř. Syntaxe pro Apache 2.4+ i 2.2.
-<FilesMatch "^config(\.sample)?\.php$">
+# config.php.<hex>.tmp is the installer's half-step before its rename; it holds
+# the same password and must never be served either, even for that instant.
+<FilesMatch "^(config(\.sample)?\.php|config\.php\.[0-9a-f]+\.tmp)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -64,11 +66,14 @@ ErrorDocument 503 /status/error.php?code=503
 # Files that ship with the code but are not pages. schema.sql is a map of the
 # database, the deploy sync state lists every deployed file with its hash, and
 # README.md is internal documentation - all three were served to anyone.
-# Nothing reads them over HTTP: schema.sql is imported by hand on a fresh install
-# and the sync state is read by the deploy over FTP. .user.ini is PHP's own
-# per-directory configuration (the session cookie flags); the server reads it
-# from disk, and nobody needs to learn from it how PHP is set up here.
-<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json|\.user\.ini)$">
+# Nothing reads them over HTTP: the installer (api.php?action=install_*) reads
+# schema.sql from disk and looks on disk for the sync state (its lock in a
+# CI-deployed directory), and the deploy reads the sync state over FTP.
+# .user.ini is PHP's own per-directory configuration (the session cookie
+# flags); the server reads it from disk, and nobody needs to learn from it how
+# PHP is set up here. installer.php only defines functions for api.php and
+# answers 404 on its own; this is the layer that does not depend on PHP.
+<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json|\.user\.ini|installer\.php)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

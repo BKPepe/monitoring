@@ -35,15 +35,39 @@ function bk_session_harden(): void {
 }
 bk_session_harden();
 
-if (!file_exists(__DIR__ . '/config.php') && file_exists(__DIR__ . '/config.sample.php')) {
-    @copy(__DIR__ . '/config.sample.php', __DIR__ . '/config.php');
-}
+/**
+ * Why this install cannot serve yet, or null once it can.
+ *
+ * config_missing  no config.php: a fresh upload.
+ * config_sample   config.php still holds the sample's placeholder credentials
+ *                 and they do not connect (a hand copy, or the copy db.php
+ *                 itself used to make).
+ * schema_missing  config.php connects, but schema.sql was never imported.
+ *
+ * A config.php with real credentials that cannot connect is NOT on this list:
+ * that is a database outage (or a typo only FTP can fix), it answers
+ * database_unavailable, and the installer refuses to replace that file - an
+ * installer that opened whenever the database was down would let anyone who
+ * noticed the outage point the site at a database of their own.
+ */
+$bk_setup_reason = null;
 
-if (file_exists(__DIR__ . '/config.php')) {
+// A missing config.php used to be "fixed" here by copying config.sample.php
+// over it. A fresh upload then died on the sample's placeholder credentials
+// with a Czech 500 page quoting the raw PDO error. Now it is a first run: the
+// app's installer (/app/setup) writes config.php after testing the connection.
+if (is_file(__DIR__ . '/config.php')) {
     require_once __DIR__ . '/config.php';
 } else {
-    http_response_code(500);
-    die('<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Konfigurace nenalezena | Blood Kings</title><style>body{background:#0b0c10;color:#fff;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}.card{background:#14161d;border:1px solid rgba(176,0,32,0.4);border-radius:12px;padding:2.5rem;max-width:480px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.5);}h2{color:#b00020;margin-top:0;}p{color:#aaa;line-height:1.6;font-size:0.95rem;}code{background:rgba(255,255,255,0.08);padding:0.2rem 0.4rem;border-radius:4px;color:#fff;}</style></head><body><div class="card"><h2>Blood Kings Monitoring</h2><p>Konfigurační soubor <code>config.php</code> nebyl na serveru nalezen.</p><p>Zkopírujte na serveru soubor <code>config.sample.php</code> na <code>config.php</code> a vyplňte vaše přihlašovací údaje k MySQL databázi, nebo spusťte deploy z GitHubu s vyplněným secretem <code>STATUS_CONFIG_PHP</code>.</p></div></body></html>');
+    $bk_setup_reason = 'config_missing';
+}
+if ($bk_setup_reason !== null) {
+    if (defined('BK_INSTALL_REQUEST')) {
+        // The installer runs on exactly this state; it gets no connection.
+        $pdo = null;
+        return;
+    }
+    bk_needs_setup($bk_setup_reason);
 }
 
 // Numbers in JSON use the shortest representation that round-trips to the same value.
@@ -191,18 +215,85 @@ function bk_cf_fix_location_history(PDO $pdo): int {
     return $rows;
 }
 
-try {
-    $db_driver = defined('DB_DRIVER') ? strtolower(DB_DRIVER) : (defined('BK_DATABASE_URL') && strpos(BK_DATABASE_URL, 'postgres') !== false ? 'pgsql' : 'mysql');
-    if ($db_driver === 'pgsql' || $db_driver === 'postgres') {
-        $db_port = defined('DB_PORT') ? DB_PORT : 5432;
-        $dsn = "pgsql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME;
-    } else {
-        // DB_PORT used to apply only to Postgres, so MySQL on a non-default
-        // port never connected and the user only saw the generic
-        // "Database connection error" message.
-        $db_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
-        $dsn = "mysql:host=" . DB_HOST . ";port=" . $db_port . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+/**
+ * The installer's address, next to this directory: /status/x.php -> /app/setup.
+ *
+ * Built from SCRIPT_NAME (the server's own path, never request input), so an
+ * install under /monitoring/status/ sends people to /monitoring/app/setup.
+ */
+function bk_setup_url(): string {
+    $status_dir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/x.php'))), '/');
+    $base = rtrim(str_replace('\\', '/', dirname($status_dir === '' ? '/' : $status_dir)), '/');
+    return $base . '/app/setup';
+}
+
+/**
+ * This install is not set up yet (see $bk_setup_reason): 503 needs_setup.
+ *
+ * Programs get JSON - the app turns it into the installer, and the machine
+ * endpoints (agents, heartbeat, cron, nodes, Prometheus) get an answer they
+ * can parse instead of a redirect to a page they cannot use. A browser opening
+ * a page goes to the installer. Nothing else is said: no path, no PDO text.
+ */
+function bk_needs_setup(string $reason): never {
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "Instalace není dokončená ({$reason}). Otevřete v prohlížeči /app/setup a projděte instalátor.\n");
+        exit(1);
     }
+    $setup_url = bk_setup_url();
+    if (!headers_sent()) {
+        header('Cache-Control: no-store');
+    }
+    if (bk_request_wants_json()) {
+        if (!headers_sent()) {
+            http_response_code(503);
+            header('Content-Type: application/json; charset=utf-8');
+        }
+        echo json_encode(['error' => 'needs_setup', 'reason' => $reason, 'setupUrl' => $setup_url]);
+        exit;
+    }
+    if (stripos((string)($_SERVER['HTTP_ACCEPT'] ?? ''), 'text/html') !== false && !headers_sent()) {
+        header('Location: ' . $setup_url, true, 302);
+        exit;
+    }
+    // An image, a feed or a bare client: neither JSON nor a page it could follow.
+    if (!headers_sent()) {
+        http_response_code(503);
+        header('Content-Type: text/plain; charset=utf-8');
+    }
+    echo "needs_setup\n";
+    exit;
+}
+
+/**
+ * config.php still carries the sample's placeholder password.
+ *
+ * Both placeholders config.sample.php has ever shipped. Only a file like that
+ * may be replaced by the installer; a real password marks a real install.
+ */
+function bk_config_is_placeholder(): bool {
+    return defined('DB_PASS') && in_array(DB_PASS, ['heslo_databaze', 'database_password'], true);
+}
+
+/**
+ * The PDO DSN for these settings - shared by the bootstrap and the installer's
+ * connection test, so "the test connected" means "the app will connect".
+ */
+function bk_db_dsn(string $driver, string $host, ?int $port, string $name): string {
+    if ($driver === 'pgsql' || $driver === 'postgres') {
+        return "pgsql:host=" . $host . ";port=" . ($port ?? 5432) . ";dbname=" . $name;
+    }
+    // DB_PORT used to apply only to Postgres, so MySQL on a non-default port
+    // never connected and the user only saw a generic connection error.
+    return "mysql:host=" . $host . ";port=" . ($port ?? 3306) . ";dbname=" . $name . ";charset=utf8mb4";
+}
+
+try {
+    if (!defined('DB_HOST') || !defined('DB_NAME') || !defined('DB_USER') || !defined('DB_PASS')) {
+        throw new PDOException('config.php does not define DB_HOST, DB_NAME, DB_USER and DB_PASS');
+    }
+    $db_driver = defined('DB_DRIVER') ? strtolower(DB_DRIVER) : (defined('BK_DATABASE_URL') && strpos(BK_DATABASE_URL, 'postgres') !== false ? 'pgsql' : 'mysql');
+    $dsn = bk_db_dsn($db_driver, (string)DB_HOST, defined('DB_PORT') ? (int)DB_PORT : null, (string)DB_NAME);
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -248,10 +339,17 @@ try {
         $stmt_ver = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'");
         $bk_current_schema = $stmt_ver->fetchColumn();
     } catch (PDOException $e) {
-        // The settings table does not exist yet - migrations below will try to finish
+        // No settings table (42S02) = schema.sql was never imported: every
+        // table the migrations below would alter is missing too, and the few
+        // they create would then shadow schema.sql's own definitions. That is
+        // the installer's import step, not a migration. Any other error keeps
+        // the old path: the migrations try to finish.
+        if ((string)$e->getCode() === '42S02') {
+            $bk_setup_reason = 'schema_missing';
+        }
     }
 
-    if ($bk_current_schema !== BK_SCHEMA_VERSION) {
+    if ($bk_setup_reason === null && $bk_current_schema !== BK_SCHEMA_VERSION) {
 
     // Automatic migration - add the checked_from column to monitor_logs
     try {
@@ -1204,7 +1302,26 @@ try {
 
     } // konec bloku migrací (schema_version)
 } catch (PDOException $e) {
+    if (defined('BK_INSTALL_REQUEST')) {
+        // The installer decides from the whole picture (a placeholder config
+        // may be replaced, a real one never), so it gets "no connection", not
+        // an exit. The reason stays in the log; the page never sees it.
+        error_log('[db] installer: no database connection: ' . $e->getMessage());
+        $pdo = null;
+        return;
+    }
+    if (bk_config_is_placeholder()) {
+        bk_needs_setup('config_sample');
+    }
     bk_database_unavailable($e);
+}
+
+if ($bk_setup_reason === 'schema_missing') {
+    if (defined('BK_INSTALL_REQUEST')) {
+        // The connection is fine; importing schema.sql over it is the installer's job.
+        return;
+    }
+    bk_needs_setup('schema_missing');
 }
 
 // Loads dynamic settings from the database

@@ -2,8 +2,11 @@
 /**
  * Configuration file template for Blood Kings Status Monitoring
  * 
- * Copy this file and save it as "config.php" in the same directory,
- * then fill in your MySQL database credentials below.
+ * The installer at /app/setup writes config.php from this file after it has
+ * tested the database connection. By hand: copy this file to "config.php" in
+ * the same directory and fill in your MySQL database credentials below.
+ * A config.php that still holds the placeholder password counts as "not set
+ * up" and the installer may replace it; one with real credentials, never.
  * 
  * THE "config.php" FILE IS IGNORED BY GIT AND MUST NOT BE COMMITTED!
  */
@@ -57,9 +60,9 @@ define('DB_PASS', 'heslo_databaze');
 // but no code ever read them - it was dead (and confusing) documentation.
 
 // --- OTHER SETTINGS ---
-// There are no default admin credentials. schema.sql creates no account; open
-// /app/setup after the import and create the first administrator there with a
-// password of your own (the step is refused once any account exists).
+// There are no default admin credentials. schema.sql creates no account; the
+// installer at /app/setup creates the first administrator with a password of
+// your own (every installer step is refused once any account exists).
 // This zone is PHP's AND the database session's: db.php sends its current UTC
 // offset to MySQL after connecting, so SQL NOW() and PHP's date() mean the same
 // instant even when the database server itself runs in another zone.

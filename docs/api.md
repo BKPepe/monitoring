@@ -137,6 +137,56 @@ included; browser pages get the branded error page with code 503. Neither says
 why - the database message used to be printed into the page, host, account and
 file names included; it now goes to the server's error log only.
 
+**Not installed yet:** the same endpoints answer `503` with
+`{"error": "needs_setup", "reason": "…", "setupUrl": "/app/setup"}` and a
+browser opening a page is redirected (302) to `/app/setup`; a request that
+wants neither JSON nor HTML gets a plain-text `503`. Machine endpoints are never
+redirected. `reason` is `config_missing` (no `config.php`), `config_sample`
+(`config.php` still holds the sample's placeholder password and it does not
+connect) or `schema_missing` (it connects, but `schema.sql` was never
+imported). A `config.php` with real credentials that cannot connect is an
+outage, not a first run: it stays `database_unavailable`. `db.php` no longer
+copies `config.sample.php` over a missing `config.php`.
+
+---
+
+## First run: the installer
+
+`/app/setup` walks these steps; the account step is the existing
+`action=setup`. They work without `config.php`, and all of them are refused
+once the install is finished (see the lock below).
+
+| Endpoint | Access | Description |
+|---|---|---|
+| `GET action=install_status` | public | `step`: `config` (write the database settings), `config_unreachable` (a real `config.php` that cannot connect, or a CI-deployed directory without a working one: fix it over FTP, the installer never writes it), `schema`, `account`, `installed`. Then `locked`, `config {exists, sample, writable}`, `database {connects, schema: missing\|partial\|ready, users, tables}`, `requirements {php, phpOk, extensions}` and `csrfToken`. When `installed` (for anyone but an administrator) or `config_unreachable` only `{step, locked: true}` |
+| `POST action=install_test_db` | public, CSRF, step `config` | Body `{host, port, database, user, password[, timezone]}`. Changes nothing. `{ok: true, database: {tables, schema, users}}`, or `{ok: false, error, message, driverCode}` with `error` = `access_denied`, `unknown_database`, `host_unreachable`, `unknown_host`, `connect_failed`. Invalid input: 400 `invalid_host`, `invalid_port`, `invalid_database`, `invalid_user`, `invalid_password` (control characters or the sample's placeholder), `invalid_timezone` |
+| `POST action=install_write_config` | public, CSRF, step `config` | The same body. Tests the connection again (422 with the codes above on failure), then writes `config.php` from `config.sample.php` (a temporary file and one rename, values `var_export()`ed): `{written: true, next}`. When PHP cannot write: `{written: false, next, fileName, directory, configText, passwordPlaceholder: "__DB_PASSWORD__", message}` - the text carries the placeholder, never the password; the app puts the password in only on the way to the clipboard |
+| `POST action=install_import_schema` | public, CSRF, step `schema`/`account` | Imports `schema.sql` statement by statement (already-exists errors of a re-run are skipped) and gives a fresh install its own `cron_key`: `{imported: true, statements, next}`. Already imported: `{imported: false, alreadyImported: true, next}`. Failure: 500 `schema_import_failed` with `statement` and `driverCode`, the MySQL text in the server log |
+| `GET action=install_cron` | while installing, then admin | The cron job for this directory: `{schedule: "* * * * *", command, crontabLine, script, phpBinary, phpBinaryFound}`. cPanel takes `schedule` and `command`, `crontab -e` takes `crontabLine`. The binary is the PHP CLI next to the PHP serving the site (`PHP_BINDIR`); `phpBinaryFound: false` = plain `php` |
+
+`next` is the step after this one. Then the app polls the public
+`action=collection_health` and shows "waiting for the first run" until
+`lastRunAt` is set - never green before.
+
+**The lock.** An open installer is a takeover path, so:
+
+- once the database connects and an account exists, every step answers
+  `409 installer_locked` (an account count that cannot be read counts as
+  existing). The lock answers before the CSRF check;
+- `config.php` is written only where none exists or where it still holds the
+  sample's placeholder password; any other answers `409 config_exists`. During
+  a database outage the real `config.php` therefore cannot be replaced;
+- nor is it ever written in a directory the CI deploy uploads to
+  (FTP-Deploy-Action leaves `.ftp-deploy-sync-state.json` there, a fresh
+  upload never has it): a `config.php` missing or back to the sample there is
+  `config_unreachable` too; `install_test_db` and `install_write_config`
+  answer `409 config_exists`, `install_import_schema` answers
+  `409 database_not_configured`;
+- writes are POST with the session's CSRF token (`X-CSRF-Token`), like every
+  other session write; the token comes from `action=install_status`;
+- the password never comes back in an answer, is never part of a URL (the
+  steps that take it are POST) and is never logged.
+
 ---
 
 ## Data collection health
@@ -918,6 +968,15 @@ identifier, an array is capped at 8 KB and at most 64 new keys are added at once
 `action_result` arrives as a separate lightweight POST - the confirmation of a
 performed Remote Action. It carries no telemetry fields, so it is handled before
 their validation.
+
+**Registration** (`{"action": "register", "token": "…", "hostname": "…",
+"agent_type": "openwrt"|…}`; the bash and OpenWrt agents send it for
+`--register TOKEN URL`) creates the monitor and answers its `agent_key`. The
+token is `agent_registration_token` from Settings. **When that setting is empty,
+the cron key (`cron_key`) is accepted in its place** - so a fleet can register
+with the cron key alone, and giving someone the cron key lets them add
+monitors. The installer gives every fresh install its own `cron_key`; with both
+empty, registration is refused (403). A wrong token is 403.
 
 **Agent 0.1.7 (OpenWrt) adds** `wifi_radios[]` (one object per wireless netdev,
 at most 16: band derived from the frequency, generation and width, client

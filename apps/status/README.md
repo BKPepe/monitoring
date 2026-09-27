@@ -24,20 +24,23 @@ An open-source, ultra-fast server and service status monitoring application buil
 ---
 
 ## 1. Quick Installation (Central Server)
-1. Upload the `status/` directory to your web server document root (e.g., `public_html/status/`).
-2. Import `schema.sql` into your MySQL/MariaDB database.
-3. Configure `config.php`:
-   * Copy `config.sample.php` to `config.php`.
-   * Fill in your database connection credentials:
-     ```php
-     define('DB_HOST', '127.0.0.1');
-     define('DB_NAME', 'bloodkings_status');
-     define('DB_USER', 'bloodkings_user');
-     define('DB_PASS', 'YourStrongPassword123!');
-     ```
-4. Open `/app/setup` and create the first administrator. `schema.sql` creates no
-   account and there is no default password; the setup step works only while the
-   `users` table is empty.
+1. Upload the `status/` and `app/` directories side by side to your web server
+   document root (e.g., `public_html/status/` and `public_html/app/`).
+2. Create an empty MySQL/MariaDB database and a user with all privileges on it
+   (in cPanel: **MySQL Databases**).
+3. Open `https://YOUR-DOMAIN/app/setup` (any page under `/status/` sends you
+   there while the install is unfinished). The installer:
+   * tests the database connection and writes `config.php` from
+     `config.sample.php` - or, when PHP cannot write to `status/`, shows its
+     text for you to save (your password is not in it; you put it in);
+   * imports `schema.sql`;
+   * creates the first administrator (`schema.sql` creates no account and
+     there is no default password);
+   * prints the exact cron line for this directory and waits for its first run.
+
+   Once the database connects and an account exists, every installer step is
+   refused. A `config.php` you write by hand from `config.sample.php` works too;
+   the installer never replaces one with real credentials.
 
 ---
 
@@ -46,11 +49,15 @@ To deploy automatically without committing passwords:
 1. In your GitHub repository, go to **Settings** -> **Secrets and variables** -> **Actions**.
 2. Add a secret named `STATUS_CONFIG_PHP` containing your production `config.php` code.
 3. The GitHub Actions workflow will automatically deploy updates to your hosting server on every `git push`.
+4. A directory this workflow deploys to keeps the installer locked even if
+   `config.php` goes missing there (FTP-Deploy-Action leaves
+   `.ftp-deploy-sync-state.json` in it): upload `config.php` again over FTP.
 
 ---
 
 ## 3. Active Probing Cron Setup
-To execute active probes every 1–5 minutes, set up a server CLI cron job:
+To execute active probes every 1–5 minutes, set up a server CLI cron job. The
+installer's last step prints this line with the real path and PHP binary:
 ```bash
 * * * * * php -q /path/to/status/cron.php >/dev/null 2>&1
 ```

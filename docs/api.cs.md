@@ -136,6 +136,55 @@ taky; stránky pro prohlížeč dostanou značkovou chybovou stránku s kódem 5
 Ani jedno neříká proč - hláška databáze se dřív tiskla do stránky i s hostem,
 účtem a jmény souborů; teď jde jen do chybového logu serveru.
 
+**Ještě nenainstalováno:** tytéž endpointy odpoví `503` s
+`{"error": "needs_setup", "reason": "…", "setupUrl": "/app/setup"}` a prohlížeč,
+který otevírá stránku, se přesměruje (302) na `/app/setup`; požadavek, který
+nechce JSON ani HTML, dostane `503` jako prostý text. Strojové endpointy se
+nikdy nepřesměrují. `reason` je `config_missing` (chybí `config.php`),
+`config_sample` (`config.php` má pořád zástupné heslo ze vzoru a nepřipojí se)
+nebo `schema_missing` (připojí se, ale `schema.sql` se nikdy neimportoval).
+`config.php` se skutečnými údaji, který se nepřipojí, je výpadek, ne první
+spuštění: zůstává `database_unavailable`. `db.php` už nekopíruje
+`config.sample.php` přes chybějící `config.php`.
+
+---
+
+## První spuštění: instalátor
+
+`/app/setup` prochází tyto kroky; krok s účtem je dosavadní `action=setup`.
+Fungují bez `config.php` a po dokončení instalace se všechny odmítnou (viz
+zámek níže).
+
+| Endpoint | Přístup | Popis |
+|---|---|---|
+| `GET action=install_status` | veřejné | `step`: `config` (zapsat údaje k databázi), `config_unreachable` (skutečný `config.php`, který se nepřipojí, nebo složka nasazovaná přes CI bez funkčního: opravit přes FTP, instalátor ho nikdy nezapíše), `schema`, `account`, `installed`. Dál `locked`, `config {exists, sample, writable}`, `database {connects, schema: missing\|partial\|ready, users, tables}`, `requirements {php, phpOk, extensions}` a `csrfToken`. Při `installed` (pro kohokoli kromě administrátora) a `config_unreachable` jen `{step, locked: true}` |
+| `POST action=install_test_db` | veřejné, CSRF, krok `config` | Tělo `{host, port, database, user, password[, timezone]}`. Nic nemění. `{ok: true, database: {tables, schema, users}}`, nebo `{ok: false, error, message, driverCode}` s `error` = `access_denied`, `unknown_database`, `host_unreachable`, `unknown_host`, `connect_failed`. Neplatný vstup: 400 `invalid_host`, `invalid_port`, `invalid_database`, `invalid_user`, `invalid_password` (řídicí znaky nebo zástupné heslo ze vzoru), `invalid_timezone` |
+| `POST action=install_write_config` | veřejné, CSRF, krok `config` | Stejné tělo. Znovu otestuje připojení (při chybě 422 s kódy výše), pak zapíše `config.php` z `config.sample.php` (dočasný soubor a jedno přejmenování, hodnoty přes `var_export()`): `{written: true, next}`. Když PHP zapisovat nemůže: `{written: false, next, fileName, directory, configText, passwordPlaceholder: "__DB_PASSWORD__", message}` - text nese zástupný znak, nikdy heslo; aplikace heslo doplní až cestou do schránky |
+| `POST action=install_import_schema` | veřejné, CSRF, krok `schema`/`account` | Naimportuje `schema.sql` příkaz po příkazu (chyby „už existuje" při opakovaném běhu přeskočí) a čerstvé instalaci vygeneruje vlastní `cron_key`: `{imported: true, statements, next}`. Už naimportováno: `{imported: false, alreadyImported: true, next}`. Chyba: 500 `schema_import_failed` se `statement` a `driverCode`, text MySQL jen v logu serveru |
+| `GET action=install_cron` | během instalace, pak admin | Úloha cronu pro tuto složku: `{schedule: "* * * * *", command, crontabLine, script, phpBinary, phpBinaryFound}`. cPanel bere `schedule` a `command`, `crontab -e` bere `crontabLine`. Binárka je PHP CLI vedle PHP, které obsluhuje web (`PHP_BINDIR`); `phpBinaryFound: false` = holé `php` |
+
+`next` je krok po tomto. Pak aplikace ptá veřejné `action=collection_health`
+a ukazuje „čeká se na první běh", dokud nepřijde `lastRunAt` - nikdy zelenou
+předem.
+
+**Zámek.** Otevřený instalátor je cesta k převzetí, proto:
+
+- jakmile se databáze připojí a existuje účet, každý krok odpoví
+  `409 installer_locked` (počet účtů, který nejde přečíst, se počítá jako
+  existující). Zámek odpovídá dřív než kontrola CSRF;
+- `config.php` se zapíše jen tam, kde žádný není, nebo kde má pořád zástupné
+  heslo ze vzoru; jinak `409 config_exists`. Při výpadku databáze tak skutečný
+  `config.php` nahradit nejde;
+- a nikdy ve složce, kam nahrává nasazení z CI (FTP-Deploy-Action tam nechává
+  `.ftp-deploy-sync-state.json`, čerstvé nahrání ho nikdy nemá): chybějící
+  `config.php` nebo zase vzorový je tam taky `config_unreachable`;
+  `install_test_db` a `install_write_config` odpoví `409 config_exists`,
+  `install_import_schema` odpoví `409 database_not_configured`;
+- zápisy jsou POST s CSRF tokenem relace (`X-CSRF-Token`) jako každý jiný
+  zápis v relaci; token dává `action=install_status`;
+- heslo se nikdy nevrátí v odpovědi, nikdy není v URL (kroky, které ho berou,
+  jsou POST) a nikdy se neloguje.
+
 ---
 
 ## Stav sběru dat
@@ -899,6 +948,15 @@ pole má strop 8 KB a najednou přibude nejvýš 64 nových klíčů.
 
 Odděleným lehkým POSTem chodí `action_result` - potvrzení provedené Remote
 Action. Nemá telemetrická pole, proto se zpracovává dřív než jejich validace.
+
+**Registrace** (`{"action": "register", "token": "…", "hostname": "…",
+"agent_type": "openwrt"|…}`; agenti pro bash a OpenWrt ji posílají při
+`--register TOKEN URL`) založí monitor a vrátí jeho `agent_key`. Token je
+`agent_registration_token` z Nastavení. **Když je toto nastavení prázdné,
+přijme se místo něj klíč cronu (`cron_key`)** - flotila se tedy zaregistruje
+i jen s klíčem cronu a kdo má klíč cronu, může přidávat monitory. Instalátor
+dá každé čerstvé instalaci vlastní `cron_key`; když jsou prázdné oba,
+registrace se odmítne (403). Špatný token je 403.
 
 **Agent 0.1.7 (OpenWrt) přidává** `wifi_radios[]` (jeden objekt na bezdrátové
 síťové zařízení, nejvýš 16: pásmo odvozené z frekvence, generace a šířka, počty

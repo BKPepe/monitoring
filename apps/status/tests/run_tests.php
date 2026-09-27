@@ -3781,6 +3781,102 @@ if (function_exists('bk_insight_severity')) {
     check('bez barvy informace', bk_insight_severity([]), 'info');
 }
 
+// --- First-run installer (site W1-5): installer.php ------------------------
+// Only function definitions and a direct-access guard; db.php is not needed
+// for the pure helpers tested here.
+require_once __DIR__ . '/../installer.php';
+check('SQL: středník v řetězci, v komentáři a v identifikátoru příkaz nerozdělí',
+    bk_install_split_sql("-- a; b\nCREATE TABLE `x;y` (a INT); # c; d\nINSERT INTO t VALUES ('1;2', \"it''s; \\\\'x\", 'a\\'b;');\n/* e; f */ SELECT 1;"),
+    ["CREATE TABLE `x;y` (a INT)", "INSERT INTO t VALUES ('1;2', \"it''s; \\\\'x\", 'a\\'b;')", 'SELECT 1']);
+check('SQL: "--" bez mezery není komentář (MySQL)', bk_install_split_sql("SELECT 1--2;"), ['SELECT 1--2']);
+$in_schema = (string)file_get_contents(__DIR__ . '/../schema.sql');
+$in_statements = bk_install_split_sql($in_schema);
+check('schema.sql: každá tabulka a dva zápisy nastavení, nic navíc',
+    count($in_statements), preg_match_all('/CREATE TABLE IF NOT EXISTS/', $in_schema) + 2);
+check_true('schema.sql: vložené komentáře uvnitř INSERTu zmizí, hodnoty zůstanou',
+    str_contains($in_statements[array_key_last(array_filter($in_statements, fn ($s) => str_starts_with($s, 'INSERT INTO `settings`')))] ?? '', "('sms_gateway_type', 'twilio'),"));
+
+[$in_cfg, $in_err] = bk_install_validate(['host' => 'localhost', 'port' => '', 'database' => 'user_status', 'user' => 'user_bk', 'password' => '']);
+check('prázdný port = 3306, prázdné heslo projde', [$in_err, $in_cfg['port'] ?? null, $in_cfg['password'] ?? null], [null, 3306, '']);
+foreach ([
+    [['host' => 'db;unix_socket=/x'], 'invalid_host'],
+    [['host' => ''], 'invalid_host'],
+    [['port' => '70000'], 'invalid_port'],
+    [['port' => ['x']], 'invalid_port'],
+    [['database' => 'a;b'], 'invalid_database'],
+    [['user' => ''], 'invalid_user'],
+    [['password' => "a\nb"], 'invalid_password'],
+    [['password' => 'heslo_databaze'], 'invalid_password'],
+    [['timezone' => 'Mars/Olymp'], 'invalid_timezone'],
+    [['timezone' => '+02:00'], 'invalid_timezone'],
+    [['timezone' => 'PST'], 'invalid_timezone'],
+] as [$in_bad, $in_code]) {
+    [, $in_got] = bk_install_validate($in_bad + ['host' => 'db.example.com', 'database' => 'd', 'user' => 'u', 'password' => 'p']);
+    check('instalátor odmítne ' . json_encode($in_bad), $in_got, $in_code);
+}
+// Chromium reports ICU's legacy names; date_default_timezone_set() takes them.
+foreach (['Asia/Calcutta', 'Europe/Kiev', 'Europe/Kyiv'] as $in_tz) {
+    [$in_cfg, $in_err] = bk_install_validate(['timezone' => $in_tz, 'host' => 'db.example.com', 'database' => 'd', 'user' => 'u', 'password' => 'p']);
+    check('instalátor přijme pásmo z Chrome ' . $in_tz, [$in_err, $in_cfg['timezone'] ?? null], [null, $in_tz]);
+}
+
+check('krok: bez configu = config', bk_install_step(false, false, null), 'config');
+check('krok: vzorový config, co se nepřipojí = config', bk_install_step(true, true, null), 'config');
+check('krok: skutečný config, co se nepřipojí = config_unreachable (výpadek, ne instalace)', bk_install_step(true, false, null), 'config_unreachable');
+check('krok: prázdná databáze = schema', bk_install_step(true, false, ['tables' => 0, 'schema' => 'missing', 'users' => 0]), 'schema');
+check('krok: schéma bez účtu = account', bk_install_step(true, false, ['tables' => 29, 'schema' => 'ready', 'users' => 0]), 'account');
+check('krok: účet existuje = installed (zámek)', bk_install_step(true, false, ['tables' => 29, 'schema' => 'ready', 'users' => 1]), 'installed');
+check('krok: počet účtů nejde přečíst = zamčeno', bk_install_step(true, false, ['tables' => null, 'schema' => null, 'users' => null]), 'installed');
+check('krok: účty i bez schématu = zamčeno', bk_install_step(true, false, ['tables' => 3, 'schema' => 'missing', 'users' => 2]), 'installed');
+// A directory the CI deploy uploads to had a working config.php: one that is
+// gone or back to the sample there is a broken deploy, not a first run.
+check('krok: složka z CI bez configu = config_unreachable', bk_install_step(false, false, null, true), 'config_unreachable');
+check('krok: složka z CI se vzorovým configem = config_unreachable', bk_install_step(true, true, null, true), 'config_unreachable');
+check('krok: složka z CI se skutečným configem, co se nepřipojí = config_unreachable', bk_install_step(true, false, null, true), 'config_unreachable');
+check('krok: složka z CI s připojenou databází se řídí databází',
+    [bk_install_step(true, false, ['tables' => 0, 'schema' => 'missing', 'users' => 0], true),
+        bk_install_step(true, false, ['tables' => 29, 'schema' => 'ready', 'users' => 1], true)], ['schema', 'installed']);
+// That lock keys off FTP-Deploy-Action's sync state next to installer.php. A
+// state-name, a server-dir one level up or another uploader moves or drops the
+// file, and the installer there opens again without a sound.
+$in_wf = (string)@file_get_contents(__DIR__ . '/../../../.github/workflows/deploy-status.yml');
+$in_step = preg_match('~uses: SamKirkland/FTP-Deploy-Action@.*?(?=\n      - |\z)~s', $in_wf, $in_m) ? $in_m[0] : '';
+check('krok: CI nahrává apps/status přes FTP-Deploy-Action do public_html/status/, bez state-name',
+    [(bool)preg_match('~^\s*local-dir: \./apps/status/$~m', $in_step), (bool)preg_match('~^\s*server-dir: public_html/status/$~m', $in_step),
+        (bool)preg_match('~^\s*state-name\s*:~m', $in_wf)], [true, true, false]);
+
+check('chyba připojení 1045 = access_denied', bk_install_connect_error(new PDOException("SQLSTATE[HY000] [1045] Access denied for user 'u'@'h' (using password: YES)")), ['error' => 'access_denied', 'driverCode' => 1045]);
+check('chyba připojení 1049 = unknown_database', bk_install_connect_error(new PDOException('SQLSTATE[HY000] [1049] Unknown database')), ['error' => 'unknown_database', 'driverCode' => 1049]);
+check('neznámá chyba = connect_failed', bk_install_connect_error(new PDOException('SQLSTATE[42000]: syntax')), ['error' => 'connect_failed', 'driverCode' => null]);
+
+check('cron: běžná cesta zůstane čitelná', bk_install_cron('/usr/bin/php', '/home/u/public_html/status/'), [
+    'schedule' => '* * * * *',
+    'command' => '/usr/bin/php -q /home/u/public_html/status/cron.php >/dev/null 2>&1',
+    'crontabLine' => '* * * * * /usr/bin/php -q /home/u/public_html/status/cron.php >/dev/null 2>&1',
+    'script' => '/home/u/public_html/status/cron.php',
+]);
+check("cron: mezera a apostrof v cestě se ošetří", bk_install_cron('php', "/home/u/my site's/status")['command'], "php -q '/home/u/my site'\\''s/status/cron.php' >/dev/null 2>&1");
+
+// The rendered config.php: every value var_export()ed, so no input becomes code.
+$in_sample = (string)file_get_contents(__DIR__ . '/../config.sample.php');
+$in_evil = "x'); echo 'PWNED'; //\\";
+$in_text = bk_install_render_config($in_sample, ['host' => 'db.example.com', 'port' => 3307, 'database' => 'u_bk', 'user' => 'u_bk', 'password' => $in_evil, 'timezone' => 'UTC'], '2026-09-23');
+check_true('config: hlavička instalátoru a heslo jako řetězec', is_string($in_text) && str_starts_with($in_text, "<?php\n// Written by the installer")
+    && str_contains($in_text, "define('DB_PASS', " . var_export($in_evil, true) . ");") && str_contains($in_text, "define('DB_PORT', 3307);"));
+$in_tmp = sys_get_temp_dir() . '/bk_install_cfg_' . bin2hex(random_bytes(4));
+file_put_contents($in_tmp . '.php', (string)$in_text);
+file_put_contents($in_tmp . '_run.php', "<?php require " . var_export($in_tmp . '.php', true) . "; echo json_encode([DB_HOST, DB_PORT, DB_PASS, TIMEZONE]);");
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($in_tmp . '_run.php') . ' 2>&1', $in_out, $in_rc);
+check('config: po načtení drží přesně zadané hodnoty a nic nespustí', [$in_rc, implode("\n", $in_out)], [0, json_encode(['db.example.com', 3307, $in_evil, 'UTC'])]);
+@unlink($in_tmp . '.php');
+@unlink($in_tmp . '_run.php');
+check('config: šablona bez DB_PASS = žádný poloviční soubor', bk_install_render_config(str_replace("define('DB_PASS'", "// define('DB_PASS'", $in_sample), $in_cfg ?? [], 'x'), null);
+file_put_contents($in_tmp . '.php', $in_sample);
+check_true('config: vzorový soubor se pozná podle zástupného hesla', bk_install_file_is_placeholder($in_tmp . '.php'));
+file_put_contents($in_tmp . '.php', (string)$in_text);
+check_false('config: skutečný ne', bk_install_file_is_placeholder($in_tmp . '.php'));
+@unlink($in_tmp . '.php');
+
 // --- UX wave 2 on main (w2m), server: health score, tips, flags ---------------
 // N-1: the health score counts only what was measured; an unmeasured part
 // drops out and the rest renormalises, too little data is null ("—").

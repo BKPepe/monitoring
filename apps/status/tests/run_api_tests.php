@@ -6446,6 +6446,252 @@ try {
     }
 }
 
+// =======================================================================
+// First run: the installer (site W1-5).
+//
+// db.php used to copy config.sample.php over a missing config.php, so a fresh
+// upload died on placeholder credentials with a 500 page. Now: needs_setup
+// (503 JSON for programs and machine endpoints, 302 to /app/setup for a
+// browser), and installer.php walks config -> schema -> account -> cron in a
+// scratch database. Then the lock: a finished install refuses every step, and
+// a real config.php whose database is down is never replaced.
+// =======================================================================
+/** The session cookie from a curl cookie jar, for a raw request that must carry it. */
+function bk_test_jar_cookie(string $jar): string {
+    foreach (file($jar, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+        // curl writes HttpOnly cookies with this prefix, which is not a comment.
+        $line = (string)preg_replace('/^#HttpOnly_/', '', $line);
+        $parts = explode("\t", $line);
+        if ($line !== '' && $line[0] !== '#' && count($parts) >= 7) {
+            return $parts[5] . '=' . $parts[6];
+        }
+    }
+    return '';
+}
+
+/**
+ * The test itself rewrites config.php below. `php -S` runs OPcache with
+ * revalidate_freq (2 s by default), counted in whole seconds from the last
+ * check: a file changed right after a request can be served from the cache
+ * for up to three seconds (2.2 s of waiting failed now and then). The
+ * installer's own write invalidates the cache and needs no wait.
+ */
+function bk_test_put_config(string $path, string $text): void {
+    file_put_contents($path, $text);
+    usleep(3300000);
+}
+
+$in_test_config = (string)file_get_contents($config_path);
+$in_db = $db_name . '_inst';
+$pdo->exec("DROP DATABASE IF EXISTS `{$in_db}`");
+$pdo->exec("CREATE DATABASE `{$in_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+register_shutdown_function(function () use ($pdo, $in_db) {
+    try {
+        $pdo->exec("DROP DATABASE IF EXISTS `{$in_db}`");
+    } catch (Throwable $e) {
+        fwrite(STDERR, "Databázi {$in_db} se nepodařilo smazat: {$e->getMessage()}\n");
+    }
+});
+$in_jar = (string)tempnam(sys_get_temp_dir(), 'bk_inst');
+$in_anon = (string)tempnam(sys_get_temp_dir(), 'bk_inst_anon');
+$in_cfg = ['host' => $db_host, 'port' => $db_port, 'database' => $in_db, 'user' => $db_user, 'password' => $db_pass];
+$in_machine = [
+    'agent_api.php' => ['{"agent_key":"x"}', 'příjem od agenta'],
+    'heartbeat.php?token=' . str_repeat('a', 48) => [null, 'heartbeat'],
+    'node_api.php?action=get_monitors' => [null, 'API vzdálených uzlů'],
+    'metrics.php' => [null, 'Prometheus'],
+    'cron.php' => [null, 'cron přes HTTP'],
+];
+$in_chmod = false;
+$in_sync = $root . '/.ftp-deploy-sync-state.json';
+$in_sync_made = false;
+try {
+    // --- A fresh upload: no config.php at all ---------------------------
+    unlink($config_path);
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session');
+    $j = json_decode($b, true);
+    check('čerstvé nahrání: API odpoví 503 needs_setup', [$c, $j['error'] ?? null, $j['reason'] ?? null, $j['setupUrl'] ?? null], [503, 'needs_setup', 'config_missing', '/app/setup']);
+    check_false('db.php už nekopíruje vzorový config.php', file_exists($config_path));
+    [$c, $h] = bk_raw_request($base . '/index.php', ['Accept: text/html']);
+    check('čerstvé nahrání: prohlížeč jde do instalátoru', [$c, preg_match('/^location:\s*\/app\/setup\s*$/mi', $h)], [302, 1]);
+    foreach ($in_machine as $in_path => [$in_post, $in_label]) {
+        [$c, $h, $b] = bk_raw_request($base . '/' . $in_path, [], $in_post);
+        check("čerstvé nahrání, {$in_label}: 503 needs_setup v JSON, bez přesměrování",
+            [$c, json_decode($b, true)['error'] ?? null, preg_match('/^location:/mi', $h)], [503, 'needs_setup', 0]);
+    }
+
+    [$c, $st] = api_get_auth($base, 'action=install_status', $in_jar);
+    check('instalátor: krok config, nic nezamčeno', [$c, $st['step'] ?? null, $st['locked'] ?? null, $st['config']['exists'] ?? null], [200, 'config', false, false]);
+    check_true('instalátor ukáže požadavky na server', is_bool($st['requirements']['extensions']['pdo_mysql'] ?? null));
+    $in_csrf = (string)($st['csrfToken'] ?? '');
+    check_true('instalátor vydá CSRF token', strlen($in_csrf) === 64);
+
+    [$c, $r] = api_post($base, 'action=install_test_db', $in_cfg, $in_jar, '');
+    check('test databáze bez CSRF tokenu: 403', [$c, $r['error'] ?? null], [403, 'csrf_invalid']);
+    [$c] = api_get_auth($base, 'action=install_write_config', $in_jar);
+    check('zápis configu přes GET: 405 (heslo nikdy v URL)', $c, 405);
+    [$c, $r] = api_post($base, 'action=install_test_db', ['host' => 'db;unix_socket=/tmp/x'] + $in_cfg, $in_jar, $in_csrf);
+    check('host se středníkem se do DSN nedostane', [$c, $r['error'] ?? null], [400, 'invalid_host']);
+    [$c, $r] = api_post($base, 'action=install_test_db', ['password' => 'heslo_databaze'] + $in_cfg, $in_jar, $in_csrf);
+    check('vzorové heslo instalátor odmítne', [$c, $r['error'] ?? null], [400, 'invalid_password']);
+    $in_wrong = 'Spatne-' . bin2hex(random_bytes(6));
+    [$c, $r, $raw] = api_post($base, 'action=install_test_db', ['password' => $in_wrong] + $in_cfg, $in_jar, $in_csrf);
+    check('špatné heslo: ok=false a access_denied', [$c, $r['ok'] ?? null, $r['error'] ?? null], [200, false, 'access_denied']);
+    check_false('a heslo se v odpovědi nevrátí', str_contains($raw, $in_wrong));
+    [$c, $r] = api_post($base, 'action=install_test_db', ['database' => $in_db . '_nope'] + $in_cfg, $in_jar, $in_csrf);
+    check('neexistující databáze: unknown_database', [$r['ok'] ?? null, $r['error'] ?? null], [false, 'unknown_database']);
+    [$c, $r] = api_post($base, 'action=install_test_db', $in_cfg, $in_jar, $in_csrf);
+    check('správné údaje: prázdná databáze bez schématu a účtů', [$c, $r['ok'] ?? null, $r['database']['schema'] ?? null, $r['database']['users'] ?? null], [200, true, 'missing', 0]);
+    check_false('test připojení nic nezapíše', file_exists($config_path));
+
+    // PHP without write access: the text comes back, the password does not.
+    $in_can_chmod = !(function_exists('posix_geteuid') && posix_geteuid() === 0);
+    if ($in_can_chmod) {
+        $in_chmod = chmod($root, 0555);
+        clearstatcache();
+        [$c, $r, $raw] = api_post($base, 'action=install_write_config', $in_cfg, $in_jar, $in_csrf);
+        chmod($root, 0755);
+        $in_chmod = false;
+        check('bez práva zápisu: written=false a text ke zkopírování', [$c, $r['written'] ?? null, $r['passwordPlaceholder'] ?? null], [200, false, '__DB_PASSWORD__']);
+        check_true('text má místo hesla zástupný znak', str_contains((string)($r['configText'] ?? ''), "define('DB_PASS', '__DB_PASSWORD__');"));
+        check_true('a testovanou databázi', str_contains((string)($r['configText'] ?? ''), "define('DB_NAME', " . var_export($in_db, true) . ");"));
+        check_false('a soubor nevznikl', file_exists($config_path));
+        if (strlen($db_pass) >= 4) {
+            check_false('heslo databáze se nevrátí ani v textu ke zkopírování', str_contains($raw, $db_pass));
+        }
+    } else {
+        echo "  (přeskočeno: pod rootem nejde složku zamknout proti zápisu)\n";
+    }
+    // --- config -> schema -> account --------------------------------------
+    [$c, $r] = api_post($base, 'action=install_write_config', $in_cfg + ['timezone' => 'Europe/Prague'], $in_jar, $in_csrf);
+    check('zápis configu po úspěšném testu', [$c, $r['written'] ?? null, $r['next'] ?? null], [200, true, 'schema']);
+    $in_written = (string)@file_get_contents($config_path);
+    check_true('config.php nese testovanou databázi', str_contains($in_written, "define('DB_NAME', " . var_export($in_db, true) . ");"));
+    check_true('a session blok ze vzoru', str_contains($in_written, 'session_set_cookie_params'));
+    exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($config_path) . ' 2>&1', $in_lint, $in_lint_rc);
+    check('zapsaný config.php je platné PHP', $in_lint_rc, 0);
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session');
+    check('config bez schématu: needs_setup schema_missing', [$c, json_decode($b, true)['reason'] ?? null], [503, 'schema_missing']);
+    [$c, $h] = bk_raw_request($base . '/monitor.php?id=1', ['Accept: text/html']);
+    check('a prohlížeč pořád do instalátoru', [$c, preg_match('/^location:\s*\/app\/setup\s*$/mi', $h)], [302, 1]);
+    foreach (['install_test_db', 'install_write_config'] as $in_action) {
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_jar, $in_csrf);
+        check("funkční config.php už instalátor nepřepíše ({$in_action})", [$c, $r['error'] ?? null], [409, 'config_exists']);
+    }
+    [$c, $r] = api_post($base, 'action=install_import_schema', [], $in_jar, $in_csrf);
+    check('import schema.sql', [$c, $r['imported'] ?? null, $r['next'] ?? null], [200, true, 'account']);
+    $in_tables = $pdo->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ?");
+    $in_tables->execute([$in_db]);
+    check('v databázi jsou všechny tabulky ze schema.sql', (int)$in_tables->fetchColumn(), preg_match_all('/CREATE TABLE IF NOT EXISTS/', (string)file_get_contents($root . '/schema.sql')));
+    $in_key = $pdo->query("SELECT key_value FROM `{$in_db}`.settings WHERE key_name = 'cron_key'")->fetchColumn();
+    check_true('čerstvá instalace dostane vlastní cron klíč', is_string($in_key) && strlen($in_key) === 32);
+    [$c, $r] = api_post($base, 'action=install_import_schema', [], $in_jar, $in_csrf);
+    check('druhý import nic nepřepíše', [$c, $r['imported'] ?? null, $r['alreadyImported'] ?? null], [200, false, true]);
+    [$c, $s] = api_get($base, 'action=session');
+    check('po importu API běží a nabídne první účet', [$c, $s['installed'] ?? 'chybí'], [200, false]);
+    [$c, $cr] = api_get_auth($base, 'action=install_cron', $in_jar);
+    check('cron řádek z __DIR__, každou minutu', [$c, $cr['script'] ?? null, $cr['schedule'] ?? null], [200, $root . '/cron.php', '* * * * *']);
+    check_true('crontab řádek = plán + příkaz pro cPanel', ($cr['crontabLine'] ?? '') === '* * * * * ' . ($cr['command'] ?? '-'));
+    [$c, $su] = api_post($base, 'action=setup', ['username' => 'installer', 'email' => 'installer@example.com', 'password' => 'Inst-' . bin2hex(random_bytes(6))], $in_jar, '');
+    check('první účet po instalátoru', [$c, $su['id'] ?? null], [200, 1]);
+
+    // --- the first cron run, with exactly the command the installer printed
+    [, $ch] = api_get($base, 'action=collection_health');
+    check('před prvním během: lastRunAt null a stale, žádná zelená',
+        [is_array($ch) && array_key_exists('lastRunAt', $ch) ? $ch['lastRunAt'] : 'chybí', $ch['stale'] ?? null], [null, true]);
+    [$c, $cr] = api_get_auth($base, 'action=install_cron', $in_jar);
+    check('po instalaci dostane cron řádek admin', $c, 200);
+    exec((string)($cr['command'] ?? 'false'), $in_cron_out, $in_cron_rc);
+    check('příkaz z instalátoru doběhne', $in_cron_rc, 0);
+    [, $ch] = api_get($base, 'action=collection_health');
+    check_true('a první běh je vidět v collection_health', is_string($ch['lastRunAt'] ?? null) && ($ch['stale'] ?? null) === false);
+
+    // --- the lock: a finished install refuses every step ----------------
+    $in_before = md5_file($config_path);
+    [$c, $st] = api_get_auth($base, 'action=install_status', $in_anon);
+    check('hotová instalace prozradí jen, že je hotová', [$c, $st], [200, ['step' => 'installed', 'locked' => true]]);
+    foreach (['install_test_db', 'install_write_config', 'install_import_schema'] as $in_action) {
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_anon, 'x');
+        check("druhý běh, {$in_action}: 409 installer_locked", [$c, $r['error'] ?? null], [409, 'installer_locked']);
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_jar, $in_csrf);
+        check("druhý běh i s tokenem admina, {$in_action}: 409", [$c, $r['error'] ?? null], [409, 'installer_locked']);
+    }
+    [$c, $r] = api_get_auth($base, 'action=install_cron', $in_anon);
+    check('cron řádek anonymovi po instalaci ne', [$c, $r['error'] ?? null], [409, 'installer_locked']);
+    [$c] = api_post($base, 'action=setup', ['username' => 'x', 'email' => 'x@example.com', 'password' => 'Xx-12345678'], $in_anon, '');
+    check('ani druhý první účet', $c, 409);
+    check('config.php zůstal, jak byl', md5_file($config_path), $in_before);
+
+    // Machine endpoints on the finished install: their own answers, no redirect.
+    $in_expect = ['agent_api.php' => 401, 'heartbeat.php?token=' . str_repeat('a', 48) => 404,
+        'node_api.php?action=get_monitors' => 403, 'metrics.php' => 404, 'cron.php' => 403];
+    foreach ($in_machine as $in_path => [$in_post, $in_label]) {
+        [$c, $h] = bk_raw_request($base . '/' . $in_path, [], $in_post);
+        check("po instalaci, {$in_label}: vlastní odpověď, žádné přesměrování", [$c, preg_match('/^location:/mi', $h)], [$in_expect[$in_path], 0]);
+    }
+
+    // --- the sample's placeholder config: still a first run ---------------
+    bk_test_put_config($config_path, (string)file_get_contents($root . '/config.sample.php'));
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session');
+    check('vzorový config.php: needs_setup config_sample', [$c, json_decode($b, true)['reason'] ?? null], [503, 'config_sample']);
+    [, $st] = api_get_auth($base, 'action=install_status', $in_anon);
+    check('a instalátor ho smí nahradit', [$st['step'] ?? null, $st['config']['sample'] ?? null], ['config', true]);
+
+    // --- a REAL config.php whose database is down: an outage, not a setup --
+    bk_test_put_config($config_path, $in_test_config);
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session', ['X-BK-Test-DB-Down: 1']);
+    check('výpadek databáze zůstává database_unavailable', [$c, json_decode($b, true)], [503, ['error' => 'database_unavailable']]);
+    [$c, $h, $b] = bk_raw_request($base . '/api.php?action=install_status', ['X-BK-Test-DB-Down: 1']);
+    check('instalátor při výpadku: zamčeno, bez tokenu', json_decode($b, true), ['step' => 'config_unreachable', 'locked' => true]);
+    [$c, $h, $b] = bk_raw_request($base . '/api.php?action=install_write_config',
+        ['X-BK-Test-DB-Down: 1', 'Content-Type: application/json', 'X-CSRF-Token: ' . $in_csrf, 'Cookie: ' . bk_test_jar_cookie($in_jar)],
+        json_encode($in_cfg));
+    check('při výpadku instalátor skutečný config.php nepřepíše', [$c, json_decode($b, true)['error'] ?? null], [409, 'config_exists']);
+    check('config.php je pořád ten testovací', (string)file_get_contents($config_path), $in_test_config);
+
+    // --- a CI-deployed directory that lost its config.php: still locked --
+    // FTP-Deploy-Action leaves .ftp-deploy-sync-state.json next to what it
+    // uploads; a fresh upload never has it. config.php gone there (a scanner's
+    // quarantine, an FTP mistake) or back to the sample is a broken deploy,
+    // and a config step would let whoever noticed point the site elsewhere.
+    $in_sync_made = !file_exists($in_sync) && file_put_contents($in_sync, '{"version":"1.0.0","data":[]}') !== false;
+    check_true('složka z CI: stav synchronizace FTP je na místě', $in_sync_made);
+    unlink($config_path);
+    foreach (['anonym' => $in_anon, 'relace s tokenem' => $in_jar] as $in_who => $in_who_jar) {
+        [$c, $st] = api_get_auth($base, 'action=install_status', $in_who_jar);
+        check("složka z CI bez config.php ({$in_who}): zamčeno, bez tokenu", [$c, $st], [200, ['step' => 'config_unreachable', 'locked' => true]]);
+    }
+    foreach (['install_test_db' => 'config_exists', 'install_write_config' => 'config_exists',
+        'install_import_schema' => 'database_not_configured'] as $in_action => $in_error) {
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_anon, 'x');
+        check("složka z CI, {$in_action} bez tokenu: 403", [$c, $r['error'] ?? null], [403, 'csrf_invalid']);
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_jar, $in_csrf);
+        check("složka z CI, {$in_action} i s tokenem: 409 {$in_error}", [$c, $r['error'] ?? null], [409, $in_error]);
+    }
+    [$c, $r] = api_get_auth($base, 'action=install_cron', $in_anon);
+    check('složka z CI: cron řádek ne', [$c, $r['error'] ?? null], [409, 'database_not_configured']);
+    [$c, $r] = api_post($base, 'action=setup', ['username' => 'x', 'email' => 'x@example.com', 'password' => 'Xx-12345678'], $in_anon, '');
+    check('složka z CI: ani první účet', [$c, $r['error'] ?? null], [503, 'needs_setup']);
+    check_false('složka z CI: config.php nevznikl', file_exists($config_path));
+    $in_sample = (string)file_get_contents($root . '/config.sample.php');
+    bk_test_put_config($config_path, $in_sample);
+    [$c, $st] = api_get_auth($base, 'action=install_status', $in_anon);
+    check('složka z CI se vzorovým config.php: taky zamčeno', [$c, $st], [200, ['step' => 'config_unreachable', 'locked' => true]]);
+    [$c, $r] = api_post($base, 'action=install_write_config', $in_cfg, $in_jar, $in_csrf);
+    check('a vzorový config.php tam instalátor nepřepíše', [$c, $r['error'] ?? null], [409, 'config_exists']);
+    check('config.php je pořád vzorový', (string)file_get_contents($config_path), $in_sample);
+} finally {
+    if ($in_chmod) {
+        chmod($root, 0755);
+    }
+    if ($in_sync_made) {
+        @unlink($in_sync);
+    }
+    file_put_contents($config_path, $in_test_config);
+    @unlink($in_jar);
+    @unlink($in_anon);
+}
+
 $failed = bk_test_report('api.php (integrační)');
 if (!defined('BK_COVERAGE_RUN')) {
     exit($failed > 0 ? 1 : 0);

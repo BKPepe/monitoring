@@ -37,14 +37,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+
+/**
+ * The first-run installer (site W1-5) runs where the rest of the API cannot:
+ * without config.php, on placeholder credentials, or on an empty database.
+ * db.php then hands over `$pdo = null` (or a connection without a schema)
+ * instead of answering needs_setup, and installer.php decides - including
+ * the lock that refuses every step once the database connects and an account
+ * exists. It exits before functions.php, which needs a finished install. The
+ * installer keeps the session open and writes only its own CSRF token there.
+ */
+if ($action === 'install_status' || $action === 'install_test_db' || $action === 'install_write_config'
+    || $action === 'install_import_schema' || $action === 'install_cron') {
+    define('BK_INSTALL_REQUEST', true);
+}
+
 // db.php loads config.php itself, after it has set the session cookie flags.
 // Requiring config.php first let its session start before them, and the
 // admin cookie went out without HttpOnly and SameSite.
 require_once __DIR__ . '/db.php';
+if (defined('BK_INSTALL_REQUEST')) {
+    require_once __DIR__ . '/installer.php';
+    bk_install_dispatch((string)$action, $pdo ?? null, __DIR__);
+}
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/lang.php';
-
-$action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /**
  * A read that failed: an error status and a code, never a success body.

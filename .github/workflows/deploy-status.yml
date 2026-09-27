@@ -113,6 +113,11 @@ jobs:
           username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
           password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
           local-dir: ./apps/status/
+          # The installer stays locked while this action's sync state
+          # (.ftp-deploy-sync-state.json, the default state name) sits next to
+          # installer.php (bk_install_dispatch). Setting a state name, moving
+          # server-dir to a parent or deploying another way turns that lock off
+          # without a sound; run_tests.php fails on any of the three.
           server-dir: public_html/status/
           protocol: ftps
           # The action's default is "loose": TLS without a certificate check.

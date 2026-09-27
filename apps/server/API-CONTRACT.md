@@ -117,6 +117,17 @@ Pozor na detaily, které se snadno ztratí:
   logy jen za den(y), kam souhrn nedošel.
   `monitors` v pohledu aplikace (ne `scope=public`) nese vedle seznamu
   `sslAlertDays` = `max(1, ssl_alert_days)` (CR-5).
+- **První spuštění (site W1-5):** bez `config.php`, se vzorovým heslem, které
+  se nepřipojí, nebo bez naimportovaného schématu odpoví každý endpoint `503
+  {"error":"needs_setup","reason"}` a prohlížeč jde 302 na `/app/setup`;
+  strojové endpointy se nepřesměrují. Skutečný config, který se nepřipojí, je
+  pořád `database_unavailable`. Instalátor `install_status` / `install_test_db`
+  / `install_write_config` / `install_import_schema` / `install_cron` (zápisy
+  POST + CSRF) se zamkne (409 `installer_locked`), jakmile se databáze připojí
+  a existuje účet; skutečný `config.php` nikdy nepřepíše a ve složce
+  nasazované přes CI (`.ftp-deploy-sync-state.json`) nezapíše žádný
+  (`config_unreachable`). Go verze musí mít stejný zámek - otevřený instalátor
+  je cesta k převzetí.
 - **„Agent existuje" ≠ „má klíč".** `agent_key` se generuje všem monitorům;
   za agenta se počítá jen ten, který se někdy ozval (`agent_last_seen`).
 - **Hub se vylučuje z distribuovaných lokací** (`checked_from != 'Main Server'`
