@@ -106,6 +106,21 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_uptime_totals',
     'bk_uptime_pct_round',
     'bk_uptime_by_day',
+    // UX wave 2, server (C-7, C-11, C-12, charts-06/15/29).
+    'bk_uptime_day_cell',
+    'bk_status_label',
+    'bk_monitor_has_reported',
+    'bk_counter_delta_points',
+    'bk_metric_family',
+    'bk_iface_traffic_booking',
+    'bk_iface_day_ceiling_bytes',
+    'bk_attention_reasons',
+    'bk_insight_severity',
+    // UX wave 2, server s3 (C-3 previousAvg, charts-22 English metric names).
+    'bk_metric_labels_en',
+    'bk_metric_label',
+    'bk_series_mean',
+    'bk_aggregate_mean',
 ]);
 
 
@@ -3374,7 +3389,10 @@ if (function_exists('bk_router_rec_evaluate') && is_readable(__DIR__ . '/fixture
     // Údržba stojí mimo zlomek: nesnižuje ani nezvyšuje.
     $ut_maint = bk_uptime_summary(bk_uptime_segments([[$ut_now - 600, 'up'], [$ut_now - 300, 'maintenance']], $ut_now - 600, $ut_now, 300, false), $ut_now - 600, $ut_now);
     check('údržba se do dostupnosti nepočítá', [$ut_maint['pct'], $ut_maint['maintenance']], [100.0, 300]);
-    check('warning není „up" (stejně jako dřív)', bk_uptime_summary([[0, 60, 'up'], [60, 120, 'warning']], 0, 120)['pct'], 50.0);
+    // C-7 / CR-4: degraded time counts as available everywhere, as in the day strip; it stays visible as 'warning'.
+    $ut_warn = bk_uptime_summary([[0, 60, 'up'], [60, 120, 'warning']], 0, 120);
+    check('warning je dostupnost (C-7), zhoršený čas zůstane vidět zvlášť', [$ut_warn['pct'], $ut_warn['warning'], $ut_warn['outage']], [100.0, 60, 0]);
+    check('výpadek dostupnost snižuje, warning ne', bk_uptime_summary([[0, 60, 'down'], [60, 120, 'warning']], 0, 120)['pct'], 50.0);
 
     check('jedna dlouhá mezera medián nepohne', bk_uptime_interval([0, 60, 120, 180, 180 + 3 * 86400, 180 + 3 * 86400 + 60]), 60);
     check('málo řádků: výchozích 300 s', bk_uptime_interval([0, 60]), 300);
@@ -3639,6 +3657,173 @@ foreach ([BK_CF_EDGE_UNKNOWN, bk_cf_location_label('XYZ', '')] as $cf_now) {
     }
 }
 check('co dnes posílá Worker, zůstane beze změny (oprava je idempotentní)', $cf_again, []);
+
+// --- UX wave 2, server half -------------------------------------------------
+// C-7: a strip day says how much of it was measured, and warning is available.
+if (function_exists('bk_uptime_day_cell')) {
+    $dc = fn (array $secs): array => bk_uptime_totals([$secs]);
+    $c = bk_uptime_day_cell(null, null);
+    check('den bez řádku: nodata, žádné procento', [$c['status'], $c['uptimePct']], ['nodata', null]);
+    $c = bk_uptime_day_cell($dc(['unmeasured' => 86400]), null);
+    check('den celý neměřený: nodata s pokrytím 0', [$c['status'], $c['coveragePct']], ['nodata', 0.0]);
+    $c = bk_uptime_day_cell($dc(['up' => 86400]), ['up' => 288, 'down' => 0, 'warning' => 0]);
+    check('celý den v pořádku: up, 100 %, pokrytí 100', [$c['status'], $c['uptimePct'], $c['coveragePct']], ['up', 100.0, 100.0]);
+    $c = bk_uptime_day_cell($dc(['up' => 50400, 'unmeasured' => 36000]), ['up' => 168, 'down' => 0, 'warning' => 0]);
+    check('14 h z 24 h měřeno: partial, ne zelený den', [$c['status'], $c['coveragePct'], $c['measuredSecs'], $c['expectedSecs']], ['partial', 58.3, 50400, 86400]);
+    check('a popis říká, kolik se měřilo', [$c['detailKey'], $c['detailArgs']], ['day_partial_detail', [50400, 86400]]);
+    $c = bk_uptime_day_cell($dc(['up' => 1800]), ['up' => 6, 'down' => 0, 'warning' => 0]);
+    check('monitor založený večer: celé jeho půlhodina změřená je up', [$c['status'], $c['coveragePct']], ['up', 100.0]);
+    $c = bk_uptime_day_cell($dc(['up' => 82800, 'warning' => 3600]), ['up' => 276, 'down' => 0, 'warning' => 12]);
+    check('varování se počítá jako dostupnost, minuty zhoršení zvlášť', [$c['status'], $c['uptimePct'], $c['degradedMin']], ['warning', 100.0, 60]);
+    $c = bk_uptime_day_cell($dc(['up' => 84600, 'down' => 1800]), ['up' => 282, 'down' => 6, 'warning' => 0]);
+    check('výpadek: down, 30 min, dostupnost bez něj', [$c['status'], $c['downMin'], $c['uptimePct']], ['down', 30, 97.9]);
+    $c = bk_uptime_day_cell($dc(['up' => 30000, 'silent' => 7200, 'unmeasured' => 49200]), ['up' => 100, 'down' => 1, 'warning' => 0]);
+    check('mlčení agenta je výpadek i při děravém dni', [$c['status'], $c['detailKey']], ['down', 'day_silent_detail']);
+    $c = bk_uptime_day_cell($dc(['up' => 3600, 'maintenance' => 82800]), ['up' => 12, 'down' => 0, 'warning' => 0]);
+    check('údržba přes většinu dne: maintenance', $c['status'], 'maintenance');
+    $c = bk_uptime_day_cell(bk_uptime_totals([['up' => 86400]]) + ['approx' => 1], ['up' => 1, 'down' => 0, 'warning' => 0]);
+    check('den dopočítaný z počtů kontrol: pokrytí neznámé, ne 100', [$c['status'], $c['coveragePct'], $c['expectedSecs']], ['up', null, null]);
+    // No check rows for a measured day (the log was pruned first): the sentence follows the seconds, never "0 checks".
+    $c = bk_uptime_day_cell(bk_uptime_totals([['up' => 86400]]), null);
+    check('den bez řádků kontrol: „Bez výpadku“, ne „Všech 0 kontrol“', [$c['status'], $c['detailKey'], $c['detailArgs']], ['up', 'day_up_time_detail', []]);
+    $c = bk_uptime_day_cell(bk_uptime_totals([['up' => 84600, 'down' => 1800]]), null);
+    check('výpadek bez řádků kontrol: délka ze sekund', [$c['status'], $c['detailKey'], $c['detailArgs'][0]], ['down', 'day_down_time_detail', 1800]);
+    $c = bk_uptime_day_cell(bk_uptime_totals([['up' => 82800, 'warning' => 3600]]), ['up' => 0, 'down' => 0, 'warning' => 0]);
+    check('zhoršení bez řádků kontrol: délka ze sekund', [$c['status'], $c['detailKey'], $c['detailArgs']], ['warning', 'day_warning_time_detail', [3600]]);
+}
+
+// C-11: one status vocabulary; "unknown" is two different things.
+if (function_exists('bk_status_label')) {
+    check('down česky', bk_status_label('down', true, 'cs'), ['key' => 'down', 'label' => 'Výpadek', 'tone' => 'down', 'icon' => 'circle-x']);
+    check('údržba je info, ne OK', [bk_status_label('maintenance', true, 'cs')['label'], bk_status_label('maintenance', true)['tone']], ['Údržba', 'info']);
+    check('nikdy nehlásil: čeká na první data, neutrální', [bk_status_label('unknown', false, 'cs')['key'], bk_status_label('unknown', false)['tone']], ['unknown_new', 'neutral']);
+    check('hlásil a zmlkl: agent mlčí, varování', [bk_status_label('unknown', true, 'cs')['label'], bk_status_label('unknown', true)['tone']], ['Agent mlčí', 'warning']);
+    check('neví se: strana varování', bk_status_label('unknown', null)['key'], 'unknown_stale');
+    check('neznámé slovo je unknown, ne OK', bk_status_label('garbage', true)['key'], 'unknown_stale');
+    check('anglicky', bk_status_label('paused', true, 'en')['label'], 'Paused');
+    check('velká písmena nevadí', bk_status_label('UP', true, 'cs')['key'], 'up');
+}
+// CR-3: cron stamps last_checked on a heartbeat every run - only a ping counts as reporting.
+if (function_exists('bk_monitor_has_reported')) {
+    check('heartbeat bez jediného signálu čeká na první data (ne „agent mlčí“)',
+        bk_monitor_has_reported(['type' => 'heartbeat', 'last_checked' => '2026-09-24 08:00:00', 'last_heartbeat' => null], []), false);
+    check('heartbeat se signálem hlásil', bk_monitor_has_reported(['type' => 'heartbeat', 'last_checked' => null, 'last_heartbeat' => '2026-09-24 07:59:00'], []), true);
+    check('ostatní typy dál podle poslední kontroly', bk_monitor_has_reported(['type' => 'web', 'last_checked' => '2026-09-24 08:00:00'], []), true);
+}
+
+// charts-06/15: counters as increments, nothing across a reset or a gap in time.
+if (function_exists('bk_counter_delta_points')) {
+    $cp = [[1000, 100], [1060, 110], [1120, 125], [1180, 5], [1240, 20], [5000, 900], [5060, 910]];
+    check('přírůstky čítače: reset i mezera bez bodu', bk_counter_delta_points($cp), [[1060, 10.0], [1120, 15.0], [1240, 15.0], [5060, 10.0]]);
+    check('bez časů se chová jako dřív', bk_counter_deltas([1.0, 3.0, null, 4.0, 6.0]), [null, 2.0, null, null, 2.0]);
+    check('s časy mezera ve čase přeruší řetěz', bk_counter_deltas([1.0, 3.0, 10.0, 12.0], [0, 60, 900, 960]), [null, 2.0, null, 2.0]);
+    check('prázdná řada', bk_counter_delta_points([]), []);
+}
+
+// charts-29: a metric is not correlated with its own family.
+if (function_exists('bk_metric_family')) {
+    check('load 1/5/15 jsou jedna rodina', array_map('bk_metric_family', ['load1', 'load5', 'load15']), ['load', 'load', 'load']);
+    check('paměť je jedna rodina', array_map('bk_metric_family', ['ram', 'ram_used_mb', 'ram_available_mb']), ['ram', 'ram', 'ram']);
+    check('iowait má rodinu sám pro sebe', bk_metric_family('iowait'), 'iowait');
+    check('šum Wi-Fi napříč pásmy', bk_metric_family('wifi_noise_5g'), 'wifi_noise');
+}
+
+// charts-22: every metric has an English name, and a counter says it is an increment.
+if (function_exists('bk_metric_label') && function_exists('bk_metric_column_map')) {
+    $en_names = bk_metric_labels_en();
+    $missing_en = array_values(array_diff(array_keys(bk_metric_column_map()), array_keys($en_names)));
+    check('každá metrika má anglický název', $missing_en, []);
+    $stale_en = array_values(array_diff(array_keys($en_names), array_keys(bk_metric_column_map()), ['response_time']));
+    check('žádný anglický název bez metriky', $stale_en, []);
+    check('česky zůstává český název', bk_metric_label('cpu', 'Využití CPU', false, 'cs'), 'Využití CPU');
+    check('anglicky anglický název', bk_metric_label('cpu', 'Využití CPU', false, 'en'), 'CPU usage');
+    check('čítač česky: přírůstek', bk_metric_label('fw_dropped', 'Firewall - zahozeno', true, 'cs'), 'Firewall - zahozeno (přírůstek)');
+    check('čítač anglicky: increase', bk_metric_label('fw_dropped', 'Firewall - zahozeno', true, 'en'), 'Firewall - dropped (increase)');
+    check('latency je odezva', bk_metric_label('latency', 'Doba odezvy (HTTP/Ping)', false, 'en'), 'Response time (HTTP/Ping)');
+    check('neznámý klíč: český název, nikdy prázdno', bk_metric_label('nic_takoveho', 'Něco', false, 'en'), 'Něco');
+}
+
+// C-3: the previous window's mean, null where too little was measured.
+if (function_exists('bk_series_mean')) {
+    check('průměr bodů', bk_series_mean([[1, 1], [2, 2.5], [3, 4.5]]), 2.667);
+    check('null body se nepočítají', bk_series_mean([[1, 1], [2, null], [3, 3], [4, 5]]), 3.0);
+    check('méně než 3 vzorky: null', bk_series_mean([[1, 10], [2, 20]]), null);
+    check('prázdná řada: null, ne nula', bk_series_mean([]), null);
+    check('SQL průměr jako řetězec', bk_aggregate_mean('12', '41.23456'), 41.235);
+    check('SQL bez vzorků: null', bk_aggregate_mean('0', null), null);
+    check('SQL se 2 vzorky: null', bk_aggregate_mean(2, '7.0'), null);
+    check('SQL nulový průměr je změřená nula', bk_aggregate_mean(5, '0'), 0.0);
+}
+
+// charts-15: which day an interface's bytes belong to.
+if (function_exists('bk_iface_traffic_booking')) {
+    check('první čtení je základ, ne dnešní provoz', bk_iface_traffic_booking(null, 5e12, false, null), 0.0);
+    check('předchozí čtení dnes: celý přírůstek', bk_iface_traffic_booking(1000.0, 5000.0, true, 7200), 4000.0);
+    check('přes půlnoc krátce: přírůstek se připíše', bk_iface_traffic_booking(1000.0, 1500.0, false, 90), 500.0);
+    check('přes půlnoc po dlouhé mezeře: nikam', bk_iface_traffic_booking(1000.0, 8e11, false, 3 * 86400), 0.0);
+    check('restart: jen co se napočítalo od něj', bk_iface_traffic_booking(9000.0, 300.0, true, 60), 300.0);
+    check('strop dne pro 1 Gbit/s', bk_iface_day_ceiling_bytes(1000.0), 1.08e13);
+    check('neznámá rychlost: 10 Gbit/s', bk_iface_day_ceiling_bytes(null), 1.08e14);
+}
+
+// C-12: the attention reasons, the same rules as the dashboard used.
+if (function_exists('bk_attention_reasons')) {
+    $ar = fn (array $m): array => array_map(fn ($r) => $r['kind'] . '/' . $r['severity'], bk_attention_reasons($m));
+    check('výpadek je kritický', $ar(['status' => 'down', 'has_reported' => true]), ['status_down/critical']);
+    check('varování je varování', $ar(['status' => 'warning', 'has_reported' => true]), ['status_warning/warning']);
+    check('agent mlčí je varování', $ar(['status' => 'unknown', 'has_reported' => true]), ['status_unknown_stale/warning']);
+    check('čeká na první data: žádný nález', $ar(['status' => 'unknown', 'has_reported' => false]), []);
+    check('údržba: žádný nález', $ar(['status' => 'maintenance', 'has_reported' => true]), []);
+    check('privátní cíl aktivní kontroly', $ar(['status' => 'up', 'type' => 'web', 'target' => 'https://192.168.1.1/']), ['unreachable/warning']);
+    check('certifikát: vypršel kritický, brzy varování, daleko nic', [
+        $ar(['status' => 'up', 'ssl_days' => 0, 'ssl_alert_days' => 14]),
+        $ar(['status' => 'up', 'ssl_days' => 5, 'ssl_alert_days' => 14]),
+        $ar(['status' => 'up', 'ssl_days' => 40, 'ssl_alert_days' => 14]),
+    ], [['ssl_expired/critical'], ['ssl_expiring/warning'], []]);
+    check('metrika nad limitem, neměřená nic', $ar(['status' => 'up', 'metrics' => [
+        'cpu' => ['value' => 95.2, 'limit' => 90], 'ram' => ['value' => null, 'limit' => 95], 'hdd' => ['value' => 40, 'limit' => 90]]]), ['metric_high/warning']);
+    check('parametry metriky: jméno, hodnota, limit', bk_attention_reasons(['status' => 'up', 'metrics' => ['hdd' => ['value' => 91.6, 'limit' => 90]]])[0]['params'], ['Disk', 92, 90]);
+    check('nový agent je informace', $ar(['status' => 'up', 'agent_version' => '0.1.7', 'agent_latest' => '0.1.8']), ['agent_update/info']);
+    check('aktuální agent nic', $ar(['status' => 'up', 'agent_version' => '0.1.8', 'agent_latest' => '0.1.8']), []);
+}
+if (function_exists('bk_insight_severity')) {
+    check('červený postřeh je varování, ne kritický', bk_insight_severity(['color' => 'var(--color-red)']), 'warning');
+    check('žlutý varování', bk_insight_severity(['color' => 'var(--color-yellow)']), 'warning');
+    check('zelený je informace', bk_insight_severity(['color' => 'var(--color-green)']), 'info');
+    check('bez barvy informace', bk_insight_severity([]), 'info');
+}
+
+// --- UX wave 2 on main (w2m), server: tips, flags ----------------------------
+// CR-9b: the tips join the findings feed without repeating a reason.
+// Public page flags: the country comes from the label, never a guess.
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_tip_findings', 'bk_location_country', 'bk_monitor_has_reported',
+    'bk_attention_reasons', 'bk_status_label', 'bk_validate_import_target', 'bk_version_is_older',
+]);
+{
+    // CR-9b: tips as findings.
+    $tf_tips = [
+        ['severity' => 'critical', 'text' => 'CPU vysoko', 'kind' => 'knowledge_tip_cpu_high'],
+        ['severity' => 'warn', 'text' => 'RAM se plní', 'kind' => 'knowledge_tip_ram_high'],
+        ['severity' => 'critical', 'text' => 'Certifikát brzy vyprší', 'kind' => 'knowledge_tip_ssl_expiring'],
+        ['severity' => 'critical', 'text' => 'Chybí proces nginx', 'kind' => 'knowledge_tip_process_missing'],
+        ['severity' => 'critical', 'text' => 'Chybí proces mysqld', 'kind' => 'knowledge_tip_process_missing'],
+        ['severity' => 'info', 'text' => 'Starý tip bez klíče'],
+    ];
+    $tf_reasons = [['kind' => 'metric_high', 'severity' => 'warning', 'params' => ['CPU', 92, 90]], ['kind' => 'ssl_expiring', 'severity' => 'warning', 'params' => [3]]];
+    $tf = bk_tip_findings($tf_tips, $tf_reasons);
+    check('tipy: CPU a certifikát vedle stejného důvodu zmizí, RAM pod limitem zůstane',
+        array_column($tf, 'kind'), ['knowledge_tip_ram_high', 'knowledge_tip_process_missing', 'knowledge_tip_process_missing-' . substr(md5('Chybí proces mysqld'), 0, 8)]);
+    check('tipy: warn je varování, critical kritický', array_column($tf, 'severity'), ['warning', 'critical', 'critical']);
+    check('tipy: bez důvodu zůstanou všechny s klíčem', count(bk_tip_findings($tf_tips, [])), 5);
+
+    // Flags from location labels.
+    check('vlajka: země z regionálních písmen', bk_location_country('🇩🇪 Frankfurt, DE (AS13335 Cloudflare)'), 'DE');
+    check('vlajka: země z ", CC" bez emoji', bk_location_country('Praha, CZ (Example ISP)'), 'CZ');
+    check('vlajka: stará cloudflarová Mumbai, US je Indie', bk_location_country('🇺🇸 Mumbai, US (AS13335 Cloudflare)'), 'IN');
+    check('vlajka: glóbus, Main Server, Agent a nic = žádná země',
+        [bk_location_country(BK_CF_EDGE_UNKNOWN), bk_location_country('Main Server'), bk_location_country('Agent'), bk_location_country(null), bk_location_country('')], [null, null, null, null, null]);
+}
 
 $failed = bk_test_report('čisté funkce');
 // Under the coverage runner the process does not exit - the report would never generate.

@@ -1127,6 +1127,128 @@ function bk_metric_column_map(): array {
 }
 
 /**
+ * English names of the series in bk_metric_column_map(), plus response_time.
+ *
+ * A separate map rather than a 'label_en' in every row: the column map is read
+ * by cron and the ingest too, and the names are only for people. run_tests
+ * pins that every metric key has an entry here, so a new metric without an
+ * English name fails the suite instead of titling an English chart in Czech
+ * (charts-22).
+ *
+ * @return array<string, string>
+ */
+function bk_metric_labels_en(): array {
+    return [
+    'response_time' => 'Response time (HTTP/Ping)',
+    'cpu' => 'CPU usage', 'ram' => 'Memory usage', 'hdd' => 'Disk usage',
+    'net' => 'WAN traffic', 'net_lte' => 'LTE backup traffic',
+    'load1' => 'Load average (1 min)', 'load5' => 'Load average (5 min)', 'load15' => 'Load average (15 min)',
+    'cpu_steal' => 'CPU steal', 'swap' => 'Swap usage',
+    'disk_io_read' => 'Disk reads', 'disk_io_write' => 'Disk writes',
+    'net_errors' => 'Network errors', 'iowait' => 'I/O wait', 'inode_usage' => 'Inode usage',
+    'ts_clients' => 'TeamSpeak clients', 'discord_presence' => 'Online on Discord', 'mc_players' => 'Players online',
+    'ts_process_cpu' => 'TS3 process CPU', 'ts_process_ram' => 'TS3 process RAM',
+    'net_ipv4' => 'IPv4 traffic (all interfaces)', 'net_ipv6' => 'IPv6 traffic (all interfaces)',
+    'temperature_c' => 'CPU temperature', 'zombie_count' => 'Zombie processes', 'fork_rate' => 'Fork rate',
+    'wifi_clients' => 'Wi-Fi clients',
+    'wifi_clients_24g' => 'Wi-Fi clients on 2.4 GHz', 'wifi_clients_5g' => 'Wi-Fi clients on 5 GHz',
+    'wifi_clients_6g' => 'Wi-Fi clients on 6 GHz',
+    'wifi_6e_capable_24g' => 'Clients on 2.4 GHz with Wi-Fi 6E support',
+    'wifi_6e_known_24g' => 'Clients on 2.4 GHz with known band support',
+    'wifi_6e_capable_5g' => 'Clients on 5 GHz with Wi-Fi 6E support',
+    'wifi_6e_known_5g' => 'Clients on 5 GHz with known band support',
+    'wifi_noise_24g' => 'Wi-Fi noise on 2.4 GHz', 'wifi_noise_5g' => 'Wi-Fi noise on 5 GHz',
+    'wifi_noise_6g' => 'Wi-Fi noise on 6 GHz',
+    'wifi_busy_24g' => 'Channel utilisation on 2.4 GHz', 'wifi_busy_5g' => 'Channel utilisation on 5 GHz',
+    'wifi_busy_6g' => 'Channel utilisation on 6 GHz',
+    'wifi_busy_other_24g' => 'Other networks on the 2.4 GHz channel',
+    'wifi_busy_other_5g' => 'Other networks on the 5 GHz channel',
+    'wifi_busy_other_6g' => 'Other networks on the 6 GHz channel',
+    'wifi_weak_clients' => 'Wi-Fi clients with a weak signal',
+    'wifi_wpa2_clients' => 'Wi-Fi clients connected over WPA2',
+    'wifi_6e_unserved' => '6 GHz clients without a 6 GHz radio (share of time)',
+    'wifi_5g_capable_24g' => 'Clients on 2.4 GHz with 5 GHz support',
+    'conntrack' => 'Conntrack table',
+    'wan_latency_ms' => 'WAN latency', 'dns_latency_ms' => 'DNS latency', 'entropy' => 'Available entropy',
+    'lte_rsrp' => 'LTE RSRP (signal strength)', 'lte_rsrq' => 'LTE RSRQ (quality)',
+    'lte_rssi' => 'LTE RSSI (strength)', 'lte_sinr' => 'LTE SINR (signal to noise)',
+    'lte_uptime' => 'LTE connection time', 'ups_battery_pct' => 'UPS battery',
+    'conntrack_count' => 'Conntrack connections',
+    'dhcp_leases_count' => 'Active DHCP leases', 'dhcp_reservations_count' => 'DHCP reservations',
+    'tailscale_peers' => 'Tailscale peers', 'wireguard_peers' => 'WireGuard peers', 'openvpn_tunnels' => 'OpenVPN tunnels',
+    'ram_used_mb' => 'Used memory', 'ram_free_mb' => 'Free memory',
+    'ram_available_mb' => 'Available memory', 'ram_total_mb' => 'Total memory',
+    'wan_link_mbit' => 'WAN link speed', 'wan_uptime' => 'WAN connection time',
+    'log_errors_24h' => 'Log errors in 24 h', 'log_warnings_24h' => 'Log warnings in 24 h',
+    'btrfs_errors' => 'Btrfs errors',
+    'sqm_download_kbps' => 'SQM download limit', 'sqm_upload_kbps' => 'SQM upload limit',
+    'fw_accepted' => 'Firewall - accepted', 'fw_dropped' => 'Firewall - dropped', 'fw_rejected' => 'Firewall - rejected',
+    'dns_queries' => 'DNS queries', 'dns_cache_hits' => 'DNS cache hits', 'dns_cache_misses' => 'DNS cache misses',
+    'tcp_retrans' => 'TCP retransmissions', 'oom_kills' => 'Out-of-memory kills',
+    'sqm_dropped' => 'SQM dropped packets', 'wan_reconnect_count' => 'WAN reconnects',
+    'cpu_core_max' => 'Busiest CPU core', 'cpu_core_max_softirq' => 'Interrupt handling on the busiest core',
+    'wan_rx_mbps' => 'WAN download', 'wan_tx_mbps' => 'WAN upload',
+    'wan_errors' => 'WAN port errors', 'wan_drops' => 'Dropped packets on WAN (incl. unknown protocols)',
+    'wan_ring_drops' => 'Dropped in the WAN port queue', 'wan_link_flaps' => 'Link drops on the WAN port',
+    'conntrack_drops' => 'Connections refused by conntrack',
+    'agent_run_ms' => 'Agent run time', 'clock_skew_s' => 'Router clock offset',
+    'agent_prev_cpu_ms' => 'Agent run CPU time',
+    ];
+}
+
+/**
+ * The name of a metric series in the requested language (charts-22).
+ *
+ * $cs is the Czech name the caller already holds (the column map's label).
+ * A missing English name falls back to it - never an empty title or a bare
+ * key. A counter chart shows increments, and its title says so in both
+ * languages, so a lifetime total is never read into it.
+ *
+ * @param string|null $lang 'en' | 'cs'; null = the request's language (lang.php)
+ */
+function bk_metric_label(string $key, string $cs, bool $counter = false, ?string $lang = null): string {
+    $lang ??= (string)($GLOBALS['BK_LANG'] ?? 'cs');
+    if ($lang === 'en') {
+        if ($key === 'latency') {
+            $key = 'response_time';
+        }
+        return (bk_metric_labels_en()[$key] ?? $cs) . ($counter ? ' (increase)' : '');
+    }
+    return $cs . ($counter ? ' (přírůstek)' : '');
+}
+
+/**
+ * Mean of a series' values, the "previous window" a trend compares with
+ * (C-3). Null with fewer than $min_samples points: a mean of one or two
+ * readings is an anecdote, and a trend built on it would be invented.
+ *
+ * @param list<array{0:int,1:float|int|null}> $points
+ */
+function bk_series_mean(array $points, int $min_samples = 3): ?float {
+    $sum = 0.0;
+    $n = 0;
+    foreach ($points as $p) {
+        if (($p[1] ?? null) === null) {
+            continue;
+        }
+        $sum += (float)$p[1];
+        $n++;
+    }
+    return $n >= $min_samples ? round($sum / $n, 3) : null;
+}
+
+/**
+ * The same rule as bk_series_mean() for a mean SQL already computed:
+ * COUNT(col) and AVG(col) of one window. PDO hands both back as strings.
+ */
+function bk_aggregate_mean(int|string|null $count, int|float|string|null $avg, int $min_samples = 3): ?float {
+    if ($avg === null || (int)$count < $min_samples) {
+        return null;
+    }
+    return round((float)$avg, 3);
+}
+
+/**
  * Pearson correlation of two aligned series.
  *
  * Pairs where either side is null are skipped - the two metrics come from the
@@ -1195,10 +1317,18 @@ function bk_pearson(array $xs, array $ys, int $min_pairs = 10): array {
  * @param array<int,float|null> $values
  * @return array<int,float|null>
  */
-function bk_counter_deltas(array $values): array {
+function bk_counter_deltas(array $values, ?array $timestamps = null): array {
+    // With the readings' times, a gap in TIME breaks the chain too (charts-15):
+    // an increment across more than 2.5 reporting intervals covers an unknown
+    // stretch - the router was off, reports were lost - and drawn as one
+    // reading's increment it is a spike that never happened. The cap is the
+    // one the uptime segments use, read off the series' own cadence.
+    $cap = $timestamps !== null ? (int)round(bk_uptime_interval(array_values(array_map('intval', $timestamps))) * 2.5) : null;
     $out = [];
     $prev = null;
+    $prev_ts = null;
     foreach ($values as $i => $v) {
+        $ts = $timestamps !== null && isset($timestamps[$i]) ? (int)$timestamps[$i] : null;
         if ($v === null) {
             $out[$i] = null;
             // A gap breaks the chain: the next reading's increment would span
@@ -1206,8 +1336,260 @@ function bk_counter_deltas(array $values): array {
             $prev = null;
             continue;
         }
-        $out[$i] = ($prev !== null && $v >= $prev) ? (float)$v - $prev : null;
+        $spans_gap = $cap !== null && $ts !== null && $prev_ts !== null && $ts - $prev_ts > $cap;
+        $out[$i] = ($prev !== null && $v >= $prev && !$spans_gap) ? (float)$v - $prev : null;
         $prev = (float)$v;
+        $prev_ts = $ts;
+    }
+    return $out;
+}
+
+/**
+ * The family a metric belongs to, for the correlation panel (charts-29).
+ *
+ * Load 1/5/15 are one number averaged three ways and the RAM columns are one
+ * memory split four ways, so "Load 5 moves with Load 15, r = +1,00" is
+ * arithmetic, not a finding. A metric is compared with no member of its own
+ * family, and of every other family only the strongest member is listed.
+ * A metric in no family is its own.
+ */
+function bk_metric_family(string $key): string {
+    $families = [
+        'load' => '/^load(1|5|15)$/',
+        'ram' => '/^ram(_(used|free|available|total)_mb)?$/',
+        'cpu' => '/^cpu(_core_max(_softirq)?)?$/',
+        'net' => '/^net(_ipv4|_ipv6)?$/',
+        'wan_rate' => '/^wan_(rx|tx)_mbps$/',
+        'wifi_clients' => '/^wifi_(clients(_24g|_5g|_6g)?|weak_clients|wpa2_clients)$/',
+        'wifi_noise' => '/^wifi_noise_/',
+        'wifi_busy' => '/^wifi_busy_/',
+        'wifi_caps' => '/^wifi_(6e_|5g_capable)/',
+        'lte_signal' => '/^lte_(rsrp|rsrq|rssi|sinr)$/',
+        'dns' => '/^dns_(queries|cache_hits|cache_misses)$/',
+        'fw' => '/^fw_/',
+        'conntrack' => '/^conntrack(_count)?$/',
+        'disk_io' => '/^disk_io_/',
+        'sqm_limit' => '/^sqm_(download|upload)_kbps$/',
+        'ts_process' => '/^ts_process_/',
+        'log' => '/^log_(errors|warnings)_24h$/',
+    ];
+    foreach ($families as $family => $re) {
+        if (preg_match($re, $key)) {
+            return $family;
+        }
+    }
+    return $key;
+}
+
+/**
+ * How many bytes one agent report adds to today's row of an interface (charts-15).
+ *
+ * The row keeps the day's total and the last raw counter. Two cases booked
+ * bytes to the wrong day: the FIRST report of an interface booked its whole
+ * lifetime counter to today, and the first report after a gap across
+ * midnight booked every byte of the missing days to today - the "800 GB day"
+ * after a weekend offline. Neither increment has a knowable day, so it is not
+ * booked; the missing days stay missing (a gap in the chart, not a spike).
+ *
+ * - no previous reading: 0, the counter becomes the baseline;
+ * - previous reading today: the whole increment, however long the gap - every
+ *   byte of it moved today;
+ * - previous reading on an earlier day: only when it is at most $cap seconds
+ *   old (2.5 reporting intervals at the documented slowest 5-minute cron);
+ * - counter lower than before (a reboot): what was counted since the reboot.
+ *
+ * @param int|null $age_secs seconds since the previous reading, null = unknown
+ */
+function bk_iface_traffic_booking(?float $prev, float $cur, bool $prev_today, ?int $age_secs, int $cap = 750): float {
+    if ($prev === null) {
+        return 0.0;
+    }
+    if (!$prev_today && ($age_secs === null || $age_secs > $cap)) {
+        return 0.0;
+    }
+    return $cur >= $prev ? $cur - $prev : $cur;
+}
+
+/**
+ * The most bytes one direction of an interface can carry in a day: its link
+ * speed for 24 hours. A day total above it is a counter artefact, never
+ * traffic, and interface_traffic_daily rejects it instead of drawing it.
+ * Unknown speed = 10 Gbit/s, above any port the supported routers have, so
+ * only the impossible is rejected.
+ */
+function bk_iface_day_ceiling_bytes(?float $link_mbit): float {
+    $mbit = ($link_mbit !== null && $link_mbit > 0) ? $link_mbit : 10000.0;
+    return $mbit * 1e6 / 8 * 86400;
+}
+
+/**
+ * Why one monitor needs attention (C-12) - the server's copy of the reasons
+ * the dashboard's "Vyžaduje pozornost" list derived in the browser
+ * (apps/monitor/src/lib/attention.ts), so the findings feed can put them in
+ * one list with the insights and the router recommendations.
+ *
+ * Only measured state, never padding: an unmeasured metric (null) and an
+ * unread certificate raise nothing. Severity is the feed's scale:
+ * critical (it is broken now), warning (it will be, or it is degraded),
+ * info (worth knowing, nothing is wrong).
+ *
+ * $m: status, has_reported, type, target, ssl_days (?int), ssl_alert_days,
+ * agent_version, agent_latest (?string), metrics [key => ['value' => ?float,
+ * 'limit' => int]].
+ *
+ * @param array<string,mixed> $m
+ * @return list<array{kind:string,severity:string,params:list<int|float|string>}>
+ */
+function bk_attention_reasons(array $m): array {
+    $out = [];
+    $state = bk_status_label((string)($m['status'] ?? ''), isset($m['has_reported']) ? (bool)$m['has_reported'] : null);
+    if ($state['key'] === 'down') {
+        $out[] = ['kind' => 'status_down', 'severity' => 'critical', 'params' => []];
+    } elseif ($state['key'] === 'warning') {
+        $out[] = ['kind' => 'status_warning', 'severity' => 'warning', 'params' => []];
+    } elseif ($state['key'] === 'unknown_stale') {
+        $out[] = ['kind' => 'status_unknown_stale', 'severity' => 'warning', 'params' => []];
+    }
+    // An active check aimed at a private address never succeeds from the
+    // hosting; every outage it reports is false.
+    if (in_array((string)($m['type'] ?? ''), ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'dns'], true)
+        && (string)($m['target'] ?? '') !== ''
+        && bk_validate_import_target((string)$m['target']) !== null) {
+        $out[] = ['kind' => 'unreachable', 'severity' => 'warning', 'params' => []];
+    }
+    $ssl = $m['ssl_days'] ?? null;
+    if (is_int($ssl) && $ssl <= (int)($m['ssl_alert_days'] ?? 14)) {
+        $out[] = $ssl <= 0
+            ? ['kind' => 'ssl_expired', 'severity' => 'critical', 'params' => []]
+            : ['kind' => 'ssl_expiring', 'severity' => 'warning', 'params' => [$ssl]];
+    }
+    foreach ((array)($m['metrics'] ?? []) as $key => $metric) {
+        $value = $metric['value'] ?? null;
+        $limit = (int)($metric['limit'] ?? 0);
+        if (is_numeric($value) && $limit > 0 && (float)$value >= $limit) {
+            $out[] = ['kind' => 'metric_high', 'severity' => 'warning', 'params' => [['cpu' => 'CPU', 'ram' => 'RAM', 'hdd' => 'Disk'][$key] ?? strtoupper((string)$key), (int)round((float)$value), $limit]];
+        }
+    }
+    $latest = $m['agent_latest'] ?? null;
+    $running = $m['agent_version'] ?? null;
+    if (is_string($latest) && is_string($running) && $running !== '' && bk_version_is_older($running, $latest)) {
+        $out[] = ['kind' => 'agent_update', 'severity' => 'info', 'params' => [$latest, $running]];
+    }
+    return $out;
+}
+
+/**
+ * The feed's severity of a dashboard insight, read off the colour its
+ * builder chose: red and orange/yellow are warnings (a trend, a forecast, a
+ * repeated reconnect - nothing is down because of it), green and the rest
+ * are information. No insight is critical: an outage reaches the feed as a
+ * status finding, not as an insight.
+ *
+ * @param array<string,mixed> $insight
+ */
+function bk_insight_severity(array $insight): string {
+    $color = strtolower((string)($insight['color'] ?? ''));
+    foreach (['red', 'orange', 'yellow'] as $hue) {
+        if (str_contains($color, $hue)) {
+            return 'warning';
+        }
+    }
+    return 'info';
+}
+
+/**
+ * Forecasts, anomalies and network notes of the given monitors, worded in
+ * the request's language - what dashboard_insights lists and the findings
+ * feed (C-12) folds in. Network notes and anomalies first, long-term trends
+ * last. Each item carries the feed's severity (bk_insight_severity).
+ *
+ * @param list<array<string,mixed>> $monitors rows of monitors (SELECT *)
+ * @return list<array{monitorId:int,monitorName:string,kind:string,severity:string,text:string,detail:string}>
+ */
+function bk_collect_insights(PDO $pdo, array $monitors): array {
+    $items = [];
+    foreach ($monitors as $monitor) {
+        $details = json_decode((string)($monitor['last_details'] ?? ''), true);
+        if (!is_array($details)) {
+            $details = [];
+        }
+        $found = array_merge(
+            bk_get_forecast_insights($pdo, $monitor),
+            bk_get_anomaly_insights($pdo, $monitor),
+            bk_get_network_insights($pdo, $monitor, $details)
+        );
+        foreach ($found as $i) {
+            $items[] = [
+                'monitorId' => (int)$monitor['id'],
+                'monitorName' => (string)$monitor['name'],
+                'kind' => (string)($i['type'] ?? 'trend'),
+                'severity' => bk_insight_severity($i),
+                'text' => (string)($i['text'] ?? ''),
+                'detail' => (string)($i['detail'] ?? ''),
+            ];
+        }
+    }
+    // More critical kinds first: network/anomalies before long-term trends.
+    $rank = ['network' => 0, 'anomaly' => 1, 'forecast' => 2, 'trend' => 3];
+    usort($items, fn($a, $b) => ($rank[$a['kind']] ?? 4) <=> ($rank[$b['kind']] ?? 4));
+    return $items;
+}
+
+/**
+ * The fleet-wide insights cache (5 minutes, one key per language), shared by
+ * dashboard_insights and the findings feed. $key null = no cache for this
+ * viewer (a user's view is computed fresh; the cache is the admin's fleet).
+ * An entry written before the items carried a severity (no 'v' => 2) is
+ * stale: serving it would drop the severity the feed sorts by.
+ *
+ * @return array{at:int,insights:list<array<string,mixed>>}|null
+ */
+function bk_insights_cache_read(?string $key): ?array {
+    if ($key === null) {
+        return null;
+    }
+    $cached = json_decode((string)get_setting($key, ''), true);
+    if (!is_array($cached) || (int)($cached['v'] ?? 0) !== 2 || !is_array($cached['insights'] ?? null)
+        || time() - (int)($cached['at'] ?? 0) >= 300) {
+        return null;
+    }
+    return ['at' => (int)$cached['at'], 'insights' => $cached['insights']];
+}
+
+/**
+ * @param list<array<string,mixed>> $items
+ */
+function bk_insights_cache_write(PDO $pdo, string $key, array $items): void {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+        $stmt->execute([$key, json_encode(['at' => time(), 'v' => 2, 'insights' => $items], JSON_UNESCAPED_UNICODE)]);
+    } catch (Throwable $e) {
+        // The cache is optional - the answer still goes out, the log says why it was not kept.
+        error_log('[insights] cache not stored: ' . $e->getMessage());
+    }
+}
+
+/**
+ * A counter series as chart points of its increments, [[ts, delta], ...].
+ *
+ * The raw value of a cumulative counter is a lifetime total ("Firewall -
+ * propuštěno 912044"), which says nothing about the chart's window. A reset
+ * (reboot) and an increment across a gap in time have no knowable value, so
+ * those readings leave no point: the chart shows a break, never a spike.
+ *
+ * @param list<array{0:int,1:float|int}> $points ascending by time
+ * @return list<array{0:int,1:float}>
+ */
+function bk_counter_delta_points(array $points): array {
+    $deltas = bk_counter_deltas(
+        array_map(fn ($p) => (float)$p[1], $points),
+        array_map(fn ($p) => (int)$p[0], $points)
+    );
+    $out = [];
+    foreach ($points as $i => $p) {
+        if (($deltas[$i] ?? null) !== null) {
+            $out[] = [(int)$p[0], round((float)$deltas[$i], 2)];
+        }
     }
     return $out;
 }
@@ -1989,9 +2371,14 @@ function bk_uptime_totals(array $parts): array {
     return $s + [
         'measured' => $measured,
         'outage' => $outage,
+        // Warning time counts as available (C-7): the service answered, only
+        // slowly. The day strip already counted it that way, while this
+        // percentage did not - one SLA row read "99,9 %, goal missed" next to
+        // "0 min of a 21 min budget" and day cells saying 100 %. Degraded time
+        // stays visible on its own ('warning', the day cell's degradedMin).
         // Five seconds of outage in 30 days is 99.9998 % - plain rounding to
         // three decimals made it 100.0, a perfect month with an outage in it.
-        'pct' => $measured > 0 ? bk_uptime_pct_round($s['up'] / $measured * 100, 3) : null,
+        'pct' => $measured > 0 ? bk_uptime_pct_round(($s['up'] + $s['warning']) / $measured * 100, 3) : null,
     ];
 }
 
@@ -2317,6 +2704,266 @@ function bk_uptime_30d(PDO $pdo, int $monitor_id, int $days = 30): ?float {
     }
 }
 
+/**
+ * One cell of the daily availability strip (C-7), from that day's seconds.
+ *
+ * The strip used to paint a day green from a single passing check and call a
+ * day nobody measured 'paused' - the word for a monitor the owner switched
+ * off. A cell now says how much of the day it knows:
+ *
+ * - 'nodata': not one second measured, no maintenance either.
+ * - 'maintenance': maintenance covered at least as much as measurement.
+ * - 'down': any outage - a failed check or an agent's silence.
+ * - 'warning': degraded, but it answered. Warning COUNTS AS AVAILABLE here:
+ *   uptimePct is (up + warning) / measured, and the degraded minutes are
+ *   reported beside it, so a slow day is no longer drawn as downtime.
+ * - 'partial': nothing worse, but less than 90 % of the day's time was
+ *   measured ("14 h z 24 měřeno"). A day with an outage stays 'down' - the
+ *   outage matters more than the hole - and carries its coverage anyway.
+ * - 'up'.
+ *
+ * The day's time is what the monitor existed of it (created mid-day, today
+ * until now): every class of bk_uptime_totals() adds up to it. A day rebuilt
+ * from check counts ('approx') has no time at all, so its coverage is null
+ * rather than a made-up 100.
+ *
+ * Pure: the caller words 'detail' from 'detailKey' and 'detailArgs' (t()).
+ *
+ * @param array<string,int|float|null>|null $tm bk_uptime_totals() of the day, plus 'approx'
+ * @param array{up:int,down:int,warning:int}|null $checks the day's check rows by status
+ * @return array{status:string,uptimePct:?float,coveragePct:?float,measuredSecs:int,expectedSecs:?int,downMin:int,degradedMin:int,maintenanceMin:int,detailKey:string,detailArgs:list<int|float|string|null>}
+ */
+function bk_uptime_day_cell(?array $tm, ?array $checks): array {
+    $up = (int)($tm['up'] ?? 0);
+    $warning = (int)($tm['warning'] ?? 0);
+    $outage = (int)($tm['outage'] ?? 0);
+    $silent = (int)($tm['silent'] ?? 0);
+    $maintenance = (int)($tm['maintenance'] ?? 0);
+    $measured = (int)($tm['measured'] ?? 0);
+    $approx = !empty($tm['approx']);
+    $expected = $approx ? null : $measured + $maintenance + (int)($tm['unmeasured'] ?? 0);
+    $down_rows = (int)($checks['down'] ?? 0);
+    $warn_rows = (int)($checks['warning'] ?? 0);
+    $rows = (int)($checks['up'] ?? 0) + $down_rows + $warn_rows;
+
+    $cell = [
+        'status' => 'up',
+        // A red day never reads "100 %": a failure shorter than 43 s (0.05 %
+        // of a day) used to round up to 100.0 next to its failed-check count.
+        'uptimePct' => $measured > 0 ? bk_uptime_pct_round(($up + $warning) / $measured * 100, 1, $outage > 0 || $down_rows > 0) : null,
+        'coveragePct' => ($expected !== null && $expected > 0) ? round(($measured + $maintenance) / $expected * 100, 1) : null,
+        'measuredSecs' => $measured,
+        'expectedSecs' => $expected,
+        'downMin' => (int)round($outage / 60),
+        'degradedMin' => (int)round($warning / 60),
+        'maintenanceMin' => (int)round($maintenance / 60),
+        // With no check rows for the day (the raw log is pruned before the
+        // day's seconds are, or the day was rolled up elsewhere) the sentence
+        // says what the seconds say - "All 0 checks passed" over a full
+        // measured day was a count nobody made.
+        'detailKey' => $rows > 0 ? 'day_up_detail' : 'day_up_time_detail',
+        'detailArgs' => $rows > 0 ? [$rows] : [],
+    ];
+    if ($measured === 0 && $maintenance === 0) {
+        // A day without a single measured second has no 0 % - it has none.
+        return ['status' => 'nodata', 'uptimePct' => null, 'coveragePct' => $expected !== null ? 0.0 : null,
+            'detailKey' => 'day_no_data', 'detailArgs' => []] + $cell;
+    }
+    if ($maintenance > 0 && $maintenance >= $measured) {
+        return ['status' => 'maintenance', 'detailKey' => 'day_maintenance', 'detailArgs' => []] + $cell;
+    }
+    // The sentence quotes the cell's own number, so the tooltip and the text
+    // never disagree about the same day.
+    $pct = $cell['uptimePct'];
+    if ($silent > 0) {
+        // The agent wrote nothing, so there are no failed checks to count -
+        // the outage is how long it was silent.
+        return ['status' => 'down', 'detailKey' => 'day_silent_detail', 'detailArgs' => [$outage, $pct]] + $cell;
+    }
+    if ($outage > 0 || $down_rows > 0) {
+        return $rows > 0
+            ? ['status' => 'down', 'detailKey' => 'day_down_detail', 'detailArgs' => [$down_rows, $rows, $pct]] + $cell
+            : ['status' => 'down', 'detailKey' => 'day_down_time_detail', 'detailArgs' => [$outage, $pct]] + $cell;
+    }
+    if ($warning > 0 || $warn_rows > 0) {
+        return $rows > 0
+            ? ['status' => 'warning', 'detailKey' => 'day_warning_detail', 'detailArgs' => [$warn_rows, $rows]] + $cell
+            : ['status' => 'warning', 'detailKey' => 'day_warning_time_detail', 'detailArgs' => [$warning]] + $cell;
+    }
+    if ($cell['coveragePct'] !== null && $cell['coveragePct'] < 90.0) {
+        return ['status' => 'partial', 'detailKey' => 'day_partial_detail', 'detailArgs' => [$measured + $maintenance, $expected]] + $cell;
+    }
+    return $cell;
+}
+
+/**
+ * A JSON body that is safe in any HTML context, for the endpoints that carry
+ * server-worded text (t(), the router engine, a check's error message).
+ *
+ * Psalm's taint analysis reads every t() result as request input (one caller
+ * passes a metric name from the query string through t()), so each such
+ * `echo json_encode(...)` was a finding kept in psalm-taint-baseline.xml by
+ * its exact code - and any edit to the payload broke the match. Here the
+ * claim is made true instead of baselined: <, >, &, ' and " inside values
+ * are hex-escaped (\u003C ...), so no value can close a tag or an attribute
+ * even if a client mis-serves the body as HTML. JSON parsers decode it
+ * unchanged. A value that cannot be encoded throws, and the endpoint's catch
+ * answers 500 - never an empty 200.
+ *
+ * @psalm-taint-escape html
+ * @psalm-taint-escape has_quotes
+ */
+function bk_json_safe(mixed $payload): string {
+    return json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR);
+}
+
+/**
+ * One status vocabulary for every surface (C-11): key, label, tone and icon.
+ *
+ * Each surface used to word the status on its own and they disagreed: the
+ * events API called maintenance and "unknown" rows "OK" (a green badge), the
+ * summary said "je aktuálně nedostupný" for anything not up - maintenance, a
+ * paused monitor and one that never reported alike - and the audit log filed
+ * an unknown check as "KONTROLA OK". The SPA mirrors this map in
+ * apps/monitor/src/lib/status.ts; the keys, tones and icons must stay equal.
+ *
+ * "unknown" is two things (owner decision 5.10): a monitor that never
+ * reported is waiting for its first data - neutral, nothing is wrong yet -
+ * while one that reported and went quiet is a warning. $has_reported says
+ * which; null (not known) takes the warning side, because silence that might
+ * be a fault must not look calm.
+ *
+ * Tones: up, warning, down, info (planned), neutral (nothing to judge).
+ * Icons are lucide names.
+ *
+ * @return array{key:string,label:string,tone:string,icon:string}
+ */
+function bk_status_label(?string $status, ?bool $has_reported = null, ?string $lang = null): array {
+    $map = [
+        'up' => ['Online', 'Online', 'up', 'circle-check'],
+        'warning' => ['Varování', 'Warning', 'warning', 'triangle-alert'],
+        'down' => ['Výpadek', 'Down', 'down', 'circle-x'],
+        'maintenance' => ['Údržba', 'Maintenance', 'info', 'wrench'],
+        'paused' => ['Pozastaveno', 'Paused', 'neutral', 'circle-pause'],
+        'unknown_new' => ['Čeká na první data', 'Waiting for first data', 'neutral', 'circle-dashed'],
+        'unknown_stale' => ['Agent mlčí', 'Agent is silent', 'warning', 'clock-alert'],
+    ];
+    $key = strtolower(trim((string)$status));
+    if (!isset($map[$key]) || str_starts_with($key, 'unknown_')) {
+        $key = $has_reported === false ? 'unknown_new' : 'unknown_stale';
+    }
+    $lang = $lang ?? (string)($GLOBALS['BK_LANG'] ?? 'cs');
+    [$cs, $en, $tone, $icon] = $map[$key];
+    return ['key' => $key, 'label' => $lang === 'en' ? $en : $cs, 'tone' => $tone, 'icon' => $icon];
+}
+
+/**
+ * What a check row says when it left no message, per state (C-11). A
+ * maintenance or unknown row used to fall back to "Kontrola proběhla v
+ * pořádku." - a pass nobody recorded.
+ */
+function bk_event_fallback_text(string $status_key): string {
+    return match ($status_key) {
+        'up' => t('event_fallback_up'),
+        'warning' => t('event_fallback_warning'),
+        'down' => t('event_fallback_down'),
+        'maintenance' => t('event_fallback_maintenance'),
+        'paused' => t('event_fallback_paused'),
+        'unknown_new' => t('event_fallback_unknown_new'),
+        default => t('event_fallback_unknown_stale'),
+    };
+}
+
+/**
+ * The title and detail of one attention reason (C-12), in the request's
+ * language. Detail null = the reason needs none (the status findings carry
+ * the last check's own message instead).
+ *
+ * @param array{kind:string,params:list<int|float|string>} $reason
+ * @return array{title:string,detail:?string}
+ */
+function bk_attention_reason_text(array $reason): array {
+    $p = $reason['params'];
+    return match ($reason['kind']) {
+        'status_down' => ['title' => t('finding_status_down'), 'detail' => null],
+        'status_warning' => ['title' => t('finding_status_warning'), 'detail' => null],
+        'status_unknown_stale' => ['title' => t('finding_status_unknown_stale'), 'detail' => null],
+        'unreachable' => ['title' => t('finding_unreachable'), 'detail' => t('finding_unreachable_detail')],
+        'ssl_expired' => ['title' => t('finding_ssl_expired'), 'detail' => null],
+        'ssl_expiring' => ['title' => t('finding_ssl_expiring'), 'detail' => vsprintf(t('finding_ssl_expiring_detail'), $p)],
+        'metric_high' => ['title' => vsprintf(t('finding_metric_high'), $p), 'detail' => vsprintf(t('finding_metric_high_detail'), $p)],
+        'agent_update' => ['title' => vsprintf(t('finding_agent_update'), $p), 'detail' => vsprintf(t('finding_agent_update_detail'), $p)],
+        default => ['title' => $reason['kind'], 'detail' => null],
+    };
+}
+
+/**
+ * The knowledge tips of one monitor as findings (CR-9b): the asset page's
+ * "Tipy" were a second advice list next to the feed. A tip that repeats an
+ * attention reason of the same monitor is left out, so each fact is listed
+ * once - a CPU/RAM/disk tip next to metric_high for that metric, the
+ * certificate tip next to ssl_expiring/ssl_expired. A tip below the limit
+ * (the warn level, 15 points under it) has no reason beside it and stays.
+ *
+ * 'kind' is the tip's rule key; a rule that speaks twice (two missing
+ * processes) gets the text's hash after the second one, so every finding
+ * keeps a key of its own.
+ *
+ * @param list<array{severity:string,text:string,kind?:string}> $tips bk_get_knowledge_tips()
+ * @param list<array{kind:string,severity:string,params:list<int|float|string>}> $reasons bk_attention_reasons()
+ * @return list<array{kind:string,severity:string,title:string}>
+ */
+function bk_tip_findings(array $tips, array $reasons): array {
+    $covered = [];
+    foreach ($reasons as $r) {
+        if ($r['kind'] === 'metric_high') {
+            $covered[(string)($r['params'][0] ?? '')] = true;
+        } elseif (str_starts_with($r['kind'], 'ssl_')) {
+            $covered['ssl'] = true;
+        }
+    }
+    $repeats = ['knowledge_tip_cpu_high' => 'CPU', 'knowledge_tip_ram_high' => 'RAM', 'knowledge_tip_hdd_high' => 'Disk',
+        'knowledge_tip_ssl_expiring' => 'ssl'];
+    $out = [];
+    $seen = [];
+    foreach ($tips as $tip) {
+        $kind = (string)($tip['kind'] ?? '');
+        $text = trim((string)($tip['text'] ?? ''));
+        if ($kind === '' || $text === '') {
+            continue;
+        }
+        if (isset($repeats[$kind]) && isset($covered[$repeats[$kind]])) {
+            continue;
+        }
+        $key = isset($seen[$kind]) ? $kind . '-' . substr(md5($text), 0, 8) : $kind;
+        $seen[$kind] = true;
+        $out[] = [
+            'kind' => $key,
+            'severity' => match ($tip['severity']) { 'critical' => 'critical', 'warn', 'warning' => 'warning', default => 'info' },
+            'title' => $text,
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Whether a monitor has ever reported: a check ran or its agent was seen.
+ * The one input bk_status_label() needs to split "unknown".
+ *
+ * @param array<string,mixed> $monitor a monitors row
+ * @param array<string,mixed> $details its decoded last_details
+ */
+function bk_monitor_has_reported(array $monitor, array $details): bool {
+    // cron.php stamps last_checked on a heartbeat on every run, ping or no
+    // ping, so for a heartbeat only a received signal counts. Without this a
+    // heartbeat that never pinged read "Agent mlčí" - no agent is involved,
+    // it is waiting for its first data (decision 5.10).
+    if (strtolower((string)($monitor['type'] ?? '')) === 'heartbeat') {
+        return !empty($monitor['last_heartbeat']);
+    }
+    return !empty($monitor['last_checked']) || !empty($details['agent_last_seen']);
+}
+
 function bk_iface_has_errors(array $iface): bool {
     $rx = isset($iface['rx_errors']) && is_numeric($iface['rx_errors']) ? (int)$iface['rx_errors'] : 0;
     $tx = isset($iface['tx_errors']) && is_numeric($iface['tx_errors']) ? (int)$iface['tx_errors'] : 0;
@@ -2462,6 +3109,9 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
             'icon' => $severity === 'critical' ? 'fa-exclamation-circle' : 'fa-exclamation-triangle',
             'severity' => $severity,
             'text' => $text,
+            // Which rule spoke, so the findings feed can key the tip and skip
+            // one that repeats an attention reason (CR-9b).
+            'kind' => (string)$tip_key,
         ];
     };
 
@@ -4013,13 +4663,29 @@ function bk_summary_pressure_line(PDO $pdo, array $monitor, array $details): ?st
     return null;
 }
 
-function bk_build_executive_summary($monitor, $health_score, array $knowledge_tips, array $insights, array $recent_events, ?PDO $pdo = null, array $details = []) {
+/**
+ * @param bool $with_concern false = only the state sentence and the pressure
+ *   line: the SPA's asset page lists the findings (the top concern included)
+ *   right under the sentence, so saying it again, or saying "no problems"
+ *   above that list, is the same fact twice (W2-2, "the findings once").
+ */
+function bk_build_executive_summary($monitor, $health_score, array $knowledge_tips, array $insights, array $recent_events, ?PDO $pdo = null, array $details = [], bool $with_concern = true) {
     $sentences = [];
     $name = $monitor['name'] ?? '';
 
-    // 1. Overall state
+    // 1. Overall state, worded per status (C-11). Anything not up used to be
+    // "je aktuálně nedostupný" - maintenance, a paused monitor and one that
+    // never reported alike.
     if (($monitor['status'] ?? '') !== 'up') {
-        $sentences[] = sprintf(t('exec_summary_down'), $name);
+        $st = bk_status_label((string)($monitor['status'] ?? ''), bk_monitor_has_reported((array)$monitor, $details));
+        $sentences[] = sprintf(match ($st['key']) {
+            'warning' => t('exec_summary_warning'),
+            'maintenance' => t('exec_summary_maintenance'),
+            'paused' => t('exec_summary_paused'),
+            'unknown_new' => t('exec_summary_unknown_new'),
+            'unknown_stale' => t('exec_summary_unknown_stale'),
+            default => t('exec_summary_down'),
+        }, $name);
     } elseif (is_array($health_score) && isset($health_score['score'])) {
         $score = (int)$health_score['score'];
         if ($score >= 90) {
@@ -4055,7 +4721,9 @@ function bk_build_executive_summary($monitor, $health_score, array $knowledge_ti
         ? bk_summary_pressure_line($pdo, $monitor, $details)
         : null;
 
-    if ($top_concern !== null) {
+    if (!$with_concern) {
+        // Neither the concern nor the all-clear: the findings list says both.
+    } elseif ($top_concern !== null) {
         $sentences[] = $top_concern;
     } elseif ($pressure_line === null && ($monitor['status'] ?? '') === 'up') {
         $sentences[] = t('exec_summary_no_concerns');
@@ -8022,6 +8690,33 @@ function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_m
     }
     // Renormalise over the actually measured components (0-100).
     return (int)round(min(100, max(0, $score / $weight_used)));
+}
+
+/**
+ * The ISO 3166-1 alpha-2 country of a location label, or null.
+ *
+ * Labels read "🇩🇪 Frankfurt, DE (AS13335 Cloudflare)" (the Worker, the
+ * nodes, detect_server_location); the public page draws a flag from the code
+ * instead of the emoji, which Windows shows as two letters. The country comes
+ * from the regional-indicator pair, else from ", CC" after the city. A
+ * Cloudflare label from before agents e13a2d4 carries its egress country
+ * (US everywhere), so it is read through bk_cf_corrected_label() first. The
+ * globe, "Main Server", "Agent" and anything else without a country give
+ * null - no flag, never a guessed one.
+ */
+function bk_location_country(?string $label): ?string {
+    if ($label === null || $label === '') {
+        return null;
+    }
+    require_once __DIR__ . '/cloudflare_colos.php';
+    $label = bk_cf_corrected_label($label) ?? $label;
+    if (preg_match('/^([\x{1F1E6}-\x{1F1FF}])([\x{1F1E6}-\x{1F1FF}])/u', $label, $m)) {
+        return chr(65 + mb_ord($m[1], 'UTF-8') - 0x1F1E6) . chr(65 + mb_ord($m[2], 'UTF-8') - 0x1F1E6);
+    }
+    if (preg_match('/, ([A-Z]{2})(?: \(|$)/u', $label, $m)) {
+        return $m[1];
+    }
+    return null;
 }
 
 /**

@@ -190,12 +190,24 @@ if ($action === 'session') {
         error_log('[api] session: stav instalace se nepodařilo zjistit: ' . $e->getMessage());
     }
 
+    // Only the providers with a client ID get a button on the login page
+    // (W2-12): a GitHub button on an install without GitHub OAuth led to an
+    // error page. Keys only - the client ID itself never leaves the server.
+    // Same test as admin.php's login form.
+    $oauth_providers = [];
+    foreach (array_keys(bk_oauth_providers()) as $op_key) {
+        if (trim((string)get_setting('oauth_' . $op_key . '_client_id')) !== '') {
+            $oauth_providers[] = $op_key;
+        }
+    }
+
     echo json_encode([
         'authenticated' => $is_logged_in,
         'user' => $user,
         'installed' => $has_users,
         'csrfToken' => $_SESSION['csrf_token'] ?? null,
         'loginUrl' => '/app/setup',
+        'oauthProviders' => $oauth_providers,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -325,7 +337,7 @@ if ($action === 'monitors') {
         [$mon_scope_sql, $mon_scope_params] = bk_monitor_scope_sql($public_view ? bk_public_monitor_ids($pdo) : bk_visible_monitor_ids($pdo), 'm.id');
         $stmt = $pdo->prepare("
             SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
-                   m.last_checked, m.last_status_change, m.last_details,
+                   m.last_checked, m.last_status_change, m.last_details, m.last_heartbeat,
                    m.maintenance, m.maintenance_description, m.maintenance_start, m.maintenance_end, m.archived_at,
                    (SELECT l.response_time FROM monitor_logs l
                     WHERE l.monitor_id = m.id AND l.response_time > 0
@@ -368,6 +380,10 @@ if ($action === 'monitors') {
                 'target' => $public_view ? null : $r['target'],
                 'port' => ($public_view || !$r['port']) ? null : (int)$r['port'],
                 'status' => strtolower($r['status'] ?? 'up'),
+                // The shared vocabulary (C-11): 'unknown' split into waiting for
+                // the first data and an agent gone quiet, which the SPA cannot
+                // tell apart from the status alone in the public view.
+                'statusKey' => bk_status_label((string)($r['status'] ?? 'up'), bk_monitor_has_reported($r, $details))['key'],
                 'category' => $r['category'] ?? 'Monitory',
                 'assetId' => $r['asset_id'] ? (int)$r['asset_id'] : (int)$r['id'],
                 'assetName' => $r['name'],
@@ -540,7 +556,15 @@ if ($action === 'monitors') {
         }
     }
 
-    echo json_encode(['monitors' => array_values($monitors)], JSON_UNESCAPED_UNICODE);
+    $mon_out = ['monitors' => array_values($monitors)];
+    if (!$public_view) {
+        // The limit cron alerts at (ssl_alert_days), so the dashboard's attention
+        // list flags a certificate by the same rule as the alert and the findings
+        // feed (CR-5) - the dashboard calls no other endpoint that carries it.
+        // Left out of the public view: a setting is not public status.
+        $mon_out['sslAlertDays'] = max(1, (int)get_setting('ssl_alert_days', '14'));
+    }
+    echo json_encode($mon_out, JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -879,7 +903,7 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
         }
         $pdo->commit();
         // Summaries cached with the monitor in (or out) are stale now.
-        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en') OR key_name LIKE 'regions_cache_%'");
+        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en') OR key_name LIKE 'regions_cache_%' OR key_name LIKE 'findings\\_summary\\_%'");
         log_monitor_event($pdo, $am_id, $am['name'], $am['type'], $am_archive ? 'monitor_archived' : 'monitor_restored', $am_archive ? 'Monitor archivován' : 'Monitor obnoven z archivu');
         bk_audit_log($pdo, $am_archive ? 'monitor_archived' : 'monitor_restored', (string)$am['name'], 'monitor', $am_id);
         echo json_encode(['success' => true, 'archived' => $am_archive, 'incidentsClosed' => $am_closed], JSON_UNESCAPED_UNICODE);
@@ -1817,23 +1841,50 @@ if ($action === 'interface_traffic_daily') {
             ORDER BY iface ASC, date ASC
         ");
         $stmt->execute([$itd_monitor, $itd_days]);
+        // Link speeds the switch reported (lan_ports), by netdev name: a day
+        // above speed x 24 h is a counter artefact (charts-15), not traffic.
+        $itd_speed = [];
+        $stmt_det = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
+        $stmt_det->execute([$itd_monitor]);
+        $itd_details = json_decode((string)$stmt_det->fetchColumn(), true);
+        $itd_lan = is_array($itd_details['lan_ports'] ?? null) ? $itd_details['lan_ports'] : [];
+        foreach (array_merge((array)($itd_lan['ports'] ?? []), (array)($itd_lan['conduits'] ?? [])) as $itd_port) {
+            $itd_name = is_array($itd_port) ? (string)($itd_port['name'] ?? $itd_port['dev'] ?? '') : '';
+            if ($itd_name !== '' && is_numeric($itd_port['speed_mbit'] ?? null)) {
+                $itd_speed[$itd_name] = (float)$itd_port['speed_mbit'];
+            }
+        }
         $by_iface = [];
         foreach ($stmt->fetchAll() as $r) {
             $iface = (string)$r['iface'];
             if (!isset($by_iface[$iface])) {
-                $by_iface[$iface] = ['iface' => $iface, 'total' => 0.0, 'days' => []];
+                $by_iface[$iface] = ['iface' => $iface, 'total' => 0.0, 'linkMbit' => $itd_speed[$iface] ?? null, 'days' => []];
             }
+            $ceiling = bk_iface_day_ceiling_bytes($itd_speed[$iface] ?? null);
             $rx = $r['rx_bytes_total'] !== null ? (float)$r['rx_bytes_total'] : null;
             $tx = $r['tx_bytes_total'] !== null ? (float)$r['tx_bytes_total'] : null;
+            $rejected = [];
+            if ($rx !== null && $rx > $ceiling) {
+                $rejected[] = 'rx';
+                $rx = null;
+            }
+            if ($tx !== null && $tx > $ceiling) {
+                $rejected[] = 'tx';
+                $tx = null;
+            }
             $by_iface[$iface]['total'] += ($rx ?? 0) + ($tx ?? 0);
-            $by_iface[$iface]['days'][] = [
+            $day_row = [
                 'date' => (string)$r['date'],
                 // A day the agent never reported is absent from the table; a
                 // day it reported with no traffic is a real zero. Null here
-                // would be a third thing that does not exist in the data.
+                // is only a rejected value, and `rejected` says which one.
                 'rxBytes' => $rx,
                 'txBytes' => $tx,
             ];
+            if ($rejected) {
+                $day_row['rejected'] = $rejected;
+            }
+            $by_iface[$iface]['days'][] = $day_row;
         }
         // Busiest first: a router has a dozen interfaces and three of them
         // carry everything.
@@ -2257,6 +2308,7 @@ if ($action === 'events') {
                 $outage_end = date('d.m.Y H:i:s', $end_ts);
             }
 
+            $ev_label = bk_status_label((string)$r['status'], true);
             $events[] = [
                 'id' => (int)$r['id'],
                 'time' => date('d.m.Y H:i:s', strtotime($r['checked_at'])),
@@ -2269,9 +2321,15 @@ if ($action === 'events') {
                 // (Frankfurt/RackNerd) used to be filled in here - for 37 of 40
                 // events it was invented, because the column was empty.
                 'location' => $r['checked_from'] ?: null,
-                'status' => $r['status'] === 'down' ? 'VÝPADEK' : ($r['status'] === 'warning' ? 'VAROVÁNÍ' : 'OK'),
+                // Maintenance and 'unknown' rows were "OK" here - a green badge
+                // for a check that did not pass (C-11). A check row that says
+                // 'unknown' is an agent-side check whose agent went quiet.
+                'status' => $ev_label['key'] === 'up' ? 'OK' : mb_strtoupper(bk_status_label($ev_label['key'], true, 'cs')['label']),
                 'rawStatus' => $r['status'],
-                'errorMsg' => ($ev_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: ($r['status'] === 'down' ? 'Cílový server neodpovídá.' : 'Kontrola proběhla v pořádku.'),
+                'statusKey' => $ev_label['key'],
+                'statusLabel' => $ev_label['label'],
+                'statusTone' => $ev_label['tone'],
+                'errorMsg' => ($ev_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: bk_event_fallback_text($ev_label['key']),
                 'responseTime' => $r['response_time'] !== null ? (int)$r['response_time'] : null,
                 'isDown' => $r['status'] === 'down',
                 // true = this OK check ended an outage. false on rows whose
@@ -2351,7 +2409,7 @@ if ($action === 'events') {
         if ($ev_public && is_array($status_change)) {
             $status_change['errorMsg'] = bk_public_reason($status_change['errorMsg'], $ev_status_type);
         }
-        echo json_encode(['events' => $events, 'statusChange' => $status_change], JSON_UNESCAPED_UNICODE);
+        echo bk_json_safe(['events' => $events, 'statusChange' => $status_change]);
     } catch (Throwable $e) {
         // events: [] read as "nothing happened" on the timeline.
         bk_api_fail('events_unavailable', 500, $e, 'Události se nepodařilo načíst.');
@@ -2426,8 +2484,25 @@ if ($action === 'monitor_insights') {
             is_array($details) ? $details : []
         );
 
-        echo json_encode([
+        // The asset page's "Souhrn stavu": the state and the pressure only,
+        // because the findings list right below it names every concern once.
+        $status_sentence = bk_build_executive_summary(
+            $monitor,
+            $health_score,
+            $knowledge_tips,
+            $monitor_insights,
+            [],
+            $pdo,
+            is_array($details) ? $details : [],
+            false
+        );
+
+        echo bk_json_safe([
             'summary' => $summary,
+            'statusSentence' => $status_sentence,
+            // The monitor's state in the shared vocabulary (C-11), so the chip
+            // next to the summary says what the sentence says.
+            'status' => bk_status_label((string)($monitor['status'] ?? ''), bk_monitor_has_reported($monitor, $details)),
             'healthScore' => $health_score,
             'tips' => array_map(fn($t) => ['severity' => $t['severity'], 'text' => $t['text']], $knowledge_tips),
             'insights' => array_map(fn($i) => ['text' => $i['text'] ?? ''], $monitor_insights),
@@ -2437,7 +2512,7 @@ if ($action === 'monitor_insights') {
                 'at' => $e['ts'],
                 'relative' => bk_relative_time_label($e['ts']),
             ], $timeline),
-        ], JSON_UNESCAPED_UNICODE);
+        ]);
     } catch (Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Nepodařilo se sestavit souhrn monitoru.'], JSON_UNESCAPED_UNICODE);
@@ -2471,50 +2546,22 @@ if ($action === 'dashboard_insights') {
         // language (t()), and a single key served whichever language filled it
         // first to everybody for five minutes.
         $cache_key = $GLOBALS['BK_LANG'] === 'en' ? 'dashboard_insights_cache_en' : 'dashboard_insights_cache_cs';
-        $cached_raw = $di_visible === null ? get_setting($cache_key, '') : '';
-        if ($cached_raw !== '') {
-            $cached = json_decode($cached_raw, true);
-            if (is_array($cached) && (time() - (int)($cached['at'] ?? 0)) < 300 && isset($cached['insights']) && is_array($cached['insights'])) {
-                echo json_encode([
-                    'insights' => array_slice($cached['insights'], $offset, $limit),
-                    'total' => count($cached['insights']),
-                    'offset' => $offset,
-                    'cachedAt' => (int)$cached['at'],
-                ], JSON_UNESCAPED_UNICODE);
-                exit;
-            }
+        $cached = bk_insights_cache_read($di_visible === null ? $cache_key : null);
+        if ($cached !== null) {
+            echo json_encode([
+                'insights' => array_slice($cached['insights'], $offset, $limit),
+                'total' => count($cached['insights']),
+                'offset' => $offset,
+                'cachedAt' => (int)$cached['at'],
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
         }
 
         $stmt = $pdo->prepare("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') AND {$di_scope} ORDER BY id ASC");
         $stmt->execute($di_scope_params);
-        $items = [];
-        while ($monitor = $stmt->fetch()) {
-            $details = json_decode($monitor['last_details'] ?? '', true);
-            if (!is_array($details)) $details = [];
-            $found = array_merge(
-                bk_get_forecast_insights($pdo, $monitor),
-                bk_get_anomaly_insights($pdo, $monitor),
-                bk_get_network_insights($pdo, $monitor, $details)
-            );
-            foreach ($found as $i) {
-                $items[] = [
-                    'monitorId' => (int)$monitor['id'],
-                    'monitorName' => $monitor['name'],
-                    'kind' => (string)($i['type'] ?? 'trend'),
-                    'text' => (string)($i['text'] ?? ''),
-                    'detail' => (string)($i['detail'] ?? ''),
-                ];
-            }
-        }
-        // More critical kinds first: network/anomalies before long-term trends.
-        $rank = ['network' => 0, 'anomaly' => 1, 'forecast' => 2, 'trend' => 3];
-        usort($items, fn($a, $b) => ($rank[$a['kind']] ?? 4) <=> ($rank[$b['kind']] ?? 4));
-        try {
-            $stmt_cache = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            if ($di_visible === null) $stmt_cache->execute([$cache_key, json_encode(['at' => time(), 'insights' => $items], JSON_UNESCAPED_UNICODE)]);
-        } catch (Throwable $ce) {
-            // cache je volitelná - the answer still goes out, the log says why it was not kept
-            error_log('[api.php action=' . $action . '] cache not stored: ' . $ce->getMessage());
+        $items = bk_collect_insights($pdo, $stmt->fetchAll());
+        if ($di_visible === null) {
+            bk_insights_cache_write($pdo, $cache_key, $items);
         }
         echo json_encode([
             'insights' => array_slice($items, $offset, $limit),
@@ -2523,6 +2570,307 @@ if ($action === 'dashboard_insights') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_fail('dashboard_insights_unavailable', 500, $e, 'Nepodařilo se sestavit postřehy.');
+    }
+    exit;
+}
+
+// C-12. One findings feed.
+//
+// Five advice systems disagreed: the dashboard's attention list (built in the
+// browser), dashboard_insights, the router recommendations, the summary tips
+// and the Insights page's own cards. This is the one list: the attention
+// reasons (bk_attention_reasons), the insights (bk_collect_insights) and the
+// router recommendations (the same engine as the Monday e-mail), each with a
+// severity on one scale and the device it is about. The dashboard takes the
+// top three, the Insights page everything grouped by device, the asset page
+// `monitor_id=` for one device.
+//
+// A source that fails is named in `sourceErrors` - the list is then
+// incomplete and must say so, never pass for "nothing found".
+if ($action === 'findings') {
+    bk_require_login();
+    $fd_monitor = (int)($_GET['monitor_id'] ?? 0);
+    if ($fd_monitor > 0) {
+        bk_require_monitor_view($pdo, $fd_monitor);
+    }
+    $fd_visible = bk_visible_monitor_ids($pdo);
+    [$fd_scope, $fd_scope_params] = bk_list_scope_sql($pdo, $fd_visible, 'm.id');
+    // summary=1: the counts alone, for the header bell and the sidebar badge
+    // (N-3). They poll it, and every poll recomputed thresholds and the router
+    // recommendations of the whole fleet, so the fleet's counts are kept for
+    // a minute per viewer scope. The counts do not depend on the language.
+    // The full list is always fresh, and a mute clears the kept counts.
+    $fd_summary = ($_GET['summary'] ?? '') === '1';
+    $fd_summary_key = $fd_monitor === 0 ? 'findings_summary_' . substr(md5((string)json_encode($fd_visible)), 0, 16) : null;
+    if ($fd_summary && $fd_summary_key !== null) {
+        $fd_kept = json_decode((string)get_setting($fd_summary_key, ''), true);
+        if (is_array($fd_kept) && is_array($fd_kept['summary'] ?? null) && time() - (int)($fd_kept['at'] ?? 0) < 60) {
+            echo bk_json_safe($fd_kept['summary'] + ['cachedAt' => date('c', (int)$fd_kept['at'])]);
+            exit;
+        }
+    }
+    try {
+        $fd_limit = min(500, max(1, (int)($_GET['limit'] ?? 50)));
+        $fd_offset = max(0, (int)($_GET['offset'] ?? 0));
+        $fd_stmt = $pdo->prepare("
+            SELECT m.*, vm.cpu_usage, vm.ram_usage, vm.hdd_usage
+            FROM monitors m
+            LEFT JOIN vps_metrics vm
+                   ON vm.id = (SELECT vm2.id FROM vps_metrics vm2 WHERE vm2.monitor_id = m.id ORDER BY vm2.id DESC LIMIT 1)
+            WHERE m.type NOT IN ('node', 'probe') AND {$fd_scope}" . ($fd_monitor > 0 ? ' AND m.id = ?' : '') . "
+            ORDER BY m.id ASC
+        ");
+        $fd_stmt->execute(array_merge($fd_scope_params, $fd_monitor > 0 ? [$fd_monitor] : []));
+        $fd_rows = $fd_stmt->fetchAll();
+
+        $fd_findings = [];
+        $fd_muted = [];
+        $fd_errors = [];
+        $fd_ssl_days_limit = max(1, (int)get_setting('ssl_alert_days', '14'));
+        $fd_last_log = $pdo->prepare("SELECT status, check_stages, error_message FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        $fd_base = fn (array $row, string $source, string $kind, string $severity): array => [
+            'key' => $source . ':' . (int)$row['id'] . ':' . $kind,
+            'source' => $source,
+            'kind' => $kind,
+            'severity' => $severity,
+            'monitorId' => (int)$row['id'],
+            'monitorName' => (string)$row['name'],
+            'monitorType' => strtolower((string)$row['type']),
+        ];
+        $fd_source_of = ['status_down' => 'status', 'status_warning' => 'status', 'status_unknown_stale' => 'status',
+            'unreachable' => 'check', 'ssl_expired' => 'certificate', 'ssl_expiring' => 'certificate',
+            'metric_high' => 'metric', 'agent_update' => 'agent'];
+
+        foreach ($fd_rows as $fd_row) {
+            $fd_mid = (int)$fd_row['id'];
+            $fd_details = json_decode((string)($fd_row['last_details'] ?? ''), true);
+            $fd_details = is_array($fd_details) ? $fd_details : [];
+            $fd_reasons = [];
+            $fd_last_log->execute([$fd_mid]);
+            $fd_log = $fd_last_log->fetch() ?: null;
+            try {
+                $fd_limits = bk_monitor_thresholds($pdo, $fd_row);
+                $fd_metrics = [];
+                foreach (['cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage'] as $fd_key => $fd_col) {
+                    $fd_metrics[$fd_key] = [
+                        'value' => $fd_row[$fd_col] !== null ? (float)$fd_row[$fd_col] : null,
+                        'limit' => $fd_limits[$fd_key] ?? BK_DEFAULT_THRESHOLDS[$fd_key],
+                    ];
+                }
+                $fd_agent_type = $fd_details['agent_type'] ?? null;
+                $fd_reasons = bk_attention_reasons([
+                    'status' => (string)($fd_row['status'] ?? ''),
+                    'has_reported' => bk_monitor_has_reported($fd_row, $fd_details),
+                    'type' => strtolower((string)($fd_row['type'] ?? '')),
+                    'target' => (string)($fd_row['target'] ?? ''),
+                    'ssl_days' => is_numeric($fd_details['ssl_days_remaining'] ?? null) ? (int)$fd_details['ssl_days_remaining'] : null,
+                    'ssl_alert_days' => $fd_ssl_days_limit,
+                    'agent_version' => is_string($fd_details['agent_version'] ?? null) ? $fd_details['agent_version'] : null,
+                    'agent_latest' => is_string($fd_agent_type) ? bk_get_agent_latest_version($fd_agent_type) : null,
+                    'metrics' => $fd_metrics,
+                ]);
+                foreach ($fd_reasons as $fd_r) {
+                    $fd_f = $fd_base($fd_row, $fd_source_of[$fd_r['kind']] ?? 'status', $fd_r['kind'], $fd_r['severity']);
+                    $fd_text = bk_attention_reason_text($fd_r);
+                    $fd_f['title'] = $fd_text['title'];
+                    $fd_f['detail'] = $fd_text['detail'];
+                    $fd_f['action'] = null;
+                    $fd_f['since'] = null;
+                    if (str_starts_with($fd_r['kind'], 'status_')) {
+                        // Since when, and the last check's own words for why.
+                        $fd_f['since'] = !empty($fd_row['last_status_change']) ? date('c', strtotime((string)$fd_row['last_status_change'])) : null;
+                        $fd_err = $fd_log['error_message'] ?? null;
+                        $fd_f['detail'] = is_string($fd_err) && $fd_err !== '' ? $fd_err : null;
+                    }
+                    $fd_findings[] = $fd_f;
+                }
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] attention of ' . $fd_mid . ': ' . $fd_e->getMessage());
+                $fd_errors[] = ['source' => 'attention', 'monitorId' => $fd_mid, 'error' => 'attention_unavailable'];
+            }
+
+            // The knowledge tips (CR-9b), the asset page's former second
+            // advice list. One device reads them as its page did, with the
+            // agent data it borrows from the same host; the fleet lists each
+            // measurement once, at the monitor that took it.
+            try {
+                $fd_tip_details = $fd_details;
+                if ($fd_monitor > 0) {
+                    bk_enrich_monitor_details($pdo, $fd_row, $fd_tip_details);
+                }
+                $fd_stages = json_decode((string)($fd_log['check_stages'] ?? ''), true);
+                $fd_tips = bk_get_knowledge_tips(
+                    $fd_row,
+                    $fd_tip_details,
+                    is_array($fd_stages) ? $fd_stages : null,
+                    (string)($fd_log['status'] ?? ($fd_row['status'] ?? 'unknown')),
+                    bk_get_enabled_metrics($fd_row, $pdo),
+                    $pdo
+                );
+                foreach (bk_tip_findings($fd_tips, $fd_reasons) as $fd_tip) {
+                    $fd_f = $fd_base($fd_row, 'tip', $fd_tip['kind'], $fd_tip['severity']);
+                    $fd_f['title'] = $fd_tip['title'];
+                    $fd_f['detail'] = null;
+                    $fd_f['action'] = null;
+                    $fd_f['since'] = null;
+                    $fd_findings[] = $fd_f;
+                }
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] tips of ' . $fd_mid . ': ' . $fd_e->getMessage());
+                $fd_errors[] = ['source' => 'tip', 'monitorId' => $fd_mid, 'error' => 'tips_unavailable'];
+            }
+        }
+
+        // Router recommendations: the Monday e-mail's engine, read-only like
+        // action=router_recommendations (the digest owns the snapshot).
+        $fd_routers = array_values(array_filter($fd_rows, fn ($r) => strtolower((string)$r['type']) === 'openwrt'));
+        if ($fd_routers) {
+            try {
+                $fd_batch = bk_router_rec_inputs_batch($pdo, array_map(fn ($r) => (int)$r['id'], $fd_routers), date('Y-m-d'));
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] router inputs: ' . $fd_e->getMessage());
+                $fd_batch = null;
+                $fd_errors[] = ['source' => 'router', 'monitorId' => null, 'error' => 'router_recommendations_unavailable'];
+            }
+            foreach ($fd_batch === null ? [] : $fd_routers as $fd_row) {
+                $fd_mid = (int)$fd_row['id'];
+                try {
+                    $fd_details = json_decode((string)($fd_row['last_details'] ?? ''), true);
+                    $fd_in = $fd_batch[$fd_mid] ?? ['window' => bk_router_rec_window(date('Y-m-d')), 'disks' => [], 'state' => []];
+                    $fd_in['monitor'] = $fd_row;
+                    $fd_in['details'] = is_array($fd_details) ? $fd_details : [];
+                    $fd_in['now'] = time();
+                    $fd_res = bk_router_rec_evaluate($fd_in);
+                    if (!$fd_res['applicable']) {
+                        continue;
+                    }
+                    $fd_state = is_array($fd_in['state'] ?? null) ? $fd_in['state'] : [];
+                    $fd_split = bk_router_rec_split($fd_res['items'], $fd_state);
+                    foreach (['items' => false, 'muted' => true] as $fd_list => $fd_is_muted) {
+                        foreach ($fd_split[$fd_list] as $fd_item) {
+                            $fd_json = bk_rec_item_json($fd_item, $fd_state[(string)$fd_item['key']] ?? null);
+                            $fd_f = $fd_base($fd_row, 'router', (string)$fd_json['key'], (string)$fd_json['severity']);
+                            $fd_f['title'] = $fd_json['title'];
+                            $fd_f['detail'] = $fd_json['measured'];
+                            $fd_f['action'] = $fd_json['action'];
+                            $fd_f['since'] = $fd_json['openSince'];
+                            $fd_f['rec'] = $fd_json;
+                            if ($fd_is_muted) {
+                                $fd_f['muted'] = true;
+                                $fd_muted[] = $fd_f;
+                            } else {
+                                $fd_findings[] = $fd_f;
+                            }
+                        }
+                    }
+                } catch (Throwable $fd_e) {
+                    error_log('[api.php action=findings] router ' . $fd_mid . ': ' . $fd_e->getMessage());
+                    $fd_errors[] = ['source' => 'router', 'monitorId' => $fd_mid, 'error' => 'router_recommendations_unavailable'];
+                }
+            }
+        }
+
+        // Insights: one device fresh, the fleet from the shared five-minute
+        // cache (the admin's) or fresh for a user's own monitors.
+        $fd_insights_at = null;
+        try {
+            $fd_cache_key = ($fd_monitor === 0 && $fd_visible === null)
+                ? ($GLOBALS['BK_LANG'] === 'en' ? 'dashboard_insights_cache_en' : 'dashboard_insights_cache_cs')
+                : null;
+            $fd_cached = bk_insights_cache_read($fd_cache_key);
+            if ($fd_cached !== null) {
+                $fd_insights = $fd_cached['insights'];
+                $fd_insights_at = $fd_cached['at'];
+            } else {
+                $fd_insights = bk_collect_insights($pdo, $fd_rows);
+                if ($fd_cache_key !== null) {
+                    bk_insights_cache_write($pdo, $fd_cache_key, $fd_insights);
+                }
+            }
+            $fd_by_id = [];
+            foreach ($fd_rows as $fd_row) {
+                $fd_by_id[(int)$fd_row['id']] = $fd_row;
+            }
+            foreach ($fd_insights as $fd_i) {
+                $fd_row = $fd_by_id[(int)($fd_i['monitorId'] ?? 0)] ?? null;
+                if ($fd_row === null) {
+                    continue;
+                }
+                $fd_f = $fd_base($fd_row, 'insight', (string)($fd_i['kind'] ?? 'trend') . '-' . substr(md5((string)($fd_i['text'] ?? '')), 0, 10), (string)($fd_i['severity'] ?? 'info'));
+                $fd_f['title'] = (string)($fd_i['text'] ?? '');
+                $fd_f['detail'] = ($fd_i['detail'] ?? '') !== '' ? (string)$fd_i['detail'] : null;
+                $fd_f['action'] = null;
+                $fd_f['since'] = null;
+                $fd_findings[] = $fd_f;
+            }
+        } catch (Throwable $fd_e) {
+            error_log('[api.php action=findings] insights: ' . $fd_e->getMessage());
+            $fd_errors[] = ['source' => 'insight', 'monitorId' => null, 'error' => 'dashboard_insights_unavailable'];
+        }
+
+        // Critical first, then the cause before its symptoms (a status before
+        // a metric, a metric before a trend), then the device by name.
+        $fd_sev = ['critical' => 0, 'warning' => 1, 'info' => 2];
+        $fd_src = ['status' => 0, 'certificate' => 1, 'check' => 2, 'router' => 3, 'metric' => 4, 'tip' => 5, 'insight' => 6, 'agent' => 7];
+        $fd_cmp = fn (array $a, array $b): int => [$fd_sev[$a['severity']] ?? 3, $fd_src[$a['source']] ?? 9, $a['monitorName'], $a['key']]
+            <=> [$fd_sev[$b['severity']] ?? 3, $fd_src[$b['source']] ?? 9, $b['monitorName'], $b['key']];
+        usort($fd_findings, $fd_cmp);
+        usort($fd_muted, $fd_cmp);
+
+        $fd_counts = ['critical' => 0, 'warning' => 0, 'info' => 0];
+        $fd_devices = [];
+        foreach ($fd_findings as $fd_f) {
+            $fd_counts[$fd_f['severity']] = ($fd_counts[$fd_f['severity']] ?? 0) + 1;
+            $fd_mid = $fd_f['monitorId'];
+            if (!isset($fd_devices[$fd_mid])) {
+                $fd_devices[$fd_mid] = ['monitorId' => $fd_mid, 'monitorName' => $fd_f['monitorName'], 'monitorType' => $fd_f['monitorType'],
+                    'worst' => $fd_f['severity'], 'critical' => 0, 'warning' => 0, 'info' => 0, 'total' => 0];
+            }
+            $fd_devices[$fd_mid][$fd_f['severity']]++;
+            $fd_devices[$fd_mid]['total']++;
+        }
+        // The list is sorted worst first, so a device's first finding is its worst.
+        $fd_devices = array_values($fd_devices);
+
+        $fd_summary_body = [
+            'total' => count($fd_findings),
+            'counts' => $fd_counts,
+            'devicesWithFindings' => count($fd_devices),
+            'monitorsChecked' => count($fd_rows),
+            'sourceErrors' => $fd_errors,
+            'generatedAt' => date('c'),
+        ];
+        // Kept only when complete: a source that failed must not be repeated
+        // as the answer for a minute after it recovers.
+        if ($fd_summary_key !== null && $fd_errors === []) {
+            try {
+                $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+                    ->execute([$fd_summary_key, json_encode(['at' => time(), 'summary' => $fd_summary_body], JSON_UNESCAPED_UNICODE)]);
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] summary not kept: ' . $fd_e->getMessage());
+            }
+        }
+        if ($fd_summary) {
+            echo bk_json_safe($fd_summary_body + ['cachedAt' => null]);
+            exit;
+        }
+
+        echo bk_json_safe([
+            'findings' => array_slice($fd_findings, $fd_offset, $fd_limit),
+            'total' => count($fd_findings),
+            'offset' => $fd_offset,
+            'counts' => $fd_counts,
+            'devices' => $fd_devices,
+            // Devices looked at, so the page can say "Ostatní zařízení bez nálezů (9)".
+            'monitorsChecked' => count($fd_rows),
+            'muted' => $fd_muted,
+            'canMute' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'sourceErrors' => $fd_errors,
+            'insightsCachedAt' => $fd_insights_at,
+            'generatedAt' => date('c'),
+        ]);
+    } catch (Throwable $e) {
+        bk_api_fail('findings_unavailable', 500, $e, 'Zjištění se nepodařilo sestavit.');
     }
     exit;
 }
@@ -2539,6 +2887,42 @@ if ($action === 'daily_uptime') {
         $stmt_mon->execute($du_scope_params);
         $mon_rows = $stmt_mon->fetchAll();
 
+        $du_ids = array_map(fn ($m) => (int)$m['id'], $mon_rows);
+        $du_today = date('Y-m-d');
+        $du_first = date('Y-m-d', strtotime('-' . $days . ' day', strtotime($du_today)));
+
+        // Finished days come from the uptime_daily rollup: its seconds (the
+        // day in time), its check counts and its average response. The rollup
+        // is kept forever while monitor_logs is pruned after 30 days, so a
+        // 90-day strip read from the logs lost the response curve and the
+        // check counts of days 31-90 (N-2); and the 30-day GROUP BY over the
+        // raw logs on every page load was the endpoint's main cost.
+        $du_roll = [];
+        if ($du_ids) {
+            $du_in = implode(',', array_fill(0, count($du_ids), '?'));
+            $stmt_ud = $pdo->prepare("
+                SELECT monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms,
+                       secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured
+                FROM uptime_daily
+                WHERE day >= ? AND day < ? AND monitor_id IN ({$du_in})
+            ");
+            $stmt_ud->execute(array_merge([$du_first, $du_today], $du_ids));
+            foreach ($stmt_ud->fetchAll() as $ud) {
+                $du_roll[(int)$ud['monitor_id']][(string)$ud['day']] = $ud;
+            }
+        }
+
+        // The raw logs are read only for the days the count rollup has not
+        // reached: today, and whatever cron has not rolled up yet (it runs
+        // over the last five days on every run, so after an outage of cron
+        // the gap is read from the logs until it catches up). The rollup
+        // writes every monitor of a day in one statement, so the newest
+        // rolled-up day of any monitor marks where the rollup stands.
+        $du_rolled_through = $pdo->query("SELECT MAX(day) FROM uptime_daily WHERE day < CURDATE() AND checks_total > 0")->fetchColumn();
+        $du_logs_from = $du_first;
+        if (is_string($du_rolled_through) && $du_rolled_through >= $du_first) {
+            $du_logs_from = date('Y-m-d', strtotime('+1 day', strtotime($du_rolled_through)));
+        }
         $stmt_days = $pdo->prepare("
             SELECT monitor_id, DATE(checked_at) AS day,
                    SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count,
@@ -2548,35 +2932,46 @@ if ($action === 'daily_uptime') {
                    COUNT(*) AS total_count,
                    AVG(CASE WHEN response_time > 0 THEN response_time END) AS avg_rt
             FROM monitor_logs
-            WHERE checked_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            WHERE checked_at >= ?
             GROUP BY monitor_id, DATE(checked_at)
         ");
-        $stmt_days->execute([$days]);
+        $stmt_days->execute([$du_logs_from . ' 00:00:00']);
 
         $by_monitor = [];
         while ($row = $stmt_days->fetch()) {
             $by_monitor[(int)$row['monitor_id']][$row['day']] = $row;
+        }
+        // A rolled-up day with check counts speaks for itself; the logs fill
+        // in only a day whose row holds no counts (a day of maintenance rows,
+        // or one the count rollup has not reached).
+        foreach ($du_roll as $du_mid => $du_days) {
+            foreach ($du_days as $du_day => $ud) {
+                if ((int)$ud['checks_total'] > 0 && !isset($by_monitor[$du_mid][$du_day])) {
+                    $by_monitor[$du_mid][$du_day] = [
+                        'up_count' => $ud['checks_up'], 'down_count' => $ud['checks_down'],
+                        'warning_count' => $ud['checks_warning'], 'maint_count' => 0,
+                        'total_count' => $ud['checks_total'], 'avg_rt' => $ud['avg_response_ms'],
+                    ];
+                }
+            }
         }
 
         // The day's availability in time (bk_uptime_segments), not in rows:
         // a day a silent agent wrote no row at all was "no data" here, and
         // the strip showed grey where the router was off. Today is computed
         // live; finished days come from the uptime_daily rollup (cron, every
-        // ten minutes) - 30 days of raw logs per page load cost seconds.
-        $du_ids = array_map(fn ($m) => (int)$m['id'], $mon_rows);
-        $du_today = date('Y-m-d');
+        // ten minutes). A day rolled up before the time columns existed knows
+        // only its check counts and is flagged approx by bk_uptime_daily_part.
         $du_time = [];
         foreach (bk_uptime_segments_for($pdo, strtotime($du_today . ' 00:00:00'), time(), $du_ids) as $du_mid => $du_seg) {
             $du_time[$du_mid][$du_today] = bk_uptime_summary($du_seg['segments'], $du_seg['from'], $du_seg['to']);
         }
-        $stmt_ud = $pdo->prepare("
-            SELECT monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured
-            FROM uptime_daily
-            WHERE day >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND day < CURDATE() AND secs_up IS NOT NULL
-        ");
-        $stmt_ud->execute([$days]);
-        foreach ($stmt_ud->fetchAll() as $ud) {
-            $du_time[(int)$ud['monitor_id']][(string)$ud['day']] = bk_uptime_totals([bk_uptime_daily_part($ud)]);
+        foreach ($du_roll as $du_mid => $du_days) {
+            foreach ($du_days as $du_day => $ud) {
+                if ($ud['secs_up'] !== null || (int)$ud['checks_total'] > 0) {
+                    $du_time[$du_mid][$du_day] = bk_uptime_totals([bk_uptime_daily_part($ud)]) + ['approx' => $ud['secs_up'] === null ? 1 : 0];
+                }
+            }
         }
 
         // Frontend (dashboard.tsx) expects `series` keyed by monitor id -> day
@@ -2594,57 +2989,46 @@ if ($action === 'daily_uptime') {
                 $d = $by_monitor[$mid][$day_key] ?? null;
                 // A finished day the rollup has not reached yet (cron behind,
                 // the first minutes after a deploy) falls back to its check
-                // counts rather than to "no data".
+                // counts rather than to "no data" - flagged approx, so its
+                // coverage stays unknown instead of a whole measured day.
                 $tm = $du_time[$mid][$day_key]
                     ?? ($d ? bk_uptime_totals([bk_uptime_daily_part([
                         'checks_up' => $d['up_count'], 'checks_down' => $d['down_count'],
                         'checks_warning' => $d['warning_count'], 'checks_maintenance' => $d['maint_count'],
-                    ])]) : null);
+                    ])]) + ['approx' => 1] : null);
 
-                // 'unknown' rows (types without an active check) are not measurements -
-                // they do not count into availability at all, otherwise a monitor
+                // 'unknown' rows (types without an active check) are not
+                // measurements - they count into no status, otherwise a monitor
                 // nobody ever tested would show false outages.
-                $down = $d ? (int)$d['down_count'] : 0;
-                $warn = $d ? (int)$d['warning_count'] : 0;
-                $measured = $d ? (int)$d['up_count'] + $down + $warn : 0;
-                $m_secs = $tm['measured'] ?? 0;
-                $maint_secs = $tm['maintenance'] ?? 0;
-
-                // The day's average response for the latency sparkline - null until
-                // something actually answered that day (0 would claim instant responses).
-                $avg_ms = ($d && $d['avg_rt'] !== null) ? (int)round((float)$d['avg_rt']) : null;
-
-                if ($m_secs === 0 && $maint_secs === 0) {
-                    // A day without a single measured second has no 0% uptime - it has none.
-                    $day_list[] = ['date' => $day_display, 'status' => 'paused', 'uptimePct' => null, 'avgMs' => $avg_ms, 'detail' => t('day_no_data')];
-                    continue;
+                $cell = bk_uptime_day_cell($tm, $d ? [
+                    'up' => (int)$d['up_count'], 'down' => (int)$d['down_count'], 'warning' => (int)$d['warning_count'],
+                ] : null);
+                $args = $cell['detailArgs'];
+                if (in_array($cell['detailKey'], ['day_silent_detail', 'day_down_time_detail', 'day_warning_time_detail'], true)) {
+                    $args[0] = bk_format_duration_secs((int)$args[0]);
+                } elseif ($cell['detailKey'] === 'day_partial_detail') {
+                    // In hours, as the strip's tooltip reads it ("14 h z 24 h"),
+                    // not "14 h z 1 d".
+                    $hours = fn (int $s): string => $s >= 3600 ? (int)round($s / 3600) . ' h' : bk_format_duration_secs($s);
+                    $args = [$hours((int)$args[0]), $hours((int)$args[1])];
                 }
 
-                // A red day never reads "100 %": a failure shorter than 43 s
-                // (0.05 % of a day) used to round up to 100.0 next to its
-                // failed-check count.
-                $uptimePct = bk_uptime_pct_round($tm['pct'] ?? null, 1, $down > 0 || !empty($tm['outage']));
-
-                if ($maint_secs > 0 && $maint_secs >= $m_secs) {
-                    $status = 'maintenance';
-                    $detail = t('day_maintenance');
-                } elseif (($tm['silent'] ?? 0) > 0) {
-                    // The agent wrote nothing, so there are no failed checks to
-                    // count - the outage is how long it was silent.
-                    $status = 'down';
-                    $detail = sprintf(t('day_silent_detail'), bk_format_duration_secs((int)$tm['outage']), $uptimePct);
-                } elseif (($tm['down'] ?? 0) > 0 || $down > 0) {
-                    $status = 'down';
-                    $detail = sprintf(t('day_down_detail'), $down, $measured, $uptimePct);
-                } elseif ($warn > 0) {
-                    $status = 'warning';
-                    $detail = sprintf(t('day_warning_detail'), $warn, $measured);
-                } else {
-                    $status = 'up';
-                    $detail = sprintf(t('day_up_detail'), $measured);
-                }
-
-                $day_list[] = ['date' => $day_display, 'status' => $status, 'uptimePct' => $uptimePct, 'avgMs' => $avg_ms, 'detail' => $detail];
+                $day_list[] = [
+                    'date' => $day_display,
+                    'day' => $day_key,
+                    'status' => $cell['status'],
+                    'uptimePct' => $cell['uptimePct'],
+                    // The day's average response for the latency sparkline - null until
+                    // something actually answered that day (0 would claim instant responses).
+                    'avgMs' => ($d && $d['avg_rt'] !== null) ? (int)round((float)$d['avg_rt']) : null,
+                    'coveragePct' => $cell['coveragePct'],
+                    'measuredSecs' => $cell['measuredSecs'],
+                    'expectedSecs' => $cell['expectedSecs'],
+                    'downMin' => $cell['downMin'],
+                    'degradedMin' => $cell['degradedMin'],
+                    'maintenanceMin' => $cell['maintenanceMin'],
+                    'detail' => vsprintf(t($cell['detailKey']), $args),
+                ];
             }
 
             $series[$mid] = $day_list;
@@ -3912,7 +4296,7 @@ if ($action === 'regions') {
         $rg_project = function (array $payload) use ($rg_public): array {
             if ($rg_public) {
                 $payload['regions'] = array_map(
-                    fn($r) => ['location' => $r['location'] ?? null, 'successRate' => $r['successRate'] ?? null],
+                    fn($r) => ['location' => $r['location'] ?? null, 'country' => $r['country'] ?? bk_location_country($r['location'] ?? null), 'successRate' => $r['successRate'] ?? null],
                     $payload['regions'] ?? []
                 );
             }
@@ -3961,6 +4345,10 @@ if ($action === 'regions') {
             $regions[] = [
                 // null = the node does not report its location; the UI says so plainly.
                 'location' => $r['checked_from'] !== null && $r['checked_from'] !== '' ? $r['checked_from'] : null,
+                // ISO 3166-1 alpha-2 from the label, null = no country known:
+                // the page draws its own flag instead of the emoji (Windows
+                // shows those as two letters).
+                'country' => bk_location_country($r['checked_from'] ?? null),
                 'checks' => $checks,
                 'upChecks' => (int)$r['up_checks'],
                 'downChecks' => (int)$r['down_checks'],
@@ -4001,7 +4389,26 @@ if ($action === 'websites_overview') {
             $wo_monitors = array_intersect_key($wo_monitors, array_flip($wo_visible));
         }
         // Archived sites leave the overview, also when the cache predates the archiving.
-        $data['monitors'] = (object)array_diff_key($wo_monitors, array_flip(bk_archived_monitor_ids($pdo)));
+        $wo_monitors = array_diff_key($wo_monitors, array_flip(bk_archived_monitor_ids($pdo)));
+        // The HTTP code the latest check recorded (W2-10, honest-14), read
+        // fresh - not from the ten-minute cache. The card printed "200 OK" for
+        // any site that was up and "OFFLINE" for a slow one, a code nobody
+        // measured. null = the latest check recorded none (it failed before
+        // HTTP, or the monitor is not a web check), and the card shows "—".
+        $wo_http = $pdo->prepare("SELECT check_stages, checked_at FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        $wo_web = $pdo->query("SELECT id FROM monitors WHERE type = 'web'")->fetchAll(PDO::FETCH_COLUMN);
+        foreach (array_map('intval', $wo_web) as $wo_mid) {
+            if (!isset($wo_monitors[$wo_mid])) {
+                continue;
+            }
+            $wo_http->execute([$wo_mid]);
+            $wo_last = $wo_http->fetch();
+            $wo_stages = is_array($wo_last) ? json_decode((string)($wo_last['check_stages'] ?? ''), true) : null;
+            $wo_code = is_array($wo_stages) ? ($wo_stages['http']['status_code'] ?? null) : null;
+            $wo_monitors[$wo_mid]['httpStatusCode'] = is_numeric($wo_code) && (int)$wo_code > 0 ? (int)$wo_code : null;
+            $wo_monitors[$wo_mid]['httpCheckedAt'] = is_array($wo_last) ? date('c', strtotime((string)$wo_last['checked_at'])) : null;
+        }
+        $data['monitors'] = (object)$wo_monitors;
         // The limit cron alerts at (ssl_alert_days), read fresh rather than
         // cached: the Insights page lists a certificate by the same rule the
         // alert uses, not by a number of its own (W1-B6).
@@ -4218,6 +4625,25 @@ if ($action === 'sla_report') {
         // first day (windowStart): a year over seven weeks of history says so.
         $sla_since = null;
 
+        // Incidents opened in the window, per monitor (W2-7: the SLA table's
+        // "incidenty" column). A failed read is null - unknown - and the
+        // report still goes out; it is not a zero.
+        $sla_incidents = null;
+        try {
+            $stmt_inc = $pdo->prepare("
+                SELECT monitor_id, COUNT(*) AS n FROM incidents
+                WHERE monitor_id IS NOT NULL AND created_at >= ?
+                GROUP BY monitor_id
+            ");
+            $stmt_inc->execute([date('Y-m-d', strtotime('-' . ($days - 1) . ' day', strtotime('today')))]);
+            $sla_incidents = [];
+            foreach ($stmt_inc->fetchAll() as $inc) {
+                $sla_incidents[(int)$inc['monitor_id']] = (int)$inc['n'];
+            }
+        } catch (Throwable $t) {
+            error_log('[api.php action=sla_report] incident counts unavailable: ' . $t->getMessage());
+        }
+
         $report = [];
         foreach ($monitors as $m) {
             $mid = (int)$m['id'];
@@ -4281,6 +4707,10 @@ if ($action === 'sla_report') {
                 // Time nothing measured (cron stopped, an agent-side check's
                 // agent went quiet): outside the percentage, and said so.
                 'unmeasuredMinutes' => $sla_sum !== null ? (int)round($sla_sum['unmeasured'] / 60) : null,
+                // The time the percentage is taken over; budgetMinutes below
+                // is the downtime the SLA goal allows in it.
+                'measuredMinutes' => $sla_sum !== null ? (int)round($sla_sum['measured'] / 60) : null,
+                'incidentCount' => $sla_incidents === null ? null : ($sla_incidents[$mid] ?? 0),
                 'since' => $mon_since,
                 'lastOutage' => $last_outage,
                 'mttrSec' => $mttr,
@@ -4291,6 +4721,15 @@ if ($action === 'sla_report') {
         }
 
         $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
+        // Downtime against the budget (W2-7): "20 min z 43 min" ranks the
+        // monitors, a bar of 99.9x % did not. The budget is what the goal
+        // allows over the time actually measured; null where nothing was.
+        foreach ($report as &$sla_row) {
+            $sla_row['budgetMinutes'] = $sla_row['measuredMinutes'] !== null
+                ? round($sla_row['measuredMinutes'] * (100 - $sla_goal) / 100, 1)
+                : null;
+        }
+        unset($sla_row);
         // Average only over monitors with actually measured SLA; without a
         // single one the result is null, not an invented 100 %.
         $uptime_vals = array_filter(array_column($report, 'uptimePercent'), fn($v) => $v !== null);
@@ -4330,8 +4769,9 @@ if ($action === 'sla_report') {
     } catch (Throwable $e) {
         // A DB error here used to return 100% uptime and 0 outage minutes -
         // a perfect SLA precisely when nothing is known about the real state.
-        http_response_code(500);
-        echo json_encode(['error' => 'Nepodařilo se sestavit SLA report.'], JSON_UNESCAPED_UNICODE);
+        // The machine code (W2-7, correctness-18) lets the page show a
+        // failure, not its "no data yet, check cron" hint.
+        bk_api_fail('sla_report_unavailable', 500, $e, 'Nepodařilo se sestavit SLA report.');
     }
     exit;
 }
@@ -4394,22 +4834,27 @@ if ($action === 'audit_logs') {
 
         $logs = [];
         foreach ($rows as $r) {
-            $row_status = strtolower($r['status'] ?? '');
-            $isDown = $row_status === 'down';
-            $isWarn = $row_status === 'warning';
+            // The shared vocabulary (C-11): a maintenance or unknown check was
+            // "KONTROLA OK" here, and a check without a response time said
+            // "(Odezva  ms)".
+            $al_label = bk_status_label((string)($r['status'] ?? ''), true);
             $mName = $r['monitor_name'] ?: "Monitor #{$r['monitor_id']}";
             $mType = strtoupper($r['monitor_type'] ?: 'HTTP');
+            $al_rt = $r['response_time'] !== null ? sprintf(t('audit_check_rt'), (int)$r['response_time']) : '';
 
             $logs[] = [
                 'id' => (int)$r['id'],
                 'time' => date('d.m.Y H:i:s', strtotime($r['time'])),
-                'action' => $isDown ? "VÝPADEK: {$mName}" : ($isWarn ? "VAROVÁNÍ: {$mName}" : "KONTROLA OK: {$mName}"),
-                'details' => $r['error_message'] ?: ($isDown ? "[{$mName}] {$mType} neodpovídá na test" : "[{$mName}] {$mType} test OK (Odezva {$r['response_time']} ms)"),
-                'status' => $isDown ? 'down' : ($isWarn ? 'warning' : 'up'),
+                'action' => ($al_label['key'] === 'up' ? t('audit_check_ok') : mb_strtoupper($al_label['label'])) . ": {$mName}",
+                'details' => $r['error_message'] ?: "[{$mName}] {$mType} " . bk_event_fallback_text($al_label['key']) . $al_rt,
+                'status' => $al_label['key'] === 'unknown_stale' ? 'unknown' : $al_label['key'],
+                'statusKey' => $al_label['key'],
+                'statusLabel' => $al_label['label'],
+                'statusTone' => $al_label['tone'],
                 'user' => 'Systémový Agent (Cron)',
             ];
         }
-        echo json_encode(['logs' => $logs], JSON_UNESCAPED_UNICODE);
+        echo bk_json_safe(['logs' => $logs]);
     } catch (Throwable $e) {
         // logs: [] read as "nothing happened".
         bk_api_fail('audit_logs_unavailable', 500, $e, 'Protokol kontrol se nepodařilo načíst.');
@@ -4466,7 +4911,7 @@ if ($action === 'metric_series') {
             // or maximum for it, so the band stays empty rather than invented.
             // ?previous=1 shifts the window by one period, as the raw path does.
             $unit = 'ms';
-            $label = 'Doba odezvy (HTTP/Ping)';
+            $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
             $stmt = $pdo->prepare("
                 SELECT UNIX_TIMESTAMP(day) AS ts, avg_response_ms, checks_total
                 FROM uptime_daily
@@ -4485,7 +4930,7 @@ if ($action === 'metric_series') {
             }
         } elseif ($metric === 'response_time' || $metric === 'latency') {
             $unit = 'ms';
-            $label = 'Doba odezvy (HTTP/Ping)';
+            $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
             $stmt = $pdo->prepare("
                 SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
                 FROM monitor_logs
@@ -4500,15 +4945,12 @@ if ($action === 'metric_series') {
             $def = $BK_METRIC_COLUMN_MAP[$metric];
             $col = $def['col'];
             $unit = $def['unit'];
-            $label = $def['label'];
             // Cumulative counters (firewall, DNS, TCP retransmissions) are stored
             // as the kernel reports them - ever-growing. Drawing them directly
             // would give a rising ramp that tells nothing. The chart therefore
-            // gets the DELTA between measurements.
+            // gets the DELTA between measurements, and its title says so.
             $is_counter = !empty($def['counter']);
-            if ($is_counter) {
-                $label .= ' (přírůstek)';
-            }
+            $label = bk_metric_label($metric, $def['label'], $is_counter);
             // A STEP metric is already the increment between two reports (the
             // ingest subtracted them), so a raw point needs no arithmetic. What
             // it does need is the right aggregation: the day of a step is the
@@ -4565,17 +5007,14 @@ if ($action === 'metric_series') {
 
                 if ($is_counter) {
                     // The delta against the previous measurement. When the value drops,
-                    // the counter was reset (reboot, firewall restart) - the point is
-                    // skipped. Computing it from zero would fabricate a spike that
-                    // never happened.
-                    $prev = null;
-                    foreach ($stmt->fetchAll() as $r) {
-                        $val = (float)$r['val'];
-                        if ($prev !== null && $val >= $prev) {
-                            $points[] = [(int)$r['ts'], round($val - $prev, 2)];
-                        }
-                        $prev = $val;
-                    }
+                    // the counter was reset (reboot, firewall restart), and across a
+                    // gap in time the increment belongs to no one reading - both
+                    // points are skipped (charts-15). Computing them would fabricate
+                    // a spike that never happened.
+                    $points = bk_counter_delta_points(array_map(
+                        fn ($r) => [(int)$r['ts'], (float)$r['val']],
+                        $stmt->fetchAll()
+                    ));
                 } else {
                     foreach ($stmt->fetchAll() as $r) {
                         $points[] = [(int)$r['ts'], (float)$r['val']];
@@ -4589,7 +5028,15 @@ if ($action === 'metric_series') {
 
         // No fabrication: an empty series means the agent has not sent this
         // metric yet or the period has no records - not that we make one up.
-        $series_payload = ['unit' => $unit, 'label' => $label, 'points' => $points];
+        // distinctValues lets the metric page tell a constant (or 2-3 state)
+        // metric from a real curve (W2-4, charts-21): nine panels over the
+        // value 8 said nothing one sentence could not.
+        $series_payload = [
+            'unit' => $unit,
+            'label' => $label,
+            'points' => $points,
+            'distinctValues' => count(array_unique(array_map(fn ($p) => (string)$p[1], $points))),
+        ];
         // The same projection the batch endpoint sends, so the detail page can
         // draw where this is heading instead of only printing the number.
         $md_forecast = bk_days_to_full($pdo, (int)$real_id);
@@ -4636,7 +5083,7 @@ if ($action === 'metric_heatmap') {
 
         if ($metric === 'response_time' || $metric === 'latency') {
             $unit = 'ms';
-            $label = 'Doba odezvy (HTTP/Ping)';
+            $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
             $stmt = $pdo->prepare("
                 SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
                        AVG(response_time) AS cell_val, COUNT(*) AS samples
@@ -4649,11 +5096,10 @@ if ($action === 'metric_heatmap') {
             $def = $BK_METRIC_COLUMN_MAP[$metric];
             $col = $def['col'];
             $unit = $def['unit'];
-            $label = $def['label'];
+            $label = bk_metric_label($metric, $def['label'], !empty($def['counter']));
             $cell_expr = "AVG({$col})";
             if (!empty($def['counter'])) {
                 $cell_expr = "MAX({$col}) - MIN({$col})";
-                $label .= ' (přírůstek)';
             } elseif (!empty($def['step'])) {
                 // Each row already holds one minute's increment: an hour of the
                 // heatmap is their SUM, never their average.
@@ -4685,6 +5131,13 @@ if ($action === 'metric_heatmap') {
         // and a day the agent slept through shows as a visibly empty row.
         // PHP's "today" and MySQL's DATE() must agree for the grid to line up;
         // both follow the server timezone (no per-user TZ exists here).
+        // The first day with a sample (charts-25): a metric measured since the
+        // 15th drew 23 empty rows above its data, which read as 23 days of
+        // silence. The grid stays dense (every day asked for, so the client
+        // never computes which days are missing); `firstSampleDay` tells the
+        // page where to start it and lets it say "měří se od 15. 9.". null =
+        // not one sample in the window.
+        $first_day = $by_day ? min(array_map('strval', array_keys($by_day))) : null;
         $days_out = [];
         for ($i = $hm_days - 1; $i >= 0; $i--) {
             $day = date('Y-m-d', strtotime("-{$i} days"));
@@ -4698,7 +5151,13 @@ if ($action === 'metric_heatmap') {
             $days_out[] = ['day' => $day, 'hours' => $hours, 'samples' => $samples];
         }
 
-        echo json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE);
+        echo bk_json_safe([
+            'unit' => $unit,
+            'label' => $label,
+            'firstSampleDay' => $first_day,
+            'requestedDays' => $hm_days,
+            'days' => $days_out,
+        ]);
     } catch (Throwable $e) {
         bk_api_fail('metric_heatmap_unavailable', 500, $e, 'Heatmapu se nepodařilo načíst.');
     }
@@ -4758,8 +5217,10 @@ if ($action === 'metric_correlations') {
         // stays because an alias added without 'only' would otherwise show up
         // as a perfect correlation of a metric with itself under another name.
         $candidates = [];
+        $subject_family = bk_metric_family($metric);
         foreach ($BK_METRIC_COLUMN_MAP as $key => $def) {
-            if ($key === $metric) {
+            // Its own family is arithmetic, not a relationship (charts-29).
+            if ($key === $metric || bk_metric_family($key) === $subject_family) {
                 continue;
             }
             if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
@@ -4779,13 +5240,16 @@ if ($action === 'metric_correlations') {
         $select = implode(', ', array_map(fn($c) => "`{$c}`", $columns));
 
         $stmt = $pdo->prepare("
-            SELECT {$select}
+            SELECT UNIX_TIMESTAMP(checked_at) AS bk_ts, {$select}
             FROM vps_metrics
             WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
             ORDER BY checked_at ASC
         ");
         $stmt->execute([$real_id, $minutes]);
         $rows = $stmt->fetchAll();
+        // The readings' times, so a counter increment across a gap is no
+        // increment at all (charts-15), exactly as the chart draws it.
+        $row_ts = array_map(fn($r) => (int)$r['bk_ts'], $rows);
 
         $series = [];
         foreach ($columns as $col) {
@@ -4794,12 +5258,12 @@ if ($action === 'metric_correlations') {
 
         $target_def = $BK_METRIC_COLUMN_MAP[$metric];
         $target = !empty($target_def['counter'])
-            ? bk_counter_deltas($series[$target_def['col']])
+            ? bk_counter_deltas($series[$target_def['col']], $row_ts)
             : $series[$target_def['col']];
 
         $out = [];
         foreach ($candidates as $key => $def) {
-            $values = !empty($def['counter']) ? bk_counter_deltas($series[$def['col']]) : $series[$def['col']];
+            $values = !empty($def['counter']) ? bk_counter_deltas($series[$def['col']], $row_ts) : $series[$def['col']];
             $res = bk_pearson($target, $values, $corr_min_pairs);
             // A metric the agent never reported is absent, not uncorrelated -
             // listing it would fill the panel with rows about nothing.
@@ -4808,7 +5272,8 @@ if ($action === 'metric_correlations') {
             }
             $out[] = [
                 'key' => $key,
-                'label' => $def['label'] . (!empty($def['counter']) ? ' (přírůstek)' : ''),
+                'family' => bk_metric_family($key),
+                'label' => bk_metric_label($key, $def['label'], !empty($def['counter'])),
                 'unit' => $def['unit'],
                 'r' => $res['r'],
                 'pairs' => $res['pairs'],
@@ -4826,14 +5291,28 @@ if ($action === 'metric_correlations') {
         });
 
         $total = count($out);
-        echo json_encode([
+        // The short list keeps the strongest member of each family: Load 1,
+        // 5 and 15 in three rows said one thing three times. all=1 lists
+        // every comparison, family members included.
+        if (empty($_GET['all'])) {
+            $seen_family = [];
+            $out = array_values(array_filter($out, function ($row) use (&$seen_family) {
+                if (isset($seen_family[$row['family']])) {
+                    return false;
+                }
+                $seen_family[$row['family']] = true;
+                return true;
+            }));
+        }
+        echo bk_json_safe([
             'metric' => $metric,
-            'label' => $target_def['label'],
+            'label' => bk_metric_label($metric, $target_def['label']),
+            'family' => $subject_family,
             'samples' => count($rows),
             'minPairs' => $corr_min_pairs,
             'total' => $total,
             'correlations' => array_slice($out, 0, $corr_top),
-        ], JSON_UNESCAPED_UNICODE);
+        ]);
     } catch (Throwable $e) {
         bk_api_fail('metric_correlations_unavailable', 500, $e, 'Korelace se nepodařilo spočítat.');
     }
@@ -4913,6 +5392,9 @@ if ($action === 'metric_detail') {
         $def = $is_latency
             ? ['label' => 'Doba odezvy (HTTP/Ping)', 'unit' => 'ms', 'counter' => false]
             : $map[$metric];
+        // The page title follows ?lang (charts-22); the counter flag rides
+        // separately, so the bare name carries no "(increase)" here.
+        $def['label'] = bk_metric_label($is_latency ? 'response_time' : $metric, $def['label']);
 
         // Related metrics: only those this monitor actually reports in its latest
         // measurement. Offering a link into an empty chart is worse than nothing.
@@ -4930,7 +5412,7 @@ if ($action === 'metric_detail') {
                     if (!array_key_exists($col, $latest) || $latest[$col] === null) continue;
                     $related[] = [
                         'key' => $rkey,
-                        'label' => $rdef['label'],
+                        'label' => bk_metric_label($rkey, $rdef['label']),
                         'unit' => $rdef['unit'],
                         'latest' => (float)$latest[$col],
                     ];
@@ -5162,7 +5644,20 @@ if ($action === 'metric_series_batch') {
         foreach ($stmt_lat->fetchAll() as $r) {
             $lat_points[] = [(int)$r['ts'], (float)$r['val']];
         }
-        $series['response_time'] = ['unit' => 'ms', 'label' => 'Doba odezvy (HTTP/Ping)', 'points' => $lat_points];
+        $series['response_time'] = ['unit' => 'ms', 'label' => bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)'), 'points' => $lat_points];
+
+        // C-3: every series carries previousAvg, the mean of the same-length
+        // window one period earlier (what ?previous=1 of metric_series draws),
+        // so a tile can say "higher than before" without a second request per
+        // chart. Aggregated in SQL - the previous window's rows are never
+        // fetched. null = fewer than 3 samples there (a new agent, or 30d,
+        // whose previous window lies past the 30-day raw retention).
+        $prev_window = 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND checked_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)';
+        $prev_params = [$real_id, $minutes * 2, $minutes];
+        $stmt_lat_prev = $pdo->prepare("SELECT COUNT(response_time) AS n, AVG(response_time) AS a FROM monitor_logs WHERE monitor_id = ? AND {$prev_window}");
+        $stmt_lat_prev->execute($prev_params);
+        $lat_prev = $stmt_lat_prev->fetch() ?: ['n' => 0, 'a' => null];
+        $series['response_time']['previousAvg'] = bk_aggregate_mean($lat_prev['n'], $lat_prev['a']);
 
         // All agent metrics - from vps_metrics (one row per agent report), in one query.
         $cols = array_column($BK_METRIC_COLUMN_MAP, 'col');
@@ -5176,6 +5671,37 @@ if ($action === 'metric_series_batch') {
         $stmt_vm->execute([$real_id, $minutes]);
         $vm_rows = $stmt_vm->fetchAll();
 
+        // Previous window (C-3). A plain series compares means, so SQL does
+        // the averaging; a counter's chart shows increments, so its mean must
+        // be of increments too - those few columns are read row by row and
+        // go through the same gap-aware deltas as the chart (charts-15).
+        $prev_agg_cols = [];
+        $prev_counter_cols = [];
+        foreach ($BK_METRIC_COLUMN_MAP as $def) {
+            if (!empty($def['counter'])) {
+                $prev_counter_cols[$def['col']] = true;
+            } else {
+                // ??= because several series share one column
+                // (ts_clients_online): re-numbering it would hand its alias
+                // to the next column and swap two metrics' means.
+                $prev_agg_cols[$def['col']] ??= count($prev_agg_cols);
+            }
+        }
+        $prev_select = [];
+        foreach ($prev_agg_cols as $c => $i) {
+            $prev_select[] = "COUNT(`$c`) AS n{$i}, AVG(`$c`) AS a{$i}";
+        }
+        $stmt_vm_prev = $pdo->prepare('SELECT ' . implode(', ', $prev_select) . " FROM vps_metrics WHERE monitor_id = ? AND {$prev_window}");
+        $stmt_vm_prev->execute($prev_params);
+        $vm_prev = $stmt_vm_prev->fetch() ?: [];
+        $prev_counter_rows = [];
+        if ($prev_counter_cols !== []) {
+            $counter_list = implode(', ', array_map(fn($c) => "`$c`", array_keys($prev_counter_cols)));
+            $stmt_ctr_prev = $pdo->prepare("SELECT UNIX_TIMESTAMP(checked_at) AS ts, {$counter_list} FROM vps_metrics WHERE monitor_id = ? AND {$prev_window} ORDER BY checked_at ASC");
+            $stmt_ctr_prev->execute($prev_params);
+            $prev_counter_rows = $stmt_ctr_prev->fetchAll();
+        }
+
         foreach ($BK_METRIC_COLUMN_MAP as $metric_key => $def) {
             // A series restricted to another monitor type is not offered at all.
             if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
@@ -5187,7 +5713,31 @@ if ($action === 'metric_series_batch') {
                     $pts[] = [(int)$r['ts'], (float)$r[$def['col']]];
                 }
             }
-            $series[$metric_key] = ['unit' => $def['unit'], 'label' => $def['label'], 'points' => $pts];
+            // A cumulative counter gets the same increments as metric_series
+            // (charts-06). The raw values are lifetime totals - "Firewall -
+            // propuštěno 912044" said nothing about the chart's window.
+            $is_counter = !empty($def['counter']);
+            if ($is_counter) {
+                $pts = bk_counter_delta_points($pts);
+            }
+            $series[$metric_key] = [
+                'unit' => $def['unit'],
+                'label' => bk_metric_label($metric_key, $def['label'], $is_counter),
+                'points' => $pts,
+            ];
+            if ($is_counter) {
+                $series[$metric_key]['counter'] = true;
+                $prev_pts = [];
+                foreach ($prev_counter_rows as $r) {
+                    if ($r[$def['col']] !== null) {
+                        $prev_pts[] = [(int)$r['ts'], (float)$r[$def['col']]];
+                    }
+                }
+                $series[$metric_key]['previousAvg'] = bk_series_mean(bk_counter_delta_points($prev_pts));
+            } else {
+                $pi = $prev_agg_cols[$def['col']];
+                $series[$metric_key]['previousAvg'] = bk_aggregate_mean($vm_prev["n{$pi}"] ?? 0, $vm_prev["a{$pi}"] ?? null);
+            }
             // Days until this metric reaches 100 %, where that is a real
             // projection. The chart card has always had a badge for it and
             // never a number to put in it. Absent = no forecast, never a zero.
@@ -6067,6 +6617,8 @@ if ($action === 'router_recommendation_mute') {
         }
         bk_audit_log($pdo, $rm_on ? 'router_rec_mute' : 'router_rec_unmute',
             $rm_key . ($rm_reason !== '' ? ': ' . $rm_reason : ''), 'monitor', $rm_monitor_id);
+        // The bell's kept counts still hold the muted item.
+        $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'");
         echo json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
             JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {

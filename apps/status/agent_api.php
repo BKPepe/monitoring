@@ -1397,7 +1397,9 @@ try {
         $stmt_if = null;
         $stmt_upsert = null;
         try {
-            $stmt_if = $pdo->prepare("SELECT last_rx_bytes, last_tx_bytes, last_rx_packets, last_tx_packets FROM monitor_interface_traffic WHERE monitor_id = ? AND iface = ? ORDER BY date DESC LIMIT 1");
+            // The row's date and age too: an increment across a gap over
+            // midnight has no knowable day (bk_iface_traffic_booking).
+            $stmt_if = $pdo->prepare("SELECT last_rx_bytes, last_tx_bytes, last_rx_packets, last_tx_packets, date, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_secs FROM monitor_interface_traffic WHERE monitor_id = ? AND iface = ? ORDER BY date DESC LIMIT 1");
             $stmt_upsert = $pdo->prepare("
                 INSERT INTO monitor_interface_traffic (
                     monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total,
@@ -1439,19 +1441,18 @@ try {
                 // The first report of an interface is only a baseline: its
                 // counters hold everything since the router booted, which may
                 // be months of traffic, and booking that as today's inflated
-                // the daily totals of every new interface or new agent.
-                $d_rx_b = 0.0; $d_tx_b = 0.0; $d_rx_p = 0; $d_tx_p = 0;
-                if ($prevrow) {
-                    $p_rx_b = (float)$prevrow['last_rx_bytes'];
-                    $p_tx_b = (float)$prevrow['last_tx_bytes'];
-                    $p_rx_p = (int)$prevrow['last_rx_packets'];
-                    $p_tx_p = (int)$prevrow['last_tx_packets'];
-
-                    $d_rx_b = ($cur_rx_b >= $p_rx_b) ? ($cur_rx_b - $p_rx_b) : $cur_rx_b;
-                    $d_tx_b = ($cur_tx_b >= $p_tx_b) ? ($cur_tx_b - $p_tx_b) : $cur_tx_b;
-                    $d_rx_p = ($cur_rx_p >= $p_rx_p) ? ($cur_rx_p - $p_rx_p) : $cur_rx_p;
-                    $d_tx_p = ($cur_tx_p >= $p_tx_p) ? ($cur_tx_p - $p_tx_p) : $cur_tx_p;
-                }
+                // the daily totals of every new interface or new agent. An
+                // increment across a gap over midnight is booked nowhere either
+                // (charts-15): the missing days' bytes are not today's traffic.
+                $if_today = $prevrow && (string)$prevrow['date'] === $today_str;
+                $if_age = ($prevrow && $prevrow['age_secs'] !== null) ? (int)$prevrow['age_secs'] : null;
+                $if_book = fn ($prev_col, float $cur): float => bk_iface_traffic_booking(
+                    $prevrow ? (float)$prevrow[$prev_col] : null, $cur, $if_today, $if_age
+                );
+                $d_rx_b = $if_book('last_rx_bytes', $cur_rx_b);
+                $d_tx_b = $if_book('last_tx_bytes', $cur_tx_b);
+                $d_rx_p = (int)$if_book('last_rx_packets', (float)$cur_rx_p);
+                $d_tx_p = (int)$if_book('last_tx_packets', (float)$cur_tx_p);
 
                 $stmt_upsert->execute([
                     $monitor_id, $ifname, $today_str, $d_rx_b, $d_tx_b, $d_rx_p, $d_tx_p,

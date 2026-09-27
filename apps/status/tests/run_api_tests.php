@@ -236,6 +236,13 @@ function api_get_auth(string $base, string $query, string $jar): array {
 check('schema.sql nezakládá žádný účet (žádné výchozí heslo)', (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn(), 0);
 [, $fresh_session] = api_get($base, 'action=session');
 check('čerstvá instalace hlásí installed=false', $fresh_session['installed'] ?? 'chybí', false);
+// W2-12: the login page draws a button only for a provider with a client ID.
+check('bez OAuth klienta session nenabízí žádného poskytovatele', $fresh_session['oauthProviders'] ?? 'chybí', []);
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('oauth_github_client_id', 'Iv1.example') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+[, $oauth_session] = api_get($base, 'action=session');
+check('s GitHub client ID nabídne session jen GitHub (klíč, ne ID)', $oauth_session['oauthProviders'] ?? 'chybí', ['github']);
+check_true('client ID samo session neprozradí', !str_contains(json_encode($oauth_session), 'Iv1.example'));
+$pdo->exec("DELETE FROM settings WHERE key_name = 'oauth_github_client_id'");
 $bk_test_admin_password = 'Test-' . bin2hex(random_bytes(8));
 $setup_jar = tempnam(sys_get_temp_dir(), 'bk_setup0');
 [$code, $fresh_setup] = api_post($base, 'action=setup', [
@@ -2757,6 +2764,13 @@ if (function_exists('bk_build_executive_summary')) {
     $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 10, NOW())");
     $calm = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
     check_true('bez tlaku se přizná klid', str_contains($calm, 'Žádné aktuální problémy'));
+    // W2-2: the asset page's sentence leaves the concern and the all-clear to the findings list below it.
+    $tip = [['severity' => 'critical', 'text' => 'Disk je plný.']];
+    check_true('souhrn pro e-mail a starou stránku jmenuje hlavní starost', str_contains(bk_build_executive_summary($mon, null, $tip, [], [], $pdo, []), 'Disk je plný.'));
+    $only_state = bk_build_executive_summary($mon, null, $tip, [], [], $pdo, [], false);
+    check_false('statusSentence starost neopakuje (je hned pod ním v nálezech)', str_contains($only_state, 'Disk je plný.'));
+    check_false('a ani netvrdí klid, ten řekne seznam nálezů', str_contains($only_state, 'Žádné aktuální problémy'));
+    check_true('stav v něm zůstane', $only_state !== '' && str_contains($only_state, 'Router'));
 }
 
 if (function_exists('bk_top_process_in_window')) {
@@ -5106,6 +5120,18 @@ $g3_row = fn (int $id): array => array_values(array_filter($g3_admin['monitors']
 check('admin vidí u webu, že je veřejný', $g3_row(1)['isPublic'] ?? null, true);
 check('a u routeru, že veřejný není', $g3_row(2)['isPublic'] ?? null, false);
 check('řádky logu jsou u routeru zapnuté', $g3_row(2)['logLinesEnabled'] ?? null, true);
+// CR-5: the app's list carries the certificate limit cron alerts at, so the
+// dashboard's attention list uses the same rule; a non-default value proves it
+// is read from the setting, and the public view does not get it.
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('ssl_alert_days', '21') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+try {
+    [, $cr5_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    check('seznam monitorů nese mez upozornění na certifikát z nastavení', $cr5_admin['sslAlertDays'] ?? null, 21);
+    [, $cr5_pub] = api_get($base, 'action=monitors&scope=public');
+    check_false('veřejný seznam mez nenese', array_key_exists('sslAlertDays', $cr5_pub ?? []));
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'ssl_alert_days'");
+}
 
 [, $g3_ps] = api_get($base, 'action=public_status');
 check('veřejný souhrn počítá jen veřejnou sadu', $g3_ps['totalMonitors'] ?? null, count($g3_ids($g3_anon)));
@@ -5645,10 +5671,11 @@ try {
 // and one cache served whichever language filled it first to everybody.
 // =======================================================================
 $b6_items = fn (string $word): array => array_map(fn ($i) => ['monitorId' => 1, 'monitorName' => 'Testovací web',
-    'kind' => 'trend', 'text' => "{$word} {$i}", 'detail' => ''], range(1, 10));
+    'kind' => 'trend', 'severity' => 'warning', 'text' => "{$word} {$i}", 'detail' => ''], range(1, 10));
 $b6_store = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-$b6_store->execute(['dashboard_insights_cache_cs', json_encode(['at' => time(), 'insights' => $b6_items('Česky')], JSON_UNESCAPED_UNICODE)]);
-$b6_store->execute(['dashboard_insights_cache_en', json_encode(['at' => time(), 'insights' => $b6_items('English')], JSON_UNESCAPED_UNICODE)]);
+// 'v' => 2: the cache format since the items carry a severity (C-12).
+$b6_store->execute(['dashboard_insights_cache_cs', json_encode(['at' => time(), 'v' => 2, 'insights' => $b6_items('Česky')], JSON_UNESCAPED_UNICODE)]);
+$b6_store->execute(['dashboard_insights_cache_en', json_encode(['at' => time(), 'v' => 2, 'insights' => $b6_items('English')], JSON_UNESCAPED_UNICODE)]);
 try {
     [, $b6_all] = api_get_auth($base, 'action=dashboard_insights&limit=100&lang=cs', $cookie_jar);
     check('postřehy: všech deset, žádný strop osmi', count($b6_all['insights'] ?? []), 10);
@@ -5989,6 +6016,365 @@ foreach (array_merge(array_keys($dd_machine), array_keys($dd_pages)) as $dd_path
     [, , $dd_body] = bk_raw_request($base . '/' . $dd_path, $dd_down);
     $dd_found = array_values(array_filter($dd_leaks, fn (string $leak): bool => stripos($dd_body, $leak) !== false));
     check("databáze dole, {$dd_path}: tělo nic neprozradí", $dd_found, []);
+}
+
+// =======================================================================
+// UX wave 2, server half.
+//
+// C-7   the strip day carries its coverage: partial and nodata instead of
+//       'paused', warning counted as available with its minutes apart;
+// C-11  one status vocabulary: maintenance and unknown are not "OK";
+// C-12  one findings feed with severity and device;
+// charts-06/15/25/29, W2-4, W2-7, W2-10.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
+            (190, 'W2 děravý web', 'web', 'https://example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (191, 'W2 čeká na data', 'agent_service', 'nginx', 'unknown', 'Test', NOW(), NULL),
+            (192, 'W2 zmlklý agent', 'agent_service', 'nginx', 'unknown', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (193, 'W2 router s čítači', 'openwrt', 'router-w2', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (194, 'W2 nález', 'web', 'https://example.net', 'down', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (195, 'W2 v údržbě', 'web', 'https://example.com/udrzba', 'maintenance', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW())");
+$pdo->exec("UPDATE monitors SET last_status_change = DATE_SUB(NOW(), INTERVAL 1 HOUR),
+            last_details = '" . json_encode(['ssl_days_remaining' => 3]) . "' WHERE id = 194");
+$w2_ud = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                        VALUES (190, DATE_SUB(CURDATE(), INTERVAL ? DAY), ?, 0, ?, 0, 0, ?)");
+$w2_ud->execute([1, 50400, 0, 36000]);   // 14 h measured of 24
+$w2_ud->execute([2, 82800, 3600, 0]);    // a whole day, one hour degraded
+try {
+    // --- C-7 -------------------------------------------------------------
+    [$w2_code, $w2_du] = api_get_auth($base, 'action=daily_uptime&days=5', $cookie_jar);
+    check('C-7: daily_uptime vrací 200', $w2_code, 200);
+    $w2_days = [];
+    foreach ($w2_du['series']['190'] ?? [] as $w2_day) {
+        $w2_days[$w2_day['day'] ?? ''] = $w2_day;
+    }
+    $w2_d1 = $w2_days[date('Y-m-d', strtotime('-1 day'))] ?? [];
+    $w2_d2 = $w2_days[date('Y-m-d', strtotime('-2 day'))] ?? [];
+    $w2_d3 = $w2_days[date('Y-m-d', strtotime('-3 day'))] ?? [];
+    check('C-7: 14 h z 24 měřeno je partial, ne zelený den', [$w2_d1['status'] ?? null, $w2_d1['coveragePct'] ?? null], ['partial', 58.3]);
+    check('C-7: měřené a očekávané sekundy', [$w2_d1['measuredSecs'] ?? null, $w2_d1['expectedSecs'] ?? null], [50400, 86400]);
+    check_true('C-7: popis říká 14 h z 24 h (dostal ' . json_encode($w2_d1['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($w2_d1['detail'] ?? ''), '14 h z 24 h'));
+    check('C-7: varování je dostupné, minuty zhoršení zvlášť', [$w2_d2['status'] ?? null, (float)($w2_d2['uptimePct'] ?? -1), $w2_d2['degradedMin'] ?? null], ['warning', 100.0, 60]);
+    check('C-7: den bez dat je nodata s null', [$w2_d3['status'] ?? null, $w2_d3['uptimePct'] ?? null], ['nodata', null]);
+    $w2_statuses = [];
+    foreach ($w2_du['series'] ?? [] as $w2_list) {
+        foreach ($w2_list as $w2_day) {
+            $w2_statuses[$w2_day['status']] = true;
+        }
+    }
+    check_false('C-7: žádný den už není „paused“', isset($w2_statuses['paused']));
+    [, $w2_du_en] = api_get_auth($base, 'action=daily_uptime&days=5&lang=en', $cookie_jar);
+    $w2_en_d1 = array_values(array_filter($w2_du_en['series']['190'] ?? [], fn ($d) => ($d['day'] ?? '') === date('Y-m-d', strtotime('-1 day'))))[0] ?? [];
+    check_true('C-7: popis i anglicky', str_contains((string)($w2_en_d1['detail'] ?? ''), 'of 24 h'));
+    // ?lang= sticks to the session; the checks below read Czech again.
+    api_get_auth($base, 'action=daily_uptime&days=1&lang=cs', $cookie_jar);
+
+    // --- C-11 ------------------------------------------------------------
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+                (195, 'maintenance', NULL, DATE_SUB(NOW(), INTERVAL 3 MINUTE)),
+                (192, 'unknown', NULL, DATE_SUB(NOW(), INTERVAL 2 MINUTE)),
+                (190, 'warning', 900, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    $w2_ev = function (int $mid) use ($base, $cookie_jar): array {
+        [, $ev] = api_get_auth($base, 'action=events&monitor_id=' . $mid . '&limit=10', $cookie_jar);
+        return $ev['events'][0] ?? [];
+    };
+    $w2_m = $w2_ev(195);
+    check('C-11: údržba není „OK“', [$w2_m['status'] ?? null, $w2_m['statusKey'] ?? null, $w2_m['statusTone'] ?? null], ['ÚDRŽBA', 'maintenance', 'info']);
+    check_false('C-11: a netvrdí, že kontrola prošla', str_contains((string)($w2_m['errorMsg'] ?? ''), 'v pořádku'));
+    $w2_u = $w2_ev(192);
+    check('C-11: řádek „unknown“ je agent mlčí, ne OK', [$w2_u['status'] ?? null, $w2_u['statusKey'] ?? null, $w2_u['statusTone'] ?? null], ['AGENT MLČÍ', 'unknown_stale', 'warning']);
+    $w2_w = $w2_ev(190);
+    check('C-11: varování bez zprávy', [$w2_w['status'] ?? null, $w2_w['errorMsg'] ?? null], ['VAROVÁNÍ', 'Kontrola hlásí zhoršený stav.']);
+    [, $w2_al] = api_get_auth($base, 'action=audit_logs&limit=10', $cookie_jar);
+    $w2_al_m = array_values(array_filter($w2_al['logs'] ?? [], fn ($l) => str_contains((string)($l['action'] ?? ''), 'W2 v údržbě')))[0] ?? [];
+    check('C-11: protokol kontrol - údržba se jmenuje údržba', [$w2_al_m['action'] ?? null, $w2_al_m['statusKey'] ?? null], ['ÚDRŽBA: W2 v údržbě', 'maintenance']);
+    check_false('C-11: a bez „(Odezva  ms)“, když se odezva neměřila', str_contains((string)($w2_al_m['details'] ?? ''), ' ms)'));
+    [, $w2_mons] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $w2_key = [];
+    foreach ($w2_mons["monitors"] ?? [] as $w2_mon) {
+        $w2_key[(int)($w2_mon['id'] ?? 0)] = $w2_mon['statusKey'] ?? null;
+    }
+    check('C-11: nikdy nehlásil = čeká na první data, zmlkl = agent mlčí', [$w2_key[191] ?? null, $w2_key[192] ?? null, $w2_key[195] ?? null], ['unknown_new', 'unknown_stale', 'maintenance']);
+    [, $w2_sum] = api_get_auth($base, 'action=monitor_insights&monitor_id=195', $cookie_jar);
+    check_false('C-11: souhrn údržby neříká „nedostupný“', str_contains((string)($w2_sum['summary'] ?? ''), 'nedostupný'));
+    check('C-11: souhrn nese stav ve sdíleném slovníku', $w2_sum['status']['key'] ?? null, 'maintenance');
+    check_true('W2-2: souhrn nese i statusSentence (stav bez starostí, ty jsou v nálezech)',
+        is_string($w2_sum['statusSentence'] ?? null) && ($w2_sum['statusSentence'] ?? '') !== '');
+    [, $w2_sum_new] = api_get_auth($base, 'action=monitor_insights&monitor_id=191', $cookie_jar);
+    check_true('C-11: nový monitor čeká na data (dostal ' . json_encode($w2_sum_new['summary'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($w2_sum_new['summary'] ?? ''), 'čeká na první data'));
+
+    // --- charts-06/15: counters as increments, nothing across a gap -------
+    // fw_accepted is a lifetime counter. Readings a minute apart, a reboot
+    // (the counter drops) and a three-hour gap: 10, 20, (reset), 15, (gap), 10.
+    $w2_vm = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, checked_at, fw_accepted, load_avg_1, load_avg_5, load_avg_15, cpu_usage, iowait_pct, entropy_avail)
+                            VALUES (193, DATE_SUB(NOW(), INTERVAL ? SECOND), ?, ?, ?, ?, ?, ?, 256)");
+    $w2_series = [[14400, 900000], [14340, 900010], [14280, 900030], [14220, 5], [14160, 20],
+        [1800, 700000], [1740, 700010]];
+    foreach ($w2_series as $w2_i => [$w2_ago, $w2_val]) {
+        $w2_vm->execute([$w2_ago, $w2_val, $w2_i, $w2_i * 0.8 + 1, $w2_i * 0.5 + 2, ($w2_i * 7) % 5 + $w2_i, ($w2_i * 3) % 4]);
+    }
+    // More readings for the correlations (at least ten pairs).
+    for ($w2_i = 0; $w2_i < 12; $w2_i++) {
+        $w2_vm->execute([1680 - $w2_i * 60, 700020 + $w2_i * 10, 7 + $w2_i, (7 + $w2_i) * 0.8 + 1, (7 + $w2_i) * 0.5 + 2, ($w2_i * 7) % 5 + $w2_i, ($w2_i * 3) % 4]);
+    }
+    [$w2_b_code, $w2_b] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h', $cookie_jar);
+    check('charts-06: metric_series_batch vrací 200', $w2_b_code, 200);
+    $w2_fw = $w2_b['series']['fw_accepted'] ?? [];
+    check('charts-06: čítač v dávce jako přírůstky, ne celoživotní součet', array_map('floatval', array_slice(array_column($w2_fw['points'] ?? [], 1), 0, 4)), [10.0, 20.0, 15.0, 10.0]);
+    check_true('charts-06: a řekne to v popisku', str_contains((string)($w2_fw['label'] ?? ''), '(přírůstek)') && ($w2_fw['counter'] ?? false) === true);
+    [, $w2_ms] = api_get_auth($base, 'action=metric_series&monitor_id=193&metric=fw_accepted&period=24h', $cookie_jar);
+    check('charts-15: metric_series stejné přírůstky, přes mezeru nic', array_map('floatval', array_slice(array_column($w2_ms['points'] ?? [], 1), 0, 4)), [10.0, 20.0, 15.0, 10.0]);
+    [, $w2_ent] = api_get_auth($base, 'action=metric_series&monitor_id=193&metric=entropy&period=24h', $cookie_jar);
+    check('W2-4: konstantní metrika má jednu hodnotu', $w2_ent['distinctValues'] ?? null, 1);
+
+    // --- W2-4 / charts-29: no correlation with the own family ---------------
+    [, $w2_corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=193&metric=load1&period=24h&all=1', $cookie_jar);
+    $w2_corr_keys = array_column($w2_corr['correlations'] ?? [], 'key');
+    check_false('charts-29: load1 se nesrovnává s load5/load15', in_array('load5', $w2_corr_keys, true) || in_array('load15', $w2_corr_keys, true));
+    check('charts-29: rodina předmětu', $w2_corr['family'] ?? null, 'load');
+    [, $w2_corr_cpu] = api_get_auth($base, 'action=metric_correlations&monitor_id=193&metric=cpu&period=24h', $cookie_jar);
+    $w2_loads = array_intersect(array_column($w2_corr_cpu['correlations'] ?? [], 'key'), ['load1', 'load5', 'load15']);
+    check('charts-29: z rodiny load jen nejsilnější člen', count($w2_loads), 1);
+
+    // --- charts-25: the heatmap starts where the data starts --------------
+    [, $w2_hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=193&metric=cpu&days=30', $cookie_jar);
+    $w2_first = $pdo->query("SELECT DATE(MIN(checked_at)) FROM vps_metrics WHERE monitor_id = 193")->fetchColumn();
+    check('charts-25: firstSampleDay je první den se vzorkem', $w2_hm['firstSampleDay'] ?? null, $w2_first);
+    $w2_hm_days = array_column($w2_hm['days'] ?? [], 'day');
+    check_true('charts-25: mřížka zůstává hustá a ten den v ní je', count($w2_hm_days) === 30 && in_array($w2_first, $w2_hm_days, true));
+    check('charts-25: požadované okno zůstává čitelné', $w2_hm['requestedDays'] ?? null, 30);
+
+    // --- W2-10: the recorded HTTP code, not an invented "200 OK" ----------
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, check_stages) VALUES
+                (1, 'down', 120, '" . json_encode(['http' => ['ok' => false, 'status_code' => 502]]) . "')");
+    [, $w2_wo] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    check('W2-10: přehled webů nese zaznamenaný kód HTTP', $w2_wo['monitors']['1']['httpStatusCode'] ?? 'chybí', 502);
+    check_true('W2-10: a čas té kontroly', is_string($w2_wo['monitors']['1']['httpCheckedAt'] ?? null));
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (1, 'down', NULL, 'DNS selhalo')");
+    [, $w2_wo2] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    check('W2-10: kontrola bez HTTP fáze nemá kód, ne 200', array_key_exists('httpStatusCode', $w2_wo2['monitors']['1'] ?? []) ? $w2_wo2['monitors']['1']['httpStatusCode'] : 'chybí', null);
+
+    // --- W2-7: downtime against the budget, incidents per monitor ---------
+    $pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('W2 incident', 'minor', 'resolved', 190)");
+    [$w2_sla_code, $w2_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    check('W2-7: sla_report vrací 200', $w2_sla_code, 200);
+    $w2_sla_row = array_values(array_filter($w2_sla['monitors'] ?? [], fn ($r) => (int)($r['id'] ?? 0) === 190))[0] ?? [];
+    check('W2-7: počet incidentů v okně', $w2_sla_row['incidentCount'] ?? null, 1);
+    $w2_budget = $w2_sla_row['measuredMinutes'] !== null ? round($w2_sla_row['measuredMinutes'] * (100 - (float)$w2_sla['slaGoal']) / 100, 1) : null;
+    check_true('W2-7: rozpočet výpadku je cíl nad změřeným časem (dostal ' . json_encode([$w2_sla_row['measuredMinutes'] ?? null, $w2_sla_row['budgetMinutes'] ?? null]) . ')',
+        ($w2_sla_row['measuredMinutes'] ?? 0) > 0 && ($w2_sla_row['budgetMinutes'] ?? null) === $w2_budget);
+
+    // --- charts-15: which day an interface's bytes belong to ---------------
+    $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface IN ('w2test0', 'w2big0')");
+    $w2_if = function (float $rx) use ($base, $agent_payload): int {
+        $ch = curl_init($base . '/agent_api.php');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_TIMEOUT => 20,
+            CURLOPT_POSTFIELDS => json_encode(array_merge($agent_payload, ['interfaces' => [['iface' => 'w2test0', 'rx_bytes' => $rx, 'tx_bytes' => 0]]])),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        ]);
+        curl_exec($ch);
+        return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    };
+    $w2_today_rx = fn (): ?float => ($v = $pdo->query("SELECT rx_bytes_total FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'w2test0' AND date = CURDATE()")->fetchColumn()) === false ? null : (float)$v;
+    check('charts-15: hlášení s rozhraním projde', $w2_if(5e12), 200);
+    check('charts-15: první čtení je základ, ne dnešních 5 TB', $w2_today_rx(), 0.0);
+    $w2_if(5e12 + 1000);
+    check('charts-15: další čtení téhož dne se připíše', $w2_today_rx(), 1000.0);
+    // The router was off over midnight: the row is yesterday's and old.
+    $pdo->exec("UPDATE monitor_interface_traffic SET date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), updated_at = DATE_SUB(NOW(), INTERVAL 2 DAY)
+                WHERE monitor_id = 2 AND iface = 'w2test0'");
+    $w2_if(5e12 + 8e11);
+    check('charts-15: bajty chybějících dnů se dnešku nepřipíšou', $w2_today_rx(), 0.0);
+    $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total) VALUES (2, 'w2big0', CURDATE(), 2e14, 1000)");
+    [, $w2_itd] = api_get_auth($base, 'action=interface_traffic_daily&monitor_id=2&days=3', $cookie_jar);
+    $w2_big = array_values(array_filter($w2_itd['interfaces'] ?? [], fn ($i) => ($i['iface'] ?? '') === 'w2big0'))[0]['days'][0] ?? [];
+    check('charts-15: den nad rychlostí linky × 24 h se odmítne, ne nakreslí',
+        [array_key_exists('rxBytes', $w2_big) ? $w2_big['rxBytes'] : 'chybí', (float)($w2_big['txBytes'] ?? -1), $w2_big['rejected'] ?? null], [null, 1000.0, ['rx']]);
+    $w2_big_if = array_values(array_filter($w2_itd['interfaces'] ?? [], fn ($i) => ($i['iface'] ?? '') === 'w2big0'))[0] ?? [];
+    check('charts-15: neznámá rychlost linky je null, ne vymyšlená', array_key_exists('linkMbit', $w2_big_if) ? $w2_big_if['linkMbit'] : 'chybí', null);
+
+    // --- C-12: one findings feed -------------------------------------------
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (194, 'down', NULL, 'HTTP 502 Bad Gateway')");
+    [$w2_anon] = api_get($base, 'action=findings');
+    check('C-12: zjištění jen po přihlášení', $w2_anon, 401);
+    [$w2_f_code, $w2_f] = api_get_auth($base, 'action=findings&limit=500&lang=cs', $cookie_jar);
+    check('C-12: findings vrací 200', $w2_f_code, 200);
+    $w2_by_key = [];
+    foreach ($w2_f['findings'] ?? [] as $w2_item) {
+        $w2_by_key[$w2_item['key']] = $w2_item;
+    }
+    $w2_down = $w2_by_key['status:194:status_down'] ?? [];
+    check('C-12: výpadek je kritický nález u svého zařízení', [$w2_down['severity'] ?? null, $w2_down['monitorName'] ?? null, $w2_down['title'] ?? null], ['critical', 'W2 nález', 'Nedostupný']);
+    check('C-12: a nese důvod poslední kontroly', $w2_down['detail'] ?? null, 'HTTP 502 Bad Gateway');
+    check_true('C-12: a od kdy', is_string($w2_down['since'] ?? null));
+    check('C-12: certifikát za 3 dny je varování', [$w2_by_key['certificate:194:ssl_expiring']['severity'] ?? null, $w2_by_key['certificate:194:ssl_expiring']['detail'] ?? null], ['warning', 'Zbývá dní: 3.']);
+    check_true('C-12: agent mlčí je nález', isset($w2_by_key['status:192:status_unknown_stale']));
+    check_false('C-12: čekání na první data ani údržba nálezem nejsou', isset($w2_by_key['status:191:status_unknown_stale']) || count(array_filter(array_keys($w2_by_key), fn ($k) => str_contains($k, ':195:'))) > 0);
+    check('C-12: kritické první', $w2_f['findings'][0]['severity'] ?? null, 'critical');
+    check('C-12: zdroj se nerozbil', $w2_f['sourceErrors'] ?? null, []);
+    $w2_dev = array_values(array_filter($w2_f['devices'] ?? [], fn ($d) => ($d['monitorId'] ?? 0) === 194))[0] ?? [];
+    check('C-12: zařízení s nejhorším nálezem', [$w2_dev['worst'] ?? null, $w2_dev['critical'] ?? null], ['critical', 1]);
+    check_true('C-12: počty a prohlédnutá zařízení', ($w2_f['counts']['critical'] ?? 0) >= 1 && ($w2_f['monitorsChecked'] ?? 0) >= count($w2_f['devices'] ?? []));
+    [, $w2_one] = api_get_auth($base, 'action=findings&monitor_id=194', $cookie_jar);
+    check_true('C-12: jedno zařízení = jen jeho nálezy', ($w2_one['total'] ?? 0) >= 2
+        && array_unique(array_column($w2_one['findings'] ?? [], 'monitorId')) === [194]);
+    [, $w2_en] = api_get_auth($base, 'action=findings&monitor_id=194&lang=en', $cookie_jar);
+    check('C-12: anglicky', array_column($w2_en['findings'] ?? [], 'title', 'key')['status:194:status_down'] ?? null, 'Down');
+    api_get_auth($base, 'action=findings&limit=1&lang=cs', $cookie_jar);
+    [, $w2_page] = api_get_auth($base, 'action=findings&limit=1&offset=1', $cookie_jar);
+    check('C-12: stránkování', [count($w2_page['findings'] ?? []), $w2_page['offset'] ?? null, $w2_page['total'] ?? null], [1, 1, $w2_f['total'] ?? -1]);
+
+    // --- C-3: previousAvg, the mean of the window before -------------------
+    // The previous 24 h window lies 24-48 h back. Readings 25 h ago, a minute
+    // apart: CPU 10/20/30, TS3 process CPU only twice (too few for a mean),
+    // fw_accepted 1000 -> 1030 (increments 5, 10, 15), entropy never.
+    $s3_prev = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, checked_at, cpu_usage, ts_clients_online, ts_process_cpu, fw_accepted)
+                              VALUES (?, DATE_SUB(NOW(), INTERVAL ? SECOND), ?, ?, ?, ?)");
+    foreach ([[90000, 10, null, 50, 1000], [89940, 20, null, 70, 1005], [89880, 30, null, null, 1015], [89820, null, null, null, 1030]] as $s3_row) {
+        $s3_prev->execute([193, ...$s3_row]);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+                (193, 'up', 100, DATE_SUB(NOW(), INTERVAL 25 HOUR)), (193, 'up', 200, DATE_SUB(NOW(), INTERVAL 25 HOUR)),
+                (193, 'up', 300, DATE_SUB(NOW(), INTERVAL 25 HOUR))");
+    $s3_avg = fn (array $b, string $k) => array_key_exists('previousAvg', $b['series'][$k] ?? [])
+        ? ($b['series'][$k]['previousAvg'] === null ? null : (float)$b['series'][$k]['previousAvg']) : 'chybí';
+    [$s3_code, $s3_b] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=cs', $cookie_jar);
+    check('C-3: dávka vrací 200', $s3_code, 200);
+    check('C-3: průměr předchozího okna', [$s3_avg($s3_b, 'cpu'), $s3_avg($s3_b, 'response_time')], [20.0, 200.0]);
+    check('C-3: čítač srovnává přírůstky, ne celoživotní součet', $s3_avg($s3_b, 'fw_accepted'), 10.0);
+    check('C-3: dva vzorky jsou málo, null', $s3_avg($s3_b, 'ts_process_cpu'), null);
+    check('C-3: nic neměřeno = null, ne nula', $s3_avg($s3_b, 'entropy'), null);
+    check('C-3: každá řada nese previousAvg', array_keys(array_filter($s3_b['series'] ?? [], fn ($s) => !array_key_exists('previousAvg', $s))), []);
+    // Several series share ts_clients_online; its SQL alias must not slide
+    // onto the next column and hand TeamSpeak clients the TS3 CPU mean.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
+                (196, 'W2 TeamSpeak', 'teamspeak', 'ts.example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW())");
+    foreach ([[90000, null, 4, 50, null], [89940, null, 6, 70, null], [89880, null, 8, 90, null]] as $s3_row) {
+        $s3_prev->execute([196, ...$s3_row]);
+    }
+    [, $s3_ts] = api_get_auth($base, 'action=metric_series_batch&monitor_id=196&period=24h', $cookie_jar);
+    check('C-3: sdílený sloupec nepřebere průměr jiné metriky', [$s3_avg($s3_ts, 'ts_clients'), $s3_avg($s3_ts, 'ts_process_cpu')], [6.0, 70.0]);
+
+    // --- charts-22: an English page gets English metric names ---------------
+    [, $s3_en] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=en', $cookie_jar);
+    check('charts-22: dávka anglicky', [$s3_en['series']['cpu']['label'] ?? null, $s3_en['series']['response_time']['label'] ?? null, $s3_en['series']['fw_accepted']['label'] ?? null],
+        ['CPU usage', 'Response time (HTTP/Ping)', 'Firewall - accepted (increase)']);
+    [, $s3_ms] = api_get_auth($base, 'action=metric_series&monitor_id=193&metric=fw_accepted&period=24h&lang=en', $cookie_jar);
+    check('charts-22: řada čítače anglicky', $s3_ms['label'] ?? null, 'Firewall - accepted (increase)');
+    [, $s3_md] = api_get_auth($base, 'action=metric_detail&monitor_id=193&metric=cpu&lang=en', $cookie_jar);
+    check('charts-22: stránka metriky anglicky i s příbuznými', [$s3_md['metric']['label'] ?? null, array_column($s3_md['related'] ?? [], 'label', 'key')['load1'] ?? null], ['CPU usage', 'Load average (1 min)']);
+    [, $s3_hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=193&metric=cpu&days=30&lang=en', $cookie_jar);
+    check('charts-22: heatmapa anglicky', $s3_hm['label'] ?? null, 'CPU usage');
+    [, $s3_corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=193&metric=load1&period=24h&all=1&lang=en', $cookie_jar);
+    check('charts-22: korelace anglicky', [$s3_corr['label'] ?? null, array_column($s3_corr['correlations'] ?? [], 'label', 'key')['cpu'] ?? null], ['Load average (1 min)', 'CPU usage']);
+    // ?lang sticks to the session (lang.php): switch back, and Czech returns.
+    [, $s3_cs] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=cs', $cookie_jar);
+    check('charts-22: zpět česky', [$s3_cs['series']['cpu']['label'] ?? null, $s3_cs['series']['fw_accepted']['label'] ?? null], ['Využití CPU', 'Firewall - propuštěno (přírůstek)']);
+} finally {
+    $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface IN ('w2test0', 'w2big0')");
+    $pdo->exec("DELETE FROM incidents WHERE title = 'W2 incident'");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 1 AND (check_stages LIKE '%502%' OR error_message = 'DNS selhalo')");
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en')");
+    foreach ([190, 191, 192, 193, 194, 195, 196] as $w2_mid) {
+        $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = {$w2_mid}");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = {$w2_mid}");
+        $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = {$w2_mid}");
+        $pdo->exec("DELETE FROM monitors WHERE id = {$w2_mid}");
+    }
+}
+
+// =======================================================================
+// UX wave 2 on main (w2m), server.
+//
+// N-2  the 90-day strip reads finished days from the uptime_daily rollup, so
+//      days 31-90 keep their response and check counts after log pruning;
+// N-3  findings&summary=1: the bell's counts, kept a minute, cleared by an
+//      archive or a mute;
+// CR-9b the knowledge tips in the findings feed, without repeating a reason;
+//      regions carry the country for the public page's flags.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
+            (197, 'W2M web s historií', 'web', 'https://w2m.example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 100 DAY), NOW()),
+            (198, 'W2M server', 'vps', 'w2m-server', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (199, 'W2M bez dat', 'web', 'https://w2m-nic.example.org', 'unknown', 'Test', NOW(), NULL)");
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 198")->execute([json_encode([
+    'agent_last_seen' => time(), 'cpu' => 97, 'ram' => 30, 'temperature' => 85, 'agent_type' => 'bash',
+    // A latch of the router rules (two bad reports in a row): an open problem.
+    'wan_alert_sent' => true,
+])]);
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('W2M incident', 'minor', 'monitoring', 197)");
+$w2m_ud = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms,
+                         secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                         VALUES (197, DATE_SUB(CURDATE(), INTERVAL ? DAY), ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)");
+// 60 days back: known only from its check counts (rolled up before the time
+// columns existed, its logs long pruned). 45 days back: a whole day in time.
+$w2m_ud->execute([60, 100, 98, 2, 250.0, null, null, null, null, null, null]);
+$w2m_ud->execute([45, 288, 288, 0, 180.0, 86400, 0, 0, 0, 0, 0]);
+$w2m_logs = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_from, checked_at) VALUES (?, 'up', ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+foreach ([50, 40, 30, 20, 10, 2] as $w2m_min) {
+    $w2m_logs->execute([198, 20, null, $w2m_min]);
+    $w2m_logs->execute([197, 120, '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)', $w2m_min]);
+}
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, checked_at, cpu_usage, ram_usage) VALUES (198, NOW(), 97, 30)");
+try {
+    // --- N-2 ---------------------------------------------------------------
+    [$w2m_code, $w2m_du] = api_get_auth($base, 'action=daily_uptime&days=90&lang=cs', $cookie_jar);
+    check('N-2: daily_uptime na 90 dní vrací 200', $w2m_code, 200);
+    $w2m_days = array_column($w2m_du['series']['197'] ?? [], null, 'day');
+    $w2m_d60 = $w2m_days[date('Y-m-d', strtotime('-60 day'))] ?? [];
+    $w2m_d45 = $w2m_days[date('Y-m-d', strtotime('-45 day'))] ?? [];
+    $w2m_d50 = $w2m_days[date('Y-m-d', strtotime('-50 day'))] ?? [];
+    check('N-2: den jen z počtů kontrol: výpadek, odezva ze souhrnu, pokrytí neznámé',
+        [$w2m_d60['status'] ?? null, $w2m_d60['avgMs'] ?? null, array_key_exists('coveragePct', $w2m_d60) ? $w2m_d60['coveragePct'] : 'chybí'], ['down', 250, null]);
+    check_true('N-2: a věta cituje počty kontrol (dostal ' . json_encode($w2m_d60['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($w2m_d60['detail'] ?? ''), '2 z 100'));
+    check('N-2: den v čase po pročištění logů: zelený, odezva ze souhrnu, celé pokrytí',
+        [$w2m_d45['status'] ?? null, $w2m_d45['avgMs'] ?? null, (float)($w2m_d45['coveragePct'] ?? -1)], ['up', 180, 100.0]);
+    check('N-2: den bez souhrnu i logů je nodata bez odezvy', [$w2m_d50['status'] ?? null, array_key_exists('avgMs', $w2m_d50) ? $w2m_d50['avgMs'] : 'chybí'], ['nodata', null]);
+    check('N-2: dnešek dál z logů', $w2m_days[date('Y-m-d')]['avgMs'] ?? null, 120);
+    check('N-2: řada má všech 90 dní', count($w2m_du['series']['197'] ?? []), 90);
+
+    // --- CR-9b: tips in the feed -------------------------------------------
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'");
+    [$w2m_fc, $w2m_f] = api_get_auth($base, 'action=findings&monitor_id=198&lang=cs', $cookie_jar);
+    check('CR-9b: zjištění jednoho zařízení vrací 200 bez chyb zdroje', [$w2m_fc, $w2m_f['sourceErrors'] ?? null], [200, []]);
+    $w2m_keys = array_column($w2m_f['findings'] ?? [], 'source', 'key');
+    check('CR-9b: tip o teplotě je v jednom seznamu jako zdroj tip',
+        [$w2m_keys['tip:198:knowledge_tip_temperature_high'] ?? null, $w2m_keys['metric:198:metric_high'] ?? null], ['tip', 'metric']);
+    check_false('CR-9b: tip o CPU vedle metric_high CPU nezdvojí', isset($w2m_keys['tip:198:knowledge_tip_cpu_high']));
+
+    // --- N-3: the bell's counts ---------------------------------------------
+    [$w2m_sc, $w2m_s] = api_get_auth($base, 'action=findings&summary=1', $cookie_jar);
+    [, $w2m_full] = api_get_auth($base, 'action=findings&limit=500', $cookie_jar);
+    check('N-3: souhrn vrací 200 a jen počty', [$w2m_sc, array_key_exists('findings', $w2m_s), array_key_exists('cachedAt', $w2m_s) ? $w2m_s['cachedAt'] : 'chybí'], [200, false, null]);
+    check('N-3: počty souhlasí s plným seznamem', [$w2m_s['counts'] ?? null, $w2m_s['total'] ?? null], [$w2m_full['counts'] ?? -1, $w2m_full['total'] ?? -1]);
+    [, $w2m_s2] = api_get_auth($base, 'action=findings&summary=1', $cookie_jar);
+    check_true('N-3: druhý dotaz do minuty je z uložených počtů a přizná to', is_string($w2m_s2['cachedAt'] ?? null) && ($w2m_s2['counts'] ?? null) === ($w2m_s['counts'] ?? -1));
+    [$w2m_ac] = api_post($base, 'action=archive_monitor', ['id' => 199], $cookie_jar);
+    check('N-3: archivace projde', $w2m_ac, 200);
+    check('N-3: archivace smaže uložené počty', (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'")->fetchColumn(), 0);
+    api_post($base, 'action=unarchive_monitor', ['id' => 199], $cookie_jar);
+    $pdo->exec("UPDATE monitors SET status = 'unknown', last_checked = NULL WHERE id = 199");
+
+    // --- regions: the country for the flags ---------------------------------
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions_cache_%'");
+    [$w2m_rc, $w2m_rg] = api_get($base, 'action=regions&scope=public');
+    $w2m_fra = array_values(array_filter($w2m_rg['regions'] ?? [], fn ($r) => str_contains((string)($r['location'] ?? ''), 'Frankfurt')))[0] ?? [];
+    check('vlajky: veřejná místa nesou zemi', [$w2m_rc, $w2m_fra['country'] ?? null], [200, 'DE']);
+    check_true('vlajky: každé místo má klíč country (null = bez vlajky)', array_filter($w2m_rg['regions'] ?? [], fn ($r) => !array_key_exists('country', $r)) === []);
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'findings\\_summary\\_%' OR key_name LIKE 'regions_cache_%' OR key_name = 'health_cache_public'");
+    $pdo->exec("DELETE FROM incidents WHERE monitor_id IN (197, 198, 199)");
+    $pdo->exec("DELETE FROM assets WHERE id = 9197");
+    foreach ([197, 198, 199] as $w2m_mid) {
+        $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = {$w2m_mid}");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = {$w2m_mid}");
+        $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = {$w2m_mid}");
+        $pdo->exec("DELETE FROM monitors WHERE id = {$w2m_mid}");
+    }
 }
 
 $failed = bk_test_report('api.php (integrační)');

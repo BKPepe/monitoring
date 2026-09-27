@@ -302,10 +302,13 @@ CREATE TABLE IF NOT EXISTS `settings` (
 
 -- Výchozí nastavení
 
+-- SMTP starts empty: an empty host means PHP mail(), and a fresh install must
+-- not point its e-mail at the author's own mail server (Settings showed that
+-- channel as configured on every new install).
 INSERT INTO `settings` (`key_name`, `key_value`) VALUES
-('smtp_host', 'smtp.bloodkings.eu'),
+('smtp_host', ''),
 ('smtp_port', '587'),
-('smtp_user', 'status@bloodkings.eu'),
+('smtp_user', ''),
 ('smtp_pass', ''),
 ('smtp_secure', 'tls'),
 ('sms_gateway_type', 'twilio'), -- 'twilio' nebo 'smsbrana'

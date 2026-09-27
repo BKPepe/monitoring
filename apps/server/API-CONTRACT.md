@@ -88,6 +88,31 @@ Pozor na detaily, které se snadno ztratí:
   denní průměr z `uptime_daily.avg_response_ms` (`resolution:"daily"`,
   `dailyRange` min/max `null`). `metric_series_batch` na 90d+ = `400
   period_unsupported`, ne tiché 24 h.
+- **UX vlna 2 (server):** `daily_uptime` nese u dne pokrytí (`partial` pod
+  90 % změřeného času, `nodata` místo `paused`, `coveragePct`, `measuredSecs`,
+  `expectedSecs`, `degradedMin`; varování se počítá jako dostupnost). Jeden
+  slovník stavů `bk_status_label()` (`unknown_new` vs `unknown_stale`) v
+  `monitors.statusKey`, `events`, `audit_logs` a `monitor_insights.status`.
+  Nová akce `findings` (důvody k pozornosti + postřehy + doporučení routeru,
+  `severity` critical/warning/info, `sourceErrors` při selhání zdroje).
+  Počítadla v `metric_series_batch` jako přírůstky; přírůstek přes reset nebo
+  mezeru delší než 2,5 intervalu nemá bod. `metric_heatmap.firstSampleDay` (mřížka dál hustá),
+  `metric_series.distinctValues`, korelace bez vlastní rodiny metrik.
+  `websites_overview.httpStatusCode`, `sla_report` `budgetMinutes` /
+  `incidentCount`, `interface_traffic_daily` odmítá den nad rychlostí linky
+  × 24 h (`rejected`) a ingest nepřipíše první čtení ani mezeru přes půlnoc.
+  Každá série v `metric_series_batch` nese `previousAvg` (průměr předchozího
+  stejně dlouhého okna, u počítadla průměr přírůstků; `null` pod 3 vzorky).
+  `metric_series`, `_batch`, `metric_detail`, `metric_heatmap` a
+  `metric_correlations` vracejí `label` podle `lang` (anglické názvy metrik).
+- **NetPulse vzhled (w2m):** `findings` má zdroj `tip` (tipy bez opakování
+  důvodu) a `summary=1` (jen počty, u flotily minutu v `settings`, smaže je
+  ztlumení/archivace).
+  `regions[].country` (ISO alpha-2 z popisku, jinak `null`). `daily_uptime`
+  čte uzavřené dny včetně `avgMs` a počtů kontrol z `uptime_daily`, surové
+  logy jen za den(y), kam souhrn nedošel.
+  `monitors` v pohledu aplikace (ne `scope=public`) nese vedle seznamu
+  `sslAlertDays` = `max(1, ssl_alert_days)` (CR-5).
 - **„Agent existuje" ≠ „má klíč".** `agent_key` se generuje všem monitorům;
   za agenta se počítá jen ten, který se někdy ozval (`agent_last_seen`).
 - **Hub se vylučuje z distribuovaných lokací** (`checked_from != 'Main Server'`

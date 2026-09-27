@@ -38,13 +38,33 @@ if (empty($known)) {
     exit(1);
 }
 
+/**
+ * Every file under $dir whose name matches $pattern, at any depth. PHP's
+ * glob() has no `**`: 'src/**' + '/*.ts*' matched exactly one directory level,
+ * so calls in components/charts/, components/reports/ or
+ * components/layout/ were never checked.
+ */
+function bk_lint_tree(string $dir, string $pattern): array {
+    if (!is_dir($dir)) {
+        return [];
+    }
+    $out = [];
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) {
+        if ($f->isFile() && preg_match($pattern, $f->getFilename())) {
+            $out[] = $f->getPathname();
+        }
+    }
+    sort($out);
+    return $out;
+}
+
 /** Files that may call the API. api.php does not check itself. */
 $files = array_filter(array_merge(
     glob($root . '/*.php') ?: [],
-    glob($repo . '/apps/monitor/src/*.ts*') ?: [],
-    glob($repo . '/apps/monitor/src/**/*.ts*') ?: [],
+    bk_lint_tree($repo . '/apps/monitor/src', '/\.tsx?$/'),
     glob($repo . '/apps/worker/src/*.ts') ?: [],
-    glob($repo . '/apps/site/src/**/*.astro') ?: []
+    bk_lint_tree($repo . '/apps/site/src', '/\.(astro|ts)$/')
 ), fn($f) => basename($f) !== 'api.php');
 
 $used = [];
