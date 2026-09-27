@@ -6481,6 +6481,37 @@ function bk_test_put_config(string $path, string $text): void {
     usleep(3300000);
 }
 
+/**
+ * Whether an installer response hands a password back: as a value of its own,
+ * or quoted the way config.php (var_export) or JSON would carry it. A bare
+ * substring proves nothing for a short password - CI's "test" is part of the
+ * database name bk_test_* and of the config text's own "connection test"
+ * comment. The define lines filled with known non-secret values are removed
+ * first, so a password equal to the user name or to 'mysql' is no false alarm.
+ *
+ * @param array<string, string|int> $known  define name => the value it was given
+ */
+function bk_test_returns_secret(string $raw, string $secret, array $known): bool {
+    $body = json_decode($raw, true);
+    if (!is_array($body)) {
+        return str_contains($raw, $secret);
+    }
+    $lines = [];
+    foreach ($known as $name => $value) {
+        $lines[] = "define('{$name}', " . var_export($value, true) . ');';
+    }
+    $quoted = [var_export($secret, true), json_encode($secret, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)];
+    $leak = false;
+    array_walk_recursive($body, static function ($value) use ($secret, $lines, $quoted, &$leak): void {
+        if (!is_string($value)) {
+            return;
+        }
+        $text = str_replace($lines, '', $value);
+        $leak = $leak || $value === $secret || str_contains($text, $quoted[0]) || str_contains($text, $quoted[1]);
+    });
+    return $leak;
+}
+
 $in_test_config = (string)file_get_contents($config_path);
 $in_db = $db_name . '_inst';
 $pdo->exec("DROP DATABASE IF EXISTS `{$in_db}`");
@@ -6557,7 +6588,8 @@ try {
         check_true('a testovanou databázi', str_contains((string)($r['configText'] ?? ''), "define('DB_NAME', " . var_export($in_db, true) . ");"));
         check_false('a soubor nevznikl', file_exists($config_path));
         if (strlen($db_pass) >= 4) {
-            check_false('heslo databáze se nevrátí ani v textu ke zkopírování', str_contains($raw, $db_pass));
+            check_false('heslo databáze se nevrátí ani v textu ke zkopírování', bk_test_returns_secret($raw, $db_pass,
+                ['DB_DRIVER' => 'mysql', 'DB_HOST' => $db_host, 'DB_PORT' => $db_port, 'DB_NAME' => $in_db, 'DB_USER' => $db_user]));
         }
     } else {
         echo "  (přeskočeno: pod rootem nejde složku zamknout proti zápisu)\n";

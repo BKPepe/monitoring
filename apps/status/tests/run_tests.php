@@ -3877,6 +3877,267 @@ file_put_contents($in_tmp . '.php', (string)$in_text);
 check_false('config: skutečný ne', bk_install_file_is_placeholder($in_tmp . '.php'));
 @unlink($in_tmp . '.php');
 
+check('SQL: zdvojený apostrof v řetězci a poslední příkaz bez středníku',
+    bk_install_split_sql("INSERT INTO t VALUES ('it''s; ok');\nSELECT 2"), ["INSERT INTO t VALUES ('it''s; ok')", 'SELECT 2']);
+check('SQL: neukončený komentář spolkne zbytek, nic z něj se nespustí', bk_install_split_sql("SELECT 1; /* never closed; DROP TABLE x;"), ['SELECT 1']);
+$in_plain = ['host' => 'db.example.com', 'port' => 3306, 'database' => 'd', 'user' => 'u', 'password' => 'p', 'timezone' => ''];
+$in_no_tz = bk_install_render_config($in_sample, $in_plain, 'x');
+check_true('config: bez pásma zůstane TIMEZONE ze vzoru', is_string($in_no_tz) && str_contains($in_no_tz, "define('TIMEZONE', 'Europe/Prague');"));
+check('config: define dvakrát nebo šablona bez <?php = žádný soubor', [
+    bk_install_render_config($in_sample . "\ndefine('DB_HOST', 'other');\n", $in_plain, 'x'),
+    bk_install_render_config(substr($in_sample, strlen("<?php\n")), $in_plain, 'x'),
+], [null, null]);
+
+// Input edges: what is trimmed, what is not, and each field's limits.
+[$in_cfg, $in_err] = bk_install_validate(['host' => ' db.example.com ', 'port' => 3307, 'database' => ' user_bk$-1 ',
+    'user' => ' u_bk ', 'password' => ' p w ', 'timezone' => ' Europe/Prague ']);
+check('instalátor ořízne mezery u všeho kromě hesla, port bere i jako číslo z JSON', [$in_err, $in_cfg], [null,
+    ['host' => 'db.example.com', 'port' => 3307, 'database' => 'user_bk$-1', 'user' => 'u_bk', 'password' => ' p w ', 'timezone' => 'Europe/Prague']]);
+[$in_cfg, $in_err] = bk_install_validate(['host' => 'db.example.com', 'database' => 'd', 'user' => 'u']);
+check('chybějící heslo a pásmo jsou prázdné, ne chyba', [$in_err, $in_cfg['password'] ?? null, $in_cfg['timezone'] ?? null], [null, '', '']);
+foreach ([
+    [['host' => ['db.example.com']], 'invalid_host'],
+    [['port' => '0'], 'invalid_port'],
+    [['port' => '3306x'], 'invalid_port'],
+    [['database' => ''], 'invalid_database'],
+    [['database' => str_repeat('d', 65)], 'invalid_database'],
+    [['database' => ['d']], 'invalid_database'],
+    [['user' => str_repeat('u', 81)], 'invalid_user'],
+    [['user' => "u\x7F"], 'invalid_user'],
+    [['user' => ['u']], 'invalid_user'],
+    [['password' => str_repeat('p', 257)], 'invalid_password'],
+    [['password' => 'database_password'], 'invalid_password'],
+    [['password' => ['p']], 'invalid_password'],
+    [['timezone' => ['UTC']], 'invalid_timezone'],
+    [['port' => '65535', 'database' => str_repeat('d', 64), 'user' => str_repeat('u', 80), 'password' => str_repeat('p', 256)], null],
+] as [$in_bad, $in_code]) {
+    [, $in_got] = bk_install_validate($in_bad + ['host' => 'db.example.com', 'database' => 'd', 'user' => 'u', 'password' => 'p']);
+    check('instalátor na hraně ' . substr((string)json_encode($in_bad), 0, 60) . ' = ' . var_export($in_code, true), $in_got, $in_code);
+}
+
+// The response JSON is safe in any HTML context: the config text echoes input.
+check('JSON instalátoru: <, >, &, apostrof a uvozovky jako \\u, diakritika a lomítka beze změny',
+    bk_install_json(['t' => "<b>&'\"č/"]), '{"t":"\u003Cb\u003E\u0026\u0027\u0022č/"}');
+
+// Every error code has its own sentence, in both languages.
+require_once __DIR__ . '/../lang.php';
+$in_src = (string)file_get_contents(__DIR__ . '/../installer.php');
+preg_match_all("/^\\s*'([a-z_]+)' => '(install_(?:err_[a-z_]+|config_unwritable))',$/m", $in_src, $in_map);
+$in_messages = array_map('bk_install_message', $in_map[1]);
+check_true('chybové kódy instalátoru se našly', count($in_map[1]) > 10 && in_array('installer_locked', $in_map[1], true));
+check('každý chybový kód má vlastní přeloženou větu', [count(array_unique($in_messages)),
+    array_values(array_filter($in_messages, fn ($m) => $m === '' || str_starts_with($m, 'install_')))], [count($in_map[1]), []]);
+check('neznámý kód = obecná chyba instalátoru', bk_install_message('no_such_code'), bk_install_message('internal'));
+$in_cs = require __DIR__ . '/../lang/cs.php';
+$in_en = require __DIR__ . '/../lang/en.php';
+check('klíče instalátoru jsou v češtině i v angličtině', [array_values(array_diff($in_map[2], array_keys($in_cs))),
+    array_values(array_diff($in_map[2], array_keys($in_en)))], [[], []]);
+
+// CSRF: the session's token, sent as the header or the form field.
+$in_saved = [$_SESSION ?? null, $_POST, $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null];
+$_SESSION = [];
+$_POST = [];
+unset($_SERVER['HTTP_X_CSRF_TOKEN']);
+check_false('CSRF: bez tokenu v session i v požadavku neprojde', bk_install_csrf_ok());
+$in_token = bk_install_csrf_token();
+check('CSRF: token je 64 hex znaků, uložený v session a stálý', [preg_match('/^[0-9a-f]{64}$/', $in_token), $_SESSION['csrf_token'] ?? null, bk_install_csrf_token()], [1, $in_token, $in_token]);
+check_false('CSRF: požadavek bez tokenu neprojde', bk_install_csrf_ok());
+$_SERVER['HTTP_X_CSRF_TOKEN'] = $in_token;
+check_true('CSRF: token v hlavičce projde', bk_install_csrf_ok());
+$_SERVER['HTTP_X_CSRF_TOKEN'] = str_repeat('0', 64);
+check_false('CSRF: cizí token v hlavičce neprojde', bk_install_csrf_ok());
+unset($_SERVER['HTTP_X_CSRF_TOKEN']);
+$_POST = ['csrf_token' => $in_token];
+check_true('CSRF: token z formuláře projde', bk_install_csrf_ok());
+$_SESSION = [];
+check_false('CSRF: token bez session neprojde', bk_install_csrf_ok());
+// Without a JSON body (the CLI has none) the input is the form.
+$_POST = ['host' => 'db.example.com', 'port' => '3307'];
+check('vstup bez JSON těla = pole formuláře', bk_install_input(), ['host' => 'db.example.com', 'port' => '3307']);
+
+// A connection test against a closed port fails fast and names no password.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_db_dsn']);
+$in_pw = 'Pw-' . bin2hex(random_bytes(6));
+$in_conn = ['error' => 'connected'];
+$in_conn_msg = '';
+try {
+    bk_install_connect(['host' => '127.0.0.1', 'port' => 1, 'database' => 'd', 'user' => 'u', 'password' => $in_pw]);
+} catch (PDOException $e) {
+    $in_conn = bk_install_connect_error($e);
+    $in_conn_msg = $e->getMessage();
+}
+check('připojení na zavřený port = host_unreachable (bez pdo_mysql connect_failed)', $in_conn['error'],
+    extension_loaded('pdo_mysql') ? 'host_unreachable' : 'connect_failed');
+check_false('a text chyby PDO heslo neobsahuje', str_contains($in_conn_msg, $in_pw));
+
+if (!class_exists('BkInstallFakePdo')) {
+    /** A PDOException as PDO raises it for MySQL: SQLSTATE as the code, the MySQL number in errorInfo[1]. */
+    final class BkInstallFakePdoError extends PDOException {
+        public function __construct(string $state, int $number) {
+            parent::__construct("SQLSTATE[{$state}]: [{$number}] simulated");
+            $this->code = $state;
+            $this->errorInfo = [$state, $number, 'simulated'];
+        }
+    }
+
+    /**
+     * In-memory SQLite that answers chosen statements the way MySQL would:
+     * $fail maps an SQL fragment to [SQLSTATE, MySQL error number] to throw,
+     * $answer maps a fragment to the one value its query returns instead.
+     */
+    final class BkInstallFakePdo extends PDO {
+        /** @var array<string, array{0: string, 1: int}> */
+        public array $fail = [];
+        /** @var array<string, string> */
+        public array $answer = [];
+
+        public function __construct() {
+            parent::__construct('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        }
+
+        private function simulate(string $sql): string {
+            foreach ($this->fail as $fragment => [$state, $number]) {
+                if (str_contains($sql, $fragment)) {
+                    throw new BkInstallFakePdoError($state, $number);
+                }
+            }
+            foreach ($this->answer as $fragment => $value) {
+                if (str_contains($sql, $fragment)) {
+                    return 'SELECT ' . $this->quote($value);
+                }
+            }
+            return $sql;
+        }
+
+        public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+            return parent::query($this->simulate($query), $fetchMode, ...$fetchModeArgs);
+        }
+
+        public function exec(string $statement): int|false {
+            return parent::exec($this->simulate($statement));
+        }
+    }
+}
+
+// What the database holds decides the step; anything unreadable locks.
+$in_fresh = new BkInstallFakePdo();
+$in_fresh->answer = ['information_schema.tables' => '0'];
+$in_fresh->fail = ['FROM settings' => ['42S02', 1146], 'FROM users' => ['42S02', 1146]];
+$in_seen = bk_install_inspect($in_fresh);
+check('databáze: prázdná = schéma chybí, 0 účtů, krok schema', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => 0, 'schema' => 'missing', 'users' => 0], 'schema']);
+$in_live = new BkInstallFakePdo();
+$in_live->answer = ['information_schema.tables' => '2'];
+$in_live->exec('CREATE TABLE settings (key_name TEXT PRIMARY KEY, key_value TEXT)');
+$in_live->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)');
+$in_seen = bk_install_inspect($in_live);
+check('databáze: tabulky bez schema_version = partial, krok schema', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => 2, 'schema' => 'partial', 'users' => 0], 'schema']);
+$in_live->exec("INSERT INTO settings VALUES ('schema_version', '')");
+check('databáze: prázdná schema_version je pořád partial', bk_install_inspect($in_live)['schema'], 'partial');
+$in_live->exec("UPDATE settings SET key_value = '42' WHERE key_name = 'schema_version'");
+$in_seen = bk_install_inspect($in_live);
+check('databáze: schema_version zapsaná = ready, krok account', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => 2, 'schema' => 'ready', 'users' => 0], 'account']);
+$in_live->exec("INSERT INTO users (id, role) VALUES (1, 'admin'), (2, 'viewer')");
+$in_seen = bk_install_inspect($in_live);
+check('databáze: dva účty = installed', [$in_seen['users'], bk_install_step(true, false, $in_seen)], [2, 'installed']);
+// MySQL's "SELECT command denied" (1142) is not a missing table. The fake
+// has no information_schema, so the table count (only a hint) is null too.
+$in_denied = new BkInstallFakePdo();
+$in_denied->fail = ['FROM settings' => ['42000', 1142], 'FROM users' => ['42000', 1142]];
+$in_seen = bk_install_inspect($in_denied);
+check('databáze: SELECT zakázán (ne chybějící tabulka) = nic nevíme a instalátor se zamkne', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => null, 'schema' => null, 'users' => null], 'installed']);
+
+// An administrator is whoever the users table says, not the session.
+$_SESSION = ['admin_logged_in' => true, 'admin_id' => 1];
+check_false('admin: bez databáze ne', bk_install_is_admin(null));
+check_false('admin: databáze bez tabulky users ne',
+    bk_install_is_admin(new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION])));
+check_true('admin: účet s rolí admin ano', bk_install_is_admin($in_live));
+$_SESSION['admin_id'] = 2;
+check_false('admin: session sesazeného admina ne', bk_install_is_admin($in_live));
+$_SESSION = ['admin_id' => 1];
+check_false('admin: bez přihlášení ne', bk_install_is_admin($in_live));
+if ($in_saved[0] === null) {
+    unset($_SESSION);
+} else {
+    $_SESSION = $in_saved[0];
+}
+$_POST = $in_saved[1];
+if ($in_saved[2] !== null) {
+    $_SERVER['HTTP_X_CSRF_TOKEN'] = $in_saved[2];
+}
+
+// schema.sql import: "already exists" is what a re-run produces and is
+// skipped; any other error stops at its statement and goes to the log only.
+$in_imp = new BkInstallFakePdo();
+$in_imp->fail = ['dup_1050' => ['42S01', 1050], 'dup_1060' => ['42S21', 1060], 'dup_1061' => ['42000', 1061],
+    'dup_1062' => ['23000', 1062], 'dup_1826' => ['HY000', 1826], 'gone_1146' => ['42S02', 1146]];
+$in_res = bk_install_import_schema($in_imp, "CREATE TABLE a (x INT);\nSELECT 'dup_1050';\nSELECT 'dup_1060';\nSELECT 'dup_1061';\n"
+    . "SELECT 'dup_1062';\nSELECT 'dup_1826';\nINSERT INTO a VALUES (7);");
+check('import: chyby "už existuje" přeskočí a doběhne', [$in_res, (int)$in_imp->query('SELECT COUNT(*) FROM a')->fetchColumn()],
+    [['ok' => true, 'executed' => 7, 'total' => 7], 1]);
+$in_log = (string)tempnam(sys_get_temp_dir(), 'bk_inst_log');
+$in_log_prev = ini_set('error_log', $in_log);
+$in_res = bk_install_import_schema($in_imp, "CREATE TABLE b (x INT);\nSELECT 'gone_1146';\nINSERT INTO b VALUES (1);");
+ini_set('error_log', (string)$in_log_prev);
+check('import: jiná chyba zastaví import na čísle příkazu', [$in_res, (int)$in_imp->query('SELECT COUNT(*) FROM b')->fetchColumn()],
+    [['ok' => false, 'executed' => 1, 'total' => 3, 'statement' => 2, 'driverCode' => 1146], 0]);
+check_true('a text chyby MySQL jde jen do logu serveru', str_contains((string)file_get_contents($in_log), '[installer] schema.sql statement 2 failed'));
+@unlink($in_log);
+
+check('cron: pod CLI je PHP binárka ta, která běží', bk_install_php_cli(), ['path' => PHP_BINARY, 'found' => true]);
+$in_req = bk_install_requirements();
+check('požadavky: verze PHP testů vyhoví, formulář dostane čtyři rozšíření jako ano/ne',
+    [$in_req['php'], $in_req['phpOk'], array_keys($in_req['extensions']), array_filter($in_req['extensions'], 'is_bool') === $in_req['extensions']],
+    [PHP_VERSION, true, ['pdo_mysql', 'curl', 'mbstring', 'openssl'], true]);
+
+// Putting config.php in place: one rename, never over a real config.
+$in_dir = sys_get_temp_dir() . '/bk_install_dir_' . bin2hex(random_bytes(4));
+mkdir($in_dir, 0755);
+$in_path = $in_dir . '/config.php';
+check_true('zápis: do zapisovatelné složky jde', bk_install_can_write($in_dir));
+$in_new = "<?php // new\n";
+$in_res = bk_install_write_config($in_dir, $in_new);
+clearstatcache();
+check('zápis: nový config.php, práva 0640, žádný .tmp', [$in_res, (string)@file_get_contents($in_path), fileperms($in_path) & 0777, glob($in_dir . '/*.tmp')],
+    ['written', $in_new, 0640, []]);
+check('zápis: skutečný config.php zůstane, jak je', [bk_install_write_config($in_dir, 'x'), (string)file_get_contents($in_path)], ['exists', $in_new]);
+file_put_contents($in_path, $in_sample);
+clearstatcache();
+check('zápis: vzorový config.php se nahradí', [bk_install_write_config($in_dir, (string)$in_text), (string)file_get_contents($in_path) === $in_text], ['written', true]);
+if (!(function_exists('posix_geteuid') && posix_geteuid() === 0)) {
+    // Read-only directory (the host's choice): a writable placeholder is
+    // overwritten in place, otherwise the app gets the text for copying.
+    file_put_contents($in_path, $in_sample);
+    chmod($in_dir, 0555);
+    clearstatcache();
+    check('zápis: složka jen pro čtení, vzorový config.php zapisovatelný = přepíše se na místě',
+        [bk_install_can_write($in_dir), bk_install_write_config($in_dir, (string)$in_text), (string)file_get_contents($in_path) === $in_text, glob($in_dir . '/*.tmp')],
+        [true, 'written', true, []]);
+    chmod($in_dir, 0755);
+    unlink($in_path);
+    chmod($in_dir, 0555);
+    clearstatcache();
+    check('zápis: složka jen pro čtení bez config.php = unwritable', [bk_install_can_write($in_dir), bk_install_write_config($in_dir, 'x'), file_exists($in_path)],
+        [false, 'unwritable', false]);
+    chmod($in_dir, 0755);
+    file_put_contents($in_path, $in_sample);
+    chmod($in_path, 0444);
+    chmod($in_dir, 0555);
+    clearstatcache();
+    check('zápis: ani složka, ani vzorový config.php = unwritable, soubor beze změny',
+        [bk_install_can_write($in_dir), bk_install_write_config($in_dir, 'x'), (string)file_get_contents($in_path) === $in_sample], [false, 'unwritable', true]);
+    chmod($in_dir, 0755);
+    chmod($in_path, 0644);
+} else {
+    echo "  (přeskočeno: pod rootem nejde složku zamknout proti zápisu)\n";
+}
+@unlink($in_path);
+@rmdir($in_dir);
+
 // --- UX wave 2 on main (w2m), server: health score, tips, flags ---------------
 // N-1: the health score counts only what was measured; an unmeasured part
 // drops out and the rest renormalises, too little data is null ("—").
