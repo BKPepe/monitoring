@@ -3217,6 +3217,29 @@ if ($logged_in) {
     check('a je to ten řádek', $nl_day['entries'][0]['recipient'] ?? null, 'historik@example.com');
     $pdo->exec("DELETE FROM notification_log");
 
+    // Every status change is stored as kind 'alert', so the kind alone named
+    // a recovered disk "Outage alert". The row carries the tone the e-mail
+    // uses; it is derived when read, so rows written before it get it too.
+    foreach (['storage_recovered', 'storage_warning', 'down', 'maintenance'] as $nl_tone_status) {
+        $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind)
+                       VALUES (1, ?, 'whatsapp', '+420000000000', 1, 'alert')")->execute([$nl_tone_status]);
+    }
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind)
+                VALUES (NULL, 'invitation', 'email', 'novy@example.com', 1, 'invitation')");
+    [, $nl_tone] = api_get_auth($base, 'action=notification_log&limit=50', $cookie_jar);
+    $nl_tones = [];
+    foreach ($nl_tone['entries'] ?? [] as $e) {
+        $nl_tones[(string)$e['status']] = array_key_exists('alertTone', $e) ? $e['alertTone'] : 'CHYBÍ';
+    }
+    check('obnovení úložiště má tón obnovení, ne výpadku', $nl_tones['storage_recovered'] ?? null, 'good');
+    check('varování má tón varování', $nl_tones['storage_warning'] ?? null, 'warn');
+    check('výpadek zůstává výpadkem', $nl_tones['down'] ?? null, 'bad');
+    check('údržba má třídu varování (štítek si ji rozliší sám)', $nl_tones['maintenance'] ?? null, 'warn');
+    // array_key_exists, not ??: ?? would turn the null under test into the fallback.
+    check_true('zpráva jiného druhu tón nemá',
+        array_key_exists('invitation', $nl_tones) && $nl_tones['invitation'] === null);
+    $pdo->exec("DELETE FROM notification_log");
+
     [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'fax'], $cookie_jar);
     check('test_notification: neznámý kanál je 400', $tn_code, 400);
     $pdo->exec("DELETE FROM settings WHERE key_name IN ('discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id')");

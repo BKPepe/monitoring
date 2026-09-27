@@ -4,6 +4,7 @@
  * Shared by the log page and the per-monitor card on a monitor's detail, so
  * the same kind cannot be called two different things in two places.
  */
+import type { AlertTone } from '@/api/types';
 
 /**
  * What the message was, in two words.
@@ -12,10 +13,27 @@
  * because a missing translation would then slip past it. A kind this app
  * does not know keeps the server's own word instead of being renamed to
  * something friendlier that would be a guess.
+ *
+ * Every status change is stored as kind `alert`, recoveries included, so an
+ * alert row is named by its tone. Maintenance is checked first: its class is
+ * `warn`, and "Warning" would misname a planned switch. Without a tone (the
+ * filter's option, or a server that does not send one) the label says only
+ * what is certain: the state changed.
  */
-export function kindLabel(kind: string, t: (key: string, fallback?: string) => string): string {
+export function kindLabel(
+  kind: string,
+  t: (key: string, fallback?: string) => string,
+  tone?: AlertTone | null,
+  status?: string | null
+): string {
+  if (kind === 'alert') {
+    if (status === 'maintenance') return t('outgoing.kind_alert_maintenance', 'Údržba');
+    if (tone === 'bad') return t('outgoing.kind_alert_bad', 'Výstraha výpadku');
+    if (tone === 'warn') return t('outgoing.kind_alert_warn', 'Varování');
+    if (tone === 'good') return t('outgoing.kind_alert_good', 'Obnovení');
+  }
   const byKind: Record<string, string> = {
-    alert: t('outgoing.kind_alert', 'Výstraha výpadku'),
+    alert: t('outgoing.kind_alert', 'Změna stavu'),
     daily_reminder: t('outgoing.kind_daily_reminder', 'Denní připomínka'),
     digest: t('outgoing.kind_digest', 'Souhrnný report'),
     digest_preview: t('outgoing.kind_digest_preview', 'Zkušební souhrn'),

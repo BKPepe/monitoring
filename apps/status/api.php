@@ -2025,11 +2025,17 @@ if ($action === 'notification_log') {
         }
         $rows = [];
         foreach ($nl_fetched as $r) {
+            $nl_row_kind = (string)($r['kind'] ?? 'other');
             $rows[] = [
                 'id' => (int)$r['id'],
                 'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
                 'monitorName' => $r['monitor_name'],
-                'kind' => (string)($r['kind'] ?? 'other'),
+                'kind' => $nl_row_kind,
+                // Every status change is stored as kind 'alert', recoveries
+                // included, so the kind alone labelled a recovery "Outage
+                // alert". The same class the e-mail and Discord use tells
+                // them apart; read at request time, so old rows get it too.
+                'alertTone' => $nl_row_kind === 'alert' ? bk_alert_color_class((string)$r['status']) : null,
                 'status' => $r['status'],
                 'channel' => $r['channel'],
                 // The address is the point of the record: "did it reach ME?"

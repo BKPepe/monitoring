@@ -905,6 +905,9 @@ export interface SpeedtestMeasurement {
  * half worth reading. It never carries the message body; the recipient is
  * personal data and the endpoint is admin-only.
  */
+/** Severity class of an alert row, derived from its status by the server (`bk_alert_color_class`). */
+export type AlertTone = 'good' | 'warn' | 'bad';
+
 export interface OutgoingMessage {
   id: number;
   /** `null` for messages that are not about one monitor (invitation, digest). */
@@ -912,6 +915,12 @@ export interface OutgoingMessage {
   monitorName: string | null;
   /** `alert`, `daily_reminder`, `digest`, `invitation`, ... - `other` when the sender named none. */
   kind: string;
+  /**
+   * For `kind: 'alert'` only: whether the status change was a recovery, a
+   * warning or an outage. Every status change is stored as `alert`, so the
+   * kind alone cannot tell them apart. Missing from an older server.
+   */
+  alertTone?: AlertTone | null;
   /** What the alert said about the monitor ('down', 'up'); empty for the other kinds. */
   status: string | null;
   channel: string;

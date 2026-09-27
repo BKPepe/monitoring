@@ -368,7 +368,7 @@ export function OutgoingMessagesPage() {
                     <TableCell className="text-muted-foreground figure whitespace-nowrap">
                       {new Date(e.atIso).toLocaleString(locale)}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{kindLabel(e.kind, t)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{kindLabel(e.kind, t, e.alertTone, e.status)}</TableCell>
                     <TableCell>
                       <Badge variant="neutral">{channelLabel(e.channel, t)}</Badge>
                     </TableCell>
@@ -418,7 +418,7 @@ export function OutgoingMessagesPage() {
       <Dialog open={detail !== null} onOpenChange={(open) => !open && setDetail(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{detail ? kindLabel(detail.kind, t) : ''}</DialogTitle>
+            <DialogTitle>{detail ? kindLabel(detail.kind, t, detail.alertTone, detail.status) : ''}</DialogTitle>
           </DialogHeader>
           {detail && (
             <dl className="space-y-2 px-5 pb-5 text-xs">

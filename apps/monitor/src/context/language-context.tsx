@@ -4400,7 +4400,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'outgoing.load_more': { cs: 'Načíst starší', en: 'Load older' },
   'outgoing.loading_more': { cs: 'Načítám…', en: 'Loading…' },
 
-  'outgoing.kind_alert': { cs: 'Výstraha výpadku', en: 'Outage alert' },
+  'outgoing.kind_alert': { cs: 'Změna stavu', en: 'Status change' },
+  'outgoing.kind_alert_bad': { cs: 'Výstraha výpadku', en: 'Outage alert' },
+  'outgoing.kind_alert_warn': { cs: 'Varování', en: 'Warning' },
+  'outgoing.kind_alert_good': { cs: 'Obnovení', en: 'Recovery' },
+  'outgoing.kind_alert_maintenance': { cs: 'Údržba', en: 'Maintenance' },
   'outgoing.kind_daily_reminder': { cs: 'Denní připomínka', en: 'Daily reminder' },
   'outgoing.kind_digest': { cs: 'Souhrnný report', en: 'Digest report' },
   'outgoing.kind_digest_preview': { cs: 'Zkušební souhrn', en: 'Digest preview' },

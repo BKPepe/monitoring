@@ -33,6 +33,7 @@ const row = (over: Partial<OutgoingMessage> = {}): OutgoingMessage => ({
   monitorId: null,
   monitorName: null,
   kind: 'alert',
+  alertTone: 'bad',
   status: 'down',
   channel: 'email',
   recipient: 'admin@example.com',
@@ -104,6 +105,30 @@ describe('Odchozí zprávy', () => {
     expect(table.getByText('Výstraha výpadku')).toBeTruthy();
     expect(table.getByText('E-mail')).toBeTruthy();
     expect(table.getByText('Odesláno')).toBeTruthy();
+  });
+
+  it('obnovení se nejmenuje výstraha výpadku, ani v detailu', async () => {
+    // The owner's report: a recovered disk and a restored LTE backup were
+    // listed as "Výstraha výpadku", because every status change is kind 'alert'.
+    serve(() =>
+      json(
+        page({
+          entries: [row({ id: 5, alertTone: 'good', status: 'storage_recovered', subject: 'Úložiště v pořádku' })],
+        })
+      )
+    );
+    renderPage();
+
+    const table = within(await screen.findByRole('table'));
+    expect(table.getByText('Obnovení')).toBeTruthy();
+    expect(table.queryByText('Výstraha výpadku')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detail' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Obnovení');
+    expect(dialog.textContent).not.toContain('Výstraha výpadku');
+    // The filter offers the kind without a tone, so it names what is certain.
+    expect(within(screen.getByLabelText('Druh zprávy')).getByText('Změna stavu')).toBeTruthy();
   });
 
   it('neodeslaná zpráva je vidět na řádku i v pruhu nad tabulkou', async () => {
