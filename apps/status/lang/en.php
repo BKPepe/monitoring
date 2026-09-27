@@ -937,6 +937,7 @@ return [
     'rr_wan_port_errors_title' => 'Errors on the WAN port',
     'rr_wan_port_errors_measured' => 'The WAN port (%1$s) logged %2$s receive errors on %3$d of the last 7 days.',
     'rr_wan_port_errors_measured_ring' => 'The WAN port (%1$s) discarded %2$s received frames on %3$d of the last 7 days (%4$s %% of the router\'s received packets).',
+    'rr_wan_port_errors_per_million' => 'That is %1$s errors per million packets the port received.',
     'rr_wan_port_errors_split' => 'The port\'s own counters: %1$s CRC errors, %2$s MAC receive errors, %3$s receive FIFO overruns, %4$s failed buffer refills, %5$s oversize frames.',
     'rr_wan_port_errors_ring_overrun' => 'Frames lost to a full receive FIFO: %1$s; the router could not keep up with reception.',
     'rr_wan_port_errors_ring_discard' => 'The port discarded %1$s frames (address filter or lack of room).',

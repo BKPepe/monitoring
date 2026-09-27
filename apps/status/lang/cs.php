@@ -941,6 +941,7 @@ return [
     'rr_wan_port_errors_title' => 'Chyby na portu WAN',
     'rr_wan_port_errors_measured' => 'Port WAN (%1$s) zaznamenal za posledních 7 dní chyby příjmu: %2$s (dny s chybami: %3$d).',
     'rr_wan_port_errors_measured_ring' => 'Port WAN (%1$s) za posledních 7 dní zahodil přijaté rámce: %2$s (dny se zahozením: %3$d), tj. %4$s %% všech paketů, které router přijal.',
+    'rr_wan_port_errors_per_million' => 'Chyby na milion paketů, které port přijal: %1$s.',
     'rr_wan_port_errors_split' => 'Vlastní počítadla portu: chyby CRC %1$s, chyby příjmu MAC %2$s, přetečení přijímací fronty FIFO %3$s, nedoplněné buffery %4$s, příliš dlouhé rámce %5$s.',
     'rr_wan_port_errors_ring_overrun' => 'Rámce ztracené kvůli plné přijímací frontě FIFO: %1$s; router nestíhal příjem.',
     'rr_wan_port_errors_ring_discard' => 'Rámce zahozené portem (filtr adres nebo nedostatek místa): %1$s.',

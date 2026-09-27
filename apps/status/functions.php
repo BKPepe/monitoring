@@ -17435,6 +17435,26 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
             $celsius = fn ($mc): ?float => is_numeric($mc) ? round((float)$mc / 1000.0, 1) : null;
             // Kernel µW; 0 µW has no dBm (no light at all) and gets no number.
             $dbm = fn ($uw): ?float => (is_numeric($uw) && (float)$uw > 0.0) ? round(10.0 * log10((float)$uw / 1000.0), 1) : null;
+            // Errors per million packets the WAN port itself received, over
+            // the W days whose errors were MEASURED (a row, 0 included): a day
+            // without one is unknown, not zero errors, so its packets stay out
+            // too. Each of those days needs the port's packet row, else there
+            // is no rate. Packets and error steps come from the same reports,
+            // so a day the router was partly off is partial on both sides.
+            // Evidence; it fires nothing.
+            $port_rx = $in['rx_packets_iface'][(string)$dev] ?? null;
+            $per_million = null;
+            if ($branch === 'errors' && is_array($port_rx) && $errors['daily'] !== []) {
+                $packets = 0.0;
+                foreach (array_keys($errors['daily']) as $day) {
+                    if (!is_numeric($port_rx[$day] ?? null)) {
+                        $packets = null;
+                        break;
+                    }
+                    $packets += (float)$port_rx[$day];
+                }
+                $per_million = ($packets !== null && $packets > 0.0) ? (float)$errors['sum'] / $packets * 1000000.0 : null;
+            }
             $items[] = bk_rec_item($key, $cause_keys[$cause], 'wan', $severity, ['kind' => 'wan'], [
                 'name' => $dev, 'branch' => $branch, 'cause' => $cause,
                 'errors' => $errors['sum'], 'drops' => $drops['sum'],
@@ -17445,6 +17465,7 @@ function bk_rec_rules_wan_week(array $in, array $state): array {
                 // is not zero.
                 'ring' => ($ring['sum'] !== null && $ring['sum'] > 0.0) ? $ring['sum'] : null,
                 'ring_pct' => $ring_share,
+                'per_million' => $per_million,
                 // The port's own counters, null unless they cover the week.
                 'crc' => $split['crc'] ?? null, 'mac_rx' => $split['mac_rx'] ?? null,
                 'overrun' => $split['overrun'] ?? null, 'discard' => $split['discard'] ?? null,
@@ -17843,7 +17864,7 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
     foreach ($ids as $id) {
         $out[$id] = ['window' => $window, 'disks' => [], 'state' => [], 'speedtests' => [],
             'events' => [], 'rx_packets' => [], 'forwarding_minutes' => null, 'conntrack_days' => null, 'server_max' => [],
-            'wan_error_minutes' => null];
+            'wan_error_minutes' => null, 'rx_packets_iface' => []];
     }
     $in_list = implode(',', array_fill(0, count($ids), '?'));
     $id_list = array_values($ids);
@@ -18004,17 +18025,25 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
     //    branch of `wan_port_errors`. Summed over every interface: the WAN
     //    device name of a week ago is not knowable here, and a share of the
     //    router's whole traffic is the conservative direction (it can only
-    //    make the share smaller, never raise a false alarm).
+    //    make the share smaller, never raise a false alarm). The same rows
+    //    per interface give the error branch its rate per million packets of
+    //    the WAN port itself - evidence in the text, it decides nothing.
+    //    One row per interface and day (unique key), so no GROUP BY.
     $stmt = $pdo->prepare(
-        "SELECT monitor_id, DATE_FORMAT(date, '%Y-%m-%d') AS day, SUM(rx_packets_total) AS rx
+        "SELECT monitor_id, iface, DATE_FORMAT(date, '%Y-%m-%d') AS day, rx_packets_total AS rx
            FROM monitor_interface_traffic
-          WHERE monitor_id IN ($in_list) AND date BETWEEN ? AND ?
-          GROUP BY monitor_id, date"
+          WHERE monitor_id IN ($in_list) AND date BETWEEN ? AND ?"
     );
     $stmt->execute(array_merge($id_list, [$window['days'][0], end($window['days'])]));
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $out[(int)$row['monitor_id']]['rx_packets'][(string)$row['day']] =
-            $row['rx'] === null ? null : (float)$row['rx'];
+        $mid = (int)$row['monitor_id'];
+        $day = (string)$row['day'];
+        $sum = $out[$mid]['rx_packets'][$day] ?? null;
+        if ($row['rx'] !== null) {
+            $sum = ($sum === null ? 0.0 : $sum) + (float)$row['rx'];
+            $out[$mid]['rx_packets_iface'][(string)$row['iface']][$day] = (float)$row['rx'];
+        }
+        $out[$mid]['rx_packets'][$day] = $sum;
     }
 
     // 7. The two raw-minute scans of X13, and ONLY for a router whose loaded
@@ -18320,6 +18349,12 @@ function bk_rec_wan_port_texts(array $p, string $name): array {
         ? sprintf(t('rr_wan_port_errors_measured_ring'), $port, bk_rec_num($val('ring')), (int)($p['days'] ?? 0),
             bk_rec_num($val('ring_pct'), 2))
         : sprintf(t('rr_wan_port_errors_measured'), $port, bk_rec_num($val('errors')), (int)($p['days'] ?? 0));
+    $per_million = $val('per_million');
+    if ($branch === 'errors' && $per_million !== null) {
+        // Three significant digits at most: a rate of 0.004 is not "0.00".
+        $decimals = $per_million >= 10.0 ? 0 : ($per_million >= 1.0 ? 1 : ($per_million >= 0.1 ? 2 : 3));
+        $parts[] = sprintf(t('rr_wan_port_errors_per_million'), bk_rec_num($per_million, $decimals));
+    }
     $has_split = false;
     foreach (['crc', 'mac_rx', 'overrun', 'discard', 'refill', 'oversize'] as $k) {
         $has_split = $has_split || $val($k) !== null;

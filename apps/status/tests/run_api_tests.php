@@ -4918,6 +4918,33 @@ if ($logged_in && function_exists('bk_router_rec_window')) {
 }
 
 
+// --- Received packets per interface: the ring share and the per-million rate ----
+//
+// One query answers both: the ring branch divides by the router's packets over
+// every interface, the error rate by the WAN port's own. A day's sum must stay
+// what it was before the rows were kept per interface.
+if (function_exists('bk_router_rec_inputs_batch')) {
+    $rp_id = 9501;
+    $rp_days = bk_router_rec_window(date('Y-m-d'))['days'];
+    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, 'Packets router', 'openwrt', '10.9.5.2', 'up', 'Síť', '{}')")
+        ->execute([$rp_id]);
+    $rp_ins = $pdo->prepare("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total) VALUES (?, ?, ?, 0, 0, ?, 0)");
+    $rp_ins->execute([$rp_id, 'eth2', $rp_days[0], 1000]);
+    $rp_ins->execute([$rp_id, 'br-lan', $rp_days[0], 500]);
+    $rp_ins->execute([$rp_id, 'br-lan', $rp_days[1], 70]);
+    $rp_in = bk_router_rec_inputs_batch($pdo, [$rp_id], date('Y-m-d'))[$rp_id] ?? [];
+    $rp_rx = $rp_in['rx_packets'] ?? [];
+    ksort($rp_rx);
+    $rp_ifaces = array_keys($rp_in['rx_packets_iface'] ?? []);
+    sort($rp_ifaces);
+    check('pakety: součet dne přes rozhraní zůstane, port WAN má své vlastní dny',
+        [$rp_rx, $rp_in['rx_packets_iface']['eth2'] ?? null, $rp_ifaces],
+        [[$rp_days[0] => 1500.0, $rp_days[1] => 70.0], [$rp_days[0] => 1000.0], ['br-lan', 'eth2']]);
+    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
+}
+
+
 // --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
 //
 // They are read-only except the mute, and the mute is the only place where a

@@ -2684,6 +2684,39 @@ if (function_exists('bk_rec_wan_port_cause')) {
     check('každá varianta nálezu na portu WAN je v obou jazycích celá', $pe_bad, []);
 }
 
+// --- The WAN port finding gives errors per million packets of the port ---------
+// Evidence only: the rate never decides whether the finding fires. It counts
+// only the days whose errors were measured (a day without an errors row is
+// unknown, not zero), and each of them needs the WAN port's own packet count.
+if (function_exists('bk_rec_wan_port_cause') && isset($pe_in, $pe_item, $pe_text)) {
+    $pm_rx = fn (array $days): array => ['rx_packets_iface' => ['eth2' => array_fill_keys($days, 20000000.0),
+        'br-lan' => array_fill_keys($pe_days, 90000000.0)]];
+    // Errors measured on 3 days, the port's packets on all 7: 120 / 60 M.
+    $pm_full = $pe_item($pe_in($pe_120, null, $pm_rx($pe_days)));
+    $pm_gap = $pe_item($pe_in($pe_120, null, $pm_rx(array_slice($pe_days, 1))));
+    $pm_quiet_gap = $pe_item($pe_in($pe_120, null, $pm_rx(array_diff($pe_days, [$pe_days[6]]))));
+    // Four more days MEASURED at zero errors do enter it: 120 / 140 M; one of
+    // them without the port's packets leaves no rate at all.
+    $pm_zeros = [40.0, 40.0, 40.0, 0.0, 0.0, 0.0, 0.0];
+    $pm_zero = $pe_item($pe_in($pm_zeros, null, $pm_rx($pe_days)));
+    $pm_zero_gap = $pe_item($pe_in($pm_zeros, null, $pm_rx(array_diff($pe_days, [$pe_days[6]]))));
+    check('chyby na milion paketů portu: jen dny se změřenými chybami, jen pakety portu WAN',
+        [round((float)($pm_full['params']['per_million'] ?? 0.0), 4), $pe_param($pm_gap, 'per_million'),
+            round((float)($pm_quiet_gap['params']['per_million'] ?? 0.0), 4),
+            round((float)($pm_zero['params']['per_million'] ?? 0.0), 4), $pe_param($pm_zero_gap, 'per_million')],
+        [2.0, null, 2.0, round(120 / 140, 4), null]);
+    check_true('chyby na milion paketů: věta v obou jazycích, bez věty, když den s chybami chybí',
+        str_contains($pe_text('en', $pm_full, 'measured'), 'That is 2.0 errors per million packets the port received.')
+        && str_contains($pe_text('cs', $pm_full, 'measured'), 'Chyby na milion paketů, které port přijal: 2,0.')
+        && str_contains($pe_text('en', $pm_zero, 'measured'), 'That is 0.86 errors per million packets the port received.')
+        && !str_contains($pe_text('en', $pm_gap, 'measured'), 'per million'));
+    check('chyby na milion paketů: počet řádů podle velikosti, nikdy 0,00',
+        [bk_with_email_lang('en', fn () => bk_rec_wan_port_texts(['name' => 'eth2', 'errors' => 60.0, 'days' => 2, 'per_million' => 0.004], 'eth2')[0]),
+            bk_with_email_lang('en', fn () => bk_rec_wan_port_texts(['name' => 'eth2', 'errors' => 60.0, 'days' => 2, 'per_million' => 12.34], 'eth2')[0])],
+        ['The WAN port (eth2) logged 60 receive errors on 2 of the last 7 days. That is 0.004 errors per million packets the port received.',
+            'The WAN port (eth2) logged 60 receive errors on 2 of the last 7 days. That is 12 errors per million packets the port received.']);
+}
+
 
 if (function_exists('bk_rec_rules_wan_tests')) {
     // A router with a full week of data and three agreeing probes below the
